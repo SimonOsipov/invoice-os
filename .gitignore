@@ -1,0 +1,29 @@
+# ---- Go ----
+# Compiled service binaries from cmd/* (built into ./bin or in-place)
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Go workspace file (machine-local)
+go.work
+go.work.sum
+
+# ---- Frontend (Node) ----
+node_modules/
+frontend/**/dist/
+frontend/**/build/
+frontend/**/.vite/
+*.tsbuildinfo
+
+# ---- Secrets / env ----
+.env
+.env.*
+!.env.example
+
+# ---- Editor / OS ----
+.DS_Store
+.idea/
+.vscode/
+*.swp

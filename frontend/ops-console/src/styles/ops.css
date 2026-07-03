@@ -1,0 +1,188 @@
+/* Local app-shell styles — ported verbatim from the InvoiceOS Africa Ops Console
+   prototype's inline <style> block (keyframes + hover/focus/active/toggle
+   transitions), plus a responsive media-query layer for the app shell. */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+@keyframes opsPop {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes opsDrawer {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes opsToast {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes opsFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes opsPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.ops-nav {
+  transition: background 120ms ease-out, color 120ms ease-out;
+}
+.ops-nav:hover {
+  background: var(--bg-3);
+}
+.ops-row {
+  transition: background 100ms ease-out;
+  cursor: pointer;
+}
+.ops-row:hover {
+  background: var(--bg-3);
+}
+.ops-chip {
+  transition: background 120ms, border-color 120ms, color 120ms;
+  cursor: pointer;
+}
+.ops-btn {
+  transition: background 120ms ease-out, transform 90ms, border-color 120ms;
+}
+.ops-btn:active {
+  transform: translateY(1px);
+}
+.ops-input {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  height: 34px;
+  padding: 0 11px;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.ops-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.ops-toggle {
+  transition: background 140ms ease-out;
+  cursor: pointer;
+}
+.ops-knob {
+  transition: transform 140ms ease-out;
+}
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+pre.ops-json {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--slate-200);
+  background: #0c0e10;
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ------------------------------------------------------------------
+   Responsive degradation. The prototype is a fixed 1380x900 desktop
+   app shell (fixed sidebar + wide grid tables/columns). These rules
+   collapse the sidebar and reflow the multi-column grids so nothing
+   is clipped at narrower widths. `!important` is required to override
+   the inline grid-template-columns/widths the components set on
+   themselves.
+   ------------------------------------------------------------------ */
+@media (max-width: 1024px) {
+  .ops-sidebar {
+    width: 72px !important;
+  }
+  .ops-sidebar .ops-nav-label,
+  .ops-sidebar .ops-hide-narrow {
+    display: none !important;
+  }
+  .ops-sidebar .ops-nav {
+    justify-content: center;
+  }
+  .ops-rules-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .ops-tenants-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .ops-recon-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .ops-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .ops-header-search {
+    display: none !important;
+  }
+  .ops-sub-stats {
+    display: none !important;
+  }
+  .ops-health-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .ops-drawer {
+    width: 100vw !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .ops-sidebar {
+    width: 0 !important;
+    border-right: 0 !important;
+    overflow: hidden;
+  }
+  .ops-screen-pad {
+    padding: 18px 14px 40px !important;
+  }
+  .ops-tenant-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .ops-tenant-detail-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

@@ -15,12 +15,16 @@ node_modules/
 frontend/**/dist/
 frontend/**/build/
 frontend/**/.vite/
+frontend/**/.verify/
 *.tsbuildinfo
 
 # ---- Secrets / env ----
 .env
 .env.*
 !.env.example
+
+# ---- Backlog.md (local task tracking, not versioned) ----
+backlog/
 
 # ---- Editor / OS ----
 .DS_Store

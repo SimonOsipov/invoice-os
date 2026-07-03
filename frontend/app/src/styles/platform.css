@@ -1,0 +1,182 @@
+/* Local page styles — ported verbatim from the InvoiceOS Africa Platform
+   prototype's inline <style> block (reset + keyframes + hover/focus/active
+   transitions), plus a responsive media-query layer for the app shell.
+   Token vars (--accent, --bg-2, --line-2, …) resolve via inheritance from .if-v2. */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pf-nav {
+  transition: background 120ms ease-out, color 120ms ease-out;
+}
+.pf-nav:hover {
+  background: var(--bg-3);
+}
+.pf-row {
+  transition: background 110ms ease-out;
+  cursor: pointer;
+}
+.pf-row:hover {
+  background: var(--bg-3);
+}
+.pf-menu-item {
+  transition: background 110ms ease-out;
+}
+.pf-menu-item:hover {
+  background: var(--bg-3);
+}
+.pf-input {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--fg-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  height: 38px;
+  padding: 0 12px;
+  width: 100%;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.pf-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.pf-num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  height: 34px;
+  padding: 0 10px;
+  width: 100%;
+  outline: none;
+  text-align: right;
+}
+.pf-num:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.pf-btn {
+  transition: background 120ms ease-out, transform 100ms;
+}
+.pf-btn:active {
+  transform: translateY(1px);
+}
+.pf-chip {
+  transition: background 120ms, border-color 120ms, color 120ms;
+  cursor: pointer;
+}
+.pf-upcard {
+  transition: border-color 120ms ease-out, background 120ms ease-out, transform 100ms;
+  font-family: var(--font-sans);
+}
+.pf-upcard:hover {
+  border-color: var(--accent) !important;
+}
+.pf-upcard:active {
+  transform: translateY(1px);
+}
+.money {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* ------------------------------------------------------------------
+   Responsive degradation. The prototype is a fixed 1280×860 app shell
+   with a 252px sidebar + multi-column grids. These media queries collapse
+   the sidebar and reflow grids so nothing clips at narrower widths.
+   `!important` is required to beat the inline grid-template-columns the
+   sections set on themselves.
+   ------------------------------------------------------------------ */
+@media (max-width: 860px) {
+  .pf-shell {
+    flex-direction: column !important;
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow: visible !important;
+  }
+  .pf-sidebar {
+    width: 100% !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .pf-nav-list {
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    overflow-x: auto;
+  }
+  .pf-main {
+    min-height: 0 !important;
+  }
+  .pf-scroll {
+    overflow-y: visible !important;
+    flex: none !important;
+  }
+  .pf-grid-2,
+  .pf-grid-3,
+  .pf-grid-4,
+  .pf-dash-row-a,
+  .pf-dash-row-b,
+  .pf-dash-row-c,
+  .pf-create-grid,
+  .pf-detail-grid,
+  .pf-onboard-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .pf-grid-3,
+  .pf-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .pf-list-row,
+  .pf-list-head {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .pf-list-row > *,
+  .pf-list-head > * {
+    text-align: left !important;
+  }
+  .pf-hide-mobile {
+    display: none !important;
+  }
+  .pf-header-search {
+    display: none !important;
+  }
+}

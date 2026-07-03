@@ -1,0 +1,98 @@
+/* Local page styles — ported verbatim from the InvoiceOS Africa prototype's
+   inline <style> block. Keyframes for the hero product mock + hover transitions.
+   Token vars (--accent, --bg-2, --line-3) resolve via inheritance from .if-v2. */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+@keyframes scanline {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(190px);
+    opacity: 0;
+  }
+}
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ios-link {
+  transition: color 120ms ease-out;
+}
+.ios-link:hover {
+  color: var(--accent) !important;
+}
+.ios-feat {
+  transition: background 160ms ease-out, border-color 160ms ease-out;
+}
+.ios-feat:hover {
+  background: var(--bg-2) !important;
+  border-color: var(--line-3) !important;
+}
+.ios-price:hover {
+  border-color: var(--line-3) !important;
+}
+
+/* ------------------------------------------------------------------
+   Responsive degradation. The prototype is desktop-first with fixed
+   multi-column grids; these media queries reflow them so nothing is
+   clipped and the nav stays usable on small screens. `!important` is
+   required to override the inline grid-template-columns the sections
+   set on themselves.
+   ------------------------------------------------------------------ */
+@media (max-width: 920px) {
+  .ios-grid.ios-2 {
+    grid-template-columns: 1fr !important;
+  }
+  .ios-grid.ios-3,
+  .ios-grid.ios-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .ios-grid.ios-3,
+  .ios-grid.ios-4 {
+    grid-template-columns: 1fr !important;
+  }
+  .ios-hide-mobile {
+    display: none !important;
+  }
+  .ios-hero-h1 {
+    font-size: 40px !important;
+  }
+  .ios-demo-card {
+    padding: 36px 22px !important;
+  }
+}

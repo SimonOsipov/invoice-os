@@ -1,0 +1,79 @@
+// Create / validate flow orchestrator — the wizard header + a step router keyed on
+// `ctx.createStep` (upload → parsing → form → validating → results). Ported from
+// Platform.dc.html ~L389-596 + the wizard slice of renderVals() (~L1324-1326).
+
+import { VAL_LABELS, PARSE_LABELS, WIZARD_STEPS, SAMPLE_FILES } from '../data'
+import { CreateUpload } from './CreateUpload'
+import { CreateForm } from './CreateForm'
+import { CreateResults } from './CreateResults'
+import { ScanlineSteps } from './ScanlineSteps'
+import type { CreateStep, PlatformCtx } from '../types'
+
+function wizardStage(step: CreateStep): number {
+  if (step === 'upload' || step === 'parsing') return 0
+  if (step === 'form') return 1
+  if (step === 'validating') return 2
+  return 3
+}
+
+export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
+  const { createStep, draft, uploadFile, valIdx, parseIdx } = ctx
+  const stage = wizardStage(createStep)
+  const selFileName = uploadFile ? SAMPLE_FILES.find((f) => f.id === uploadFile)?.name || '' : ''
+  const valCount = Math.min(valIdx, VAL_LABELS.length)
+
+  return (
+    <div style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
+        <button onClick={ctx.closeCreate} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, padding: '0 12px', fontSize: 13 }}>
+          ← Cancel
+        </button>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0 }}>
+          {WIZARD_STEPS.map(([n, label], idx) => {
+            const done = idx < stage
+            const a = idx === stage
+            return (
+              <div key={n} style={{ display: 'flex', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 22, height: 22, borderRadius: 99, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, background: a ? 'var(--accent)' : done ? 'var(--accent-tint)' : 'var(--bg-2)', color: a ? '#fff' : done ? 'var(--accent)' : 'var(--fg-3)', border: `1px solid ${a || done ? 'var(--accent)' : 'var(--line-2)'}` }}>{n}</span>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: a ? 'var(--fg-1)' : 'var(--fg-3)' }}>{label}</span>
+                </div>
+                <span style={{ width: 36, height: 1, background: 'var(--line-2)', margin: '0 14px' }} />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {createStep === 'upload' && <CreateUpload ctx={ctx} />}
+
+      {createStep === 'parsing' && (
+        <ScanlineSteps
+          title={`Parsing ${selFileName}…`}
+          subtitle="EXTRACTING BUYER · LINE ITEMS · TOTALS"
+          labels={PARSE_LABELS}
+          idx={parseIdx}
+          unitLabel="PARSED"
+          transformMs={180}
+          widthMs={170}
+        />
+      )}
+
+      {createStep === 'form' && <CreateForm ctx={ctx} />}
+
+      {createStep === 'validating' && (
+        <ScanlineSteps
+          title="Validating against MBS rules…"
+          subtitle={`${draft.number} · ${valCount} / 16 CHECKS`}
+          labels={VAL_LABELS}
+          idx={valIdx}
+          unitLabel="COMPLETE"
+          transformMs={170}
+          widthMs={150}
+        />
+      )}
+
+      {createStep === 'results' && <CreateResults ctx={ctx} />}
+    </div>
+  )
+}

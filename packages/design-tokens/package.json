@@ -1,0 +1,10 @@
+{
+  "name": "@invoice-os/design-tokens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared FiscalBridge Africa design-system token CSS (colors_and_type.css + v2.css). Single source of truth, consumed byte-identically by all three frontend apps; extracted from the per-app duplicates in M1-03.",
+  "exports": {
+    "./colors_and_type.css": "./colors_and_type.css",
+    "./v2.css": "./v2.css"
+  }
+}

@@ -26,6 +26,9 @@ frontend/**/.verify/
 # ---- Backlog.md (local task tracking, not versioned) ----
 backlog/
 
+# ---- Claude Code (local project instructions, not versioned) ----
+CLAUDE.md
+
 # ---- Editor / OS ----
 .DS_Store
 .idea/

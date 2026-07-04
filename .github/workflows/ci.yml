@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same branch/PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Detect which parts of the monorepo changed so SPA-only PRs skip Go and
+  # Go-only PRs skip the frontend. A change to this workflow triggers both.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - 'cmd/**'
+              - 'internal/**'
+              - 'migrations/**'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
+
+  go:
+    name: Go
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    # Postgres wired now, ready for M2 integration tests (go test picks up DATABASE_URL).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoice_os_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/invoice_os_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # No dependencies / go.sum yet — nothing to cache. Enable in M2.
+          cache: false
+      - name: Build
+        run: go build ./...
+      # vet/test error on an empty module ("no packages"), so gate them on
+      # there being at least one package. They run automatically from M2 on.
+      - name: Vet
+        run: |
+          if [ -n "$(go list ./...)" ]; then
+            go vet ./...
+          else
+            echo "No Go packages yet — skipping vet (wired for M2)."
+          fi
+      - name: Test
+        run: |
+          if [ -n "$(go list ./...)" ]; then
+            go test ./...
+          else
+            echo "No Go packages yet — skipping test (wired for M2)."
+          fi
+
+  frontend:
+    name: Frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # action-setup reads the pinned pnpm version from package.json#packageManager.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: Build
+        run: pnpm -r build
+
+  # Single always-running gate. Mark THIS check ("CI") required in branch
+  # protection (M1-05): it passes when the triggered jobs pass or are skipped,
+  # and fails only when a job that actually ran failed — so path-filtered
+  # skips never leave a required check stuck pending.
+  ci:
+    name: CI
+    needs: [changes, go, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all triggered jobs to pass
+        run: |
+          echo "changes:  ${{ needs.changes.result }}"
+          echo "go:       ${{ needs.go.result }}"
+          echo "frontend: ${{ needs.frontend.result }}"
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::'changes' job did not succeed"; exit 1
+          fi
+          if [ "${{ needs.go.result }}" = "failure" ] || [ "${{ needs.go.result }}" = "cancelled" ]; then
+            echo "::error::Go job failed"; exit 1
+          fi
+          if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
+            echo "::error::Frontend job failed"; exit 1
+          fi
+          echo "All triggered CI jobs passed (skipped jobs are OK)."

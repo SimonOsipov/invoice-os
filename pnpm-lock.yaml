@@ -10,6 +10,9 @@ importers:
 
   frontend/app:
     dependencies:
+      '@invoice-os/design-tokens':
+        specifier: workspace:*
+        version: link:../../packages/design-tokens
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -35,6 +38,9 @@ importers:
 
   frontend/landing:
     dependencies:
+      '@invoice-os/design-tokens':
+        specifier: workspace:*
+        version: link:../../packages/design-tokens
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -60,6 +66,9 @@ importers:
 
   frontend/ops-console:
     dependencies:
+      '@invoice-os/design-tokens':
+        specifier: workspace:*
+        version: link:../../packages/design-tokens
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -82,6 +91,8 @@ importers:
       vite:
         specifier: ^8.1.2
         version: 8.1.3
+
+  packages/design-tokens: {}
 
 packages:
 

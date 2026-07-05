@@ -27,3 +27,5 @@ var, so the same suite runs against a PR preview or any other deploy:
 ```bash
 APP_URL=https://app-pr-123.up.railway.app pnpm --filter @invoice-os/e2e test
 ```
+
+<!-- lifecycle verification throwaway PR (M1-08) — do not merge -->

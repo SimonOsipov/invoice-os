@@ -1,0 +1,29 @@
+# Build context is the repo root (needed for the pnpm workspace + single root
+# lockfile). Keep the context lean: ship only what `pnpm build` needs.
+
+# Node
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.vite
+**/.verify
+*.tsbuildinfo
+
+# VCS / CI / tooling
+.git
+.github
+.claude
+backlog
+
+# Go backend (not part of the frontend image)
+cmd
+internal
+migrations
+*.go
+go.mod
+go.sum
+
+# Editor / OS
+.DS_Store
+**/.DS_Store

@@ -1,0 +1,25 @@
+# Shared static-SPA server for all three frontend apps (M1-06).
+# Each app's Dockerfile copies its built `dist` to /srv and this same Caddyfile
+# to /etc/caddy/Caddyfile, so the serving behaviour is identical across services.
+{
+	admin off
+	auto_https off
+}
+
+# Railway injects $PORT; default to 8080 for local `docker run` smoke tests.
+:{$PORT:8080} {
+	encode gzip
+
+	# Liveness endpoint for Railway's healthcheck — answered before the filesystem.
+	handle /health {
+		respond "OK" 200
+	}
+
+	# Static assets with history-API fallback: unknown paths return index.html
+	# so client-side routing and deep links work instead of 404ing.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

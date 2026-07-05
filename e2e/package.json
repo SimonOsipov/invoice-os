@@ -1,0 +1,17 @@
+{
+  "name": "@invoice-os/e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Playwright smoke suite for the three deployed SPAs (M1-08): each app loads its main mock view with no console errors.",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^6.0.3"
+  }
+}

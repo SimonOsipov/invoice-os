@@ -111,21 +111,52 @@ jobs:
       - name: Build
         run: pnpm -r build
 
+  # Unconditional clean-clone guard (M1-09). The path-filtered go/frontend jobs
+  # above only rebuild the half that changed, and the frontend job warms the pnpm
+  # store cache — so cross-half rot, a cache-masked lockfile break, an accidentally
+  # uncommitted build input (the M1-01 go.mod trap), or a root-file change that
+  # matches neither filter can all slip past them. This job always runs, uses no
+  # caches, and builds BOTH halves from a fresh checkout — permanently guarding the
+  # module-path fix (M1-01) and the workspace collapse (M1-02/03).
+  clean-clone:
+    name: Clean-clone build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Go from scratch — no module/build cache.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: go build ./... (from scratch)
+        run: go build ./...
+      # All SPAs from scratch — cold pnpm install (deliberately no `cache: pnpm`)
+      # so a stale cache can't mask a lockfile that no longer resolves.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: pnpm install (cold, frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: pnpm -r build (all three SPAs)
+        run: pnpm -r build
+
   # Single always-running gate. Mark THIS check ("CI") required in branch
   # protection (M1-05): it passes when the triggered jobs pass or are skipped,
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend]
+    needs: [changes, go, frontend, clean-clone]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require all triggered jobs to pass
         run: |
-          echo "changes:  ${{ needs.changes.result }}"
-          echo "go:       ${{ needs.go.result }}"
-          echo "frontend: ${{ needs.frontend.result }}"
+          echo "changes:     ${{ needs.changes.result }}"
+          echo "go:          ${{ needs.go.result }}"
+          echo "frontend:    ${{ needs.frontend.result }}"
+          echo "clean-clone: ${{ needs.clean-clone.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
           fi
@@ -134,5 +165,10 @@ jobs:
           fi
           if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
             echo "::error::Frontend job failed"; exit 1
+          fi
+          # clean-clone is unconditional (no path filter) — it must actually pass,
+          # never merely skip.
+          if [ "${{ needs.clean-clone.result }}" != "success" ]; then
+            echo "::error::Clean-clone build failed"; exit 1
           fi
           echo "All triggered CI jobs passed (skipped jobs are OK)."

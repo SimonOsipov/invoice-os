@@ -16,13 +16,17 @@ node_modules
 .claude
 backlog
 
-# Go backend (not part of the frontend image)
+# Go backend + DB/migration tooling (not part of the frontend image)
 cmd
 internal
 migrations
+db
+Makefile
 *.go
 go.mod
 go.sum
+.env
+.env.example
 
 # Editor / OS
 .DS_Store

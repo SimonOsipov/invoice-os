@@ -22,6 +22,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -32,6 +33,13 @@ jobs:
               - 'cmd/**'
               - 'internal/**'
               - 'migrations/**'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+            migrations:
+              - 'migrations/**'
+              - 'db/**'
+              - 'Makefile'
               - 'go.mod'
               - 'go.sum'
               - '.github/workflows/ci.yml'
@@ -91,6 +99,71 @@ jobs:
             echo "No Go packages yet — skipping test (wired for M2)."
           fi
 
+  # The independent migration gate (M2-01, task-9.2): prove the goose harness end to
+  # end against a FRESH, ephemeral Postgres — zero Railway dependency. Bootstrap the
+  # two non-superuser roles as the superuser, apply every migration as the migrator,
+  # assert nothing is left pending, then a reset→up round-trip to prove every
+  # migration is reversible. The DB is empty each run (no reliance on prior state).
+  # Modeled on learn-greek-easy's gating alembic-check; see docs/migrations.md §6.
+  migrations:
+    name: Migrations (fresh Postgres)
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    # Postgres MAJOR must match the Railway-provisioned major (both 16 today) — bump
+    # together. See docs/migrations.md §6 and add-a-service.md.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoice_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # bootstrap runs as the superuser; goose runs as the migrator. The app role
+      # (DATABASE_URL) is deliberately never used here. Dev-safe passwords only —
+      # this is an ephemeral throwaway DB.
+      DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      MIGRATOR_PASSWORD: migrator
+      APP_PASSWORD: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bootstrap non-superuser roles (as superuser; psql is preinstalled on the runner)
+        run: make db-bootstrap
+      - name: Apply all migrations from empty (as migrator)
+        run: make migrate-up
+      - name: Assert nothing pending after up
+        # goose prints status to stderr — capture with 2>&1 or the grep never matches.
+        run: |
+          if make migrate-status 2>&1 | grep -qi 'pending'; then
+            echo "::error::migrations still pending after 'up'"
+            make migrate-status 2>&1 || true
+            exit 1
+          fi
+          echo "No pending migrations after up."
+      - name: Reversibility round-trip (reset all down -> up)
+        # `reset` runs every Down; a broken/irreversible down exits non-zero here.
+        run: |
+          make migrate-reset
+          make migrate-up
+          if make migrate-status 2>&1 | grep -qi 'pending'; then
+            echo "::error::migrations pending after reset->up round-trip"
+            exit 1
+          fi
+          echo "Reset -> up round-trip clean; every migration is reversible."
+
   frontend:
     name: Frontend
     needs: changes
@@ -147,7 +220,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone]
+    needs: [changes, go, frontend, clean-clone, migrations]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -155,6 +228,7 @@ jobs:
         run: |
           echo "changes:     ${{ needs.changes.result }}"
           echo "go:          ${{ needs.go.result }}"
+          echo "migrations:  ${{ needs.migrations.result }}"
           echo "frontend:    ${{ needs.frontend.result }}"
           echo "clean-clone: ${{ needs.clean-clone.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
@@ -162,6 +236,9 @@ jobs:
           fi
           if [ "${{ needs.go.result }}" = "failure" ] || [ "${{ needs.go.result }}" = "cancelled" ]; then
             echo "::error::Go job failed"; exit 1
+          fi
+          if [ "${{ needs.migrations.result }}" = "failure" ] || [ "${{ needs.migrations.result }}" = "cancelled" ]; then
+            echo "::error::Migrations job failed"; exit 1
           fi
           if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
             echo "::error::Frontend job failed"; exit 1

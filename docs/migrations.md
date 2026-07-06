@@ -146,7 +146,7 @@ Postgres, it belongs in a migration; if it needs the superuser, it belongs in bo
 
 ## 6. Local & CI usage
 
-**Local** (`make help` lists these; copy `.env.example` → `.env` first):
+**Local** (`make help` lists these; set the §1 `DATABASE_*` URLs in `.env` — gitignored — or your environment first):
 
 | Command | Does | As role |
 |---|---|---|
@@ -229,7 +229,7 @@ real passwords live **only** in Railway.
 ## Related
 
 - [add-a-service.md](./add-a-service.md) — provisioning compute services; §4 covers the
-  per-service `.env.example` and env-var conventions this doc's root `.env.example` complements.
+  per-service `cmd/<svc>/.env.example` and env-var conventions for service binaries.
 - [deploy-model.md](./deploy-model.md) — the PR-preview + scale-to-zero model the dev
   Postgres is exempt from.
 - `db/bootstrap.sql`, root `Makefile`, `migrations/` — the harness this doc specifies.

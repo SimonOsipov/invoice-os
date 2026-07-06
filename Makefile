@@ -4,9 +4,9 @@
 # same version locally and in CI. Migrations run as the MIGRATOR role
 # (DATABASE_MIGRATION_URL); the one-time role bootstrap runs as the SUPERUSER
 # (DATABASE_SUPERUSER_URL). The app role (DATABASE_URL) is never used here.
-# Copy .env.example -> .env for local values. See docs/migrations.md.
+# Set the DATABASE_* URLs in .env (gitignored) or your environment; see docs/migrations.md §1.
 
-# Load local overrides if present (.env is gitignored; .env.example is the template).
+# Load local overrides from .env if present (gitignored).
 -include .env
 export
 
@@ -30,7 +30,7 @@ help: ## List the available targets
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs psql)
-	@test -n "$(DATABASE_SUPERUSER_URL)" || { echo "DATABASE_SUPERUSER_URL is not set (copy .env.example -> .env)"; exit 1; }
+	@test -n "$(DATABASE_SUPERUSER_URL)" || { echo "DATABASE_SUPERUSER_URL is not set (set it in .env or the environment)"; exit 1; }
 	psql "$(DATABASE_SUPERUSER_URL)" -v ON_ERROR_STOP=1 \
 		-v migrator_password="$(MIGRATOR_PASSWORD)" \
 		-v app_password="$(APP_PASSWORD)" \
@@ -54,4 +54,4 @@ migrate-create: ## Scaffold a timestamped migration: make migrate-create name=<s
 
 .PHONY: guard-migration-url
 guard-migration-url:
-	@test -n "$(DATABASE_MIGRATION_URL)" || { echo "DATABASE_MIGRATION_URL is not set (copy .env.example -> .env)"; exit 1; }
+	@test -n "$(DATABASE_MIGRATION_URL)" || { echo "DATABASE_MIGRATION_URL is not set (set it in .env or the environment)"; exit 1; }

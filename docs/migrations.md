@@ -146,16 +146,29 @@ Postgres, it belongs in a migration; if it needs the superuser, it belongs in bo
 
 ## 6. Local & CI usage
 
-**Local** (`make help` lists these; set the §1 `DATABASE_*` URLs in `.env` — gitignored — or your environment first):
+**Local** (`make help` lists these). `make dev-db` is the one-command entry point and
+needs **no `.env`**; the lower-level targets read the §1 `DATABASE_*` URLs from `.env`
+(copy `.env.example`) or the environment:
 
 | Command | Does | As role |
 |---|---|---|
-| `make db-bootstrap` | create/rotate the two roles (needs `psql`) | superuser |
+| `make dev-db` | **one command** — `docker compose up` a local Postgres → bootstrap roles (in-container) → apply all migrations | — |
+| `make dev-db-down` | stop/remove the local Postgres container (keeps the data volume) | — |
+| `make dev-db-reset` | drop the data volume and rebuild the local DB from empty | — |
+| `make db-bootstrap` | create/rotate the two roles (needs a host `psql`) | superuser |
 | `make migrate-up` | apply all pending migrations | migrator |
 | `make migrate-down` | roll back the latest migration | migrator |
 | `make migrate-reset` | roll back **all** migrations | migrator |
 | `make migrate-status` | show applied/pending state | migrator |
 | `make migrate-create name=<slug>` | scaffold a timestamped SQL migration | — |
+
+The local DB comes from `docker-compose.yml` — a `postgres:18` service on
+`localhost:5432`, database `invoice_os`; its major matches the CI/Railway major (the
+§6 rule below). `make dev-db` bootstraps the roles *inside* the container, so a host
+`psql` client is **not** required for the local loop (only `make db-bootstrap` run on
+its own needs one). The app and `go test` connect as `invoice_app`, so RLS behaves
+locally exactly as in CI/prod. This compose file is **local-only** — CI spins up its
+own ephemeral Postgres service container.
 
 **CI** (`.github/workflows/ci.yml`, `migrations` job — the independent hard gate): on a
 fresh Postgres service container it runs `db/bootstrap.sql` as the superuser, `goose up` as

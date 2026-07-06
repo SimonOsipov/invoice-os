@@ -18,12 +18,17 @@ MIGRATIONS_DIR := migrations
 MIGRATOR_PASSWORD ?= migrator
 APP_PASSWORD      ?= app
 
+# Migrator URL for the local docker-compose Postgres (make dev-db). Kept separate
+# from DATABASE_MIGRATION_URL so `make dev-db` always targets the compose DB on
+# localhost regardless of .env, and the existing migrate-* guards stay untouched.
+DEV_DB_MIGRATION_URL := postgres://invoice_migrator:$(MIGRATOR_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
+
 # goose against Postgres as the migrator role.
 GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap migrate-up migrate-down migrate-reset migrate-status migrate-create
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -51,6 +56,26 @@ migrate-status: guard-migration-url ## Show applied/pending migration state (as 
 migrate-create: ## Scaffold a timestamped migration: make migrate-create name=<slug>
 	@test -n "$(name)" || { echo "usage: make migrate-create name=<slug>"; exit 1; }
 	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
+
+# ---- Local dev DB (docker-compose Postgres a solo engineer iterates against) ----
+
+dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrate
+	docker compose up -d --wait
+	# Bootstrap the two roles INSIDE the container: its psql is always present, so
+	# no host psql client is required. -T disables the TTY so the file pipes to stdin.
+	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
+		-v migrator_password="$(MIGRATOR_PASSWORD)" -v app_password="$(APP_PASSWORD)" \
+		< db/bootstrap.sql
+	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"
+	# seed seam (M2-06): nothing to seed until the tenants table exists; M2-06 wires a dev-seed step in here.
+	@echo "Local dev DB ready on localhost:5432 (db invoice_os; app role invoice_app). Seeds: deferred to M2-06."
+
+dev-db-down: ## Stop and remove the local dev Postgres container (keeps the data volume)
+	docker compose down
+
+dev-db-reset: ## Wipe the local dev Postgres (drop the data volume) and rebuild from empty
+	docker compose down -v
+	$(MAKE) dev-db
 
 .PHONY: guard-migration-url
 guard-migration-url:

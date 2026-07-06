@@ -1,0 +1,30 @@
+# Local dev database for the inner loop (M2-02). `make dev-db` brings this up,
+# bootstraps the two non-superuser roles, and applies all migrations — see the
+# Makefile targets and docs/migrations.md §6. This is the disposable LOCAL
+# Postgres a solo engineer iterates against daily; it is unrelated to the
+# always-on shared Railway dev DB and to the PR scale-to-zero model (which
+# scales SPA compute only, per docs/deploy-model.md). CI does NOT use this file
+# — ci.yml spins up its own ephemeral Postgres service container.
+services:
+  postgres:
+    image: postgres:18            # MAJOR must match the Railway-provisioned major (docs/migrations.md §6).
+    environment:
+      # Superuser + default DB, identical to ci.yml's migrations job so local == CI.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: invoice_os
+    ports:
+      - "5432:5432"
+    volumes:
+      # PG18's PGDATA is /var/lib/postgresql/18/docker and the image's declared
+      # VOLUME is the parent /var/lib/postgresql — mount the named volume THERE.
+      # (The pre-18 .../data path would not persist the actual data directory.)
+      - dev_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d invoice_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dev_db_data:

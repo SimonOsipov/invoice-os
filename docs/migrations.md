@@ -163,7 +163,8 @@ the migrator, asserts nothing is pending, then does a `reset → up` round-trip 
 migration is **reversible**. It bootstraps from empty every run (no reliance on prior state)
 and is folded into the required `CI` gate, so a migration that errors, leaves pending state,
 or fails the round-trip **blocks merge**. The CI Postgres **major version must match the
-Railway-provisioned major** (both `16` today) — bump them together.
+Railway-provisioned major** (both `18` today — Railway's `postgres-ssl` template
+provisioned PG18) — bump them together.
 
 ---
 
@@ -181,43 +182,49 @@ shared dev one.
 
 ## Appendix: Provisioning the dev Postgres (M2-01 subtask 4)
 
-A **user-hands** step — the Railway MCP is unauthenticated here and the CLI-token→GraphQL
-path is sandbox-blocked in background sessions. Railway target (from add-a-service.md):
-project `9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3`, environment `development`
-(`6c864094-6a06-452f-8495-be77d8a94fe7`).
+**Status: DONE (2026-07-06).** The dev `Postgres` service exists in the `development`
+environment (project `9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3`, service
+`98723af0-50ca-42a4-a56a-3e0438b9ce8a`), image `postgres-ssl:18`, Online. Both roles are
+bootstrapped and the baseline skeleton migration is applied (`goose_db_version` owned by
+`invoice_migrator`). The steps below are the reusable runbook (re-provision / prod);
+real passwords live **only** in Railway.
 
-1. **Add Postgres** to the dev environment — dashboard **New → Database → PostgreSQL**
-   (or the equivalent template deploy). Provision a **PG 16** major so it matches the CI
-   Postgres (§6). This creates a `Postgres` service exposing `DATABASE_URL` (superuser),
-   `DATABASE_PRIVATE_URL`, and `PG*` vars. Default database name is `railway`.
+1. **Add Postgres** to the dev environment: `railway add -d postgres` (dashboard **New →
+   Database → PostgreSQL** works too). Railway's `postgres-ssl` template currently
+   provisions **PG18** — keep the CI Postgres major matched to it (§6). The service
+   exposes `DATABASE_URL`/`DATABASE_PUBLIC_URL` (both **superuser**) and `PG*` vars;
+   default database name is `railway`, private host `postgres.railway.internal:5432`.
 
-2. **Bootstrap the two roles** once, as the superuser. Pick real passwords (not the dev
-   defaults), then from a machine with the repo + `psql`:
+2. **Bootstrap the two roles** once, as the superuser (idempotent — re-running rotates the
+   passwords). Pick strong passwords, then from a machine with the repo (the public proxy
+   URL is reachable off-network; `psql` via Docker if you don't have it locally):
    ```bash
-   psql "<Postgres.DATABASE_URL>" -v ON_ERROR_STOP=1 \
-     -v migrator_password="<MIGRATOR_PW>" -v app_password="<APP_PW>" \
-     -f db/bootstrap.sql
+   docker run --rm -v "$PWD/db:/db:ro" postgres:18 \
+     psql "<Postgres.DATABASE_PUBLIC_URL>" -v ON_ERROR_STOP=1 \
+       -v migrator_password="<MIGRATOR_PW>" -v app_password="<APP_PW>" -f /db/bootstrap.sql
    ```
-   (Or `railway connect Postgres` for a psql shell, then paste `db/bootstrap.sql` with the
-   two `:'…_password'` refs replaced by real quoted literals.) It is idempotent — re-running
-   rotates the passwords.
 
-3. **Record the app + migrator URLs** as dev variables, built from the **private** host
-   (`postgres.railway.internal:5432/railway`) — never the public proxy, per §2:
+3. **Store the app + migrator URLs**, built from the **private** host — never the public
+   proxy, per §2:
    ```
-   DATABASE_URL           = postgresql://invoice_app:<APP_PW>@postgres.railway.internal:5432/railway
-   DATABASE_MIGRATION_URL = postgresql://invoice_migrator:<MIGRATOR_PW>@postgres.railway.internal:5432/railway
+   invoice_app     → postgresql://invoice_app:<APP_PW>@postgres.railway.internal:5432/railway
+   invoice_migrator→ postgresql://invoice_migrator:<MIGRATOR_PW>@postgres.railway.internal:5432/railway
    ```
-   Set them as **environment-level shared variables** in `development` so M2-12's gateway
-   and context services reference them (`${{shared.DATABASE_URL}}` /
-   `${{shared.DATABASE_MIGRATION_URL}}`) — the concrete per-service wiring is finalized at
-   M2-12, the first DB consumer. **Never** hand any service `${{Postgres.DATABASE_URL}}`
-   (superuser — disables RLS). Real values live **only** in Railway — never in the repo,
-   `railway.json`, or as real values in `.env.example`.
+   Railway variables are **service-scoped** (no CLI shared-variable path), and there is no
+   DB consumer yet (the gateway is M2-12), so these are stored **on the `Postgres` service**
+   under non-colliding names — `INVOICE_APP_DATABASE_URL` and `INVOICE_MIGRATOR_DATABASE_URL`
+   (plain `DATABASE_URL` on that service is Railway's superuser URL — do not overwrite it):
+   ```bash
+   printf '%s' "<migrator-url>" | railway variables set INVOICE_MIGRATOR_DATABASE_URL --stdin -s Postgres --skip-deploys
+   printf '%s' "<app-url>"      | railway variables set INVOICE_APP_DATABASE_URL      --stdin -s Postgres --skip-deploys
+   ```
+   **M2-12 wires the consumers** by reference: each service sets
+   `DATABASE_URL=${{Postgres.INVOICE_APP_DATABASE_URL}}` and the gateway's migration step
+   sets `DATABASE_MIGRATION_URL=${{Postgres.INVOICE_MIGRATOR_DATABASE_URL}}`. **Never** hand
+   any service `${{Postgres.DATABASE_URL}}` (superuser — disables RLS).
 
-4. **Confirm it stays always-on:** the Postgres service must **not** appear in
-   `preview-cleanup.yml`'s teardown matrix (§7) — that matrix is guarded with a comment
-   and lists SPAs only, so this holds as long as no one adds `postgres` to it.
+4. **Stays always-on:** the `Postgres` service is **not** in `preview-cleanup.yml`'s
+   teardown matrix (§7) — that matrix is guarded with a comment and lists SPAs only.
 
 ## Related
 

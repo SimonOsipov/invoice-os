@@ -59,7 +59,7 @@ jobs:
     # Postgres wired now, ready for M2 integration tests (go test picks up DATABASE_URL).
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -110,11 +110,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
-    # Postgres MAJOR must match the Railway-provisioned major (both 16 today) — bump
-    # together. See docs/migrations.md §6 and add-a-service.md.
+    # Postgres MAJOR must match the Railway-provisioned major (both 18 today —
+    # Railway's postgres-ssl template provisioned PG18) — bump together. See
+    # docs/migrations.md §6 and add-a-service.md.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

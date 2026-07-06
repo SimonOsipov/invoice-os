@@ -22,10 +22,12 @@ internal
 migrations
 db
 Makefile
+docker-compose.yml
 *.go
 go.mod
 go.sum
 .env
+.env.example
 
 # Editor / OS
 .DS_Store

@@ -34,6 +34,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # SPAs only. The dev Postgres (M2-01) is deliberately NOT listed here: it is
+        # stateful and shared across PRs, so it stays always-on — scaling it to zero
+        # on PR close would lose migration state and break every open PR. See
+        # docs/migrations.md §7. Do NOT add `postgres` to this matrix.
         service: [landing, app, ops-console]
     steps:
       - name: railway down ${{ matrix.service }}

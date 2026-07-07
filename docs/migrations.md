@@ -212,6 +212,11 @@ or fails the round-trip **blocks merge**. The CI Postgres **major version must m
 Railway-provisioned major** (both `18` today — Railway's `postgres-ssl` template
 provisioned PG18) — bump them together.
 
+A second DB-backed job, **`rls`**, bootstraps the roles the same way, applies the
+migrations, and then runs the M2-07 adversarial isolation suite (§8) as the app, migrator,
+and reader roles. It is also folded into the required `CI` gate. Locally, `make test-rls`
+runs the same suite against the `make dev-db` Postgres.
+
 ---
 
 ## 7. Scale-to-zero: the dev Postgres is always-on
@@ -273,11 +278,31 @@ store-on-`Postgres`-service pattern as the app/migrator URLs — see the Appendi
 
 ### Testing
 
-M2-06 ships **no** isolation tests — the whole matrix, **including the enumeration role**
-(`invoice_tenant_reader` sees all tenants; `invoice_app` sees one), lives in **M2-07**
-(adversarial RLS suite, testcontainers). Because this task adds an isolation-critical role
-untested, **M2-07 should land as a tight follow-on** to close the unverified-isolation
-window.
+The isolation matrix is proven by the **M2-07 adversarial RLS suite**
+(`internal/platform/db/rls_test.go` + `rls_harness_test.go`), which attacks the
+guarantees as each role against a real Postgres and asserts every attack fails:
+
+- cross-tenant `SELECT`/`INSERT`/`UPDATE` are refused (reads return zero rows; writes
+  raise a `WITH CHECK` violation, SQLSTATE 42501),
+- a missing `app.current_tenant` fails **closed** (zero rows, never a full read),
+- the table **owner** (`invoice_migrator`) cannot bypass a `FORCE`'d table, and no role
+  holds `BYPASSRLS`/`SUPERUSER`,
+- a reused pooled connection cannot carry tenant context across transactions
+  (the `set_config(..., is_local=true)` = `SET LOCAL` invariant), and
+- the **enumeration role** (`invoice_tenant_reader`) sees all tenants while `invoice_app`
+  sees only its current one.
+
+Writes need an app-writable table, but `tenants` grants `invoice_app` SELECT only — so
+the suite creates a **test-only** `tenant_id`-column fixture table (the shape every M3+
+table copies) with write grants to the app role, at runtime as the migrator; it is not a
+committed migration. It runs in CI (the **`rls`** job: bootstrap roles → migrate →
+attack; folded into the required `CI` gate) and locally via `make test-rls` (after
+`make dev-db`). The suite **skips itself** when the per-role `DATABASE_*` URLs are absent,
+so the default `go` job and a bare `go test ./...` stay green without a database.
+
+> The build plan floated *testcontainers*; we instead reuse the same
+> Postgres-service-container + Makefile-bootstrap path as the `migrations` job — no new Go
+> dependency, one canonical bootstrap (`db/bootstrap.sql`), CI-consistent.
 
 ---
 

@@ -17,19 +17,29 @@ MIGRATIONS_DIR := migrations
 # environment / the command line; real values live only in Railway.
 MIGRATOR_PASSWORD ?= migrator
 APP_PASSWORD      ?= app
-READER_PASSWORD   ?= reader   # invoice_tenant_reader — the M2-06 cross-tenant enumeration role.
+# invoice_tenant_reader — the M2-06 cross-tenant enumeration role (M2-07's suite is
+# its first consumer). NOTE: an inline `# comment` here would land trailing spaces in
+# the value and produce an invalid connection URL — keep the comment on its own line.
+READER_PASSWORD   ?= reader
 
 # Migrator URL for the local docker-compose Postgres (make dev-db). Kept separate
 # from DATABASE_MIGRATION_URL so `make dev-db` always targets the compose DB on
 # localhost regardless of .env, and the existing migrate-* guards stay untouched.
 DEV_DB_MIGRATION_URL := postgres://invoice_migrator:$(MIGRATOR_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
 
+# The other per-role URLs against the same compose DB, for the RLS suite (make
+# test-rls). Same rationale: always target localhost so `make test-rls` works right
+# after `make dev-db` with no .env edits.
+DEV_DB_APP_URL       := postgres://invoice_app:$(APP_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
+DEV_DB_READER_URL    := postgres://invoice_tenant_reader:$(READER_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
+DEV_DB_SUPERUSER_URL := postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+
 # goose against Postgres as the migrator role.
 GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -83,6 +93,13 @@ dev-db-down: ## Stop and remove the local dev Postgres container (keeps the data
 dev-db-reset: ## Wipe the local dev Postgres (drop the data volume) and rebuild from empty
 	docker compose down -v
 	$(MAKE) dev-db
+
+test-rls: ## Run the M2-07 adversarial RLS suite against the local dev DB (run `make dev-db` first)
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
+	go test -count=1 -run TestRLS ./internal/platform/db/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

@@ -191,6 +191,62 @@ jobs:
           fi
           echo "Reset -> up round-trip clean; every migration is reversible."
 
+  # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
+  # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real
+  # Postgres: cross-tenant SELECT/INSERT/UPDATE refused, a missing tenant context
+  # fails closed, the table owner cannot bypass a FORCE'd table, and a reused pooled
+  # connection cannot carry tenant context across transactions. It bootstraps roles
+  # and migrates exactly like the `migrations` job, then runs the suite as the
+  # app/migrator/reader roles. The suite SKIPS itself when these DATABASE_* URLs are
+  # absent, so the `go` job above and a bare local `go test ./...` stay green without
+  # a database. See docs/migrations.md §6, §8. (The build plan floated testcontainers;
+  # we reuse this service-container + Makefile-bootstrap path instead — no new Go
+  # dependency, one canonical bootstrap, CI-consistent.)
+  rls:
+    name: RLS isolation (adversarial)
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoice_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # bootstrap runs as the superuser; goose runs as the migrator; the suite then
+      # connects as all four identities. Dev-safe passwords only (ephemeral throwaway
+      # DB). NEVER point the app/migrator/reader URLs at the superuser — BYPASSRLS
+      # would make every isolation policy a silent no-op.
+      DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_READER_URL: postgres://invoice_tenant_reader:reader@localhost:5432/invoice_os?sslmode=disable
+      MIGRATOR_PASSWORD: migrator
+      APP_PASSWORD: app
+      READER_PASSWORD: reader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bootstrap non-superuser roles (as superuser; psql is preinstalled on the runner)
+        run: make db-bootstrap
+      - name: Apply all migrations (as migrator)
+        run: make migrate-up
+      - name: Run the adversarial RLS suite (as app / migrator / reader)
+        # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
+        run: go test -count=1 -run TestRLS ./internal/platform/db/...
+
   frontend:
     name: Frontend
     needs: changes
@@ -247,7 +303,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -257,6 +313,7 @@ jobs:
           echo "go:            ${{ needs.go.result }}"
           echo "docker-canary: ${{ needs.docker-canary.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
+          echo "rls:           ${{ needs.rls.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
@@ -270,6 +327,9 @@ jobs:
           fi
           if [ "${{ needs.migrations.result }}" = "failure" ] || [ "${{ needs.migrations.result }}" = "cancelled" ]; then
             echo "::error::Migrations job failed"; exit 1
+          fi
+          if [ "${{ needs.rls.result }}" = "failure" ] || [ "${{ needs.rls.result }}" = "cancelled" ]; then
+            echo "::error::RLS isolation suite failed"; exit 1
           fi
           if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
             echo "::error::Frontend job failed"; exit 1

@@ -1,0 +1,60 @@
+{
+  "_comment": "Golden fixture pinning the Supabase GoTrue JWT claim contract for M2-05. The mock issuer's tokens are asserted against the SHAPE of decoded_header/decoded_claims (keys + types), never their values (iss/kid/exp/sub differ). The raw signed JWT is intentionally OMITTED because invoice-os is a public repo; shape is sufficient to detect mock drift from real GoTrue. Refresh from the production project at M8-05.",
+  "captured_at": "2026-07-07",
+  "source": {
+    "project_ref": "sbgzrerzxemextujwpil",
+    "issuer": "https://sbgzrerzxemextujwpil.supabase.co/auth/v1",
+    "jwks_url": "https://sbgzrerzxemextujwpil.supabase.co/auth/v1/.well-known/jwks.json",
+    "signing_alg": "ES256"
+  },
+  "decoded_header": {
+    "alg": "ES256",
+    "kid": "d7cedb92-485d-47f9-804a-834d40e1d817",
+    "typ": "JWT"
+  },
+  "decoded_claims": {
+    "iss": "https://sbgzrerzxemextujwpil.supabase.co/auth/v1",
+    "sub": "51f16fd3-e734-4783-83d1-b4461a8309f3",
+    "aud": "authenticated",
+    "exp": 1783410903,
+    "iat": 1783407303,
+    "email": "golden@fiscalbridge.dev",
+    "phone": "",
+    "app_metadata": {
+      "provider": "email",
+      "providers": [
+        "email"
+      ]
+    },
+    "user_metadata": {
+      "email_verified": true
+    },
+    "role": "authenticated",
+    "aal": "aal1",
+    "amr": [
+      {
+        "method": "password",
+        "timestamp": 1783407303
+      }
+    ],
+    "session_id": "47438a7d-7f83-4c7a-903a-0e96794be890",
+    "is_anonymous": false
+  },
+  "jwks": {
+    "keys": [
+      {
+        "alg": "ES256",
+        "crv": "P-256",
+        "ext": true,
+        "key_ops": [
+          "verify"
+        ],
+        "kid": "d7cedb92-485d-47f9-804a-834d40e1d817",
+        "kty": "EC",
+        "use": "sig",
+        "x": "KhrbZ2tbW2XiePz2LJ9Ro5sdRuBIfqJqO9fjo4qiMYA",
+        "y": "GtBOlVaco9Nbmfg3TPrnfkB5rPfRWLnMjEKHl4OiqZ4"
+      }
+    ]
+  }
+}

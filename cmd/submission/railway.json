@@ -1,0 +1,21 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "buildArgs": { "SERVICE": "submission" },
+    "watchPatterns": [
+      "cmd/submission/**",
+      "internal/submission/**",
+      "internal/platform/**",
+      "internal/audit/**",
+      "go.mod",
+      "go.sum",
+      "Dockerfile"
+    ]
+  },
+  "deploy": {
+    "healthcheckPath": "/healthz",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}

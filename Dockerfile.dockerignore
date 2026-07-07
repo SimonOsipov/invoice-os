@@ -1,0 +1,43 @@
+# Ignore-file for the root Go `Dockerfile`. BuildKit resolves a Dockerfile-adjacent
+# <dockerfile>.dockerignore ahead of the root .dockerignore, so this file governs the
+# Go image context while the SPA builds (frontend/<app>/Dockerfile) keep using the
+# root .dockerignore. KEEP go.mod, go.sum, cmd/**, internal/** — everything the Go
+# build needs; exclude everything else to keep the context small and the cache stable.
+
+# Frontend / Node — never part of a Go image
+node_modules
+**/node_modules
+frontend
+packages
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+Caddyfile
+**/dist
+**/.vite
+**/.verify
+
+# VCS / CI / tooling / docs
+.git
+.github
+.claude
+backlog
+docs
+e2e
+*.md
+
+# DB / migration tooling — not needed to compile a service binary
+migrations
+db
+Makefile
+docker-compose.yml
+
+# Docker / env / editor / OS
+Dockerfile
+Dockerfile.dockerignore
+.dockerignore
+.env
+.env.*
+**/.env
+.DS_Store
+**/.DS_Store

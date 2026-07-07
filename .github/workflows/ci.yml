@@ -160,6 +160,7 @@ jobs:
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
+      READER_PASSWORD: reader
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

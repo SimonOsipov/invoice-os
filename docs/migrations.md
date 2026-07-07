@@ -41,6 +41,12 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
   `CREATE, USAGE ON SCHEMA public`. Owns every object a migration creates.
 - `invoice_app` — same attributes, **no DDL, no ownership**. Gets table privileges only
   via explicit per-migration `GRANT`s (see §3).
+- `invoice_tenant_reader` (added M2-06) — same attributes (`NOSUPERUSER NOBYPASSRLS`),
+  granted `USAGE ON SCHEMA public` only. It is the **one cross-tenant enumeration
+  identity**: a `FOR SELECT TO invoice_tenant_reader` policy on `tenants` lets it — and
+  only it — read every tenant row, while `invoice_app` still sees only its current one.
+  It has no runtime URL yet; that is provisioned when its first consumer (M5-06
+  reconciliation) lands. See §8.
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
@@ -126,6 +132,33 @@ contract migrations and policies must honor:
 No DDL is needed to "declare" the GUC — a custom (dotted) GUC name is settable at runtime
 with no configuration. That is why the M2-01 skeleton migration is a no-op.
 
+### The helper (M2-06): `WithinTenantTx`
+
+Application code never issues `SET LOCAL` by hand. The single sanctioned entry point is
+`db.WithinTenantTx` in `internal/platform/db`:
+
+```go
+db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+    // every tenant-scoped query for this unit of work runs on tx
+})
+```
+
+What it guarantees:
+
+- **Sets the GUC inside a transaction** via `SELECT set_config('app.current_tenant', $1,
+  true)` — the *function* form of `SET LOCAL`, because the bare `SET LOCAL` statement
+  cannot bind a parameter. `is_local = true` scopes the setting to this transaction.
+- **Transaction-scoped ⇒ no pooled-connection bleed.** When the tx commits or rolls back
+  the setting evaporates, so the next borrower of that pooled connection starts clean.
+  This is the invariant M2-07 attacks (pooled-connection reuse must not carry tenant
+  context across transactions).
+- **Fail-closed.** `tenantID` is parsed as a UUID *before* the tx opens; empty or malformed
+  input returns `ErrNoTenant` and issues **no** statement — the helper can never run an
+  unscoped query.
+- **Explicit tenant, not context-derived.** The core helper takes the tenant as an
+  argument so it serves both the HTTP path and the worker (§8). `WithinRequestTenantTx`
+  is a thin wrapper that pulls the tenant from the request `auth.Identity` for handlers.
+
 ---
 
 ## 5. Extensions: trusted → migration, untrusted → bootstrap
@@ -190,6 +223,61 @@ The dev SPAs scale to zero on PR close ([deploy-model.md](./deploy-model.md)). T
 migration state and break every open PR. Dev migrations are therefore forward-only/additive;
 the reversibility guarantee is enforced against the *ephemeral CI* Postgres (§6), not the
 shared dev one.
+
+---
+
+## 8. Cross-tenant access: the enumeration seam and the worker-role pattern (M2-06)
+
+Per-tenant `SET LOCAL` (§4) is the rule for touching tenant data. Two legitimate
+operations need to reach *more than one* tenant, and M2-06 fixes how — so M5 wires the
+worker and reconciliation with **no new decision**.
+
+### The worker-role pattern
+
+The M5 submission worker processes jobs for many tenants from one long-lived process. It
+is **not** special-cased against RLS:
+
+- It connects as **`invoice_app`** — the same `NOBYPASSRLS` runtime role, the same
+  `DATABASE_URL`. No dedicated worker role, no superuser.
+- Every job payload carries its **`tenant_id`**, and the worker wraps each job's business
+  logic in `WithinTenantTx(ctx, pool, job.TenantID, …)` — the *same* helper as the HTTP
+  path, per-job `SET LOCAL`. `SET LOCAL` (not `SET SESSION`) is what keeps a pooled
+  connection from carrying one job's tenant into the next.
+- **River's own queue tables are infrastructure, not tenant data** — they have no
+  `tenant_id` and no RLS; the worker operates them outside any tenant context. Only the
+  job *handler's* tenant-scoped work runs inside `WithinTenantTx`.
+- A **cross-tenant batch** (e.g. reconciliation over every tenant) is a **loop that sets
+  one tenant context at a time** — never a single blanket read. It is isolation-preserving
+  by construction.
+
+### The enumeration seam — the one place per-tenant `SET LOCAL` can't reach
+
+That batch loop needs the **list** of tenants to iterate, and `SELECT … FROM tenants` as
+`invoice_app` returns only the current tenant's row. Enumerating *all* tenants is the one
+operation the per-tenant model structurally cannot serve. Because the escapes are
+deliberately closed — no `BYPASSRLS` role exists, and under `FORCE` even a `SECURITY
+DEFINER` function owned by the table owner is still subject to the policy — M2-06 solves it
+with a **narrowly-scoped second policy**, not a bypass:
+
+```sql
+CREATE POLICY tenant_enumerate ON tenants
+    FOR SELECT TO invoice_tenant_reader USING (true);
+```
+
+RLS combines permissive policies with **OR**, so for `invoice_tenant_reader` the predicate
+is `(id = current_tenant) OR true` = every row; `invoice_app` is not in that policy's `TO`
+list, so it still sees exactly one. `invoice_tenant_reader` stays `NOBYPASSRLS` — its reach
+is exactly what this policy grants, nothing more. Its Railway connection URL is
+provisioned when M5-06 (reconciliation) becomes its first consumer (same
+store-on-`Postgres`-service pattern as the app/migrator URLs — see the Appendix).
+
+### Testing
+
+M2-06 ships **no** isolation tests — the whole matrix, **including the enumeration role**
+(`invoice_tenant_reader` sees all tenants; `invoice_app` sees one), lives in **M2-07**
+(adversarial RLS suite, testcontainers). Because this task adds an isolation-critical role
+untested, **M2-07 should land as a tight follow-on** to close the unverified-isolation
+window.
 
 ---
 

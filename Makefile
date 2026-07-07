@@ -17,6 +17,7 @@ MIGRATIONS_DIR := migrations
 # environment / the command line; real values live only in Railway.
 MIGRATOR_PASSWORD ?= migrator
 APP_PASSWORD      ?= app
+READER_PASSWORD   ?= reader   # invoice_tenant_reader — the M2-06 cross-tenant enumeration role.
 
 # Migrator URL for the local docker-compose Postgres (make dev-db). Kept separate
 # from DATABASE_MIGRATION_URL so `make dev-db` always targets the compose DB on
@@ -39,6 +40,7 @@ db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs
 	psql "$(DATABASE_SUPERUSER_URL)" -v ON_ERROR_STOP=1 \
 		-v migrator_password="$(MIGRATOR_PASSWORD)" \
 		-v app_password="$(APP_PASSWORD)" \
+		-v reader_password="$(READER_PASSWORD)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -59,16 +61,21 @@ migrate-create: ## Scaffold a timestamped migration: make migrate-create name=<s
 
 # ---- Local dev DB (docker-compose Postgres a solo engineer iterates against) ----
 
-dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrate
+dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrate -> seed
 	docker compose up -d --wait
-	# Bootstrap the two roles INSIDE the container: its psql is always present, so
+	# Bootstrap the roles INSIDE the container: its psql is always present, so
 	# no host psql client is required. -T disables the TTY so the file pipes to stdin.
 	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
 		-v migrator_password="$(MIGRATOR_PASSWORD)" -v app_password="$(APP_PASSWORD)" \
+		-v reader_password="$(READER_PASSWORD)" \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"
-	# seed seam (M2-06): nothing to seed until the tenants table exists; M2-06 wires a dev-seed step in here.
-	@echo "Local dev DB ready on localhost:5432 (db invoice_os; app role invoice_app). Seeds: deferred to M2-06."
+	# Seed a couple of test tenants (M2-06). Runs as the in-container superuser, which
+	# has BYPASSRLS — so the fixture inserts need no tenant context and no app INSERT
+	# grant. Idempotent (ON CONFLICT DO NOTHING), so re-running `make dev-db` is safe.
+	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
+		< db/seed.dev.sql
+	@echo "Local dev DB ready on localhost:5432 (db invoice_os; app role invoice_app). Seeded tenants: see db/seed.dev.sql."
 
 dev-db-down: ## Stop and remove the local dev Postgres container (keeps the data volume)
 	docker compose down

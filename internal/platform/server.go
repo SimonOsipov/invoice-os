@@ -31,6 +31,7 @@ type App struct {
 	Mux    *http.ServeMux
 
 	readiness readiness
+	bgWorkers []BackgroundWorker
 }
 
 // New builds an App for the named service: it loads config from the
@@ -76,10 +77,23 @@ func (a *App) handler() http.Handler {
 
 // Run serves HTTP until the process receives SIGINT/SIGTERM (or ctx is
 // cancelled), then shuts down gracefully within ShutdownTimeout and flushes
-// Sentry.
+// Sentry. Any registered background workers (AddBackgroundWorker) start alongside
+// the server and drain within the same shutdown window.
 func (a *App) Run(ctx context.Context) error {
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	// Keep the process-lifetime context (runCtx) distinct from the signal context:
+	// background workers start on runCtx, so a shutdown signal does NOT hard-cancel
+	// their in-flight jobs — those are drained explicitly (Stop) within the window.
+	runCtx := ctx
+	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Start background workers (e.g. the River pool) before serving, so /healthz and
+	// the workers come up together. A worker that fails to start aborts startup.
+	for _, w := range a.bgWorkers {
+		if err := w.Start(runCtx); err != nil {
+			return fmt.Errorf("platform: start background worker: %w", err)
+		}
+	}
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(a.Config.Port),
@@ -98,16 +112,24 @@ func (a *App) Run(ctx context.Context) error {
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("platform: server error: %w", err)
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		a.Logger.Info("shutdown signal received")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.Config.ShutdownTimeout)
 	defer cancel()
-	err := srv.Shutdown(shutdownCtx)
+
+	// Drain the HTTP server and every background worker within the same window.
+	// Errors are joined so one worker's failure can't mask the server's or another's.
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	for _, w := range a.bgWorkers {
+		if err := w.Stop(shutdownCtx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+	}
 	flushSentry(2 * time.Second)
-	if err != nil {
-		return fmt.Errorf("platform: graceful shutdown: %w", err)
+	if shutdownErr != nil {
+		return fmt.Errorf("platform: graceful shutdown: %w", shutdownErr)
 	}
 	a.Logger.Info("shutdown complete")
 	return nil

@@ -58,23 +58,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    # Postgres wired now, ready for M2 integration tests (go test picks up DATABASE_URL).
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: invoice_os_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/invoice_os_test?sslmode=disable
+    # No Postgres here on purpose: every DB-backed suite (RLS, queue) is env-gated and
+    # SKIPS without its per-role DATABASE_* URLs, so each runs in its own bootstrap+migrate
+    # job below (`rls`, `queue`) — never here. A DATABASE_URL in this job would point the
+    # queue smoke suite at an unmigrated DB, so it is deliberately absent. This job
+    # builds/vets/tests the pure-Go units.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -247,6 +235,57 @@ jobs:
         # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
         run: go test -count=1 -run TestRLS ./internal/platform/db/...
 
+  # The M2-08 queue/outbox smoke suite. Proves the async job spine end to end against a
+  # real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-outbox
+  # enqueue commits a job + its idempotency key atomically (a rollback leaves neither), a
+  # duplicate business key yields exactly one job, a demo job runs to completion through the
+  # worker-role WithinTenantTx path, and a job that exhausts MaxAttempts lands in River's
+  # discarded state. It bootstraps roles and migrates exactly like the `migrations`/`rls`
+  # jobs (creating River's tables + idempotency_keys), then runs the suite as invoice_app.
+  # The suite SKIPS itself without DATABASE_URL, so the `go` job and a bare `go test ./...`
+  # stay green. The adversarial exactly-once proof is deferred to M2-09.
+  queue:
+    name: Queue smoke (River + outbox)
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoice_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # bootstrap runs as the superuser; goose runs as the migrator; the smoke suite then
+      # connects as invoice_app (never the superuser — BYPASSRLS would void the guarantees).
+      DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
+      MIGRATOR_PASSWORD: migrator
+      APP_PASSWORD: app
+      READER_PASSWORD: reader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bootstrap non-superuser roles (as superuser; psql is preinstalled on the runner)
+        run: make db-bootstrap
+      - name: Apply all migrations (as migrator)
+        run: make migrate-up
+      - name: Run the queue/outbox smoke suite (as invoice_app)
+        # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
+        run: go test -count=1 -run TestQueueSmoke ./internal/submission/...
+
   frontend:
     name: Frontend
     needs: changes
@@ -303,7 +342,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -314,6 +353,7 @@ jobs:
           echo "docker-canary: ${{ needs.docker-canary.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
           echo "rls:           ${{ needs.rls.result }}"
+          echo "queue:         ${{ needs.queue.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
@@ -330,6 +370,9 @@ jobs:
           fi
           if [ "${{ needs.rls.result }}" = "failure" ] || [ "${{ needs.rls.result }}" = "cancelled" ]; then
             echo "::error::RLS isolation suite failed"; exit 1
+          fi
+          if [ "${{ needs.queue.result }}" = "failure" ] || [ "${{ needs.queue.result }}" = "cancelled" ]; then
+            echo "::error::Queue smoke suite failed"; exit 1
           fi
           if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
             echo "::error::Frontend job failed"; exit 1

@@ -107,8 +107,14 @@ distinction:
 
 - **`audit_log` (M2-10) is append-only** — `invoice_app` gets `INSERT` only, never
   `UPDATE`/`DELETE`. A blanket grant would silently make the audit trail mutable.
-- **River's internal tables (M2-08)** are managed by the queue library; the app touches
-  them only through River's API, not via ambient table grants.
+- **River's queue tables (M2-08)** are managed by the queue library; the app touches them
+  only through River's API. Its migration grants `invoice_app` exactly the DML River's
+  driver issues per table (fetch/enqueue/complete/clean on `river_job` + `USAGE` on
+  `river_job_id_seq`; leader election on `river_leader`; upsert/pause on `river_queue`;
+  cleanup-only `DELETE` on `river_notification`) — explicit and per-table, never a blanket
+  `ALL`. The same migration's app-owned `idempotency_keys` (the outbox dedupe ledger) IS
+  tenant data and copies the FORCE-RLS `tenants` template; being permanent/append-only it
+  gets `SELECT`/`INSERT` only, like `audit_log`.
 
 Least privilege is a per-object decision, so it lives in the per-object migration.
 
@@ -254,6 +260,14 @@ is **not** special-cased against RLS:
 - A **cross-tenant batch** (e.g. reconciliation over every tenant) is a **loop that sets
   one tenant context at a time** — never a single blanket read. It is isolation-preserving
   by construction.
+
+**Realized in M2-08.** `internal/platform/queue` builds the River client and the
+`EnqueueTx` transactional-outbox helper (a domain change, its `idempotency_keys` row, and
+the River job commit or roll back together); `cmd/submission` runs the worker pool on the
+platform-kit lifecycle hook (`platform.BackgroundWorker`), draining in the shutdown window.
+Each `DemoWorker` job wraps its tenant-scoped work in `WithinTenantTx(job.Args.TenantID, …)`.
+The happy-path proof is the `queue` CI job (`make test-queue` locally); the adversarial
+exactly-once / re-drive suite is M2-09.
 
 ### The enumeration seam — the one place per-tenant `SET LOCAL` can't reach
 

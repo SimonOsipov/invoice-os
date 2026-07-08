@@ -91,6 +91,15 @@ func (c *Client) River() *river.Client[pgx.Tx] { return c.river }
 // resolves, so a key and its job always share one fate — the exactly-once property M2-09
 // attacks adversarially.
 func (c *Client) EnqueueTx(ctx context.Context, tx pgx.Tx, tenantID, key string, args river.JobArgs, opts *river.InsertOpts) (skipped bool, err error) {
+	// A blank business key is a caller bug: ON CONFLICT DO NOTHING would collapse every
+	// empty-key job for the tenant into one. Fail fast (idempotency_keys' CHECK rejects it
+	// too — this just gives a clearer error before the write).
+	if key == "" {
+		return false, fmt.Errorf("queue: idempotency key is required")
+	}
+	// TODO(M2-09): also reject tenantID != the job args' tenant, so the outbox's atomic
+	// tenant can't diverge from the tenant the worker runs the job under. Belongs with the
+	// adversarial exactly-once suite (needs a tenant-aware job-args contract).
 	ct, err := tx.Exec(ctx,
 		`INSERT INTO idempotency_keys (tenant_id, key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		tenantID, key)

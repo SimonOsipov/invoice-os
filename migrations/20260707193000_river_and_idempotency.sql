@@ -388,6 +388,10 @@ CREATE TABLE idempotency_keys (
     tenant_id  uuid        NOT NULL,
     key        text        NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
+    -- Mirrors River's own table conventions (e.g. river_job's queue/kind length checks):
+    -- a blank key would dedupe unrelated jobs, an unbounded key could overflow the PK
+    -- btree. Rejected at the schema boundary, backing up queue.EnqueueTx's app-level guard.
+    CONSTRAINT idempotency_key_length CHECK (char_length(key) > 0 AND char_length(key) <= 255),
     PRIMARY KEY (tenant_id, key)
 );
 

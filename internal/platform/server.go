@@ -88,11 +88,15 @@ func (a *App) Run(ctx context.Context) error {
 	defer stop()
 
 	// Start background workers (e.g. the River pool) before serving, so /healthz and
-	// the workers come up together. A worker that fails to start aborts startup.
+	// the workers come up together. Track the ones already up so any error path can drain
+	// them: a worker that fails to start must not leave its predecessors running past Run.
+	started := make([]BackgroundWorker, 0, len(a.bgWorkers))
 	for _, w := range a.bgWorkers {
 		if err := w.Start(runCtx); err != nil {
+			a.drainWorkers(started)
 			return fmt.Errorf("platform: start background worker: %w", err)
 		}
+		started = append(started, w)
 	}
 
 	srv := &http.Server{
@@ -111,6 +115,8 @@ func (a *App) Run(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		// The listener died; drain the workers we started before bailing out.
+		a.drainWorkers(started)
 		return fmt.Errorf("platform: server error: %w", err)
 	case <-sigCtx.Done():
 		a.Logger.Info("shutdown signal received")
@@ -122,7 +128,7 @@ func (a *App) Run(ctx context.Context) error {
 	// Drain the HTTP server and every background worker within the same window.
 	// Errors are joined so one worker's failure can't mask the server's or another's.
 	shutdownErr := srv.Shutdown(shutdownCtx)
-	for _, w := range a.bgWorkers {
+	for _, w := range started {
 		if err := w.Stop(shutdownCtx); err != nil {
 			shutdownErr = errors.Join(shutdownErr, err)
 		}
@@ -133,4 +139,21 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.Logger.Info("shutdown complete")
 	return nil
+}
+
+// drainWorkers stops the given workers within a fresh ShutdownTimeout window. It is used on
+// the error exit paths where Run bails out before its normal shutdown sequence, so an
+// already-started worker never outlives the call. Stop errors are logged, not returned —
+// Run is already returning the primary failure.
+func (a *App) drainWorkers(workers []BackgroundWorker) {
+	if len(workers) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), a.Config.ShutdownTimeout)
+	defer cancel()
+	for _, w := range workers {
+		if err := w.Stop(ctx); err != nil {
+			a.Logger.Error("draining background worker on error exit", slog.Any("err", err))
+		}
+	}
 }

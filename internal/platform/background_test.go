@@ -75,3 +75,27 @@ func TestRunAbortsWhenBackgroundWorkerStartFails(t *testing.T) {
 		t.Fatal("Run should return the worker's start error, got nil")
 	}
 }
+
+// When a later worker's Start fails, the ones already started must be drained before Run
+// returns — no worker outlives the aborted startup.
+func TestRunDrainsStartedWorkersWhenLaterStartFails(t *testing.T) {
+	t.Setenv("PORT", "0")
+	app, err := New("svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := &stubWorker{}
+	second := &stubWorker{startErr: errors.New("boom")}
+	app.AddBackgroundWorker(first)
+	app.AddBackgroundWorker(second)
+
+	if err := app.Run(context.Background()); err == nil {
+		t.Fatal("Run should return the second worker's start error, got nil")
+	}
+	if !first.started.Load() {
+		t.Error("first worker should have started")
+	}
+	if !first.stopped.Load() {
+		t.Error("first worker should have been drained after the second's Start failed")
+	}
+}

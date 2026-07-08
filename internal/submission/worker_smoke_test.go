@@ -138,6 +138,18 @@ func TestQueueSmoke_Outbox(t *testing.T) {
 		}
 	})
 
+	t.Run("empty business key is rejected", func(t *testing.T) {
+		tenant := uuid.NewString()
+		err := db.WithinTenantTx(ctx, pool, tenant, func(tx pgx.Tx) error {
+			_, e := q.EnqueueTx(ctx, tx, tenant, "",
+				submission.DemoArgs{TenantID: tenant, Note: uuid.NewString()}, nil)
+			return e
+		})
+		if err == nil {
+			t.Fatal("EnqueueTx with an empty key should return an error")
+		}
+	})
+
 	t.Run("duplicate business key produces exactly one job", func(t *testing.T) {
 		tenant, key, note := uuid.NewString(), uuid.NewString(), uuid.NewString()
 		if skipped := enqueueDemo(t, ctx, q, pool, tenant, key, note); skipped {

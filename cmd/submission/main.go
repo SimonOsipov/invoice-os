@@ -30,7 +30,13 @@ func main() {
 	// Connect as the app role (invoice_app, NOBYPASSRLS) — never the migrator or
 	// superuser (docs/migrations.md §1). The worker uses this pool both to operate River's
 	// queue and, per job, to open tenant-scoped transactions via db.WithinTenantTx.
-	pool, err := db.NewPool(ctx, os.Getenv("DATABASE_URL"))
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		// pgx would otherwise build a config from ambient libpq env/defaults for an empty
+		// DSN — fail fast so this service can only ever connect as its configured app role.
+		log.Fatal("submission: DATABASE_URL is required")
+	}
+	pool, err := db.NewPool(ctx, dsn)
 	if err != nil {
 		log.Fatalf("submission: db pool: %v", err)
 	}

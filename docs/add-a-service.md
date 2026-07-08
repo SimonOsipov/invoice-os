@@ -50,6 +50,20 @@ repo-root `go.mod`/`go.sum`; the run stage contains only the binary and listens 
 (nothing can build or verify it today — `cmd/` dirs are placeholders). Do not write
 per-service Dockerfiles.
 
+> **Realized in M2-12 — how `SERVICE` is supplied (deviation from the original
+> plan).** Railway config-as-code has **no `build.buildArgs`** field
+> ([config-as-code/reference](https://docs.railway.com/config-as-code/reference)
+> lists only `builder`, `dockerfilePath`, `buildCommand`, `watchPatterns`,
+> `railpackVersion`), so the `buildArgs` block first specified for `railway.json`
+> was silently ignored and `SERVICE` reached the build empty. The working mechanism
+> is Railway's documented one: declare `ARG SERVICE` in the Dockerfile (done) and
+> set `SERVICE=<svc>` as a **service variable** — Railway injects declared service
+> variables as build args (§4). One consequence: the shared Dockerfile uses **no**
+> BuildKit `--mount=type=cache`, because Railway requires each cache-mount id to
+> embed the *building service's own id* (`id=s/<service-id>-<target>`) and bans env
+> vars in the id — unexpressable in one Dockerfile shared by every service. Plain
+> Docker layer caching is kept; the build stays portable (Railway + local).
+
 ## 2. The config block — `cmd/<svc>/railway.json`
 
 One file per service, committed next to the binary's `main.go`. Copy verbatim,
@@ -61,7 +75,6 @@ substitute `<svc>`/`<ctx>`:
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "buildArgs": { "SERVICE": "<svc>" },
     "watchPatterns": [
       "cmd/<svc>/**",
       "internal/<ctx>/**",
@@ -86,6 +99,8 @@ Fixed by convention, not per-service choice:
 - **`ON_FAILURE`** restart policy everywhere.
 - **Root Directory stays `/`** (unset) on the Railway service — the build needs the
   whole repo (root `go.mod`, shared `internal/`).
+- **No `buildArgs`.** `SERVICE=<svc>` is set as a **service variable** instead (§4,
+  and the §1 M2-12 note) — Railway config-as-code has no `buildArgs` field.
 
 ## 3. Watch-path convention
 
@@ -107,9 +122,13 @@ service must rebuild?* For a Go service that is exactly:
 > all services per D7) — omitting it would leave stale deployments after audit-module
 > changes. If M2 restructures audit, revisit this line.
 
-Do **not** add `migrations/**` — schema migrations are not a service-image concern and
-must not trigger fleet-wide rebuilds. Do **not** add another service's context dir; if
-service A needs service B's types, that coupling is the problem, not the watch list.
+Do **not** add `migrations/**` — for a **context service** schema migrations are not a
+service-image concern and must not trigger a rebuild. **The gateway is the one exception**
+(realized in M2-12): it embeds the migrations via `go:embed` and applies them at boot
+(migrations.md §2), so a migration change *does* change its image — its watch patterns
+therefore include `migrations/**`. No other service does. Do **not** add another
+service's context dir; if service A needs service B's types, that coupling is the problem,
+not the watch list.
 
 ### ⚠️ The instance-level gotcha (this is half the reason this doc exists)
 
@@ -131,6 +150,14 @@ build/deploy behavior; trust (and maintain) the **instance** for trigger behavio
 
 ### `.env.example`
 
+> **Not adopted for backend services (M2-12 decision).** The seven context services and
+> the gateway ship **no** `cmd/<svc>/.env.example`. Each service's variables live in one
+> place — its Railway service variable set (see the M2-12 wiring below and the task
+> record) — and the binaries fail fast on a missing required var, so a committed example
+> file bought duplication, not safety. The subsection below is retained for the SPA prior
+> art and any future service that opts back in; it is **not** a requirement for the Go
+> binaries.
+
 One per service at **`cmd/<svc>/.env.example`**, committed (the root `.gitignore`
 already carves out `!.env.example`; real `.env` files are ignored). Rule: **every
 environment variable the binary reads appears here** with a dev-safe placeholder — a
@@ -149,6 +176,12 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
 
 - **Names:** `UPPER_SNAKE_CASE`. No per-service prefix — each Railway service has its
   own variable set, so prefixes add nothing.
+- **`SERVICE=<svc>` everywhere, set explicitly** (runbook step 4). This is the build
+  arg that selects which binary the shared Dockerfile compiles (`./cmd/${SERVICE}`) —
+  a **build-time** variable Railway injects into the Dockerfile's `ARG SERVICE`, not a
+  runtime one (the binary reads its name from code, not env). Required: an unset/empty
+  `SERVICE` fails the build. See the §1 M2-12 note for why it is a variable, not
+  `railway.json` `buildArgs`.
 - **`PORT=8080` everywhere, set explicitly** (runbook step 4). Railway injects `$PORT`
   at runtime; we pin it so private-networking callers can rely on
   `http://<svc>.railway.internal:8080` without per-service discovery.

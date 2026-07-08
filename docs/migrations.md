@@ -54,6 +54,16 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 as the superuser via psql. `make db-bootstrap` runs it with dev-default passwords; real
 passwords live only in Railway.
 
+> **Bootstrap drift on already-provisioned DBs (hit in M2-12).** Adding a role here
+> (as M2-06 added `invoice_tenant_reader`) does **not** retroactively create it on a
+> Postgres that was bootstrapped earlier — the dev Railway DB, bootstrapped at M2-01,
+> was missing the reader when M2-12 first ran migrations against it, so
+> `20260707122459_tenants_rls.sql` failed with `role "invoice_tenant_reader" does not
+> exist`. Re-run `bootstrap.sql` against every live DB after adding a role. To create
+> just the new role without rotating the existing roles' passwords (step 3 rotates all
+> three — it would invalidate the live `INVOICE_*_DATABASE_URL` vars), run only its
+> `CREATE ROLE` + `ALTER ROLE … NOSUPERUSER NOBYPASSRLS` + schema `GRANT USAGE` lines.
+
 ---
 
 ## 2. On-deploy mechanism — gateway-as-migrator, CI-ordered
@@ -74,10 +84,19 @@ This gives a **global ordering barrier** (schema-before-fleet) using only in-net
 connections — the gateway is the one service that already needs privileged DB reach, so
 it doubles as the migrator. No context service is granted the migrator URL.
 
-> **Specify-now / prove-at-first-consumer:** the exact wiring (gateway `railway.json`
-> deploy hook or entrypoint step, the CI job ordering) is authored in **M2-12** against
-> this spec — same pattern add-a-service.md uses for the shared Go Dockerfile. Everything
-> a wirer needs is here; nothing is left to re-decide.
+> **Realized in M2-12.** The gateway image is distroless (the binary only — no shell, no
+> goose binary), so the migrator step runs *inside the binary*. `migrations/embed.go`
+> ships every `migrations/*.sql` via `go:embed`, and `cmd/gateway` calls
+> `internal/platform/db.MigrateUp` (goose's Provider `Up` over the pgx v5 stdlib driver,
+> against `DATABASE_MIGRATION_URL`) **synchronously in `main`, before `app.Run` opens the
+> listener**. `/healthz` is always-200 liveness, so it can only answer *after* migration
+> returns — that is the "migrated before healthy" guarantee, enforced by process order
+> rather than a probe. A migration error is fatal (`log.Fatal`), so the deploy never goes
+> healthy. The CI ordering lives in `.github/workflows/preview-backend.yml`: deploy the
+> gateway → poll its public `/healthz` until 200 (the health-gate, which also surfaces a
+> failed migration) → deploy the seven context services. Because the gateway embeds the
+> SQL, its `cmd/gateway/railway.json` watch patterns include `migrations/**` — the one
+> service for which a migration change rebuilds the image (add-a-service.md §3).
 
 **Dev vs CI, two different gates:**
 

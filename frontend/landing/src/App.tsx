@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { Nav } from './components/Nav'
+import { SignInModal } from './components/SignInModal'
 import { Hero } from './components/Hero'
 import { TrustStrip } from './components/TrustStrip'
 import { HowItWorks } from './components/HowItWorks'
@@ -14,6 +16,7 @@ import { Footer } from './components/Footer'
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
 // .mono, .grid-bg, .dot-bg) that every section relies on.
 export default function App() {
+  const [signInOpen, setSignInOpen] = useState(false)
   return (
     <div
       className="if-v2"
@@ -25,7 +28,7 @@ export default function App() {
         overflowX: 'hidden',
       }}
     >
-      <Nav />
+      <Nav onSignIn={() => setSignInOpen(true)} />
       <Hero />
       <TrustStrip />
       <HowItWorks />
@@ -36,6 +39,7 @@ export default function App() {
       <Pricing />
       <DemoCta />
       <Footer />
+      {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
     </div>
   )
 }

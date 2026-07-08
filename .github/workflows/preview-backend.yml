@@ -1,9 +1,10 @@
 name: PR Preview Backend (deploy fleet + health-gate)
 
-# Backend half of the M1-08 deploy model (M2-12): on a non-draft PR touching Go
-# backend paths, deploy the eight backend services to the shared dev environment
-# from the PR's code — the gateway FIRST and health-gated, then the seven context
-# services in parallel. The gateway runs `goose up` at boot (docs/migrations.md
+# Backend half of the M1-08 deploy model (M2-12): on a non-draft app-code PR (the
+# trigger paths mirror preview.yml so the whole dev env comes up together), deploy
+# the eight backend services to the shared dev environment from the PR's code — the
+# gateway FIRST and health-gated, then the seven context services in parallel. The
+# gateway runs `goose up` at boot (docs/migrations.md
 # §2), so health-gating it is the schema-before-fleet barrier: the context
 # services deploy only once the gateway is healthy, i.e. the schema is fully
 # migrated. Mirrors preview.yml (the SPA half); NOT a required check.
@@ -20,6 +21,9 @@ name: PR Preview Backend (deploy fleet + health-gate)
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    # Any app-code PR (frontend OR backend) previews the WHOLE dev env so the SPAs
+    # and the backend fleet come up together (see preview.yml). This list is the
+    # UNION of the backend + frontend paths and MUST stay in sync with preview.yml's.
     paths:
       - 'cmd/**'
       - 'internal/**'
@@ -28,6 +32,13 @@ on:
       - 'go.sum'
       - 'Dockerfile'
       - 'Dockerfile.dockerignore'
+      - 'frontend/**'
+      - 'packages/**'
+      - 'e2e/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/preview.yml'
       - '.github/workflows/preview-backend.yml'
   workflow_dispatch:
 

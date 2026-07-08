@@ -70,10 +70,9 @@ jobs:
     if: needs.gateway.result == 'success'
     runs-on: ubuntu-latest
     env:
-      # TODO(M2-12 Half B): set to the gateway's public Railway domain once the
-      # service is provisioned and a domain is generated (add-a-service.md §5
-      # step 6). Same pattern as preview.yml's hardcoded SPA URLs.
-      GATEWAY_URL: https://GATEWAY-DOMAIN-PENDING.up.railway.app
+      # The gateway's public Railway domain (dev), generated in M2-12 Half B
+      # (add-a-service.md §5 step 6). Same pattern as preview.yml's hardcoded SPA URLs.
+      GATEWAY_URL: https://gateway-development-997b.up.railway.app
     steps:
       - name: Wait for gateway /healthz 200
         run: |

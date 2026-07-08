@@ -3,7 +3,6 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "buildArgs": { "SERVICE": "notifications" },
     "watchPatterns": [
       "cmd/notifications/**",
       "internal/notifications/**",

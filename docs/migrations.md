@@ -54,6 +54,16 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 as the superuser via psql. `make db-bootstrap` runs it with dev-default passwords; real
 passwords live only in Railway.
 
+> **Bootstrap drift on already-provisioned DBs (hit in M2-12).** Adding a role here
+> (as M2-06 added `invoice_tenant_reader`) does **not** retroactively create it on a
+> Postgres that was bootstrapped earlier — the dev Railway DB, bootstrapped at M2-01,
+> was missing the reader when M2-12 first ran migrations against it, so
+> `20260707122459_tenants_rls.sql` failed with `role "invoice_tenant_reader" does not
+> exist`. Re-run `bootstrap.sql` against every live DB after adding a role. To create
+> just the new role without rotating the existing roles' passwords (step 3 rotates all
+> three — it would invalidate the live `INVOICE_*_DATABASE_URL` vars), run only its
+> `CREATE ROLE` + `ALTER ROLE … NOSUPERUSER NOBYPASSRLS` + schema `GRANT USAGE` lines.
+
 ---
 
 ## 2. On-deploy mechanism — gateway-as-migrator, CI-ordered

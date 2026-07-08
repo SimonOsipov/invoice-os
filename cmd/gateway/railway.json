@@ -3,7 +3,6 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "buildArgs": { "SERVICE": "gateway" },
     "watchPatterns": [
       "cmd/gateway/**",
       "internal/gateway/**",

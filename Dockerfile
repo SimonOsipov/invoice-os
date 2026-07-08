@@ -16,14 +16,17 @@ ARG SERVICE
 # so Go never has to download a toolchain at build time.
 FROM golang:1.26-alpine AS build
 WORKDIR /src
-# Modules first: this layer caches across source-only changes.
+# Modules first: this COPY+download layer is reused across source-only changes
+# via normal Docker layer caching. A BuildKit `--mount=type=cache` is deliberately
+# NOT used: Railway's Metal builder requires every cache-mount id to embed the
+# building service's own id (`id=s/<service-id>-<target>`) and forbids env vars in
+# the id, which cannot be expressed in the ONE Dockerfile shared by every service
+# (add-a-service.md §1). Plain layers keep the build portable (Railway + local).
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN go mod download
 COPY . .
 ARG SERVICE
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    test -n "${SERVICE}" || { echo "Dockerfile: SERVICE build arg is required" >&2; exit 1; }; \
+RUN test -n "${SERVICE}" || { echo "Dockerfile: SERVICE build arg is required" >&2; exit 1; }; \
     CGO_ENABLED=0 go build -o /out/service ./cmd/${SERVICE}
 
 # ---- Run: distroless static (CA certs + nonroot user), binary only ----

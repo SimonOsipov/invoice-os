@@ -3,7 +3,6 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "buildArgs": { "SERVICE": "invoice" },
     "watchPatterns": [
       "cmd/invoice/**",
       "internal/invoice/**",

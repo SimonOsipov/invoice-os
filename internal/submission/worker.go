@@ -27,6 +27,10 @@ type DemoArgs struct {
 // Kind is River's stable job-type key, persisted on every row — never rename it.
 func (DemoArgs) Kind() string { return "submission_demo" }
 
+// Tenant satisfies queue.TenantScoped: the tenant this job runs its work under. EnqueueTx
+// requires it and fails closed if it diverges from the outbox tenant (docs/migrations.md §8).
+func (a DemoArgs) Tenant() string { return a.TenantID }
+
 // InsertOpts gives every demo job River-layer uniqueness by args: the in-flight complement
 // to the authoritative idempotency_keys dedupe (the two-layer idempotency of decision #2).
 func (DemoArgs) InsertOpts() river.InsertOpts {

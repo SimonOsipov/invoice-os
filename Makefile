@@ -101,9 +101,10 @@ test-rls: ## Run the M2-07 adversarial RLS suite against the local dev DB (run `
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
 	go test -count=1 -run TestRLS ./internal/platform/db/...
 
-test-queue: ## Run the M2-08 queue/outbox smoke suite against the local dev DB (run `make dev-db` first)
+test-queue: ## Run the M2-08 smoke + M2-09 exactly-once queue suites against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
-	go test -count=1 -run TestQueueSmoke ./internal/submission/...
+	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	go test -count=1 ./internal/submission/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

@@ -58,10 +58,14 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 // failArgs is a test-only job whose worker always errors, so it exhausts MaxAttempts and
 // lands in River's `discarded` (dead-letter) state — the DLQ path of AC #5.
 type failArgs struct {
-	Note string `json:"note"`
+	TenantID string `json:"tenant_id"`
+	Note     string `json:"note"`
 }
 
 func (failArgs) Kind() string { return "submission_demo_fail" }
+
+// Tenant satisfies queue.TenantScoped (EnqueueTx is fail-closed on non-implementers).
+func (a failArgs) Tenant() string { return a.TenantID }
 
 type failWorker struct {
 	river.WorkerDefaults[failArgs]
@@ -198,7 +202,7 @@ func TestQueueSmoke_Worker(t *testing.T) {
 		// attempt 2) before the discard, not just an instant give-up.
 		err := db.WithinTenantTx(ctx, pool, tenant, func(tx pgx.Tx) error {
 			_, e := q.EnqueueTx(ctx, tx, tenant, key,
-				failArgs{Note: note}, &river.InsertOpts{MaxAttempts: 2})
+				failArgs{TenantID: tenant, Note: note}, &river.InsertOpts{MaxAttempts: 2})
 			return e
 		})
 		if err != nil {

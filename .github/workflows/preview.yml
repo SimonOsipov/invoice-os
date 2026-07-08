@@ -18,12 +18,6 @@ name: PR Preview (deploy + smoke)
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    # Any app-code PR (frontend OR backend) previews the WHOLE dev env, so the SPAs
-    # and the backend fleet are up together — a coherent environment, not two halves
-    # that deploy independently. This list is the UNION of the frontend + backend
-    # paths and MUST stay in sync with preview-backend.yml's (both fire together;
-    # they serialize on the shared concurrency group). The SPA↔gateway wiring is a
-    # later task; this just keeps both tiers alive at the same time.
     paths:
       - 'frontend/**'
       - 'packages/**'
@@ -31,15 +25,7 @@ on:
       - 'package.json'
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'migrations/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
-      - 'Dockerfile.dockerignore'
       - '.github/workflows/preview.yml'
-      - '.github/workflows/preview-backend.yml'
   workflow_dispatch:
 
 # One PR deploys to the shared dev environment at a time; a second PR queues

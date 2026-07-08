@@ -39,7 +39,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -105,6 +105,11 @@ test-queue: ## Run the M2-08 smoke + M2-09 exactly-once queue suites against the
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	go test -count=1 ./internal/submission/...
+
+test-audit: ## Run the M2-10 audit immutability/atomicity suite against the local dev DB (run `make dev-db` first)
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	go test -count=1 ./internal/audit/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

@@ -290,6 +290,57 @@ jobs:
         # each DB-backed test self-skips without its DATABASE_* URLs.
         run: go test -count=1 ./internal/submission/...
 
+  # M2-10 audit suite: proves audit_log rows are append-only (UPDATE/DELETE/TRUNCATE rejected
+  # for the app by the missing grant and for the table owner by the append-only trigger) and
+  # commit/roll back atomically with the caller's transaction. Bootstraps roles and migrates
+  # exactly like the `migrations`/`rls`/`queue` jobs (creating the committed audit_log table),
+  # then runs ./internal/audit as invoice_app; the owner-immutability case also needs
+  # DATABASE_MIGRATION_URL (already set below) to attack as invoice_migrator. The suite SKIPS
+  # itself without both DATABASE_* URLs, so the `go` job and a bare `go test ./...` stay green.
+  audit:
+    name: Audit suite (append-only + atomicity)
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoice_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # bootstrap runs as the superuser; goose runs as the migrator; the suite then connects
+      # as invoice_app (writes + grant/RLS attacks) and invoice_migrator (the owner attack).
+      DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
+      MIGRATOR_PASSWORD: migrator
+      APP_PASSWORD: app
+      READER_PASSWORD: reader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bootstrap non-superuser roles (as superuser; psql is preinstalled on the runner)
+        run: make db-bootstrap
+      - name: Apply all migrations (as migrator)
+        run: make migrate-up
+      - name: Run the audit immutability/atomicity suite (as invoice_app / invoice_migrator)
+        # -count=1 disables the test cache: the suite MUST re-run against this fresh DB. No
+        # -run filter, so new tests in ./internal/audit are picked up automatically; each
+        # DB-backed test self-skips without its DATABASE_* URLs.
+        run: go test -count=1 ./internal/audit/...
+
   frontend:
     name: Frontend
     needs: changes
@@ -346,7 +397,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -358,6 +409,7 @@ jobs:
           echo "migrations:    ${{ needs.migrations.result }}"
           echo "rls:           ${{ needs.rls.result }}"
           echo "queue:         ${{ needs.queue.result }}"
+          echo "audit:         ${{ needs.audit.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
@@ -377,6 +429,9 @@ jobs:
           fi
           if [ "${{ needs.queue.result }}" = "failure" ] || [ "${{ needs.queue.result }}" = "cancelled" ]; then
             echo "::error::Queue smoke suite failed"; exit 1
+          fi
+          if [ "${{ needs.audit.result }}" = "failure" ] || [ "${{ needs.audit.result }}" = "cancelled" ]; then
+            echo "::error::Audit suite failed"; exit 1
           fi
           if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
             echo "::error::Frontend job failed"; exit 1

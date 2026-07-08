@@ -26,8 +26,11 @@ docs
 e2e
 *.md
 
-# DB / migration tooling — not needed to compile a service binary
-migrations
+# DB tooling — not needed to compile a service binary. `migrations/` is the
+# exception (M2-12): the gateway embeds migrations/*.sql via go:embed
+# (migrations.md §2), so they MUST be in the Go build context or the gateway image
+# fails to compile. It is a shared Dockerfile, so migrations/ lands in every
+# service's context; the seven context services simply never import it.
 db
 Makefile
 docker-compose.yml

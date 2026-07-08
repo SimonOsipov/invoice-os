@@ -107,9 +107,13 @@ service must rebuild?* For a Go service that is exactly:
 > all services per D7) — omitting it would leave stale deployments after audit-module
 > changes. If M2 restructures audit, revisit this line.
 
-Do **not** add `migrations/**` — schema migrations are not a service-image concern and
-must not trigger fleet-wide rebuilds. Do **not** add another service's context dir; if
-service A needs service B's types, that coupling is the problem, not the watch list.
+Do **not** add `migrations/**` — for a **context service** schema migrations are not a
+service-image concern and must not trigger a rebuild. **The gateway is the one exception**
+(realized in M2-12): it embeds the migrations via `go:embed` and applies them at boot
+(migrations.md §2), so a migration change *does* change its image — its watch patterns
+therefore include `migrations/**`. No other service does. Do **not** add another
+service's context dir; if service A needs service B's types, that coupling is the problem,
+not the watch list.
 
 ### ⚠️ The instance-level gotcha (this is half the reason this doc exists)
 
@@ -130,6 +134,14 @@ build/deploy behavior; trust (and maintain) the **instance** for trigger behavio
 ## 4. `.env.example` and env-var conventions
 
 ### `.env.example`
+
+> **Not adopted for backend services (M2-12 decision).** The seven context services and
+> the gateway ship **no** `cmd/<svc>/.env.example`. Each service's variables live in one
+> place — its Railway service variable set (see the M2-12 wiring below and the task
+> record) — and the binaries fail fast on a missing required var, so a committed example
+> file bought duplication, not safety. The subsection below is retained for the SPA prior
+> art and any future service that opts back in; it is **not** a requirement for the Go
+> binaries.
 
 One per service at **`cmd/<svc>/.env.example`**, committed (the root `.gitignore`
 already carves out `!.env.example`; real `.env` files are ignored). Rule: **every

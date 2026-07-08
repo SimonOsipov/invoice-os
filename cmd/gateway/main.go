@@ -17,6 +17,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 // routedServices are the seven context services the gateway fronts, in wedge
@@ -31,6 +33,17 @@ func main() {
 	app, err := platform.New("gateway")
 	if err != nil {
 		log.Fatalf("gateway: startup: %v", err)
+	}
+
+	// Migrate before serving: the gateway is the fleet's single in-network
+	// migrator (docs/migrations.md §2). It applies every pending migration as the
+	// migrator role here — before app.Run starts the listener — so the schema is
+	// fully migrated by the time /healthz first answers. That is the
+	// schema-before-fleet barrier CI relies on when it health-gates the gateway
+	// ahead of the seven context services (which never migrate). Fatal on failure:
+	// a gateway that cannot migrate must never come up healthy.
+	if err := db.MigrateUp(context.Background(), mustEnv("DATABASE_MIGRATION_URL"), migrations.FS); err != nil {
+		log.Fatalf("gateway: migrate: %v", err)
 	}
 
 	verifier, err := auth.NewVerifier(auth.Config{

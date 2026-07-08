@@ -179,9 +179,20 @@ export type ConnectorsState = Record<ConnectorId, boolean>
 // item that `nav()` translates into `{ view: 'invoices', filter: 'Pending' }`.
 export type NavId = View | 'approvals'
 
+// The signed-in caller shown in the sidebar footer. `tenantName`/`verified` come from
+// the GET /v1/me round trip (M2-13): when verified, the tenant name was proven against
+// the live backend; otherwise it falls back to the persona's static workspace label.
+export type SignedInUser = {
+  name: string
+  initials: string
+  tenantName: string | null
+  verified: boolean
+}
+
 // The full app state + action bundle threaded through every section component, mirroring
 // the prototype's single `renderVals()` bag of state/handlers (Platform.dc.html ~L1266+).
 export type PlatformCtx = {
+  user: SignedInUser
   clients: Client[]
   active: Client
   mode: Mode

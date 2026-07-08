@@ -8,9 +8,15 @@
 -- The UUIDs are FIXED and well-known on purpose: mint a mock-issuer JWT (M2-05) with
 -- app_metadata.tenant_id set to one of these and the whole auth → SET LOCAL → RLS path
 -- resolves to a real seeded tenant, and M2-13's mock-login round trip has a row to read.
--- Two tenants so cross-tenant isolation can be exercised by hand and in M2-07.
+-- Tenant A/B exist so cross-tenant isolation can be exercised by hand and in M2-07; the
+-- two persona tenants below back the M2-13 / task-21 sign-in personas (the frontend sends
+-- their id as app_metadata.tenant_id), so /v1/me renders the real firm / in-house name.
+--   1111… → Okafor & Partners  (persona: Chinedu Okafor, firm accountant)
+--   2222… → Honeywell Group    (persona: Ngozi Balogun, in-house accountant)
 
 INSERT INTO tenants (id, name) VALUES
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)')
+    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)'),
+    ('11111111-1111-1111-1111-111111111111', 'Okafor & Partners'),
+    ('22222222-2222-2222-2222-222222222222', 'Honeywell Group')
 ON CONFLICT (id) DO NOTHING;

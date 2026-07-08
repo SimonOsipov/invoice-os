@@ -242,6 +242,11 @@ jobs:
       - name: Run the adversarial RLS suite (as app / migrator / reader)
         # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
         run: go test -count=1 -run TestRLS ./internal/platform/db/...
+      - name: Tenancy /v1/me round-trip (RLS-scoped read as invoice_app)
+        # M2-13: proves Store.CurrentTenant's bare SELECT resolves to exactly the
+        # caller's tenant under RLS. Needs DATABASE_URL (app) + DATABASE_SUPERUSER_URL
+        # (seed) — both already in this job's env; it self-skips everywhere else.
+        run: go test -count=1 -run TestCurrentTenant_RoundTrip ./internal/tenancy/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

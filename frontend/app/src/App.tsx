@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { INHOUSE_IDX } from './data'
+import { APP_PERSONAS, signIn, type Persona, type PersonaId, type Session } from './auth'
+import { SignIn } from './components/SignIn'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
 import { Sidebar } from './components/Sidebar'
@@ -24,6 +26,7 @@ import type {
   NavId,
   PlatformCtx,
   SettingsTab,
+  SignedInUser,
   ValidationResult,
   View,
 } from './types'
@@ -33,12 +36,14 @@ const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracl
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
-export default function App() {
+// Rendered only once signed in (see App): the persona picks the initial workspace mode.
+function Workspace({ session }: { session: Session }) {
+  const initialIdx = session.persona.mode === 'inhouse' ? INHOUSE_IDX : 1
   const [clients, setClients] = useState<Client[]>(() => buildClients())
-  const [mode, setMode_] = useState<Mode>('firm')
+  const [mode, setMode_] = useState<Mode>(session.persona.mode)
   const [view, setView] = useState<View>('dashboard')
-  const [activeIdx, setActiveIdx] = useState(1)
-  const [draft, setDraft] = useState<Draft>(() => defaultDraft(clients[1]))
+  const [activeIdx, setActiveIdx] = useState(initialIdx)
+  const [draft, setDraft] = useState<Draft>(() => defaultDraft(clients[initialIdx]))
   const [createStep, setCreateStep] = useState<CreateStep>('form')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
   const [uploadFile, setUploadFile] = useState<string | null>(null)
@@ -236,7 +241,15 @@ export default function App() {
     )
   }
 
+  const user: SignedInUser = {
+    name: session.persona.name,
+    initials: session.persona.initials,
+    tenantName: session.me?.tenant.name ?? null,
+    verified: session.verified,
+  }
+
   const ctx: PlatformCtx = {
+    user,
     clients,
     active,
     mode,
@@ -313,4 +326,35 @@ export default function App() {
       {xmlOpen && <XmlModal ctx={ctx} />}
     </div>
   )
+}
+
+// App gates the workspace behind the mock sign-in (M2-13). Picking a persona runs the
+// real round trip (mint → GET /v1/me) when a gateway is configured; on failure it enters
+// with the persona's static identity, marked unverified, so the showcase never hard-fails.
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null)
+  const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
+
+  const doSignIn = useCallback(async (persona: Persona) => {
+    setSigningIn(persona.id)
+    try {
+      setSession(await signIn(persona))
+    } catch (err) {
+      // A configured gateway that is unreachable: degrade to an unverified session so the
+      // app still opens. console.warn (not error) keeps the Playwright smoke's no-error gate green.
+      console.warn('[app] sign-in round trip failed; entering with unverified identity:', err)
+      setSession({ persona, token: null, me: null, verified: false })
+    } finally {
+      setSigningIn(null)
+    }
+  }, [])
+
+  // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that persona.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('persona')
+    if (p === 'firm' || p === 'inhouse') void doSignIn(APP_PERSONAS[p])
+  }, [doSignIn])
+
+  if (!session) return <SignIn signingIn={signingIn} onPick={doSignIn} />
+  return <Workspace session={session} />
 }

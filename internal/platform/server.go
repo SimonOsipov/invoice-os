@@ -64,12 +64,14 @@ func (a *App) Ready(name string, check ReadyCheck) {
 }
 
 // handler wraps the mux with the standard middleware chain (outermost first):
-// request-id and tenant-id run before recovery so a recovered panic is logged
-// and reported with both ids.
+// request-id, tenant-id and identity run before recovery so a recovered panic is
+// logged and reported with the request and tenant ids, and so tenant-scoped handlers
+// see the verified caller the gateway injected.
 func (a *App) handler() http.Handler {
 	return chain(a.Mux,
 		requestIDMiddleware,
 		tenantIDMiddleware,
+		identityMiddleware,
 		recoveryMiddleware(a.Logger),
 		requestLogMiddleware(a.Logger),
 	)

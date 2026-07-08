@@ -39,7 +39,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -100,6 +100,10 @@ test-rls: ## Run the M2-07 adversarial RLS suite against the local dev DB (run `
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
 	go test -count=1 -run TestRLS ./internal/platform/db/...
+
+test-queue: ## Run the M2-08 queue/outbox smoke suite against the local dev DB (run `make dev-db` first)
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	go test -count=1 -run TestQueueSmoke ./internal/submission/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

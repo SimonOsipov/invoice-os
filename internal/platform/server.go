@@ -31,6 +31,7 @@ type App struct {
 	Mux    *http.ServeMux
 
 	readiness readiness
+	bgWorkers []BackgroundWorker
 }
 
 // New builds an App for the named service: it loads config from the
@@ -76,10 +77,27 @@ func (a *App) handler() http.Handler {
 
 // Run serves HTTP until the process receives SIGINT/SIGTERM (or ctx is
 // cancelled), then shuts down gracefully within ShutdownTimeout and flushes
-// Sentry.
+// Sentry. Any registered background workers (AddBackgroundWorker) start alongside
+// the server and drain within the same shutdown window.
 func (a *App) Run(ctx context.Context) error {
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	// Keep the process-lifetime context (runCtx) distinct from the signal context:
+	// background workers start on runCtx, so a shutdown signal does NOT hard-cancel
+	// their in-flight jobs — those are drained explicitly (Stop) within the window.
+	runCtx := ctx
+	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Start background workers (e.g. the River pool) before serving, so /healthz and
+	// the workers come up together. Track the ones already up so any error path can drain
+	// them: a worker that fails to start must not leave its predecessors running past Run.
+	started := make([]BackgroundWorker, 0, len(a.bgWorkers))
+	for _, w := range a.bgWorkers {
+		if err := w.Start(runCtx); err != nil {
+			a.drainWorkers(started)
+			return fmt.Errorf("platform: start background worker: %w", err)
+		}
+		started = append(started, w)
+	}
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(a.Config.Port),
@@ -97,18 +115,45 @@ func (a *App) Run(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		// The listener died; drain the workers we started before bailing out.
+		a.drainWorkers(started)
 		return fmt.Errorf("platform: server error: %w", err)
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		a.Logger.Info("shutdown signal received")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.Config.ShutdownTimeout)
 	defer cancel()
-	err := srv.Shutdown(shutdownCtx)
+
+	// Drain the HTTP server and every background worker within the same window.
+	// Errors are joined so one worker's failure can't mask the server's or another's.
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	for _, w := range started {
+		if err := w.Stop(shutdownCtx); err != nil {
+			shutdownErr = errors.Join(shutdownErr, err)
+		}
+	}
 	flushSentry(2 * time.Second)
-	if err != nil {
-		return fmt.Errorf("platform: graceful shutdown: %w", err)
+	if shutdownErr != nil {
+		return fmt.Errorf("platform: graceful shutdown: %w", shutdownErr)
 	}
 	a.Logger.Info("shutdown complete")
 	return nil
+}
+
+// drainWorkers stops the given workers within a fresh ShutdownTimeout window. It is used on
+// the error exit paths where Run bails out before its normal shutdown sequence, so an
+// already-started worker never outlives the call. Stop errors are logged, not returned —
+// Run is already returning the primary failure.
+func (a *App) drainWorkers(workers []BackgroundWorker) {
+	if len(workers) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), a.Config.ShutdownTimeout)
+	defer cancel()
+	for _, w := range workers {
+		if err := w.Stop(ctx); err != nil {
+			a.Logger.Error("draining background worker on error exit", slog.Any("err", err))
+		}
+	}
 }

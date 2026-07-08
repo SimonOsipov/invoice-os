@@ -9,8 +9,9 @@
 // get out of sync. The worker-role pattern (docs/migrations.md §8): a client connects as
 // invoice_app; River's tables are cross-tenant infrastructure (no tenant_id, no RLS), and
 // each job handler re-establishes tenant context with db.WithinTenantTx keyed by the job's
-// tenant_id. This task builds the machinery + a happy-path smoke test; the adversarial
-// exactly-once proof is M2-09.
+// tenant_id. M2-08 built the machinery + a happy-path smoke test; M2-09 adds the handler
+// idempotency guard (OncePerJob) and EnqueueTx's fail-closed TenantScoped check, and proves
+// the exactly-once composite adversarially (internal/submission failure-mode suite).
 package queue
 
 import (
@@ -75,6 +76,15 @@ func (c *Client) Stop(ctx context.Context) error { return c.river.Stop(ctx) }
 // not re-abstract — non-transactional Insert, Subscribe, and rivertest in tests.
 func (c *Client) River() *river.Client[pgx.Tx] { return c.river }
 
+// TenantScoped is the contract every job's args MUST satisfy to be enqueued: Tenant()
+// returns the tenant the job will run its work under (the worker re-establishes that
+// context from the payload — the worker-role pattern, docs/migrations.md §8). EnqueueTx
+// uses it to fail closed when the declared tenant diverges from the tenant the
+// idempotency key is recorded under. DemoArgs implements it; every real job-args type must.
+type TenantScoped interface {
+	Tenant() string
+}
+
 // EnqueueTx is the transactional-outbox enqueue: within the caller's transaction tx it
 // records the business idempotency key and inserts the River job, so the two — together
 // with whatever domain change the caller already made on tx — commit or roll back
@@ -82,7 +92,10 @@ func (c *Client) River() *river.Client[pgx.Tx] { return c.river }
 //
 // tx MUST be a tenant-scoped transaction from db.WithinTenantTx: idempotency_keys is
 // written under RLS keyed by app.current_tenant, so tenantID must equal the tx's tenant
-// (a mismatch fails the policy's WITH CHECK — a built-in safety net).
+// (a mismatch fails the policy's WITH CHECK — a built-in safety net). args MUST implement
+// TenantScoped and declare that same tenant: the outbox's atomic tenant can then never
+// diverge from the tenant the worker runs the job under. Both are enforced BEFORE any
+// write — a rejected call leaves neither an idempotency key nor a job (fail-closed).
 //
 // Dedupe is authoritative and permanent via idempotency_keys' UNIQUE(tenant_id, key): a
 // second EnqueueTx with the same (tenantID, key) inserts no key row and NO job, returning
@@ -97,9 +110,16 @@ func (c *Client) EnqueueTx(ctx context.Context, tx pgx.Tx, tenantID, key string,
 	if key == "" {
 		return false, fmt.Errorf("queue: idempotency key is required")
 	}
-	// TODO(M2-09): also reject tenantID != the job args' tenant, so the outbox's atomic
-	// tenant can't diverge from the tenant the worker runs the job under. Belongs with the
-	// adversarial exactly-once suite (needs a tenant-aware job-args contract).
+	// Fail closed on tenant divergence: args must declare, via TenantScoped, the same
+	// tenant the outbox row is scoped to. A type that doesn't implement the contract is
+	// rejected too — non-implementers can't prove their tenant, so they never enqueue.
+	ts, ok := args.(TenantScoped)
+	if !ok {
+		return false, fmt.Errorf("queue: job args %T must implement TenantScoped", args)
+	}
+	if ts.Tenant() != tenantID {
+		return false, fmt.Errorf("queue: job tenant %q does not match outbox tenant %q", ts.Tenant(), tenantID)
+	}
 	ct, err := tx.Exec(ctx,
 		`INSERT INTO idempotency_keys (tenant_id, key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		tenantID, key)
@@ -113,4 +133,38 @@ func (c *Client) EnqueueTx(ctx context.Context, tx pgx.Tx, tenantID, key string,
 		return false, fmt.Errorf("queue: insert job: %w", err)
 	}
 	return false, nil
+}
+
+// OncePerJob makes a side-effecting handler idempotent — the third leg of FiscalBridge's
+// exactly-once composite (enqueue dedupe + River single-delivery + idempotent handler).
+// River is at-least-once: a worker can commit its effect and crash before River marks the
+// job completed, so the effect re-runs on retry unless the handler guards it. OncePerJob
+// is that guard.
+//
+// It records a per-job marker and runs fn in the SAME tx, so the marker and fn's writes
+// commit or roll back together:
+//   - marker absent (first successful attempt): fn runs, applied=true. If fn or the tx
+//     later fails, the marker rolls back with it, so a retry re-runs fn.
+//   - marker present (the tx of an earlier attempt committed): fn is skipped, applied=false
+//     — the job is acked without re-applying the effect.
+//
+// The marker reuses idempotency_keys under a "job:<jobID>" key namespace: business keys are
+// UUIDs, so they can never collide with it, and no new migration is needed. tx MUST be a
+// tenant-scoped transaction (db.WithinTenantTx) and tenantID MUST equal its tenant — the
+// marker is written under idempotency_keys' RLS exactly like an EnqueueTx key.
+func OncePerJob(ctx context.Context, tx pgx.Tx, tenantID string, jobID int64, fn func() error) (applied bool, err error) {
+	key := fmt.Sprintf("job:%d", jobID)
+	ct, err := tx.Exec(ctx,
+		`INSERT INTO idempotency_keys (tenant_id, key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		tenantID, key)
+	if err != nil {
+		return false, fmt.Errorf("queue: record job marker: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return false, nil // a prior attempt already applied fn: skip it, ack the job
+	}
+	if err := fn(); err != nil {
+		return false, fmt.Errorf("queue: apply once-per-job effect: %w", err)
+	}
+	return true, nil
 }

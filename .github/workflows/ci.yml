@@ -235,17 +235,19 @@ jobs:
         # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
         run: go test -count=1 -run TestRLS ./internal/platform/db/...
 
-  # The M2-08 queue/outbox smoke suite. Proves the async job spine end to end against a
-  # real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-outbox
-  # enqueue commits a job + its idempotency key atomically (a rollback leaves neither), a
-  # duplicate business key yields exactly one job, a demo job runs to completion through the
-  # worker-role WithinTenantTx path, and a job that exhausts MaxAttempts lands in River's
-  # discarded state. It bootstraps roles and migrates exactly like the `migrations`/`rls`
-  # jobs (creating River's tables + idempotency_keys), then runs the suite as invoice_app.
-  # The suite SKIPS itself without DATABASE_URL, so the `go` job and a bare `go test ./...`
-  # stay green. The adversarial exactly-once proof is deferred to M2-09.
+  # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
+  # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-
+  # outbox enqueue commits a job + its idempotency key atomically (a rollback leaves
+  # neither), a duplicate business key yields exactly one job, and — adversarially (M2-09) —
+  # the exactly-once composite holds under rollback, concurrent workers (SKIP LOCKED),
+  # committed-then-crashed retries (the OncePerJob guard), poison/DLQ discard, and operator
+  # re-drive. It bootstraps roles and migrates exactly like the `migrations`/`rls` jobs
+  # (creating River's tables + idempotency_keys), then runs the whole ./internal/submission
+  # package as invoice_app; the M2-09 suite also needs DATABASE_MIGRATION_URL (already set
+  # below) to create its runtime effects table as the migrator. Both suites SKIP themselves
+  # without their DATABASE_* URLs, so the `go` job and a bare `go test ./...` stay green.
   queue:
-    name: Queue smoke (River + outbox)
+    name: Queue suites (River outbox + exactly-once)
     needs: changes
     if: needs.changes.outputs.go == 'true' || needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
@@ -282,9 +284,11 @@ jobs:
         run: make db-bootstrap
       - name: Apply all migrations (as migrator)
         run: make migrate-up
-      - name: Run the queue/outbox smoke suite (as invoice_app)
-        # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
-        run: go test -count=1 -run TestQueueSmoke ./internal/submission/...
+      - name: Run the queue smoke + exactly-once suites (as invoice_app)
+        # -count=1 disables the test cache: the suites MUST re-run against this fresh DB. No
+        # -run filter, so new tests in ./internal/submission are picked up automatically;
+        # each DB-backed test self-skips without its DATABASE_* URLs.
+        run: go test -count=1 ./internal/submission/...
 
   frontend:
     name: Frontend

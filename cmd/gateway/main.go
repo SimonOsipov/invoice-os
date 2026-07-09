@@ -60,11 +60,22 @@ func main() {
 		log.Fatalf("gateway: upstreams: %v", err)
 	}
 
-	app.Mux.Handle(routePrefix, gateway.Handler(gateway.Options{
+	// CORS layer, composed OUTSIDE the JWT verifier: the app SPA and the gateway are
+	// separate origins, so a browser preflight (OPTIONS, no bearer) must be answered
+	// before the verifier would 401 it. Allowed origins come from CORS_ALLOWED_ORIGINS
+	// (comma-separated); empty grants no browser origin (the production default).
+	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
+
+	app.Mux.Handle(routePrefix, withCORS(gateway.Handler(gateway.Options{
 		Verifier:  verifier,
 		Upstreams: upstreams,
 		Logger:    app.Logger,
-	}))
+	})))
+
+	// Public fleet-health roll-up: the seven context services are private-network-only,
+	// so this is how CI (and a future status page) see their health through the one public
+	// backend surface. Outside /api/ and outside the verifier — operational, not tenant data.
+	app.Mux.HandleFunc("GET /healthz/fleet", gateway.FleetHealthHandler(upstreams, app.Logger))
 
 	// Dev/CI only: embed the mock issuer so a token can be minted (/auth/login)
 	// and its JWKS served for the Verifier to fetch (AUTH_JWKS_URL points back at
@@ -75,7 +86,13 @@ func main() {
 			log.Fatalf("gateway: mock issuer: %v", err)
 		}
 		app.Mux.Handle("GET /.well-known/jwks.json", issuer.JWKSHandler())
-		app.Mux.HandleFunc("POST /auth/login", gateway.MockLoginHandler(issuer))
+		// /auth/login is called cross-origin by the browser, so wrap it in the same CORS
+		// layer. Register POST (the mint) and OPTIONS (the preflight CORS answers) — a
+		// method-scoped POST route alone would 405 the preflight instead of letting CORS
+		// handle it.
+		login := withCORS(gateway.MockLoginHandler(issuer))
+		app.Mux.Handle("POST /auth/login", login)
+		app.Mux.Handle("OPTIONS /auth/login", login)
 		app.Logger.Warn("mock issuer enabled — dev/CI only, never production")
 	}
 

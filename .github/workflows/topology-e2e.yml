@@ -1,0 +1,247 @@
+name: Topology E2E (M2-14 exit criterion)
+
+# The M2 exit criterion (task-23): the end-to-end topology proof against the live dev
+# fleet. It brings the fleet up from zero, resets+seeds the dev DB, and runs three
+# assertions — (a) the gateway fleet-health route reports all 8 backends green; (b) a
+# Playwright browser login on the deployed app SPA renders the BACKEND-VERIFIED tenant
+# identity (not the static fallback); (c) a live cross-tenant isolation check proves a
+# tenant-A token cannot read tenant-B's row through the gateway — then scales the compute
+# back to zero. All compute is scale-to-zero between runs (Postgres is always-on), so this
+# workflow is self-bringing-up.
+#
+# Trigger: workflow_dispatch (run it on demand as the exit gate — a full fleet bring-up +
+# teardown is too heavy for every PR). `gh workflow run topology-e2e.yml` or the Actions UI.
+#
+# ── PREREQUISITES (one-time, human-applied; see docs/topology-e2e.md) ──────────────────
+#  1. Railway service vars set BY THIS WORKFLOW at bring-up (idempotent, --skip-deploys):
+#       app     : VITE_GATEWAY_URL   = <GATEWAY_URL>   (Vite bakes it at build)
+#       gateway : GATEWAY_MOCK_ISSUER = true
+#       gateway : CORS_ALLOWED_ORIGINS = <APP_URL>
+#  2. Gateway auth wiring — assumed present from M2-12/M2-13 (this workflow does NOT touch
+#     it, to avoid clobbering deployed config): AUTH_ISSUER set, and AUTH_JWKS_URL pointing
+#     at the gateway's OWN <GATEWAY_URL>/.well-known/jwks.json so the mock round trip verifies.
+#  3. GitHub secret DATABASE_SUPERUSER_URL_DEV = the dev Postgres PUBLIC superuser DSN
+#     (GitHub runners can't reach *.railway.internal; the reset+seed needs the superuser
+#     because `tenants` is FORCE ROW LEVEL SECURITY).
+#  4. Secret RAILWAY_API_DEV_TOKEN — the same dev project token the preview workflows use.
+#
+# Modeled on preview-backend.yml (gateway-first health-gate) + preview.yml (SPA smoke).
+
+on:
+  workflow_dispatch:
+
+# Share the preview workflows' lock: only one PR/run mutates the single shared dev
+# environment + DB at a time (never cancel an in-flight deploy or a teardown).
+concurrency:
+  group: dev-preview-shared
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The gateway's + app's public Railway domains (dev) — same hardcoded-URL convention as
+  # preview.yml / preview-backend.yml.
+  GATEWAY_URL: https://gateway-development-997b.up.railway.app
+  APP_URL: https://app-development-3b4b.up.railway.app
+
+jobs:
+  # 1. Deploy the gateway FIRST (it is the fleet's single migrator — docs/migrations.md §2).
+  #    Set the two new gateway vars before `up` so the deployment boots with the mock issuer
+  #    enabled and the app origin CORS-allowed. `--ci` streams build logs then exits after
+  #    the BUILD (health is gated separately below).
+  deploy-gateway:
+    name: Deploy gateway → dev (mock issuer + CORS)
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set gateway vars (mock issuer + CORS) then deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: |
+          railway variables --set "GATEWAY_MOCK_ISSUER=true" --service gateway --skip-deploys
+          railway variables --set "CORS_ALLOWED_ORIGINS=$APP_URL" --service gateway --skip-deploys
+          railway up --ci --service gateway
+        timeout-minutes: 15
+
+  # 2. Schema-before-fleet barrier: the gateway migrates at boot and log.Fatals on a bad
+  #    migration, so a green /healthz proves the schema is fully migrated (what the context
+  #    services + the reset/seed wait behind).
+  health-gate:
+    name: Gate on gateway /healthz (schema migrated)
+    needs: deploy-gateway
+    if: needs.deploy-gateway.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for gateway /healthz 200
+        run: |
+          echo "Waiting for $GATEWAY_URL/healthz ..."
+          ok=0
+          for _ in $(seq 1 40); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "  gateway healthy (schema migrated)"; ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::$GATEWAY_URL/healthz did not return 200 within 200s (migration failed?)"
+            exit 1
+          fi
+
+  # 3. Deploy the seven context services, only after the gateway is healthy.
+  deploy-context:
+    name: Deploy ${{ matrix.service }} → dev
+    needs: health-gate
+    if: needs.health-gate.result == 'success'
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications]
+    steps:
+      - uses: actions/checkout@v4
+      - name: railway up ${{ matrix.service }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: railway up --ci --service ${{ matrix.service }}
+        timeout-minutes: 15
+
+  # 4. Deploy the app SPA, baking VITE_GATEWAY_URL so its sign-in does the real round trip
+  #    (mint → /me) against the deployed gateway instead of the pure client-side mock.
+  deploy-app:
+    name: Deploy app → dev (VITE_GATEWAY_URL baked)
+    needs: health-gate
+    if: needs.health-gate.result == 'success'
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set VITE_GATEWAY_URL then deploy app
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: |
+          railway variables --set "VITE_GATEWAY_URL=$GATEWAY_URL" --service app --skip-deploys
+          railway up --ci --service app
+        timeout-minutes: 15
+
+  # 5. Reset + seed the dev DB (data-only) as the Postgres SUPERUSER, after the schema is
+  #    migrated (health-gate) and before any assertion — setup owns correctness, so every
+  #    run starts from the known fixture set regardless of prior state.
+  reset-seed:
+    name: Reset + seed dev DB (data-only, superuser)
+    needs: health-gate
+    if: needs.health-gate.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: TRUNCATE + re-seed tenant fixtures
+        env:
+          DSN: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}
+        run: |
+          if [ -z "$DSN" ]; then
+            echo "::error::DATABASE_SUPERUSER_URL_DEV is not set (dev Postgres PUBLIC superuser DSN — see this workflow's header + docs/topology-e2e.md)"
+            exit 1
+          fi
+          echo "Resetting dev tenant fixtures (data-only, schema untouched) ..."
+          psql "$DSN" -v ON_ERROR_STOP=1 -f db/reset.dev.sql
+          psql "$DSN" -v ON_ERROR_STOP=1 -f db/seed.dev.sql
+          echo "Seeded tenants:"
+          psql "$DSN" -v ON_ERROR_STOP=1 -c "select id, name from tenants order by name;"
+
+  # 6. Assertion (a): the post-deploy fleet /healthz gate. Poll the gateway's fleet-health
+  #    roll-up until all 8 backends are green (they may cold-start after `up`); fail the run
+  #    naming the culprit if any stays down.
+  fleet-gate:
+    name: Fleet /healthz gate (all 8 backends green)
+    needs: [deploy-context]
+    if: needs.deploy-context.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll gateway /healthz/fleet until all up
+        run: |
+          echo "Polling $GATEWAY_URL/healthz/fleet ..."
+          code=000
+          for _ in $(seq 1 40); do
+            code=$(curl -sS -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 5
+          done
+          echo "--- fleet health (HTTP $code) ---"
+          jq . /tmp/fleet.json 2>/dev/null || cat /tmp/fleet.json || true
+          if [ "$code" != "200" ]; then
+            echo "::error::fleet not all-green (HTTP $code). Down services:"
+            jq -r '.services[] | select(.status != "up") | "  DOWN: \(.name) — \(.error // "unhealthy")"' /tmp/fleet.json 2>/dev/null || true
+            exit 1
+          fi
+          echo "All 8 backends green."
+
+  # 7. Assertions (b) + (c): the live browser round trip + cross-tenant isolation, via the
+  #    Playwright topology suite, once the fleet is green, the app is deployed, and the DB
+  #    is seeded.
+  topology:
+    name: Topology E2E (browser login + isolation)
+    needs: [fleet-gate, deploy-app, reset-seed]
+    if: needs.fleet-gate.result == 'success' && needs.deploy-app.result == 'success' && needs.reset-seed.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Wait for app /health
+        run: |
+          echo "Waiting for $APP_URL/health ..."
+          ok=0
+          for _ in $(seq 1 40); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$APP_URL/health" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "  app healthy"; ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then echo "::error::$APP_URL/health did not return 200 within 200s"; exit 1; fi
+      - name: Install Chromium
+        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+      - name: Run topology suite (browser login + cross-tenant isolation)
+        # GATEWAY_URL + APP_URL come from the workflow-level env (topology/targets.ts reads them).
+        run: pnpm --filter @invoice-os/e2e test:topology
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topology-playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # 8. Scale ALL brought-up compute back to zero — always, even on failure. The dev
+  #    Postgres is deliberately NOT listed (stateful, always-on; see preview-cleanup.yml).
+  scale-down:
+    name: Scale ${{ matrix.service }} → 0
+    needs: [deploy-gateway, health-gate, deploy-context, deploy-app, reset-seed, fleet-gate, topology]
+    if: always()
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - gateway
+          - tenancy
+          - portfolio
+          - invoice
+          - validation
+          - submission
+          - dashboard
+          - notifications
+          - app
+    steps:
+      - name: railway down ${{ matrix.service }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: |
+          railway down --service ${{ matrix.service }} --yes \
+            || echo "no active deployment for ${{ matrix.service }} (already scaled down)"

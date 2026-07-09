@@ -55,3 +55,47 @@ test('cross-tenant isolation: each token reads exactly its own tenant + domain r
   expect(a.tenant.id).not.toBe(TENANTS.b.id)
   expect(b.tenant.id).not.toBe(TENANTS.a.id)
 })
+
+// M3-02 (AC #6, live): the core claim isn't just "each token resolves its own tenant" —
+// it's that firm A's session cannot READ firm B's MEMBERSHIPS. /me alone doesn't probe
+// that (it returns one row, the caller's own tenant); GET /v1/memberships returns the
+// whole member LIST for the caller's tenant, so this is the end-to-end deployed proof
+// that RLS — not application code — is what scopes the list, exactly like the
+// service-layer proof (internal/tenancy/tenancy_test.go TestStoreListMemberships_*).
+async function fetchMemberships(
+  request: APIRequestContext,
+  t: { id: string; subject: string },
+): Promise<{ memberships: { user_id: string; role: string }[] }> {
+  const login = await request.post(`${GATEWAY_URL}/auth/login`, {
+    data: { subject: t.subject, role: 'authenticated', tenant_id: t.id },
+  })
+  expect(login.ok(), `auth/login for ${t.id} returned HTTP ${login.status()}`).toBeTruthy()
+  const { access_token } = (await login.json()) as { access_token: string }
+
+  const res = await request.get(`${GATEWAY_URL}/api/tenancy/v1/memberships`, {
+    headers: { Authorization: `Bearer ${access_token}` },
+  })
+  expect(res.ok(), `/v1/memberships for ${t.id} returned HTTP ${res.status()}`).toBeTruthy()
+  return (await res.json()) as { memberships: { user_id: string; role: string }[] }
+}
+
+test('cross-tenant isolation: each tenant token lists exactly its own members through the live gateway', async ({
+  request,
+}) => {
+  const a = await fetchMemberships(request, TENANTS.a)
+  const b = await fetchMemberships(request, TENANTS.b)
+
+  const aUserIds = a.memberships.map((m) => m.user_id).sort()
+  const bUserIds = b.memberships.map((m) => m.user_id).sort()
+
+  // Positive: the firm token's list is exactly its 3 seeded members (admin/preparer/
+  // reviewer); the in-house token's list is exactly its 1 seeded member.
+  expect(aUserIds).toEqual([...TENANTS.a.members].sort())
+  expect(bUserIds).toEqual([...TENANTS.b.members].sort())
+
+  // Negative: neither list leaks the other tenant's subject — the in-house persona
+  // never appears in the firm list, and vice versa, even though both are real,
+  // membership-holding subjects in the same memberships table.
+  expect(aUserIds).not.toContain(TENANTS.b.subject)
+  expect(bUserIds).not.toContain(TENANTS.a.subject)
+})

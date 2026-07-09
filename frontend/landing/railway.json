@@ -2,12 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "frontend/landing/Dockerfile",
-    "watchPatterns": [
-      "frontend/landing/**",
-      "packages/design-tokens/**",
-      "pnpm-lock.yaml"
-    ]
+    "dockerfilePath": "frontend/landing/Dockerfile"
   },
   "deploy": {
     "healthcheckPath": "/health",

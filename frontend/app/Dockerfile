@@ -9,12 +9,6 @@ WORKDIR /repo
 RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
-# Optional build-time API gateway URL. Railway passes the `app` service's
-# VITE_GATEWAY_URL variable as a build arg; Vite bakes it into the bundle so the
-# deployed app performs the real M2-13 round trip (mint → GET /api/tenancy/v1/me).
-# Unset → empty → the app is a pure client-side mock with no backend calls.
-ARG VITE_GATEWAY_URL=""
-ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
 RUN pnpm --filter @invoice-os/app build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----

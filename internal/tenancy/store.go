@@ -62,3 +62,15 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 	}
 	return t, role, nil
 }
+
+// ListMemberships lists the caller's tenant's memberships (user_id, role),
+// RLS-scoped: SELECT user_id, role FROM memberships ORDER BY created_at,
+// user_id -- bare (no WHERE tenant_id), same as Me's tenant query, inside a
+// SINGLE db.WithinRequestTenantTx call. An empty tenant returns an empty
+// non-nil slice and a nil error (never nil, nil).
+//
+// STUB (M3-02-02 RED stage, task-30): not implemented yet -- Stage 3
+// (executor) replaces this body with the real query above.
+func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
+	return nil, errors.New("tenancy: ListMemberships not implemented")
+}

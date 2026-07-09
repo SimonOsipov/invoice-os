@@ -394,6 +394,246 @@ func TestStoreMe_RoleValueIntegrity(t *testing.T) {
 	}
 }
 
+// membershipsBody mirrors the GET /v1/memberships JSON so the handler tests
+// can assert the contract (A3: snake_case {user_id, role} items) and, for
+// TestMemberships_Empty200, inspect the raw JSON of the memberships field
+// directly -- json.RawMessage lets that test distinguish a literal `[]` from
+// `null`, which decoding straight into a Go slice could not (both unmarshal
+// to a zero-length/nil slice).
+type membershipsBody struct {
+	Memberships json.RawMessage `json:"memberships"`
+	Error       string          `json:"error"`
+}
+
+func doMemberships(t *testing.T, load MembershipsLoader, id *auth.Identity) (*httptest.ResponseRecorder, membershipsBody) {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/memberships", nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	MembershipsHandler(load, nil).ServeHTTP(rec, r)
+	var body membershipsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	return rec, body
+}
+
+// TestMemberships_OK (M3-02-02 Test Specs, AC #2): a loader resolving two
+// memberships must produce 200 with both {user_id,role} items, in the
+// loader's order.
+func TestMemberships_OK(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	want := []Membership{{UserID: "u1", Role: "admin"}, {UserID: "u2", Role: "preparer"}}
+	load := func(context.Context) ([]Membership, error) { return want, nil }
+	rec, body := doMemberships(t, load, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var items []struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+	}
+	if err := json.Unmarshal(body.Memberships, &items); err != nil {
+		t.Fatalf("decode memberships %q: %v", body.Memberships, err)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("len(memberships) = %d, want %d: %+v", len(items), len(want), items)
+	}
+	for i, m := range want {
+		if items[i].UserID != m.UserID || items[i].Role != m.Role {
+			t.Errorf("memberships[%d] = %+v, want {user_id:%s role:%s}", i, items[i], m.UserID, m.Role)
+		}
+	}
+}
+
+// TestMemberships_Empty200 (AC #2, A4): an empty loader result must still be
+// 200 with the memberships field serialized as a literal `[]`, never `null`
+// -- a client that does `res.memberships.map(...)` must not crash on a bare
+// null field.
+func TestMemberships_Empty200(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return []Membership{}, nil }
+	rec, body := doMemberships(t, load, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if string(body.Memberships) != "[]" {
+		t.Errorf("memberships raw JSON = %s, want [] (not null)", body.Memberships)
+	}
+}
+
+// TestMemberships_NoIdentity401 (AC #2): no identity in the request context
+// must 401 before the loader ever runs -- asserted by failing the test if
+// load is called.
+func TestMemberships_NoIdentity401(t *testing.T) {
+	load := func(context.Context) ([]Membership, error) {
+		t.Fatal("loader must not run without an identity")
+		return nil, nil
+	}
+	rec, body := doMemberships(t, load, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when no identity in context", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMemberships_NoTenantCtx401 (AC #2, A4): the loader returning
+// db.ErrNoTenant must fail closed with 401, same as MeHandler.
+func TestMemberships_NoTenantCtx401(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return nil, db.ErrNoTenant }
+	rec, body := doMemberships(t, load, &id)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMemberships_Error500 (AC #2, A4): any other loader error must map to
+// 500 -- and specifically NEVER 403/404, since A4 says the member-list does
+// not independently gate on the caller holding a membership.
+func TestMemberships_Error500(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return nil, errors.New("boom") }
+	rec, body := doMemberships(t, load, &id)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestStoreListMemberships_OwnTenantOnly (M3-02-02 Test Specs, core AC #6 --
+// service-layer isolation): tenant A seeded with 3 memberships (admin,
+// preparer, reviewer) and tenant B seeded with 1 unrelated membership;
+// ListMemberships as tenant A must return exactly A's 3 rows -- B's row must
+// be absent. This is the service-layer half of core AC #6 (the RLS half is
+// already covered by internal/platform/db/memberships_rls_test.go, M3-01).
+func TestStoreListMemberships_OwnTenantOnly(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	userA1, userA2, userA3 := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	userB := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test memberships A', 'firm'), ($2, 'tenancy qa-test memberships B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantA, userA1, userA2, userA3); err != nil {
+		t.Fatalf("seed tenant A memberships: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		tenantB, userB); err != nil {
+		t.Fatalf("seed tenant B membership: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userA1, Role: "authenticated", TenantID: tenantA})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships(tenant A): %v", err)
+	}
+
+	want := map[string]string{userA1: "admin", userA2: "preparer", userA3: "reviewer"}
+	if len(got) != len(want) {
+		t.Fatalf("len(memberships) = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for _, m := range got {
+		if m.UserID == userB {
+			t.Fatalf("tenant B's membership (user %s) leaked into tenant A's list: %+v", userB, got)
+		}
+		wantRole, ok := want[m.UserID]
+		if !ok {
+			t.Errorf("unexpected membership user_id %q in tenant A's list", m.UserID)
+			continue
+		}
+		if m.Role != wantRole {
+			t.Errorf("role for %s = %q, want %q", m.UserID, m.Role, wantRole)
+		}
+	}
+}
+
+// TestStoreListMemberships_DeterministicOrder (AC #2): 3 rows seeded in one
+// tenant; calling ListMemberships twice must produce identical order (ORDER
+// BY created_at, user_id) -- the ordering guarantee the member-list response
+// depends on for stable rendering across repeated requests.
+func TestStoreListMemberships_DeterministicOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	callerID := uuid.NewString()
+	u1, u2 := uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test memberships order', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantID, callerID, u1, u2); err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
+
+	first, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships (1st call): %v", err)
+	}
+	second, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships (2nd call): %v", err)
+	}
+	if len(first) != 3 || len(second) != 3 {
+		t.Fatalf("len(first)=%d len(second)=%d, want 3 each", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Errorf("order differs at index %d: first=%+v second=%+v", i, first[i], second[i])
+		}
+	}
+}
+
+// TestStoreListMemberships_NoContextFailsClosed (AC #2, A4): a context with
+// no identity must fail closed with db.ErrNoTenant before any statement
+// runs -- the WithinRequestTenantTx contract, same as Store.Me.
+func TestStoreListMemberships_NoContextFailsClosed(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+
+	store := NewStore(app)
+	got, err := store.ListMemberships(ctx)
+	if !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("ListMemberships err = %v, want db.ErrNoTenant", err)
+	}
+	if got != nil {
+		t.Errorf("ListMemberships rows = %+v, want nil on fail-closed error", got)
+	}
+}
+
 // TestStoreMe_RoleIsCatalogValueForEachRole (AC #1/#3 adversarial, QA-added
 // task-29): for each of the three catalog roles (roles table:
 // admin/preparer/reviewer — migrations/20260709151759_roles.sql), a caller

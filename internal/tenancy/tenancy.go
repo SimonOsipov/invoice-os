@@ -107,6 +107,27 @@ type meResponse struct {
 	} `json:"user"`
 }
 
+// MembershipsLoader lists the caller's tenant's memberships (user + domain
+// role), RLS-scoped to the current tenant. As with MeLoader, the handler
+// depends on this narrow function type rather than a pool, so its HTTP
+// contract is unit-testable without a database; the production loader
+// (Store.ListMemberships) runs the real, RLS-scoped query.
+type MembershipsLoader func(ctx context.Context) ([]Membership, error)
+
+// MembershipsHandler returns GET /v1/memberships.
+//
+// STUB (M3-02-02 RED stage, task-30): this body intentionally does NOT
+// implement the target status/body mapping yet (200 with {user_id,role}
+// items / empty-but-non-null [] / 401 on no-identity or db.ErrNoTenant / 500
+// otherwise, per A4 -- no 403/404). It exists only so the package compiles
+// against the target signature; Stage 3 (executor) replaces this body with
+// the real mapping mirroring MeHandler's error switch.
+func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

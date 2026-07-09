@@ -216,3 +216,144 @@ func TestRLS_BusinessEntitiesOwnRowReassignmentRefused(t *testing.T) {
 	})
 	assertRLSViolation(t, err)
 }
+
+// BE-RLS-08 (QA-added): the RLS Test-Spec above covers tenant isolation, not the
+// table's own constraints — `business_entities_tenant_tin_uq` is a *partial* unique
+// index (`WHERE tin IS NOT NULL`), which has three distinct failure modes a naive
+// plain UNIQUE(tenant_id, tin) would get wrong: (1) a duplicate non-NULL tin within
+// the SAME tenant must be rejected (23505 unique_violation); (2) two rows with tin
+// IS NULL must both succeed — the partial index excludes NULLs, so NULL is not
+// "duplicated"; (3) the SAME tin string under a DIFFERENT tenant must succeed —
+// uniqueness is scoped per-tenant, not global. All three run as h.app inside
+// WithinTenantTx (the real runtime path), and clean up their own probe rows via the
+// superuser pool (bypasses RLS, so cleanup doesn't depend on tenant context).
+func TestRLS_BusinessEntitiesTinUniquePerTenant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	cleanupIDs := func(ids ...string) {
+		for _, id := range ids {
+			if id == "" {
+				continue
+			}
+			_, _ = h.super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, id)
+		}
+	}
+
+	// (1) duplicate non-NULL tin within the SAME tenant (A) is rejected.
+	var firstID string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, 'First Co', 'TIN-DUP-1') RETURNING id`,
+			h.tenantA,
+		).Scan(&firstID)
+	})
+	if err != nil {
+		t.Fatalf("insert first row with tin: %v", err)
+	}
+	defer cleanupIDs(firstID)
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, 'Second Co', 'TIN-DUP-1')`,
+			h.tenantA,
+		)
+		return e
+	})
+	if err == nil {
+		t.Fatal("duplicate tin within same tenant succeeded, want unique_violation (SQLSTATE 23505)")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("duplicate tin within same tenant: SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+
+	// (2) two rows with tin IS NULL under the same tenant both succeed — the partial
+	// index excludes NULLs, so NULL is never "duplicated".
+	var nullID1, nullID2 string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, 'Null TIN Co 1', NULL) RETURNING id`,
+			h.tenantA,
+		).Scan(&nullID1)
+	})
+	if err != nil {
+		t.Fatalf("insert first NULL-tin row: %v", err)
+	}
+	defer cleanupIDs(nullID1)
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, 'Null TIN Co 2', NULL) RETURNING id`,
+			h.tenantA,
+		).Scan(&nullID2)
+	})
+	if err != nil {
+		t.Fatalf("insert second NULL-tin row (want success, partial index excludes NULLs): %v", err)
+	}
+	defer cleanupIDs(nullID2)
+
+	// (3) the SAME tin string under a DIFFERENT tenant (B) succeeds — uniqueness is
+	// per-tenant, not global.
+	var otherTenantID string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, 'Other Tenant Co', 'TIN-DUP-1') RETURNING id`,
+			h.tenantB,
+		).Scan(&otherTenantID)
+	})
+	if err != nil {
+		t.Fatalf("insert same tin under different tenant (want success, uniqueness is per-tenant): %v", err)
+	}
+	cleanupIDs(otherTenantID)
+}
+
+// BE-RLS-09 (QA-added): `status` has a CHECK constraint restricting it to
+// ('active','archived') — the RLS Test-Spec only ever inserts with the default
+// ('active'), so the CHECK itself was never exercised. Confirm it actually rejects a
+// value outside the allowed set (23514 check_violation) and actually accepts the
+// other legitimate value, 'archived' (not just the default).
+func TestRLS_BusinessEntitiesStatusCheck(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	// A bogus status is rejected.
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO business_entities (tenant_id, name, status) VALUES ($1, 'Bogus Status Co', 'pending')`,
+			h.tenantA,
+		)
+		return e
+	})
+	if err == nil {
+		t.Fatal("insert with status = 'pending' succeeded, want CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("insert with status = 'pending': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	// The other legitimate value, 'archived', is accepted and round-trips.
+	var id string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO business_entities (tenant_id, name, status) VALUES ($1, 'Archived Co', 'archived') RETURNING id`,
+			h.tenantA,
+		).Scan(&id)
+	})
+	if err != nil {
+		t.Fatalf("insert with status = 'archived': want success, got: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, id)
+	}()
+
+	var status string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT status FROM business_entities WHERE id = $1`, id).Scan(&status)
+	})
+	if err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if status != "archived" {
+		t.Errorf("status read back = %q, want %q", status, "archived")
+	}
+}

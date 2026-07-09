@@ -676,3 +676,159 @@ func TestStoreMe_RoleIsCatalogValueForEachRole(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreListMemberships_ReverseIsolation (core AC #6 adversarial, QA-added
+// task-30): seeds tenant A with 2 memberships and tenant B with 3, then calls
+// ListMemberships as EACH tenant in turn. TestStoreListMemberships_OwnTenantOnly
+// only proves B's row can't leak into A's list; this proves isolation holds in
+// both directions -- A's rows must not leak into B's list either, and each
+// tenant's count must match exactly what was seeded for it (not the total).
+func TestStoreListMemberships_ReverseIsolation(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	a1, a2 := uuid.NewString(), uuid.NewString()
+	b1, b2, b3 := uuid.NewString(), uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test reverse-iso A', 'firm'), ($2, 'tenancy qa-test reverse-iso B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer')`,
+		tenantA, a1, a2); err != nil {
+		t.Fatalf("seed tenant A memberships: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantB, b1, b2, b3); err != nil {
+		t.Fatalf("seed tenant B memberships: %v", err)
+	}
+
+	store := NewStore(app)
+
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: a1, Role: "authenticated", TenantID: tenantA})
+	gotA, err := store.ListMemberships(cA)
+	if err != nil {
+		t.Fatalf("ListMemberships(tenant A): %v", err)
+	}
+	if len(gotA) != 2 {
+		t.Fatalf("len(tenant A memberships) = %d, want 2: %+v", len(gotA), gotA)
+	}
+	for _, m := range gotA {
+		if m.UserID == b1 || m.UserID == b2 || m.UserID == b3 {
+			t.Fatalf("tenant B's membership (user %s) leaked into tenant A's list: %+v", m.UserID, gotA)
+		}
+	}
+
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: b1, Role: "authenticated", TenantID: tenantB})
+	gotB, err := store.ListMemberships(cB)
+	if err != nil {
+		t.Fatalf("ListMemberships(tenant B): %v", err)
+	}
+	if len(gotB) != 3 {
+		t.Fatalf("len(tenant B memberships) = %d, want 3: %+v", len(gotB), gotB)
+	}
+	for _, m := range gotB {
+		if m.UserID == a1 || m.UserID == a2 {
+			t.Fatalf("tenant A's membership (user %s) leaked into tenant B's list: %+v", m.UserID, gotB)
+		}
+	}
+}
+
+// TestStoreListMemberships_EmptyTenantReturnsEmptySlice (AC #2/A4 adversarial,
+// QA-added task-30): a seeded, visible tenant with ZERO membership rows must
+// resolve to a non-nil, zero-length slice and a nil error at the SERVICE
+// LAYER -- complements the handler-level TestMemberships_Empty200 (which only
+// exercises a stubbed loader) by proving Store.ListMemberships itself, backed
+// by a real RLS-scoped query with no rows to return, never produces (nil, nil)
+// (which would defeat the handler's nil-normalization) nor a spurious error.
+func TestStoreListMemberships_EmptyTenantReturnsEmptySlice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test memberships empty', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	// Deliberately NO membership rows seeded for this tenant.
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships(empty tenant): %v", err)
+	}
+	if got == nil {
+		t.Fatal("ListMemberships(empty tenant) = nil slice, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("len(memberships) = %d, want 0: %+v", len(got), got)
+	}
+}
+
+// TestStoreListMemberships_ContentFidelity (core AC #2 adversarial, QA-added
+// task-30): seeds one tenant with a known {user_id,role} triple for EACH of
+// the three catalog roles and asserts the returned set matches EXACTLY --
+// every seeded user_id present with its correct role. Guards against a
+// column-order/scan mix-up (e.g. `SELECT user_id, role` accidentally scanned
+// as role-then-user_id) that TestStoreListMemberships_OwnTenantOnly's
+// same-role-per-index style could theoretically miss if roles collided.
+func TestStoreListMemberships_ContentFidelity(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	uAdmin, uPreparer, uReviewer := uuid.NewString(), uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test content-fidelity', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantID, uAdmin, uPreparer, uReviewer); err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uAdmin, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships: %v", err)
+	}
+
+	want := map[string]string{uAdmin: "admin", uPreparer: "preparer", uReviewer: "reviewer"}
+	if len(got) != len(want) {
+		t.Fatalf("len(memberships) = %d, want %d: %+v", len(got), len(want), got)
+	}
+	seen := make(map[string]bool, len(want))
+	for _, m := range got {
+		wantRole, ok := want[m.UserID]
+		if !ok {
+			t.Errorf("unexpected user_id %q in result: %+v", m.UserID, m)
+			continue
+		}
+		if m.Role != wantRole {
+			t.Errorf("role for %s = %q, want %q (possible column/scan mix-up)", m.UserID, m.Role, wantRole)
+		}
+		seen[m.UserID] = true
+	}
+	for userID := range want {
+		if !seen[userID] {
+			t.Errorf("expected user_id %q missing from result: %+v", userID, got)
+		}
+	}
+}

@@ -242,3 +242,75 @@ func TestRLS_MembershipsOwnRowReassignmentRefused(t *testing.T) {
 	})
 	assertRLSViolation(t, err)
 }
+
+// MEM-RLS-08 (QA-added): the SAME user_id can hold a membership in BOTH tenant A and
+// tenant B at once — the (tenant_id, user_id) UNIQUE constraint (MEM-RLS-03) is scoped
+// PER TENANT, not globally on user_id alone. MEM-RLS-03 only proves the negative
+// (duplicate within one tenant is refused); this is the matching positive case that
+// proves the scope wasn't accidentally narrowed to "one membership per user, period" —
+// the entire point of a multi-tenant membership model (e.g. one accountant serving
+// clients in more than one tenant).
+func TestRLS_MembershipsSameUserAcrossTenants(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	userID := uuid.NewString()
+
+	_, cleanupA := seedMembership(t, h.tenantA, userID, "admin")
+	defer cleanupA()
+
+	var idB string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'preparer') RETURNING id`,
+			h.tenantB, userID,
+		).Scan(&idB)
+	})
+	if err != nil {
+		t.Fatalf("insert membership for same user in tenant B: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, idB)
+	}()
+
+	// Each tenant sees exactly one membership for this user — its own — and the other
+	// tenant's row for the same user stays invisible, proving the two rows are
+	// RLS-isolated peers rather than one row somehow shared across tenants.
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var role string
+		if e := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE tenant_id = $1 AND user_id = $2`, h.tenantA, userID,
+		).Scan(&role); e != nil {
+			return e
+		}
+		if role != "admin" {
+			t.Errorf("tenant A role for shared user = %q, want %q", role, "admin")
+		}
+		if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE user_id = $1`, userID); n != 1 {
+			t.Errorf("rows visible to A for shared user = %d, want 1 (B's row must stay invisible)", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("verify tenant A view: %v", err)
+	}
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		var role string
+		if e := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE tenant_id = $1 AND user_id = $2`, h.tenantB, userID,
+		).Scan(&role); e != nil {
+			return e
+		}
+		if role != "preparer" {
+			t.Errorf("tenant B role for shared user = %q, want %q", role, "preparer")
+		}
+		if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE user_id = $1`, userID); n != 1 {
+			t.Errorf("rows visible to B for shared user = %d, want 1 (A's row must stay invisible)", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("verify tenant B view: %v", err)
+	}
+}

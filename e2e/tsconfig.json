@@ -13,5 +13,5 @@
     "noUnusedParameters": true,
     "types": ["@playwright/test", "node"]
   },
-  "include": ["smoke", "playwright.config.ts"]
+  "include": ["smoke", "topology", "playwright.config.ts", "playwright.topology.config.ts"]
 }

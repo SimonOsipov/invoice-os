@@ -9,6 +9,13 @@ WORKDIR /repo
 RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
+# Vite bakes VITE_* at build time. Railway injects the service variable as a build arg
+# (same mechanism the shared Go Dockerfile uses for SERVICE); declare it and promote it
+# to an env var so `vite build` sees it. Unset → empty → the app runs as a pure
+# client-side mock (frontend/app/src/auth.ts: gatewayBase() returns null), so the
+# default showcase build and the smoke suite are unaffected.
+ARG VITE_GATEWAY_URL
+ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
 RUN pnpm --filter @invoice-os/app build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----

@@ -1,23 +1,24 @@
-// M3-01-02 (task-25): RED tests for the `tenants.kind` discriminator, written BEFORE
-// the migration exists. The Executor's migration will add:
+// M3-01-02 (task-25): tests for the `tenants.kind` discriminator, written BEFORE the
+// migration existed (RED against SQLSTATE 42703 undefined_column). The migration has
+// since landed:
 //
 //	ALTER TABLE tenants ADD COLUMN kind text NOT NULL DEFAULT 'firm'
 //	    CHECK (kind IN ('firm','in_house'))
 //
 // Both cases here assert against the LIVE dev DB via the shared M2-07 harness
 // (rls_harness_test.go) and self-skip when it is not configured (requireHarness).
-// Pre-migration, `kind` does not exist, so every query that names it fails with
-// SQLSTATE 42703 (undefined_column) — that is the expected RED. Once the Executor
-// lands the migration these turn GREEN with no changes required here.
 //
-// Run: `make test-rls` runs everything prefixed TestRLS; these are not, so exercise
-// them directly with the same four DSNs, e.g.:
+// Named with the TestRLS_ prefix (not TestTenantsKind_) so the CI `rls` job's
+// `-run TestRLS` (.github/workflows/ci.yml) and `make test-rls` both pick these up
+// automatically — a distinct prefix here would be invisible to CI.
+//
+// Run: `make test-rls`, or directly with the same four DSNs, e.g.:
 //
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable" \
 //	DATABASE_MIGRATION_URL="postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable" \
 //	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable" \
 //	DATABASE_READER_URL="postgres://invoice_tenant_reader:reader@localhost:5432/invoice_os?sslmode=disable" \
-//	go test -count=1 -run TestTenantsKind ./internal/platform/db/...
+//	go test -count=1 -run TestRLS_TenantsKind ./internal/platform/db/...
 package db_test
 
 import (
@@ -42,7 +43,7 @@ func pgCode(err error) string {
 // proves the DEFAULT is load-bearing, not merely present in the DDL. Uses the
 // superuser pool (BYPASSRLS) purely to isolate this assertion from RLS; the DEFAULT
 // itself is enforced by Postgres regardless of role. Cleans up its own probe row.
-func TestTenantsKind_DefaultOnInsert(t *testing.T) {
+func TestRLS_TenantsKindDefault(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
@@ -72,7 +73,7 @@ func TestTenantsKind_DefaultOnInsert(t *testing.T) {
 // TEN-KIND-02: pre-existing rows are backfilled to a non-NULL kind (the NOT NULL
 // DEFAULT applied to existing rows, not just future inserts), and the CHECK
 // constraint actually rejects a value outside ('firm','in_house').
-func TestTenantsKind_Backfill(t *testing.T) {
+func TestRLS_TenantsKindBackfill(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 

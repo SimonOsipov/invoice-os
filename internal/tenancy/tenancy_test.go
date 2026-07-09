@@ -318,3 +318,121 @@ func TestStoreMe_RolePerTenant(t *testing.T) {
 		t.Errorf("role in tenant B = %q, want %q", roleB, "preparer")
 	}
 }
+
+// TestStoreMe_CrossTenantRoleBorrowFailsClosed (AC #3 adversarial, QA-added
+// task-29): the SAME user_id seeded as 'admin' in tenant A ONLY must NOT
+// resolve any role when the caller's current tenant is B (a real, seeded
+// tenant where the user holds no membership row). This is the load-bearing
+// isolation property of role resolution: Store.Me's membership query has no
+// explicit `AND tenant_id = ...` clause (see store.go) — it relies entirely on
+// the memberships table's tenant_isolation RLS policy to scope
+// `WHERE user_id = $1` to the current tenant. If that policy (or the GUC
+// plumbing) ever regressed, this test is what would catch a user borrowing
+// their role from a tenant they are not currently acting in.
+func TestStoreMe_CrossTenantRoleBorrowFailsClosed(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	userID := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test borrow A', 'firm'), ($2, 'tenancy qa-test borrow B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	// U is admin in A ONLY — deliberately no membership row in B.
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		tenantA, userID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	store := NewStore(app)
+	// Caller's current tenant is B, not A — U must not borrow A's admin role.
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
+	_, role, err := store.Me(c)
+	if !errors.Is(err, ErrNoMembership) {
+		t.Fatalf("Me(tenant B) err = %v, role = %q, want ErrNoMembership (must not borrow tenant A's admin role)", err, role)
+	}
+}
+
+// TestStoreMe_RoleValueIntegrity (AC #1/#3 adversarial, QA-added task-29):
+// seeding the caller as 'preparer' (not 'admin') must resolve to exactly
+// "preparer" — guards against a hardcoded/defaulted role value that would
+// happen to pass the 'admin'-only assertions in TestStoreMe_ResolvesTenantAndRole.
+func TestStoreMe_RoleValueIntegrity(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	userID := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test role-integrity', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'preparer')`, tenantID, userID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	_, role, err := store.Me(c)
+	if err != nil {
+		t.Fatalf("Me(%s): %v", tenantID, err)
+	}
+	if role != "preparer" {
+		t.Errorf("role = %q, want exactly %q (not admin/blank/defaulted)", role, "preparer")
+	}
+}
+
+// TestStoreMe_RoleIsCatalogValueForEachRole (AC #1/#3 adversarial, QA-added
+// task-29): for each of the three catalog roles (roles table:
+// admin/preparer/reviewer — migrations/20260709151759_roles.sql), a caller
+// seeded with that role must get back that EXACT non-empty string — no code
+// path may return ("", nil) on success. Covers 'reviewer', the one role none
+// of the Stage 2.5 tests exercised.
+func TestStoreMe_RoleIsCatalogValueForEachRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	for _, want := range []string{"admin", "preparer", "reviewer"} {
+		t.Run(want, func(t *testing.T) {
+			tenantID := uuid.NewString()
+			userID := uuid.NewString()
+
+			if _, err := super.Exec(ctx,
+				`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test catalog-role', 'firm')`, tenantID); err != nil {
+				t.Fatalf("seed tenant: %v", err)
+			}
+			t.Cleanup(func() {
+				_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+			})
+			if _, err := super.Exec(ctx,
+				`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)`, tenantID, userID, want); err != nil {
+				t.Fatalf("seed membership: %v", err)
+			}
+
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+			_, role, err := store.Me(c)
+			if err != nil {
+				t.Fatalf("Me(%s): %v", tenantID, err)
+			}
+			if role == "" {
+				t.Fatal("role = \"\" on success — a role must never be empty/defaulted")
+			}
+			if role != want {
+				t.Errorf("role = %q, want %q", role, want)
+			}
+		})
+	}
+}

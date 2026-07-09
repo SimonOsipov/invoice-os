@@ -1,8 +1,10 @@
 import { expect, type Page } from '@playwright/test'
 
-// The three deployed SPAs under smoke test. Each URL defaults to its live dev
-// deployment and is overridable via an env var, so the same suite runs locally
-// and against any deploy (e.g. a PR preview) without code changes.
+// The two pure SPAs under smoke test (landing, ops-console) — no backend round trip, so a
+// render check is sufficient. The app SPA is always gateway-wired in the unified dev env, so
+// its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
+// Each URL defaults to its live dev deployment and is overridable via an env var, so the
+// same suite runs locally and against any deploy (e.g. a PR preview) without code changes.
 export interface AppTarget {
   name: string
   url: string
@@ -21,20 +23,6 @@ export const APPS: AppTarget[] = [
       const h1 = page.getByRole('heading', { level: 1 })
       await expect(h1).toBeVisible()
       await expect(h1).toContainText(/e-invoicing/i)
-    },
-  },
-  {
-    name: 'app',
-    url: resolveUrl('APP_URL', 'https://app-development-3b4b.up.railway.app'),
-    assertMainView: async (page) => {
-      // The app gates on a mock sign-in (M2-13): pick the firm persona to enter the
-      // workspace. With no gateway configured on the deployed build the sign-in is a
-      // pure client-side mock (no backend call), so the shell mounts either way.
-      await page.getByRole('button', { name: /Chinedu Okafor/ }).click()
-      // Sidebar brand + the signed-in firm persona prove the workspace shell mounted;
-      // the dashboard is the default view.
-      await expect(page.getByText('InvoiceOS').first()).toBeVisible()
-      await expect(page.getByText('Chinedu Okafor')).toBeVisible()
     },
   },
   {

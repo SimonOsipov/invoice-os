@@ -1,0 +1,286 @@
+name: Dev Env (deploy full fleet + verify)
+
+# The unified dev-deploy model (M2-14, task-23): on a ready PR, deploy the WHOLE
+# fleet coherently — gateway first (migrator + health-gate), then the seven
+# context services and the three SPAs (app gateway-wired) in parallel — reset
+# +seed the dev DB, then run post-deploy verification (smoke + topology). This
+# env is single-branch/single-agent, so a half-deployed dev env (SPAs without
+# backends, or backends without an app) has no value: there is exactly ONE
+# coherent env, and every ready PR redeploys it whole. The env STAYS UP after a
+# green run — dev-env-cleanup.yml scales all 11 services to zero when the PR
+# closes. No concurrency contention to worry about beyond the shared lock below
+# (single-branch/single-agent dev means one deploy at a time is always enough).
+#
+# Supersedes the old split model: preview.yml (SPA-only deploy+smoke) +
+# preview-backend.yml (backend-only deploy+health-gate) are DELETED — this
+# workflow deploys both halves together so the env is never left half-up. The
+# standalone topology-e2e.yml (workflow_dispatch-only exit-criterion run) is
+# also DELETED — its bring-up + assertions + reset/seed logic is now IN this
+# workflow as steps 6-7 (fleet-gate + e2e), running on every ready PR instead of
+# on demand, since the fleet is deployed here anyway.
+#
+# Auth: RAILWAY_API_DEV_TOKEN is a Railway PROJECT token scoped to the dev
+# environment, consumed as RAILWAY_TOKEN — so `railway up --service <svc>`
+# targets the FiscalBridge dev env with no `railway link` and no project/
+# workspace IDs.
+#
+# ── PREREQUISITES (one-time, human-applied; see docs/topology-e2e.md) ──────
+#  1. Railway service vars set BY THIS WORKFLOW at deploy (idempotent,
+#     --skip-deploys):
+#       gateway : GATEWAY_MOCK_ISSUER = true
+#       gateway : CORS_ALLOWED_ORIGINS = <APP_URL>
+#       app     : VITE_GATEWAY_URL   = <GATEWAY_URL>   (Vite bakes it at build)
+#  2. Gateway auth wiring — assumed present from M2-12/M2-13 (this workflow
+#     does NOT touch it, to avoid clobbering deployed config): AUTH_ISSUER set,
+#     and AUTH_JWKS_URL pointing at the gateway's OWN <GATEWAY_URL>/.well-known/
+#     jwks.json so the mock round trip verifies.
+#  3. GitHub secret DATABASE_SUPERUSER_URL_DEV = the dev Postgres PUBLIC
+#     superuser DSN (GitHub runners can't reach *.railway.internal; the reset
+#     +seed needs the superuser because `tenants` is FORCE ROW LEVEL SECURITY).
+#  4. Secret RAILWAY_API_DEV_TOKEN — the dev project token.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'frontend/**'
+      - 'packages/**'
+      - 'e2e/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'migrations/**'
+      - 'db/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - 'Dockerfile.dockerignore'
+      - 'Caddyfile'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/dev-env.yml'
+  workflow_dispatch:
+
+# One PR deploys to the shared dev environment at a time; a second PR queues
+# rather than racing (never cancel an in-flight deploy). Shared with
+# dev-env-cleanup.yml so a teardown never races a deploy.
+concurrency:
+  group: dev-preview-shared
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The four public Railway domains (dev) — same hardcoded-URL convention as
+  # the workflows this supersedes.
+  GATEWAY_URL: https://gateway-development-997b.up.railway.app
+  APP_URL: https://app-development-3b4b.up.railway.app
+  LANDING_URL: https://landing-development-92a2.up.railway.app
+  OPS_CONSOLE_URL: https://ops-console-development.up.railway.app
+
+jobs:
+  # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
+  #    migrations.md §2). Set the two gateway vars before `up` so the
+  #    deployment boots with the mock issuer enabled and the app origin
+  #    CORS-allowed. `--ci` streams build logs then exits after the BUILD
+  #    (health is gated separately below). Skipped for draft PRs.
+  deploy-gateway:
+    name: Deploy gateway → dev (mock issuer + CORS)
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set gateway vars (mock issuer + CORS) then deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: |
+          railway variables --set "GATEWAY_MOCK_ISSUER=true" --service gateway --skip-deploys
+          railway variables --set "CORS_ALLOWED_ORIGINS=$APP_URL" --service gateway --skip-deploys
+          railway up --ci --service gateway
+        timeout-minutes: 15
+
+  # 2. Schema-before-fleet barrier: the gateway migrates at boot and
+  #    log.Fatals on a bad migration, so a green /healthz proves the schema is
+  #    fully migrated — this is what the context services, the SPAs, and the
+  #    reset/seed all wait behind.
+  health-gate:
+    name: Gate on gateway /healthz (schema migrated)
+    needs: deploy-gateway
+    if: needs.deploy-gateway.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for gateway /healthz 200
+        run: |
+          echo "Waiting for $GATEWAY_URL/healthz ..."
+          ok=0
+          for _ in $(seq 1 40); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "  gateway healthy (schema migrated)"; ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::$GATEWAY_URL/healthz did not return 200 within 200s (migration failed?)"
+            exit 1
+          fi
+
+  # 3. Deploy the seven context services, only after the gateway is healthy.
+  #    They boot against the already-migrated schema and never run
+  #    migrations. Skipped for draft PRs.
+  deploy-context:
+    name: Deploy ${{ matrix.service }} → dev
+    needs: health-gate
+    if: needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications]
+    steps:
+      - uses: actions/checkout@v4
+      - name: railway up ${{ matrix.service }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: railway up --ci --service ${{ matrix.service }}
+        timeout-minutes: 15
+
+  # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
+  #    The app SPA gets VITE_GATEWAY_URL baked so its sign-in does the real
+  #    round trip (mint → /me) against the deployed gateway instead of the
+  #    pure client-side mock. Skipped for draft PRs.
+  deploy-spas:
+    name: Deploy ${{ matrix.service }} → dev
+    needs: health-gate
+    if: needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [landing, app, ops-console]
+    steps:
+      - uses: actions/checkout@v4
+      - name: set app var (app only)
+        if: matrix.service == 'app'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: railway variables --set "VITE_GATEWAY_URL=$GATEWAY_URL" --service app --skip-deploys
+      - name: railway up ${{ matrix.service }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+        run: railway up --ci --service ${{ matrix.service }}
+        timeout-minutes: 15
+
+  # 5. Reset + seed the dev DB (data-only) as the Postgres SUPERUSER, after the
+  #    schema is migrated (health-gate) and before any assertion — setup owns
+  #    correctness, so every run starts from the known fixture set regardless
+  #    of prior state.
+  reset-seed:
+    name: Reset + seed dev DB (data-only, superuser)
+    needs: health-gate
+    if: needs.health-gate.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: TRUNCATE + re-seed tenant fixtures
+        env:
+          DSN: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}
+        run: |
+          if [ -z "$DSN" ]; then
+            echo "::error::DATABASE_SUPERUSER_URL_DEV is not set (dev Postgres PUBLIC superuser DSN — see this workflow's header + docs/topology-e2e.md)"
+            exit 1
+          fi
+          echo "Resetting dev tenant fixtures (data-only, schema untouched) ..."
+          psql "$DSN" -v ON_ERROR_STOP=1 -f db/reset.dev.sql
+          psql "$DSN" -v ON_ERROR_STOP=1 -f db/seed.dev.sql
+          echo "Seeded tenants:"
+          psql "$DSN" -v ON_ERROR_STOP=1 -c "select id, name from tenants order by name;"
+
+  # 6. Post-deploy verification (a): the fleet /healthz gate. Poll the
+  #    gateway's fleet-health roll-up until all 8 backends are green (they may
+  #    cold-start after `up`); fail the run naming the culprit if any stays
+  #    down.
+  fleet-gate:
+    name: Fleet /healthz gate (all 8 backends green)
+    needs: [deploy-context]
+    if: needs.deploy-context.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll gateway /healthz/fleet until all up
+        run: |
+          echo "Polling $GATEWAY_URL/healthz/fleet ..."
+          code=000
+          for _ in $(seq 1 40); do
+            code=$(curl -sS -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 5
+          done
+          echo "--- fleet health (HTTP $code) ---"
+          jq . /tmp/fleet.json 2>/dev/null || cat /tmp/fleet.json || true
+          if [ "$code" != "200" ]; then
+            echo "::error::fleet not all-green (HTTP $code). Down services:"
+            jq -r '.services[] | select(.status != "up") | "  DOWN: \(.name) — \(.error // "unhealthy")"' /tmp/fleet.json 2>/dev/null || true
+            exit 1
+          fi
+          echo "All 8 backends green."
+
+  # 7. Post-deploy verification (b): smoke (landing + ops-console render) and
+  #    topology (browser login + cross-tenant isolation) via Playwright, once
+  #    the fleet is green, the SPAs are deployed, and the DB is seeded.
+  e2e:
+    name: E2E (smoke + topology)
+    needs: [fleet-gate, deploy-spas, reset-seed]
+    if: needs.fleet-gate.result == 'success' && needs.deploy-spas.result == 'success' && needs.reset-seed.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Wait for SPA /health
+        run: |
+          for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL"; do
+            echo "Waiting for $url/health ..."
+            ok=0
+            for _ in $(seq 1 40); do
+              code=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || echo 000)
+              if [ "$code" = "200" ]; then echo "  healthy"; ok=1; break; fi
+              sleep 5
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::error::$url did not serve /health 200 within 200s"; exit 1
+            fi
+          done
+      - name: Install Chromium
+        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+      - name: Smoke (landing + ops-console render)
+        run: pnpm --filter @invoice-os/e2e test:smoke
+      - name: Topology (app verified-login + cross-tenant isolation)
+        # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from the
+        # workflow-level env (topology/targets.ts reads them).
+        run: pnpm --filter @invoice-os/e2e test:topology
+      - name: Upload smoke Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload topology Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topology-playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # NOTE: there is NO scale-down job here — the env stays up while the PR is
+  # open. dev-env-cleanup.yml scales all 11 services to zero on PR close.

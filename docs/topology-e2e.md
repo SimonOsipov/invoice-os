@@ -3,9 +3,10 @@
 The end-to-end proof that the platform foundation works as one system against the **live
 dev fleet**: a real browser signs in on the deployed app SPA and renders a
 backend-resolved tenant identity, every backend's health is green, and cross-tenant
-isolation holds over the full edge path. Realized by `.github/workflows/topology-e2e.yml`
-plus the gateway CORS + fleet-health route (M2-14.1 / .2), the deployed-dev wiring
-(M2-14.3), and the Playwright topology suite (`e2e/topology/`, M2-14.4).
+isolation holds over the full edge path. Realized by the post-deploy verification steps of
+`.github/workflows/dev-env.yml` plus the gateway CORS + fleet-health route (M2-14.1 / .2),
+the deployed-dev wiring (M2-14.3), and the Playwright topology suite (`e2e/topology/`,
+M2-14.4).
 
 ## What it asserts
 
@@ -25,18 +26,21 @@ plus the gateway CORS + fleet-health route (M2-14.1 / .2), the deployed-dev wiri
 
 ## How it runs
 
-`workflow_dispatch` only — a full fleet bring-up + teardown is too heavy for every PR. Run
-it as the deliberate exit gate:
+There is no standalone topology workflow. These assertions run automatically as the
+post-deploy verification steps of `.github/workflows/dev-env.yml`, on every ready
+(non-draft) PR — after the fleet is deployed and the dev DB is reset + seeded, alongside the
+smoke suite. `dev-env.yml` flow:
 
-```bash
-gh workflow run topology-e2e.yml        # or the Actions UI → "Topology E2E" → Run workflow
+```
+gateway ──> gate on /healthz (schema migrated)
+        ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL set)
+        ──> reset + seed the dev DB (data-only, superuser)
+        ──> verify: smoke (landing + ops-console) + topology (fleet gate, browser login, isolation)
 ```
 
-Flow: deploy gateway → gate on `/healthz` (schema migrated) → deploy the 7 context services
-+ the app, and reset+seed the DB → assert (fleet gate, then browser login + isolation) →
-scale **all 9** compute services back to zero (Postgres stays always-on). It joins the
-`dev-preview-shared` concurrency group, so it never races the PR-preview workflows on the
-single shared dev environment.
+The whole coherent env then stays up (see [deploy-model.md](./deploy-model.md)) rather than
+being torn down after the assertions run. `dev-env.yml` remains dispatchable by hand
+(`workflow_dispatch`) to re-run the deploy + verify flow on demand.
 
 ## One-time prerequisites (human-applied)
 
@@ -45,7 +49,7 @@ config it deliberately does not clobber. Apply these once:
 
 ### Railway service variables
 
-The workflow **sets these itself** at bring-up (`railway variables --set … --skip-deploys`),
+The workflow **sets these itself** at deploy time (`railway variables --set … --skip-deploys`),
 so no manual step is needed — listed here for the record:
 
 | Service | Variable | Value |
@@ -64,7 +68,7 @@ trip verifies. If the round trip 401s, this is the first thing to check.
 | Secret | Value |
 |---|---|
 | `DATABASE_SUPERUSER_URL_DEV` | The dev Postgres **PUBLIC** superuser DSN (Railway → Postgres → Connect → Public Network). Required because GitHub runners can't reach `*.railway.internal`, and `tenants` is FORCE ROW LEVEL SECURITY so only the superuser (BYPASSRLS) can TRUNCATE + seed it. |
-| `RAILWAY_API_DEV_TOKEN` | Already present — the same dev project token the preview workflows use. |
+| `RAILWAY_API_DEV_TOKEN` | Already present — the same dev project token the rest of `dev-env.yml` uses. |
 
 ## The data-only reset
 
@@ -77,7 +81,7 @@ of prior state.
 
 ## Related
 
-- `.github/workflows/preview.yml` / `preview-backend.yml` — the PR-preview deploy halves
-  this workflow models its bring-up on.
-- `docs/deploy-model.md` — the scale-to-zero dev model.
+- [deploy-model.md](./deploy-model.md) — the unified deploy + verify flow this suite runs
+  inside of, and the scale-to-zero teardown on PR close.
+- `e2e/README.md` — the smoke + topology suites, run commands, and target-URL conventions.
 - `db/seed.dev.sql` — the canonical fixtures re-applied on every run.

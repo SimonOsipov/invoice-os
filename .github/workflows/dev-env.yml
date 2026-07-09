@@ -137,7 +137,16 @@ jobs:
         run: |
           railway variables --set "GATEWAY_MOCK_ISSUER=true" --service gateway --skip-deploys
           railway variables --set "CORS_ALLOWED_ORIGINS=$APP_URL" --service gateway --skip-deploys
-          railway up --ci --service gateway
+          # The fleet is torn down (`railway down`) between PRs, so when a PR
+          # changes no gateway/migration code `railway up` yields only a SKIPPED
+          # (no-op) deployment and the gateway stays Offline. Force a redeploy of
+          # the latest (cached) image in that case so it actually comes up.
+          out="$(railway up --ci --service gateway 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          if printf '%s\n' "$out" | grep -qi 'build will skip'; then
+            echo "::notice::gateway image unchanged (build skipped) — forcing redeploy of the latest image so the torn-down service comes up."
+            railway redeploy --service gateway -y
+          fi
         timeout-minutes: 15
 
   # 2. Schema-before-fleet barrier: the gateway migrates at boot and
@@ -182,7 +191,16 @@ jobs:
       - name: railway up ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        run: railway up --ci --service ${{ matrix.service }}
+        # See the gateway step: `railway up` on an unchanged image (fleet torn
+        # down between PRs) only produces a SKIPPED no-op deployment, so force a
+        # redeploy of the latest image when the build is skipped.
+        run: |
+          out="$(railway up --ci --service ${{ matrix.service }} 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          if printf '%s\n' "$out" | grep -qi 'build will skip'; then
+            echo "::notice::${{ matrix.service }} image unchanged (build skipped) — forcing redeploy so the torn-down service comes up."
+            railway redeploy --service ${{ matrix.service }} -y
+          fi
         timeout-minutes: 15
 
   # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
@@ -209,7 +227,15 @@ jobs:
       - name: railway up ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        run: railway up --ci --service ${{ matrix.service }}
+        # See the gateway step: force a redeploy when the build is skipped so an
+        # unchanged SPA still comes up after the fleet was torn down.
+        run: |
+          out="$(railway up --ci --service ${{ matrix.service }} 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          if printf '%s\n' "$out" | grep -qi 'build will skip'; then
+            echo "::notice::${{ matrix.service }} image unchanged (build skipped) — forcing redeploy so the torn-down service comes up."
+            railway redeploy --service ${{ matrix.service }} -y
+          fi
         timeout-minutes: 15
 
   # 5. Reset + seed the dev DB (data-only) as the Postgres SUPERUSER, after the

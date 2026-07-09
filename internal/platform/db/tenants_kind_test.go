@@ -128,3 +128,34 @@ func scanCount(ctx context.Context, q querier, sql string, args ...any) (int, er
 	err := q.QueryRow(ctx, sql, args...).Scan(&n)
 	return n, err
 }
+
+// TEN-KIND-03 (QA-added): the discriminator's whole point is two valid values, but
+// TestRLS_TenantsKindDefault/Backfill only ever exercise 'firm' (the default) plus a
+// rejected bogus value. Confirm the other legitimate value the CHECK allows —
+// 'in_house' — is actually accepted and round-trips, not just that non-members are
+// rejected.
+func TestRLS_TenantsKindInHouseAccepted(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	id := uuid.NewString()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'kind-in-house-probe', 'in_house')`, id,
+	); err != nil {
+		if code := pgCode(err); code == "42703" {
+			t.Fatalf("insert kind='in_house': undefined_column (42703) — tenants.kind migration not applied yet: %v", err)
+		}
+		t.Fatalf("insert kind='in_house': want success, got: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, id)
+	}()
+
+	var kind string
+	if err := h.super.QueryRow(ctx, `SELECT kind FROM tenants WHERE id = $1`, id).Scan(&kind); err != nil {
+		t.Fatalf("SELECT kind: %v", err)
+	}
+	if kind != "in_house" {
+		t.Errorf("kind read back = %q, want %q (in_house rejected or mangled by the CHECK/column)", kind, "in_house")
+	}
+}

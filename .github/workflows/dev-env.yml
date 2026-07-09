@@ -70,6 +70,7 @@ concurrency:
 
 permissions:
   contents: read
+  checks: read   # await-ci reads the CI check-run status on this commit
 
 env:
   # The four public Railway domains (dev) — same hardcoded-URL convention as
@@ -80,6 +81,40 @@ env:
   OPS_CONSOLE_URL: https://ops-console-development.up.railway.app
 
 jobs:
+  # 0. CI gate: never deploy red code to the single shared dev env. On a PR,
+  #    wait for the required `CI` workflow to go GREEN on THIS commit before any
+  #    deploy job runs. workflow_dispatch bypasses this gate (manual force-
+  #    deploy for live debugging); draft PRs skip it (and everything below).
+  #    Every deploy job is transitively downstream of deploy-gateway, so gating
+  #    deploy-gateway on this one job gates the whole pipeline.
+  await-ci:
+    name: Await green CI (PR only; dispatch bypasses)
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Wait for the CI check to succeed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Gating deploy on the 'CI' check for $SHA ..."
+          for _ in $(seq 1 80); do   # ~20 min (80 × 15s)
+            j=$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=CI&per_page=100" 2>/dev/null || echo '{}')
+            status=$(echo "$j" | jq -r '[.check_runs[]?] | sort_by(.started_at // "") | last | .status // "none"')
+            concl=$(echo "$j"  | jq -r '[.check_runs[]?] | sort_by(.started_at // "") | last | .conclusion // "none"')
+            echo "  CI: status=$status conclusion=$concl"
+            if [ "$concl" = "success" ]; then echo "CI is green — deploying."; exit 0; fi
+            if [ "$status" = "completed" ] && [ "$concl" != "none" ] && [ "$concl" != "success" ]; then
+              echo "::error::CI concluded '$concl' for $SHA — refusing to deploy red code to the shared dev env."
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::Timed out after ~20m waiting for the CI check on $SHA."
+          exit 1
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). Set the two gateway vars before `up` so the
   #    deployment boots with the mock issuer enabled and the app origin
@@ -87,7 +122,11 @@ jobs:
   #    (health is gated separately below). Skipped for draft PRs.
   deploy-gateway:
     name: Deploy gateway → dev (mock issuer + CORS)
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    needs: await-ci
+    if: >-
+      always() &&
+      ( github.event_name == 'workflow_dispatch' ||
+        ( github.event.pull_request.draft == false && needs.await-ci.result == 'success' ) )
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     steps:

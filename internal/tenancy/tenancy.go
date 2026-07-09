@@ -27,10 +27,11 @@ type Tenant struct {
 
 // Membership is one row of the caller's tenant's memberships: a user and their
 // domain role. Added in M3-02-01 for the Me/loader shape; M3-02-02's member-list
-// endpoint is the first consumer of the slice form.
+// endpoint is the first consumer of the slice form. JSON tags are snake_case
+// (user_id, role) -- the GET /v1/memberships wire contract (A3).
 type Membership struct {
-	UserID string
-	Role   string
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
 }
 
 // ErrTenantNotFound means the caller's tenant id resolved to no visible row — a
@@ -114,18 +115,46 @@ type meResponse struct {
 // (Store.ListMemberships) runs the real, RLS-scoped query.
 type MembershipsLoader func(ctx context.Context) ([]Membership, error)
 
-// MembershipsHandler returns GET /v1/memberships.
-//
-// STUB (M3-02-02 RED stage, task-30): this body intentionally does NOT
-// implement the target status/body mapping yet (200 with {user_id,role}
-// items / empty-but-non-null [] / 401 on no-identity or db.ErrNoTenant / 500
-// otherwise, per A4 -- no 403/404). It exists only so the package compiles
-// against the target signature; Stage 3 (executor) replaces this body with
-// the real mapping mirroring MeHandler's error switch.
+// MembershipsHandler returns GET /v1/memberships. It reads the verified
+// identity from context (401 if absent, before the loader ever runs -- same
+// fail-closed shape as MeHandler), then lists the caller's tenant's
+// memberships via load. Unlike MeHandler, this endpoint does NOT gate on the
+// caller holding a membership row: db.ErrNoTenant is 401 (fail-closed, no
+// tenant context at all); any other loader error is 500. Per A4 there is
+// deliberately no 403/404 mapping here. A nil/empty result is normalized to
+// an empty slice so the memberships field always serializes as `[]`, never
+// `null`.
 func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+	if log == nil {
+		log = slog.Default()
 	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		memberships, err := load(r.Context())
+		switch {
+		case errors.Is(err, db.ErrNoTenant):
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "tenancy: list memberships", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		if memberships == nil {
+			memberships = []Membership{}
+		}
+		writeJSON(w, http.StatusOK, membershipsResponse{Memberships: memberships})
+	}
+}
+
+// membershipsResponse is the GET /v1/memberships body: the caller's tenant's
+// memberships, each as {user_id, role} (A3).
+type membershipsResponse struct {
+	Memberships []Membership `json:"memberships"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

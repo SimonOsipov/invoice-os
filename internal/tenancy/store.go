@@ -68,9 +68,25 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 // user_id -- bare (no WHERE tenant_id), same as Me's tenant query, inside a
 // SINGLE db.WithinRequestTenantTx call. An empty tenant returns an empty
 // non-nil slice and a nil error (never nil, nil).
-//
-// STUB (M3-02-02 RED stage, task-30): not implemented yet -- Stage 3
-// (executor) replaces this body with the real query above.
 func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
-	return nil, errors.New("tenancy: ListMemberships not implemented")
+	memberships := []Membership{}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT user_id, role FROM memberships ORDER BY created_at, user_id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m Membership
+			if err := rows.Scan(&m.UserID, &m.Role); err != nil {
+				return err
+			}
+			memberships = append(memberships, m)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return memberships, nil
 }

@@ -50,14 +50,11 @@ type MeLoader func(ctx context.Context) (Tenant, string, error)
 
 // MeHandler returns GET /v1/me. It reads the verified identity the platform's
 // identityMiddleware placed in the context (401 if absent — the endpoint is
-// tenant-scoped and must never answer without a caller), resolves the tenant via
-// load, and returns the caller's tenant and user. A missing/invalid tenant is 401
-// (db.ErrNoTenant, fail-closed); an unknown tenant is 404; anything else is 500.
-//
-// STUB (M3-02-01, RED stage): load's signature has been widened to the target
-// (Tenant, string, error) shape, but the domain role and tenant.kind are not yet
-// wired into the response, and ErrNoMembership is not yet mapped to 403 — those
-// land in Stage 3. The existing 401/404/500 mapping is preserved unchanged.
+// tenant-scoped and must never answer without a caller), resolves the tenant and
+// domain role via load, and returns them. A missing/invalid tenant is 401
+// (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
+// no membership row is 403 (ErrNoMembership, fail-closed — a role is never
+// defaulted); anything else is 500.
 func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -68,13 +65,16 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		tenant, _, err := load(r.Context())
+		tenant, role, err := load(r.Context())
 		switch {
 		case errors.Is(err, db.ErrNoTenant):
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		case errors.Is(err, ErrTenantNotFound):
 			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		case errors.Is(err, ErrNoMembership):
+			writeError(w, http.StatusForbidden, "no membership")
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "tenancy: load current tenant", slog.Any("err", err))
@@ -85,21 +85,21 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		var resp meResponse
 		resp.Tenant.ID = tenant.ID
 		resp.Tenant.Name = tenant.Name
+		resp.Tenant.Kind = tenant.Kind
 		resp.User.ID = id.Subject
-		resp.User.Role = id.Role
+		resp.User.Role = role
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
 // meResponse is the GET /v1/me body: the caller's tenant (resolved through the
-// RLS-scoped query) and the user identity carried by the token.
-//
-// STUB (M3-02-01, RED stage): does not yet include tenant.kind or the domain
-// role — Stage 3 adds both fields and the values that populate them.
+// RLS-scoped query, including its kind discriminator) and the user identity,
+// with the domain role resolved from memberships (not the JWT role claim).
 type meResponse struct {
 	Tenant struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Kind string `json:"kind"`
 	} `json:"tenant"`
 	User struct {
 		ID   string `json:"id"`

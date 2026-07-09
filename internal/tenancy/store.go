@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // Store reads tenancy data as the invoice_app role. It holds the app-role pool
@@ -26,10 +30,35 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // scopes the row set to the current tenant). No visible tenant row maps to
 // ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
 //
-// STUB (M3-02-01, RED stage): not yet implemented — Stage 3 wires both queries
-// inside one db.WithinRequestTenantTx call. This always returns a
-// not-implemented error so the RED tests fail on assertion, never on a compile
-// or skip path.
+// Both queries run inside the SAME db.WithinRequestTenantTx call, so a missing
+// tenant row surfaces as ErrTenantNotFound before the membership query ever runs.
 func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
-	return Tenant{}, "", errors.New("tenancy: Store.Me not implemented")
+	var t Tenant
+	var role string
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTenantNotFound
+			}
+			return err
+		}
+
+		// The identity is guaranteed present here: WithinRequestTenantTx already
+		// resolved it (as the tenant id) before this closure ran, returning
+		// db.ErrNoTenant otherwise.
+		id, _ := auth.IdentityFromContext(ctx)
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
+		).Scan(&role); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoMembership
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return Tenant{}, "", err
+	}
+	return t, role, nil
 }

@@ -22,24 +22,43 @@ import (
 type Tenant struct {
 	ID   string
 	Name string
+	Kind string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
+}
+
+// Membership is one row of the caller's tenant's memberships: a user and their
+// domain role. Added in M3-02-01 for the Me/loader shape; M3-02-02's member-list
+// endpoint is the first consumer of the slice form.
+type Membership struct {
+	UserID string
+	Role   string
 }
 
 // ErrTenantNotFound means the caller's tenant id resolved to no visible row — a
 // well-formed identity whose tenant does not exist (or is invisible under RLS).
 var ErrTenantNotFound = errors.New("tenancy: tenant not found")
 
-// TenantLoader resolves the current caller's tenant. The handler depends on this
-// narrow function type rather than a pool, so its HTTP contract is unit-testable
-// without a database; the production loader (Store.CurrentTenant) runs the real
-// tenant-scoped query.
-type TenantLoader func(ctx context.Context) (Tenant, error)
+// ErrNoMembership means the caller's identity and tenant both resolved, but the
+// caller holds no memberships row in that tenant — an authenticated caller with
+// no domain role. Fail-closed: a role must never be defaulted when this occurs.
+var ErrNoMembership = errors.New("tenancy: no membership")
+
+// MeLoader resolves the current caller's tenant and their domain role (from
+// memberships). The handler depends on this narrow function type rather than a
+// pool, so its HTTP contract is unit-testable without a database; the production
+// loader (Store.Me) runs the real tenant + membership queries.
+type MeLoader func(ctx context.Context) (Tenant, string, error)
 
 // MeHandler returns GET /v1/me. It reads the verified identity the platform's
 // identityMiddleware placed in the context (401 if absent — the endpoint is
 // tenant-scoped and must never answer without a caller), resolves the tenant via
 // load, and returns the caller's tenant and user. A missing/invalid tenant is 401
 // (db.ErrNoTenant, fail-closed); an unknown tenant is 404; anything else is 500.
-func MeHandler(load TenantLoader, log *slog.Logger) http.HandlerFunc {
+//
+// STUB (M3-02-01, RED stage): load's signature has been widened to the target
+// (Tenant, string, error) shape, but the domain role and tenant.kind are not yet
+// wired into the response, and ErrNoMembership is not yet mapped to 403 — those
+// land in Stage 3. The existing 401/404/500 mapping is preserved unchanged.
+func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -49,7 +68,7 @@ func MeHandler(load TenantLoader, log *slog.Logger) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		tenant, err := load(r.Context())
+		tenant, _, err := load(r.Context())
 		switch {
 		case errors.Is(err, db.ErrNoTenant):
 			writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -74,6 +93,9 @@ func MeHandler(load TenantLoader, log *slog.Logger) http.HandlerFunc {
 
 // meResponse is the GET /v1/me body: the caller's tenant (resolved through the
 // RLS-scoped query) and the user identity carried by the token.
+//
+// STUB (M3-02-01, RED stage): does not yet include tenant.kind or the domain
+// role — Stage 3 adds both fields and the values that populate them.
 type meResponse struct {
 	Tenant struct {
 		ID   string `json:"id"`

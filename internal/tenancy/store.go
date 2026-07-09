@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // Store reads tenancy data as the invoice_app role. It holds the app-role pool
@@ -22,22 +19,17 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// CurrentTenant returns the caller's tenant, scoped by RLS. The query is a bare
-// SELECT with no WHERE: under the tenant_isolation policy the invoice_app role sees
-// exactly the one tenants row whose id equals app.current_tenant, so the policy — not
-// the query — is what limits the result. That is precisely the property M2-13 proves.
-// No visible row (an identity whose tenant does not exist) maps to ErrTenantNotFound;
-// a missing/invalid tenant id fails closed inside WithinRequestTenantTx (db.ErrNoTenant).
-func (s *Store) CurrentTenant(ctx context.Context) (Tenant, error) {
-	var t Tenant
-	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id, name FROM tenants`).Scan(&t.ID, &t.Name)
-	})
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return Tenant{}, ErrTenantNotFound
-	case err != nil:
-		return Tenant{}, err
-	}
-	return t, nil
+// Me returns the caller's tenant (id, name, kind) and their domain role, both
+// resolved under RLS: SELECT id, name, kind FROM tenants (bare — the
+// app.current_tenant GUC is the filter, not a WHERE clause) then SELECT role FROM
+// memberships WHERE user_id = $1 (identity.Subject, read inside the closure — RLS
+// scopes the row set to the current tenant). No visible tenant row maps to
+// ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
+//
+// STUB (M3-02-01, RED stage): not yet implemented — Stage 3 wires both queries
+// inside one db.WithinRequestTenantTx call. This always returns a
+// not-implemented error so the RED tests fail on assertion, never on a compile
+// or skip path.
+func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
+	return Tenant{}, "", errors.New("tenancy: Store.Me not implemented")
 }

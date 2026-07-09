@@ -284,3 +284,35 @@ func TestRLS_InvitationsOwnRowReassignmentRefused(t *testing.T) {
 	})
 	assertRLSViolation(t, err)
 }
+
+// INV-RLS-08 (F5, QA-added): invoice_app has NO DELETE grant on invitations — revoking
+// an invite is an UPDATE to status = 'revoked', not a row deletion (see the migration
+// header). Even a same-tenant DELETE on a row the app can otherwise see/update must be
+// refused, and refused at the GRANT level (SQLSTATE 42501 insufficient_privilege) rather
+// than by RLS, since there is no privilege for the policy to even evaluate against.
+// This is the one guarantee the Test Spec's INV-RLS-0x cases don't cover: none of them
+// exercise DELETE, so a future migration that widens the GRANT to include DELETE would
+// slip through unnoticed without this case.
+func TestRLS_InvitationsDeleteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	id, cleanup := seedInvitation(t, h.tenantA, "preparer", "delete-refused@example.com")
+	defer cleanup()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM invitations WHERE tenant_id = $1`, h.tenantA)
+		return e
+	})
+	if err == nil {
+		t.Fatal("app-role DELETE on invitations succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("app-role DELETE on invitations: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+
+	// The row must still exist — a permission-denied DELETE has no effect.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM invitations WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after refused DELETE = %d, want 1 (row must survive)", n)
+	}
+}

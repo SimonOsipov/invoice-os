@@ -23,7 +23,7 @@ import type { PlatformCtx } from '../types'
 type SidebarNavItem = NavDef & { badge?: string | null }
 
 export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
-  const { mode, active, clients, activeIdx, switcherOpen, view, filter } = ctx
+  const { user, mode, active, clients, activeIdx, switcherOpen, view, filter } = ctx
   const isFirm = mode === 'firm'
   const isInhouse = !isFirm
   const orgLabel = isFirm ? 'OKAFOR & PARTNERS' : active.short.toUpperCase() + ' · FINANCE'
@@ -157,11 +157,20 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
       </nav>
 
       <div style={{ padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}>AO</span>
+        <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}>{user.initials}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>Amara Okafor</div>
-          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
-            {orgLabel}
+          <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
+          <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+            {/* When /me verified, show the tenant name resolved from the live backend with a
+                green dot; otherwise fall back to the mode-derived workspace label. */}
+            {user.verified && user.tenantName ? (
+              <>
+                <span style={{ flex: 'none', width: 5, height: 5, borderRadius: 99, background: 'var(--status-green-text)' }} title="Tenant verified via /v1/me" />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.tenantName.toUpperCase()}</span>
+              </>
+            ) : (
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{orgLabel}</span>
+            )}
           </div>
         </div>
         <span style={{ color: 'var(--fg-3)' }}>{gearGlyph}</span>

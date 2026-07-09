@@ -27,10 +27,14 @@ export const APPS: AppTarget[] = [
     name: 'app',
     url: resolveUrl('APP_URL', 'https://app-development-3b4b.up.railway.app'),
     assertMainView: async (page) => {
-      // Sidebar brand + signed-in firm user prove the app shell mounted; the
-      // dashboard is the default view.
+      // The app gates on a mock sign-in (M2-13): pick the firm persona to enter the
+      // workspace. With no gateway configured on the deployed build the sign-in is a
+      // pure client-side mock (no backend call), so the shell mounts either way.
+      await page.getByRole('button', { name: /Chinedu Okafor/ }).click()
+      // Sidebar brand + the signed-in firm persona prove the workspace shell mounted;
+      // the dashboard is the default view.
       await expect(page.getByText('InvoiceOS').first()).toBeVisible()
-      await expect(page.getByText('Amara Okafor')).toBeVisible()
+      await expect(page.getByText('Chinedu Okafor')).toBeVisible()
     },
   },
   {

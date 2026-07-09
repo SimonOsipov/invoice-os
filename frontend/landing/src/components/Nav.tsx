@@ -1,4 +1,4 @@
-import { BrandMark, Icon } from '../icons'
+import { BrandMark } from '../icons'
 
 const NAV_LINKS = [
   { label: 'How it works', href: '#how' },
@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { label: 'Pricing', href: '#pricing' },
 ]
 
-export function Nav() {
+export function Nav({ onSignIn }: { onSignIn: () => void }) {
   return (
     <header
       style={{
@@ -59,14 +59,11 @@ export function Nav() {
           ))}
         </nav>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* Cross-app links are stubs in Phase 1 — Ops Console / Platform apps not built yet. */}
-          <a href="#" className="v2-btn v2-btn-ghost ios-hide-mobile" style={{ height: 38, gap: 7 }}>
-            <Icon paths={['M3 12h4l2 5 4-12 2 7h6']} size={15} strokeWidth={1.7} />
-            Ops console
-          </a>
-          <a href="#" className="v2-btn v2-btn-ghost ios-hide-mobile" style={{ height: 38 }}>
-            Open platform
-          </a>
+          {/* Sign in opens the mock persona picker → OTP → routes to the workspace the
+              chosen role may open (task-21). */}
+          <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 38, cursor: 'pointer' }}>
+            Sign in
+          </button>
           <a href="#demo" className="v2-btn v2-btn-primary" style={{ height: 38 }}>
             Book a demo
           </a>

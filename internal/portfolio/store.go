@@ -137,25 +137,141 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 // Update partially updates a business_entities row's mutable fields
 // (name/tin/registration/sector/address) and writes a
 // "portfolio.entity.updated" audit row in the same transaction (M3-03-04,
-// task-37). STUB for the RED stage -- the executor (Mode B) implements the
-// real COALESCE-based partial update, ValidateTIN re-check on a changed TIN,
-// empty-input rejection (ErrValidation before any UPDATE), duplicate-TIN
-// mapping (23505 -> ErrDuplicateTIN), zero-rows-affected mapping
-// (-> ErrNotFound), and the audit.Record call, per task-37's Implementation
-// Plan.
+// task-37). An all-nil in is rejected as ErrValidation before any tx opens
+// (a no-op UPDATE is forbidden). A non-nil in.TIN is re-validated via
+// ValidateTIN and the canonical form (not the raw input) is what gets
+// persisted. The SET clause only ever touches the provided fields -- status
+// is never part of it, so an update on an archived entity leaves it archived
+// (edit-while-archived, story [A6]). Zero rows affected (cross-tenant id,
+// RLS-invisible) maps to ErrNotFound; a unique_violation (23505) on the
+// duplicate-TIN partial index maps to ErrDuplicateTIN, same as Create.
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Entity, error) {
-	return Entity{}, errors.New("not implemented: M3-03-04")
+	if in.Name == nil && in.TIN == nil && in.Registration == nil && in.Sector == nil && in.Address == nil {
+		return Entity{}, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+
+	var canonicalTIN string
+	if in.TIN != nil {
+		var err error
+		canonicalTIN, err = ValidateTIN(*in.TIN)
+		if err != nil {
+			return Entity{}, err
+		}
+	}
+
+	var entity Entity
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var setClauses []string
+		var args []any
+		var changedFields []string
+
+		if in.Name != nil {
+			args = append(args, *in.Name)
+			setClauses = append(setClauses, fmt.Sprintf("name = $%d", len(args)))
+			changedFields = append(changedFields, "name")
+		}
+		if in.TIN != nil {
+			args = append(args, canonicalTIN)
+			setClauses = append(setClauses, fmt.Sprintf("tin = $%d", len(args)))
+			changedFields = append(changedFields, "tin")
+		}
+		if in.Registration != nil {
+			args = append(args, *in.Registration)
+			setClauses = append(setClauses, fmt.Sprintf("registration = $%d", len(args)))
+			changedFields = append(changedFields, "registration")
+		}
+		if in.Sector != nil {
+			args = append(args, *in.Sector)
+			setClauses = append(setClauses, fmt.Sprintf("sector = $%d", len(args)))
+			changedFields = append(changedFields, "sector")
+		}
+		if in.Address != nil {
+			args = append(args, *in.Address)
+			setClauses = append(setClauses, fmt.Sprintf("address = $%d", len(args)))
+			changedFields = append(changedFields, "address")
+		}
+
+		args = append(args, id)
+		query := fmt.Sprintf(
+			`UPDATE business_entities SET %s WHERE id = $%d
+			 RETURNING id, name, tin, registration, sector, address, status, created_at`,
+			strings.Join(setClauses, ", "), len(args),
+		)
+
+		if err := tx.QueryRow(ctx, query, args...).Scan(
+			&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Status, &entity.CreatedAt,
+		); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "23505" {
+				return ErrDuplicateTIN
+			}
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "portfolio.entity.updated", map[string]any{
+			"id":     entity.ID,
+			"fields": changedFields,
+		})
+	})
+	if err != nil {
+		return Entity{}, err
+	}
+	return entity, nil
 }
 
 // SetStatus is the guarded lifecycle transition behind Offboard
 // (target="archived") and Onboard (target="active") (M3-03-04, task-37): a
 // redundant transition (already at target) returns ErrRedundantTransition
-// with NO audit row; otherwise the status flips and a
+// BEFORE any UPDATE or audit.Record call, so no row changes and no audit row
+// is written. Otherwise the status flips and a
 // "portfolio.entity.offboarded"/"portfolio.entity.onboarded" audit row is
-// written in the same transaction. STUB for the RED stage -- see Update's
-// comment.
+// written in the same transaction. Archived rows are never filtered out of
+// GetByID/List -- this is a status value, not a soft-delete tombstone.
 func (s *Store) SetStatus(ctx context.Context, id, target string) (Entity, error) {
-	return Entity{}, errors.New("not implemented: M3-03-04")
+	var entity Entity
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var current string
+		if err := tx.QueryRow(ctx,
+			`SELECT status FROM business_entities WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&current); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if current == target {
+			return ErrRedundantTransition
+		}
+
+		if err := tx.QueryRow(ctx,
+			`UPDATE business_entities SET status = $1 WHERE id = $2
+			 RETURNING id, name, tin, registration, sector, address, status, created_at`,
+			target, id,
+		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Status, &entity.CreatedAt); err != nil {
+			return err
+		}
+
+		event := "portfolio.entity.onboarded"
+		if target == "archived" {
+			event = "portfolio.entity.offboarded"
+		}
+		return audit.Record(ctx, tx, callerID.Subject, event, map[string]any{
+			"id":   entity.ID,
+			"from": current,
+			"to":   entity.Status,
+		})
+	})
+	if err != nil {
+		return Entity{}, err
+	}
+	return entity, nil
 }
 
 // GetByID runs a bare SELECT by id inside db.WithinRequestTenantTx — RLS

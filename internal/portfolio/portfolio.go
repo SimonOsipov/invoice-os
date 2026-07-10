@@ -268,42 +268,117 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Entity, int, er
 	}
 }
 
-// UpdateHandler returns PATCH /v1/entities/{id} (M3-03-04, task-37). STUB for
-// the RED stage: the real decode/validate/dispatch logic (400 on decode error
-// or empty body, error mapping via statusForErr, 200 + updated Entity on
-// success) is added by the executor (Mode B) — this scaffold only needs to
-// compile and exist so handler tests can reference it and stubbed store
-// closures.
+// updateEntityRequest is the PATCH /v1/entities/{id} wire body (snake_case
+// JSON tags, pointer fields so "field absent" is distinguishable from "field
+// present"). Deliberately has NO status field -- lifecycle transitions are
+// Offboard/OnboardHandler's job, not Update's (story Decision [A6]).
+type updateEntityRequest struct {
+	Name         *string `json:"name"`
+	TIN          *string `json:"tin"`
+	Registration *string `json:"registration"`
+	Sector       *string `json:"sector"`
+	Address      *string `json:"address"`
+}
+
+// UpdateHandler returns PATCH /v1/entities/{id} (M3-03-04, task-37). Same
+// identity-first-401 order as Create/GetHandler, then decodes the PATCH body
+// into updateEntityRequest (400 on decode error), rejects an all-nil body
+// as 400 ("no fields to update") before ever calling update, maps store
+// errors via statusForErr, and answers 200 + updated Entity on success.
 func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-04")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var req updateEntityRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Name == nil && req.TIN == nil && req.Registration == nil && req.Sector == nil && req.Address == nil {
+			writeError(w, http.StatusBadRequest, "no fields to update")
+			return
+		}
+
+		entity, err := update(r.Context(), r.PathValue("id"), UpdateInput{
+			Name:         req.Name,
+			TIN:          req.TIN,
+			Registration: req.Registration,
+			Sector:       req.Sector,
+			Address:      req.Address,
+		})
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "portfolio: update entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, entity)
 	}
 }
 
 // OffboardHandler returns POST /v1/entities/{id}/offboard (M3-03-04,
-// task-37): its real implementation calls setStatus(ctx, id, "archived").
-// STUB for the RED stage, see UpdateHandler's comment.
+// task-37). Same identity-first-401 order, reading r.PathValue("id") and
+// calling setStatus(ctx, id) -- the caller binds "archived" as the target at
+// wiring time (M3-03-05); this handler is target-agnostic. Maps ErrNotFound
+// to 404, ErrRedundantTransition to 409, else statusForErr; 200 + Entity on
+// success.
 func OffboardHandler(setStatus func(ctx context.Context, id string) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-04")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		entity, err := setStatus(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "portfolio: offboard entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, entity)
 	}
 }
 
 // OnboardHandler returns POST /v1/entities/{id}/onboard (M3-03-04, task-37):
-// its real implementation calls setStatus(ctx, id, "active"). STUB for the
-// RED stage, see UpdateHandler's comment.
+// mirrors OffboardHandler; the caller binds "active" as the target at wiring
+// time (M3-03-05).
 func OnboardHandler(setStatus func(ctx context.Context, id string) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-04")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		entity, err := setStatus(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "portfolio: onboard entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, entity)
 	}
 }
 

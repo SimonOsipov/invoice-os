@@ -16,11 +16,13 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// meBody mirrors the GET /v1/me JSON so the handler tests can assert the contract.
+// meBody mirrors the GET /v1/me JSON so the handler tests can assert the
+// contract, including the M3-02-01 additions (tenant.kind, domain user.role).
 type meBody struct {
 	Tenant struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Kind string `json:"kind"`
 	} `json:"tenant"`
 	User struct {
 		ID   string `json:"id"`
@@ -29,7 +31,7 @@ type meBody struct {
 	Error string `json:"error"`
 }
 
-func doMe(t *testing.T, load TenantLoader, id *auth.Identity) (*httptest.ResponseRecorder, meBody) {
+func doMe(t *testing.T, load MeLoader, id *auth.Identity) (*httptest.ResponseRecorder, meBody) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/me", nil)
 	if id != nil {
@@ -44,10 +46,15 @@ func doMe(t *testing.T, load TenantLoader, id *auth.Identity) (*httptest.Respons
 	return rec, body
 }
 
-func TestMeHandler_OK(t *testing.T) {
-	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: "11111111-1111-1111-1111-111111111111"}
-	load := func(context.Context) (Tenant, error) {
-		return Tenant{ID: id.TenantID, Name: "Okafor & Partners"}, nil
+// TestMe_OKShape (M3-02-01 Test Specs, AC #1): a loader resolving tenant
+// {kind:"firm"} + domain role "admin" must produce 200 with tenant.kind=="firm"
+// and user.role=="admin" — the domain role from memberships, NOT the JWT
+// "authenticated" claim the identity below deliberately carries instead, so this
+// assertion only passes once Stage 3 wires the loader's role into the response.
+func TestMe_OKShape(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) (Tenant, string, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, "admin", nil
 	}
 	rec, body := doMe(t, load, &id)
 
@@ -57,117 +64,771 @@ func TestMeHandler_OK(t *testing.T) {
 	if body.Tenant.ID != id.TenantID || body.Tenant.Name != "Okafor & Partners" {
 		t.Errorf("tenant = %+v, want id=%s name=Okafor & Partners", body.Tenant, id.TenantID)
 	}
-	if body.User.ID != "user-1" || body.User.Role != "authenticated" {
-		t.Errorf("user = %+v, want id=user-1 role=authenticated", body.User)
+	if body.Tenant.Kind != "firm" {
+		t.Errorf("tenant.kind = %q, want %q", body.Tenant.Kind, "firm")
+	}
+	if body.User.ID != "user-1" {
+		t.Errorf("user.id = %q, want %q", body.User.ID, "user-1")
+	}
+	if body.User.Role != "admin" {
+		t.Errorf("user.role = %q, want %q (the domain role from memberships, not the JWT role)", body.User.Role, "admin")
 	}
 }
 
-func TestMeHandler_NoIdentity401(t *testing.T) {
-	load := func(context.Context) (Tenant, error) {
-		t.Fatal("loader must not run without an identity")
-		return Tenant{}, nil
+// TestMe_NoMembership403 (AC #3, A1): ErrNoMembership must map to 403 with a
+// non-empty error body — distinct from 401 (no identity) and 404 (no tenant).
+func TestMe_NoMembership403(t *testing.T) {
+	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", ErrNoMembership }
+	rec, body := doMe(t, load, &id)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
 	}
-	rec, _ := doMe(t, load, nil)
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMe_TenantNotFound404 (AC #1): the pre-existing ErrTenantNotFound->404
+// mapping must be preserved unchanged by the M3-02-01 loader-signature widening.
+func TestMe_TenantNotFound404(t *testing.T) {
+	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", ErrTenantNotFound }
+	rec, body := doMe(t, load, &id)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMe_NoTenantCtx401 (AC #3): the pre-existing db.ErrNoTenant->401 fail-closed
+// mapping must be preserved unchanged.
+func TestMe_NoTenantCtx401(t *testing.T) {
+	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", db.ErrNoTenant }
+	rec, body := doMe(t, load, &id)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMe_NoIdentity401 (AC #1): no identity in the request context must 401
+// before the loader ever runs — asserted by failing the test if load is called.
+func TestMe_NoIdentity401(t *testing.T) {
+	load := func(context.Context) (Tenant, string, error) {
+		t.Fatal("loader must not run without an identity")
+		return Tenant{}, "", nil
+	}
+	rec, body := doMe(t, load, nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 when no identity in context", rec.Code)
 	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
 }
 
-func TestMeHandler_ErrorMapping(t *testing.T) {
+// TestMe_InternalError500: an unrecognized loader error must map to 500, not
+// leak internals into the body, but still include a non-empty error message.
+func TestMe_InternalError500(t *testing.T) {
 	id := auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}
-	cases := []struct {
-		name string
-		err  error
-		want int
-	}{
-		{"no tenant fails closed", db.ErrNoTenant, http.StatusUnauthorized},
-		{"unknown tenant", ErrTenantNotFound, http.StatusNotFound},
-		{"unexpected error", errors.New("boom"), http.StatusInternalServerError},
+	load := func(context.Context) (Tenant, string, error) { return Tenant{}, "", errors.New("boom") }
+	rec, body := doMe(t, load, &id)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			load := func(context.Context) (Tenant, error) { return Tenant{}, tc.err }
-			rec, body := doMe(t, load, &id)
-			if rec.Code != tc.want {
-				t.Errorf("status = %d, want %d", rec.Code, tc.want)
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// dbTestPools returns the superuser (seed) and app-role (Store) pools for the
+// tenancy db-integration suite below, or skips the test when the per-role DSNs
+// are unset — the same env gate `make test-rls` and the pre-existing
+// TestCurrentTenant_RoundTrip used (DATABASE_URL for invoice_app,
+// DATABASE_SUPERUSER_URL for seeding as the BYPASSRLS superuser).
+func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
+	t.Helper()
+	appURL := os.Getenv("DATABASE_URL")
+	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
+	if appURL == "" || superURL == "" {
+		t.Skip("tenancy db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+	}
+	ctx := context.Background()
+
+	s, err := pgxpool.New(ctx, superURL)
+	if err != nil {
+		t.Fatalf("connect superuser: %v", err)
+	}
+	// Registered before the app pool's Cleanup, so per LIFO ordering it closes
+	// AFTER app's pool — and callers that register a row-delete Cleanup of their
+	// own (after calling dbTestPools) get it run BEFORE either pool closes.
+	t.Cleanup(s.Close)
+	if err := s.Ping(ctx); err != nil {
+		t.Fatalf("ping superuser (is the DB up and bootstrapped?): %v", err)
+	}
+
+	a, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatalf("connect app: %v", err)
+	}
+	t.Cleanup(a.Close)
+
+	return s, a
+}
+
+// TestStoreMe_ResolvesTenantAndRole (M3-02-01 Test Specs, AC #1): a
+// superuser-seeded kind='firm' tenant plus a membership (user, 'admin') must
+// resolve, via Store.Me, to tenant{id,name,kind:"firm"} and role "admin".
+// Requires DATABASE_URL (invoice_app) + DATABASE_SUPERUSER_URL (seed); run via
+// `make test-rls` or with both env vars set directly.
+func TestStoreMe_ResolvesTenantAndRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	userID := uuid.NewString()
+	const tenantName = "tenancy me-test firm"
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, tenantID, tenantName); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`, tenantID, userID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	tenant, role, err := store.Me(c)
+	if err != nil {
+		t.Fatalf("Me(%s): %v", tenantID, err)
+	}
+	if tenant.ID != tenantID || tenant.Name != tenantName || tenant.Kind != "firm" {
+		t.Errorf("tenant = %+v, want id=%s name=%s kind=firm", tenant, tenantID, tenantName)
+	}
+	if role != "admin" {
+		t.Errorf("role = %q, want %q", role, "admin")
+	}
+}
+
+// TestStoreMe_NoMembershipFailsClosed (AC #3, A1): a seeded, visible tenant with
+// NO membership row for the caller must resolve to ErrNoMembership, never a
+// defaulted role.
+func TestStoreMe_NoMembershipFailsClosed(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy me-test no-membership', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	_, _, err := store.Me(c)
+	if !errors.Is(err, ErrNoMembership) {
+		t.Fatalf("Me err = %v, want ErrNoMembership", err)
+	}
+}
+
+// TestStoreMe_UnknownTenant (AC #1): a well-formed tenant id with no visible row
+// (RLS makes it invisible / it does not exist) must resolve to ErrTenantNotFound.
+func TestStoreMe_UnknownTenant(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+	_, _, err := store.Me(c)
+	if !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("Me err = %v, want ErrTenantNotFound", err)
+	}
+}
+
+// TestStoreMe_NoIdentityFailsClosed (AC #3): a context with no identity must
+// fail closed with db.ErrNoTenant before any statement runs (the
+// WithinRequestTenantTx contract).
+func TestStoreMe_NoIdentityFailsClosed(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+
+	store := NewStore(app)
+	_, _, err := store.Me(ctx)
+	if !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("Me err = %v, want db.ErrNoTenant", err)
+	}
+}
+
+// TestStoreMe_RolePerTenant (AC #3): the SAME user_id seeded as 'admin' in
+// tenant A and 'preparer' in tenant B must resolve to the role of whichever
+// tenant is current — proving role resolution is scoped to the current tenant,
+// not merely to the user.
+func TestStoreMe_RolePerTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	userID := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy me-test role A', 'firm'), ($2, 'tenancy me-test role B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($3, $2, 'preparer')`,
+		tenantA, userID, tenantB); err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+
+	store := NewStore(app)
+
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantA})
+	_, roleA, err := store.Me(cA)
+	if err != nil {
+		t.Fatalf("Me(tenant A): %v", err)
+	}
+	if roleA != "admin" {
+		t.Errorf("role in tenant A = %q, want %q", roleA, "admin")
+	}
+
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
+	_, roleB, err := store.Me(cB)
+	if err != nil {
+		t.Fatalf("Me(tenant B): %v", err)
+	}
+	if roleB != "preparer" {
+		t.Errorf("role in tenant B = %q, want %q", roleB, "preparer")
+	}
+}
+
+// TestStoreMe_CrossTenantRoleBorrowFailsClosed (AC #3 adversarial, QA-added
+// task-29): the SAME user_id seeded as 'admin' in tenant A ONLY must NOT
+// resolve any role when the caller's current tenant is B (a real, seeded
+// tenant where the user holds no membership row). This is the load-bearing
+// isolation property of role resolution: Store.Me's membership query has no
+// explicit `AND tenant_id = ...` clause (see store.go) — it relies entirely on
+// the memberships table's tenant_isolation RLS policy to scope
+// `WHERE user_id = $1` to the current tenant. If that policy (or the GUC
+// plumbing) ever regressed, this test is what would catch a user borrowing
+// their role from a tenant they are not currently acting in.
+func TestStoreMe_CrossTenantRoleBorrowFailsClosed(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	userID := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test borrow A', 'firm'), ($2, 'tenancy qa-test borrow B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	// U is admin in A ONLY — deliberately no membership row in B.
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		tenantA, userID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	store := NewStore(app)
+	// Caller's current tenant is B, not A — U must not borrow A's admin role.
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantB})
+	_, role, err := store.Me(c)
+	if !errors.Is(err, ErrNoMembership) {
+		t.Fatalf("Me(tenant B) err = %v, role = %q, want ErrNoMembership (must not borrow tenant A's admin role)", err, role)
+	}
+}
+
+// TestStoreMe_RoleValueIntegrity (AC #1/#3 adversarial, QA-added task-29):
+// seeding the caller as 'preparer' (not 'admin') must resolve to exactly
+// "preparer" — guards against a hardcoded/defaulted role value that would
+// happen to pass the 'admin'-only assertions in TestStoreMe_ResolvesTenantAndRole.
+func TestStoreMe_RoleValueIntegrity(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	userID := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test role-integrity', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'preparer')`, tenantID, userID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	_, role, err := store.Me(c)
+	if err != nil {
+		t.Fatalf("Me(%s): %v", tenantID, err)
+	}
+	if role != "preparer" {
+		t.Errorf("role = %q, want exactly %q (not admin/blank/defaulted)", role, "preparer")
+	}
+}
+
+// membershipsBody mirrors the GET /v1/memberships JSON so the handler tests
+// can assert the contract (A3: snake_case {user_id, role} items) and, for
+// TestMemberships_Empty200, inspect the raw JSON of the memberships field
+// directly -- json.RawMessage lets that test distinguish a literal `[]` from
+// `null`, which decoding straight into a Go slice could not (both unmarshal
+// to a zero-length/nil slice).
+type membershipsBody struct {
+	Memberships json.RawMessage `json:"memberships"`
+	Error       string          `json:"error"`
+}
+
+func doMemberships(t *testing.T, load MembershipsLoader, id *auth.Identity) (*httptest.ResponseRecorder, membershipsBody) {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/memberships", nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	MembershipsHandler(load, nil).ServeHTTP(rec, r)
+	var body membershipsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	return rec, body
+}
+
+// TestMemberships_OK (M3-02-02 Test Specs, AC #2): a loader resolving two
+// memberships must produce 200 with both {user_id,role} items, in the
+// loader's order.
+func TestMemberships_OK(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	want := []Membership{{UserID: "u1", Role: "admin"}, {UserID: "u2", Role: "preparer"}}
+	load := func(context.Context) ([]Membership, error) { return want, nil }
+	rec, body := doMemberships(t, load, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var items []struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+	}
+	if err := json.Unmarshal(body.Memberships, &items); err != nil {
+		t.Fatalf("decode memberships %q: %v", body.Memberships, err)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("len(memberships) = %d, want %d: %+v", len(items), len(want), items)
+	}
+	for i, m := range want {
+		if items[i].UserID != m.UserID || items[i].Role != m.Role {
+			t.Errorf("memberships[%d] = %+v, want {user_id:%s role:%s}", i, items[i], m.UserID, m.Role)
+		}
+	}
+}
+
+// TestMemberships_Empty200 (AC #2, A4): an empty loader result must still be
+// 200 with the memberships field serialized as a literal `[]`, never `null`
+// -- a client that does `res.memberships.map(...)` must not crash on a bare
+// null field.
+func TestMemberships_Empty200(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return []Membership{}, nil }
+	rec, body := doMemberships(t, load, &id)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if string(body.Memberships) != "[]" {
+		t.Errorf("memberships raw JSON = %s, want [] (not null)", body.Memberships)
+	}
+}
+
+// TestMemberships_NoIdentity401 (AC #2): no identity in the request context
+// must 401 before the loader ever runs -- asserted by failing the test if
+// load is called.
+func TestMemberships_NoIdentity401(t *testing.T) {
+	load := func(context.Context) ([]Membership, error) {
+		t.Fatal("loader must not run without an identity")
+		return nil, nil
+	}
+	rec, body := doMemberships(t, load, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when no identity in context", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMemberships_NoTenantCtx401 (AC #2, A4): the loader returning
+// db.ErrNoTenant must fail closed with 401, same as MeHandler.
+func TestMemberships_NoTenantCtx401(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return nil, db.ErrNoTenant }
+	rec, body := doMemberships(t, load, &id)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMemberships_Error500 (AC #2, A4): any other loader error must map to
+// 500 -- and specifically NEVER 403/404, since A4 says the member-list does
+// not independently gate on the caller holding a membership.
+func TestMemberships_Error500(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) { return nil, errors.New("boom") }
+	rec, body := doMemberships(t, load, &id)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestStoreListMemberships_OwnTenantOnly (M3-02-02 Test Specs, core AC #6 --
+// service-layer isolation): tenant A seeded with 3 memberships (admin,
+// preparer, reviewer) and tenant B seeded with 1 unrelated membership;
+// ListMemberships as tenant A must return exactly A's 3 rows -- B's row must
+// be absent. This is the service-layer half of core AC #6 (the RLS half is
+// already covered by internal/platform/db/memberships_rls_test.go, M3-01).
+func TestStoreListMemberships_OwnTenantOnly(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	userA1, userA2, userA3 := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	userB := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test memberships A', 'firm'), ($2, 'tenancy qa-test memberships B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantA, userA1, userA2, userA3); err != nil {
+		t.Fatalf("seed tenant A memberships: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		tenantB, userB); err != nil {
+		t.Fatalf("seed tenant B membership: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userA1, Role: "authenticated", TenantID: tenantA})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships(tenant A): %v", err)
+	}
+
+	want := map[string]string{userA1: "admin", userA2: "preparer", userA3: "reviewer"}
+	if len(got) != len(want) {
+		t.Fatalf("len(memberships) = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for _, m := range got {
+		if m.UserID == userB {
+			t.Fatalf("tenant B's membership (user %s) leaked into tenant A's list: %+v", userB, got)
+		}
+		wantRole, ok := want[m.UserID]
+		if !ok {
+			t.Errorf("unexpected membership user_id %q in tenant A's list", m.UserID)
+			continue
+		}
+		if m.Role != wantRole {
+			t.Errorf("role for %s = %q, want %q", m.UserID, m.Role, wantRole)
+		}
+	}
+}
+
+// TestStoreListMemberships_DeterministicOrder (AC #2): 3 rows seeded in one
+// tenant; calling ListMemberships twice must produce identical order (ORDER
+// BY created_at, user_id) -- the ordering guarantee the member-list response
+// depends on for stable rendering across repeated requests.
+func TestStoreListMemberships_DeterministicOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	callerID := uuid.NewString()
+	u1, u2 := uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test memberships order', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantID, callerID, u1, u2); err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
+
+	first, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships (1st call): %v", err)
+	}
+	second, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships (2nd call): %v", err)
+	}
+	if len(first) != 3 || len(second) != 3 {
+		t.Fatalf("len(first)=%d len(second)=%d, want 3 each", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Errorf("order differs at index %d: first=%+v second=%+v", i, first[i], second[i])
+		}
+	}
+}
+
+// TestStoreListMemberships_NoContextFailsClosed (AC #2, A4): a context with
+// no identity must fail closed with db.ErrNoTenant before any statement
+// runs -- the WithinRequestTenantTx contract, same as Store.Me.
+func TestStoreListMemberships_NoContextFailsClosed(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+
+	store := NewStore(app)
+	got, err := store.ListMemberships(ctx)
+	if !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("ListMemberships err = %v, want db.ErrNoTenant", err)
+	}
+	if got != nil {
+		t.Errorf("ListMemberships rows = %+v, want nil on fail-closed error", got)
+	}
+}
+
+// TestStoreMe_RoleIsCatalogValueForEachRole (AC #1/#3 adversarial, QA-added
+// task-29): for each of the three catalog roles (roles table:
+// admin/preparer/reviewer — migrations/20260709151759_roles.sql), a caller
+// seeded with that role must get back that EXACT non-empty string — no code
+// path may return ("", nil) on success. Covers 'reviewer', the one role none
+// of the Stage 2.5 tests exercised.
+func TestStoreMe_RoleIsCatalogValueForEachRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	for _, want := range []string{"admin", "preparer", "reviewer"} {
+		t.Run(want, func(t *testing.T) {
+			tenantID := uuid.NewString()
+			userID := uuid.NewString()
+
+			if _, err := super.Exec(ctx,
+				`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test catalog-role', 'firm')`, tenantID); err != nil {
+				t.Fatalf("seed tenant: %v", err)
 			}
-			if body.Error == "" {
-				t.Error("expected an error message in the body")
+			t.Cleanup(func() {
+				_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+			})
+			if _, err := super.Exec(ctx,
+				`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)`, tenantID, userID, want); err != nil {
+				t.Fatalf("seed membership: %v", err)
+			}
+
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+			_, role, err := store.Me(c)
+			if err != nil {
+				t.Fatalf("Me(%s): %v", tenantID, err)
+			}
+			if role == "" {
+				t.Fatal("role = \"\" on success — a role must never be empty/defaulted")
+			}
+			if role != want {
+				t.Errorf("role = %q, want %q", role, want)
 			}
 		})
 	}
 }
 
-// TestCurrentTenant_RoundTrip proves the M2-13 claim end to end against a real
-// Postgres: Store.CurrentTenant's bare `SELECT ... FROM tenants` returns exactly the
-// caller's tenant because RLS + the app.current_tenant GUC (set by WithinRequestTenantTx)
-// is the filter — not a WHERE clause. It also pins the fail-closed and not-found paths.
-// It reuses the same Postgres-service-container + role-bootstrap path as the CI `rls`
-// job and SKIPS itself when the per-role URLs are absent, so `go test ./...` stays green
-// without a database. Requires DATABASE_URL (invoice_app) + DATABASE_SUPERUSER_URL (seed).
-func TestCurrentTenant_RoundTrip(t *testing.T) {
-	appURL := os.Getenv("DATABASE_URL")
-	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
-	if appURL == "" || superURL == "" {
-		t.Skip("tenancy round-trip skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
-	}
+// TestStoreListMemberships_ReverseIsolation (core AC #6 adversarial, QA-added
+// task-30): seeds tenant A with 2 memberships and tenant B with 3, then calls
+// ListMemberships as EACH tenant in turn. TestStoreListMemberships_OwnTenantOnly
+// only proves B's row can't leak into A's list; this proves isolation holds in
+// both directions -- A's rows must not leak into B's list either, and each
+// tenant's count must match exactly what was seeded for it (not the total).
+func TestStoreListMemberships_ReverseIsolation(t *testing.T) {
+	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	super, err := pgxpool.New(ctx, superURL)
-	if err != nil {
-		t.Fatalf("connect superuser: %v", err)
-	}
-	// Register pool closes via Cleanup (not defer) so they run AFTER the row-delete
-	// Cleanup below — Cleanups run LIFO, and a delete on a closed pool would no-op.
-	t.Cleanup(super.Close)
-	if err := super.Ping(ctx); err != nil {
-		t.Fatalf("ping superuser (is the DB up and bootstrapped?): %v", err)
-	}
-	app, err := pgxpool.New(ctx, appURL)
-	if err != nil {
-		t.Fatalf("connect app: %v", err)
-	}
-	t.Cleanup(app.Close)
-
-	// Seed two tenants as the superuser (BYPASSRLS, so no tenant context needed).
-	// Random ids stay collision-free against any pre-existing rows in a shared dev DB.
 	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	a1, a2 := uuid.NewString(), uuid.NewString()
+	b1, b2, b3 := uuid.NewString(), uuid.NewString(), uuid.NewString()
+
 	if _, err := super.Exec(ctx,
-		`INSERT INTO tenants (id, name) VALUES ($1, 'tenancy me-test A'), ($2, 'tenancy me-test B')`,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test reverse-iso A', 'firm'), ($2, 'tenancy qa-test reverse-iso B', 'firm')`,
 		tenantA, tenantB); err != nil {
 		t.Fatalf("seed tenants: %v", err)
 	}
-	// Registered last → runs first (before the pool closes above), so the delete
-	// executes against a still-open superuser pool.
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
 	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer')`,
+		tenantA, a1, a2); err != nil {
+		t.Fatalf("seed tenant A memberships: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantB, b1, b2, b3); err != nil {
+		t.Fatalf("seed tenant B memberships: %v", err)
+	}
 
 	store := NewStore(app)
 
-	// As tenant A, the bare SELECT resolves to A only; as tenant B, to B only.
-	for _, tc := range []struct{ id, name string }{
-		{tenantA, "tenancy me-test A"},
-		{tenantB, "tenancy me-test B"},
-	} {
-		c := auth.WithIdentity(ctx, auth.Identity{Subject: "u", Role: "authenticated", TenantID: tc.id})
-		got, err := store.CurrentTenant(c)
-		if err != nil {
-			t.Fatalf("CurrentTenant(%s): %v", tc.id, err)
-		}
-		if got.ID != tc.id || got.Name != tc.name {
-			t.Errorf("CurrentTenant = %+v, want id=%s name=%s", got, tc.id, tc.name)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: a1, Role: "authenticated", TenantID: tenantA})
+	gotA, err := store.ListMemberships(cA)
+	if err != nil {
+		t.Fatalf("ListMemberships(tenant A): %v", err)
+	}
+	if len(gotA) != 2 {
+		t.Fatalf("len(tenant A memberships) = %d, want 2: %+v", len(gotA), gotA)
+	}
+	for _, m := range gotA {
+		if m.UserID == b1 || m.UserID == b2 || m.UserID == b3 {
+			t.Fatalf("tenant B's membership (user %s) leaked into tenant A's list: %+v", m.UserID, gotA)
 		}
 	}
 
-	// A well-formed tenant id with no row → ErrTenantNotFound (RLS makes it invisible).
-	unknown := auth.WithIdentity(ctx, auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()})
-	if _, err := store.CurrentTenant(unknown); !errors.Is(err, ErrTenantNotFound) {
-		t.Errorf("unknown tenant err = %v, want ErrTenantNotFound", err)
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: b1, Role: "authenticated", TenantID: tenantB})
+	gotB, err := store.ListMemberships(cB)
+	if err != nil {
+		t.Fatalf("ListMemberships(tenant B): %v", err)
+	}
+	if len(gotB) != 3 {
+		t.Fatalf("len(tenant B memberships) = %d, want 3: %+v", len(gotB), gotB)
+	}
+	for _, m := range gotB {
+		if m.UserID == a1 || m.UserID == a2 {
+			t.Fatalf("tenant A's membership (user %s) leaked into tenant B's list: %+v", m.UserID, gotB)
+		}
+	}
+}
+
+// TestStoreListMemberships_EmptyTenantReturnsEmptySlice (AC #2/A4 adversarial,
+// QA-added task-30): a seeded, visible tenant with ZERO membership rows must
+// resolve to a non-nil, zero-length slice and a nil error at the SERVICE
+// LAYER -- complements the handler-level TestMemberships_Empty200 (which only
+// exercises a stubbed loader) by proving Store.ListMemberships itself, backed
+// by a real RLS-scoped query with no rows to return, never produces (nil, nil)
+// (which would defeat the handler's nil-normalization) nor a spurious error.
+func TestStoreListMemberships_EmptyTenantReturnsEmptySlice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test memberships empty', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	// Deliberately NO membership rows seeded for this tenant.
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships(empty tenant): %v", err)
+	}
+	if got == nil {
+		t.Fatal("ListMemberships(empty tenant) = nil slice, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("len(memberships) = %d, want 0: %+v", len(got), got)
+	}
+}
+
+// TestStoreListMemberships_ContentFidelity (core AC #2 adversarial, QA-added
+// task-30): seeds one tenant with a known {user_id,role} triple for EACH of
+// the three catalog roles and asserts the returned set matches EXACTLY --
+// every seeded user_id present with its correct role. Guards against a
+// column-order/scan mix-up (e.g. `SELECT user_id, role` accidentally scanned
+// as role-then-user_id) that TestStoreListMemberships_OwnTenantOnly's
+// same-role-per-index style could theoretically miss if roles collided.
+func TestStoreListMemberships_ContentFidelity(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	uAdmin, uPreparer, uReviewer := uuid.NewString(), uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test content-fidelity', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'preparer'), ($1, $4, 'reviewer')`,
+		tenantID, uAdmin, uPreparer, uReviewer); err != nil {
+		t.Fatalf("seed memberships: %v", err)
 	}
 
-	// No identity → fail closed before any statement runs.
-	if _, err := store.CurrentTenant(ctx); !errors.Is(err, db.ErrNoTenant) {
-		t.Errorf("no-identity err = %v, want db.ErrNoTenant", err)
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uAdmin, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships: %v", err)
+	}
+
+	want := map[string]string{uAdmin: "admin", uPreparer: "preparer", uReviewer: "reviewer"}
+	if len(got) != len(want) {
+		t.Fatalf("len(memberships) = %d, want %d: %+v", len(got), len(want), got)
+	}
+	seen := make(map[string]bool, len(want))
+	for _, m := range got {
+		wantRole, ok := want[m.UserID]
+		if !ok {
+			t.Errorf("unexpected user_id %q in result: %+v", m.UserID, m)
+			continue
+		}
+		if m.Role != wantRole {
+			t.Errorf("role for %s = %q, want %q (possible column/scan mix-up)", m.UserID, m.Role, wantRole)
+		}
+		seen[m.UserID] = true
+	}
+	for userID := range want {
+		if !seen[userID] {
+			t.Errorf("expected user_id %q missing from result: %+v", userID, got)
+		}
 	}
 }

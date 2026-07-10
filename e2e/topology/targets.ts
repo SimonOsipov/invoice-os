@@ -10,19 +10,35 @@ const resolve = (envVar: string, fallback: string): string => process.env[envVar
 export const GATEWAY_URL = resolve('GATEWAY_URL', 'https://gateway-development-997b.up.railway.app')
 export const APP_URL = resolve('APP_URL', 'https://app-development-3b4b.up.railway.app')
 
-// The seeded isolation pair (db/seed.dev.sql). Both rows exist in the tenants table, so
-// RLS — not a WHERE clause — is what limits each token to its own row. Subjects are
-// arbitrary but fixed uuids (the mock issuer stamps them as the JWT `sub`).
+// The seeded isolation pair (db/seed.dev.sql), M3-02: the two real persona tenants, each
+// with an admin membership for its persona subject. Both rows exist in the tenants
+// table, so RLS — not a WHERE clause — is what limits each token to its own row. Using
+// the real persona tenants (rather than the throwaway aaaa…/bbbb… fixtures) is required
+// now that /me is membership-gated (a non-member subject would 403, not 200) and doubles
+// as the live proof that the firm and in-house personas resolve their own tenant + role.
 export const TENANTS = {
   a: {
-    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    name: 'Tenant A (dev)',
-    subject: 'a0000000-0000-0000-0000-0000000000a1',
+    id: '11111111-1111-1111-1111-111111111111',
+    name: 'Okafor & Partners',
+    kind: 'firm',
+    subject: 'c0000000-0000-0000-0000-000000000001',
+    role: 'admin',
+    // All three seeded members of this tenant (db/seed.dev.sql) — the live
+    // membership-list proof (isolation.spec.ts) asserts GET /v1/memberships
+    // returns exactly these user_ids and none of tenant b's.
+    members: [
+      'c0000000-0000-0000-0000-000000000001',
+      'c0000000-0000-0000-0000-000000000003',
+      'c0000000-0000-0000-0000-000000000004',
+    ],
   },
   b: {
-    id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-    name: 'Tenant B (dev)',
-    subject: 'b0000000-0000-0000-0000-0000000000b1',
+    id: '22222222-2222-2222-2222-222222222222',
+    name: 'Honeywell Group',
+    kind: 'in_house',
+    subject: 'c0000000-0000-0000-0000-000000000002',
+    role: 'admin',
+    members: ['c0000000-0000-0000-0000-000000000002'],
   },
 } as const
 

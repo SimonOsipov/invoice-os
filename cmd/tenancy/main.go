@@ -46,7 +46,11 @@ func main() {
 	// GET /v1/me — the caller's tenant + user, resolved under RLS. Reached via the
 	// gateway as /api/tenancy/v1/me (the prefix is stripped upstream).
 	store := tenancy.NewStore(pool)
-	app.Mux.HandleFunc("GET /v1/me", tenancy.MeHandler(store.CurrentTenant, app.Logger))
+	app.Mux.HandleFunc("GET /v1/me", tenancy.MeHandler(store.Me, app.Logger))
+
+	// GET /v1/memberships — the caller's tenant's membership list, resolved under
+	// RLS. Reached via the gateway as /api/tenancy/v1/memberships.
+	app.Mux.HandleFunc("GET /v1/memberships", tenancy.MembershipsHandler(store.ListMemberships, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("tenancy: %v", err)

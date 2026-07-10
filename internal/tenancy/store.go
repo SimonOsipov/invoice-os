@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -22,22 +23,70 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// CurrentTenant returns the caller's tenant, scoped by RLS. The query is a bare
-// SELECT with no WHERE: under the tenant_isolation policy the invoice_app role sees
-// exactly the one tenants row whose id equals app.current_tenant, so the policy — not
-// the query — is what limits the result. That is precisely the property M2-13 proves.
-// No visible row (an identity whose tenant does not exist) maps to ErrTenantNotFound;
-// a missing/invalid tenant id fails closed inside WithinRequestTenantTx (db.ErrNoTenant).
-func (s *Store) CurrentTenant(ctx context.Context) (Tenant, error) {
+// Me returns the caller's tenant (id, name, kind) and their domain role, both
+// resolved under RLS: SELECT id, name, kind FROM tenants (bare — the
+// app.current_tenant GUC is the filter, not a WHERE clause) then SELECT role FROM
+// memberships WHERE user_id = $1 (identity.Subject, read inside the closure — RLS
+// scopes the row set to the current tenant). No visible tenant row maps to
+// ErrTenantNotFound; no membership row maps to ErrNoMembership (never defaulted).
+//
+// Both queries run inside the SAME db.WithinRequestTenantTx call, so a missing
+// tenant row surfaces as ErrTenantNotFound before the membership query ever runs.
+func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 	var t Tenant
+	var role string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id, name FROM tenants`).Scan(&t.ID, &t.Name)
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTenantNotFound
+			}
+			return err
+		}
+
+		// The identity is guaranteed present here: WithinRequestTenantTx already
+		// resolved it (as the tenant id) before this closure ran, returning
+		// db.ErrNoTenant otherwise.
+		id, _ := auth.IdentityFromContext(ctx)
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
+		).Scan(&role); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoMembership
+			}
+			return err
+		}
+		return nil
 	})
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return Tenant{}, ErrTenantNotFound
-	case err != nil:
-		return Tenant{}, err
+	if err != nil {
+		return Tenant{}, "", err
 	}
-	return t, nil
+	return t, role, nil
+}
+
+// ListMemberships lists the caller's tenant's memberships (user_id, role),
+// RLS-scoped: SELECT user_id, role FROM memberships ORDER BY created_at,
+// user_id -- bare (no WHERE tenant_id), same as Me's tenant query, inside a
+// SINGLE db.WithinRequestTenantTx call. An empty tenant returns an empty
+// non-nil slice and a nil error (never nil, nil).
+func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
+	memberships := []Membership{}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT user_id, role FROM memberships ORDER BY created_at, user_id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m Membership
+			if err := rows.Scan(&m.UserID, &m.Role); err != nil {
+				return err
+			}
+			memberships = append(memberships, m)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return memberships, nil
 }

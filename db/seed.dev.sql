@@ -14,9 +14,24 @@
 --   1111… → Okafor & Partners  (persona: Chinedu Okafor, firm accountant)
 --   2222… → Honeywell Group    (persona: Ngozi Balogun, in-house accountant)
 
-INSERT INTO tenants (id, name) VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)'),
-    ('11111111-1111-1111-1111-111111111111', 'Okafor & Partners'),
-    ('22222222-2222-2222-2222-222222222222', 'Honeywell Group')
-ON CONFLICT (id) DO NOTHING;
+-- kind is named explicitly (not left to the tenants.kind DEFAULT 'firm' from M3-01) and
+-- the conflict clause is DO UPDATE so a local `make dev-db` re-run CORRECTS an
+-- already-seeded row's kind (DO NOTHING would leave a stale kind in place).
+INSERT INTO tenants (id, name, kind) VALUES
+    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)',    'firm'),
+    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)',    'firm'),
+    ('11111111-1111-1111-1111-111111111111', 'Okafor & Partners', 'firm'),
+    ('22222222-2222-2222-2222-222222222222', 'Honeywell Group',   'in_house')
+ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind;
+
+-- M3-02: demo firm memberships (all three roles) + the in-house persona's own membership
+-- so her /me sign-in stays green now that /me is membership-gated (fail-closed 403
+-- otherwise). Roles (admin/preparer/reviewer) already exist from the M3-01 migration.
+INSERT INTO memberships (tenant_id, user_id, role) VALUES
+    -- Okafor & Partners (kind='firm') — all three roles
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 'admin'),     -- Chinedu Okafor (firm persona)
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000003', 'preparer'),  -- seed-only
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000004', 'reviewer'),  -- seed-only
+    -- Honeywell Group (in-house persona)
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin')      -- Ngozi Balogun
+ON CONFLICT (tenant_id, user_id) DO NOTHING;

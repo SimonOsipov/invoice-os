@@ -23,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -58,35 +59,85 @@ var (
 	ErrRedundantTransition = errors.New("portfolio: redundant transition")
 )
 
-// CreateHandler returns POST /v1/entities. Its intended contract (filled in
-// by the executor): check the verified identity is present (401 before
-// decode/create, exactly like tenancy.MeHandler's order), decode the request
-// body (400 on decode error or empty name), call create, map errors via
-// statusForErr, and answer 201 + Entity on success.
-//
-// STUB (M3-03-02 Test-Spec, RED): always answers 501 regardless of request —
-// the executor replaces this body.
+// createEntityRequest is the POST /v1/entities wire body (snake_case JSON
+// tags). Named distinctly from the test file's own createRequest (same
+// package, used there only to marshal test request bodies).
+type createEntityRequest struct {
+	Name         string  `json:"name"`
+	TIN          string  `json:"tin"`
+	Registration *string `json:"registration,omitempty"`
+	Sector       *string `json:"sector,omitempty"`
+	Address      *string `json:"address,omitempty"`
+}
+
+// CreateHandler returns POST /v1/entities. It checks the verified identity is
+// present (401 before decode/create, exactly like tenancy.MeHandler's order),
+// decodes the request body (400 on decode error or empty name), calls create,
+// maps errors via statusForErr, and answers 201 + Entity on success.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-02")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var req createEntityRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+
+		entity, err := create(r.Context(), CreateInput{
+			Name:         req.Name,
+			TIN:          req.TIN,
+			Registration: req.Registration,
+			Sector:       req.Sector,
+			Address:      req.Address,
+		})
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "portfolio: create entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, entity)
 	}
 }
 
-// GetHandler returns GET /v1/entities/{id}. Its intended contract (filled in
-// by the executor): same identity-first-401 order as CreateHandler, reading
-// r.PathValue("id"); 404 via ErrNotFound, 200 + Entity on success.
-//
-// STUB (M3-03-02 Test-Spec, RED): always answers 501 regardless of request —
-// the executor replaces this body.
+// GetHandler returns GET /v1/entities/{id}. Same identity-first-401 order as
+// CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound, 200 + Entity
+// on success.
 func GetHandler(get func(ctx context.Context, id string) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-02")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		entity, err := get(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "portfolio: get entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, entity)
 	}
 }
 

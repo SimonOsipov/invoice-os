@@ -137,14 +137,7 @@ jobs:
         run: |
           railway variables --set "GATEWAY_MOCK_ISSUER=true" --service gateway --skip-deploys
           railway variables --set "CORS_ALLOWED_ORIGINS=$APP_URL" --service gateway --skip-deploys
-          # The fleet is torn down (`railway down`) between PRs and per-service
-          # auto-deploy-from-main is OFF. On its own, `railway up` for a service
-          # whose image is unchanged produces only a SKIPPED (no-op) deployment,
-          # so the service stays Offline. Run `up` directly (not captured, so it
-          # still waits for any real build) and ALWAYS follow with `railway
-          # redeploy` to force the latest image to actually run.
           railway up --ci --service gateway
-          railway redeploy --service gateway -y
         timeout-minutes: 15
 
   # 2. Schema-before-fleet barrier: the gateway migrates at boot and
@@ -161,13 +154,13 @@ jobs:
         run: |
           echo "Waiting for $GATEWAY_URL/healthz ..."
           ok=0
-          for _ in $(seq 1 72); do
+          for _ in $(seq 1 40); do
             code=$(curl -fsS -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then echo "  gateway healthy (schema migrated)"; ok=1; break; fi
             sleep 5
           done
           if [ "$ok" != "1" ]; then
-            echo "::error::$GATEWAY_URL/healthz did not return 200 within 360s (migration failed?)"
+            echo "::error::$GATEWAY_URL/healthz did not return 200 within 200s (migration failed?)"
             exit 1
           fi
 
@@ -186,15 +179,10 @@ jobs:
         service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications]
     steps:
       - uses: actions/checkout@v4
-      - name: railway up + redeploy ${{ matrix.service }}
+      - name: railway up ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        # See the gateway step: `railway up` on an unchanged image (fleet torn
-        # down between PRs) only produces a SKIPPED no-op deployment, so always
-        # follow with a redeploy to force the latest image to actually run.
-        run: |
-          railway up --ci --service ${{ matrix.service }}
-          railway redeploy --service ${{ matrix.service }} -y
+        run: railway up --ci --service ${{ matrix.service }}
         timeout-minutes: 15
 
   # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
@@ -218,14 +206,10 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
         run: railway variables --set "VITE_GATEWAY_URL=$GATEWAY_URL" --service app --skip-deploys
-      - name: railway up + redeploy ${{ matrix.service }}
+      - name: railway up ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        # See the gateway step: always redeploy after up so an unchanged SPA
-        # still comes up after the fleet was torn down.
-        run: |
-          railway up --ci --service ${{ matrix.service }}
-          railway redeploy --service ${{ matrix.service }} -y
+        run: railway up --ci --service ${{ matrix.service }}
         timeout-minutes: 15
 
   # 5. Reset + seed the dev DB (data-only) as the Postgres SUPERUSER, after the

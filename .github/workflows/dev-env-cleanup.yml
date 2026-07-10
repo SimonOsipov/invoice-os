@@ -3,9 +3,16 @@ name: Dev Env Cleanup (scale full fleet to zero)
 # Teardown half of the unified dev-deploy model (M2-14, task-23): dev-env.yml
 # deploys the whole fleet on each ready PR and leaves the env UP for as long as
 # that PR is open. When the PR is closed (merged or abandoned), this workflow
-# scales all 11 dev services to zero. The dev environment and its stable URLs
-# are preserved — only the compute (latest deployment) is removed; the next
-# ready PR's dev-env.yml run brings it back.
+# tears down all 11 dev services via `railway down`, which REMOVES the latest
+# deployment outright (not a scale-to-0 pause). The dev environment and its
+# stable URLs are preserved — only the compute is removed.
+#
+# This teardown mechanism is unchanged, but is now genuinely recoverable
+# (M3-16): each service's Watch Paths were cleared out-of-band, so the next
+# ready PR's dev-env.yml run always rebuilds every service from scratch via
+# `railway up` — including ones the PR itself didn't touch — rather than
+# skipping them and leaving a torn-down service Offline. See
+# docs/deploy-model.md "Cold-fleet recovery (M3-16)".
 #
 # For this teardown to actually stick, the per-service auto-deploy-from-main
 # triggers must stay removed — otherwise a merge pushes to main and Railway

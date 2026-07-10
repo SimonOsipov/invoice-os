@@ -235,7 +235,7 @@ func TestGetHandler_NoIdentity401(t *testing.T) {
 	}
 }
 
-// --- List handler tests (task-36, M3-03-03 RED stage) --------------------------------
+// --- List handler tests (task-36, M3-03-03) -------------------------------------------
 
 // doList issues a GET /v1/entities request (optionally with a raw query
 // string, e.g. "?status=pending") through ListHandler.
@@ -254,9 +254,10 @@ func doList(t *testing.T, list func(ctx context.Context, f ListFilter) ([]Entity
 // returning ([]Entity{}, 0, nil) must produce 200 with the RAW response body
 // containing "entities":[] (never "entities":null) and "total":0.
 //
-// FAILS today (M3-03-03 RED stage): ListHandler is a compiling stub that
-// always answers 501 without calling list -- this must go green once the
-// executor implements the real envelope in Mode B.
+// QA mutation probe (Mode B): confirmed this reddens for the right reason --
+// forcing ListHandler to emit a nil Entities slice fails the raw-JSON
+// "entities":[] assertion below (portfolio_test.go:276), not an
+// import/collection error.
 func TestListHandler_EmptyState200(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	called := false
@@ -285,9 +286,6 @@ func TestListHandler_EmptyState200(t *testing.T) {
 // other than "active"/"archived") must 400 with a non-empty error, and must
 // never call the store -- validation happens in the handler before List
 // runs.
-//
-// FAILS today (M3-03-03 RED stage): the stub returns 501 regardless of the
-// query string.
 func TestListHandler_BadStatus400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	list := func(ctx context.Context, f ListFilter) ([]Entity, int, error) {
@@ -311,10 +309,6 @@ func TestListHandler_BadStatus400(t *testing.T) {
 // TestListHandler_LimitDefaultAndClamp (AC-4): the ListFilter the handler
 // passes to the store must default an omitted ?limit= to 50, and clamp an
 // over-large ?limit=500 down to 200.
-//
-// FAILS today (M3-03-03 RED stage): the stub never calls list, so "called"
-// stays false regardless of the query string -- the t.Fatalf below fires for
-// both subtests.
 func TestListHandler_LimitDefaultAndClamp(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -872,7 +866,7 @@ func TestStoreCreate_InvalidTINRejectedAtStoreLayer(t *testing.T) {
 	}
 }
 
-// --- DB-backed Store.List tests (task-36, M3-03-03 RED stage) ------------------------
+// --- DB-backed Store.List tests (task-36, M3-03-03) -----------------------------------
 
 // seedEntityStatus inserts one business_entities row for tenantID with an
 // EXPLICIT status ("active"|"archived") -- seedEntity always takes the
@@ -902,8 +896,10 @@ func seedEntityStatus(t *testing.T, super *pgxpool.Pool, tenantID, name string, 
 // internal/platform/db/business_entities_rls_test.go (M3-01) and is not
 // re-tested here.
 //
-// FAILS today (M3-03-03 RED stage): Store.List is a stub returning
-// errors.New("not implemented: M3-03-03").
+// QA mutation probe (Mode B): confirmed this reddens for the right reason --
+// temporarily seeding tenant B's two rows under tenant A (simulating a
+// cross-tenant leak) flips the total assertion to "total = 5, want 3", not
+// an import/collection error.
 func TestStoreList_OwnTenantOnly(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -946,8 +942,6 @@ func TestStoreList_OwnTenantOnly(t *testing.T) {
 
 // TestStoreList_StatusFilter (AC-2): tenant A has 2 active + 1 archived --
 // List(status="archived") must return exactly the 1 archived row.
-//
-// FAILS today (M3-03-03 RED stage): stub.
 func TestStoreList_StatusFilter(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -987,8 +981,6 @@ func TestStoreList_StatusFilter(t *testing.T) {
 // TestStoreList_StatusOmittedReturnsBoth (AC-2): the same tenant/data shape
 // as TestStoreList_StatusFilter (2 active + 1 archived) -- List(status=nil)
 // must return all 3 rows.
-//
-// FAILS today (M3-03-03 RED stage): stub.
 func TestStoreList_StatusOmittedReturnsBoth(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1021,7 +1013,11 @@ func TestStoreList_StatusOmittedReturnsBoth(t *testing.T) {
 // TestStoreList_SearchQ (AC-3): tenant A has "Okafor Ltd" and "Lagos Foods"
 // -- List(q="okaf") must match "Okafor Ltd" only, case-insensitive.
 //
-// FAILS today (M3-03-03 RED stage): stub.
+// QA mutation probe (Mode B): confirmed this reddens for the right reason --
+// dropping the name ILIKE arm (leaving only the tin arm) flips this to
+// "total=0 len(items)=0, want 1/1", not an import/collection error; the
+// sibling TIN-arm mutation (see TestStoreList_SearchQMatchesTIN) leaves this
+// test green, proving the two arms are independently load-bearing.
 func TestStoreList_SearchQ(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1059,7 +1055,9 @@ func TestStoreList_SearchQ(t *testing.T) {
 // TestCreateHandler_201) -- List(q="34567"), a substring of that TIN, must
 // match it.
 //
-// FAILS today (M3-03-03 RED stage): stub.
+// QA mutation probe (Mode B): confirmed this reddens for the right reason --
+// dropping the tin ILIKE arm (leaving only the name arm) flips this to
+// "total=0 len(items)=0, want 1/1", not an import/collection error.
 func TestStoreList_SearchQMatchesTIN(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1096,7 +1094,11 @@ func TestStoreList_SearchQMatchesTIN(t *testing.T) {
 // offset=2) must return exactly 2 rows, the middle page in stable name ASC,
 // id ASC order, with total=5 (the full filtered count, not the page size).
 //
-// FAILS today (M3-03-03 RED stage): stub.
+// QA mutation probe (Mode B): confirmed this reddens for the right reason --
+// returning len(items) as total instead of the COUNT(*) flips this to
+// "total = 2, want 5"; separately, dropping LIMIT/OFFSET from the SELECT
+// flips it to "len(items) = 5, want 2" -- neither is an import/collection
+// error.
 func TestStoreList_Pagination(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1138,9 +1140,6 @@ func TestStoreList_Pagination(t *testing.T) {
 // TestStoreList_EmptyTenant (AC-5): a fresh tenant with 0 rows -- List must
 // return a non-nil empty slice, total 0, nil err (never a nil slice, which
 // would serialize to JSON null instead of []).
-//
-// FAILS today (M3-03-03 RED stage): the stub returns a nil slice AND a
-// non-nil error, so both checks below fail.
 func TestStoreList_EmptyTenant(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1166,5 +1165,301 @@ func TestStoreList_EmptyTenant(t *testing.T) {
 	}
 	if total != 0 {
 		t.Errorf("total = %d, want 0", total)
+	}
+}
+
+// --- QA-added adversarial / edge-case tests (task-36 Part 2, QA Verify) ---------------
+
+// TestStoreList_ReverseCrossTenantIsolation (QA-added, mirrors
+// TestStoreList_OwnTenantOnly in the OTHER direction): tenant A has 3
+// entities, tenant B has 2 -- List AS TENANT B must return exactly B's 2,
+// none of A's. TestStoreList_OwnTenantOnly only proves A never sees B's rows;
+// this proves the reverse also holds (isolation is not accidentally
+// one-directional, e.g. from a filter that happens to exclude B's rows from
+// A's result set for an unrelated reason).
+func TestStoreList_ReverseCrossTenantIsolation(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-reverse-isolation A', 'firm'), ($2, 'portfolio list-reverse-isolation B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+
+	seedEntity(t, super, tenantA, "A Co One", nil)
+	seedEntity(t, super, tenantA, "A Co Two", nil)
+	seedEntity(t, super, tenantA, "A Co Three", nil)
+	seedEntity(t, super, tenantB, "B Co One", nil)
+	seedEntity(t, super, tenantB, "B Co Two", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+
+	items, total, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (as tenant B): %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total = %d, want 2", total)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	for _, e := range items {
+		if strings.HasPrefix(e.Name, "A Co") {
+			t.Errorf("List(as tenant B) returned tenant A's row: %+v", e)
+		}
+	}
+}
+
+// TestStoreList_CombinedStatusAndQFilter (QA-added, AC-2 + AC-3 combined):
+// tenant A has an ACTIVE "Okafor Ltd" and an ARCHIVED "Okafor Foods" --
+// List(status=active, q="okafor") must match ONLY the active row, proving
+// the two filters combine with AND (both must hold), not OR.
+func TestStoreList_CombinedStatusAndQFilter(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-combined-filter tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	activeID := seedEntity(t, super, tenantID, "Okafor Ltd", nil)
+	seedEntityStatus(t, super, tenantID, "Okafor Foods", nil, "archived")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	status := "active"
+	items, total, err := store.List(c, ListFilter{Status: &status, Q: "okafor", Limit: 50})
+	if err != nil {
+		t.Fatalf("List(status=active,q=okafor): %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("total=%d len(items)=%d, want 1/1", total, len(items))
+	}
+	if items[0].ID != activeID {
+		t.Errorf("items[0].ID = %q, want %q (the active Okafor Ltd row, not the archived Okafor Foods)", items[0].ID, activeID)
+	}
+}
+
+// TestStoreList_SearchQNoMatch (QA-added, AC-3/AC-5 edge): a q that matches
+// no row in the tenant must produce the same zero-result contract as an
+// empty tenant (TestStoreList_EmptyTenant) -- a non-nil empty slice, total 0,
+// nil err -- even though the tenant itself is non-empty.
+func TestStoreList_SearchQNoMatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-nomatch tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	seedEntity(t, super, tenantID, "Lagos Foods", nil)
+	seedEntity(t, super, tenantID, "Acme Ltd", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Q: "zzz-no-such-substring", Limit: 50})
+	if err != nil {
+		t.Fatalf("List(q=no-match): %v", err)
+	}
+	if items == nil {
+		t.Error("items = nil, want a non-nil empty slice")
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+	if total != 0 {
+		t.Errorf("total = %d, want 0", total)
+	}
+}
+
+// TestStoreList_SearchQWildcardIsNotEscaped (QA-added -- documents ACTUAL
+// behavior, not asserted as a bug): f.Q is always passed as a BOUND
+// parameter ('%'||$n||'%'), never string-interpolated into the SQL text, so
+// there is NO SQL-injection risk from q. However, Store.List does NOT
+// LIKE-escape q's contents before binding it -- so a literal "%" or "_"
+// TYPED BY THE USER into q is interpreted by Postgres as an ILIKE wildcard,
+// not a literal character. q="%" here becomes the pattern '%'||'%'||'%' =
+// '%%%', which ILIKE collapses to "match anything" -- List(q="%") matches
+// EVERY row in the tenant, regardless of name/tin content.
+//
+// QA ruling: acceptable for this MVP/demo search box (M3-03-03, task-36).
+// Nigerian business names/TINs containing a literal "%" or "_" are
+// vanishingly rare, and the failure mode if one occurs is "search returns
+// more rows than the literal string would suggest" -- not a security issue,
+// not a cross-tenant leak, not data corruption. NOT bounced as a defect;
+// flagged here for the human's awareness in case a future story wants
+// stricter literal-search semantics (would require escaping "%", "_", and
+// "\" in q before binding).
+func TestStoreList_SearchQWildcardIsNotEscaped(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-search-wildcard tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	seedEntity(t, super, tenantID, "Okafor Ltd", nil)
+	seedEntity(t, super, tenantID, "Lagos Foods", nil)
+	seedEntity(t, super, tenantID, "Acme Traders", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Q: "%", Limit: 50})
+	if err != nil {
+		t.Fatalf(`List(q="%%"): %v`, err)
+	}
+	if total != 3 || len(items) != 3 {
+		t.Fatalf("total=%d len(items)=%d, want 3/3 (a literal %% in q is treated as an ILIKE wildcard here, matching every row in the tenant -- see comment above)", total, len(items))
+	}
+}
+
+// TestStoreList_PaginationPastEnd (QA-added, AC-4 edge): tenant A has 3
+// entities -- List(limit=10, offset=100), an offset past the end of the
+// filtered set, must return an empty slice, but total must still reflect the
+// full filtered count (3) -- proving total is computed independently of the
+// LIMIT/OFFSET window, not derived from len(items).
+func TestStoreList_PaginationPastEnd(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-pagination-past-end tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	seedEntity(t, super, tenantID, "Co A", nil)
+	seedEntity(t, super, tenantID, "Co B", nil)
+	seedEntity(t, super, tenantID, "Co C", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Limit: 10, Offset: 100})
+	if err != nil {
+		t.Fatalf("List(offset past end): %v", err)
+	}
+	if items == nil {
+		t.Error("items = nil, want a non-nil empty slice")
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (the full filtered count, independent of offset)", total)
+	}
+}
+
+// TestStoreList_OrderingTieBreak (QA-added, AC-4 edge): two entities in the
+// SAME tenant with the IDENTICAL name -- List's ORDER BY name ASC, id ASC
+// must break the tie by id, and that order must be STABLE (identical)
+// across two separate List calls -- proving id is a real, deterministic
+// secondary sort key, not incidental ordering Postgres happens to produce
+// once.
+func TestStoreList_OrderingTieBreak(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-order-tiebreak tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	const dupName = "Tie Break Co"
+	id1 := seedEntity(t, super, tenantID, dupName, nil)
+	id2 := seedEntity(t, super, tenantID, dupName, nil)
+	wantFirst, wantSecond := id1, id2
+	if wantFirst > wantSecond {
+		wantFirst, wantSecond = wantSecond, wantFirst
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items1, _, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (1st call): %v", err)
+	}
+	items2, _, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (2nd call): %v", err)
+	}
+	if len(items1) != 2 || len(items2) != 2 {
+		t.Fatalf("len(items1)=%d len(items2)=%d, want 2/2", len(items1), len(items2))
+	}
+	if items1[0].ID != wantFirst || items1[1].ID != wantSecond {
+		t.Errorf("items1 order = [%q, %q], want [%q, %q] (id ASC tie-break)", items1[0].ID, items1[1].ID, wantFirst, wantSecond)
+	}
+	if items1[0].ID != items2[0].ID || items1[1].ID != items2[1].ID {
+		t.Errorf("order not stable across calls: 1st=[%q,%q] 2nd=[%q,%q]", items1[0].ID, items1[1].ID, items2[0].ID, items2[1].ID)
+	}
+}
+
+// TestStoreList_LargeLimitReturnsAllRows (QA-added, AC-4 edge, store-level):
+// a large limit (200, the handler's max clamp value) with FEWER rows than
+// the limit in the tenant must return every row. This is the LIMIT boundary
+// at the STORE layer against real Postgres -- distinct from
+// TestListHandler_LimitDefaultAndClamp, which only asserts what ListFilter
+// the handler CONSTRUCTS from a stubbed store and never proves Store.List
+// actually honors a large limit end-to-end.
+func TestStoreList_LargeLimitReturnsAllRows(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio list-large-limit tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	const rowCount = 7
+	for i := 0; i < rowCount; i++ {
+		seedEntity(t, super, tenantID, fmt.Sprintf("Co %02d", i), nil)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Limit: 200})
+	if err != nil {
+		t.Fatalf("List(limit=200): %v", err)
+	}
+	if total != rowCount || len(items) != rowCount {
+		t.Fatalf("total=%d len(items)=%d, want %d/%d (limit=200 exceeds the tenant's row count, all rows returned)", total, len(items), rowCount, rowCount)
 	}
 }

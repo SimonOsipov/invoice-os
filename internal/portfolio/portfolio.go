@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -119,13 +120,14 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, err
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if req.Name == "" {
+		trimmedName := strings.TrimSpace(req.Name)
+		if trimmedName == "" {
 			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
 
 		entity, err := create(r.Context(), CreateInput{
-			Name:         req.Name,
+			Name:         trimmedName,
 			TIN:          req.TIN,
 			Registration: req.Registration,
 			Sector:       req.Sector,
@@ -303,6 +305,15 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 		if req.Name == nil && req.TIN == nil && req.Registration == nil && req.Sector == nil && req.Address == nil {
 			writeError(w, http.StatusBadRequest, "no fields to update")
 			return
+		}
+
+		if req.Name != nil {
+			trimmedName := strings.TrimSpace(*req.Name)
+			if trimmedName == "" {
+				writeError(w, http.StatusBadRequest, "name cannot be blank")
+				return
+			}
+			req.Name = &trimmedName
 		}
 
 		entity, err := update(r.Context(), r.PathValue("id"), UpdateInput{

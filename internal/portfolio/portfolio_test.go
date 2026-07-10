@@ -144,6 +144,48 @@ func TestCreateHandler_MissingName400(t *testing.T) {
 	}
 }
 
+// TestCreateHandler_WhitespaceName400 (CodeRabbit review, PR #33): a
+// whitespace-only name (e.g. "   ") must 400 before create ever runs --
+// asserted by failing the test if create is called. strings.TrimSpace
+// treats "   " as blank, same as "".
+func TestCreateHandler_WhitespaceName400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Entity, error) {
+		t.Fatal("create must not run when name is whitespace-only")
+		return Entity{}, nil
+	}
+	rec, body := doCreate(t, create, &id, createRequest{Name: "   ", TIN: "1234567897"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body error=%q)", rec.Code, body.Error)
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestCreateHandler_TrimsName (CodeRabbit review, PR #33): a name with
+// leading/trailing whitespace must reach the store trimmed, so
+// "  Acme Ltd  " persists as "Acme Ltd".
+func TestCreateHandler_TrimsName(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	const tin = "1234567897"
+	want := Entity{ID: uuid.NewString(), Name: "Acme Ltd", TIN: strPtr(tin), Status: "active", CreatedAt: time.Now()}
+	var gotName string
+	create := func(ctx context.Context, in CreateInput) (Entity, error) {
+		gotName = in.Name
+		return want, nil
+	}
+	rec, _ := doCreate(t, create, &id, createRequest{Name: "  Acme Ltd  ", TIN: tin})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	if gotName != "Acme Ltd" {
+		t.Errorf("CreateInput.Name = %q, want trimmed %q", gotName, "Acme Ltd")
+	}
+}
+
 // TestCreateHandler_DuplicateTIN409 (AC4): the store returning ErrDuplicateTIN
 // must map to 409 with a non-empty error message.
 func TestCreateHandler_DuplicateTIN409(t *testing.T) {
@@ -494,6 +536,26 @@ func TestUpdateHandler_EmptyBody400(t *testing.T) {
 		return Entity{}, nil
 	}
 	rec, body := doUpdate(t, update, &id, entityID, `{}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if body.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestUpdateHandler_WhitespaceName400 (CodeRabbit review, PR #33): a
+// whitespace-only name (e.g. "  ") in the PATCH body must 400 before update
+// ever runs -- asserted by failing the test if update is called.
+func TestUpdateHandler_WhitespaceName400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	entityID := uuid.NewString()
+	update := func(ctx context.Context, gotID string, in UpdateInput) (Entity, error) {
+		t.Fatal("update must not run when name is whitespace-only")
+		return Entity{}, nil
+	}
+	rec, body := doUpdate(t, update, &id, entityID, `{"name":"  "}`)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())

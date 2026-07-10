@@ -38,6 +38,14 @@ name: Dev Env (deploy full fleet + verify)
 #     superuser DSN (GitHub runners can't reach *.railway.internal; the reset
 #     +seed needs the superuser because `tenants` is FORCE ROW LEVEL SECURITY).
 #  4. Secret RAILWAY_API_DEV_TOKEN — the dev project token.
+#  5. Service-level Railway Watch Paths cleared (empty) on all 11 non-Postgres
+#     services (gateway + 7 context services + 3 SPAs) — otherwise `railway up`
+#     SKIPs any service a PR's diff doesn't touch, and a torn-down fleet
+#     (dev-env-cleanup.yml's `railway down`) never recovers on the next PR
+#     (M3-16). This is Railway-side config, not repo state — `railway.json`'s
+#     `build.watchPatterns` is ignored by Railway entirely, so it cannot be set
+#     from the repo. If a service is ever recreated, its Watch Paths must be
+#     re-cleared. See docs/deploy-model.md "Cold-fleet recovery (M3-16)".
 
 on:
   pull_request:
@@ -154,13 +162,16 @@ jobs:
         run: |
           echo "Waiting for $GATEWAY_URL/healthz ..."
           ok=0
-          for _ in $(seq 1 40); do
+          # 360s (72 x 5s): a cold-fleet run (M3-16) means this is a freshly
+          # built gateway image cold-starting + running goose migrate at boot,
+          # not a warm redeploy — 200s was too tight for that path.
+          for _ in $(seq 1 72); do
             code=$(curl -fsS -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then echo "  gateway healthy (schema migrated)"; ok=1; break; fi
             sleep 5
           done
           if [ "$ok" != "1" ]; then
-            echo "::error::$GATEWAY_URL/healthz did not return 200 within 200s (migration failed?)"
+            echo "::error::$GATEWAY_URL/healthz did not return 200 within 360s (migration failed?)"
             exit 1
           fi
 

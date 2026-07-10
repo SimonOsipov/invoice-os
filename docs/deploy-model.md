@@ -84,6 +84,45 @@ services to zero.
 To revert to the M1-06 always-on model: re-enable auto-deploy per service
 (Settings → **Enable**), and disable/remove `dev-env.yml` + `dev-env-cleanup.yml`.
 
+## Cold-fleet recovery (M3-16)
+
+**Root cause.** Each Railway service has a *service-level* **Watch Paths**
+setting (a monorepo build filter, configured in the dashboard) that suppresses
+`railway up` whenever the uploaded snapshot doesn't touch that service's
+watched paths — printing `no changes detected in watch paths, build will
+skip` and creating no deployment. After `dev-env-cleanup.yml`'s `railway down`
+removes a service's deployment on PR close, the *next* PR's `dev-env.yml`
+`railway up --ci --service <svc>` for any service whose watch paths the PR
+doesn't touch (e.g. a `.github/workflows/**`-only PR) skips instead of
+building — the torn-down service never comes back, and since `dev-env.yml`
+gates on the gateway's `/healthz` before deploying the rest of the fleet, one
+such skip fails the whole run. This is distinct from `railway.json`'s
+`build.watchPatterns` field, which Railway silently **ignores** — it never
+appears in a deployment's property mapping regardless of value. That's why
+M2-14's removal of `watchPatterns` from `railway.json` (`bae6c0f`) never
+actually fixed this: the field it edited was never wired to anything.
+
+**The fix (invariant, not a workflow change).** Service-level Watch Paths were
+cleared to empty on all 11 non-Postgres services (gateway, the 7 context
+services, and `landing`/`app`/`ops-console`) via the Railway API, out-of-band,
+one time. With Watch Paths empty, `railway up` reverts to its documented
+default — it always uploads and builds the working tree, for every service,
+on every run (Approach 3: always-rebuild). This must hold as an **invariant**:
+if a service is ever deleted and recreated, its Watch Paths must be
+re-cleared, or the skip failure mode returns. Postgres is excluded — it was
+never in the deploy fleet.
+
+**Teardown is unchanged.** `dev-env-cleanup.yml` still runs `railway down`
+(removes the deployment, not a scale-to-0 pause) — see the file's header
+comment. It is now recoverable **only because** of the empty-watch-paths
+invariant above: the next PR's `dev-env.yml` rebuilds every service from
+nothing rather than trying (and failing) to skip to a deployment that no
+longer exists.
+
+See the M3-16 story (`User Stories/M3/M3-16 Dev-Env Cold-Fleet Deploy Fix.md`)
+for the live experiment log that falsified the alternative approaches
+(scale-to-0 teardown, diff-driven redeploys).
+
 ## Related
 
 - [add-a-service.md](./add-a-service.md) — how each service was provisioned (the

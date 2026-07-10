@@ -79,6 +79,33 @@ history are untouched and persist (the dev Postgres is always-on). Idempotent �
 re-run. Setup owns correctness, not teardown, so the fixtures are deterministic regardless
 of prior state.
 
+## Cold-fleet recovery (M3-16)
+
+The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
+`deploy-spas` are both green — so it depends on every service in the fleet actually coming
+up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. That
+was not reliably true before M3-16: each Railway service has a service-level **Watch Paths**
+filter that makes `railway up` skip (no deployment created) when the PR's diff misses the
+service's watched paths. After a PR-close teardown (`dev-env-cleanup.yml`'s `railway down`,
+which removes the deployment), the next PR's `railway up` for an untouched service would
+skip rather than rebuild, leaving that service Offline and failing `health-gate` or
+`fleet-gate` before the E2E suites ever ran. (`railway.json`'s `build.watchPatterns` field
+looks like it should control this but Railway ignores it entirely — it is not wired to
+anything, which is why an earlier attempt to fix this via `railway.json` had no effect.)
+
+**Fix / invariant:** service-level Watch Paths were cleared to empty, out-of-band, on all 11
+non-Postgres services. With Watch Paths empty, `railway up --ci --service <svc>` always
+builds and deploys the working tree — for every service, on every `dev-env.yml` run —
+so a torn-down fleet always comes back regardless of which files a PR touched. Teardown
+itself (`railway down` in `dev-env-cleanup.yml`) is unchanged; it is recoverable only because
+of this invariant. This is Railway-side config applied once, not something expressed in this
+repo — see [deploy-model.md](./deploy-model.md) "Cold-fleet recovery (M3-16)" for the root
+cause and the full rationale (Approach 3: always-rebuild, chosen after live experiments
+falsified scale-to-0 and diff-driven alternatives).
+
+The gateway `health-gate` window was also widened from 200s to 360s to cover a genuinely
+cold build → container start → `goose migrate` boot path, not just a warm redeploy.
+
 ## Related
 
 - [deploy-model.md](./deploy-model.md) — the unified deploy + verify flow this suite runs

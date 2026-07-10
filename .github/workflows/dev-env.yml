@@ -166,7 +166,7 @@ jobs:
           # built gateway image cold-starting + running goose migrate at boot,
           # not a warm redeploy — 200s was too tight for that path.
           for _ in $(seq 1 72); do
-            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
+            code=$(curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then echo "  gateway healthy (schema migrated)"; ok=1; break; fi
             sleep 5
           done
@@ -263,7 +263,7 @@ jobs:
           echo "Polling $GATEWAY_URL/healthz/fleet ..."
           code=000
           for _ in $(seq 1 40); do
-            code=$(curl -sS -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
+            code=$(curl -sS --connect-timeout 5 --max-time 10 -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then break; fi
             sleep 5
           done

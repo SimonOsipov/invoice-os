@@ -112,6 +112,12 @@ if a service is ever deleted and recreated, its Watch Paths must be
 re-cleared, or the skip failure mode returns. Postgres is excluded — it was
 never in the deploy fleet.
 
+This empty-Watch-Paths invariant is a deliberately-documented one-time,
+human-applied prerequisite — it is Railway-side dashboard config, not codified
+anywhere in this repo (per the M3-16 decision above); an automated CI
+invariant-check (e.g. a read-only GraphQL query asserting all 11 services
+report empty watch paths) is possible FUTURE hardening, not implemented here.
+
 **Teardown is unchanged.** `dev-env-cleanup.yml` still runs `railway down`
 (removes the deployment, not a scale-to-0 pause) — see the file's header
 comment. It is now recoverable **only because** of the empty-watch-paths

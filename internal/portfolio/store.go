@@ -70,6 +70,19 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 	return entity, nil
 }
 
+// List returns the caller's tenant's business_entities filtered by f
+// (status, name/tin search), ordered name ASC, id ASC, paginated by
+// f.Limit/f.Offset, plus the total filtered count (ignoring limit/offset)
+// for the response envelope's pagination.total -- M3-03-03 (task-36).
+//
+// NOT YET IMPLEMENTED: this is the RED test-spec stage (Mode A) stub; the
+// real query (wrapped in db.WithinRequestTenantTx, RLS-scoped, ILIKE search
+// over name/tin, a non-nil empty []Entity{} on zero rows) is the executor's
+// job (Mode B).
+func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
+	return nil, 0, errors.New("not implemented: M3-03-03")
+}
+
 // GetByID runs a bare SELECT by id inside db.WithinRequestTenantTx — RLS
 // scopes the row set to the caller's tenant, so a cross-tenant id naturally
 // 0-rows; pgx.ErrNoRows maps to ErrNotFound.

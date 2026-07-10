@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -156,17 +157,100 @@ func GetHandler(get func(ctx context.Context, id string) (Entity, error), log *s
 	}
 }
 
-// ListHandler returns GET /v1/entities (M3-03-03, task-36). NOT YET
-// IMPLEMENTED: this is a compiling stub for the RED test-spec stage (Mode
-// A) -- identity-first-401, query-param parsing into a ListFilter (status
-// validation, limit default/clamp, offset), calling list, and building the
-// {"entities","pagination"} response envelope are all the executor's job
-// (Mode B). Always answers 501 for now so callers get a well-formed error
-// body rather than a panic while this subtask is mid-flight. Route
-// registration itself is M3-03-05.
+// listPagination is the "pagination" object in ListHandler's response
+// envelope (story Decision [A4]): the effective limit/offset applied (after
+// defaulting/clamping) plus the total filtered count across all pages.
+type listPagination struct {
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
+	Total  int `json:"total"`
+}
+
+// listResponse is the GET /v1/entities response body: {"entities":
+// [...],"pagination": {...}}. Entities is []Entity (never a nil slice from
+// Store.List), so an empty result serializes "entities":[] rather than
+// "entities":null.
+type listResponse struct {
+	Entities   []Entity       `json:"entities"`
+	Pagination listPagination `json:"pagination"`
+}
+
+// ListHandler returns GET /v1/entities (M3-03-03, task-36). Same
+// identity-first-401 order as Create/GetHandler. Query params: status
+// (omitted -> both; must be exactly "active"/"archived" else 400), q (raw
+// substring, empty = no filter), limit (default 50, non-integer or <1 -> 400,
+// clamped down to 200 when over), offset (default 0, non-integer or negative
+// -> 400). limit<1 and offset<0 both 400 rather than clamp -- a caller asking
+// for zero/negative rows almost certainly has a bug, so silently returning
+// data would hide it; only the over-200 case is a generous cap, not a
+// nonsensical request. Route registration itself is M3-03-05.
 func ListHandler(list func(ctx context.Context, f ListFilter) ([]Entity, int, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-03")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		query := r.URL.Query()
+
+		var statusFilter *string
+		if raw := query.Get("status"); raw != "" {
+			if raw != "active" && raw != "archived" {
+				writeError(w, http.StatusBadRequest, `status must be "active" or "archived"`)
+				return
+			}
+			statusFilter = &raw
+		}
+
+		limit := 50
+		if raw := query.Get("limit"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "limit must be an integer")
+				return
+			}
+			limit = n
+		}
+		if limit > 200 {
+			limit = 200
+		} else if limit < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be >= 1")
+			return
+		}
+
+		offset := 0
+		if raw := query.Get("offset"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "offset must be an integer")
+				return
+			}
+			offset = n
+		}
+		if offset < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be >= 0")
+			return
+		}
+
+		filter := ListFilter{Status: statusFilter, Q: query.Get("q"), Limit: limit, Offset: offset}
+
+		items, total, err := list(r.Context(), filter)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "portfolio: list entities", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, listResponse{
+			Entities:   items,
+			Pagination: listPagination{Limit: filter.Limit, Offset: filter.Offset, Total: total},
+		})
 	}
 }
 

@@ -3,6 +3,8 @@ package portfolio
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,12 +77,61 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 // f.Limit/f.Offset, plus the total filtered count (ignoring limit/offset)
 // for the response envelope's pagination.total -- M3-03-03 (task-36).
 //
-// NOT YET IMPLEMENTED: this is the RED test-spec stage (Mode A) stub; the
-// real query (wrapped in db.WithinRequestTenantTx, RLS-scoped, ILIKE search
-// over name/tin, a non-nil empty []Entity{} on zero rows) is the executor's
-// job (Mode B).
+// RLS (not a `WHERE tenant_id`) scopes both queries to the caller's tenant,
+// same as GetByID. Filters are appended as bound params -- never string
+// interpolation of user input -- and the same WHERE clause is reused for the
+// COUNT(*) (no limit/offset) that produces total.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
-	return nil, 0, errors.New("not implemented: M3-03-03")
+	items := []Entity{}
+	var total int
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var conditions []string
+		var args []any
+
+		if f.Status != nil {
+			args = append(args, *f.Status)
+			conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
+		}
+		if f.Q != "" {
+			args = append(args, f.Q)
+			conditions = append(conditions, fmt.Sprintf("(name ILIKE '%%'||$%d||'%%' OR tin ILIKE '%%'||$%d||'%%')", len(args), len(args)))
+		}
+
+		where := ""
+		if len(conditions) > 0 {
+			where = " WHERE " + strings.Join(conditions, " AND ")
+		}
+
+		if err := tx.QueryRow(ctx,
+			"SELECT count(*) FROM business_entities"+where, args...,
+		).Scan(&total); err != nil {
+			return err
+		}
+
+		selectArgs := append(append([]any{}, args...), f.Limit, f.Offset)
+		rows, err := tx.Query(ctx, fmt.Sprintf(
+			`SELECT id, name, tin, registration, sector, address, status, created_at
+			 FROM business_entities%s
+			 ORDER BY name ASC, id ASC
+			 LIMIT $%d OFFSET $%d`, where, len(args)+1, len(args)+2,
+		), selectArgs...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e Entity
+			if err := rows.Scan(&e.ID, &e.Name, &e.TIN, &e.Registration, &e.Sector, &e.Address, &e.Status, &e.CreatedAt); err != nil {
+				return err
+			}
+			items = append(items, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 // GetByID runs a bare SELECT by id inside db.WithinRequestTenantTx — RLS

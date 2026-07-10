@@ -50,6 +50,20 @@ type CreateInput struct {
 	Address      *string
 }
 
+// UpdateInput is the Store.Update argument (M3-03-04, task-37): a partial
+// update over business_entities' mutable fields. Only non-nil fields are
+// applied; nil means "leave unchanged". Deliberately has NO Status field --
+// lifecycle transitions are Store.SetStatus's job (via OffboardHandler/
+// OnboardHandler), not Update's, so PATCH structurally cannot touch status
+// (story Decision [A6]).
+type UpdateInput struct {
+	Name         *string
+	TIN          *string
+	Registration *string
+	Sector       *string
+	Address      *string
+}
+
 // ListFilter is the Store.List query (M3-03-03, task-36). Status nil means
 // both active and archived; Q is an optional case-insensitive substring
 // match over name OR tin (empty = no filter); Limit/Offset paginate.
@@ -251,6 +265,45 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Entity, int, er
 			Entities:   items,
 			Pagination: listPagination{Limit: filter.Limit, Offset: filter.Offset, Total: total},
 		})
+	}
+}
+
+// UpdateHandler returns PATCH /v1/entities/{id} (M3-03-04, task-37). STUB for
+// the RED stage: the real decode/validate/dispatch logic (400 on decode error
+// or empty body, error mapping via statusForErr, 200 + updated Entity on
+// success) is added by the executor (Mode B) — this scaffold only needs to
+// compile and exist so handler tests can reference it and stubbed store
+// closures.
+func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-04")
+	}
+}
+
+// OffboardHandler returns POST /v1/entities/{id}/offboard (M3-03-04,
+// task-37): its real implementation calls setStatus(ctx, id, "archived").
+// STUB for the RED stage, see UpdateHandler's comment.
+func OffboardHandler(setStatus func(ctx context.Context, id string) (Entity, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-04")
+	}
+}
+
+// OnboardHandler returns POST /v1/entities/{id}/onboard (M3-03-04, task-37):
+// its real implementation calls setStatus(ctx, id, "active"). STUB for the
+// RED stage, see UpdateHandler's comment.
+func OnboardHandler(setStatus func(ctx context.Context, id string) (Entity, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented: M3-03-04")
 	}
 }
 

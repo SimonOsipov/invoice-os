@@ -134,6 +134,30 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 	return items, total, nil
 }
 
+// Update partially updates a business_entities row's mutable fields
+// (name/tin/registration/sector/address) and writes a
+// "portfolio.entity.updated" audit row in the same transaction (M3-03-04,
+// task-37). STUB for the RED stage -- the executor (Mode B) implements the
+// real COALESCE-based partial update, ValidateTIN re-check on a changed TIN,
+// empty-input rejection (ErrValidation before any UPDATE), duplicate-TIN
+// mapping (23505 -> ErrDuplicateTIN), zero-rows-affected mapping
+// (-> ErrNotFound), and the audit.Record call, per task-37's Implementation
+// Plan.
+func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Entity, error) {
+	return Entity{}, errors.New("not implemented: M3-03-04")
+}
+
+// SetStatus is the guarded lifecycle transition behind Offboard
+// (target="archived") and Onboard (target="active") (M3-03-04, task-37): a
+// redundant transition (already at target) returns ErrRedundantTransition
+// with NO audit row; otherwise the status flips and a
+// "portfolio.entity.offboarded"/"portfolio.entity.onboarded" audit row is
+// written in the same transaction. STUB for the RED stage -- see Update's
+// comment.
+func (s *Store) SetStatus(ctx context.Context, id, target string) (Entity, error) {
+	return Entity{}, errors.New("not implemented: M3-03-04")
+}
+
 // GetByID runs a bare SELECT by id inside db.WithinRequestTenantTx — RLS
 // scopes the row set to the caller's tenant, so a cross-tenant id naturally
 // 0-rows; pgx.ErrNoRows maps to ErrNotFound.

@@ -484,3 +484,257 @@ func TestStoreGetByID_CrossTenantNotFound(t *testing.T) {
 		t.Fatalf("GetByID(cross-tenant id) err = %v, want ErrNotFound", err)
 	}
 }
+
+// --- QA-added adversarial / edge-case tests (task-38 Part 2, QA Verify) --------------
+
+// TestStoreCreate_TINUniquenessIsPerTenantNotGlobal (critical correctness): the
+// duplicate-TIN unique index is (tenant_id, tin) -- a PARTIAL index scoped to
+// tenant_id, not a global uniqueness constraint. The SAME canonical TIN
+// created in TWO DIFFERENT tenants must NOT collide -- both Creates must
+// succeed, each producing its own row under its own tenant. (Contrast
+// TestStoreCreate_FailedCreateWritesNoAudit, which proves the 409 case: a
+// duplicate TIN WITHIN one tenant.)
+func TestStoreCreate_TINUniquenessIsPerTenantNotGlobal(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio per-tenant-tin A', 'firm'), ($2, 'portfolio per-tenant-tin B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+
+	store := NewStore(app)
+	const tin = "1234567897"
+
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	entityA, err := store.Create(cA, CreateInput{Name: "Tenant A Co", TIN: tin})
+	if err != nil {
+		t.Fatalf("Create in tenant A: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, entityA.ID)
+	})
+
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	entityB, err := store.Create(cB, CreateInput{Name: "Tenant B Co", TIN: tin})
+	if err != nil {
+		t.Fatalf("Create in tenant B with the SAME canonical TIN as tenant A: %v (want success -- the unique index is per-tenant, not global)", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, entityB.ID)
+	})
+
+	if entityA.ID == entityB.ID {
+		t.Fatalf("entityA.ID == entityB.ID (%s), want two distinct rows", entityA.ID)
+	}
+
+	gotA, err := store.GetByID(cA, entityA.ID)
+	if err != nil || gotA.TIN == nil || *gotA.TIN != tin {
+		t.Fatalf("GetByID(A) = %+v, err=%v, want tin=%q under tenant A", gotA, err, tin)
+	}
+	gotB, err := store.GetByID(cB, entityB.ID)
+	if err != nil || gotB.TIN == nil || *gotB.TIN != tin {
+		t.Fatalf("GetByID(B) = %+v, err=%v, want tin=%q under tenant B", gotB, err, tin)
+	}
+}
+
+// TestStoreCreate_NullableOptionalFieldsRoundTrip (edge case): Registration,
+// Sector, and Address are optional (*string, nullable columns). Omitted (nil)
+// on Create must persist as SQL NULL and round-trip through GetByID as a nil
+// *string -- NOT an empty string. When provided, the values must round-trip
+// unchanged.
+func TestStoreCreate_NullableOptionalFieldsRoundTrip(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio nullable-fields tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	// Omitted -> nil -> persisted as SQL NULL -> nil *string on read-back.
+	omitted, err := store.Create(c, CreateInput{Name: "Nil Fields Co", TIN: "1234567897"})
+	if err != nil {
+		t.Fatalf("Create (omitted optional fields): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, omitted.ID)
+	})
+	if omitted.Registration != nil || omitted.Sector != nil || omitted.Address != nil {
+		t.Errorf("Create (omitted): registration=%v sector=%v address=%v, want all nil",
+			omitted.Registration, omitted.Sector, omitted.Address)
+	}
+	got, err := store.GetByID(c, omitted.ID)
+	if err != nil {
+		t.Fatalf("GetByID (omitted): %v", err)
+	}
+	if got.Registration != nil || got.Sector != nil || got.Address != nil {
+		t.Errorf("GetByID (omitted): registration=%v sector=%v address=%v, want all nil (SQL NULL, not empty string)",
+			got.Registration, got.Sector, got.Address)
+	}
+
+	// Set -> round-trips the values unchanged.
+	reg, sec, addr := "RC-12345", "Manufacturing", "12 Marina Rd, Lagos"
+	set, err := store.Create(c, CreateInput{Name: "Set Fields Co", TIN: "123456780006", Registration: &reg, Sector: &sec, Address: &addr})
+	if err != nil {
+		t.Fatalf("Create (set optional fields): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, set.ID)
+	})
+	if set.Registration == nil || *set.Registration != reg || set.Sector == nil || *set.Sector != sec || set.Address == nil || *set.Address != addr {
+		t.Errorf("Create (set): registration=%v sector=%v address=%v, want %q/%q/%q",
+			set.Registration, set.Sector, set.Address, reg, sec, addr)
+	}
+	got2, err := store.GetByID(c, set.ID)
+	if err != nil {
+		t.Fatalf("GetByID (set): %v", err)
+	}
+	if got2.Registration == nil || *got2.Registration != reg || got2.Sector == nil || *got2.Sector != sec || got2.Address == nil || *got2.Address != addr {
+		t.Errorf("GetByID (set): registration=%v sector=%v address=%v, want %q/%q/%q",
+			got2.Registration, got2.Sector, got2.Address, reg, sec, addr)
+	}
+}
+
+// TestStoreCreate_AuditRowIsTenantScoped (AC3, AC5): after a successful Create
+// in tenant A, the portfolio.entity.created audit_log row must be visible
+// under tenant A's GUC context with actor == the caller's Subject, and must
+// NOT be visible under a different tenant B's GUC context -- audit_log's own
+// FORCE-RLS tenant isolation applies to this event just as it does to any
+// other row.
+func TestStoreCreate_AuditRowIsTenantScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio audit-scope A', 'firm'), ($2, 'portfolio audit-scope B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+
+	store := NewStore(app)
+	userID := uuid.NewString()
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantA})
+
+	const event = "portfolio.entity.created"
+	entity, err := store.Create(cA, CreateInput{Name: "Audit Scope Co", TIN: "1234567897"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, entity.ID)
+	})
+
+	if n := auditCount(t, app, tenantA, event); n != 1 {
+		t.Fatalf("audit_log rows for %s under tenant A = %d, want 1", event, n)
+	}
+	if actor := auditActor(t, app, tenantA, event); actor != userID {
+		t.Errorf("audit actor under tenant A = %q, want %q", actor, userID)
+	}
+	if n := auditCount(t, app, tenantB, event); n != 0 {
+		t.Errorf("audit_log rows for %s under tenant B = %d, want 0 (tenant A's audit row must not be visible to tenant B)", event, n)
+	}
+}
+
+// TestStoreGetByID_UnknownIDNotFound (AC5): a well-formed uuid that does not
+// exist in ANY tenant (not merely a different tenant, per
+// TestStoreGetByID_CrossTenantNotFound) must resolve to ErrNotFound.
+func TestStoreGetByID_UnknownIDNotFound(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+
+	_, err := store.GetByID(c, uuid.NewString())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetByID(unknown id) err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestStoreGetByID_MalformedIDNotUUID (AC5, edge case): a non-uuid id string
+// does NOT map to ErrNotFound. Postgres rejects it client-side as invalid
+// input syntax for type uuid (SQLSTATE 22P02) before any row-matching
+// happens, so GetByID surfaces that raw error, which statusForErr's default
+// case maps to 500 -- a conscious, documented behavior (not silently assumed)
+// for a malformed path param, distinct from the 404 a well-formed-but-absent
+// or cross-tenant id produces.
+func TestStoreGetByID_MalformedIDNotUUID(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+
+	_, err := store.GetByID(c, "not-a-uuid")
+	if err == nil {
+		t.Fatal("GetByID(malformed id) err = nil, want a non-nil error")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("GetByID(malformed id) should NOT map to ErrNotFound -- it is a raw Postgres invalid-input error (22P02), which statusForErr maps to 500, not 404")
+	}
+}
+
+// TestStoreCreate_InvalidTINRejectedAtStoreLayer (AC2, store layer): Store.Create
+// itself -- not just the handler's decode/validation path -- must reject a
+// Luhn-failing TIN via ValidateTIN before any INSERT runs: no business_entities
+// row and no audit_log row.
+func TestStoreCreate_InvalidTINRejectedAtStoreLayer(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio store-invalid-tin tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	// No business_entities cleanup registered: none is expected to exist (asserted
+	// below), and the FK's ON DELETE CASCADE would remove any surprise row anyway
+	// when this tenant is deleted.
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	const event = "portfolio.entity.created"
+	beforeAudit := auditCount(t, app, tenantID, event)
+	var beforeRows int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM business_entities WHERE tenant_id = $1`, tenantID).Scan(&beforeRows); err != nil {
+		t.Fatalf("count business_entities before: %v", err)
+	}
+
+	// Format-valid (10 digits) but Luhn-failing -- see tin_test.go
+	// TestValidateTIN_ChecksumRejected, which proves ValidateTIN itself rejects
+	// "1234567890" on checksum grounds alone.
+	_, err := store.Create(c, CreateInput{Name: "Bad TIN Co", TIN: "1234567890"})
+	if !errors.Is(err, ErrInvalidTIN) {
+		t.Fatalf("Create with Luhn-failing TIN err = %v, want ErrInvalidTIN", err)
+	}
+
+	var afterRows int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM business_entities WHERE tenant_id = $1`, tenantID).Scan(&afterRows); err != nil {
+		t.Fatalf("count business_entities after: %v", err)
+	}
+	if afterRows != beforeRows {
+		t.Errorf("business_entities rows for tenant = %d, want unchanged %d (invalid TIN must write no row)", afterRows, beforeRows)
+	}
+	if after := auditCount(t, app, tenantID, event); after != beforeAudit {
+		t.Errorf("audit_log rows for %s = %d, want unchanged %d (invalid TIN must write no audit row)", event, after, beforeAudit)
+	}
+}

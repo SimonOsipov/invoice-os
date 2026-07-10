@@ -747,6 +747,36 @@ func auditActor(t *testing.T, pool *pgxpool.Pool, tenantID, event string) string
 	return actor
 }
 
+// auditEventsForEntity returns the (event, actor) pairs for every audit_log
+// row whose JSON payload has "id" == entityID, ordered by the row's bigserial
+// id (== commit order) -- used by the full lifecycle round-trip test (QA,
+// task-37) to prove the audit trail is complete AND ordered, not just
+// individually present per event.
+func auditEventsForEntity(t *testing.T, pool *pgxpool.Pool, tenantID, entityID string) (events, actors []string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT event, actor FROM audit_log WHERE payload->>'id' = $1 ORDER BY id ASC`, entityID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var event, actor string
+			if err := rows.Scan(&event, &actor); err != nil {
+				return err
+			}
+			events = append(events, event)
+			actors = append(actors, actor)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("query audit_log for entity %s: %v", entityID, err)
+	}
+	return events, actors
+}
+
 // TestStoreCreate_PersistsAndAudits (task-38 Test Specs, AC1/AC3): a Create
 // with valid input, as tenant A's identity, must (a) persist a row visible to
 // A via GetByID with status "active", and (b) write exactly one
@@ -2267,5 +2297,339 @@ func TestStoreSetStatus_CrossTenantNotFound(t *testing.T) {
 	afterA := auditCount(t, app, tenantA, event)
 	if afterA != beforeA {
 		t.Errorf("audit_log rows for %s under tenant A = %d, want unchanged %d (cross-tenant SetStatus must write no audit row under A)", event, afterA, beforeA)
+	}
+}
+
+// --- QA (Mode B) adversarial/edge coverage, task-37 ------------------------------------
+
+// TestStoreLifecycle_RoundTripAuditTrail (QA, task-37): the demo's core
+// lifecycle -- Create(active) -> Offboard -> Onboard -- must leave the
+// audit_log with EXACTLY 3 rows for that entity, in commit order, with the
+// exact event keys "portfolio.entity.created" -> "portfolio.entity.offboarded"
+// -> "portfolio.entity.onboarded", actor == the caller's Subject on every row.
+// This is stronger than the per-event counting the other store tests do: it
+// proves the full trail is both complete (no missing/duplicate row) and
+// ordered.
+func TestStoreLifecycle_RoundTripAuditTrail(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	userID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio lifecycle-roundtrip tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+
+	created, err := store.Create(c, CreateInput{Name: "Lifecycle Co", TIN: "1234567897"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, created.ID)
+	})
+
+	if _, err := store.SetStatus(c, created.ID, "archived"); err != nil {
+		t.Fatalf("SetStatus(archived): %v", err)
+	}
+	if _, err := store.SetStatus(c, created.ID, "active"); err != nil {
+		t.Fatalf("SetStatus(active): %v", err)
+	}
+
+	events, actors := auditEventsForEntity(t, app, tenantID, created.ID)
+	wantEvents := []string{"portfolio.entity.created", "portfolio.entity.offboarded", "portfolio.entity.onboarded"}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("audit events (in order) = %v, want %v", events, wantEvents)
+	}
+	for i, want := range wantEvents {
+		if events[i] != want {
+			t.Errorf("audit event[%d] = %q, want %q (full order: %v)", i, events[i], want, events)
+		}
+	}
+	for i, actor := range actors {
+		if actor != userID {
+			t.Errorf("audit row %d (%s) actor = %q, want %q", i, events[i], actor, userID)
+		}
+	}
+}
+
+// TestStoreUpdate_TINToAnotherTenantsTINSucceeds (QA, task-37): the
+// business_entities_tenant_tin_uq unique index is scoped (tenant_id, tin), so
+// updating tenant A's entity to hold the SAME tin value already used by
+// tenant B's entity must succeed -- uniqueness is per-tenant, not global.
+func TestStoreUpdate_TINToAnotherTenantsTINSucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-cross-tenant-tin A', 'firm'), ($2, 'portfolio update-cross-tenant-tin B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+
+	const tinX = "1234567897"
+	const tinY = "123456780006"
+	entityAID := seedEntity(t, super, tenantA, "A Corp", strPtr(tinX))
+	seedEntity(t, super, tenantB, "B Corp", strPtr(tinY))
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	newTIN := tinY
+	updated, err := store.Update(cA, entityAID, UpdateInput{TIN: &newTIN})
+	if err != nil {
+		t.Fatalf("Update(A's entity, tin=B's tin) err = %v, want success (TIN uniqueness is per-tenant)", err)
+	}
+	if updated.TIN == nil || *updated.TIN != tinY {
+		t.Errorf("Update: tin = %v, want %q", updated.TIN, tinY)
+	}
+}
+
+// TestStoreUpdate_PartialUpdateLeavesOtherFieldsIntact (QA, task-37): an
+// entity seeded with name+sector+address -- updating name ONLY must leave
+// sector/address exactly as they were, both in the returned Entity and on
+// re-fetch, proving the dynamic SET clause really only touches the provided
+// field(s).
+func TestStoreUpdate_PartialUpdateLeavesOtherFieldsIntact(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-partial tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	sector, address := "Manufacturing", "12 Marina Rd, Lagos"
+	created, err := store.Create(c, CreateInput{Name: "Untouched Fields Co", TIN: "1234567897", Sector: &sector, Address: &address})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, created.ID)
+	})
+
+	newName := "Renamed Only"
+	updated, err := store.Update(c, created.ID, UpdateInput{Name: &newName})
+	if err != nil {
+		t.Fatalf("Update(name only): %v", err)
+	}
+	if updated.Name != newName {
+		t.Errorf("Update: name = %q, want %q", updated.Name, newName)
+	}
+	if updated.Sector == nil || *updated.Sector != sector || updated.Address == nil || *updated.Address != address {
+		t.Errorf("Update(name only): sector=%v address=%v, want unchanged %q/%q", updated.Sector, updated.Address, sector, address)
+	}
+
+	got, err := store.GetByID(c, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after partial Update: %v", err)
+	}
+	if got.Name != newName {
+		t.Errorf("GetByID: name = %q, want %q", got.Name, newName)
+	}
+	if got.Sector == nil || *got.Sector != sector || got.Address == nil || *got.Address != address {
+		t.Errorf("GetByID after partial Update: sector=%v address=%v, want unchanged %q/%q", got.Sector, got.Address, sector, address)
+	}
+}
+
+// TestStoreUpdate_ArchivedEntityTINChangeSucceeds (QA, task-37): editing an
+// archived entity's TIN (not just its name) must still succeed, still leave
+// status untouched -- edit-while-archived ([A6]) applies to every mutable
+// field, not just name.
+func TestStoreUpdate_ArchivedEntityTINChangeSucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio update-archived-tin tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	const oldTIN = "1234567897"
+	const newTIN = "123456780006"
+	entityID := seedEntityStatus(t, super, tenantID, "Archived TIN Co", strPtr(oldTIN), "archived")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	newTINVal := newTIN
+	updated, err := store.Update(c, entityID, UpdateInput{TIN: &newTINVal})
+	if err != nil {
+		t.Fatalf("Update (archived entity, tin change): %v", err)
+	}
+	if updated.Status != "archived" {
+		t.Errorf("Update: status = %q, want still %q", updated.Status, "archived")
+	}
+	if updated.TIN == nil || *updated.TIN != newTIN {
+		t.Errorf("Update: tin = %v, want %q", updated.TIN, newTIN)
+	}
+
+	got, err := store.GetByID(c, entityID)
+	if err != nil {
+		t.Fatalf("GetByID after Update: %v", err)
+	}
+	if got.Status != "archived" || got.TIN == nil || *got.TIN != newTIN {
+		t.Errorf("GetByID after Update = %+v, want status=archived tin=%q", got, newTIN)
+	}
+}
+
+// TestStoreSetStatus_InvalidTargetRejectedByCheckConstraint (QA, task-37,
+// defensive): SetStatus's target is normally bound to "active"/"archived" at
+// the Offboard/OnboardHandler wiring layer (M3-03-05) -- never taken directly
+// from caller-supplied input, so this is not user-reachable today. This test
+// is defense-in-depth only: it proves that even a caller bug (a stray target
+// string reaching SetStatus) cannot silently corrupt the status column --
+// the business_entities status CHECK constraint (status IN ('active',
+// 'archived')) rejects the UPDATE, SetStatus returns a non-nil error, and the
+// row's status is left unchanged.
+func TestStoreSetStatus_InvalidTargetRejectedByCheckConstraint(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio setstatus-invalid-target tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	entityID := seedEntity(t, super, tenantID, "Bogus Target Co", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	if _, err := store.SetStatus(c, entityID, "bogus"); err == nil {
+		t.Fatal(`SetStatus(id, "bogus") err = nil, want a non-nil error (status CHECK constraint violation)`)
+	}
+
+	got, err := store.GetByID(c, entityID)
+	if err != nil {
+		t.Fatalf("GetByID after rejected SetStatus: %v", err)
+	}
+	if got.Status != "active" {
+		t.Errorf("GetByID after rejected SetStatus: status = %q, want unchanged %q", got.Status, "active")
+	}
+}
+
+// TestStoreSetStatus_DoubleOffboardIdempotencySemantics (QA, task-37): a
+// live Offboard->Offboard sequence on the SAME entity (not a pre-seeded
+// already-archived row) -- the first call must succeed and archive it, the
+// second must be the redundant-transition 409 with the audit count unchanged
+// after it. Complements TestStoreSetStatus_RedundantOffboard409 (which seeds
+// the archived state directly) by exercising the actual state transition
+// that produces it.
+func TestStoreSetStatus_DoubleOffboardIdempotencySemantics(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio double-offboard tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+
+	entityID := seedEntity(t, super, tenantID, "Double Offboard Co", nil)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	const event = "portfolio.entity.offboarded"
+	before := auditCount(t, app, tenantID, event)
+
+	first, err := store.SetStatus(c, entityID, "archived")
+	if err != nil {
+		t.Fatalf("first SetStatus(archived): %v", err)
+	}
+	if first.Status != "archived" {
+		t.Errorf("first SetStatus: status = %q, want %q", first.Status, "archived")
+	}
+
+	afterFirst := auditCount(t, app, tenantID, event)
+	if afterFirst != before+1 {
+		t.Fatalf("audit_log rows for %s after first offboard = %d, want %d", event, afterFirst, before+1)
+	}
+
+	_, err = store.SetStatus(c, entityID, "archived")
+	if !errors.Is(err, ErrRedundantTransition) {
+		t.Fatalf("second SetStatus(archived) err = %v, want ErrRedundantTransition", err)
+	}
+
+	afterSecond := auditCount(t, app, tenantID, event)
+	if afterSecond != afterFirst {
+		t.Errorf("audit_log rows for %s after second (redundant) offboard = %d, want unchanged %d", event, afterSecond, afterFirst)
+	}
+}
+
+// TestStoreSetStatus_CrossTenantOnboardNotFound (QA, task-37): completes
+// cross-tenant coverage for SetStatus -- TestStoreSetStatus_CrossTenantNotFound
+// only exercises the offboard (target="archived") direction; this exercises
+// the onboard (target="active") direction against a cross-tenant id, which
+// must equally return ErrNotFound, leave B's row unaffected, and write no
+// audit row under A.
+func TestStoreSetStatus_CrossTenantOnboardNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio setstatus-cross-tenant-onboard A', 'firm'), ($2, 'portfolio setstatus-cross-tenant-onboard B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+
+	entityIDInB := seedEntityStatus(t, super, tenantB, "B Archived Corp", nil, "archived")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	const event = "portfolio.entity.onboarded"
+	beforeA := auditCount(t, app, tenantA, event)
+
+	_, err := store.SetStatus(cA, entityIDInB, "active")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetStatus(B's id, active) as tenant A err = %v, want ErrNotFound", err)
+	}
+
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	got, err := store.GetByID(cB, entityIDInB)
+	if err != nil {
+		t.Fatalf("GetByID(B's entity, as B) after cross-tenant Onboard attempt: %v", err)
+	}
+	if got.Status != "archived" {
+		t.Errorf("B's entity status = %q, want unchanged %q", got.Status, "archived")
+	}
+
+	afterA := auditCount(t, app, tenantA, event)
+	if afterA != beforeA {
+		t.Errorf("audit_log rows for %s under tenant A = %d, want unchanged %d (cross-tenant Onboard must write no audit row under A)", event, afterA, beforeA)
 	}
 }

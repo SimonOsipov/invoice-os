@@ -1,0 +1,26 @@
+{
+  "name": "@invoice-os/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared typed gateway client + inherited async-state UI for the FiscalBridge Africa frontends (M3-06).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "react": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@invoice-os/design-tokens": "workspace:*"
+  }
+}

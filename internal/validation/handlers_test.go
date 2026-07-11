@@ -3,6 +3,8 @@ package validation
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,15 +17,16 @@ import (
 
 // --- handler tests (httptest + stubbed engine/store closures, no DB) -----------------
 //
-// RED-stage (Mode A, task M3-04-07): handlers.go's ValidateHandler/
-// ToggleHandler both unconditionally answer 501 and never call their
-// closure, so every assertion below fails on the STATUS check first (got
-// 501, want 200/401/400/...) -- the executor's real decode/delegate/
-// statusForErr logic (mirroring internal/portfolio/portfolio.go's
-// CreateHandler/GetHandler shape) turns these green without changing this
-// file. Identity is injected via auth.WithIdentity, exactly like
+// GREEN (Mode A->B, task M3-04-07): this block (through
+// TestToggle_MissingEnabled400) is the AC-derived suite authored RED before
+// implementation and now passing against handlers.go's real ValidateHandler/
+// ToggleHandler (decode/delegate/statusForErr, mirroring
+// internal/portfolio/portfolio.go's CreateHandler/GetHandler shape).
+// Identity is injected via auth.WithIdentity, exactly like
 // portfolio_test.go's doCreate/doUpdate helpers; stub closures capture their
-// call args so the happy-path tests aren't vacuous.
+// call args so the happy-path tests aren't vacuous. QA-added adversarial
+// coverage (collect-all order, 500 no-leak, toggle enable path, error
+// envelope shape) follows below TestToggle_MissingEnabled400.
 //
 // Contract decisions this file's tests pin for the executor:
 //   - ValidateHandler's request body is {"invoice": {...}} decoded into a
@@ -138,9 +141,13 @@ func TestValidate_Happy200(t *testing.T) {
 	if !called {
 		t.Fatal("loadAndEval was not called")
 	}
-	supplier, ok := gotPayload["supplier"].(map[string]any)
+	inv, ok := gotPayload["invoice"].(map[string]any)
+	if !ok {
+		t.Fatalf("loadAndEval called with unexpected payload: %+v (want a Payload with the decoded \"invoice\" object, unwrapped)", gotPayload)
+	}
+	supplier, ok := inv["supplier"].(map[string]any)
 	if !ok || supplier["tin"] != "" {
-		t.Errorf("loadAndEval called with unexpected payload: %+v (want the decoded \"invoice\" object)", gotPayload)
+		t.Errorf("loadAndEval's payload[\"invoice\"] = %+v, want supplier.tin present and empty", inv)
 	}
 
 	var body validateResponseBody
@@ -336,5 +343,253 @@ func TestToggle_MissingEnabled400(t *testing.T) {
 	}
 	if body["error"] == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// --- QA adversarial coverage (Mode B, M3-04-07) -----------------------------
+//
+// The tests above are the executor's committed (RED->GREEN) AC suite. The
+// tests below are QA-added: collect-ALL pass-through order (story Core AC
+// #2/#4), the 500 no-leak contract, the toggle enable direction (existing
+// coverage only exercised disable), toggle's own 503, and the flat
+// {"error":...} envelope shape asserted structurally rather than just
+// non-empty.
+
+// TestValidate_CollectAllOrderPreserved: the stub returns 3 violations in a
+// deliberately NON-alphabetical rule-key order (z, a, m) with distinct
+// severities/messages/paths. The response must reproduce that exact order
+// and every field verbatim -- proving ValidateHandler is a pure pass-through
+// of loadAndEval's Result and does NOT re-sort or otherwise mutate it. (The
+// engine's own deterministic sort -- Decision N16 -- is Evaluate's job, one
+// layer below this stub; the handler must not duplicate or second-guess it.)
+func TestValidate_CollectAllOrderPreserved(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	want := Result{
+		RuleSetVersion: 7,
+		Violations: []Violation{
+			{RuleKey: "zzz.rule", Severity: "info", Message: "third msg", Path: "z.path"},
+			{RuleKey: "aaa.rule", Severity: "error", Message: "first msg", Path: "a.path"},
+			{RuleKey: "mmm.rule", Severity: "warning", Message: "second msg", Path: "m.path"},
+		},
+	}
+	loadAndEval := func(ctx context.Context, p Payload) (Result, error) {
+		return want, nil
+	}
+	rec := doValidate(t, loadAndEval, &id, `{"invoice":{"total":100}}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body validateResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if body.RuleSetVersion != 7 {
+		t.Errorf("rule_set_version = %d, want 7", body.RuleSetVersion)
+	}
+	if len(body.Violations) != 3 {
+		t.Fatalf("violations count = %d, want 3 (body=%+v)", len(body.Violations), body)
+	}
+	if diff := cmpViolations(body.Violations, want.Violations); diff != "" {
+		t.Errorf("violations not passed through verbatim (order+fields): %s", diff)
+	}
+}
+
+// cmpViolations reports a human-readable diff if got != want, element by
+// element and in order -- a plain reflect.DeepEqual failure message doesn't
+// show WHICH element/order broke, which matters for an order-sensitive
+// assertion.
+func cmpViolations(got, want []Violation) string {
+	if len(got) != len(want) {
+		return fmt.Sprintf("len(got)=%d len(want)=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return fmt.Sprintf("index %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	return ""
+}
+
+// TestValidate_GenericErrorIs500: loadAndEval returning an error that is
+// none of the recognized sentinels must map to 500 with the generic body --
+// and, critically, the raw error string must NOT leak into the response
+// (statusForErr's default case never echoes err.Error()).
+func TestValidate_GenericErrorIs500(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	loadAndEval := func(ctx context.Context, p Payload) (Result, error) {
+		return Result{}, errors.New("boom: rule-set jsonb decode exploded")
+	}
+	rec := doValidate(t, loadAndEval, &id, `{"invoice":{"total":100}}`)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if body["error"] != "internal server error" {
+		t.Errorf(`error = %q, want "internal server error"`, body["error"])
+	}
+	if strings.Contains(rec.Body.String(), "boom") || strings.Contains(rec.Body.String(), "jsonb") {
+		t.Errorf("response body leaked the raw error: %s", rec.Body.String())
+	}
+}
+
+// TestValidate_EmptyBodyIs400: a completely empty request body (io.EOF from
+// the decoder, distinct from TestValidate_BadBody400's truncated-but-nonempty
+// malformed JSON) must also 400 before loadAndEval ever runs.
+func TestValidate_EmptyBodyIs400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	loadAndEval := func(ctx context.Context, p Payload) (Result, error) {
+		t.Fatal("loadAndEval must not run when the request body is empty")
+		return Result{}, nil
+	}
+	rec := doValidate(t, loadAndEval, &id, ``)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if body["error"] == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestToggle_EnablePath: the existing committed TestToggle_Happy200 only
+// exercises the disable direction ({"enabled":false}); this covers the
+// enable direction ({"enabled":true}) -- toggle must be called with
+// enabled==true and the 200 response's rule must have enabled==true.
+func TestToggle_EnablePath(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	want := Rule{Key: "R", Type: TypeRequired, Target: "supplier.tin", Severity: "error", Message: "supplier TIN is required", Scope: "document", Enabled: true}
+	var gotKey string
+	var gotEnabled bool
+	called := false
+	toggle := func(ctx context.Context, key string, enabled bool) (Rule, error) {
+		called = true
+		gotKey = key
+		gotEnabled = enabled
+		return want, nil
+	}
+	rec := doToggle(t, toggle, &id, "R", `{"enabled":true}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Fatal("toggle was not called")
+	}
+	if gotKey != "R" {
+		t.Errorf("toggle called with key = %q, want %q", gotKey, "R")
+	}
+	if !gotEnabled {
+		t.Error("toggle called with enabled = false, want true")
+	}
+
+	var body ruleBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if !body.Enabled {
+		t.Error("enabled = false, want true")
+	}
+}
+
+// TestToggle_GenericErrorIs500: toggle returning an error that is none of
+// the recognized sentinels must map to 500 with the generic body, and the
+// raw error string must NOT leak into the response.
+func TestToggle_GenericErrorIs500(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	toggle := func(ctx context.Context, key string, enabled bool) (Rule, error) {
+		return Rule{}, errors.New("boom: connection reset by peer")
+	}
+	rec := doToggle(t, toggle, &id, "R", `{"enabled":true}`)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if body["error"] != "internal server error" {
+		t.Errorf(`error = %q, want "internal server error"`, body["error"])
+	}
+	if strings.Contains(rec.Body.String(), "boom") || strings.Contains(rec.Body.String(), "peer") {
+		t.Errorf("response body leaked the raw error: %s", rec.Body.String())
+	}
+}
+
+// TestToggle_NoActiveRuleSet503: toggle can also hit "no active rule-set"
+// (ToggleRule re-derives the active version internally, same as
+// LoadActiveRuleSet) -- must map to 503, same as ValidateHandler's
+// TestValidate_NoRuleSet503.
+func TestToggle_NoActiveRuleSet503(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	toggle := func(ctx context.Context, key string, enabled bool) (Rule, error) {
+		return Rule{}, ErrNoActiveRuleSet
+	}
+	rec := doToggle(t, toggle, &id, "R", `{"enabled":true}`)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if body["error"] == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestHandlers_ErrorEnvelopeShape: every error response across both handlers
+// must be the FLAT {"error": "<msg>"} envelope -- exactly one key, a string
+// value -- with Content-Type: application/json, not e.g. a nested object or
+// an array. Checked structurally (not just "non-empty") against one
+// ValidateHandler response and one ToggleHandler response.
+func TestHandlers_ErrorEnvelopeShape(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	t.Run("validate 404", func(t *testing.T) {
+		loadAndEval := func(ctx context.Context, p Payload) (Result, error) {
+			return Result{}, ErrNotFound
+		}
+		rec := doValidate(t, loadAndEval, &id, `{"invoice":{"total":100}}`)
+		assertFlatErrorEnvelope(t, rec)
+	})
+
+	t.Run("toggle 409", func(t *testing.T) {
+		toggle := func(ctx context.Context, key string, enabled bool) (Rule, error) {
+			return Rule{}, ErrRedundantTransition
+		}
+		rec := doToggle(t, toggle, &id, "R", `{"enabled":true}`)
+		assertFlatErrorEnvelope(t, rec)
+	})
+}
+
+// assertFlatErrorEnvelope asserts rec's body decodes to a JSON object with
+// EXACTLY one key ("error") holding a string, and that Content-Type is
+// application/json.
+func assertFlatErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", ct, "application/json")
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("body has %d keys, want exactly 1 (%q): %+v", len(body), "error", body)
+	}
+	msg, ok := body["error"].(string)
+	if !ok || msg == "" {
+		t.Errorf(`body["error"] = %#v, want a non-empty string`, body["error"])
 	}
 }

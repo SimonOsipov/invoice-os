@@ -8,17 +8,28 @@
 // portfolio.go's CreateHandler/GetHandler shape: identity-first-401, decode,
 // delegate, statusForErr, flat {"error":...} envelope on failure.
 //
-// PAYLOAD CONTRACT (see ValidateHandler): the handler UNWRAPS the request
-// body's "invoice" object and hands THAT object to loadAndEval as the Payload
-// -- loadAndEval receives the invoice payload itself, NOT the {"invoice":{...}}
-// envelope. The engine's resolvePath roots at p["invoice"] (Decision N19), so
-// the cmd/validation wiring (M3-04-08) that binds loadAndEval MUST re-wrap the
-// invoice before calling the engine, i.e.
-// engine.Evaluate(map[string]any{"invoice": inv}, rs). The unwrap lives here
-// (pinned by handlers_test.go's TestValidate_Happy200, which asserts
-// loadAndEval is called with the decoded invoice object); the re-wrap is the
-// wiring seam's job. See rule.go for the Payload/Result/Violation/Rule wire
-// shapes and store.go for the loadAndEval/toggle signatures.
+// PAYLOAD CONTRACT (see ValidateHandler): the handler passes the FULL decoded
+// request body -- a Payload map with the "invoice" key intact, i.e.
+// {"invoice": {...}} -- to loadAndEval UNCHANGED. This matches the engine's
+// resolvePath, which roots at p["invoice"] (Decision N19), so the
+// cmd/validation wiring (task-47) that binds loadAndEval needs NO re-wrap
+// seam: the exact contract task-47 must implement is
+//
+//	func(ctx context.Context, p Payload) (Result, error) {
+//	    rs, err := store.LoadActiveRuleSet(ctx)
+//	    if err != nil {
+//	        return Result{}, err
+//	    }
+//	    return engine.Evaluate(p, rs)
+//	}
+//
+// (QA/M3-04-07: an earlier revision unwrapped "invoice" here and expected
+// task-47 to re-wrap it before calling engine.Evaluate -- that seam's
+// failure mode is a SILENT "all fields missing" bug if the re-wrap is ever
+// forgotten, since a wrongly-rooted payload just resolves every target as
+// absent rather than erroring. Passing the body through unchanged removes
+// the seam entirely.) See rule.go for the Payload/Result/Violation/Rule wire
+// shapes and store.go for the toggle signature.
 package validation
 
 import (
@@ -34,13 +45,14 @@ import (
 
 // ValidateHandler returns POST /v1/validate: checks the verified identity is
 // present (401 before decode/eval, same order as portfolio.CreateHandler),
-// decodes a {"invoice": {...}} body (400 on malformed JSON), unwraps the
-// "invoice" object and calls loadAndEval with it, then answers 200 + Result
-// (rule_set_version + violations) on success. A body whose "invoice" key is
-// absent or not an object passes a nil payload straight through -- the engine's
-// resolvePath tolerates a missing invoice (reports every path as absent, so the
-// "required" rules simply fire), matching the {"invoice":{}} empty-invoice case
-// rather than special-casing it into a 400.
+// decodes a {"invoice": {...}} body (400 on malformed JSON) into a Payload,
+// and calls loadAndEval with the decoded body UNCHANGED (see file header --
+// no unwrap/re-wrap seam), then answers 200 + Result (rule_set_version +
+// violations) on success. A body whose "invoice" key is absent or not an
+// object is passed straight through -- the engine's resolvePath tolerates a
+// missing invoice (reports every path as absent, so the "required" rules
+// simply fire), matching the {"invoice":{}} empty-invoice case rather than
+// special-casing it into a 400.
 func ValidateHandler(loadAndEval func(ctx context.Context, p Payload) (Result, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -56,11 +68,8 @@ func ValidateHandler(loadAndEval func(ctx context.Context, p Payload) (Result, e
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		// Unwrap: hand loadAndEval the invoice object itself (the wiring
-		// re-wraps {"invoice": inv} for the engine -- see file header).
-		inv, _ := body["invoice"].(map[string]any)
 
-		result, err := loadAndEval(r.Context(), inv)
+		result, err := loadAndEval(r.Context(), body)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

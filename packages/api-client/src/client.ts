@@ -55,7 +55,7 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
       signal: opts?.signal,
     })
   } catch (e) {
-    throw new ApiError('network', (e as Error).message ?? 'network error', null)
+    throw new ApiError('network', e instanceof Error ? e.message : String(e), null)
   }
 
   if (!res.ok) {

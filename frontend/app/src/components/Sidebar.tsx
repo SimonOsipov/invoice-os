@@ -2,11 +2,10 @@
 // card (in-house), nav list with badges, user footer. Ported from Platform.dc.html
 // ~L40-117 (markup) + the matching slices of `renderVals()` (~L1284-1310).
 
-import { BrandMark } from '../icons'
+import { BrandMark, Icon } from '../icons'
 import {
   chevDownGlyph,
   firmModeIcon,
-  gearGlyph,
   inhouseModeIcon,
   NAV_APPROVALS,
   NAV_CLIENTS,
@@ -173,7 +172,19 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
             )}
           </div>
         </div>
-        <span style={{ color: 'var(--fg-3)' }}>{gearGlyph}</span>
+        {/* Sign out (M3-07-03). Replaces the old decorative gear: the gear read as
+            "settings" (already a nav item) and had no handler — this footer slot now holds
+            one real action. Default/hover color live in `.pf-signout` (platform.css) so the
+            :hover token can win (an inline color would beat the hover rule). */}
+        <button
+          onClick={ctx.signOut}
+          className="pf-btn pf-signout"
+          aria-label="Sign out"
+          title="Sign out"
+          style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer' }}
+        >
+          <Icon paths={['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9']} size={16} />
+        </button>
       </div>
     </aside>
   )

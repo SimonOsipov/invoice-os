@@ -386,6 +386,8 @@ jobs:
         run: pnpm -r build
       - name: Unit tests (api-client)
         run: pnpm --filter @invoice-os/api-client test
+      - name: Unit tests (app)
+        run: pnpm --filter @invoice-os/app test
 
   # Unconditional clean-clone guard (M1-09). The path-filtered go/frontend jobs
   # above only rebuild the half that changed, and the frontend job warms the pnpm

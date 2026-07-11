@@ -325,7 +325,9 @@ func TestToggle_Unknown404(t *testing.T) {
 // opposed to explicitly {"enabled":false}) must 400 before toggle ever runs
 // -- asserted by failing the test if toggle is called. Pins the contract
 // decision that the handler decodes "enabled" into a *bool field so
-// "absent" and "false" are distinguishable.
+// "absent" and "false" are distinguishable. The message is "enabled is
+// required" -- distinct from the malformed-JSON case's "invalid request
+// body" (see TestToggle_MalformedJSON400).
 func TestToggle_MissingEnabled400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	toggle := func(ctx context.Context, key string, enabled bool) (Rule, error) {
@@ -341,8 +343,34 @@ func TestToggle_MissingEnabled400(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
 	}
-	if body["error"] == "" {
-		t.Error("expected a non-empty error message in the body")
+	if body["error"] != "enabled is required" {
+		t.Errorf(`error = %q, want "enabled is required"`, body["error"])
+	}
+}
+
+// TestToggle_MalformedJSON400 (regression, CodeRabbit): a malformed
+// (truncated) JSON body -- as opposed to the well-formed-but-missing-
+// "enabled" "{}" of TestToggle_MissingEnabled400 -- must 400 with the
+// "invalid request body" message (the same message ValidateHandler uses for
+// a bad body), NOT the "enabled is required" message reserved for the
+// missing-key case. Toggle must never run.
+func TestToggle_MalformedJSON400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	toggle := func(ctx context.Context, key string, enabled bool) (Rule, error) {
+		t.Fatal("toggle must not run when the request body is not valid JSON")
+		return Rule{}, nil
+	}
+	rec := doToggle(t, toggle, &id, "R", `{"enabled":`) // truncated -- not valid JSON
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if body["error"] != "invalid request body" {
+		t.Errorf(`error = %q, want "invalid request body"`, body["error"])
 	}
 }
 

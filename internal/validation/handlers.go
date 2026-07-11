@@ -107,7 +107,11 @@ func ToggleHandler(toggle func(ctx context.Context, key string, enabled bool) (R
 		}
 
 		var req toggleRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled == nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Enabled == nil {
 			writeError(w, http.StatusBadRequest, "enabled is required")
 			return
 		}

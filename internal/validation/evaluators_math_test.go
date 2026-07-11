@@ -599,6 +599,36 @@ func TestTaxMath_NumberLiteralOperands(t *testing.T) {
 	}
 }
 
+// TestTaxMath_NegativeToleranceErrors (regression, CodeRabbit): a negative
+// tolerance is a misconfiguration, not a rule that silently flags correct
+// invoices. Over an EXACTLY-correct invoice (1000*0.075 == 75, mismatch 0),
+// tolerance=-0.01 would make mismatch.GreaterThan(tolerance) true
+// (0 > -0.01) and WRONGLY report a violation on a correct invoice -- so a
+// negative tolerance must be a config fault (=> error, Decision N15), NOT a
+// violation and NOT a silent pass.
+func TestTaxMath_NegativeToleranceErrors(t *testing.T) {
+	e := taxMathEval{}
+	payload := Payload{"invoice": map[string]any{
+		"subtotal": float64(1000),
+		"vat":      float64(75), // exactly base*rate -- mismatch is 0
+	}}
+	r := Rule{
+		Key:      "TAXMATH-NEG-TOLERANCE",
+		Type:     TypeTaxMath,
+		Params:   json.RawMessage(`{"base":"subtotal","rate":0.075,"expected":"vat","tolerance":-0.01}`),
+		Severity: "error",
+		Message:  "should never surface -- config fault",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err == nil {
+		t.Fatal("Eval() error = nil, want non-nil: a negative tolerance is a config fault, not a silent violation of an exactly-correct invoice")
+	}
+	if v != nil {
+		t.Errorf("Eval() violation = %+v, want nil: a config-fault error and a violation are mutually exclusive -- and the invoice is exactly correct (mismatch 0)", v)
+	}
+}
+
 // --- cross_field: full op table, absent path, unknown op ----------------
 
 // TestCrossField_AllOps tables every cross_field op (eq/ne/lt/le/gt/ge)

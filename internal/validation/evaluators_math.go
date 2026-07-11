@@ -70,9 +70,11 @@ import (
 // literal (JSON number) -- see file-header contract.
 //
 // Config faults (=> error, Decision N15): undecodable params; rate a
-// non-number or absent; base/expected param key absent. Data faults (=>
-// violation, mirroring rangeEval's non-numeric handling): a base/expected
-// path that is absent or resolves to a non-numeric value.
+// non-number or absent; base/expected param key absent; a negative
+// tolerance (which would make a zero mismatch on an exactly-correct invoice
+// register as > tolerance and silently flag it). Data faults (=> violation,
+// mirroring rangeEval's non-numeric handling): a base/expected path that is
+// absent or resolves to a non-numeric value.
 type taxMathEval struct{}
 
 func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
@@ -94,6 +96,12 @@ func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
 	}
 	if len(params.Expected) == 0 {
 		return nil, fmt.Errorf("validation: tax_math rule %q missing expected", r.Key)
+	}
+	// A negative tolerance is a misconfiguration: mismatch.GreaterThan(tol)
+	// would be true even for a zero mismatch (0 > negative), silently
+	// flagging CORRECT invoices. Fail loud (N15) rather than mis-flag.
+	if params.Tolerance < 0 {
+		return nil, fmt.Errorf("validation: tax_math rule %q tolerance must be non-negative, got %v", r.Key, params.Tolerance)
 	}
 
 	// A present operand whose path is absent/non-numeric is bad DATA -> a

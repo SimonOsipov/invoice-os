@@ -167,3 +167,78 @@ describe('authedFetch end-to-end: a real 401 clears the persisted session (Decis
     expect(storage.getItem(SESSION_KEY)).toBeNull()
   })
 })
+
+// Adversarial / edge coverage (added post-implementation, QA Mode B).
+// AC-3 requires ONLY a real 401 to clear the session — a 403 (still an auth failure,
+// but not "the token is dead") must NOT trigger onUnauthorized, and the discriminator
+// must be the ApiError `kind`, not merely a numeric `status` field that happens to be
+// 401 on a shape that isn't a real HTTP response (e.g. a malformed-body error that
+// coincidentally carries the last-seen status).
+describe('isUnauthorized: edge cases beyond the happy path', () => {
+  it('E1: false for ApiError{kind:"http", status:403} (Forbidden is not a session-clearing signal)', () => {
+    expect(isUnauthorized(new ApiError('http', 'x', 403))).toBe(false)
+  })
+
+  it("E2: false for ApiError{kind:'malformed', status:401} (kind must be 'http', not just a matching status)", () => {
+    expect(isUnauthorized(new ApiError('malformed', 'malformed response body', 401))).toBe(false)
+  })
+})
+
+describe('authedFetch: edge cases beyond the happy path', () => {
+  it('E3: a 403 rejects but does NOT invoke onUnauthorized (only 401 logs the user out)', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: 'forbidden' }) })
+    const spy = vi.fn()
+    const af = createAuthedFetch(() => 'tok', spy)
+
+    const err = await captureRejection(() => af('/x'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('E4: getToken() returning null issues the request with NO Authorization header (token stays app-side, omitted when absent)', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ id: 't1' }) })
+    const af = createAuthedFetch(() => null, vi.fn())
+
+    const result = await af<{ id: string }>('/x')
+
+    expect(result).toEqual({ id: 't1' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    const headers = new Headers(init?.headers)
+    expect(headers.has('Authorization')).toBe(false)
+  })
+
+  it('E5: opts (method + body) pass through to the underlying fetch alongside the injected token', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await af('/x', { method: 'POST', body: { a: 1 } })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(calledUrl).toBe('/x')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ a: 1 }))
+    const headers = new Headers(init.headers)
+    expect(headers.get('Authorization')).toBe('Bearer tok')
+    expect(headers.get('Content-Type')).toBe('application/json')
+  })
+
+  it('E6: onUnauthorized is still invoked exactly once when the 401 response body is unreadable (empty/non-JSON)', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.reject(new Error('Unexpected end of JSON input')),
+    })
+    const spy = vi.fn()
+    const af = createAuthedFetch(() => 'tok', spy)
+
+    const err = await captureRejection(() => af('/x'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(401)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+})

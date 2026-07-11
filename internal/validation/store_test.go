@@ -42,6 +42,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -451,5 +452,280 @@ func TestStore_AuditRollsBackWithToggle(t *testing.T) {
 	}
 	if auditRows != 0 {
 		t.Errorf("audit_log rows for tenant = %d, want 0 (failed audit write must roll back, leaving no row)", auditRows)
+	}
+}
+
+// TestStore_LoadNoIdentityErrors (QA adversarial): rule_set_versions/rules are
+// GLOBAL tables (no tenant_id, no RLS -- see store.go's file header), but
+// both Store methods still wrap db.WithinRequestTenantTx purely to resolve
+// the caller's identity for audit.Record. That wrapper's gate must still
+// apply even though the underlying data is not tenant-scoped: a context
+// carrying NO auth.Identity must be refused with db.ErrNoTenant BEFORE any
+// SQL (including the UPDATE and the audit write) runs -- "global" means every
+// tenant sees the same content, not that access requires no identity.
+func TestStore_LoadNoIdentityErrors(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background() // deliberately NOT auth.WithIdentity -- no identity in ctx
+
+	versionID, _ := seedVersion(t, super, true)
+	ruleID := seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+
+	store := NewStore(app)
+
+	if _, err := store.LoadActiveRuleSet(ctx); !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("LoadActiveRuleSet with no identity: err = %v, want db.ErrNoTenant", err)
+	}
+
+	var auditBefore int
+	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM audit_log`).Scan(&auditBefore); err != nil {
+		t.Fatalf("count audit_log before: %v", err)
+	}
+
+	if _, err := store.ToggleRule(ctx, "R", false); !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("ToggleRule with no identity: err = %v, want db.ErrNoTenant", err)
+	}
+
+	// Delta (not an absolute-zero assertion): audit_log accumulates rows
+	// across every test in this binary run, so only "did THIS call add a
+	// row" is a safe invariant to check.
+	var auditAfter int
+	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM audit_log`).Scan(&auditAfter); err != nil {
+		t.Fatalf("count audit_log after: %v", err)
+	}
+	if auditAfter != auditBefore {
+		t.Errorf("audit_log row count changed %d -> %d after a no-identity ToggleRule, want unchanged -- "+
+			"the tenant-tx gate must refuse before WithinTenantTx (and therefore audit.Record) ever runs", auditBefore, auditAfter)
+	}
+
+	var enabled bool
+	if err := super.QueryRow(context.Background(), `SELECT enabled FROM rules WHERE id = $1`, ruleID).Scan(&enabled); err != nil {
+		t.Fatalf("read back enabled: %v", err)
+	}
+	if !enabled {
+		t.Error("rule enabled = false after a no-identity ToggleRule -- the tenant-tx gate should have refused before any UPDATE ran")
+	}
+}
+
+// TestStore_ToggleRoundTripEvents (QA adversarial): disable then re-enable
+// the same rule and confirm the audit trail is a faithful, ORDERED history
+// of both flips -- not just "one row exists" (TestStore_ToggleFlipsAndAudits
+// only ever disables once). Asserts event names, from/to payload fields, and
+// that the rule really is back to enabled=true after the round trip.
+func TestStore_ToggleRoundTripEvents(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	versionID, version := seedVersion(t, super, true)
+	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+
+	store := NewStore(app)
+	tenantID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
+
+	if _, err := store.ToggleRule(c, "R", false); err != nil {
+		t.Fatalf("ToggleRule(R,false): %v", err)
+	}
+	if _, err := store.ToggleRule(c, "R", true); err != nil {
+		t.Fatalf("ToggleRule(R,true): %v", err)
+	}
+
+	type auditRow struct {
+		Event   string
+		Payload map[string]any
+	}
+	var got []auditRow
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		// ORDER BY id (bigserial, monotonic) rather than created_at -- two
+		// separate transactions in quick succession could land the same
+		// timestamptz value on a fast machine.
+		rows, err := tx.Query(ctx, `SELECT event, payload FROM audit_log WHERE event LIKE 'validation.rule.%' ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var event string
+			var payload []byte
+			if err := rows.Scan(&event, &payload); err != nil {
+				return err
+			}
+			var p map[string]any
+			if err := json.Unmarshal(payload, &p); err != nil {
+				return err
+			}
+			got = append(got, auditRow{Event: event, Payload: p})
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read audit_log rows for tenant: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("audit_log rows for tenant = %d, want 2 (disable then enable)", len(got))
+	}
+	if got[0].Event != "validation.rule.disabled" {
+		t.Errorf("audit_log[0].event = %q, want validation.rule.disabled", got[0].Event)
+	}
+	if got[0].Payload["from"] != true || got[0].Payload["to"] != false {
+		t.Errorf("audit_log[0].payload from/to = %v/%v, want true/false", got[0].Payload["from"], got[0].Payload["to"])
+	}
+	if got[1].Event != "validation.rule.enabled" {
+		t.Errorf("audit_log[1].event = %q, want validation.rule.enabled", got[1].Event)
+	}
+	if got[1].Payload["from"] != false || got[1].Payload["to"] != true {
+		t.Errorf("audit_log[1].payload from/to = %v/%v, want false/true", got[1].Payload["from"], got[1].Payload["to"])
+	}
+	for i, r := range got {
+		v, ok := r.Payload["version"].(float64)
+		if !ok || int(v) != version {
+			t.Errorf("audit_log[%d].payload version = %v, want %d", i, r.Payload["version"], version)
+		}
+		if r.Payload["key"] != "R" {
+			t.Errorf("audit_log[%d].payload key = %v, want %q", i, r.Payload["key"], "R")
+		}
+	}
+
+	rs, err := store.LoadActiveRuleSet(c)
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSet after round trip: %v", err)
+	}
+	var found bool
+	for _, r := range rs.Rules {
+		if r.Key != "R" {
+			continue
+		}
+		found = true
+		if !r.Enabled {
+			t.Error("R.Enabled = false after disable-then-enable round trip, want true")
+		}
+	}
+	if !found {
+		t.Fatal("R not present in RuleSet.Rules after round trip")
+	}
+}
+
+// TestStore_ToggleRunsAsAppRole (QA adversarial): every other test in this
+// file already calls NewStore(app) where app is dbTestPools' DATABASE_URL
+// pool -- i.e. they already run as invoice_app, not the superuser. This test
+// makes that fact an explicit, checked assertion (current_user) rather than
+// an unverified convention, and proves ToggleRule's UPDATE genuinely
+// succeeds under the real production role's column-level grant (SELECT +
+// UPDATE(enabled) only -- schema_test.go's TestSchema_AppCanToggleEnabled)
+// plus its FOR UPDATE row lock, not because the test happens to run
+// privileged.
+func TestStore_ToggleRunsAsAppRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	var currentUser string
+	if err := app.QueryRow(ctx, `SELECT current_user`).Scan(&currentUser); err != nil {
+		t.Fatalf("select current_user on the app pool: %v", err)
+	}
+	if currentUser != "invoice_app" {
+		t.Fatalf("dbTestPools' app pool runs as %q, want invoice_app -- Store tests would be exercising the wrong role's grants entirely", currentUser)
+	}
+
+	versionID, _ := seedVersion(t, super, true)
+	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+
+	store := NewStore(app)
+	tenantID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.ToggleRule(c, "R", false)
+	if err != nil {
+		t.Fatalf("ToggleRule as invoice_app: %v -- the column-level UPDATE(enabled) grant + FOR UPDATE lock must permit this mutation for the real production role", err)
+	}
+	if got.Enabled {
+		t.Error("ToggleRule(R,false).Enabled = true, want false")
+	}
+}
+
+// TestStore_LoadOrdersAndRoundTripsFields (QA adversarial): seeds three rules
+// out of key order and one carrying a non-null "when" guard plus a
+// structured `params` blob, then asserts LoadActiveRuleSet (a) returns them
+// sorted ORDER BY key (not insertion order), and (b) faithfully round-trips
+// When (*string, non-nil), Params, Scope, Type, and Severity -- fields
+// TestStore_LoadActiveRuleSet does not exercise (no "when", no ordering
+// check, only two rules already alphabetical).
+func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	versionID, _ := seedVersion(t, super, true)
+	whenExpr := "invoice.total > 0"
+	paramsJSON := `{"expr":"invoice.total > 0 && invoice.total < 1000000"}`
+	// Seeded out of key order (zulu, alpha, mike) to prove LoadActiveRuleSet's
+	// `ORDER BY key` (store.go), not insertion order.
+	seedFullRule(t, super, versionID, ruleFixture{
+		Key: "zulu", Type: "cel", Target: "invoice", Params: paramsJSON,
+		Severity: "info", When: &whenExpr, Message: "cel rule", Scope: "document", Enabled: true,
+	})
+	seedFullRule(t, super, versionID, ruleFixture{Key: "alpha", Enabled: true})
+	seedFullRule(t, super, versionID, ruleFixture{Key: "mike", Enabled: true})
+
+	store := NewStore(app)
+	tenantID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
+
+	rs, err := store.LoadActiveRuleSet(c)
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSet: %v", err)
+	}
+	if len(rs.Rules) != 3 {
+		t.Fatalf("len(RuleSet.Rules) = %d, want 3", len(rs.Rules))
+	}
+
+	gotKeys := []string{rs.Rules[0].Key, rs.Rules[1].Key, rs.Rules[2].Key}
+	wantKeys := []string{"alpha", "mike", "zulu"}
+	if !reflect.DeepEqual(gotKeys, wantKeys) {
+		t.Fatalf("RuleSet.Rules key order = %v, want %v (ORDER BY key, not insertion order)", gotKeys, wantKeys)
+	}
+
+	zulu := rs.Rules[2]
+	if zulu.Type != TypeCEL {
+		t.Errorf("zulu.Type = %q, want %q", zulu.Type, TypeCEL)
+	}
+	if zulu.Severity != Severity("info") {
+		t.Errorf("zulu.Severity = %q, want info", zulu.Severity)
+	}
+	if zulu.Scope != "document" {
+		t.Errorf("zulu.Scope = %q, want document", zulu.Scope)
+	}
+	if zulu.When == nil {
+		t.Fatal(`zulu.When = nil, want non-nil (a "when" guard was seeded)`)
+	}
+	if *zulu.When != whenExpr {
+		t.Errorf("zulu.When = %q, want %q", *zulu.When, whenExpr)
+	}
+
+	// jsonb re-serializes on round trip (e.g. Postgres inserts a space after
+	// ':', and does not guarantee the on-disk key order matches input text),
+	// so a literal byte comparison against the seeded input string is not a
+	// meaningful invariant. Decode both sides and compare the resulting
+	// values instead -- that is what "Params round-trips faithfully" means.
+	var wantParams, gotParams map[string]any
+	if err := json.Unmarshal([]byte(paramsJSON), &wantParams); err != nil {
+		t.Fatalf("unmarshal seeded params: %v", err)
+	}
+	if err := json.Unmarshal(zulu.Params, &gotParams); err != nil {
+		t.Fatalf("unmarshal loaded params %s: %v", zulu.Params, err)
+	}
+	if !reflect.DeepEqual(wantParams, gotParams) {
+		t.Errorf("zulu.Params decoded = %v, want %v", gotParams, wantParams)
+	}
+
+	// alpha/mike were seeded with no "when" guard -- confirm the nullable
+	// column's zero case round-trips to a true nil *string, not a pointer to
+	// an empty string.
+	for _, key := range []string{"alpha", "mike"} {
+		for _, r := range rs.Rules {
+			if r.Key != key {
+				continue
+			}
+			if r.When != nil {
+				t.Errorf("%s.When = %q, want nil (no when guard seeded)", key, *r.When)
+			}
+		}
 	}
 }

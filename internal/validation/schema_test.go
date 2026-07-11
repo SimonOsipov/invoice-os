@@ -330,3 +330,133 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 		t.Errorf("rules has %d row(s) not tagged as a QA fixture -- the M3-04-01 migration must ship the tables only, no seeded rule content", ruleCount)
 	}
 }
+
+// ---- QA-added adversarial / edge coverage (post-implementation, M3-04-01 Mode B) ----
+//
+// The six tests above are the AC-derived RED suite (authored pre-implementation, now
+// green). The tests below were added during QA verification to close gaps the AC suite
+// didn't cover:
+//
+//  7. TestSchema_AppCannotMutateRemainingContentColumns — completeness for #1: every
+//     OTHER content column (target, params, message, scope, "when",
+//     rule_set_version_id), not just key/severity/type.
+//  8. TestSchema_MultipleInactiveVersionsAllowed — the mirror image of #5: proves the
+//     unique index is PARTIAL (WHERE is_active), not total, so it must not fire for
+//     is_active=false rows. Guards the M3-05 seeding path (which will insert an
+//     inactive version before flipping it active) against a regression to a total
+//     unique index on `version` conflated with `is_active`.
+//  9. TestSchema_RulesCascadeOnVersionDelete — the FK's ON DELETE CASCADE, asserted
+//     directly rather than relying on seedVersion's own (error-swallowing) Cleanup.
+// 10. TestSchema_CheckConstraintsRejectInvalidEnums — the three CHECK constraints
+//     (type, severity, scope) reject out-of-list values with 23514.
+
+// TestSchema_AppCannotMutateRemainingContentColumns (QA addition): the column-level
+// grant `GRANT SELECT, UPDATE (enabled) ON rules TO invoice_app` must deny invoice_app
+// UPDATE on every content column other than `enabled` -- TestSchema_AppCannotMutateContent
+// above only exercises key/severity/type. Covers the remaining columns: target, params,
+// message, scope, "when", and the rule_set_version_id FK itself. Each case must fail
+// 42501 (insufficient_privilege), proving the grant scope is exactly {enabled}.
+func TestSchema_AppCannotMutateRemainingContentColumns(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	versionID, _ := seedVersion(t, super, false)
+	ruleID := seedRule(t, super, versionID, "content-immutable-remaining-probe")
+	otherVersionID, _ := seedVersion(t, super, false)
+
+	cases := []struct {
+		col  string
+		sql  string
+		args []any
+	}{
+		{"target", `UPDATE rules SET target = 'mutated' WHERE id = $1`, []any{ruleID}},
+		{"params", `UPDATE rules SET params = '{"x":1}'::jsonb WHERE id = $1`, []any{ruleID}},
+		{"message", `UPDATE rules SET message = 'mutated' WHERE id = $1`, []any{ruleID}},
+		{"scope", `UPDATE rules SET scope = 'document' WHERE id = $1`, []any{ruleID}},
+		{`"when"`, `UPDATE rules SET "when" = 'true' WHERE id = $1`, []any{ruleID}},
+		{"rule_set_version_id", `UPDATE rules SET rule_set_version_id = $2 WHERE id = $1`, []any{ruleID, otherVersionID}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.col, func(t *testing.T) {
+			_, err := app.Exec(ctx, tc.sql, tc.args...)
+			if err == nil {
+				t.Fatalf("UPDATE rules SET %s=...: want SQLSTATE 42501 (insufficient_privilege), got no error -- app must not be able to mutate rule content", tc.col)
+			}
+			assertSQLState(t, err, "42501")
+		})
+	}
+}
+
+// TestSchema_MultipleInactiveVersionsAllowed (QA addition): the mirror image of
+// TestSchema_OneActiveVersionEnforced above. That test proves the partial unique index
+// fires for is_active=true; this one proves it does NOT fire for is_active=false --
+// i.e. it is genuinely partial (`WHERE is_active`), not a total unique index on some
+// constant expression that would incorrectly cap the table at one row overall. Seeding
+// several is_active=false rows must all succeed (seedVersion itself calls t.Fatalf on
+// any insert error, so reaching the end of this test IS the assertion).
+func TestSchema_MultipleInactiveVersionsAllowed(t *testing.T) {
+	super, _ := dbTestPools(t)
+
+	seedVersion(t, super, false)
+	seedVersion(t, super, false)
+	seedVersion(t, super, false)
+}
+
+// TestSchema_RulesCascadeOnVersionDelete (QA addition): rules.rule_set_version_id is
+// `REFERENCES rule_set_versions(id) ON DELETE CASCADE` -- deleting a version must
+// delete every rule under it too. Asserted directly here (not inferred from
+// seedVersion's own Cleanup, whose delete errors are swallowed with `_, _ =`), so a
+// regression to ON DELETE RESTRICT/NO ACTION shows up as a test failure instead of a
+// silently-failing Cleanup.
+func TestSchema_RulesCascadeOnVersionDelete(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	versionID, _ := seedVersion(t, super, false)
+	ruleID := seedRule(t, super, versionID, "cascade-probe")
+
+	if _, err := super.Exec(ctx, `DELETE FROM rule_set_versions WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("DELETE FROM rule_set_versions: %v", err)
+	}
+
+	var exists bool
+	if err := super.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM rules WHERE id = $1)`, ruleID,
+	).Scan(&exists); err != nil {
+		t.Fatalf("check rule survival: %v", err)
+	}
+	if exists {
+		t.Error("rule still exists after its rule_set_versions row was deleted -- ON DELETE CASCADE did not fire")
+	}
+}
+
+// TestSchema_CheckConstraintsRejectInvalidEnums (QA addition): the CHECK constraints on
+// rules.type, rules.severity, and rules.scope must reject out-of-list values with
+// check_violation (23514). Run as superuser (BYPASSRLS, full grants) so a rejection can
+// only be the CHECK firing -- not a grant denial masquerading as one (same isolation
+// rationale as TestSchema_OneActiveVersionEnforced's doc comment).
+func TestSchema_CheckConstraintsRejectInvalidEnums(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	versionID, _ := seedVersion(t, super, false)
+
+	cases := []struct {
+		name, sql string
+	}{
+		{"type", `INSERT INTO rules (rule_set_version_id, key, type, severity, message)
+			VALUES ($1, 'bad-type-probe', 'not_a_real_type', 'error', 'x')`},
+		{"severity", `INSERT INTO rules (rule_set_version_id, key, type, severity, message)
+			VALUES ($1, 'bad-severity-probe', 'required', 'not_a_real_severity', 'x')`},
+		{"scope", `INSERT INTO rules (rule_set_version_id, key, type, severity, message, scope)
+			VALUES ($1, 'bad-scope-probe', 'required', 'error', 'x', 'not_document')`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := super.Exec(ctx, tc.sql, versionID)
+			if err == nil {
+				t.Fatalf("INSERT rules with invalid %s: want SQLSTATE 23514 (check_violation), got no error", tc.name)
+			}
+			assertSQLState(t, err, "23514")
+		})
+	}
+}

@@ -258,6 +258,30 @@ func (dateEval) Eval(p Payload, r Rule) (*Violation, error) {
 		layout = params.Format
 	}
 
+	// Resolve the temporal bound params FIRST, before the absent-target
+	// short-circuit -- a not_before/not_after that is neither "today" nor
+	// parseable under the layout is a config fault that must fail loud even
+	// when the data omits the target (Decision N15: a broken ruleset must
+	// not quietly validate everything). This mirrors formatEval compiling
+	// its pattern before resolvePath. A bad `format` layout is surfaced here
+	// too, via resolveDateBound parsing each bound under it.
+	now := time.Now()
+	var notBefore, notAfter *time.Time
+	if params.NotBefore != "" {
+		nb, err := resolveDateBound(params.NotBefore, layout, now)
+		if err != nil {
+			return nil, fmt.Errorf("validation: date rule %q not_before: %w", r.Key, err)
+		}
+		notBefore = &nb
+	}
+	if params.NotAfter != "" {
+		na, err := resolveDateBound(params.NotAfter, layout, now)
+		if err != nil {
+			return nil, fmt.Errorf("validation: date rule %q not_after: %w", r.Key, err)
+		}
+		notAfter = &na
+	}
+
 	val, present := resolvePath(p, r.Target)
 	if !present || val == nil {
 		return nil, nil
@@ -274,24 +298,11 @@ func (dateEval) Eval(p Payload, r Rule) (*Violation, error) {
 	}
 	d := dateOnly(parsed)
 
-	now := time.Now()
-	if params.NotBefore != "" {
-		nb, err := resolveDateBound(params.NotBefore, layout, now)
-		if err != nil {
-			return nil, fmt.Errorf("validation: date rule %q not_before: %w", r.Key, err)
-		}
-		if d.Before(nb) {
-			return violation(r), nil
-		}
+	if notBefore != nil && d.Before(*notBefore) {
+		return violation(r), nil
 	}
-	if params.NotAfter != "" {
-		na, err := resolveDateBound(params.NotAfter, layout, now)
-		if err != nil {
-			return nil, fmt.Errorf("validation: date rule %q not_after: %w", r.Key, err)
-		}
-		if d.After(na) {
-			return violation(r), nil
-		}
+	if notAfter != nil && d.After(*notAfter) {
+		return violation(r), nil
 	}
 	return nil, nil
 }

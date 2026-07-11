@@ -957,32 +957,21 @@ func TestDate_BadParamsErrors(t *testing.T) {
 	}
 }
 
-// TestDate_BadBoundAbsentTarget_KNOWNBUG documents a confirmed deviation
-// from the evaluators.go file-header contract ("Params are validated FIRST,
-// before the absent-target short-circuit, so a rule with broken config
-// fails loud even when the data happens to omit the target") and from
-// Decision N15 ("a broken ruleset must not quietly validate everything").
+// TestDate_BadBoundAbsentTargetErrors pins the fix for a confirmed deviation
+// (QA M3-04-03 Mode B) from the evaluators.go file-header contract ("Params
+// are validated FIRST, before the absent-target short-circuit, so a rule with
+// broken config fails loud even when the data happens to omit the target")
+// and from Decision N15 ("a broken ruleset must not quietly validate
+// everything").
 //
-// Unlike format (which compiles its regex BEFORE resolvePath, so a bad
-// pattern errors even on an absent target -- see
-// TestFormat_BadParamsAbsentTargetStillErrors), dateEval only calls
-// resolveDateBound for not_before/not_after INSIDE the not-before/not-after
-// blocks, which are only reached AFTER the "absent target => return nil,nil"
-// early return (evaluators.go: resolvePath + absent check at ~line 261-264,
-// resolveDateBound calls at ~line 279 and ~line 288 -- both unreachable when
-// the target is absent). So a not_after/not_before bound that is neither
-// "today" nor parseable under the rule's layout silently PASSES when the
-// target happens to be absent, instead of erroring as documented.
-//
-// This test pins the CURRENT (buggy) behavior so a regression is visible in
-// the diff if the ordering is ever "fixed" in the wrong direction; it is
-// t.Skip'd so it does not block the green suite. See QA report for the
-// repro and file/line citation -- flagged for the executor to fix (move the
-// not_before/not_after bound resolution ahead of the absent-target check,
-// mirroring format's early regexp.Compile).
-func TestDate_BadBoundAbsentTarget_KNOWNBUG(t *testing.T) {
-	t.Skip("KNOWN BUG (QA M3-04-03 Mode B): date not_before/not_after bound validation is not hoisted ahead of the absent-target short-circuit, unlike format's pattern compile -- see evaluators.go dateEval.Eval ~line 244-297. A malformed bound silently passes instead of erroring when the target is absent, violating N15 and the file's own documented contract.")
-
+// Like format (which compiles its regex BEFORE resolvePath, so a bad pattern
+// errors even on an absent target -- see
+// TestFormat_BadParamsAbsentTargetStillErrors), dateEval now resolves its
+// not_before/not_after bounds ahead of the "absent target => return nil,nil"
+// short-circuit. So a not_after/not_before bound that is neither "today" nor
+// parseable under the rule's layout must ERROR (a config fault), even when the
+// target happens to be absent -- it must not silently pass.
+func TestDate_BadBoundAbsentTargetErrors(t *testing.T) {
 	e := dateEval{}
 	payload := Payload{"invoice": map[string]any{}} // target absent
 	r := Rule{
@@ -996,7 +985,7 @@ func TestDate_BadBoundAbsentTarget_KNOWNBUG(t *testing.T) {
 
 	v, err := mustEval(t, e, payload, r)
 	if err == nil {
-		t.Error("Eval() error = nil -- CONFIRMS the bug: a malformed not_after bound silently passes when the target is absent, instead of erroring (decision #1 / N15)")
+		t.Error("Eval() error = nil: a malformed not_after bound must fail loud even when the target is absent, not silently pass (decision #1 / N15)")
 	}
 	if v != nil {
 		t.Errorf("Eval() violation = %+v, want nil alongside a config-fault error", v)

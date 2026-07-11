@@ -49,16 +49,16 @@ type Severity string
 // story's Constraints section pins, and that the M3-04-06 Store's
 // LoadActiveRuleSet materializes from the `rules` table.
 type Rule struct {
-	Key    string
-	Type   RuleType
-	Target string          // dotted path into the invoice payload, e.g. "supplier.tin" -- NO "invoice." prefix (Decision N19)
-	Params json.RawMessage // type-specific; decoded by the type's own Evaluator
+	Key    string          `json:"key"`
+	Type   RuleType        `json:"type"`
+	Target string          `json:"target"` // dotted path into the invoice payload, e.g. "supplier.tin" -- NO "invoice." prefix (Decision N19)
+	Params json.RawMessage `json:"params"` // type-specific; decoded by the type's own Evaluator
 
-	Severity Severity
-	When     *string // optional CEL guard (select-stage); nil => always applicable. CEL-rooted => MUST prefix "invoice." (Decision N19)
-	Message  string
-	Scope    string // "document" only in v1 (Decision N10)
-	Enabled  bool
+	Severity Severity `json:"severity"`
+	When     *string  `json:"when,omitempty"` // optional CEL guard (select-stage); nil => always applicable. CEL-rooted => MUST prefix "invoice." (Decision N19)
+	Message  string   `json:"message"`
+	Scope    string   `json:"scope"` // "document" only in v1 (Decision N10)
+	Enabled  bool     `json:"enabled"`
 }
 
 // RuleSet is the engine's evaluation input: the active published version's

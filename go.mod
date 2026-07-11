@@ -16,6 +16,7 @@ require (
 	github.com/riverqueue/river v0.40.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.40.0
 	github.com/riverqueue/river/rivertype v0.40.0
+	github.com/shopspring/decimal v1.4.0
 )
 
 require (
@@ -59,7 +60,6 @@ require (
 	github.com/riverqueue/river/rivershared v0.40.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
-	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect

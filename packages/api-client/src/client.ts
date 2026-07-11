@@ -3,10 +3,6 @@
 // surface uses — it injects the Bearer auth header, JSON-serializes the request
 // body, and normalizes every failure mode (network / non-2xx / malformed body)
 // into a typed ApiError so callers handle gateway errors uniformly.
-//
-// NOTE (M3-06-01, QA Mode A): gatewayBase() and apiFetch() are intentionally
-// stubbed to throw below — the RED specs in client.test.ts pin the contract;
-// the executor implements the real bodies to turn them green.
 
 export type ApiErrorKind = 'network' | 'http' | 'malformed'
 
@@ -33,10 +29,52 @@ export interface ApiFetchOptions {
 
 // Configured gateway base (trailing slashes stripped) or null when VITE_GATEWAY_URL is empty/unset.
 export function gatewayBase(): string | null {
-  throw new Error('not implemented')
+  const v = (import.meta.env.VITE_GATEWAY_URL ?? '').trim().replace(/\/+$/, '')
+  return v || null
 }
 
 // Resolves parsed JSON on 2xx; REJECTS with ApiError on network / non-2xx / malformed-body.
-export function apiFetch<T>(_url: string, _opts?: ApiFetchOptions): Promise<T> {
-  throw new Error('not implemented')
+export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
+  const headers = new Headers()
+  if (opts?.token) {
+    headers.set('Authorization', 'Bearer ' + opts.token)
+  }
+
+  let body: string | undefined
+  if (opts?.body !== undefined) {
+    headers.set('Content-Type', 'application/json')
+    body = JSON.stringify(opts.body)
+  }
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: opts?.method ?? 'GET',
+      headers,
+      body,
+      signal: opts?.signal,
+    })
+  } catch (e) {
+    throw new ApiError('network', (e as Error).message ?? 'network error', null)
+  }
+
+  if (!res.ok) {
+    let responseBody: unknown
+    let msg = res.statusText
+    try {
+      responseBody = await res.json()
+      if (responseBody && typeof responseBody === 'object' && 'error' in responseBody) {
+        msg = String((responseBody as { error: unknown }).error)
+      }
+    } catch {
+      // best-effort — no JSON body to read; fall back to statusText.
+    }
+    throw new ApiError('http', msg, res.status, responseBody)
+  }
+
+  try {
+    return (await res.json()) as T
+  } catch {
+    throw new ApiError('malformed', 'malformed response body', res.status)
+  }
 }

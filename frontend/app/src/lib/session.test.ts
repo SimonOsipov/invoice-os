@@ -273,3 +273,71 @@ describe('shouldAutoSignIn deep-link guard', () => {
     expect(shouldAutoSignIn(null, null)).toBe(false)
   })
 })
+
+// QA (M3-07-01, Mode B): adversarial/edge coverage added on top of the RED-first S1-S17
+// specs above. These are NOT padding — each one is a genuine regression guard for a
+// specific way the implementation could silently regress (see the QA report for the
+// mutation-tested rationale behind each).
+describe('adversarial / edge coverage (QA)', () => {
+  function inhouseSession(): Session {
+    return {
+      persona: APP_PERSONAS.inhouse,
+      token: 'jwt-inhouse',
+      me: {
+        tenant: { id: '22222222-2222-2222-2222-222222222222', name: 'Honeywell Group' },
+        user: { id: 'c0000000-0000-0000-0000-000000000002', role: 'authenticated' },
+      },
+      verified: true,
+    }
+  }
+
+  it('S18: round-trips an inhouse session, rebuilding persona as the same APP_PERSONAS reference (S1-S8 only exercise firm — this proves the persona-by-id lookup is not firm-hardcoded)', () => {
+    const session = inhouseSession()
+
+    const restored = parseStoredSession(serializeSession(session))
+
+    expect(restored).toEqual(session)
+    expect(restored?.persona).toBe(APP_PERSONAS.inhouse)
+  })
+
+  it("S19: does not auto-sign-in for the landing-only 'support' persona (an Ops Console persona, not an APP_PERSONAS entry — only 'firm'/'inhouse' auto-sign-in)", () => {
+    expect(shouldAutoSignIn(null, 'support')).toBe(false)
+  })
+
+  it('S20: parseStoredSession ignores unknown extra fields in a stored blob (a forward-compat blob from a later schema still parses, picking only known fields)', () => {
+    const session = firmSession()
+    const raw = JSON.stringify({
+      ...JSON.parse(serializeSession(session)),
+      futureField: 'added-by-a-later-schema-version',
+      anotherExtra: { nested: true },
+    })
+
+    const restored = parseStoredSession(raw)
+
+    expect(restored).toEqual(session)
+  })
+
+  it('S21: an empty-string token is a valid token and round-trips (the type guard checks typeof, not truthiness)', () => {
+    const session: Session = { ...firmSession(), token: '' }
+
+    const restored = parseStoredSession(serializeSession(session))
+
+    expect(restored).toEqual(session)
+    expect(restored?.token).toBe('')
+  })
+
+  it('S22 (documentation, not a bug): a non-null "me" object that is not a full Me shape is accepted as-is — parseStoredSession only shallow-checks me is null|object per Decision (c); it does not deep-validate tenant/user fields', () => {
+    const raw = JSON.stringify({
+      v: SESSION_SCHEMA_VERSION,
+      personaId: 'firm',
+      token: 'jwt',
+      me: { unexpectedShape: true },
+      verified: true,
+    })
+
+    const restored = parseStoredSession(raw)
+
+    expect(restored).not.toBeNull()
+    expect(restored?.me).toEqual({ unexpectedShape: true })
+  })
+})

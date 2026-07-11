@@ -8,6 +8,7 @@
 // default showcase build), signIn resolves to an UNVERIFIED session with no network
 // call — so a deployed SPA with no backend behind it stays a clean, error-free mock.
 
+import { apiFetch, gatewayBase } from '@invoice-os/api-client'
 import type { Mode } from './types'
 
 export type PersonaId = 'firm' | 'inhouse'
@@ -73,12 +74,6 @@ export interface Session {
   verified: boolean
 }
 
-// The configured gateway base URL, or null when running as a pure showcase mock.
-function gatewayBase(): string | null {
-  const v = (import.meta.env.VITE_GATEWAY_URL ?? '').trim().replace(/\/+$/, '')
-  return v || null
-}
-
 // signIn mints a token and reads /me when a gateway is configured; otherwise it returns
 // an unverified mock session without touching the network. It THROWS only when a gateway
 // is configured but the round trip fails — the caller decides whether to degrade.
@@ -89,21 +84,14 @@ export async function signIn(persona: Persona): Promise<Session> {
   }
 
   // 1. Mint a GoTrue-shaped JWT via the gateway's dev mock issuer.
-  const loginRes = await fetch(`${base}/auth/login`, {
+  const { access_token: token } = await apiFetch<{ access_token: string }>(`${base}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject: persona.subject, role: persona.role, tenant_id: persona.tenantId }),
+    body: { subject: persona.subject, role: persona.role, tenant_id: persona.tenantId },
   })
-  if (!loginRes.ok) throw new Error(`auth/login failed: HTTP ${loginRes.status}`)
-  const { access_token: token } = (await loginRes.json()) as { access_token: string }
 
   // 2. The first real authenticated fetch of app data: the gateway verifies the token,
   //    injects the tenant, and tenancy resolves it under RLS (SET LOCAL).
-  const meRes = await fetch(`${base}/api/tenancy/v1/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!meRes.ok) throw new Error(`/me failed: HTTP ${meRes.status}`)
-  const me = (await meRes.json()) as Me
+  const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token })
 
   return { persona, token, me, verified: true }
 }

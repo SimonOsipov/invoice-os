@@ -22,6 +22,9 @@ importers:
 
   frontend/app:
     dependencies:
+      '@invoice-os/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@invoice-os/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens

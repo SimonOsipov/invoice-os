@@ -25,7 +25,12 @@
 // recover).
 package validation
 
-import "testing"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+)
 
 // fakeEval is a static Evaluator: every call returns the same (v, err),
 // independent of the Rule or Payload passed in. Registering distinct
@@ -351,6 +356,243 @@ func TestPath_ResolveDotted(t *testing.T) {
 		got, present := mustResolvePath(t, payload, "supplier.tin.extra")
 		if present {
 			t.Errorf(`resolvePath(payload, "supplier.tin.extra") present = true (value=%v), want false -- "tin" is a string, not a map`, got)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// QA (Mode B) adversarial/edge coverage added post-implementation, on top of
+// the 7 RALPH-authored Test Specs above. These probe fault paths and
+// select/dispatch ordering the Test Specs table didn't enumerate.
+// ---------------------------------------------------------------------------
+
+// TestEngine_EvaluatorErrorPropagates: a selected rule's Evaluator returning
+// a non-nil error is a config/expression fault (Decision N15) -- it must
+// surface as Evaluate's own error, NEVER be swallowed as a pass, and NEVER
+// leak a partial Result alongside the error.
+func TestEngine_EvaluatorErrorPropagates(t *testing.T) {
+	const fakeType RuleType = "fake-eval-error-probe"
+	evalErr := errors.New("eval: malformed params")
+	registry := map[RuleType]Evaluator{
+		fakeType: fakeEval{v: nil, err: evalErr},
+	}
+	rule := Rule{Key: "broken-rule", Type: fakeType, Severity: "error", Message: "x", Scope: "document", Enabled: true}
+	e := NewEngine(registry, newFakeGuard(true, nil))
+
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 5, Rules: []Rule{rule}})
+	if err == nil {
+		t.Fatalf("Evaluate() with an Evaluator error: want a non-nil error, got nil (result=%+v) -- a config/expression fault must fail loud (Decision N15), never be swallowed as a pass", got)
+	}
+	if !errors.Is(err, evalErr) {
+		t.Errorf("Evaluate() error = %v, want it to equal/wrap the evaluator error %v", err, evalErr)
+	}
+	if got.RuleSetVersion != 0 || len(got.Violations) != 0 {
+		t.Errorf("Evaluate() returned a non-zero-value Result (%+v) alongside the evaluator error -- no partial violations may leak", got)
+	}
+}
+
+// TestEngine_GuardErrorPropagates: a rule with a `when` guard whose GuardFunc
+// returns a non-nil error is the same fault class as an Evaluator error
+// (Decision N15) -- it must fail loud, never be treated as a silent skip
+// (which is what a false guard result means).
+func TestEngine_GuardErrorPropagates(t *testing.T) {
+	const fakeType RuleType = "fake-guard-error-probe"
+	guardExpr := "invoice.country == 'NG'"
+	guardErr := errors.New("guard: malformed CEL expression")
+	registry := map[RuleType]Evaluator{
+		// Registered and would violate if reached -- proves the guard error
+		// short-circuits BEFORE dispatch, it isn't just "empty registry
+		// happens to also error".
+		fakeType: fakeEval{v: &Violation{RuleKey: "guarded-rule", Severity: "error", Message: "should never be reached"}},
+	}
+	rule := Rule{
+		Key: "guarded-rule", Type: fakeType, Severity: "error", Message: "guarded rule",
+		Scope: "document", Enabled: true, When: &guardExpr,
+	}
+	e := NewEngine(registry, newFakeGuard(false, guardErr))
+
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 3, Rules: []Rule{rule}})
+	if err == nil {
+		t.Fatalf("Evaluate() with a guard error: want a non-nil error, got nil (result=%+v) -- a broken `when` guard must fail loud (Decision N15), never silently skip the rule", got)
+	}
+	if !errors.Is(err, guardErr) {
+		t.Errorf("Evaluate() error = %v, want it to equal/wrap the guard error %v", err, guardErr)
+	}
+	if got.RuleSetVersion != 0 || len(got.Violations) != 0 {
+		t.Errorf("Evaluate() returned a non-zero-value Result (%+v) alongside the guard error", got)
+	}
+}
+
+// TestEngine_NonDocumentScopeSkipped: a rule whose Scope isn't "document"
+// (Decision N10 -- document-only in v1) must be select-stage-skipped even
+// though its registered Evaluator would otherwise report a violation.
+func TestEngine_NonDocumentScopeSkipped(t *testing.T) {
+	const fakeType RuleType = "fake-scope-probe"
+	registry := map[RuleType]Evaluator{
+		fakeType: fakeEval{v: &Violation{RuleKey: "line-scoped-rule", Severity: "error", Message: "should never be evaluated in v1"}},
+	}
+	rule := Rule{Key: "line-scoped-rule", Type: fakeType, Severity: "error", Message: "x", Scope: "line", Enabled: true}
+	e := NewEngine(registry, newFakeGuard(true, nil))
+
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 2, Rules: []Rule{rule}})
+	if err != nil {
+		t.Fatalf("Evaluate() unexpected error: %v", err)
+	}
+	if len(got.Violations) != 0 {
+		t.Fatalf("len(Violations) = %d, want 0 -- a non-\"document\" scope must be select-stage-skipped (Decision N10: document-only in v1)", len(got.Violations))
+	}
+}
+
+// TestEngine_MixedPassAndViolate: 4 applicable rules, 2 whose Evaluator
+// passes (nil Violation, nil error) and 2 that violate -- exactly the 2
+// violations must come back, in sorted (rule key ascending) order, proving
+// passing rules are excluded rather than merely not counted.
+func TestEngine_MixedPassAndViolate(t *testing.T) {
+	const (
+		typePass1 RuleType = "fake-mixed-pass-1"
+		typePass2 RuleType = "fake-mixed-pass-2"
+		typeFail1 RuleType = "fake-mixed-fail-1"
+		typeFail2 RuleType = "fake-mixed-fail-2"
+	)
+	rules := []Rule{
+		{Key: "pass-b", Type: typePass1, Severity: "error", Message: "passes", Scope: "document", Enabled: true},
+		{Key: "fail-a", Type: typeFail1, Severity: "error", Message: "fails a", Scope: "document", Enabled: true},
+		{Key: "pass-a", Type: typePass2, Severity: "error", Message: "passes", Scope: "document", Enabled: true},
+		{Key: "fail-b", Type: typeFail2, Severity: "error", Message: "fails b", Scope: "document", Enabled: true},
+	}
+	registry := map[RuleType]Evaluator{
+		typePass1: fakeEval{v: nil, err: nil},
+		typePass2: fakeEval{v: nil, err: nil},
+		typeFail1: fakeEval{v: &Violation{RuleKey: "fail-a", Severity: "error", Message: "fails a"}},
+		typeFail2: fakeEval{v: &Violation{RuleKey: "fail-b", Severity: "error", Message: "fails b"}},
+	}
+	e := NewEngine(registry, newFakeGuard(true, nil))
+
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 1, Rules: rules})
+	if err != nil {
+		t.Fatalf("Evaluate() unexpected error: %v", err)
+	}
+	assertRuleKeyOrder(t, got.Violations, []string{"fail-a", "fail-b"})
+}
+
+// TestEngine_DisabledUnknownTypeDoesNotError: a rule whose Type is absent
+// from the registry BUT is Enabled:false must NOT error -- select-stage
+// (Enabled/Scope/When) must filter the rule out BEFORE the unknown-type
+// dispatch check ever runs, pinning select-before-dispatch ordering. If
+// dispatch ran first, this would wrongly fail the whole evaluation over a
+// rule that was never going to be evaluated anyway.
+func TestEngine_DisabledUnknownTypeDoesNotError(t *testing.T) {
+	e := NewEngine(map[RuleType]Evaluator{}, newFakeGuard(true, nil)) // empty registry: the type below is unregistered
+	rules := []Rule{
+		{Key: "disabled-unregistered", Type: RuleType("not-a-real-type"), Severity: "error", Message: "x", Scope: "document", Enabled: false},
+	}
+
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 4, Rules: rules})
+	if err != nil {
+		t.Fatalf("Evaluate() unexpected error: %v -- a disabled rule of an unknown type must be select-stage-filtered before the unknown-type dispatch check, not error", err)
+	}
+	if len(got.Violations) != 0 {
+		t.Errorf("len(Violations) = %d, want 0", len(got.Violations))
+	}
+	if got.RuleSetVersion != 4 {
+		t.Errorf("RuleSetVersion = %d, want 4", got.RuleSetVersion)
+	}
+}
+
+// TestEngine_ViolationsMarshalEmptyNotNull: the wire-shape guarantee on
+// Result.Violations ("never nil" -- rule.go doc) is only meaningful if it
+// actually marshals as "violations":[] and not "violations":null; a Go-level
+// nil check alone wouldn't catch a regression to a nil slice that still
+// happens to satisfy len()==0 assertions elsewhere.
+func TestEngine_ViolationsMarshalEmptyNotNull(t *testing.T) {
+	e := NewEngine(map[RuleType]Evaluator{}, newFakeGuard(true, nil))
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 1})
+	if err != nil {
+		t.Fatalf("Evaluate() unexpected error: %v", err)
+	}
+
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal(Result) unexpected error: %v", err)
+	}
+	if !strings.Contains(string(b), `"violations":[]`) {
+		t.Errorf("json.Marshal(Result) = %s, want it to contain \"violations\":[] (not null) for an empty Result", string(b))
+	}
+	if strings.Contains(string(b), `"violations":null`) {
+		t.Errorf("json.Marshal(Result) = %s, must never marshal violations as null", string(b))
+	}
+}
+
+// TestEngine_DeterministicOrder_TiesByPathAscending: the aggregate-stage
+// comparator's documented tie-break ("rule key ascending, then path",
+// Decision N16) is untested by TestEngine_DeterministicOrder above because
+// all its fixture rule keys are distinct. The DB's UNIQUE
+// (rule_set_version_id, key) constraint (M3-04-01 migration) makes a
+// same-key collision impossible via the real M3-04-06 Store, but Evaluate's
+// own contract doesn't assume Go-level uniqueness on RuleSet.Rules, so the
+// fallback branch is real reachable code that needs its own coverage.
+func TestEngine_DeterministicOrder_TiesByPathAscending(t *testing.T) {
+	const (
+		typeX RuleType = "fake-tie-x"
+		typeY RuleType = "fake-tie-y"
+	)
+	rules := []Rule{
+		{Key: "dup", Type: typeX, Severity: "error", Message: "x", Scope: "document", Enabled: true},
+		{Key: "dup", Type: typeY, Severity: "error", Message: "y", Scope: "document", Enabled: true},
+	}
+	registry := map[RuleType]Evaluator{
+		typeX: fakeEval{v: &Violation{RuleKey: "dup", Severity: "error", Message: "x", Path: "supplier.tin"}},
+		typeY: fakeEval{v: &Violation{RuleKey: "dup", Severity: "error", Message: "y", Path: "buyer.tin"}},
+	}
+	e := NewEngine(registry, newFakeGuard(true, nil))
+
+	got, err := mustEvaluate(t, e, emptyInvoicePayload(), RuleSet{Version: 1, Rules: rules})
+	if err != nil {
+		t.Fatalf("Evaluate() unexpected error: %v", err)
+	}
+	if len(got.Violations) != 2 {
+		t.Fatalf("len(Violations) = %d, want 2", len(got.Violations))
+	}
+	if got.Violations[0].Path != "buyer.tin" || got.Violations[1].Path != "supplier.tin" {
+		t.Errorf("Violations paths = [%q, %q], want [\"buyer.tin\", \"supplier.tin\"] -- tied rule key must fall back to path ascending (Decision N16)",
+			got.Violations[0].Path, got.Violations[1].Path)
+	}
+}
+
+// TestPath_ResolveDotted_EdgeCases covers three resolvePath boundary cases
+// the RALPH-authored TestPath_ResolveDotted above doesn't: a first-segment
+// (not nested) walk through a non-map value, a payload missing the
+// "invoice" key entirely, and the empty-dotted-string identity case.
+func TestPath_ResolveDotted_EdgeCases(t *testing.T) {
+	t.Run("segment indexes into a non-map returns absent", func(t *testing.T) {
+		payload := Payload{"invoice": map[string]any{"a": "str"}}
+		got, present := mustResolvePath(t, payload, "a.b")
+		if present {
+			t.Errorf(`resolvePath(payload, "a.b") present = true (value=%v), want false -- "a" resolves to a string, not a map`, got)
+		}
+	})
+
+	t.Run("payload with no invoice key is absent", func(t *testing.T) {
+		payload := Payload{"someOtherKey": "irrelevant"}
+		got, present := mustResolvePath(t, payload, "supplier.tin")
+		if present {
+			t.Errorf(`resolvePath(payload, "supplier.tin") present = true (value=%v), want false -- payload has no "invoice" key`, got)
+		}
+	})
+
+	t.Run("empty dotted string resolves to the invoice object itself", func(t *testing.T) {
+		invoice := map[string]any{"supplier": map[string]any{"tin": "x"}}
+		payload := Payload{"invoice": invoice}
+		got, present := mustResolvePath(t, payload, "")
+		if !present {
+			t.Fatal(`resolvePath(payload, "") present = false, want true`)
+		}
+		gotMap, ok := got.(map[string]any)
+		if !ok {
+			t.Fatalf(`resolvePath(payload, "") = %T, want map[string]any (the invoice object itself)`, got)
+		}
+		if len(gotMap) != len(invoice) {
+			t.Errorf(`resolvePath(payload, "") returned a map of len %d, want %d (the invoice object itself)`, len(gotMap), len(invoice))
 		}
 	})
 }

@@ -23,7 +23,12 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // Store persists/reads rule_set_versions + rules as the invoice_app role. It
@@ -62,7 +67,55 @@ var (
 // what gets evaluated). Returns ErrNoActiveRuleSet when no row has
 // is_active=true.
 func (s *Store) LoadActiveRuleSet(ctx context.Context) (RuleSet, error) {
-	panic("validation: not implemented")
+	var rs RuleSet
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var versionID string
+		var version int
+		if err := tx.QueryRow(ctx,
+			`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+		).Scan(&versionID, &version); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoActiveRuleSet
+			}
+			return err
+		}
+
+		// "when" is a reserved word -- quoted so it reads as the column, not the
+		// CASE/WHEN keyword.
+		rows, err := tx.Query(ctx,
+			`SELECT key, type, target, params, severity, "when", message, scope, enabled
+			 FROM rules WHERE rule_set_version_id = $1 ORDER BY key`, versionID,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		rules := []Rule{}
+		for rows.Next() {
+			var r Rule
+			// params (jsonb) scans into json.RawMessage; "when" (nullable text)
+			// into *string. type/severity scan straight into their named string
+			// types (pgx v5 resolves the underlying kind).
+			if err := rows.Scan(
+				&r.Key, &r.Type, &r.Target, &r.Params, &r.Severity, &r.When, &r.Message, &r.Scope, &r.Enabled,
+			); err != nil {
+				return err
+			}
+			rules = append(rules, r)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		rs.Version = version
+		rs.Rules = rules
+		return nil
+	})
+	if err != nil {
+		return RuleSet{}, err
+	}
+	return rs, nil
 }
 
 // ToggleRule flips `enabled` on the rule identified by key within the
@@ -73,5 +126,62 @@ func (s *Store) LoadActiveRuleSet(ctx context.Context) (RuleSet, error) {
 // guard shape as portfolio.Store.SetStatus. An unknown key under the active
 // version returns ErrNotFound.
 func (s *Store) ToggleRule(ctx context.Context, key string, enabled bool) (Rule, error) {
-	panic("validation: not implemented")
+	var rule Rule
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The identity is guaranteed present here (WithinRequestTenantTx resolved
+		// it as the tenant id before this closure ran); Subject is the audit actor.
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var versionID string
+		var version int
+		if err := tx.QueryRow(ctx,
+			`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+		).Scan(&versionID, &version); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoActiveRuleSet
+			}
+			return err
+		}
+
+		var ruleID string
+		var current bool
+		if err := tx.QueryRow(ctx,
+			`SELECT id, enabled FROM rules WHERE rule_set_version_id = $1 AND key = $2 FOR UPDATE`,
+			versionID, key,
+		).Scan(&ruleID, &current); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if current == enabled {
+			return ErrRedundantTransition
+		}
+
+		if err := tx.QueryRow(ctx,
+			`UPDATE rules SET enabled = $1 WHERE id = $2
+			 RETURNING key, type, target, params, severity, "when", message, scope, enabled`,
+			enabled, ruleID,
+		).Scan(&rule.Key, &rule.Type, &rule.Target, &rule.Params, &rule.Severity, &rule.When, &rule.Message, &rule.Scope, &rule.Enabled); err != nil {
+			return err
+		}
+
+		event := "validation.rule.enabled"
+		if !enabled {
+			event = "validation.rule.disabled"
+		}
+		// audit.Record runs in the SAME tx: a failed write rolls back the UPDATE
+		// too (atomicity -- TestStore_AuditRollsBackWithToggle).
+		return audit.Record(ctx, tx, callerID.Subject, event, map[string]any{
+			"key":     key,
+			"version": version,
+			"from":    current,
+			"to":      enabled,
+		})
+	})
+	if err != nil {
+		return Rule{}, err
+	}
+	return rule, nil
 }

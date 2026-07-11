@@ -45,7 +45,7 @@ export function ErrorState(props: { error: ApiError; onRetry?: () => void }): Re
         <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--status-red-text)' }}>Something went wrong</div>
         <div style={{ fontSize: 13, color: 'var(--fg-2)' }}>{error.message}</div>
         {error.status ? (
-          <span className="mono" style={{ display: 'inline-block', marginTop: 6, fontSize: 10, letterSpacing: '0.06em', color: 'var(--status-red-text)' }}>
+          <span style={{ display: 'inline-block', marginTop: 6, fontSize: 10, letterSpacing: '0.06em', color: 'var(--status-red-text)', fontFamily: 'var(--font-mono)' }}>
             HTTP {error.status}
           </span>
         ) : null}

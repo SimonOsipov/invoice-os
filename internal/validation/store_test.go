@@ -213,12 +213,29 @@ func TestStore_LoadNoActiveErrors(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
+	// M3-05 ships a permanent active v1, so "no active version" is no longer
+	// the migrated DB's natural resting state -- deactivate it here and
+	// restore it on cleanup (independent of seedVersion, since this test
+	// seeds no fixture of its own) so the ErrNoActiveRuleSet path is
+	// genuinely exercised. The leaked-fixture pre-check below is narrowed to
+	// exclude v1 itself: it still catches a real leaked fixture (or stray
+	// hand-seeded content) from a prior test/run, just not the sanctioned
+	// seed this test is about to deactivate.
+	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE version = 1`); err != nil {
+		t.Fatalf("deactivate v1: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := super.Exec(context.Background(), `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
+			t.Errorf("cleanup: reactivate v1: %v", err)
+		}
+	})
+
 	var leaked int
-	if err := super.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE is_active`).Scan(&leaked); err != nil {
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE is_active AND version <> 1`).Scan(&leaked); err != nil {
 		t.Fatalf("check pre-existing active version: %v", err)
 	}
 	if leaked != 0 {
-		t.Fatalf("found %d pre-existing is_active=true rule_set_versions row(s) -- a prior test leaked an "+
+		t.Fatalf("found %d pre-existing is_active=true rule_set_versions row(s) (other than v1) -- a prior test leaked an "+
 			"active fixture (or the dev DB has real seeded content); reset the local DB and re-run", leaked)
 	}
 

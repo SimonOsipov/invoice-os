@@ -91,6 +91,25 @@ func seedVersion(t *testing.T, super *pgxpool.Pool, isActive bool) (id string, v
 	t.Helper()
 	ctx := context.Background()
 	version = nextVersion()
+
+	if isActive {
+		// M3-05 seeds a permanent active v1, occupying the partial unique
+		// index's (WHERE is_active) single slot. Deactivate it first so this
+		// fixture's own is_active=true insert does not collide (23505 on
+		// rule_set_versions_one_active), then register a reactivate-v1
+		// cleanup BEFORE the delete-fixture cleanup below so LIFO order runs
+		// delete-fixture first, then reactivate v1 (you cannot reactivate v1
+		// while this fixture row is still active).
+		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
+			t.Fatalf("deactivate active version before seeding fixture(version=%d, is_active=true): %v", version, err)
+		}
+		t.Cleanup(func() {
+			if _, err := super.Exec(context.Background(), `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
+				t.Errorf("cleanup: reactivate v1 after fixture(version=%d, is_active=true): %v", version, err)
+			}
+		})
+	}
+
 	if err := super.QueryRow(ctx,
 		`INSERT INTO rule_set_versions (version, is_active, notes) VALUES ($1, $2, $3) RETURNING id`,
 		version, isActive, fixtureNotes,
@@ -308,26 +327,32 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
+	// M3-05 permanently ships one sanctioned content row: the active v1
+	// rule_set_versions row (version=1) plus its 17 rules. Excluded here
+	// alongside the fixtureNotes exclusion so this test still guards against
+	// an accidental SECOND seed or stray hand-inserted rows -- a guard the
+	// seed_test.go "active v1 has exactly 17 rules" assertion does not
+	// provide (NARROWED per the story's Decisions section, not retired).
 	var versionCount int
 	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM rule_set_versions WHERE notes IS DISTINCT FROM $1`, fixtureNotes,
+		`SELECT count(*) FROM rule_set_versions WHERE notes IS DISTINCT FROM $1 AND version <> 1`, fixtureNotes,
 	).Scan(&versionCount); err != nil {
 		t.Fatalf("count non-fixture rule_set_versions: %v", err)
 	}
 	if versionCount != 0 {
-		t.Errorf("rule_set_versions has %d row(s) not tagged as a QA fixture -- the M3-04-01 migration must ship the tables only, no seeded rule_set_versions content", versionCount)
+		t.Errorf("rule_set_versions has %d row(s) not tagged as a QA fixture (and not the sanctioned M3-05 v1 seed) -- an unsanctioned second seed or stray row exists", versionCount)
 	}
 
 	var ruleCount int
 	if err := super.QueryRow(ctx,
 		`SELECT count(*) FROM rules r
 		   JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		  WHERE v.notes IS DISTINCT FROM $1`, fixtureNotes,
+		  WHERE v.notes IS DISTINCT FROM $1 AND v.version <> 1`, fixtureNotes,
 	).Scan(&ruleCount); err != nil {
 		t.Fatalf("count non-fixture rules: %v", err)
 	}
 	if ruleCount != 0 {
-		t.Errorf("rules has %d row(s) not tagged as a QA fixture -- the M3-04-01 migration must ship the tables only, no seeded rule content", ruleCount)
+		t.Errorf("rules has %d row(s) not tagged as a QA fixture (and not under the sanctioned M3-05 v1 seed) -- an unsanctioned second seed or stray row exists", ruleCount)
 	}
 }
 

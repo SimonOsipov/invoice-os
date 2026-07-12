@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { INHOUSE_IDX } from './data'
 import { APP_PERSONAS, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
 import { Sidebar } from './components/Sidebar'
@@ -71,6 +72,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   useEffect(() => clearVal, [])
+
+  const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut), [session, onSignOut])
 
   const active = clients[activeIdx]
 
@@ -250,6 +253,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   const ctx: PlatformCtx = {
+    authedFetch,
     user,
     clients,
     active,

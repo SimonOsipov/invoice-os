@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,29 @@ func TestCORSPreflightAnsweredWithGrant(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != corsAllowHeaders {
 		t.Errorf("Access-Control-Allow-Headers = %q, want %q", got, corsAllowHeaders)
+	}
+}
+
+// TestCORSPreflightGrantsPATCH proves the preflight for the portfolio entity edit
+// (M3-08, the first PATCH caller from the browser) is granted: an OPTIONS with
+// Access-Control-Request-Method: PATCH from an allowed origin must get PATCH back in
+// Access-Control-Allow-Methods, or the browser blocks the follow-up PATCH.
+func TestCORSPreflightGrantsPATCH(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	r := httptest.NewRequest("OPTIONS", "/api/portfolio/v1/entities/00000000-0000-0000-0000-000000000001", nil)
+	r.Header.Set("Origin", allowedOrigin)
+	r.Header.Set("Access-Control-Request-Method", "PATCH")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", rec.Code)
+	}
+	got := rec.Header().Get("Access-Control-Allow-Methods")
+	if !strings.Contains(got, "PATCH") {
+		t.Errorf("Access-Control-Allow-Methods = %q, want it to contain PATCH", got)
 	}
 }
 

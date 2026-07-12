@@ -116,6 +116,6 @@ export function toEntityUpdateInput(original: Entity, state: EntityFormState): P
 export function mapSubmitError(err: ApiError): SubmitError | null {
   if (err.status === 401) return null
   if (err.status === 409) return { field: 'tin', message: 'This TIN is already registered.' }
-  if (err.status === 400) return { field: 'tin', message: err.message }
+  if (err.status === 400) return { field: 'tin', message: err.message.trim() || 'Please check the TIN and try again.' }
   return { message: 'Something went wrong. Please try again.' }
 }

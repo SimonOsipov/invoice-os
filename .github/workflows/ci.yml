@@ -239,25 +239,25 @@ jobs:
         run: make db-bootstrap
       - name: Apply all migrations (as migrator)
         run: make migrate-up
-      - name: Run the adversarial RLS suite (as app / migrator / reader)
+      - name: Run the adversarial RLS suite (as app / migrator / reader) + per-test visibility & skip gate
         # -count=1 disables the test cache: the suite MUST re-run against this fresh DB.
-        run: go test -count=1 -run TestRLS ./internal/platform/db/...
-      - name: Tenancy /v1/me suite (RLS-scoped read as invoice_app)
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS ./internal/platform/db/...
+      - name: Tenancy /v1/me suite (RLS-scoped read as invoice_app) + per-test visibility & skip gate
         # M2-13/M3-02-01: proves Store.Me's bare SELECTs resolve to exactly the
         # caller's tenant + domain role under RLS. Needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL (seed) — both already in this job's env; it
         # self-skips everywhere else.
-        run: go test -count=1 ./internal/tenancy/...
-      - name: Portfolio /v1/entities suite (RLS-scoped CRUD + audit as invoice_app)
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/tenancy/...
+      - name: Portfolio /v1/entities suite (RLS-scoped CRUD + audit as invoice_app) + per-test visibility & skip gate
         # M3-03: proves the portfolio store's CRUD/lifecycle methods resolve to exactly
         # the caller's tenant under RLS and write audit rows in the same tx. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
-        run: go test -count=1 ./internal/portfolio/...
-      - name: Validation /v1 suite (engine + store + handlers as invoice_app)
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/portfolio/...
+      - name: Validation /v1 suite (engine + store + handlers as invoice_app) + per-test visibility & skip gate
         # M3-04: proves the rules-as-data engine, the DB-backed Store (LoadActiveRuleSet
         # + ToggleRule audit) and the HTTP handlers over the migrated rules tables. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
-        run: go test -count=1 ./internal/validation/...
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/validation/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

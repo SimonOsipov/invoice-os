@@ -60,6 +60,9 @@ async function toggleEnabledResilient(token: string, key: string, throwOnUnexpec
         if (retryErr instanceof ApiError && retryErr.status === 409) {
           return
         }
+        if (throwOnUnexpected && !(retryErr instanceof ApiError && retryErr.kind === 'network')) {
+          throw retryErr
+        }
         console.error(`toggleEnabledResilient(${key}): retry-once after network error still failed; leaving rule state as-is`, retryErr)
         return
       }
@@ -164,17 +167,16 @@ test.describe('validation collect-all + live kill-switch (API E2E, over the depl
   })
 
   test('kill-switch: disabling vat-standard-rate drops only it — supplier-tin-format (control) still fires; reversible', async () => {
-    const baseline = await validate(token, badInvoice)
-    expect(keysOf(baseline)).toContain('vat-standard-rate')
-    expect(keysOf(baseline)).toContain('supplier-tin-format')
+    const baselineKeys = keysOf(await validate(token, badInvoice))
+    expect(baselineKeys).toContain('vat-standard-rate')
+    expect(baselineKeys).toContain('supplier-tin-format')
 
     try {
       await disableRule(token, 'vat-standard-rate')
       const disabled = await validate(token, badInvoice)
-      expect(keysOf(disabled)).not.toContain('vat-standard-rate')
-      // Control: the OTHER violation on the same bad invoice still fires —
-      // proves only the toggled rule dropped, not that the engine went dark.
-      expect(keysOf(disabled)).toContain('supplier-tin-format')
+      // Exact set, not just "still contains the control": proves ONLY the
+      // toggled key changed, not that the engine went dark or dropped extras.
+      expect(keysOf(disabled)).toEqual(baselineKeys.filter((k) => k !== 'vat-standard-rate'))
     } finally {
       await ensureEnabled(token, 'vat-standard-rate')
     }
@@ -184,13 +186,14 @@ test.describe('validation collect-all + live kill-switch (API E2E, over the depl
   })
 
   test('kill-switch: disabling currency-allowed drops it; reversible', async () => {
-    const baseline = await validate(token, currencyUsdInvoice)
-    expect(keysOf(baseline)).toContain('currency-allowed')
+    const baselineKeys = keysOf(await validate(token, currencyUsdInvoice))
+    expect(baselineKeys).toContain('currency-allowed')
 
     try {
       await disableRule(token, 'currency-allowed')
       const disabled = await validate(token, currencyUsdInvoice)
-      expect(keysOf(disabled)).not.toContain('currency-allowed')
+      // Exact set: proves ONLY the toggled key changed.
+      expect(keysOf(disabled)).toEqual(baselineKeys.filter((k) => k !== 'currency-allowed'))
     } finally {
       await ensureEnabled(token, 'currency-allowed')
     }

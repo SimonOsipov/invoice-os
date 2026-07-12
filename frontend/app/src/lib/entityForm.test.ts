@@ -54,6 +54,30 @@ describe('validateEntityForm', () => {
     expect(result.valid).toBe(true)
     expect(result.errors).toEqual({})
   })
+
+  it('ADV: a whitespace-only name is invalid (proves trim, not just a length/truthiness check)', () => {
+    const result = validateEntityForm({ ...emptyEntityForm(), name: '   ', tin: '0000000000' })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.name).toBeTruthy()
+    expect(result.errors.tin).toBeUndefined()
+  })
+
+  it('ADV: tin present + name blank produces only a name error (not a spurious tin error)', () => {
+    const result = validateEntityForm({ ...emptyEntityForm(), name: '', tin: '0000000000' })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.name).toBeTruthy()
+    expect(result.errors.tin).toBeUndefined()
+  })
+
+  it('ADV: both name and tin blank produces both errors (independent object literal, not emptyEntityForm())', () => {
+    const result = validateEntityForm({ name: '', tin: '', registration: '', sector: '', address: '' })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.name).toBeTruthy()
+    expect(result.errors.tin).toBeTruthy()
+  })
 })
 
 describe('toEntityInput (create path)', () => {
@@ -71,6 +95,37 @@ describe('toEntityInput (create path)', () => {
     expect(result).not.toHaveProperty('sector')
     expect(result).not.toHaveProperty('address')
   })
+
+  it('ADV: a whitespace-only optional (sector) is omitted after trim, same as an empty one', () => {
+    const result = toEntityInput({
+      name: 'Acme',
+      tin: '0000000000',
+      registration: '',
+      sector: '   ',
+      address: '',
+    })
+
+    expect(result).toEqual({ name: 'Acme', tin: '0000000000' })
+    expect(result).not.toHaveProperty('sector')
+  })
+
+  it('ADV: all optionals set are all present in the output and trimmed', () => {
+    const result = toEntityInput({
+      name: ' Acme ',
+      tin: ' 0000000000 ',
+      registration: ' RC123456 ',
+      sector: ' Freight ',
+      address: ' 12 Marina Rd, Lagos ',
+    })
+
+    expect(result).toEqual({
+      name: 'Acme',
+      tin: '0000000000',
+      registration: 'RC123456',
+      sector: 'Freight',
+      address: '12 Marina Rd, Lagos',
+    })
+  })
 })
 
 describe('entityFormFrom', () => {
@@ -87,6 +142,25 @@ describe('entityFormFrom', () => {
     for (const value of Object.values(result)) {
       expect(typeof value).toBe('string')
     }
+  })
+
+  it('ADV: an entity with all optionals set maps verbatim (no accidental blanking)', () => {
+    const entity = baseEntity({
+      tin: '0000000000',
+      registration: 'RC123456',
+      sector: 'Freight',
+      address: '12 Marina Rd, Lagos',
+    })
+
+    const result = entityFormFrom(entity)
+
+    expect(result).toEqual({
+      name: 'Acme',
+      tin: '0000000000',
+      registration: 'RC123456',
+      sector: 'Freight',
+      address: '12 Marina Rd, Lagos',
+    })
   })
 })
 
@@ -125,6 +199,44 @@ describe('mapSubmitError', () => {
     expect(result).not.toBeNull()
     expect(result?.field).toBeUndefined()
     expect(result?.message).toBeTruthy()
+  })
+
+  it('ADV: a 403 (not 400/401/409) falls through to a sensible form-level message, not a crash', () => {
+    const err = new ApiError('http', 'forbidden', 403)
+
+    const result = mapSubmitError(err)
+
+    expect(result).not.toBeNull()
+    expect(result?.field).toBeUndefined()
+    expect(result?.message.trim().length).toBeGreaterThan(0)
+  })
+
+  it('ADV: a kind:"malformed" ApiError (status null, not a 401/409/400/network HTTP status) maps to a form-level message', () => {
+    const err = new ApiError('malformed', 'invalid JSON body', null)
+
+    const result = mapSubmitError(err)
+
+    expect(result).not.toBeNull()
+    expect(result?.field).toBeUndefined()
+    expect(result?.message.trim().length).toBeGreaterThan(0)
+  })
+
+  it('ADV: a 400 with an empty server message still returns a usable (non-blank) message', () => {
+    const err = new ApiError('http', '', 400)
+
+    const result = mapSubmitError(err)
+
+    expect(result).not.toBeNull()
+    expect(result?.message.trim().length).toBeGreaterThan(0)
+  })
+
+  it('ADV: a 400 with a whitespace-only server message still returns a usable (non-blank) message', () => {
+    const err = new ApiError('http', '   ', 400)
+
+    const result = mapSubmitError(err)
+
+    expect(result).not.toBeNull()
+    expect(result?.message.trim().length).toBeGreaterThan(0)
   })
 })
 
@@ -170,5 +282,83 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
     const result = toEntityUpdateInput(original, state)
 
     expect(result).toEqual({})
+  })
+
+  it('ADV: clearing a previously-set optional (sector) sends {sector:""} — the whole point of fix-now ([A-k])', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Retail', registration: null, address: null })
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({ sector: '' })
+  })
+
+  it('ADV: a whitespace-equivalent name edit is a no-op (trim normalizes both sides, not a spurious diff)', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000' })
+    const state: EntityFormState = { name: ' Acme ', tin: '0000000000', registration: '', sector: '', address: '' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({})
+  })
+
+  it('ADV: changing a required field and clearing an optional together produces both keys, cleared one as ""', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Retail', registration: null, address: null })
+    const state: EntityFormState = { name: 'AcmeCorp', tin: '0000000000', registration: '', sector: '', address: '' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({ name: 'AcmeCorp', sector: '' })
+  })
+
+  it('ADV: original optional null + state left at "" (untouched) normalizes equal — not in diff', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000', address: null, registration: null, sector: null })
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({})
+  })
+
+  it('ADV: original optional null + state sets a real value produces {field: value}', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000', address: null, registration: null, sector: null })
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: 'X' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({ address: 'X' })
+  })
+
+  it('ADV: nothing changed yields a literal empty object (not undefined) — caller can safely check emptiness to skip the PATCH', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Retail', registration: 'RC1', address: 'Lagos' })
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: 'RC1', sector: 'Retail', address: 'Lagos' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({})
+    expect(result).not.toBeUndefined()
+    expect(Object.keys(result)).toHaveLength(0)
+  })
+
+  it('ADV: round-trip via entityFormFrom on a fully-populated entity yields {} — editing without changes must never PATCH', () => {
+    const entity = baseEntity({
+      tin: '0000000000',
+      registration: 'RC123456',
+      sector: 'Freight',
+      address: '12 Marina Rd, Lagos',
+    })
+
+    const result = toEntityUpdateInput(entity, entityFormFrom(entity))
+
+    expect(result).toEqual({})
+  })
+
+  it('ADV (documents current behavior, NOT flagged as a defect — server also blank-checks Name, portfolio.go:310-325): clearing the required name field still slips into the diff as "" because the mapper has no required-field guard; callers must gate with validateEntityForm before calling toEntityUpdateInput', () => {
+    const original = baseEntity({ name: 'Acme', tin: '0000000000' })
+    const state: EntityFormState = { name: '', tin: '0000000000', registration: '', sector: '', address: '' }
+
+    const result = toEntityUpdateInput(original, state)
+
+    expect(result).toEqual({ name: '' })
   })
 })

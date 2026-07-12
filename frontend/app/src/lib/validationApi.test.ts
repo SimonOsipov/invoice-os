@@ -233,21 +233,17 @@ describe('severityStyle', () => {
     expect(error).not.toEqual(info)
   })
 
-  // QA FAILS today (M3-09-01 defect, not a test bug): the System Design stub's own code
-  // comment ("error->red, warning->amber, info->muted, else->muted") and the Architect
-  // Decisions section ("Severity -> token mapping ... unknown->muted fallback ... the
-  // mapper is made total so M4/future rule-sets with warning/info render correctly",
-  // Obsidian "M3-09 Validation Playground Surface.md") require severityStyle to be a
-  // TOTAL mapping — any Severity value outside the current 3 must still resolve to the
-  // muted style, not `undefined`. The wire `Violation.severity` comes from JSON.parse
-  // (apiFetch<ValidateResponse>) and is NOT runtime-validated against the `Severity`
-  // union, so a future rule-set (or a malformed row) sending an unrecognized severity
-  // string reaches this function for real. The current implementation
-  // (`SEVERITY_STYLE[sev]` with no fallback branch) returns `undefined` for any key not
-  // in the literal map — proven directly against the map literal in a bare node repro
-  // (`severityStyle('critical')` -> undefined). A UI pill component destructuring
-  // `{bg, border, text, label}` off that `undefined` would throw. Needs an executor fix:
-  // fall back to the `info`/muted entry for any unrecognized severity.
+  // The System Design stub's own code comment ("error->red, warning->amber, info->muted,
+  // else->muted") and the Architect Decisions section ("Severity -> token mapping ...
+  // unknown->muted fallback ... the mapper is made total so M4/future rule-sets with
+  // warning/info render correctly", Obsidian "M3-09 Validation Playground Surface.md")
+  // require severityStyle to be a TOTAL mapping — any Severity value outside the current 3
+  // must still resolve to the muted style, not `undefined`. The wire `Violation.severity`
+  // comes from JSON.parse (apiFetch<ValidateResponse>) and is NOT runtime-validated
+  // against the `Severity` union, so a future rule-set (or a malformed row) sending an
+  // unrecognized severity string reaches this function for real. `SEVERITY_STYLE[sev] ??
+  // MUTED_STYLE` (fixed in 01d6260) covers that: any key not in the literal map falls back
+  // to the muted entry instead of returning `undefined`.
   it('QA: an out-of-enum severity (cast) still resolves to the muted style, all four fields truthy — total-mapping fallback required by the story', () => {
     const style = severityStyle('critical' as Severity)
 

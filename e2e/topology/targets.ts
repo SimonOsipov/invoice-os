@@ -48,3 +48,12 @@ export const FIRM_PERSONA = {
   buttonName: 'Chinedu Okafor',
   tenantName: 'Okafor & Partners',
 } as const
+
+// The seeded MBS v1 rule-set (migrations/20260711121327_seed_mbs_v1.sql, M3-05) that the
+// live gateway evaluates. The "has-violations" preset (invoicePayload.ts PRESETS) fires a
+// subset of these — a robust sample rather than all 16 — plus the rule-set version the
+// engine tags every violation row with.
+export const VALIDATION_EXPECTED = {
+  ruleSetVersion: 1,
+  sampleRuleKeys: ['supplier-name-required', 'vat-standard-rate', 'currency-allowed'],
+} as const

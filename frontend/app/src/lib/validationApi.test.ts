@@ -140,6 +140,41 @@ describe('validateInvoice: non-2xx / transport failures reject with the ApiError
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
 
+  it('QA: a 400 does NOT fire onUnauthorized — the seam only triggers on kind:"http"+status:401, not on any http error (boundary complement to V4)', async () => {
+    mockFetchOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'invalid request body' }) })
+    const onUnauthorized = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized)
+
+    await captureRejection(() => validateInvoice(af, base, payload))
+
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('QA: a 500 rejects ApiError{kind:"http", status:500} (non-2xx handling generalizes beyond 400/401)', async () => {
+    mockFetchOnce({ ok: false, status: 500, json: () => Promise.resolve({ error: 'internal error' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => validateInvoice(af, base, payload))
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('http')
+    expect(apiErr.status).toBe(500)
+  })
+
+  it('QA: a 503 {"error":"no active rule-set"} rejects ApiError{status:503} with the message preserved verbatim', async () => {
+    mockFetchOnce({ ok: false, status: 503, json: () => Promise.resolve({ error: 'no active rule-set' }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => validateInvoice(af, base, payload))
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('http')
+    expect(apiErr.status).toBe(503)
+    expect(apiErr.message).toContain('no active rule-set')
+  })
+
   it('V5: fetch itself rejecting (network failure) propagates as ApiError{kind:"network", status:null}', async () => {
     mockFetchRejecting(new TypeError('Failed to fetch'))
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -150,6 +185,18 @@ describe('validateInvoice: non-2xx / transport failures reject with the ApiError
     const apiErr = err as ApiError
     expect(apiErr.kind).toBe('network')
     expect(apiErr.status).toBeNull()
+  })
+
+  it('QA: a 200 with an unparseable JSON body rejects ApiError{kind:"malformed", status:200} — the "malformed" failure mode is otherwise untested by V1-V5', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.reject(new Error('bad json')) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => validateInvoice(af, base, payload))
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('malformed')
+    expect(apiErr.status).toBe(200)
   })
 })
 
@@ -184,6 +231,31 @@ describe('severityStyle', () => {
     expect(error).not.toEqual(warning)
     expect(warning).not.toEqual(info)
     expect(error).not.toEqual(info)
+  })
+
+  // QA FAILS today (M3-09-01 defect, not a test bug): the System Design stub's own code
+  // comment ("error->red, warning->amber, info->muted, else->muted") and the Architect
+  // Decisions section ("Severity -> token mapping ... unknown->muted fallback ... the
+  // mapper is made total so M4/future rule-sets with warning/info render correctly",
+  // Obsidian "M3-09 Validation Playground Surface.md") require severityStyle to be a
+  // TOTAL mapping — any Severity value outside the current 3 must still resolve to the
+  // muted style, not `undefined`. The wire `Violation.severity` comes from JSON.parse
+  // (apiFetch<ValidateResponse>) and is NOT runtime-validated against the `Severity`
+  // union, so a future rule-set (or a malformed row) sending an unrecognized severity
+  // string reaches this function for real. The current implementation
+  // (`SEVERITY_STYLE[sev]` with no fallback branch) returns `undefined` for any key not
+  // in the literal map — proven directly against the map literal in a bare node repro
+  // (`severityStyle('critical')` -> undefined). A UI pill component destructuring
+  // `{bg, border, text, label}` off that `undefined` would throw. Needs an executor fix:
+  // fall back to the `info`/muted entry for any unrecognized severity.
+  it('QA: an out-of-enum severity (cast) still resolves to the muted style, all four fields truthy — total-mapping fallback required by the story', () => {
+    const style = severityStyle('critical' as Severity)
+
+    expect(style).toBeDefined()
+    expect(style.bg).toBe('var(--status-muted-bg)')
+    expect(style.border).toBe('var(--status-muted-border)')
+    expect(style.text).toBe('var(--status-muted-text)')
+    expect(style.label).toBeTruthy()
   })
 })
 

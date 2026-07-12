@@ -51,14 +51,21 @@ export async function validateInvoice(
   return authedFetch<ValidateResponse>(`${base}/api/validation/v1/validate`, { method: 'POST', body: payload })
 }
 
-const SEVERITY_STYLE: Record<Severity, StatusStyle> = {
+const MUTED_STYLE: StatusStyle = { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'Info' }
+
+const SEVERITY_STYLE: Partial<Record<Severity, StatusStyle>> = {
   error: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'Error' },
   warning: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'Warning' },
-  info: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'Info' },
+  info: MUTED_STYLE,
 }
 
+// Total mapping: `sev` is typed `Severity`, but the wire value comes from JSON.parse'd
+// server data with no runtime enum validation, so an out-of-enum value must still
+// resolve to a well-formed StatusStyle rather than `undefined` (Architect Decision —
+// unknown -> muted fallback, so M4/future rule-sets render correctly instead of
+// crashing a pill component that destructures the result).
 export function severityStyle(sev: Severity): StatusStyle {
-  return SEVERITY_STYLE[sev]
+  return SEVERITY_STYLE[sev] ?? MUTED_STYLE
 }
 
 export function shouldValidate(base: string | null): boolean {

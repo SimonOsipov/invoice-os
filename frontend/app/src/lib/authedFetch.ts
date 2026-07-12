@@ -10,6 +10,8 @@
 // its exports. Not instantiated in App.tsx yet — no in-app caller exists until M3-08/09.
 //
 import { ApiError, apiFetch, type ApiFetchOptions } from '@invoice-os/api-client'
+import type { Session } from '../auth'
+import type { AuthedFetch } from './portfolio'
 
 export function isUnauthorized(e: unknown): boolean {
   return e instanceof ApiError && e.kind === 'http' && e.status === 401
@@ -27,4 +29,21 @@ export function createAuthedFetch(
       throw e
     }
   }
+}
+
+// makeAuthedFetch(session, onSignOut) — the app-side factory `Workspace` instantiates
+// (M3-08-03, task-58). STUB — the executor implements the body next; the RED specs in
+// portfolio.authedfetch.test.ts (A1-A6) fail on a thrown/assertion mismatch, not an
+// import or type error.
+//
+// Contract: a thin pure wrapper around `createAuthedFetch` that closes over `session`,
+// reading `session.token` at CALL time (`() => session.token`), not construction time —
+// a live re-sign-in swaps the `Session` object under React state, so a captured token
+// snapshot would go stale (A5) — and forwards `onSignOut` unchanged as the
+// `onUnauthorized` callback (A1/A3). This narrows the Obsidian M3-08 story's [A-c]
+// code-review-only residual to just `Workspace`'s `useMemo` forwarding `session` +
+// `onSignOut` into this factory — the token-read + onUnauthorized wiring itself becomes
+// node-testable here, through the live `listEntities`/`createEntity` callers.
+export function makeAuthedFetch(_session: Session, _onSignOut: () => void): AuthedFetch {
+  throw new Error('not implemented')
 }

@@ -16,7 +16,7 @@
 // not-implemented), not an import/compile/setup error.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, type AsyncState } from '@invoice-os/api-client'
+import { ApiError, type AsyncState, type AsyncStatus } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
 import {
@@ -27,6 +27,7 @@ import {
   shouldFetchEntities,
   updateEntity,
   type Entity,
+  type EntityInput,
 } from './portfolio'
 
 interface MockResponse {
@@ -38,6 +39,12 @@ interface MockResponse {
 
 function mockFetchOnce(response: MockResponse) {
   const fetchMock = vi.fn().mockResolvedValue(response)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function mockFetchRejecting(err: unknown) {
+  const fetchMock = vi.fn().mockRejectedValue(err)
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
@@ -219,5 +226,147 @@ describe('clientsViewState', () => {
     for (const asyncState of cases) {
       expect(clientsViewState(base, asyncState)).toBe(asyncState.status)
     }
+  })
+})
+
+// --- Adversarial / edge / negative coverage added in QA (M3-08-01 verify pass) ---
+// Appends only — the P1-P11 specs above are untouched.
+
+describe('listEntities: malformed envelope (200 OK, but the body does not match EntityListResponse)', () => {
+  // apiFetch casts `res.json()` as T with no runtime validation (client.ts L75-76,
+  // "return (await res.json()) as T") — listEntities inherits that same trust-the-
+  // gateway-contract posture (it does no validation of its own either). These specs
+  // pin the ACTUAL runtime behavior so a future tightening (e.g. adding validation) is
+  // a deliberate, visible change, not a silent one.
+  it('P12: `entities` key absent → returns undefined (not [], not a throw)', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ pagination: { limit: 200, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listEntities(af, base)
+
+    expect(result).toBeUndefined()
+  })
+
+  it('P13: `entities` present but not an array → passed through unchanged, uncoerced', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: 'not-an-array', pagination: { limit: 200, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listEntities(af, base)
+
+    expect(result).toBe('not-an-array')
+  })
+})
+
+describe('listEntities: transport/auth failures propagate unchanged (not swallowed or reshaped)', () => {
+  it('P14: a network failure (fetch itself rejects) propagates as ApiError{kind:"network", status:null}', async () => {
+    mockFetchRejecting(new TypeError('Failed to fetch'))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const caught = await captureRejection(() => listEntities(af, base))
+
+    expect(caught).toBeInstanceOf(ApiError)
+    const apiErr = caught as ApiError
+    expect(apiErr.kind).toBe('network')
+    expect(apiErr.status).toBeNull()
+  })
+
+  it('P15: a 401 propagates as ApiError{status:401} through listEntities (the pure helper does not catch it) while the authedFetch seam still fires onUnauthorized', async () => {
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'token expired' }) })
+    const onUnauthorized = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized)
+
+    const caught = await captureRejection(() => listEntities(af, base))
+
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).status).toBe(401)
+    // Not this helper's job to call onUnauthorized (that's the seam's, M3-07-02) —
+    // asserted here only to prove listEntities didn't intercept/swallow the error
+    // before it reached the seam.
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createEntity / updateEntity: exact body serialization at the transport layer', () => {
+  it('P16: createEntity with every optional field set serializes ALL of them, none dropped', async () => {
+    const fullInput: EntityInput = {
+      name: 'Acme',
+      tin: '0000000000',
+      registration: 'RC999999',
+      sector: 'retail',
+      address: '1 Broad St, Lagos',
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 201, json: () => Promise.resolve(activeEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await createEntity(af, base, fullInput)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe(JSON.stringify(fullInput))
+  })
+
+  it('P17: updateEntity sends an explicit empty string for a cleared optional field — "" is serialized, not dropped (F6 clear-an-optional path)', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(activeEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await updateEntity(af, base, 'e1', { address: '' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe(JSON.stringify({ address: '' }))
+    expect(init.body).not.toBe('{}')
+    const parsed = JSON.parse(init.body as string) as Record<string, unknown>
+    expect(parsed).toHaveProperty('address', '')
+  })
+})
+
+describe('entityStatusStyle: exhaustiveness', () => {
+  it('P18: active/archived both return well-formed (all 4 fields non-empty) StatusStyle objects, and they are distinct', () => {
+    const active = entityStatusStyle('active')
+    const archived = entityStatusStyle('archived')
+
+    for (const style of [active, archived]) {
+      expect(style.bg).toBeTruthy()
+      expect(style.border).toBeTruthy()
+      expect(style.text).toBeTruthy()
+      expect(style.label).toBeTruthy()
+    }
+    expect(active).not.toEqual(archived)
+  })
+})
+
+describe('clientsViewState: every branch', () => {
+  it('P19: base==null short-circuits to idle for EVERY async status, not just "ready" (belt-and-suspenders on the zero-network decision)', () => {
+    const cases: Array<AsyncState<Entity[]>> = [
+      { status: 'idle', data: null, error: null },
+      { status: 'loading', data: null, error: null },
+      { status: 'error', data: null, error: new ApiError('network', 'boom') },
+      { status: 'empty', data: null, error: null },
+      { status: 'ready', data: [activeEntity], error: null },
+    ]
+
+    for (const asyncState of cases) {
+      expect(clientsViewState(null, asyncState)).toBe('idle')
+    }
+  })
+
+  it('P20: base present + status "idle" mirrors idle too (P11 only covered loading/error/empty/ready)', () => {
+    const asyncState: AsyncState<Entity[]> = { status: 'idle', data: null, error: null }
+
+    const result: AsyncStatus = clientsViewState(base, asyncState)
+
+    expect(result).toBe('idle')
+  })
+})
+
+describe('shouldFetchEntities: strict null-check, not truthiness', () => {
+  it('P21: an empty-string base is non-null and falsy — must still return true (base != null, not base ? ... )', () => {
+    expect(shouldFetchEntities('')).toBe(true)
   })
 })

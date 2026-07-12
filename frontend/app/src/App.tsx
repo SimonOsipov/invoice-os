@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { INHOUSE_IDX } from './data'
 import { APP_PERSONAS, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn } from './components/SignIn'
+import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
 import { Sidebar } from './components/Sidebar'
@@ -37,7 +38,7 @@ const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracl
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App): the persona picks the initial workspace mode.
-function Workspace({ session }: { session: Session }) {
+function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const initialIdx = session.persona.mode === 'inhouse' ? INHOUSE_IDX : 1
   const [clients, setClients] = useState<Client[]>(() => buildClients())
   const [mode, setMode_] = useState<Mode>(session.persona.mode)
@@ -291,6 +292,7 @@ function Workspace({ session }: { session: Session }) {
     openXml,
     closeXml,
     transmit,
+    signOut: onSignOut,
   }
 
   return (
@@ -332,8 +334,18 @@ function Workspace({ session }: { session: Session }) {
 // real round trip (mint → GET /v1/me) when a gateway is configured; on failure it enters
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
-  const [session, setSession] = useState<Session | null>(null)
+  // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
+  // no SignIn flash) so a reload / new tab returns straight to the workspace.
+  const [session, setSession] = useState<Session | null>(() => loadSession())
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
+
+  // Mirror the session to storage: persist while signed in, wipe on sign out / cleared session.
+  useEffect(() => {
+    if (session) saveSession(session)
+    else clearSession()
+  }, [session])
+
+  const signOut = useCallback(() => setSession(null), [])
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
@@ -349,12 +361,16 @@ export default function App() {
     }
   }, [])
 
-  // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that persona.
+  // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that
+  // persona. The `session` read here is the BOOT value (deps are [doSignIn] → mount-only):
+  // shouldAutoSignIn gates on "did boot produce a session?", so a rehydrated session wins
+  // over a stale deep-link param. The `p as PersonaId` cast is safe — shouldAutoSignIn
+  // returns true only for 'firm' | 'inhouse'.
   useEffect(() => {
     const p = new URLSearchParams(window.location.search).get('persona')
-    if (p === 'firm' || p === 'inhouse') void doSignIn(APP_PERSONAS[p])
+    if (shouldAutoSignIn(session, p)) void doSignIn(APP_PERSONAS[p as PersonaId])
   }, [doSignIn])
 
   if (!session) return <SignIn signingIn={signingIn} onPick={doSignIn} />
-  return <Workspace session={session} />
+  return <Workspace session={session} onSignOut={signOut} />
 }

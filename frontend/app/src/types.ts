@@ -235,4 +235,5 @@ export type PlatformCtx = {
   openXml: () => void
   closeXml: () => void
   transmit: () => void
+  signOut: () => void
 }

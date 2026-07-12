@@ -96,6 +96,13 @@ body {
 .pf-btn:active {
   transform: translateY(1px);
 }
+.pf-signout {
+  color: var(--fg-3);
+  transition: color 120ms ease-out, transform 100ms;
+}
+.pf-signout:hover {
+  color: var(--fg-1);
+}
 .pf-chip {
   transition: background 120ms, border-color 120ms, color 120ms;
   cursor: pointer;

@@ -20,7 +20,7 @@ import {
   onboardEntity,
   PERSONAS,
 } from './client'
-import { freshTin } from './fixtures'
+import { freshTin, canonicalTin } from './fixtures'
 
 // Serial: every stage after Create depends on the entity id captured there, and each
 // stage mutates the SAME row in sequence (playwright.api.config.ts already runs the
@@ -54,7 +54,12 @@ test.describe('portfolio CRUD lifecycle (API E2E, over the deployed gateway)', (
 
     expect(created.id.length).toBeGreaterThan(0)
     expect(created.name).toBe(name)
-    expect(created.tin).toBe(tin)
+    // The portfolio service canonicalizes the FIRS TIN to its 12-digit,
+    // hyphen-stripped form before persisting (internal/portfolio/tin.go's
+    // ValidateTIN) and echoes that canonical form back — so the response
+    // TIN is NOT the hyphenated string we sent; it's that string with the
+    // hyphen removed.
+    expect(created.tin).toBe(canonicalTin(tin))
     expect(created.status).toBe('active')
 
     entityId = created.id

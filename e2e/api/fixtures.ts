@@ -153,3 +153,12 @@ export function freshTin(): string {
   const twelve = digits11 + luhnCheckDigit(digits11)
   return `${twelve.slice(0, 8)}-${twelve.slice(8)}`
 }
+
+// canonicalTin(): the portfolio service canonicalizes an accepted TIN to its
+// digits-only form on write and echoes THAT form back (internal/portfolio/tin.go's
+// ValidateTIN strips the hyphen before persisting/returning) — so any assertion
+// comparing an echoed `.tin` to a hyphenated freshTin() input must compare against
+// this canonical form, not the raw input.
+export function canonicalTin(tin: string): string {
+  return tin.replace(/-/g, '')
+}

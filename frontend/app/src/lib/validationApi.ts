@@ -44,21 +44,28 @@ export interface InvoicePayload {
 }
 
 export async function validateInvoice(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _payload: InvoicePayload,
+  authedFetch: AuthedFetch,
+  base: string,
+  payload: InvoicePayload,
 ): Promise<ValidateResponse> {
-  throw new Error('not implemented')
+  return authedFetch<ValidateResponse>(`${base}/api/validation/v1/validate`, { method: 'POST', body: payload })
 }
 
-export function severityStyle(_sev: Severity): StatusStyle {
-  throw new Error('not implemented')
+const SEVERITY_STYLE: Record<Severity, StatusStyle> = {
+  error: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'Error' },
+  warning: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'Warning' },
+  info: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'Info' },
 }
 
-export function shouldValidate(_base: string | null): boolean {
-  throw new Error('not implemented')
+export function severityStyle(sev: Severity): StatusStyle {
+  return SEVERITY_STYLE[sev]
 }
 
-export function playgroundState(_base: string | null, _s: AsyncState<ValidateResponse>): AsyncStatus {
-  throw new Error('not implemented')
+export function shouldValidate(base: string | null): boolean {
+  return base != null
+}
+
+export function playgroundState(base: string | null, s: AsyncState<ValidateResponse>): AsyncStatus {
+  if (base == null) return 'idle'
+  return s.status
 }

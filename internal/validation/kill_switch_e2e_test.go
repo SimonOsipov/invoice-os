@@ -102,6 +102,13 @@ func TestKillSwitch_E2E(t *testing.T) {
 			store := NewStore(app)
 			engine := NewDefaultEngine()
 
+			// Both event names are needed from step 2 onward (disable) AND at
+			// step 2/4's cross-event isolation checks (a disable must not also
+			// write an enabled-event row, and vice versa) -- declared together
+			// up front rather than one per step.
+			const disabledEvent = "validation.rule.disabled"
+			const enabledEvent = "validation.rule.enabled"
+
 			// Step 1: baseline -- the rule fires on the seeded, enabled v1.
 			rs := loadV1(t, app)
 			result, err := engine.Evaluate(firePayload, rs)
@@ -114,7 +121,6 @@ func TestKillSwitch_E2E(t *testing.T) {
 
 			// Step 2: disable -- exactly one new "validation.rule.disabled" audit
 			// row under this tenant, same tx as the UPDATE.
-			const disabledEvent = "validation.rule.disabled"
 			beforeDisabled := auditCountTenant(t, app, tenantID, disabledEvent)
 
 			toggled, err := store.ToggleRule(c, tc.key, false)
@@ -129,7 +135,24 @@ func TestKillSwitch_E2E(t *testing.T) {
 			if afterDisabled != beforeDisabled+1 {
 				t.Fatalf("%s audit_log rows for %s = %d, want %d (exactly one new row)", tc.key, disabledEvent, afterDisabled, beforeDisabled+1)
 			}
-			assertTogglePayload(t, app, tenantID, disabledEvent, tc.key, true, false)
+			assertTogglePayload(t, app, tenantID, disabledEvent, tc.key, rs.Version, true, false)
+
+			// Adversarial: column-level persistence, read directly via
+			// superuser -- independent of and complementary to step 3's
+			// validate-effect check (which goes through loadV1+Evaluate, not
+			// the raw column). A ToggleRule that returned Enabled=false in its
+			// Rule struct without the UPDATE actually landing would pass the
+			// earlier `toggled.Enabled` check but fail here.
+			if got := ruleEnabledV1(t, super, tc.key); got {
+				t.Errorf("%s: rules.enabled column = true after ToggleRule(false), want false (column-level persistence)", tc.key)
+			}
+			// Adversarial: event isolation -- a disable must not ALSO write an
+			// "enabled" event for this tenant. The two events are mutually
+			// exclusive per flip, not "logs both, caller checks the one it
+			// cares about."
+			if n := auditCountTenant(t, app, tenantID, enabledEvent); n != 0 {
+				t.Errorf("%s: %s audit_log rows after disable = %d, want 0 (disable must not also write an enabled-event row)", tc.key, enabledEvent, n)
+			}
 
 			// Step 3: validate-effect -- a FRESH load+evaluate must no longer fire
 			// the disabled rule (no redeploy). A control rule (supplier-tin-format,
@@ -152,7 +175,6 @@ func TestKillSwitch_E2E(t *testing.T) {
 			}
 
 			// Step 4: re-enable -- paired "validation.rule.enabled" audit row.
-			const enabledEvent = "validation.rule.enabled"
 			beforeEnabled := auditCountTenant(t, app, tenantID, enabledEvent)
 
 			restored, err := store.ToggleRule(c, tc.key, true)
@@ -167,7 +189,20 @@ func TestKillSwitch_E2E(t *testing.T) {
 			if afterEnabled != beforeEnabled+1 {
 				t.Fatalf("%s audit_log rows for %s = %d, want %d (exactly one new row)", tc.key, enabledEvent, afterEnabled, beforeEnabled+1)
 			}
-			assertTogglePayload(t, app, tenantID, enabledEvent, tc.key, false, true)
+			assertTogglePayload(t, app, tenantID, enabledEvent, tc.key, rs.Version, false, true)
+
+			// Adversarial: column-level persistence after re-enable (mirrors
+			// the step 2 check above).
+			if got := ruleEnabledV1(t, super, tc.key); !got {
+				t.Errorf("%s: rules.enabled column = false after ToggleRule(true), want true (column-level persistence)", tc.key)
+			}
+			// Adversarial: event isolation -- re-enabling must not ALSO write a
+			// second "disabled" event for this tenant; the disabled count from
+			// step 2 must stay exactly afterDisabled (unchanged), not
+			// double-fire.
+			if n := auditCountTenant(t, app, tenantID, disabledEvent); n != afterDisabled {
+				t.Errorf("%s: %s audit_log rows after re-enable = %d, want %d (re-enable must not also write a disabled-event row)", tc.key, disabledEvent, n, afterDisabled)
+			}
 
 			// Step 5: reversibility -- a FRESH load+evaluate fires the rule again.
 			rs3 := loadV1(t, app)
@@ -185,12 +220,14 @@ func TestKillSwitch_E2E(t *testing.T) {
 // assertTogglePayload reads the most recent audit_log row for tenantID+event
 // (auditPayloadTenant, store_test.go) and asserts its payload carries the
 // exact field names store.go's ToggleRule actually serializes: "key",
-// "version", "from", "to" (see store.go's audit.Record call) -- version is
-// asserted only for presence/type (float64 via encoding/json, matching
-// store_test.go's TestStore_ToggleFlipsAndAudits precedent), since this
-// suite does not seed its own rule_set_versions row and the migrated v1's
-// version number is an implementation detail already pinned by seed_test.go.
-func assertTogglePayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, key string, wantFrom, wantTo bool) {
+// "version", "from", "to" (see store.go's audit.Record call). wantVersion is
+// the caller's own baseline-load RuleSet.Version (step 1's loadV1, taken
+// before any toggle) rather than a hardcoded literal -- it asserts the
+// payload's "version" is actually the active rule_set_versions.version at
+// toggle time, not merely "some number" (store_test.go's
+// TestStore_ToggleFlipsAndAudits established the type-only precedent this
+// tightens).
+func assertTogglePayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, key string, wantVersion int, wantFrom, wantTo bool) {
 	t.Helper()
 	payload := auditPayloadTenant(t, pool, tenantID, event)
 	var p map[string]any
@@ -200,8 +237,10 @@ func assertTogglePayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, key 
 	if p["key"] != key {
 		t.Errorf("audit payload key = %v, want %q", p["key"], key)
 	}
-	if _, ok := p["version"].(float64); !ok {
+	if got, ok := p["version"].(float64); !ok {
 		t.Errorf("audit payload version = %v (%T), want a numeric version", p["version"], p["version"])
+	} else if got != float64(wantVersion) {
+		t.Errorf("audit payload version = %v, want %d (the active rule_set_versions.version at toggle time)", got, wantVersion)
 	}
 	if p["from"] != wantFrom {
 		t.Errorf("audit payload from = %v, want %v", p["from"], wantFrom)
@@ -209,4 +248,20 @@ func assertTogglePayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, key 
 	if p["to"] != wantTo {
 		t.Errorf("audit payload to = %v, want %v", p["to"], wantTo)
 	}
+}
+
+// ruleEnabledV1 reads rules.enabled directly via the superuser pool for key
+// under the migrated v1 rule_set_versions row -- column-level persistence,
+// independent of and complementary to the validate-effect assertions (steps
+// 3/5 above), which go through loadV1+Evaluate rather than the raw column.
+func ruleEnabledV1(t *testing.T, pool *pgxpool.Pool, key string) bool {
+	t.Helper()
+	var enabled bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON r.rule_set_version_id = v.id
+		 WHERE v.version = 1 AND r.key = $1`, key,
+	).Scan(&enabled); err != nil {
+		t.Fatalf("read rules.enabled for key=%q: %v", key, err)
+	}
+	return enabled
 }

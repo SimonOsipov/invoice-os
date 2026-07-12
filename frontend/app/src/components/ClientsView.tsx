@@ -6,10 +6,13 @@
 // and are removed ([A-d]). Rows are display-only in this subtask — the add/edit
 // modal + its open-state land in M3-08-05 ([A-l]).
 
+import { useState } from 'react'
+
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
 import { clientsViewState, entityStatusStyle, listEntities, shouldFetchEntities, type Entity } from '../lib/portfolio'
+import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
 
 // Local avatar-bubble helper — deliberately NOT reused from lib/customers.ts (that
@@ -41,6 +44,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const count = list.data?.length ?? 0
   const orgSegment = ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''
 
+  // Add/edit form's open/mode/edit-target state ([A-l]) — local, not PlatformCtx: it
+  // derives from this view's own live list + refetch handle, neither of which live on
+  // Workspace ctx. EntityFormModal receives it as props.
+  const [modal, setModal] = useState<{ mode: 'create' | 'edit'; entity?: Entity } | null>(null)
+
   return (
     <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
@@ -51,7 +59,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             {count} companies · partner program
           </p>
         </div>
-        <button className="v2-btn v2-btn-primary pf-btn">
+        <button
+          onClick={() => setModal({ mode: 'create' })}
+          disabled={base == null}
+          className="v2-btn v2-btn-primary pf-btn"
+        >
           <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
         </button>
       </div>
@@ -79,7 +91,8 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             return (
               <div
                 key={e.id}
-                className="pf-list-row"
+                onClick={() => setModal({ mode: 'edit', entity: e })}
+                className="pf-row pf-list-row"
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
@@ -102,6 +115,20 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             )
           })}
         </div>
+      )}
+
+      {modal && base != null && (
+        <EntityFormModal
+          mode={modal.mode}
+          entity={modal.entity}
+          ctx={ctx}
+          base={base}
+          onClose={() => setModal(null)}
+          onSuccess={() => {
+            list.run()
+            setModal(null)
+          }}
+        />
       )}
     </div>
   )

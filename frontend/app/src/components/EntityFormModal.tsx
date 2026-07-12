@@ -119,7 +119,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
 
   return (
     <div
-      onClick={onClose}
+      onClick={() => { if (!submitting) onClose() }}
       style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(20,23,26,0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
     >
       <div

@@ -14,6 +14,7 @@ import {
   NAV_INVOICES,
   NAV_REPORTS,
   NAV_SETTINGS,
+  NAV_VALIDATION,
   tickGlyph11,
   type NavDef,
 } from '../glyphs'
@@ -30,6 +31,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   const navDef: SidebarNavItem[] = [
     NAV_DASHBOARD,
     { ...NAV_INVOICES, badge: active.onboarding ? null : typeof active.failing === 'number' && active.failing > 0 ? String(active.failing) : null },
+    NAV_VALIDATION,
     isFirm ? NAV_CLIENTS : { ...NAV_APPROVALS, badge: active.onboarding ? null : active.pending ? String(active.pending) : null },
     ...(isFirm ? [NAV_CUSTOMERS] : []),
     NAV_REPORTS,

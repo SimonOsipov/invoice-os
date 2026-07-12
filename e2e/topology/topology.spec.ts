@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { APP_URL, FIRM_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // M2-14 deliverable (1): the live browser round trip. On the gateway-wired dev build,
 // picking a persona mints a JWT via the gateway (/auth/login) and reads GET
@@ -37,5 +37,56 @@ test('deployed app: persona mock-login renders the backend-verified tenant ident
   // The wired round trip must complete cleanly — a failed round trip degrades to an
   // unverified session (a console.warn, not an error), which would already have failed the
   // marker assertion above; this pins that no hard error fired during load.
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// M3-09-05 deliverable: the live browser round trip for the validation playground
+// (M3-09-04). Loading the "Has violations" preset and clicking Validate drives
+// buildInvoicePayload -> validateInvoice -> the live gateway -> the seeded MBS v1
+// rule-set (M3-05), rendered through ViolationsTable (M3-09-03). Mirrors the identity
+// test above (same error-collection setup, same firm-persona sign-in) but proves the
+// validate path end to end instead of /me.
+test('deployed app: validation playground round-trips the live engine', async ({ page }) => {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+
+  const res = await page.goto(APP_URL)
+  expect(res, `no response from ${APP_URL}`).toBeTruthy()
+  expect(res!.ok(), `${APP_URL} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  // Sign in as the firm persona and wait for the /me round trip to finish (same
+  // discriminator as the test above) before touching the nav — Validate needs an authed
+  // gateway session.
+  await page.getByRole('button', { name: new RegExp(FIRM_PERSONA.buttonName) }).click()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  await page.getByRole('button', { name: /Validation/ }).click()
+  await page.getByRole('button', { name: /Has violations/ }).click()
+  await page.getByRole('button', { name: 'Validate' }).click()
+
+  // ViolationsTable renders only once the live POST /v1/validate resolves; Playwright
+  // auto-waits for it rather than an arbitrary sleep.
+  const table = page.getByRole('table')
+  await expect(table).toBeVisible()
+
+  for (const key of VALIDATION_EXPECTED.sampleRuleKeys) {
+    await expect(table).toContainText(key)
+  }
+
+  // Rule-set version column, scoped to the first violation row rather than a loose
+  // "contains '1'" check (which would also match row indices, TINs, etc. elsewhere in
+  // the table).
+  const firstRow = table.locator('tbody tr').first()
+  await expect(firstRow.locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
+
+  // All seeded MBS v1 rules are error severity (migrations/20260711121327_seed_mbs_v1.sql)
+  // -- severityStyle maps error -> the "Error" pill label (validationApi.ts).
+  await expect(table.getByText('Error', { exact: false }).first()).toBeVisible()
+
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

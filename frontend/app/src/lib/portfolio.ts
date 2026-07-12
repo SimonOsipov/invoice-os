@@ -69,35 +69,42 @@ export interface EntityInput {
 // (src/lib/authedFetch.ts). No token/onUnauthorized knowledge lives here.
 export type AuthedFetch = <T>(url: string, opts?: ApiFetchOptions) => Promise<T>
 
-export async function listEntities(_authedFetch: AuthedFetch, _base: string): Promise<Entity[]> {
-  throw new Error('not implemented')
+export async function listEntities(authedFetch: AuthedFetch, base: string): Promise<Entity[]> {
+  const res = await authedFetch<EntityListResponse>(`${base}/api/portfolio/v1/entities?limit=200`)
+  return res.entities
 }
 
 export async function createEntity(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _input: EntityInput,
+  authedFetch: AuthedFetch,
+  base: string,
+  input: EntityInput,
 ): Promise<Entity> {
-  throw new Error('not implemented')
+  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities`, { method: 'POST', body: input })
 }
 
 export async function updateEntity(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
-  _input: Partial<EntityInput>,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  input: Partial<EntityInput>,
 ): Promise<Entity> {
-  throw new Error('not implemented')
+  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities/${id}`, { method: 'PATCH', body: input })
 }
 
-export function entityStatusStyle(_status: EntityStatus): StatusStyle {
-  throw new Error('not implemented')
+const ENTITY_STATUS_STYLE: Record<EntityStatus, StatusStyle> = {
+  active: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'ACTIVE' },
+  archived: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'ARCHIVED' },
 }
 
-export function shouldFetchEntities(_base: string | null): boolean {
-  throw new Error('not implemented')
+export function entityStatusStyle(status: EntityStatus): StatusStyle {
+  return ENTITY_STATUS_STYLE[status]
 }
 
-export function clientsViewState(_base: string | null, _asyncState: AsyncState<Entity[]>): AsyncStatus {
-  throw new Error('not implemented')
+export function shouldFetchEntities(base: string | null): boolean {
+  return base != null
+}
+
+export function clientsViewState(base: string | null, asyncState: AsyncState<Entity[]>): AsyncStatus {
+  if (base == null) return 'idle'
+  return asyncState.status
 }

@@ -221,8 +221,10 @@ func absentRuleTypeCases() []absentTypeCase {
 // TestAbsentRuleTypes (Core AC 4, absent-3 half): each of cross_field,
 // conditional, date is exercised through an in-memory fixture RuleSet
 // literal, entirely without a DB connection -- must run and pass in both the
-// `go` and `rls` CI jobs. A trailing coverage subtest asserts the seeded-6 +
-// absent-3 tables together name all nine RuleType consts.
+// `go` and `rls` CI jobs. cross_field additionally gets a boundary subtest
+// (QA Mode B adversarial addition) proving its op is "ge" and not "gt". A
+// trailing coverage subtest asserts the seeded-6 + absent-3 tables together
+// name all nine RuleType consts.
 func TestAbsentRuleTypes(t *testing.T) {
 	engine := NewDefaultEngine()
 	cases := absentRuleTypeCases()
@@ -249,6 +251,25 @@ func TestAbsentRuleTypes(t *testing.T) {
 					t.Errorf("%s did not fire on the violate fixture -- violations=%+v", tc.rule.Key, result.Violations)
 				}
 			})
+
+			// Adversarial addition (QA Mode B): the pass fixture above has
+			// total(1075) STRICTLY greater than subtotal(1000), which would
+			// also pass under a mistakenly-implemented "gt" op -- it cannot
+			// tell "ge" and "gt" apart. Pin the boundary: total == subtotal
+			// must still pass, which only holds for "ge".
+			if tc.typeLabel == string(TypeCrossField) {
+				t.Run("boundary: total == subtotal holds (ge, not gt)", func(t *testing.T) {
+					p := validInvoicePayload()
+					invoiceOf(p)["subtotal"] = 1075.0 // == total -- op must be ge (>=), not gt (>)
+					result, err := engine.Evaluate(p, rs)
+					if err != nil {
+						t.Fatalf("Evaluate(boundary payload): %v", err)
+					}
+					if hasViolation(result, tc.rule.Key) {
+						t.Errorf("%s fired when total == subtotal -- op should be ge (>=), not gt (>) -- violations=%+v", tc.rule.Key, result.Violations)
+					}
+				})
+			}
 		})
 	}
 

@@ -1,6 +1,10 @@
 // Domain types re-authored from the prototype's `this.state` / seed-data shapes
 // (Platform.dc.html, class Component extends DCLogic).
 
+// Type-only import: `portfolio.ts` imports `StatusStyle` from this file, so a runtime
+// import here would form a cycle. `AuthedFetch` is only ever used as a type below.
+import type { AuthedFetch } from './lib/portfolio'
+
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
 export type SectorDef = {
@@ -192,6 +196,7 @@ export type SignedInUser = {
 // The full app state + action bundle threaded through every section component, mirroring
 // the prototype's single `renderVals()` bag of state/handlers (Platform.dc.html ~L1266+).
 export type PlatformCtx = {
+  authedFetch: AuthedFetch
   user: SignedInUser
   clients: Client[]
   active: Client

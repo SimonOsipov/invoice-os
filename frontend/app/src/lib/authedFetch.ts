@@ -7,7 +7,7 @@
 //   that calls `apiFetch<T>(url, { ...opts, token: getToken() })`, invokes
 //   `onUnauthorized()` iff `isUnauthorized(caught)`, and always rethrows.
 // No `@invoice-os/api-client` **package** change (Constraint); this file only consumes
-// its exports. Not instantiated in App.tsx yet — no in-app caller exists until M3-08/09.
+// its exports. Instantiated in App.tsx's `Workspace` via `makeAuthedFetch` (M3-08-03).
 //
 import { ApiError, apiFetch, type ApiFetchOptions } from '@invoice-os/api-client'
 import type { Session } from '../auth'
@@ -32,9 +32,8 @@ export function createAuthedFetch(
 }
 
 // makeAuthedFetch(session, onSignOut) — the app-side factory `Workspace` instantiates
-// (M3-08-03, task-58). STUB — the executor implements the body next; the RED specs in
-// portfolio.authedfetch.test.ts (A1-A6) fail on a thrown/assertion mismatch, not an
-// import or type error.
+// (M3-08-03, task-58), covered by the live-caller specs in portfolio.authedfetch.test.ts
+// (A1-A6).
 //
 // Contract: a thin pure wrapper around `createAuthedFetch` that closes over `session`,
 // reading `session.token` at CALL time (`() => session.token`), not construction time —
@@ -44,6 +43,6 @@ export function createAuthedFetch(
 // code-review-only residual to just `Workspace`'s `useMemo` forwarding `session` +
 // `onSignOut` into this factory — the token-read + onUnauthorized wiring itself becomes
 // node-testable here, through the live `listEntities`/`createEntity` callers.
-export function makeAuthedFetch(_session: Session, _onSignOut: () => void): AuthedFetch {
-  throw new Error('not implemented')
+export function makeAuthedFetch(session: Session, onSignOut: () => void): AuthedFetch {
+  return createAuthedFetch(() => session.token, onSignOut)
 }

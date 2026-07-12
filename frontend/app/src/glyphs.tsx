@@ -44,7 +44,7 @@ export const inhouseModeIcon = (
   <Icon paths={['M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z', 'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2', 'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2', 'M10 6h4', 'M10 10h4', 'M10 14h4']} size={14} />
 )
 
-export type NavDef = { id: 'dashboard' | 'invoices' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
+export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
 
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
@@ -53,6 +53,7 @@ export const NAV_INVOICES: NavDef = {
   glyph: <Icon paths={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8M16 17H8']} size={17} />,
 }
 export const NAV_CLIENTS: NavDef = { id: 'clients', label: 'Clients', glyph: firmModeIcon }
+export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation', glyph: shieldGlyph }
 export const NAV_APPROVALS: NavDef = {
   id: 'approvals',
   label: 'Approvals',

@@ -14,6 +14,7 @@ import { InvoicesList } from './components/InvoicesList'
 import { CreateFlow } from './components/CreateFlow'
 import { InvoiceDetail } from './components/InvoiceDetail'
 import { ClientsView } from './components/ClientsView'
+import { ValidationView } from './components/ValidationView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
@@ -324,6 +325,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
           {view === 'create' && <CreateFlow ctx={ctx} />}
           {view === 'detail' && <InvoiceDetail ctx={ctx} />}
           {view === 'clients' && <ClientsView ctx={ctx} />}
+          {view === 'validation' && <ValidationView ctx={ctx} />}
           {view === 'customers' && <CustomersView ctx={ctx} />}
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}

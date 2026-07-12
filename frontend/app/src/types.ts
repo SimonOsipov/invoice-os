@@ -169,7 +169,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
+export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
 export type CreateStep = 'upload' | 'parsing' | 'form' | 'validating' | 'results'
 

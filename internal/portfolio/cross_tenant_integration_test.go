@@ -48,6 +48,10 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 	store := NewStore(app)
 	subjA := uuid.NewString()
 	ctxA := auth.WithIdentity(ctx, auth.Identity{Subject: subjA, Role: "authenticated", TenantID: tenantA})
+	// ctxB is created up front (not just at the final re-read) so the
+	// reverse-direction isolation check in step 2b can use it too --
+	// isolation must be symmetric, not just proven A-sees-none-of-B.
+	ctxB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
 
 	// --- 1. Create: A's own entity, produced live (not pre-seeded) -------
 	const aTIN = "1234567897"
@@ -76,6 +80,14 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 
 	if _, err := store.GetByID(ctxA, bEntityID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetByID(B's id) as tenant A err = %v, want ErrNotFound", err)
+	}
+
+	// --- 2b. Reverse direction: as tenant B, A's (live, non-pre-seeded)
+	// entity is equally invisible -- RLS isolation is symmetric, not just
+	// A-can't-see-B. QA adversarial addition (M3-10-01): no existing test
+	// exercises this direction against a live-created (not seeded) row.
+	if _, err := store.GetByID(ctxB, aEntity.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetByID(A's id) as tenant B err = %v, want ErrNotFound", err)
 	}
 
 	// --- 3. List: exactly A's one entity, never B's ----------------------
@@ -119,6 +131,20 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 		t.Errorf("SetStatus(offboard) status = %q, want %q", offboarded.Status, "archived")
 	}
 
+	// --- 5b. List(status=active) while A's own entity is archived: the
+	// status filter and the tenant filter must compose. QA adversarial
+	// addition (M3-10-01): tenant B's mirror entity is untouched and still
+	// "active", so a non-empty result here can ONLY come from B leaking
+	// through -- A has nothing of its own left to match this filter.
+	activeStatus := "active"
+	activeItems, activeTotal, err := store.List(ctxA, ListFilter{Status: &activeStatus, Limit: 50})
+	if err != nil {
+		t.Fatalf("List(as A, status=active) while A's entity is archived: %v", err)
+	}
+	if activeTotal != 0 || len(activeItems) != 0 {
+		t.Fatalf("List(as A, status=active) while A's own entity is archived = total=%d items=%+v, want 0/[] (non-empty here can only mean tenant B's active entity leaked through)", activeTotal, activeItems)
+	}
+
 	onboarded, err := store.SetStatus(ctxA, aEntity.ID, "active")
 	if err != nil {
 		t.Fatalf("SetStatus(A's own entity, onboard): %v", err)
@@ -152,15 +178,16 @@ func TestPortfolioCrossTenantIntegrationFlow(t *testing.T) {
 		}
 	}
 
-	if n := auditCount(t, app, tenantB, "portfolio.entity.created"); n != 0 {
-		t.Errorf("audit_log rows for portfolio.entity.created under tenant B = %d, want 0 (A's Create must not leak into B's audit)", n)
-	}
-	if n := auditCount(t, app, tenantB, "portfolio.entity.updated"); n != 0 {
-		t.Errorf("audit_log rows for portfolio.entity.updated under tenant B = %d, want 0 (A's Update must not leak into B's audit)", n)
+	// QA adversarial addition (M3-10-01): check ALL four of A's mutation
+	// events, not just created/updated -- offboarded/onboarded must not leak
+	// into tenant B's audit either.
+	for _, event := range wantEvents {
+		if n := auditCount(t, app, tenantB, event); n != 0 {
+			t.Errorf("audit_log rows for %s under tenant B = %d, want 0 (A's action must not leak into B's audit)", event, n)
+		}
 	}
 
 	// --- 7. B's mirror entity is byte-for-byte unchanged, re-read as B ---
-	ctxB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
 	gotB, err := store.GetByID(ctxB, bEntityID)
 	if err != nil {
 		t.Fatalf("GetByID(B's entity, as B) after the entire A-driven flow: %v", err)

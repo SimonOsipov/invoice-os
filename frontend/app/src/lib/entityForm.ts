@@ -1,8 +1,6 @@
-// App-side entity form helpers (M3-08-02, task-57). STUB — the executor implements the
-// bodies next; every export below throws so the RED specs in entityForm.test.ts (F1-F12)
-// fail on a thrown/assertion mismatch, not an import or type error. These are pure (no
-// React) functions consumed by EntityFormModal.tsx (M3-08-05) — no fetch/global mocking
-// needed here, unlike portfolio.test.ts / authedFetch.test.ts.
+// App-side entity form helpers (M3-08-02, task-57). These are pure (no React) functions
+// consumed by EntityFormModal.tsx (M3-08-05) — no fetch/global mocking needed here,
+// unlike portfolio.test.ts / authedFetch.test.ts.
 //
 // Contract (Obsidian M3-08 story, §6 System Design + [A-k]):
 // - `emptyEntityForm()` — all-'' form state (name/tin/registration/sector/address).
@@ -28,10 +26,8 @@
 //   called signOut — the surface is unmounting to <SignIn>, no inline error needed);
 //   network/500 -> a form-level message (`{message}`, no `field`).
 //
-// `ApiError` (as a runtime value) is referenced only by the real implementation (next,
-// not this stub) — importing it unused here would fail noUnusedLocals under this app's
-// strict tsconfig (mirrors portfolio.ts's / authedFetch.ts's stub rationale). Only the
-// type-only imports below are referenced by this stub's signatures.
+// `mapSubmitError` only reads fields (`status`, `message`) off the `ApiError` instance
+// the caller passes in — it never constructs one — so `ApiError` is imported type-only.
 import type { ApiError } from '@invoice-os/api-client'
 import type { Entity, EntityInput } from './portfolio'
 
@@ -62,25 +58,64 @@ export interface SubmitError {
 }
 
 export function emptyEntityForm(): EntityFormState {
-  throw new Error('not implemented')
+  return { name: '', tin: '', registration: '', sector: '', address: '' }
 }
 
-export function entityFormFrom(_entity: Entity): EntityFormState {
-  throw new Error('not implemented')
+export function entityFormFrom(entity: Entity): EntityFormState {
+  return {
+    name: entity.name,
+    tin: entity.tin ?? '',
+    registration: entity.registration ?? '',
+    sector: entity.sector ?? '',
+    address: entity.address ?? '',
+  }
 }
 
-export function validateEntityForm(_state: EntityFormState): EntityFormValidation {
-  throw new Error('not implemented')
+export function validateEntityForm(state: EntityFormState): EntityFormValidation {
+  const errors: EntityFormErrors = {}
+  if (!state.name.trim()) errors.name = 'Name is required'
+  if (!state.tin.trim()) errors.tin = 'TIN is required'
+  return { valid: Object.keys(errors).length === 0, errors }
 }
 
-export function toEntityInput(_state: EntityFormState): EntityInput {
-  throw new Error('not implemented')
+export function toEntityInput(state: EntityFormState): EntityInput {
+  const input: EntityInput = { name: state.name.trim(), tin: state.tin.trim() }
+  const registration = state.registration.trim()
+  const sector = state.sector.trim()
+  const address = state.address.trim()
+  if (registration) input.registration = registration
+  if (sector) input.sector = sector
+  if (address) input.address = address
+  return input
 }
 
-export function toEntityUpdateInput(_original: Entity, _state: EntityFormState): Partial<EntityInput> {
-  throw new Error('not implemented')
+export function toEntityUpdateInput(original: Entity, state: EntityFormState): Partial<EntityInput> {
+  const trimmed: EntityFormState = {
+    name: state.name.trim(),
+    tin: state.tin.trim(),
+    registration: state.registration.trim(),
+    sector: state.sector.trim(),
+    address: state.address.trim(),
+  }
+  const normalized: EntityFormState = {
+    name: original.name,
+    tin: original.tin ?? '',
+    registration: original.registration ?? '',
+    sector: original.sector ?? '',
+    address: original.address ?? '',
+  }
+  const diff: Partial<EntityInput> = {}
+  if (trimmed.name !== normalized.name) diff.name = trimmed.name
+  if (trimmed.tin !== normalized.tin) diff.tin = trimmed.tin
+  if (trimmed.registration !== normalized.registration) diff.registration = trimmed.registration
+  if (trimmed.sector !== normalized.sector) diff.sector = trimmed.sector
+  if (trimmed.address !== normalized.address) diff.address = trimmed.address
+  return diff
 }
 
-export function mapSubmitError(_err: ApiError): SubmitError | null {
-  throw new Error('not implemented')
+export function mapSubmitError(err: ApiError): SubmitError | null {
+  if (err.status === 401) return null
+  if (err.status === 409) return { field: 'tin', message: 'This TIN is already registered.' }
+  if (err.status === 400) return { field: 'tin', message: err.message }
+  return { message: 'Something went wrong. Please try again.' }
 }

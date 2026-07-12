@@ -32,6 +32,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -254,5 +255,250 @@ func TestEvaluate_MalformedLine_TreatedAsZeroRan(t *testing.T) {
 
 	if code == 0 {
 		t.Fatalf("evaluate() exit code = 0, want non-zero for malformed input treated as zero test-level results; buf=%q", buf.String())
+	}
+}
+
+// ---------------------------------------------------------------------
+// QA Mode B adversarial / edge coverage (M3-17-01). These are ADDED after
+// the implementation landed (green), on top of the RED acceptance tests
+// above. Each predicts the correct behavior from the task-72 contract
+// FIRST, then asserts it -- a couple were verified empirically against the
+// real binary (`go run ./internal/tools/rlsgate < fixture.jsonl`) before
+// being encoded here, see the QA report for that trace.
+// ---------------------------------------------------------------------
+
+// TestEvaluate_PackageLevelSkip_NotPhantomTestSkip: the crux false-positive
+// risk. A package-level skip event (no Test field, e.g. a "no test files"
+// package folded into the same stream as a real suite) must NOT be counted
+// as a DB-backed test-level skip, must NOT be named, and must NOT flip the
+// exit code -- only skip events carrying a non-empty Test field count,
+// per the "test-level result" definition in rlsgate.go's package doc.
+func TestEvaluate_PackageLevelSkip_NotPhantomTestSkip(t *testing.T) {
+	fixture := `{"Action":"start","Package":"pkgA"}
+{"Action":"run","Package":"pkgA","Test":"TestReal"}
+{"Action":"pass","Package":"pkgA","Test":"TestReal","Elapsed":0.01}
+{"Action":"pass","Package":"pkgA","Elapsed":0.02}
+{"Action":"start","Package":"pkgEmpty"}
+{"Action":"output","Package":"pkgEmpty","Output":"?   \tpkgEmpty\t[no test files]\n"}
+{"Action":"skip","Package":"pkgEmpty","Elapsed":0}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code != 0 {
+		t.Fatalf("evaluate() exit code = %d, want 0: a package-level skip (no Test field) must not fail the gate; buf=%q", code, buf.String())
+	}
+	out := buf.String()
+	if strings.Contains(out, "::error::") {
+		t.Errorf("evaluate() emitted an ::error:: line for a package-level (non-test) skip; buf=%q", out)
+	}
+	if !strings.Contains(out, "0 skipped") {
+		t.Errorf("evaluate() summary does not report 0 skipped for a package-level-only skip; buf=%q", out)
+	}
+}
+
+// TestEvaluate_PauseCont_Ignored: parallel tests emit pause/cont around the
+// run<->pass window (t.Parallel()). Neither action is pass/fail/skip, so
+// neither may be counted, rendered as a PASS/SKIP/FAIL line, or otherwise
+// affect the verdict.
+func TestEvaluate_PauseCont_Ignored(t *testing.T) {
+	fixture := `{"Action":"run","Package":"pkgA","Test":"TestPar1"}
+{"Action":"run","Package":"pkgA","Test":"TestPar2"}
+{"Action":"pause","Package":"pkgA","Test":"TestPar1"}
+{"Action":"cont","Package":"pkgA","Test":"TestPar1"}
+{"Action":"pass","Package":"pkgA","Test":"TestPar1","Elapsed":0.01}
+{"Action":"pause","Package":"pkgA","Test":"TestPar2"}
+{"Action":"cont","Package":"pkgA","Test":"TestPar2"}
+{"Action":"pass","Package":"pkgA","Test":"TestPar2","Elapsed":0.01}
+{"Action":"pass","Package":"pkgA","Elapsed":0.02}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code != 0 {
+		t.Fatalf("evaluate() exit code = %d, want 0 for two parallel passes with pause/cont framing; buf=%q", code, buf.String())
+	}
+	out := buf.String()
+	if got := strings.Count(out, "PASS"); got != 2 {
+		t.Errorf("evaluate() rendered %d PASS lines, want exactly 2 (pause/cont must not be double-counted or rendered); buf=%q", got, out)
+	}
+	if strings.Count(out, "SKIP") != 0 || strings.Count(out, "FAIL") != 0 {
+		t.Errorf("evaluate() rendered a SKIP/FAIL line for a pause/cont-only stream; buf=%q", out)
+	}
+	if !strings.Contains(out, "2 passed") {
+		t.Errorf("evaluate() summary does not report 2 passed; buf=%q", out)
+	}
+}
+
+// TestEvaluate_InterleavedOutputBeforeVerdict: the realistic run -> output
+// -> output -> pass shape (captured stdout/stderr lines arriving before the
+// final verdict event) must render cleanly and exit 0.
+func TestEvaluate_InterleavedOutputBeforeVerdict(t *testing.T) {
+	fixture := `{"Action":"run","Package":"pkgA","Test":"TestChatty"}
+{"Action":"output","Package":"pkgA","Test":"TestChatty","Output":"=== RUN   TestChatty\n"}
+{"Action":"output","Package":"pkgA","Test":"TestChatty","Output":"    chatty_test.go:5: setting up fixture\n"}
+{"Action":"pass","Package":"pkgA","Test":"TestChatty","Elapsed":0.01}
+{"Action":"pass","Package":"pkgA","Elapsed":0.01}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code != 0 {
+		t.Fatalf("evaluate() exit code = %d, want 0 for a chatty passing test; buf=%q", code, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "TestChatty") || !containsFold(out, "PASS") {
+		t.Errorf("evaluate() did not render TestChatty as PASS; buf=%q", out)
+	}
+	if !strings.Contains(out, "1 passed") {
+		t.Errorf("evaluate() summary does not report 1 passed; buf=%q", out)
+	}
+}
+
+// TestEvaluate_VeryLongOutputLine_NoTruncationOrPanic: a single Output
+// event carrying an >70KB string (e.g. a giant stack dump or verbose
+// assertion diff) must not truncate, error, or panic the scanner. rlsgate
+// uses bufio.Reader.ReadString rather than bufio.Scanner specifically to
+// avoid Scanner's ~64KB default token-size limit -- this proves it.
+func TestEvaluate_VeryLongOutputLine_NoTruncationOrPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("evaluate() panicked on a very long Output line: %v", r)
+		}
+	}()
+
+	bigOutput := strings.Repeat("x", 80_000)
+	outputEvent, err := json.Marshal(event{Action: "output", Package: "pkgA", Test: "TestBig", Output: bigOutput})
+	if err != nil {
+		t.Fatalf("failed to build fixture: %v", err)
+	}
+	fixture := `{"Action":"run","Package":"pkgA","Test":"TestBig"}` + "\n" +
+		string(outputEvent) + "\n" +
+		`{"Action":"pass","Package":"pkgA","Test":"TestBig","Elapsed":0.5}` + "\n"
+
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code != 0 {
+		t.Fatalf("evaluate() exit code = %d, want 0 for a pass carrying a >70KB Output line; buf has %d bytes", code, buf.Len())
+	}
+	if !strings.Contains(buf.String(), "1 passed") {
+		t.Errorf("evaluate() summary does not report 1 passed after a very long Output line; buf head=%q", buf.String()[:min(200, buf.Len())])
+	}
+}
+
+// TestEvaluate_OnlyRunAndOutput_NoResolution_ZeroRan: a Test that starts
+// (run) and emits output but never reaches pass/fail/skip (e.g. the test
+// binary panicked or the process was killed mid-test, truncating the JSON
+// stream) must not be counted as a test-level result -- it must fail as a
+// zero-ran run, the same as no tests at all.
+func TestEvaluate_OnlyRunAndOutput_NoResolution_ZeroRan(t *testing.T) {
+	fixture := `{"Action":"start","Package":"pkgA"}
+{"Action":"run","Package":"pkgA","Test":"TestHang"}
+{"Action":"output","Package":"pkgA","Test":"TestHang","Output":"=== RUN   TestHang\n"}
+{"Action":"output","Package":"pkgA","Test":"TestHang","Output":"panic: runtime error: nil pointer dereference\n"}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code == 0 {
+		t.Fatalf("evaluate() exit code = 0, want non-zero: run+output with no pass/fail/skip resolution must be zero-ran; buf=%q", buf.String())
+	}
+	if !mentionsZeroResults(buf.String()) {
+		t.Errorf("evaluate() output does not mention zero test-level results for an unresolved test; buf=%q", buf.String())
+	}
+}
+
+// TestEvaluate_BlankLinesAndLeadingWhitespace_Tolerated: blank lines and
+// leading whitespace before a JSON object (both plausible artifacts of
+// piping/buffering `go test -json` through a shell) must not be treated as
+// malformed-fatal -- they're skipped like any other unparsable line, and a
+// valid stream around them still evaluates normally.
+func TestEvaluate_BlankLinesAndLeadingWhitespace_Tolerated(t *testing.T) {
+	fixture := "{\"Action\":\"run\",\"Package\":\"pkgA\",\"Test\":\"TestBlank1\"}\n" +
+		"\n" + // blank line
+		"{\"Action\":\"pass\",\"Package\":\"pkgA\",\"Test\":\"TestBlank1\",\"Elapsed\":0.01}\n" +
+		"   {\"Action\":\"run\",\"Package\":\"pkgA\",\"Test\":\"TestBlank2\"}\n" + // leading whitespace
+		"{\"Action\":\"pass\",\"Package\":\"pkgA\",\"Test\":\"TestBlank2\",\"Elapsed\":0.01}\n" +
+		"\n" + // trailing blank line before EOF
+		"{\"Action\":\"pass\",\"Package\":\"pkgA\",\"Elapsed\":0.02}\n"
+
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code != 0 {
+		t.Fatalf("evaluate() exit code = %d, want 0: blank lines/leading whitespace must not break an otherwise-valid all-pass stream; buf=%q", code, buf.String())
+	}
+	out := buf.String()
+	for _, name := range []string{"TestBlank1", "TestBlank2"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("evaluate() output missing test name %q around blank lines; buf=%q", name, out)
+		}
+	}
+	if !strings.Contains(out, "2 passed") {
+		t.Errorf("evaluate() summary does not report 2 passed; buf=%q", out)
+	}
+}
+
+// TestEvaluate_FailAndSkipCoOccur_BothSurfaced: when a stream has both a
+// genuine fail and a skip, the gate must still exit non-zero (precedence
+// must never silently drop either signal) and the skip's ::error:: naming
+// must still fire -- confirms the skip>0 -> zero-ran -> fail>0 precedence
+// order doesn't mask the skip when a fail is also present.
+func TestEvaluate_FailAndSkipCoOccur_BothSurfaced(t *testing.T) {
+	fixture := `{"Action":"run","Package":"pkgA","Test":"TestBad"}
+{"Action":"output","Package":"pkgA","Test":"TestBad","Output":"    bad_test.go:10: expected 42, got 7\n"}
+{"Action":"fail","Package":"pkgA","Test":"TestBad","Elapsed":0.00}
+{"Action":"run","Package":"pkgA","Test":"TestRLS_Skipped"}
+{"Action":"skip","Package":"pkgA","Test":"TestRLS_Skipped","Elapsed":0.00}
+{"Action":"fail","Package":"pkgA","Elapsed":0.01}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code == 0 {
+		t.Fatalf("evaluate() exit code = 0, want non-zero when fail and skip co-occur; buf=%q", buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "::error::") || !strings.Contains(out, "TestRLS_Skipped") {
+		t.Errorf("evaluate() skip ::error:: naming did not fire when a fail also co-occurred; buf=%q", out)
+	}
+	if !strings.Contains(out, "TestBad") {
+		t.Errorf("evaluate() did not surface the failed test TestBad when a skip also co-occurred; buf=%q", out)
+	}
+}
+
+// TestEvaluate_DuplicateTestNameAcrossPackages_BothCountedAndDistinguishable:
+// the same Test name skipping in two different Packages must count as 2
+// skips (not deduplicated to 1) and must remain distinguishable in the
+// rendered output via the package-qualified per-event SKIP lines, so a
+// human reading the full CI log can tell which two suites actually lost
+// their env even though the two skips share a bare test name.
+func TestEvaluate_DuplicateTestNameAcrossPackages_BothCountedAndDistinguishable(t *testing.T) {
+	fixture := `{"Action":"run","Package":"pkgA","Test":"TestRLS_Dup"}
+{"Action":"skip","Package":"pkgA","Test":"TestRLS_Dup","Elapsed":0.00}
+{"Action":"run","Package":"pkgB","Test":"TestRLS_Dup"}
+{"Action":"skip","Package":"pkgB","Test":"TestRLS_Dup","Elapsed":0.00}
+{"Action":"pass","Package":"pkgA","Elapsed":0.01}
+{"Action":"pass","Package":"pkgB","Elapsed":0.01}
+`
+	var buf bytes.Buffer
+	code := evaluate(strings.NewReader(fixture), &buf)
+
+	if code == 0 {
+		t.Fatalf("evaluate() exit code = 0, want non-zero when duplicate-named tests skip across packages; buf=%q", buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "2 skipped") {
+		t.Errorf("evaluate() summary does not report 2 skipped for duplicate-named skips in different packages (deduplication bug?); buf=%q", out)
+	}
+	// Per-event render lines are package-qualified ("%s.%s"), so both
+	// occurrences must be individually distinguishable in the full output
+	// even though they share a bare Test name.
+	if !strings.Contains(out, "pkgA.TestRLS_Dup") || !strings.Contains(out, "pkgB.TestRLS_Dup") {
+		t.Errorf("evaluate() output does not distinguish the two duplicate-named skips by package; buf=%q", out)
+	}
+	if strings.Count(out, "TestRLS_Dup") < 2 {
+		t.Errorf("evaluate() output does not name TestRLS_Dup for both skip occurrences; buf=%q", out)
 	}
 }

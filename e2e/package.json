@@ -8,9 +8,11 @@
     "test": "playwright test",
     "test:smoke": "playwright test",
     "test:topology": "playwright test --config playwright.topology.config.ts",
+    "test:api": "playwright test --config playwright.api.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@invoice-os/api-client": "workspace:*",
     "@playwright/test": "^1.50.0",
     "@types/node": "^22.10.0",
     "typescript": "^6.0.3"

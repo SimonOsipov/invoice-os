@@ -1,105 +1,108 @@
-// Clients / partner portal — portfolio KPIs + a per-company table (firm mode only).
-// Ported from Platform.dc.html ~L695-732 + the portfolio slice of renderVals()
-// (~L1437-1451).
+// Clients / partner portal — live entity list (M3-08-04). Fetches the signed-in
+// tenant's real business entities from the portfolio service and renders them with
+// active/archived status pills, replacing the mock `buildClients()` feed for this
+// surface only (Obsidian M3-08 §1/§3/§4/§5). Ported shell from Platform.dc.html
+// ~L695-732; the KPI grid and the Readiness/VAT/Failing columns have no live source
+// and are removed ([A-d]). Rows are display-only in this subtask — the add/edit
+// modal + its open-state land in M3-08-05 ([A-l]).
 
-import { fmtShort } from '../lib/format'
-import { statusStyle } from '../lib/clients'
+import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+
 import { plusGlyph } from '../glyphs'
+import { clientsViewState, entityStatusStyle, listEntities, shouldFetchEntities, type Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 
+// Local avatar-bubble helper — deliberately NOT reused from lib/customers.ts (that
+// module is the customer/buyer domain; this surface is the portfolio-entity domain,
+// and the two are unrelated aside from both wanting initials from a name).
+function initials(name: string): string {
+  return name
+    .replace(/[^A-Za-z ]/g, '')
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase()
+}
+
 export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
-  const { clients, activeIdx } = ctx
+  const base = gatewayBase()
+  // The `base ? … : …` narrowing (rather than a `base!` assertion) means the producer
+  // is well-typed without ever trusting a non-null base at the call site; in practice
+  // it never runs when base is null anyway — `immediate: shouldFetchEntities(base)`
+  // (= base != null) keeps the no-gateway build at zero network ([A-e]/[A-m]).
+  const list = useAsync<Entity[]>(
+    () => (base ? listEntities(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: shouldFetchEntities(base) },
+  )
+  const state = clientsViewState(base, list)
 
-  const scored = clients.filter((c) => c.score != null)
-  const avg = Math.round(scored.reduce((s, c) => s + (c.score as number), 0) / scored.length)
-  const vatTotal = clients.reduce((s, c) => s + c.vatNum, 0)
-  const openFail = clients.reduce((s, c) => s + (typeof c.failing === 'number' ? c.failing : 0), 0)
-
-  const portfolioKpis = [
-    { label: 'Companies', value: String(clients.length), color: 'var(--fg-1)' },
-    { label: 'Avg. readiness', value: avg + '%', color: 'var(--accent)' },
-    { label: 'VAT tracked', value: fmtShort(vatTotal), color: 'var(--fg-1)' },
-    { label: 'Open failures', value: String(openFail), color: 'var(--status-red-text)' },
-  ]
+  const count = list.data?.length ?? 0
+  const orgSegment = ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''
 
   return (
     <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>Okafor &amp; Partners · 6 companies · partner program</p>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+            {orgSegment}
+            {count} companies · partner program
+          </p>
         </div>
         <button className="v2-btn v2-btn-primary pf-btn">
           <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
         </button>
       </div>
-      <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 20 }}>
-        {portfolioKpis.map((k) => (
-          <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, padding: '18px 20px' }}>
-            <div className="label" style={{ marginBottom: 12 }}>
-              {k.label}
-            </div>
-            <span className="money" style={{ fontSize: 26, fontWeight: 700, color: k.color }}>
-              {k.value}
-            </span>
+
+      {state === 'loading' && <Loading label="Loading entities…" />}
+
+      {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
+
+      {(state === 'idle' || state === 'empty') && (
+        <EmptyState title="No entities yet" message="Add your first business entity to get started." />
+      )}
+
+      {state === 'ready' && (
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+          <div
+            className="pf-list-head"
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
+          >
+            <span className="label">Company</span>
+            <span className="label">Sector</span>
+            <span className="label">Status</span>
           </div>
-        ))}
-      </div>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
-        <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: '1fr 110px 150px 120px 130px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
-          <span className="label">Company</span>
-          <span className="label" style={{ textAlign: 'right' }}>Readiness</span>
-          <span className="label">VAT tracked</span>
-          <span className="label" style={{ textAlign: 'right' }}>Failing</span>
-          <span className="label">Status</span>
-        </div>
-        {clients.map((c, i) => {
-          const sc = c.score == null ? NaN : c.score
-          const st = statusStyle(c.head)
-          const scoreColor = isNaN(sc) ? 'var(--fg-4)' : sc >= 85 ? 'var(--status-green-text)' : sc >= 70 ? 'var(--status-amber-text)' : 'var(--status-red-text)'
-          const failColor = c.failing === 0 || c.failing === '—' ? (c.failing === '—' ? 'var(--fg-4)' : 'var(--status-green-text)') : 'var(--status-red-text)'
-          return (
-            <div
-              key={c.name}
-              onClick={() => ctx.switchClient(i)}
-              className="pf-row pf-list-row"
-              style={{ display: 'grid', gridTemplateColumns: '1fr 110px 150px 120px 130px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center', background: i === activeIdx ? 'var(--accent-tint)' : 'transparent' }}
-            >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 6, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>{c.initials}</span>
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 500 }}>
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-                    {i === activeIdx && (
-                      <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--accent)', background: 'var(--accent-tint)', padding: '1px 5px', borderRadius: 3, flex: 'none' }}>
-                        ACTIVE
-                      </span>
-                    )}
+          {(list.data ?? []).map((e) => {
+            const st = entityStatusStyle(e.status)
+            return (
+              <div
+                key={e.id}
+                className="pf-list-row"
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 6, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
+                    {initials(e.name)}
                   </span>
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>TIN {c.tin}</span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.name}</span>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>TIN {e.tin ?? '—'}</span>
+                  </span>
                 </span>
-              </span>
-              <span style={{ textAlign: 'right' }}>
-                <span className="money mono" style={{ fontSize: 14, fontWeight: 600, color: scoreColor }}>
-                  {c.score == null ? '—' : c.score + '%'}
+                <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{e.sector ?? '—'}</span>
+                <span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}>
+                    <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
+                    <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
+                  </span>
                 </span>
-              </span>
-              <span className="money" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{c.onboarding ? '₦0' : c.vatLabel}</span>
-              <span style={{ textAlign: 'right' }}>
-                <span className="money mono" style={{ fontSize: 13, fontWeight: 600, color: failColor }}>
-                  {c.onboarding ? '—' : String(c.failing)}
-                </span>
-              </span>
-              <span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}>
-                  <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-                  <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
-                </span>
-              </span>
-            </div>
-          )
-        })}
-      </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

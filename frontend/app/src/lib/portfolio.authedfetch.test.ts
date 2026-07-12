@@ -20,7 +20,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
 import { makeAuthedFetch } from './authedFetch'
-import { createEntity, listEntities, type EntityInput } from './portfolio'
+import { createEntity, listEntities, updateEntity, type EntityInput } from './portfolio'
 
 const base = 'https://gw'
 
@@ -33,6 +33,14 @@ interface MockResponse {
 
 function mockFetchOnce(response: MockResponse) {
   const fetchMock = vi.fn().mockResolvedValue(response)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+// Simulates a transport failure (fetch itself rejects, not a non-2xx response) —
+// mirrors client.test.ts's mockFetchRejecting, used by B3 below.
+function mockFetchRejecting(err: unknown) {
+  const fetchMock = vi.fn().mockRejectedValue(err)
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
@@ -144,5 +152,94 @@ describe('makeAuthedFetch: token-read semantics', () => {
     const headers = new Headers(init?.headers)
     expect(headers.has('Authorization')).toBe(false)
     expect(signOutSpy).not.toHaveBeenCalled()
+  })
+})
+
+// Adversarial/edge coverage (QA, M3-08-03) — extends A1-A6 above, which only exercised
+// list/create at 200/401/500. These specs close gaps A1-A6 left open: the PATCH
+// (update) caller, a non-401 4xx (403) that must NOT trigger the seam, a transport-level
+// (network) ApiError that must also NOT trigger the seam, closure independence across
+// multiple makeAuthedFetch instances, and the fire-then-rethrow ORDER (onSignOut must
+// run before the rejection reaches the caller, and must not be swallowed).
+describe('makeAuthedFetch: adversarial coverage (B1-B5)', () => {
+  it('B1: a 401 on a live updateEntity (PATCH) call rejects ApiError{status:401} AND calls onSignOut exactly once', async () => {
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const signOutSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+
+    const err = await captureRejection(() => updateEntity(af, base, 'e1', { name: 'New' }))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(401)
+    expect(signOutSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('B2: a 403 on a live listEntities call rejects ApiError{status:403} and does NOT call onSignOut (only 401 logs out)', async () => {
+    mockFetchOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: 'forbidden' }) })
+    const signOutSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+
+    const err = await captureRejection(() => listEntities(af, base))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(403)
+    expect(signOutSpy).not.toHaveBeenCalled()
+  })
+
+  it('B3: a transport failure (fetch itself rejects) produces ApiError{kind:"network"}, does NOT call onSignOut, and the rejection still propagates to the caller', async () => {
+    mockFetchRejecting(new TypeError('Failed to fetch'))
+    const signOutSpy = vi.fn()
+    const af = makeAuthedFetch(buildSession('tok'), signOutSpy)
+
+    const err = await captureRejection(() => listEntities(af, base))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('network')
+    expect((err as ApiError).status).toBeNull()
+    expect(signOutSpy).not.toHaveBeenCalled()
+  })
+
+  it('B4: two makeAuthedFetch instances built from the same session are independent closures — no shared mutable state, each fires only its own onSignOut on its own 401', async () => {
+    const session = buildSession('tok')
+    const signOutSpyA = vi.fn()
+    const signOutSpyB = vi.fn()
+    const afA = makeAuthedFetch(session, signOutSpyA)
+    const afB = makeAuthedFetch(session, signOutSpyB)
+
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+    await captureRejection(() => listEntities(afA, base))
+
+    expect(signOutSpyA).toHaveBeenCalledTimes(1)
+    expect(signOutSpyB).not.toHaveBeenCalled()
+
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+    await captureRejection(() => listEntities(afB, base))
+
+    expect(signOutSpyB).toHaveBeenCalledTimes(1)
+    // afA's spy must be untouched by afB's later 401 — proves no shared state (e.g. a
+    // module-level "already signed out" flag) between the two closures.
+    expect(signOutSpyA).toHaveBeenCalledTimes(1)
+  })
+
+  it('B5: onSignOut fires BEFORE the rejection reaches the caller, and the error is not swallowed (the caller still observes the 401)', async () => {
+    mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const order: string[] = []
+    const onSignOut = () => {
+      order.push('signOut')
+    }
+    const af = makeAuthedFetch(buildSession('tok'), onSignOut)
+
+    let caught: unknown
+    try {
+      await listEntities(af, base)
+      order.push('resolved-should-not-happen')
+    } catch (err) {
+      order.push('caller-caught')
+      caught = err
+    }
+
+    expect(order).toEqual(['signOut', 'caller-caught'])
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).status).toBe(401)
   })
 })

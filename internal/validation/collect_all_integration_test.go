@@ -118,6 +118,34 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 				t.Errorf("violation %+v has empty Message", v)
 			}
 		}
+
+		// Spot-check three of the eight triples (one required, one enum, one
+		// cel rule type) against the migration-seeded content itself
+		// (migrations/20260711121327_seed_mbs_v1.sql) rather than only
+		// asserting non-empty above -- proves each triple carries the real
+		// seeded rule/severity/message, not just placeholder strings, and
+		// would catch a triple that came back non-empty but wrong (e.g. a
+		// swapped or truncated message).
+		wantContent := map[string]struct {
+			severity Severity
+			message  string
+		}{
+			"currency-allowed":        {"error", "Currency must be NGN."},
+			"invoice-number-required": {"error", "Invoice number is required."},
+			"no-duplicate-line-items": {"error", "Invoice contains duplicate line items (a line id appears more than once)."},
+		}
+		for _, v := range result.Violations {
+			want, ok := wantContent[v.RuleKey]
+			if !ok {
+				continue
+			}
+			if v.Severity != want.severity {
+				t.Errorf("%s: Severity = %q, want %q", v.RuleKey, v.Severity, want.severity)
+			}
+			if v.Message != want.message {
+				t.Errorf("%s: Message = %q, want %q", v.RuleKey, v.Message, want.message)
+			}
+		}
 	})
 
 	t.Run("single_defect_control", func(t *testing.T) {
@@ -132,6 +160,28 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 		wantKeys := []string{"currency-allowed"}
 		if got := violationKeys(result); !reflect.DeepEqual(got, wantKeys) {
 			t.Errorf("violation keys = %v, want %v (a single broken rule must fire alone, not cascade into unrelated rules)", got, wantKeys)
+		}
+	})
+
+	t.Run("clean_payload_zero_violations", func(t *testing.T) {
+		// Guards the other end of the breadth assertion: a payload that
+		// breaks none of the eight rules above returns no violations at
+		// all, AND the result is still stamped with the active version --
+		// the version stamp is not something that only appears when there
+		// happens to be a violation to attach it to.
+		result, err := engine.Evaluate(validInvoicePayload(), rs)
+		if err != nil {
+			t.Fatalf("Evaluate(validInvoicePayload): %v", err)
+		}
+
+		if result.RuleSetVersion != 1 {
+			t.Errorf("RuleSetVersion = %d, want 1 (stamped even on a clean pass)", result.RuleSetVersion)
+		}
+		if result.Violations == nil {
+			t.Error("Violations = nil, want [] (never nil, even when empty -- Result doc)")
+		}
+		if len(result.Violations) != 0 {
+			t.Errorf("Violations = %v, want none -- validInvoicePayload() breaks no seeded v1 rule", result.Violations)
 		}
 	})
 }

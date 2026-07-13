@@ -155,7 +155,11 @@ jobs:
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
     needs: deploy-gateway
-    if: needs.deploy-gateway.result == 'success'
+    # always() breaks the transitive skip-cascade so a workflow_dispatch run (where
+    # await-ci is skipped) still verifies the fleet — without it, this job and every
+    # job downstream inherit await-ci's skip even though deploy-gateway ran via its
+    # own always(). Gate on the real dependency result, not the cascade.
+    if: always() && needs.deploy-gateway.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Wait for gateway /healthz 200
@@ -181,7 +185,7 @@ jobs:
   deploy-context:
     name: Deploy ${{ matrix.service }} → dev
     needs: health-gate
-    if: needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
+    if: always() && needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     strategy:
@@ -203,7 +207,7 @@ jobs:
   deploy-spas:
     name: Deploy ${{ matrix.service }} → dev
     needs: health-gate
-    if: needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
+    if: always() && needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     strategy:
@@ -230,7 +234,7 @@ jobs:
   reset-seed:
     name: Reset + seed dev DB (data-only, superuser)
     needs: health-gate
-    if: needs.health-gate.result == 'success'
+    if: always() && needs.health-gate.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -255,7 +259,7 @@ jobs:
   fleet-gate:
     name: Fleet /healthz gate (all 8 backends green)
     needs: [deploy-context]
-    if: needs.deploy-context.result == 'success'
+    if: always() && needs.deploy-context.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Poll gateway /healthz/fleet until all up
@@ -283,7 +287,7 @@ jobs:
   e2e:
     name: E2E (smoke + api + topology)
     needs: [fleet-gate, deploy-spas, reset-seed]
-    if: needs.fleet-gate.result == 'success' && needs.deploy-spas.result == 'success' && needs.reset-seed.result == 'success'
+    if: always() && needs.fleet-gate.result == 'success' && needs.deploy-spas.result == 'success' && needs.reset-seed.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

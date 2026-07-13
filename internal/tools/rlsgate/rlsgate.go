@@ -109,7 +109,7 @@ func evaluate(r io.Reader, out io.Writer) (exitCode int) {
 
 	switch {
 	case s.skipped > 0:
-		fmt.Fprintf(out, "::error::rlsgate: %d DB-backed test(s) SKIPPED on the rls job (DB env broke): %s\n",
+		fmt.Fprintf(out, "::error::rlsgate: %d DB-backed test(s) SKIPPED (DB env broke): %s\n",
 			s.skipped, strings.Join(s.skipNames, ", "))
 		return 1
 	case total == 0:

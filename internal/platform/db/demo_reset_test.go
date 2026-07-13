@@ -245,3 +245,107 @@ func TestRLS_DemoResetRuleReenableIdempotent(t *testing.T) {
 		t.Errorf("count(rules WHERE enabled=false) after SECOND apply = %d, want 0", n)
 	}
 }
+
+// TestRLS_DemoResetGuardRejectsWrongKind: [M3-12-01 QA] adversarial coverage. The
+// existing GuardRefusesWrongTarget case only mutates `name`, which would still pass a
+// guard that (incorrectly) checked id+name and ignored `kind`. This case keeps id and
+// name canonical and mutates ONLY `kind` (to the other value the column's CHECK
+// permits, 'in_house' — migrations/20260709153027_tenants_add_kind.sql), proving the
+// guard's exact-match requires ALL THREE columns, not a subset. Also strengthens the
+// "commits nothing on refusal" evidence from a single disabled rule to two, so a
+// guard/rollback bug that only protects the first row touched cannot hide.
+func TestRLS_DemoResetGuardRejectsWrongKind(t *testing.T) {
+	requireHarness(t)
+	seedDemoTenantFixture(t)
+	setAllRulesEnabled(t)
+
+	const ruleKeyA = "vat-standard-rate"
+	const ruleKeyB = "supplier-tin-required"
+	disableRule(t, ruleKeyA)
+	disableRule(t, ruleKeyB)
+
+	if _, err := h.super.Exec(context.Background(),
+		`UPDATE tenants SET kind = 'in_house' WHERE id = $1`, demoTenantID,
+	); err != nil {
+		t.Fatalf("trip the guard (mutate tenant kind): %v", err)
+	}
+
+	err := applyDemoReset(t)
+
+	if err == nil {
+		t.Fatal("apply against a fixture with the wrong kind succeeded, want an error containing \"demo-reset refused\"")
+	}
+	if !strings.Contains(err.Error(), "demo-reset refused") {
+		t.Errorf("apply error = %q, want it to contain %q", err.Error(), "demo-reset refused")
+	}
+
+	if got := ruleEnabled(t, ruleKeyA); got {
+		t.Errorf("rule %q enabled = %v after a refused apply, want false (still disabled — nothing committed)", ruleKeyA, got)
+	}
+	if got := ruleEnabled(t, ruleKeyB); got {
+		t.Errorf("rule %q enabled = %v after a refused apply, want false (still disabled — nothing committed)", ruleKeyB, got)
+	}
+}
+
+// TestRLS_DemoResetGuardRejectsWrongName: [M3-12-01 QA] adversarial coverage,
+// complementary to GuardRejectsWrongKind above — mutates ONLY `name` (id and kind stay
+// canonical) using a value that still contains the substring "Okafor" and starts with
+// the right prefix, so a guard that used a loose match (e.g. LIKE 'Okafor%' instead of
+// an exact `=`) would wrongly accept it. Confirms the guard's name check is exact.
+func TestRLS_DemoResetGuardRejectsWrongName(t *testing.T) {
+	requireHarness(t)
+	seedDemoTenantFixture(t)
+	setAllRulesEnabled(t)
+
+	const ruleKey = "currency-allowed"
+	disableRule(t, ruleKey)
+
+	if _, err := h.super.Exec(context.Background(),
+		`UPDATE tenants SET name = 'Okafor & Partners LLC' WHERE id = $1`, demoTenantID,
+	); err != nil {
+		t.Fatalf("trip the guard (mutate tenant name to a near-match): %v", err)
+	}
+
+	err := applyDemoReset(t)
+
+	if err == nil {
+		t.Fatal("apply against a near-match fixture name succeeded, want an error containing \"demo-reset refused\"")
+	}
+	if !strings.Contains(err.Error(), "demo-reset refused") {
+		t.Errorf("apply error = %q, want it to contain %q", err.Error(), "demo-reset refused")
+	}
+	if got := ruleEnabled(t, ruleKey); got {
+		t.Errorf("rule %q enabled = %v after a refused apply, want false (still disabled — nothing committed)", ruleKey, got)
+	}
+}
+
+// TestRLS_DemoResetReenablesMultipleDisabledRules: [M3-12-01 QA] adversarial coverage.
+// The Core-AC-3 case (ReenablesDisabledRule) only disables a single key
+// (vat-standard-rate), which a narrower fix (e.g. `UPDATE rules SET enabled = true
+// WHERE key = 'vat-standard-rate'`) would also satisfy. This disables THREE distinct
+// keys spanning different rule `type`s (tax_math, required, enum) and asserts the
+// GLOBAL `WHERE enabled = false` predicate restores every one of them in a single
+// apply, proving the fix is genuinely global and not hardcoded to one key.
+func TestRLS_DemoResetReenablesMultipleDisabledRules(t *testing.T) {
+	requireHarness(t)
+	seedDemoTenantFixture(t)
+	setAllRulesEnabled(t)
+
+	keys := []string{"vat-standard-rate", "supplier-tin-required", "currency-allowed"}
+	for _, k := range keys {
+		disableRule(t, k)
+	}
+
+	if err := applyDemoReset(t); err != nil {
+		t.Fatalf("apply db/demo-reset.sql: %v", err)
+	}
+
+	if n := disabledRuleCount(t); n != 0 {
+		t.Errorf("count(rules WHERE enabled=false) = %d after apply, want 0", n)
+	}
+	for _, k := range keys {
+		if got := ruleEnabled(t, k); !got {
+			t.Errorf("rule %q enabled = %v after apply, want true", k, got)
+		}
+	}
+}

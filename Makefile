@@ -120,6 +120,6 @@ guard-migration-url:
 
 demo-reset: ## Restore the demo tenant (Okafor & Partners) to its curated state (run before a firm call; needs psql)
 	@test -n "$(DATABASE_SUPERUSER_URL_DEV)" || { echo "DATABASE_SUPERUSER_URL_DEV is not set (set it to the deployed-dev superuser DSN; see docs/demo-reset.md)"; exit 1; }
-	psql "$(DATABASE_SUPERUSER_URL_DEV)" -v ON_ERROR_STOP=1 -f db/demo-reset.sql
+	@psql "$(DATABASE_SUPERUSER_URL_DEV)" -v ON_ERROR_STOP=1 -f db/demo-reset.sql
 	@echo "Demo tenant portfolio (11111111-1111-1111-1111-111111111111):"
-	psql "$(DATABASE_SUPERUSER_URL_DEV)" -c "SELECT status, count(*) FROM business_entities WHERE tenant_id = '11111111-1111-1111-1111-111111111111' GROUP BY status ORDER BY status;"
+	@psql "$(DATABASE_SUPERUSER_URL_DEV)" -c "SELECT status, count(*) FROM business_entities WHERE tenant_id = '11111111-1111-1111-1111-111111111111' GROUP BY status ORDER BY status;"

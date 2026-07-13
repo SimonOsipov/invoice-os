@@ -178,14 +178,14 @@ jobs:
             exit 1
           fi
           echo "Reset -> up round-trip clean; every migration is reversible."
-      - name: Embedded-migration apply (the gateway's on-deploy path)
+      - name: Embedded-migration apply (the gateway's on-deploy path) + per-test visibility & skip gate
         # Prove the migrations embedded into the gateway binary (go:embed +
         # internal/platform/db.MigrateUp) apply from empty and leave nothing
         # pending — the exact code path the gateway runs at boot (M2-12,
         # docs/migrations.md §2). The filesystem round-trip above can't catch a
         # stale/incomplete go:embed; this can. DATABASE_MIGRATION_URL is already in
         # this job's env, so the test runs here (it self-skips everywhere else).
-        run: go test -count=1 -run TestMigrateUpFromEmbedded ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestMigrateUpFromEmbedded ./internal/platform/db/...
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real

@@ -281,11 +281,11 @@ jobs:
           echo "All 8 backends green."
 
   # 7. Post-deploy verification (b): smoke (landing + ops-console render), api
-  #    (typed contract suite against the gateway), and topology (browser login
-  #    + cross-tenant isolation) via Playwright, once the fleet is green, the
-  #    SPAs are deployed, and the DB is seeded.
+  #    (typed contract suite against the gateway), topology (browser login
+  #    + cross-tenant isolation), and demo (Day-30 wedge journey) via Playwright,
+  #    once the fleet is green, the SPAs are deployed, and the DB is seeded.
   e2e:
-    name: E2E (smoke + api + topology)
+    name: E2E (smoke + api + topology + demo)
     needs: [fleet-gate, deploy-spas, reset-seed]
     if: always() && needs.fleet-gate.result == 'success' && needs.deploy-spas.result == 'success' && needs.reset-seed.result == 'success'
     runs-on: ubuntu-latest
@@ -328,6 +328,15 @@ jobs:
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from the
         # workflow-level env (topology/targets.ts reads them).
         run: pnpm --filter @invoice-os/e2e test:topology
+      - name: Demo (Day-30 wedge journey)
+        # Runs LAST (after topology): the demo kill-switches vat-standard-rate then
+        # restores it, so no rule-dependent suite runs after it in the same run; the
+        # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7's
+        # audit assertion needs the superuser DSN; GATEWAY_URL/APP_URL come from the
+        # workflow-level env (the seam reads them), and chromium is already installed.
+        env:
+          DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}
+        run: pnpm --filter @invoice-os/e2e test:demo
       - name: Upload smoke Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -349,6 +358,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: topology-playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload demo Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-playwright-report
           path: e2e/playwright-report/
           if-no-files-found: warn
           retention-days: 7

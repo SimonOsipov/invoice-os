@@ -5,6 +5,8 @@
 *.test
 *.out
 coverage.*
+# Compiled tool binary emitted at repo root by `go build ./internal/tools/rlsgate`
+/rlsgate
 
 # Go workspace file (machine-local)
 go.work

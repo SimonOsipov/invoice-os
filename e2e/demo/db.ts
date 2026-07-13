@@ -61,3 +61,24 @@ export async function auditRowExists({ event, key, tenantId, since }: AuditRowQu
     await client.end()
   }
 }
+
+// dbNow(): the DB clock (SELECT now()) — the `t0` baseline AC-7 filters audit_log
+// rows against (created_at >= t0). Uses the DATABASE clock, NOT the Node runner
+// clock, so a runner/DB skew can neither hide this run's toggle row nor over-match
+// an accumulated older one (Decision D7). Same open/query/close Client lifecycle as
+// auditRowExists, reusing this module's single pg wiring rather than re-deriving the
+// connection string + TLS config in the spec (Decision D9). Never call when
+// !dbEnabled(). pg maps a timestamptz to a JS Date, so the return is a Date.
+export async function dbNow(): Promise<Date> {
+  const client = new Client({
+    connectionString: process.env.DATABASE_SUPERUSER_URL_DEV,
+    ssl: { rejectUnauthorized: false },
+  })
+  await client.connect()
+  try {
+    const res = await client.query<{ now: Date }>('SELECT now() AS now')
+    return res.rows[0].now
+  } finally {
+    await client.end()
+  }
+}

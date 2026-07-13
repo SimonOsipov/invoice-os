@@ -54,9 +54,10 @@ test.describe('auth-header contract (API E2E, over the deployed gateway)', () =>
 
     test('malformed scheme (Basic, not Bearer) -> 401 { error: string }', async () => {
       // Present but wrong scheme: bearerToken() only recognizes "Bearer ",
-      // so a well-formed Basic header still fails the scheme check.
+      // so any non-Bearer scheme still fails the scheme check. The value
+      // is intentionally not a real credential (not base64).
       const res = await rawFetch('/api/tenancy/v1/me', {
-        headers: { Authorization: 'Basic dXNlcjpwYXNzd29yZA==' },
+        headers: { Authorization: 'Basic not-a-credential' },
       })
       assertUnauthorizedEnvelope(res, 'malformed scheme (Basic)')
     })

@@ -70,5 +70,3 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 		})
 	}
 }
-
-// M3-18 throwaway: forces the dev-env full-fleet deploy gate to fire on a ci.yml-only PR; reverted in this same PR.

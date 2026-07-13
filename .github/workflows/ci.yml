@@ -294,7 +294,7 @@ jobs:
       # connects as invoice_app (never the superuser — BYPASSRLS would void the guarantees).
       DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
-      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: ""
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
@@ -345,7 +345,7 @@ jobs:
       # as invoice_app (writes + grant/RLS attacks) and invoice_migrator (the owner attack).
       DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
-      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: ""
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader

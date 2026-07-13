@@ -24,6 +24,35 @@ export function apiBase(): string {
   )
 }
 
+// rawFetch(): a raw HTTP seam for M3-15's malformed-request contract specs
+// (M3-15-02..05), which need byte-level control over headers/body that the
+// typed apiFetch wrapper normalizes away (e.g. a malformed-scheme
+// Authorization header, or a genuinely empty request body). Applies
+// init.headers verbatim — callers control Authorization exactly (absent /
+// "Basic x" / "Bearer not-a-jwt"). JSON-serializes body with Content-Type:
+// application/json ONLY when body is present; omitting body sends no
+// request body and no Content-Type at all (this is what enables M3-15-04's
+// no-body -> io.EOF -> 400 case). Never throws on a non-2xx status — body is
+// best-effort parsed JSON, undefined if parsing fails.
+export async function rawFetch(
+  path: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: unknown },
+): Promise<{ status: number; body: unknown }> {
+  const hasBody = init?.body !== undefined
+  const res = await fetch(`${apiBase()}${path}`, {
+    method: init?.method,
+    headers: hasBody ? { ...init?.headers, 'Content-Type': 'application/json' } : init?.headers,
+    body: hasBody ? JSON.stringify(init?.body) : undefined,
+  })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
 export interface Persona {
   subject: string
   tenantId: string

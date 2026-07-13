@@ -8,6 +8,7 @@
 import { createEntity, listEntities, offboardEntity, type Entity } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { TENANTS } from '../topology/targets'
+import { withNetworkRetry } from './retry'
 
 // The rule the demo kill-switches in AC-6 (PATCH .../v1/rules/vat-standard-rate
 // {enabled:false}) and asserts audited in AC-7 (event validation.rule.disabled,
@@ -57,7 +58,9 @@ const CREATE_BATCH = 5
 //      (original active + the ones just created — no re-list needed, since
 //      creates never change the archived count).
 export async function ensurePortfolioSeeded(tokenA: string): Promise<void> {
-  const { entities, pagination } = await listEntities(tokenA, { limit: LIST_LIMIT })
+  const { entities, pagination } = await withNetworkRetry(() =>
+    listEntities(tokenA, { limit: LIST_LIMIT }),
+  )
   // pagination.total is the authoritative UNCLAMPED filtered count across all
   // pages (internal/portfolio/portfolio.go:177-182), so the >=25 gate stays
   // correct even if the portfolio ever grows past the 200-row page on a
@@ -73,7 +76,7 @@ export async function ensurePortfolioSeeded(tokenA: string): Promise<void> {
   for (let i = 0; i < toCreate; i += CREATE_BATCH) {
     const batch = Array.from({ length: Math.min(CREATE_BATCH, toCreate - i) }, () => {
       const tin = freshTin()
-      return createEntity(tokenA, { name: `Demo Client ${tin}`, tin })
+      return withNetworkRetry(() => createEntity(tokenA, { name: `Demo Client ${tin}`, tin }))
     })
     created.push(...(await Promise.all(batch)))
   }
@@ -83,6 +86,6 @@ export async function ensurePortfolioSeeded(tokenA: string): Promise<void> {
   const toArchive = Math.max(0, MIN_ARCHIVED - archived)
   const archiveTargets = [...activeRows, ...created].slice(0, toArchive)
   for (const row of archiveTargets) {
-    await offboardEntity(tokenA, row.id)
+    await withNetworkRetry(() => offboardEntity(tokenA, row.id))
   }
 }

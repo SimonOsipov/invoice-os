@@ -16,6 +16,28 @@ import pg from 'pg'
 
 const { Client } = pg
 
+// withClient(): the single superuser pg wiring both reads route through (Decision
+// D9 — not re-derived per call). Constructs the Client, connects, runs fn, and ALWAYS
+// end()s in finally. Railway public Postgres requires TLS; rejectUnauthorized:false
+// accepts its managed cert without a local CA bundle (the DSN is a trusted CI secret).
+// The bounded connectionTimeoutMillis + query_timeout make a stalled connect/query on
+// the cold dev DB fail with a clear DB error instead of hanging until the Playwright
+// 60s test timeout. Never call when !dbEnabled().
+async function withClient<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+  const client = new Client({
+    connectionString: process.env.DATABASE_SUPERUSER_URL_DEV,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10_000,
+    query_timeout: 10_000,
+  })
+  await client.connect()
+  try {
+    return await fn(client)
+  } finally {
+    await client.end()
+  }
+}
+
 // dbEnabled(): the DSN is a CI secret. Local `test:demo` runs (against the live
 // dev URLs, like the other suites) won't have it, so the spec env-gate-skips
 // AC-7 when this is false. auditRowExists() must never be called when false.
@@ -39,14 +61,7 @@ export interface AuditRowQuery {
 // from,to}; we match event + payload->>'key' + tenant_id + created_at >= since.
 // Never call this when !dbEnabled().
 export async function auditRowExists({ event, key, tenantId, since }: AuditRowQuery): Promise<boolean> {
-  // Railway public Postgres requires TLS; rejectUnauthorized:false accepts its
-  // managed cert without a local CA bundle (the DSN is a trusted CI secret).
-  const client = new Client({
-    connectionString: process.env.DATABASE_SUPERUSER_URL_DEV,
-    ssl: { rejectUnauthorized: false },
-  })
-  await client.connect()
-  try {
+  return withClient(async (client) => {
     const res = await client.query<{ n: number }>(
       `SELECT count(*)::int AS n
          FROM audit_log
@@ -57,28 +72,19 @@ export async function auditRowExists({ event, key, tenantId, since }: AuditRowQu
       [event, key, tenantId, since],
     )
     return Number(res.rows[0]?.n ?? 0) >= 1
-  } finally {
-    await client.end()
-  }
+  })
 }
 
 // dbNow(): the DB clock (SELECT now()) — the `t0` baseline AC-7 filters audit_log
 // rows against (created_at >= t0). Uses the DATABASE clock, NOT the Node runner
 // clock, so a runner/DB skew can neither hide this run's toggle row nor over-match
-// an accumulated older one (Decision D7). Same open/query/close Client lifecycle as
+// an accumulated older one (Decision D7). Routes through withClient like
 // auditRowExists, reusing this module's single pg wiring rather than re-deriving the
 // connection string + TLS config in the spec (Decision D9). Never call when
 // !dbEnabled(). pg maps a timestamptz to a JS Date, so the return is a Date.
 export async function dbNow(): Promise<Date> {
-  const client = new Client({
-    connectionString: process.env.DATABASE_SUPERUSER_URL_DEV,
-    ssl: { rejectUnauthorized: false },
-  })
-  await client.connect()
-  try {
+  return withClient(async (client) => {
     const res = await client.query<{ now: Date }>('SELECT now() AS now')
     return res.rows[0].now
-  } finally {
-    await client.end()
-  }
+  })
 }

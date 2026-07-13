@@ -692,3 +692,129 @@ func TestRLS_DemoResetLeavesOtherTenantUntouched(t *testing.T) {
 		t.Errorf("Honeywell tenant's business_entities changed after a demo-reset apply, want untouched\nbefore: %+v\nafter:  %+v", before, after)
 	}
 }
+
+// TestRLS_DemoResetCrossTenantSameNameIsolation: [M3-12-02 QA] adversarial coverage,
+// complementary to TestRLS_DemoResetLeavesOtherTenantUntouched above. That test uses
+// distinct Honeywell names, which a bug that (incorrectly) scoped the DELETE/INSERT
+// by `name` instead of `tenant_id` could still pass by accident. Here Honeywell is
+// seeded with a row whose NAME is IDENTICAL to curated row #1
+// ("Adeyemi & Sons Trading Ltd") but a distinct TIN — proving the demo tenant's
+// DELETE/INSERT is scoped strictly by tenant_id, not by name: a name-scoped DELETE
+// would wrongly remove Honeywell's same-named row when the demo tenant re-curates its
+// own "Adeyemi & Sons Trading Ltd", and the two tenants coexisting with the same name
+// under different TINs is exactly what the schema's unique index — (tenant_id, tin),
+// not name (migrations/20260709155011_business_entities.sql) — permits and correct
+// scoping produces.
+func TestRLS_DemoResetCrossTenantSameNameIsolation(t *testing.T) {
+	requireHarness(t)
+	seedDemoTenantFixture(t)
+	seedHoneywellTenantFixture(t)
+
+	const sharedName = "Adeyemi & Sons Trading Ltd" // == curated row #1's name
+	const honeywellTIN = "77000000-0001"            // distinct from the curated TIN
+
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, $2, $3, 'active')`,
+		honeywellTenantID, sharedName, honeywellTIN,
+	); err != nil {
+		t.Fatalf("seed Honeywell same-name row: %v", err)
+	}
+
+	before := fetchEntities(t, honeywellTenantID)
+	if len(before) != 1 {
+		t.Fatalf("precondition: Honeywell business_entities count = %d, want 1", len(before))
+	}
+
+	if err := applyDemoReset(t); err != nil {
+		t.Fatalf("apply db/demo-reset.sql: %v", err)
+	}
+
+	after := fetchEntities(t, honeywellTenantID)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("Honeywell's same-named row changed after a demo-reset apply, want untouched (DELETE/INSERT must be scoped by tenant_id, not name)\nbefore: %+v\nafter:  %+v", before, after)
+	}
+
+	// The demo tenant must still curate its own row with the shared name, keeping
+	// its own curated TIN — proving both tenants' rows coexist independently
+	// rather than one clobbering or merging into the other via the name collision.
+	demoAfter := fetchEntities(t, demoTenantID)
+	found := false
+	for _, r := range demoAfter {
+		if r.name == sharedName {
+			found = true
+			if r.tin == honeywellTIN {
+				t.Errorf("demo tenant's %q row carries Honeywell's TIN %q, want its own curated TIN (cross-tenant bleed)", sharedName, honeywellTIN)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("demo tenant's curated set is missing %q after apply", sharedName)
+	}
+}
+
+// TestRLS_DemoResetConvergesFromPartialCuratedPlusJunk: [M3-12-02 QA] adversarial
+// coverage. TestRLS_DemoResetCuratesExactSet and TestRLS_DemoResetClearsJunkAndConverges
+// each start from a single kind of "before" state (empty, or pure generic junk).
+// Neither proves convergence when the demo tenant already holds SOME of its own
+// curated rows — with their real curated TINs — mixed with junk, the state a
+// half-finished/interrupted prior run or a hand-edited demo tenant could plausibly
+// leave behind. This pre-seeds 5 of the 27 curated rows verbatim (exact name+TIN+
+// status, copied from db/demo-reset.sql / the story's curated table: rows #3, #10,
+// #15, #20 active + #25 archived) plus ~30 generic junk rows, then applies the file
+// TWICE. The first apply must DELETE the pre-seeded curated-looking rows too (not
+// skip them because they already "look right") and re-INSERT the full 27 without a
+// unique-(tenant_id,tin) collision on the 5 rows that were already present — a DELETE
+// that (incorrectly) excluded rows matching curated TINs/names would instead surface
+// as a unique-constraint error on the very first apply. The second apply (now from
+// the fully-converged state) must then reach a byte-identical (name,tin,status) set,
+// proving convergence is stable regardless of which state fed into it.
+func TestRLS_DemoResetConvergesFromPartialCuratedPlusJunk(t *testing.T) {
+	requireHarness(t)
+	seedDemoTenantFixture(t)
+
+	partial := []entityRow{
+		{name: "Okonkwo Textiles Nigeria Ltd", tin: "10034567-0003", status: "active"},
+		{name: "Yakubu Motors Ltd", tin: "10101234-0010", status: "active"},
+		{name: "Ngozi Interiors Ltd", tin: "10156789-0015", status: "active"},
+		{name: "Kemi Beauty Concepts Ltd", tin: "10201234-0020", status: "active"},
+		{name: "Musa Hardware Stores Ltd", tin: "10256789-0025", status: "archived"},
+	}
+	for _, r := range partial {
+		if _, err := h.super.Exec(context.Background(),
+			`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, $2, $3, $4)`,
+			demoTenantID, r.name, r.tin, r.status,
+		); err != nil {
+			t.Fatalf("pre-seed partial curated row %q: %v", r.name, err)
+		}
+	}
+	seedJunkEntities(t, demoTenantID)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM business_entities WHERE tenant_id = $1`, demoTenantID); n != 35 {
+		t.Fatalf("precondition: partial-curated (5) + junk (30) count = %d, want 35", n)
+	}
+
+	if err := applyDemoReset(t); err != nil {
+		t.Fatalf("first apply (from partial-curated + junk): %v", err)
+	}
+	first := fetchEntities(t, demoTenantID)
+	if len(first) != 27 {
+		t.Fatalf("count(business_entities) after apply from partial-curated + junk = %d, want 27", len(first))
+	}
+	for _, r := range first {
+		if strings.HasPrefix(r.name, "Demo Client") || strings.HasPrefix(r.name, "Demo Onboarding") {
+			t.Errorf("junk row survived apply: name = %q", r.name)
+		}
+	}
+
+	if err := applyDemoReset(t); err != nil {
+		t.Fatalf("second apply (idempotency from the now-converged state): %v", err)
+	}
+	second := fetchEntities(t, demoTenantID)
+	if len(second) != 27 {
+		t.Fatalf("count(business_entities) after SECOND apply = %d, want 27 (no growth)", len(second))
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("curated (name,tin,status) set differs between the first apply (from partial-curated+junk) and the second apply, want byte-identical\nfirst:  %+v\nsecond: %+v", first, second)
+	}
+}

@@ -145,7 +145,7 @@ jobs:
         run: |
           railway variables --set "GATEWAY_MOCK_ISSUER=true" --service gateway --skip-deploys
           railway variables --set "CORS_ALLOWED_ORIGINS=$APP_URL" --service gateway --skip-deploys
-          railway up --ci --service gateway
+          sh scripts/ci/railway-up-ci.sh gateway
         timeout-minutes: 15
 
   # 2. Schema-before-fleet barrier: the gateway migrates at boot and
@@ -197,7 +197,7 @@ jobs:
       - name: railway up ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        run: railway up --ci --service ${{ matrix.service }}
+        run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
   # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
@@ -224,7 +224,7 @@ jobs:
       - name: railway up ${{ matrix.service }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        run: railway up --ci --service ${{ matrix.service }}
+        run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
   # 5. Reset + seed the dev DB (data-only) as the Postgres SUPERUSER, after the

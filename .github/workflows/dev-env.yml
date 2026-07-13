@@ -276,11 +276,12 @@ jobs:
           fi
           echo "All 8 backends green."
 
-  # 7. Post-deploy verification (b): smoke (landing + ops-console render) and
-  #    topology (browser login + cross-tenant isolation) via Playwright, once
-  #    the fleet is green, the SPAs are deployed, and the DB is seeded.
+  # 7. Post-deploy verification (b): smoke (landing + ops-console render), api
+  #    (typed contract suite against the gateway), and topology (browser login
+  #    + cross-tenant isolation) via Playwright, once the fleet is green, the
+  #    SPAs are deployed, and the DB is seeded.
   e2e:
-    name: E2E (smoke + topology)
+    name: E2E (smoke + api + topology)
     needs: [fleet-gate, deploy-spas, reset-seed]
     if: needs.fleet-gate.result == 'success' && needs.deploy-spas.result == 'success' && needs.reset-seed.result == 'success'
     runs-on: ubuntu-latest
@@ -311,6 +312,14 @@ jobs:
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + ops-console render)
         run: pnpm --filter @invoice-os/e2e test:smoke
+      - name: API E2E (typed contract suite)
+        # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
+        # must complete before topology's rule-dependent assertions run (D4).
+        # Shares the global `rules` fixture with topology, so ordering here is
+        # load-bearing, not cosmetic. GATEWAY_URL comes from the workflow-level
+        # env (the seam reads it directly) — no chromium needed (A6: the api
+        # config declares no browser project).
+        run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from the
         # workflow-level env (topology/targets.ts reads them).
@@ -320,6 +329,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload API Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-api
           path: e2e/playwright-report/
           if-no-files-found: warn
           retention-days: 7

@@ -383,3 +383,196 @@ func TestRLS_ImportBatchesCountsNonNegativeCheck(t *testing.T) {
 		t.Fatalf("insert with rows_total = -1: SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
 	}
 }
+
+// IB-RLS-12 (QA-added, least-privilege proof): invoice_tenant_reader has NO grant on
+// import_batches at all (unlike tenants, which grants it SELECT via tenant_enumerate —
+// see the migration header: "Deliberately NO tenant_enumerate/invoice_tenant_reader
+// policy"). A bare SELECT as that role must fail at the GRANT level (SQLSTATE 42501
+// insufficient_privilege) before RLS is even evaluated — proving the table was never
+// exposed to the one cross-tenant enumeration identity. None of IB-RLS-01..11 connect
+// as h.reader, so a future migration that widened the GRANT to include this role would
+// slip through unnoticed without this case.
+func TestRLS_ImportBatchesReaderHasNoGrant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var n int
+	err := h.reader.QueryRow(ctx, `SELECT count(*) FROM import_batches`).Scan(&n)
+	if err == nil {
+		t.Fatal("invoice_tenant_reader SELECT on import_batches succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("invoice_tenant_reader SELECT on import_batches: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+}
+
+// IB-RLS-13 (QA-added, least-privilege proof): invoice_app has NO DELETE grant on
+// import_batches — the migration grants only SELECT/INSERT/UPDATE ("no DELETE" in the
+// header). Even a same-tenant DELETE on a row the app can otherwise see/update must be
+// refused at the GRANT level (42501), never reaching RLS's policy evaluation, and the
+// row must survive untouched. None of IB-RLS-01..11 exercise DELETE, so a future
+// migration that widened the GRANT would slip through unnoticed without this case
+// (same guarantee INV-RLS-08 proves for invitations).
+func TestRLS_ImportBatchesDeleteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-13 A Corp")
+	defer cleanupEntityA()
+	id, cleanupBatch := seedImportBatch(t, h.tenantA, entityA)
+	defer cleanupBatch()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM import_batches WHERE tenant_id = $1`, h.tenantA)
+		return e
+	})
+	if err == nil {
+		t.Fatal("app-role DELETE on import_batches succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("app-role DELETE on import_batches: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM import_batches WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after refused DELETE = %d, want 1 (row must survive)", n)
+	}
+}
+
+// IB-RLS-14 (QA-added, CHECK boundary): IB-RLS-11 only proves the negative side of the
+// non-negative CHECK (rows_total = -1 rejected). Confirm the boundary itself — all
+// three counters at exactly 0, the DEFAULT value every fresh batch starts at — is
+// ALLOWED, not accidentally caught by an off-by-one CHECK (e.g. a wrongly-written
+// `> 0` instead of `>= 0`).
+func TestRLS_ImportBatchesCountsZeroBoundaryAllowed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-14 A Corp")
+	defer cleanupEntityA()
+
+	var id string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO import_batches (tenant_id, entity_id, rows_total, rows_valid, rows_invalid)
+			 VALUES ($1, $2, 0, 0, 0) RETURNING id`,
+			h.tenantA, entityA,
+		).Scan(&id)
+	})
+	if err != nil {
+		t.Fatalf("insert with counters explicitly = 0: want success, got: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM import_batches WHERE id = $1`, id)
+	}()
+
+	var rowsTotal, rowsValid, rowsInvalid int
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT rows_total, rows_valid, rows_invalid FROM import_batches WHERE id = $1`, id,
+		).Scan(&rowsTotal, &rowsValid, &rowsInvalid)
+	})
+	if err != nil {
+		t.Fatalf("read back zero counters: %v", err)
+	}
+	if rowsTotal != 0 || rowsValid != 0 || rowsInvalid != 0 {
+		t.Errorf("counters read back = (%d,%d,%d), want (0,0,0)", rowsTotal, rowsValid, rowsInvalid)
+	}
+}
+
+// IB-RLS-15 (QA-added): a valid non-empty `errors` jsonb payload round-trips
+// byte-for-byte through the app role. IB-RLS-05 only ever proves the DEFAULT ('[]');
+// this confirms the column actually stores and returns caller-supplied JSON content,
+// not just its default.
+func TestRLS_ImportBatchesErrorsJSONRoundTrips(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-15 A Corp")
+	defer cleanupEntityA()
+
+	const payload = `[{"row": 3, "message": "missing TIN"}, {"row": 7, "message": "invalid date"}]`
+
+	var id string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO import_batches (tenant_id, entity_id, errors) VALUES ($1, $2, $3::jsonb) RETURNING id`,
+			h.tenantA, entityA, payload,
+		).Scan(&id)
+	})
+	if err != nil {
+		t.Fatalf("insert with explicit errors payload: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM import_batches WHERE id = $1`, id)
+	}()
+
+	var got string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT errors::text FROM import_batches WHERE id = $1`, id).Scan(&got)
+	})
+	if err != nil {
+		t.Fatalf("read back errors: %v", err)
+	}
+	// Compare parsed structure, not raw text — jsonb normalizes whitespace/key order.
+	var gotCount int
+	if err := h.app.QueryRow(ctx, `SELECT jsonb_array_length($1::jsonb)`, got).Scan(&gotCount); err != nil {
+		t.Fatalf("jsonb_array_length on read-back errors: %v", err)
+	}
+	if gotCount != 2 {
+		t.Errorf("errors array length read back = %d, want 2 (payload did not round-trip)", gotCount)
+	}
+}
+
+// IB-RLS-16 (QA-added, isolation completeness — belt-and-suspenders vs IB-RLS-01):
+// with TWO tenants' batches coexisting, an unqualified SELECT * (no WHERE tenant_id
+// filter) as tenant A returns ONLY A's rows. IB-RLS-01 always filters by tenant_id in
+// the query itself, which would still return the right count even if RLS silently did
+// nothing and the app happened to filter correctly; this case removes that filter so
+// RLS is the ONLY thing narrowing the result set.
+func TestRLS_ImportBatchesUnfilteredSelectSeesOnlyOwnTenant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-16 A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "IB-16 B Corp")
+	defer cleanupEntityB()
+
+	idA, cleanupA := seedImportBatch(t, h.tenantA, entityA)
+	defer cleanupA()
+	_, cleanupB := seedImportBatch(t, h.tenantB, entityB)
+	defer cleanupB()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		rows, e := tx.Query(ctx, `SELECT id, tenant_id FROM import_batches`)
+		if e != nil {
+			return e
+		}
+		defer rows.Close()
+
+		seen := map[string]string{}
+		for rows.Next() {
+			var id, tenantID string
+			if e := rows.Scan(&id, &tenantID); e != nil {
+				return e
+			}
+			seen[id] = tenantID
+		}
+		if e := rows.Err(); e != nil {
+			return e
+		}
+
+		if len(seen) != 1 {
+			t.Errorf("unfiltered SELECT returned %d rows, want 1 (RLS should narrow to A's own row only)", len(seen))
+		}
+		if tenantID, ok := seen[idA]; !ok {
+			t.Error("unfiltered SELECT did not include A's own row")
+		} else if tenantID != h.tenantA {
+			t.Errorf("returned row's tenant_id = %q, want %q", tenantID, h.tenantA)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}

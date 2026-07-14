@@ -544,3 +544,171 @@ func TestRLS_InvoiceStatusHistoryCrossTenantDanglingInvoiceRef(t *testing.T) {
 		t.Fatalf("WithinTenantTx (join check): %v", err)
 	}
 }
+
+// (QA-added, least-privilege proof): invoice_tenant_reader has NO grant on
+// invoice_status_history at all (see the migration header: "No grant to
+// invoice_tenant_reader"). A bare SELECT as that role must fail at the GRANT level
+// (SQLSTATE 42501 insufficient_privilege) before RLS is even evaluated — proving the
+// table was never exposed to the one cross-tenant enumeration identity. None of
+// ISH-RLS-01..13 connect as h.reader, so a future migration that widened the GRANT
+// would slip through unnoticed without this case (the same guarantee
+// TestRLS_LineItemsReaderHasNoGrant / TestRLS_InvoicesReaderHasNoGrant /
+// TestRLS_ImportBatchesReaderHasNoGrant prove for their tables). Confirmed meaningful
+// against the live migration: QA verified the grant list via information_schema before
+// writing this test (invoice_app has exactly {SELECT, INSERT}; no entry at all for
+// invoice_tenant_reader).
+func TestRLS_InvoiceStatusHistoryReaderHasNoGrant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var n int
+	err := h.reader.QueryRow(ctx, `SELECT count(*) FROM invoice_status_history`).Scan(&n)
+	if err == nil {
+		t.Fatal("invoice_tenant_reader SELECT on invoice_status_history succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("invoice_tenant_reader SELECT on invoice_status_history: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+}
+
+// (QA-added, tenant-cascade proof, complements ISH-RLS-12's invoice-delete cascade):
+// deleting the parent `tenants` row cascades its invoice_status_history rows away —
+// `tenant_id` is `ON DELETE CASCADE` (the M3-01 child-table precedent, the same
+// guarantee TestRLS_ImportBatchesTenantDeleteCascades proves for import_batches). Uses
+// a fresh, throwaway tenant (never h.tenantA/B) since deleting it is the whole point of
+// the test. Unlike the IB-RLS-10 precedent (which discards its entity's cleanup func
+// on the assumption the tenant-delete CASCADE will remove it), every seed cleanup here
+// is deferred IMMEDIATELY, not discarded — so a later fallible seed call Goexiting via
+// t.Fatalf still tears down everything already created, and this throwaway tenant can
+// never leak into a rerun even on failure.
+func TestRLS_InvoiceStatusHistoryTenantDeleteCascades(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO tenants (id, name) VALUES ($1, 'ISH-TDC throwaway tenant')`, tenantID,
+	); err != nil {
+		t.Fatalf("seed throwaway tenant: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	}()
+
+	entityID, cleanupEntity := seedBusinessEntity(t, tenantID, "ISH-TDC throwaway entity")
+	defer cleanupEntity()
+	invoiceID, cleanupInvoice := seedInvoice(t, tenantID, entityID, "ISH-TDC-throwaway")
+	defer cleanupInvoice()
+	historyID, cleanupHistory := seedStatusHistory(t, tenantID, invoiceID)
+	defer cleanupHistory()
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		t.Fatalf("delete parent tenants row: %v", err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM invoice_status_history WHERE id = $1`, historyID); n != 0 {
+		t.Errorf("invoice_status_history rows after tenant delete = %d, want 0 (tenant_id ON DELETE CASCADE)", n)
+	}
+}
+
+// (QA-added, closes a gap between ISH-RLS-09 and ISH-RLS-10): ISH-RLS-09 proves
+// from_status accepts NULL; ISH-RLS-10 proves the to_status CHECK rejects an
+// out-of-set value and accepts each of the 7 states — but neither exercises the
+// from_status CHECK's non-NULL branch (`from_status IS NULL OR from_status IN (...)`).
+// A miscoded OR (e.g. one that accidentally short-circuited to always-true) would slip
+// past both existing specs undetected. This closes that gap directly: a bogus
+// (non-NULL) from_status is rejected (23514), and each of the 7 canonical states is
+// individually accepted and round-trips when used as from_status.
+func TestRLS_InvoiceStatusHistoryFromStatusCheck(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "ISH-FSC A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "ISH-FSC-A")
+	defer cleanupInvoiceA()
+
+	// A bogus (non-NULL) from_status is rejected.
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor) VALUES ($1, $2, 'bogus', 'draft', 'system')`,
+			h.tenantA, invoiceA,
+		)
+		return e
+	})
+	if err == nil {
+		t.Fatal("insert with from_status = 'bogus' succeeded, want CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("insert with from_status = 'bogus': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	// Each of the 7 canonical states is accepted and round-trips as from_status too.
+	for _, want := range []string{"draft", "validated", "queued", "submitted", "accepted", "rejected", "failed"} {
+		var id string
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx,
+				`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor) VALUES ($1, $2, $3, 'draft', 'system') RETURNING id`,
+				h.tenantA, invoiceA, want,
+			).Scan(&id)
+		})
+		if err != nil {
+			t.Fatalf("insert with from_status = %q: want success, got: %v", want, err)
+		}
+		defer func(rowID string) {
+			_, _ = h.super.Exec(context.Background(), `DELETE FROM invoice_status_history WHERE id = $1`, rowID)
+		}(id)
+
+		var got string
+		err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT from_status FROM invoice_status_history WHERE id = $1`, id).Scan(&got)
+		})
+		if err != nil {
+			t.Fatalf("read back from_status for %q: %v", want, err)
+		}
+		if got != want {
+			t.Errorf("from_status read back = %q, want %q", got, want)
+		}
+	}
+}
+
+// (QA-added, isolation completeness, mirrors TestRLS_LineItemsUnfilteredCountSeesOnlyOwnTenant):
+// ISH-RLS-01 proves cross-tenant SELECT is refused using a query that already filters
+// by `tenant_id` in its own WHERE clause. This case removes that filter entirely — an
+// UNFILTERED `SELECT count(*) FROM invoice_status_history` under tenant A's context
+// must still see only A's own row, proving RLS transparently filters even when the
+// caller supplies no tenant_id predicate at all (the shape every real application
+// query will actually use). Seeds 1 row for A and 2 for B so an accidental
+// "see everything" bug (which would read 3) is distinguishable from the correct
+// answer (1).
+func TestRLS_InvoiceStatusHistoryUnfilteredCountSeesOnlyOwnTenant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "ISH-ISO A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "ISH-ISO B Corp")
+	defer cleanupEntityB()
+
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "ISH-ISO-A")
+	defer cleanupInvoiceA()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "ISH-ISO-B")
+	defer cleanupInvoiceB()
+
+	_, cleanupA := seedStatusHistory(t, h.tenantA, invoiceA)
+	defer cleanupA()
+	_, cleanupB1 := seedStatusHistory(t, h.tenantB, invoiceB)
+	defer cleanupB1()
+	_, cleanupB2 := seedStatusHistory(t, h.tenantB, invoiceB)
+	defer cleanupB2()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, `SELECT count(*) FROM invoice_status_history`); n != 1 {
+			t.Errorf("unfiltered count under A's RLS = %d, want 1 (A's own row only; B seeded 2 more)", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}

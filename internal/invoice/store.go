@@ -317,3 +317,29 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	}
 	return inv, nil
 }
+
+// errNotImplemented is the RED-stage stub body Transition returns below
+// (M4-02-02, Mode A / RALPH Stage 2.5): the real guarded-transition
+// implementation (legalTransitions table, SELECT ... FOR UPDATE, atomic
+// status+history+audit triple write) lands in this subtask's Mode B
+// (Executor, Stage 3) pass. It returns (rather than panics) so
+// transition_test.go reaches its assertions and fails for the right reason
+// (assertion mismatch on this sentinel), not a panic or compile error.
+var errNotImplemented = errors.New("invoice: not implemented")
+
+// Transition will be the SOLE writer of invoices.status (M4-02-02, System
+// Design [D1]/[D2]/[D4]/[D11]): inside ONE db.WithinRequestTenantTx closure,
+// SELECT status FROM invoices WHERE id=$1 FOR UPDATE (RLS-scoped; 0 rows /
+// pgx.ErrNoRows -> ErrNotFound) -> reject a no-op (current==target) as
+// ErrRedundantTransition (checked FIRST) -> reject an edge outside the
+// legalTransitions table as ErrIllegalTransition -> else UPDATE status +
+// INSERT invoice_status_history(from_status=current, to_status=target,
+// actor=Subject) + audit.Record(ctx, tx, actor, "invoice.transitioned",
+// {"from":current,"to":target}) -- all in one transaction, so a later
+// failure rolls the earlier writes back too. The 6 legal, forward-only
+// edges: draft->validated, validated->queued, queued->submitted,
+// submitted->{accepted,rejected,failed}; accepted/rejected/failed are
+// terminal (no outgoing edges in M4-02, no recovery/back edges).
+func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
+	return Invoice{}, errNotImplemented
+}

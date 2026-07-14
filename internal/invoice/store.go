@@ -80,14 +80,25 @@ func scanLineItem(row scanner, li *LineItem) error {
 //
 // Only the invoices INSERT's pg error is mapped: a unique_violation (23505) on
 // invoices_tenant_entity_number_uq -> ErrDuplicateNumber, a foreign_key_violation
-// (23503, non-existent entity_id) -> ErrValidation. The line_items/history/audit
-// errors propagate raw so their SQLSTATE (e.g. the actor CHECK's 23514) is not
-// masked -- the atomicity specs assert on it.
+// (23503, non-existent entity_id) or an invalid_text_representation (22P02,
+// entity_id is the only uuid-typed input here, so a malformed non-empty value
+// unambiguously means a bad entity_id) -> ErrValidation. The line_items/history/
+// audit errors propagate raw so their SQLSTATE (e.g. the actor CHECK's 23514) is
+// not masked -- the atomicity specs assert on it.
+//
+// EntityID/InvoiceNumber are required non-empty ([D10]); an empty value is
+// rejected as ErrValidation BEFORE any tx opens, mirroring Update's all-nil
+// pre-tx guard -- this also completes the contract for the importer-reuse path
+// ([D3]), since the HTTP layer is not the only caller.
 //
 // Numeric inputs are bound as $N::text::numeric: the innermost ::text pins the
 // wire parameter type to text so pgx encodes the *string (pgx's NumericCodec has
 // no string encode plan), then Postgres casts text->numeric.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
+	if in.EntityID == "" || in.InvoiceNumber == "" {
+		return Invoice{}, fmt.Errorf("%w: entity_id and invoice_number are required", ErrValidation)
+	}
+
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// The identity is guaranteed present here: WithinRequestTenantTx already
@@ -110,7 +121,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			switch pgCode(err) {
 			case "23505":
 				return ErrDuplicateNumber
-			case "23503":
+			case "23503", "22P02":
 				return ErrValidation
 			}
 			return err

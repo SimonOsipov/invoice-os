@@ -1,5 +1,9 @@
 -- db/seed.dev.sql — LOCAL dev fixture data (M2-06). NOT a migration and NOT run in CI.
 --
+-- [dev-env deploy trigger 2026-07-14] No-op comment: this branch exists only to open a
+-- ready PR so dev-env.yml redeploys the full fleet on current main (M4-02 merged). Revert
+-- or close the PR to scale the dev env back to zero. No functional change.
+--
 -- `make dev-db` runs this in-container as the POSTGRES SUPERUSER, after migrations.
 -- The superuser has BYPASSRLS, so these inserts need no app.current_tenant context and
 -- no INSERT grant on the app role (invoice_app is deliberately SELECT-only on tenants).

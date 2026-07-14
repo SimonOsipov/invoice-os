@@ -7,10 +7,9 @@
 // transaction as the domain change, so a failed audit/history write rolls
 // back the domain write too (mirrors internal/portfolio's [A5] convention).
 //
-// This subtask (M4-02-01) establishes the domain types, the error model, and
-// the Create/Get/List/Update store methods over business content only;
-// M4-02-02 adds the Transition state-machine method and M4-02-03 wires HTTP
-// handlers — both out of scope here, on the same scaffold.
+// This file establishes the domain types and error model shared by the
+// Create/Get/List/Update/Transition store methods (store.go) and the HTTP
+// handlers (handlers.go).
 package invoice
 
 import (

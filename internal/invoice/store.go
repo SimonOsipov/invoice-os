@@ -162,8 +162,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 
 // Get returns the invoice by id with its line_items hydrated (ordered by line_no,
 // [D7]) inside one db.WithinRequestTenantTx. RLS scopes the row set to the
-// caller's tenant, so a cross-tenant (or genuinely absent) id 0-rows;
-// pgx.ErrNoRows maps to ErrNotFound.
+// caller's tenant, so a cross-tenant (or genuinely absent) VALID uuid 0-rows;
+// pgx.ErrNoRows maps to ErrNotFound. A malformed (non-uuid) id raises 22P02
+// (invalid_text_representation), mapped to ErrValidation -- mirrors Create's
+// entity_id mapping (CodeRabbit finding, M4-02 PR review).
 func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -172,6 +174,9 @@ func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 		), &inv); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
 			}
 			return err
 		}
@@ -241,8 +246,10 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 // is rejected as ErrValidation BEFORE any tx opens (a no-op UPDATE is forbidden,
 // [D9]). It never touches status/violations/line_items -- status is Transition's
 // sole province (M4-02-02), violations is M4-04's. Zero rows affected
-// (cross-tenant id, RLS-invisible) maps to ErrNotFound. Numeric inputs are bound
-// as $N::text::numeric, same rationale as Create.
+// (cross-tenant VALID uuid, RLS-invisible) maps to ErrNotFound; a malformed
+// (non-uuid) id raises 22P02, mapped to ErrValidation (CodeRabbit finding,
+// mirrors Get/Create). Numeric inputs are bound as $N::text::numeric, same
+// rationale as Create.
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
 	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
 		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
@@ -304,6 +311,9 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
 			return err
 		}
 
@@ -346,8 +356,10 @@ func canTransition(from, target Status) bool {
 // Transition is the SOLE writer of invoices.status (M4-02-02, System Design
 // [D1]/[D2]/[D4]/[D11]). Inside ONE db.WithinRequestTenantTx closure:
 // SELECT status FROM invoices WHERE id=$1 FOR UPDATE locks and reads the
-// current status (RLS-scoped, so a cross-tenant id 0-rows same as a genuinely
-// nonexistent one; pgx.ErrNoRows -> ErrNotFound) -> a no-op (current==target)
+// current status (RLS-scoped, so a cross-tenant VALID uuid 0-rows same as a
+// genuinely nonexistent one; pgx.ErrNoRows -> ErrNotFound; a malformed
+// non-uuid id raises 22P02, mapped to ErrValidation, mirroring Get/Update/
+// Create -- CodeRabbit finding) -> a no-op (current==target)
 // -> ErrRedundantTransition (checked FIRST, [D4], before legality) -> an edge
 // outside legalTransitions -> ErrIllegalTransition -> else UPDATE status,
 // INSERT invoice_status_history (from_status=current, to_status=target,
@@ -375,6 +387,9 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		).Scan(&current); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
 			}
 			return err
 		}

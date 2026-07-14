@@ -318,28 +318,97 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	return inv, nil
 }
 
-// errNotImplemented is the RED-stage stub body Transition returns below
-// (M4-02-02, Mode A / RALPH Stage 2.5): the real guarded-transition
-// implementation (legalTransitions table, SELECT ... FOR UPDATE, atomic
-// status+history+audit triple write) lands in this subtask's Mode B
-// (Executor, Stage 3) pass. It returns (rather than panics) so
-// transition_test.go reaches its assertions and fails for the right reason
-// (assertion mismatch on this sentinel), not a panic or compile error.
-var errNotImplemented = errors.New("invoice: not implemented")
+// legalTransitions is the SINGLE source of truth for the invoice lifecycle
+// state machine ([D1], [D11] -- no generic FSM framework, Simplicity First):
+// forward-only in M4-02 -- 6 edges, 3 terminals (accepted/rejected/failed have
+// no outgoing edge, so they are simply absent as map keys). Recovery/retry
+// edges (e.g. validated->draft, rejected->draft, failed->queued) are added by
+// the consumer stories that DRIVE them (the M4-05 fix loop, M5 submission
+// retries), never speculatively here.
+var legalTransitions = map[Status][]Status{
+	StatusDraft:     {StatusValidated},
+	StatusValidated: {StatusQueued},
+	StatusQueued:    {StatusSubmitted},
+	StatusSubmitted: {StatusAccepted, StatusRejected, StatusFailed},
+}
 
-// Transition will be the SOLE writer of invoices.status (M4-02-02, System
-// Design [D1]/[D2]/[D4]/[D11]): inside ONE db.WithinRequestTenantTx closure,
-// SELECT status FROM invoices WHERE id=$1 FOR UPDATE (RLS-scoped; 0 rows /
-// pgx.ErrNoRows -> ErrNotFound) -> reject a no-op (current==target) as
-// ErrRedundantTransition (checked FIRST) -> reject an edge outside the
-// legalTransitions table as ErrIllegalTransition -> else UPDATE status +
-// INSERT invoice_status_history(from_status=current, to_status=target,
-// actor=Subject) + audit.Record(ctx, tx, actor, "invoice.transitioned",
-// {"from":current,"to":target}) -- all in one transaction, so a later
-// failure rolls the earlier writes back too. The 6 legal, forward-only
-// edges: draft->validated, validated->queued, queued->submitted,
-// submitted->{accepted,rejected,failed}; accepted/rejected/failed are
-// terminal (no outgoing edges in M4-02, no recovery/back edges).
+// canTransition reports whether target is a legal next state from from, per
+// legalTransitions.
+func canTransition(from, target Status) bool {
+	for _, s := range legalTransitions[from] {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+// Transition is the SOLE writer of invoices.status (M4-02-02, System Design
+// [D1]/[D2]/[D4]/[D11]). Inside ONE db.WithinRequestTenantTx closure:
+// SELECT status FROM invoices WHERE id=$1 FOR UPDATE locks and reads the
+// current status (RLS-scoped, so a cross-tenant id 0-rows same as a genuinely
+// nonexistent one; pgx.ErrNoRows -> ErrNotFound) -> a no-op (current==target)
+// -> ErrRedundantTransition (checked FIRST, [D4], before legality) -> an edge
+// outside legalTransitions -> ErrIllegalTransition -> else UPDATE status,
+// INSERT invoice_status_history (from_status=current, to_status=target,
+// actor=Subject), and audit.Record("invoice.transitioned", {id,from,to},
+// [D6]) -- all in one transaction, so a later failure rolls the earlier
+// writes back too (INV-SM-05). The FOR UPDATE row lock serializes concurrent
+// transitions on the same invoice (INV-SM-06): a losing goroutine blocks on
+// the lock, then observes the winner's already-applied status and resolves
+// to ErrRedundantTransition.
+//
+// The history/audit INSERTs are NOT actor-length pre-validated -- the
+// atomicity specs rely on the real CHECK constraints firing (an empty Subject
+// fails invoice_status_history's char_length(actor)>0; a 256-char Subject
+// passes that but fails audit_log's char_length(actor)<=255) and propagate
+// raw so their SQLSTATE (23514) is not masked, mirroring Create's write-order
+// handling.
 func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
-	return Invoice{}, errNotImplemented
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var current Status
+		if err := tx.QueryRow(ctx,
+			`SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&current); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if current == target {
+			return ErrRedundantTransition
+		}
+		if !canTransition(current, target) {
+			return ErrIllegalTransition
+		}
+
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET status = $1 WHERE id = $2 RETURNING `+invoiceColumns,
+			string(target), id,
+		), &inv); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			callerID.TenantID, id, string(current), string(target), callerID.Subject,
+		); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.transitioned", map[string]any{
+			"id":   id,
+			"from": current,
+			"to":   target,
+		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
 }

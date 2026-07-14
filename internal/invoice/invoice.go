@@ -36,6 +36,18 @@ const (
 	StatusFailed    Status = "failed"
 )
 
+// valid reports whether s is one of the seven canonical invoice lifecycle
+// states. TransitionHandler ([D12], M4-02-03) uses this to reject an unknown
+// target string as 400 "unknown status" BEFORE ever calling Store.Transition.
+func (s Status) valid() bool {
+	switch s {
+	case StatusDraft, StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted, StatusRejected, StatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // LineItem is a line_items row: one line of an invoice, always read ordered
 // by its system-assigned LineNo (1..N, [D10]). MBS-content fields are
 // nullable (store-invalid-faithfully, no CHECK, per the migration's own
@@ -43,39 +55,43 @@ const (
 // ::text ([D13]) — never float64 or pgtype.Numeric, to avoid a
 // floating-point misrepresentation of money.
 type LineItem struct {
-	ID          string
-	LineNo      int
-	Description *string
-	Quantity    *string
-	UnitPrice   *string
-	LineTotal   *string
-	LineTax     *string
+	ID          string  `json:"id"`
+	LineNo      int     `json:"line_no"`
+	Description *string `json:"description"`
+	Quantity    *string `json:"quantity"`
+	UnitPrice   *string `json:"unit_price"`
+	LineTotal   *string `json:"line_total"`
+	LineTax     *string `json:"line_tax"`
 }
 
 // Invoice is an invoices row plus its hydrated LineItems (Store.Get only;
 // Store.List returns headers with LineItems left nil, [D7]/[D8]). Money
 // fields (Subtotal/VAT/Total) are *string, read via ::text ([D13]) — see
 // LineItem. Violations/RuleSetVersionID are read-only here: M4-02 never
-// writes them (M4-04's validate gate owns both).
+// writes them (M4-04's validate gate owns both). RuleSetVersionID is
+// intentionally NOT surfaced on the wire (json:"-") — it is always null in
+// M4-02 and M4-04 will define its eventual wire shape; Violations IS
+// surfaced (always the literal "[]" here) since it is a real, if currently
+// always-empty, part of the row.
 type Invoice struct {
-	ID               string
-	EntityID         string
-	ImportBatchID    *string
-	InvoiceNumber    string
-	Status           Status
-	IssueDate        *time.Time
-	SupplierTIN      *string
-	SupplierName     *string
-	BuyerTIN         *string
-	BuyerName        *string
-	Currency         *string
-	Subtotal         *string
-	VAT              *string
-	Total            *string
-	Violations       json.RawMessage
-	RuleSetVersionID *string
-	CreatedAt        time.Time
-	LineItems        []LineItem
+	ID               string          `json:"id"`
+	EntityID         string          `json:"entity_id"`
+	ImportBatchID    *string         `json:"import_batch_id"`
+	InvoiceNumber    string          `json:"invoice_number"`
+	Status           Status          `json:"status"`
+	IssueDate        *time.Time      `json:"issue_date"`
+	SupplierTIN      *string         `json:"supplier_tin"`
+	SupplierName     *string         `json:"supplier_name"`
+	BuyerTIN         *string         `json:"buyer_tin"`
+	BuyerName        *string         `json:"buyer_name"`
+	Currency         *string         `json:"currency"`
+	Subtotal         *string         `json:"subtotal"`
+	VAT              *string         `json:"vat"`
+	Total            *string         `json:"total"`
+	Violations       json.RawMessage `json:"violations"`
+	RuleSetVersionID *string         `json:"-"`
+	CreatedAt        time.Time       `json:"created_at"`
+	LineItems        []LineItem      `json:"line_items,omitempty"`
 }
 
 // LineItemInput is one line of Store.Create's CreateInput.LineItems. LineNo

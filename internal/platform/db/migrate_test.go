@@ -1,4 +1,4 @@
-package db
+package db_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
+	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
@@ -23,6 +24,12 @@ import (
 // go:embed glob that ships a stale or incomplete set inside the gateway binary.
 // Resetting to empty first proves every embedded migration is applied, not merely
 // that the DB was already current.
+//
+// The DownTo(0) reset wipes the tenants the RLS harness (rls_harness_test.go) seeds
+// in TestMain, so when that harness is active (a full-package run with all four
+// DATABASE_* URLs) this test restores the shared fixtures it disturbs in a cleanup,
+// keeping the package green un-filtered. In the CI `migrations` job only
+// DATABASE_MIGRATION_URL is set, the harness self-skips, and the cleanup is a no-op.
 func TestMigrateUpFromEmbedded(t *testing.T) {
 	dsn := os.Getenv("DATABASE_MIGRATION_URL")
 	if dsn == "" {
@@ -41,6 +48,24 @@ func TestMigrateUpFromEmbedded(t *testing.T) {
 		t.Fatalf("build migration provider: %v", err)
 	}
 
+	// DownTo(0) below rebuilds the schema from zero, wiping the tenants the RLS
+	// harness seeded in TestMain. When the harness is active (full-package run with
+	// all four DATABASE_* URLs) restore its fixtures afterwards so the other RLS
+	// cases don't fail on missing tenants. In the CI `migrations` job only
+	// DATABASE_MIGRATION_URL is set, so h == nil and this is a no-op — unchanged.
+	if h != nil {
+		t.Cleanup(func() {
+			cctx := context.Background()
+			if err := db.MigrateUp(cctx, dsn, migrations.FS); err != nil {
+				t.Errorf("restore schema after migrate round-trip: %v", err)
+				return
+			}
+			if err := h.restore(cctx); err != nil {
+				t.Errorf("restore RLS harness fixtures: %v", err)
+			}
+		})
+	}
+
 	// Roll all the way back so Up is proven from zero. DownTo(0) runs every Down
 	// in the embedded set — a stale/incomplete embed would already fail here.
 	if _, err := provider.DownTo(ctx, 0); err != nil {
@@ -48,7 +73,7 @@ func TestMigrateUpFromEmbedded(t *testing.T) {
 	}
 
 	// The path under test: the shared helper the gateway calls at boot.
-	if err := MigrateUp(ctx, dsn, migrations.FS); err != nil {
+	if err := db.MigrateUp(ctx, dsn, migrations.FS); err != nil {
 		t.Fatalf("MigrateUp from empty schema: %v", err)
 	}
 

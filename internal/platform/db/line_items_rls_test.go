@@ -475,3 +475,228 @@ func TestRLS_LineItemsCrossTenantDanglingInvoiceRef(t *testing.T) {
 		t.Fatalf("WithinTenantTx (join check): %v", err)
 	}
 }
+
+// (QA-added, least-privilege proof): invoice_tenant_reader has NO grant on
+// line_items at all (unlike tenants, which grants it SELECT via tenant_enumerate —
+// see the migration header: "Deliberately NO tenant_enumerate/invoice_tenant_reader
+// policy"). A bare SELECT as that role must fail at the GRANT level (SQLSTATE 42501
+// insufficient_privilege) before RLS is even evaluated — proving the table was never
+// exposed to the one cross-tenant enumeration identity. None of LI-RLS-01..12 connect
+// as h.reader, so a future migration that widened the GRANT would slip through
+// unnoticed without this case (same guarantee TestRLS_InvoicesReaderHasNoGrant /
+// TestRLS_ImportBatchesReaderHasNoGrant prove for their tables).
+func TestRLS_LineItemsReaderHasNoGrant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var n int
+	err := h.reader.QueryRow(ctx, `SELECT count(*) FROM line_items`).Scan(&n)
+	if err == nil {
+		t.Fatal("invoice_tenant_reader SELECT on line_items succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("invoice_tenant_reader SELECT on line_items: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+}
+
+// (QA-added, least-privilege proof): invoice_app has NO DELETE grant on line_items —
+// the migration grants only SELECT/INSERT/UPDATE (SIU, not SIUD — "no DELETE" in the
+// header: "the fix loop (M4-05) edits rows in place — no DELETE"). Even a same-tenant
+// DELETE on a row the app can otherwise see/update must be refused at the GRANT level
+// (42501), never reaching RLS's policy evaluation, and the row must survive untouched.
+// None of LI-RLS-01..12 exercise DELETE, so a future migration that widened the GRANT
+// would slip through unnoticed without this case.
+func TestRLS_LineItemsDeleteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-A")
+	defer cleanupInvoiceA()
+	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM line_items WHERE tenant_id = $1`, h.tenantA)
+		return e
+	})
+	if err == nil {
+		t.Fatal("app-role DELETE on line_items succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("app-role DELETE on line_items: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after refused DELETE = %d, want 1 (row must survive)", n)
+	}
+}
+
+// (QA-added, cascade-is-FK-driven-not-grant-driven proof, belt-and-suspenders vs
+// LI-RLS-10 and TestRLS_LineItemsDeleteRefused above): line_items grants invoice_app
+// NO DELETE at all — proven above — so the app role can never directly remove a
+// line_items row. LI-RLS-10 proves the CASCADE removes lines when the parent invoice
+// is deleted, but does so via h.super, which BYPASSES every grant and every RLS
+// policy, so it cannot distinguish "the CASCADE fired" from "the superuser can do
+// anything anyway". This case re-proves the cascade using h.mig — the table OWNER,
+// which is bound by FORCE RLS exactly like every other role (LI-RLS-06) and was never
+// explicitly GRANTed DELETE on either table (ownership alone confers full privileges,
+// same as invoice_migrator's implicit rights on every M4-01 table) — under a real
+// tenant-scoped transaction. The line still disappears, proving the referential-action
+// CASCADE is driven by the FK constraint itself, not by any DELETE grant on line_items.
+func TestRLS_LineItemsCascadeDrivenByFKNotGrant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-CASC A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-CASC-A")
+	defer cleanupInvoiceA() // no-op: DELETE-by-id after the tx below already removed it
+	lineID, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine() // no-op: DELETE-by-id after the cascade already removed it
+
+	err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `DELETE FROM invoices WHERE id = $1`, invoiceA)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 1 {
+			t.Errorf("owner (h.mig) tenant-scoped invoice DELETE affected %d rows, want 1", ct.RowsAffected())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("owner-role (h.mig) tenant-scoped DELETE of the parent invoice: %v", err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, lineID); n != 0 {
+		t.Errorf("line_items rows after owner-driven cascade delete = %d, want 0 (CASCADE must fire regardless of the child table's own grants)", n)
+	}
+}
+
+// (QA-added, unique guard belt-and-suspenders vs LI-RLS-08): LI-RLS-08 seeds its FIRST
+// row via the superuser (BYPASSRLS) and only exercises the SECOND insert through an
+// ordinary app-role tenant-context write. This case proves the guard holds when BOTH
+// sides of the collision are ordinary same-tenant app-role writes end-to-end — ruling
+// out any (implausible but unverified) path where the constraint only bites against
+// superuser-seeded rows (same proof TestRLS_InvoicesUniqueGuardBothRowsViaTenantContext
+// gives for invoices).
+func TestRLS_LineItemsUniqueGuardBothRowsViaTenantContext(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DUP2 A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DUP2-INV")
+	defer cleanupInvoiceA()
+
+	var firstID string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO line_items (tenant_id, invoice_id, line_no) VALUES ($1, $2, 1) RETURNING id`,
+			h.tenantA, invoiceA,
+		).Scan(&firstID)
+	})
+	if err != nil {
+		t.Fatalf("first app-role tenant-context insert: want success, got: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM line_items WHERE id = $1`, firstID)
+	}()
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO line_items (tenant_id, invoice_id, line_no) VALUES ($1, $2, 1)`,
+			h.tenantA, invoiceA,
+		)
+		return e
+	})
+	if err == nil {
+		t.Fatal("second app-role tenant-context insert with the same (invoice_id, line_no) succeeded, want unique_violation (SQLSTATE 23505)")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("second app-role tenant-context insert (duplicate ordinal): SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+}
+
+// (QA-added, unique guard belt-and-suspenders vs LI-RLS-08): the guard must also catch
+// a collision created by an UPDATE, not just a fresh INSERT — renaming an existing
+// line's line_no onto a sibling's, within the SAME invoice, is refused just like a
+// duplicate INSERT would be (SQLSTATE 23505). Regression target: a future rewrite of
+// the guard as an INSERT-only trigger instead of a true UNIQUE constraint would pass
+// LI-RLS-08 but fail this case (same proof TestRLS_InvoicesUniqueGuardUpdateCollision
+// gives for invoices).
+func TestRLS_LineItemsUniqueGuardUpdateCollision(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-UPDDUP A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-UPDDUP-INV")
+	defer cleanupInvoiceA()
+
+	_, cleanupSibling := seedLineItem(t, h.tenantA, invoiceA, 1) // the TARGET ordinal
+	defer cleanupSibling()
+	victimID, cleanupVictim := seedLineItem(t, h.tenantA, invoiceA, 2) // the SOURCE, renamed below
+	defer cleanupVictim()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE line_items SET line_no = 1 WHERE id = $1`, victimID)
+		return e
+	})
+	if err == nil {
+		t.Fatal("UPDATE renaming a line_no onto a sibling's within the same invoice succeeded, want unique_violation (SQLSTATE 23505)")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("UPDATE collision on (invoice_id, line_no): SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+
+	// The victim row must be untouched by the refused UPDATE.
+	var stillLineNo int
+	if err := h.super.QueryRow(ctx, `SELECT line_no FROM line_items WHERE id = $1`, victimID).Scan(&stillLineNo); err != nil {
+		t.Fatalf("read back victim line_no: %v", err)
+	}
+	if stillLineNo != 2 {
+		t.Errorf("victim line_no after refused UPDATE = %d, want unchanged 2", stillLineNo)
+	}
+}
+
+// (QA-added, isolation completeness — belt-and-suspenders vs LI-RLS-01): with TWO
+// tenants' line_items coexisting, an UNFILTERED count (no WHERE tenant_id clause) as
+// tenant A returns ONLY A's row count. LI-RLS-01 always filters by tenant_id in the
+// query itself, which would still return the right count even if RLS silently did
+// nothing and the query happened to filter correctly; this case removes that filter so
+// RLS is the ONLY thing narrowing the result set (same proof
+// TestRLS_ImportBatchesUnfilteredSelectSeesOnlyOwnTenant gives for import_batches).
+func TestRLS_LineItemsUnfilteredCountSeesOnlyOwnTenant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-ISO A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "LI-ISO B Corp")
+	defer cleanupEntityB()
+
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-ISO-A")
+	defer cleanupInvoiceA()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "LI-ISO-B")
+	defer cleanupInvoiceB()
+
+	_, cleanupA := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupA()
+	_, cleanupB1 := seedLineItem(t, h.tenantB, invoiceB, 1)
+	defer cleanupB1()
+	_, cleanupB2 := seedLineItem(t, h.tenantB, invoiceB, 2)
+	defer cleanupB2()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, `SELECT count(*) FROM line_items`); n != 1 {
+			t.Errorf("unfiltered count under A's RLS = %d, want 1 (A's own row only; B seeded 2 more)", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}

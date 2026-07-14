@@ -1,0 +1,162 @@
+// Package invoice is the 03 Invoice context: the CRUD and lifecycle surface
+// for a tenant's invoices — the canonical record the import -> validate ->
+// fix -> re-validate loop (M4-03/M4-04/M4-05) reads and writes. Every store
+// method wraps db.WithinRequestTenantTx, so writes and reads are scoped to
+// the caller's tenant under RLS; every mutation writes an audit.Record row
+// (plus, for Create, a genesis invoice_status_history row) in the SAME
+// transaction as the domain change, so a failed audit/history write rolls
+// back the domain write too (mirrors internal/portfolio's [A5] convention).
+//
+// This subtask (M4-02-01) establishes the domain types, the error model, and
+// the Create/Get/List/Update store methods over business content only;
+// M4-02-02 adds the Transition state-machine method and M4-02-03 wires HTTP
+// handlers — both out of scope here, on the same scaffold.
+package invoice
+
+import (
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// Status is one of the seven canonical invoice lifecycle states, matching the
+// invoices.status / invoice_status_history.to_status CHECK constraint
+// (migrations/20260714103137_invoices.sql) [D11].
+type Status string
+
+const (
+	StatusDraft     Status = "draft"
+	StatusValidated Status = "validated"
+	StatusQueued    Status = "queued"
+	StatusSubmitted Status = "submitted"
+	StatusAccepted  Status = "accepted"
+	StatusRejected  Status = "rejected"
+	StatusFailed    Status = "failed"
+)
+
+// LineItem is a line_items row: one line of an invoice, always read ordered
+// by its system-assigned LineNo (1..N, [D10]). MBS-content fields are
+// nullable (store-invalid-faithfully, no CHECK, per the migration's own
+// header); Quantity/UnitPrice/LineTotal/LineTax are numeric columns read via
+// ::text ([D13]) — never float64 or pgtype.Numeric, to avoid a
+// floating-point misrepresentation of money.
+type LineItem struct {
+	ID          string
+	LineNo      int
+	Description *string
+	Quantity    *string
+	UnitPrice   *string
+	LineTotal   *string
+	LineTax     *string
+}
+
+// Invoice is an invoices row plus its hydrated LineItems (Store.Get only;
+// Store.List returns headers with LineItems left nil, [D7]/[D8]). Money
+// fields (Subtotal/VAT/Total) are *string, read via ::text ([D13]) — see
+// LineItem. Violations/RuleSetVersionID are read-only here: M4-02 never
+// writes them (M4-04's validate gate owns both).
+type Invoice struct {
+	ID               string
+	EntityID         string
+	ImportBatchID    *string
+	InvoiceNumber    string
+	Status           Status
+	IssueDate        *time.Time
+	SupplierTIN      *string
+	SupplierName     *string
+	BuyerTIN         *string
+	BuyerName        *string
+	Currency         *string
+	Subtotal         *string
+	VAT              *string
+	Total            *string
+	Violations       json.RawMessage
+	RuleSetVersionID *string
+	CreatedAt        time.Time
+	LineItems        []LineItem
+}
+
+// LineItemInput is one line of Store.Create's CreateInput.LineItems. LineNo
+// is deliberately NOT part of this input — it is system-assigned 1..N by the
+// slice's array position ([D10]), never caller-supplied.
+type LineItemInput struct {
+	Description *string
+	Quantity    *string
+	UnitPrice   *string
+	LineTotal   *string
+	LineTax     *string
+}
+
+// CreateInput is the Store.Create argument. EntityID and InvoiceNumber are
+// required (non-empty, [D10]); every other field is optional MBS content
+// that Store.Create persists un-rejected even when negative/NULL/blank
+// (store-invalid-faithfully, AC-6). ImportBatchID is deliberately NOT a
+// field here — M4-03's importer sets it via a later subtask, not this one
+// ([D10]).
+type CreateInput struct {
+	EntityID      string
+	InvoiceNumber string
+	IssueDate     *time.Time
+	SupplierTIN   *string
+	SupplierName  *string
+	BuyerTIN      *string
+	BuyerName     *string
+	Currency      *string
+	Subtotal      *string
+	VAT           *string
+	Total         *string
+	LineItems     []LineItemInput
+}
+
+// UpdateInput is the Store.Update argument: a partial update over invoices'
+// mutable MBS-content columns only. Only non-nil fields are applied; nil
+// means "leave unchanged". Deliberately has NO EntityID/InvoiceNumber/Status
+// field — identity and lifecycle are not Update's job ([D9]); an all-nil
+// UpdateInput is rejected as ErrValidation before any tx opens (a no-op
+// UPDATE is forbidden).
+type UpdateInput struct {
+	IssueDate    *time.Time
+	SupplierTIN  *string
+	SupplierName *string
+	BuyerTIN     *string
+	BuyerName    *string
+	Currency     *string
+	Subtotal     *string
+	VAT          *string
+	Total        *string
+}
+
+// ListFilter is the Store.List query ([D8]): no filters, just pagination —
+// Limit/Offset. (Unlike internal/portfolio's ListFilter, there is no
+// Status/Q — List's only job here is a paginated, tenant-scoped header
+// feed, ordered created_at DESC, id DESC.)
+type ListFilter struct {
+	Limit  int
+	Offset int
+}
+
+// Sentinels for the invoice error model. ErrIllegalTransition/
+// ErrRedundantTransition are declared here (types live in this file) even
+// though Store.Transition itself is a later subtask (M4-02-02) — no method
+// returns them yet.
+var (
+	ErrValidation          = errors.New("invoice: validation")
+	ErrNotFound            = errors.New("invoice: not found")
+	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
+	ErrRedundantTransition = errors.New("invoice: redundant transition")
+	ErrIllegalTransition   = errors.New("invoice: illegal transition")
+)
+
+// pgCode extracts the SQLSTATE from err, or "" if err does not wrap a
+// *pgconn.PgError. Copied verbatim from internal/portfolio/portfolio.go's own
+// copy (itself copied from internal/platform/db/tenants_kind_test.go), needed
+// here to map Store.Create's 23505/23503 to ErrDuplicateNumber/ErrValidation.
+func pgCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}

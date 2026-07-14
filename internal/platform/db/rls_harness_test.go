@@ -171,6 +171,21 @@ func (h *harness) seed(ctx context.Context) error {
 	return nil
 }
 
+// restore re-establishes the shared fixtures after a test in this package rebuilds
+// the schema from zero (TestMigrateUpFromEmbedded's DownTo(0)+MigrateUp), which drops
+// the migrator-owned `tenants` (and the seeded tenants A/B). Idempotent: recreate the
+// fixture table, clear any stale A/B rows, re-seed — returning the DB to the baseline
+// TestMain established so later RLS cases still find their fixtures.
+func (h *harness) restore(ctx context.Context) error {
+	if err := h.createFixtureTable(ctx); err != nil {
+		return err
+	}
+	if _, err := h.super.Exec(ctx, `DELETE FROM tenants WHERE id IN ($1, $2)`, h.tenantA, h.tenantB); err != nil {
+		return fmt.Errorf("restore: clear tenants: %w", err)
+	}
+	return h.seed(ctx)
+}
+
 // teardown drops the fixture table and this run's seeded tenants, then closes pools.
 // Best-effort: the CI DB is ephemeral, and leftover rows (random ids) are harmless.
 func (h *harness) teardown(ctx context.Context) {

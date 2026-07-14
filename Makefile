@@ -39,7 +39,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit
+.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit demo-reset
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -114,3 +114,12 @@ test-audit: ## Run the M2-10 audit immutability/atomicity suite against the loca
 .PHONY: guard-migration-url
 guard-migration-url:
 	@test -n "$(DATABASE_MIGRATION_URL)" || { echo "DATABASE_MIGRATION_URL is not set (set it in .env or the environment)"; exit 1; }
+
+# ---- Demo reset (M3-12) — restore the demo tenant to its curated, presentable
+# state right before a firm call. See docs/demo-reset.md. ----
+
+demo-reset: ## Restore the demo tenant (Okafor & Partners) to its curated state (run before a firm call; needs psql)
+	@test -n "$(DATABASE_SUPERUSER_URL_DEV)" || { echo "DATABASE_SUPERUSER_URL_DEV is not set (set it to the deployed-dev superuser DSN; see docs/demo-reset.md)"; exit 1; }
+	@psql "$(DATABASE_SUPERUSER_URL_DEV)" -v ON_ERROR_STOP=1 -f db/demo-reset.sql
+	@echo "Demo tenant portfolio (11111111-1111-1111-1111-111111111111):"
+	@psql "$(DATABASE_SUPERUSER_URL_DEV)" -c "SELECT status, count(*) FROM business_entities WHERE tenant_id = '11111111-1111-1111-1111-111111111111' GROUP BY status ORDER BY status;"

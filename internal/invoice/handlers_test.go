@@ -348,6 +348,48 @@ func TestCreateHandler_DuplicateNumber409(t *testing.T) {
 	}
 }
 
+// TestCreateHandler_201_WireShape (QA Mode B adversarial, Surface-Conflict
+// verification): a created invoice's RAW response body must be the
+// snake_case wire shape the story's System Design specifies -- entity_id,
+// invoice_number, status, violations, and line_items all present -- AND must
+// NOT contain rule_set_version_id at all. Invoice.Violations carries
+// `json:"violations"` (surfaced, always "[]" in M4-02) while
+// Invoice.RuleSetVersionID carries `json:"-"` (hidden, M4-04's field); this
+// test sets RuleSetVersionID to a non-nil value specifically so a regression
+// that dropped the `json:"-"` tag (reverting to a normal `json:"rule_set_version_id"`
+// tag) would leak the value into the body and fail this test -- checking the
+// raw bytes rather than a decoded struct (whose Go type simply lacks the
+// field) is what makes this non-vacuous.
+func TestCreateHandler_201_WireShape(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	entityID := uuid.NewString()
+	rsv := "some-rule-set-version-id"
+	want := Invoice{
+		ID: uuid.NewString(), EntityID: entityID, InvoiceNumber: "INV-0001", Status: StatusDraft,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &rsv,
+		LineItems:        []LineItem{{ID: uuid.NewString(), LineNo: 1}},
+	}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		return want, nil
+	}
+	body := marshalCreate(t, createInvoiceRequest{EntityID: entityID, InvoiceNumber: "INV-0001"})
+	rec, _ := doInvoiceCreate(t, create, &id, body)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.Bytes()
+	for _, want := range []string{`"entity_id":`, `"invoice_number":"INV-0001"`, `"status":"draft"`, `"line_items":[`, `"violations":[]`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("body = %s, want raw JSON to contain %s", raw, want)
+		}
+	}
+	if bytes.Contains(raw, []byte(`rule_set_version_id`)) {
+		t.Errorf("body = %s, must NOT contain rule_set_version_id (json:\"-\", hidden per M4-02 System Design)", raw)
+	}
+}
+
 // --- Get handler tests (INV-HTTP-05) ----------------------------------------
 
 // TestGetHandler_200 (INV-HTTP-05): a get resolving an invoice must produce
@@ -545,6 +587,51 @@ func TestListHandler_NonIntegerLimit400(t *testing.T) {
 	}
 }
 
+// TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues (QA Mode B
+// adversarial): the RAW response body's top-level envelope must have EXACTLY
+// two keys, "invoices" and "pagination" (no extra keys, no drift from the
+// {invoices,pagination} shape the story specifies), and pagination.limit/
+// offset in the body must reflect the EFFECTIVE post-clamp values (?limit=500
+// clamped to 200) -- not merely the ListFilter captured by the fake store
+// (TestListHandler_LimitDefaultAndClamp already covers that half; this closes
+// the gap by asserting on what the client actually receives).
+func TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{}, 0, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "?limit=500&offset=3")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw envelope: %v", err)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("envelope has %d top-level keys, want exactly 2 (invoices, pagination): %s", len(raw), rec.Body.String())
+	}
+	if _, ok := raw["invoices"]; !ok {
+		t.Error("envelope missing \"invoices\" key")
+	}
+	if _, ok := raw["pagination"]; !ok {
+		t.Error("envelope missing \"pagination\" key")
+	}
+
+	var pag listPaginationWire
+	if err := json.Unmarshal(raw["pagination"], &pag); err != nil {
+		t.Fatalf("decode pagination: %v", err)
+	}
+	if pag.Limit != 200 {
+		t.Errorf("response body pagination.limit = %d, want 200 (post-clamp effective value, not the raw ?limit=500)", pag.Limit)
+	}
+	if pag.Offset != 3 {
+		t.Errorf("response body pagination.offset = %d, want 3", pag.Offset)
+	}
+}
+
 // TestListHandler_NoIdentity401 (identity-first pattern, same as
 // INV-HTTP-03/11): no identity in the request context must 401 before list
 // ever runs.
@@ -658,6 +745,73 @@ func TestTransitionHandler_UnknownStatus400_StoreNotCalled(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestTransitionHandler_MalformedOrEmptyBody400_StoreNotCalled (QA Mode B
+// adversarial, portfolio parity with TestCreateHandler_MalformedJSON400): an
+// unparseable or entirely empty request body must 400 before transition ever
+// runs -- asserted by failing the test if transition is called. Covers both
+// "path id but bad body" and "path id but no body" from the QA prompt's
+// optional coverage list.
+func TestTransitionHandler_MalformedOrEmptyBody400_StoreNotCalled(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"malformed JSON", `{"target":`},
+		{"empty body", ``},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+			invoiceID := uuid.NewString()
+			transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+				t.Fatal("transition must not run when the request body is malformed or empty")
+				return Invoice{}, nil
+			}
+			rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if resp.Error == "" {
+				t.Error("expected a non-empty error message in the body")
+			}
+		})
+	}
+}
+
+// TestTransitionHandler_MissingOrEmptyTarget400_StoreNotCalled (QA Mode B
+// adversarial): a well-formed JSON body whose target is an empty string, or
+// which omits the target key entirely, must 400 "unknown status" WITHOUT
+// ever calling transition -- the empty-string edge of Status.valid()'s
+// membership check, distinct from INV-HTTP-10's garbage-string ("foo") case.
+func TestTransitionHandler_MissingOrEmptyTarget400_StoreNotCalled(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty string target", `{"target":""}`},
+		{"target key absent", `{}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+			invoiceID := uuid.NewString()
+			transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+				t.Fatal("transition must not run when target is empty/absent")
+				return Invoice{}, nil
+			}
+			rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if resp.Error == "" {
+				t.Error("expected a non-empty error message in the body")
+			}
+		})
 	}
 }
 

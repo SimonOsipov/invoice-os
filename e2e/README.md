@@ -53,3 +53,6 @@ See `docs/topology-e2e.md`.
 ```bash
 pnpm --filter @invoice-os/e2e test:topology   # needs the gateway-wired dev deploy up
 ```
+
+<!-- dev-env spawn: this PR brings the full dev fleet up for manual QA (bug/change triage). -->
+

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
-import { APPROVALS, CLIENTS, FIRM, INHOUSE, PIPELINE } from '../data'
+import { APPROVALS, CLIENTS, FIRM, INHOUSE, PIPELINE, type Audience as AudienceData } from '../data'
 
 type AudienceKey = 'firm' | 'inhouse'
 
@@ -24,6 +24,16 @@ const tabStyle = (active: boolean): CSSProperties => ({
   alignItems: 'center',
   gap: 8,
   transition: 'background 160ms ease-out, color 160ms ease-out',
+})
+
+// Both audience variants are rendered stacked in the same grid cell (all layers at
+// row 1 / col 1); only the active one is visible. `visibility: hidden` keeps the
+// inactive layer laid out, so every cell permanently reserves the height of its taller
+// variant — toggling swaps content without reflowing the page (no layout shift / jump).
+const stackCell: CSSProperties = { display: 'grid' }
+const layer = (visible: boolean): CSSProperties => ({
+  gridArea: '1 / 1',
+  visibility: visible ? 'visible' : 'hidden',
 })
 
 function FirmMock() {
@@ -200,10 +210,60 @@ function InhouseMock() {
   )
 }
 
+// Right-hand copy column for one audience — extracted so both variants can be rendered
+// stacked (see `stackCell`/`layer`) and the cell reserves the taller one's height.
+function AudienceCopy({ data }: { data: AudienceData }) {
+  return (
+    <div>
+      <h3 style={{ fontSize: 32, lineHeight: 1.12, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 16px' }}>
+        {data.headline}
+      </h3>
+      <p style={{ fontSize: 16, lineHeight: 1.65, color: 'var(--fg-2)', margin: '0 0 26px' }}>{data.body}</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 28 }}>
+        {data.features.map((f) => (
+          <div key={f.title} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <span
+              style={{
+                flex: 'none',
+                width: 24,
+                height: 24,
+                borderRadius: 4,
+                background: 'var(--accent-tint)',
+                color: 'var(--accent)',
+                display: 'grid',
+                placeItems: 'center',
+                marginTop: 1,
+              }}
+            >
+              {f.glyph}
+            </span>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 1 }}>{f.title}</div>
+              <div style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.5 }}>{f.body}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 30 }}>
+        {data.stats.map((st) => (
+          <div key={st.label} style={{ flex: 1, minWidth: 150, border: '1px solid var(--line-1)', borderRadius: 6, padding: '16px 18px' }}>
+            <div className="mono" style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: st.color }}>
+              {st.value}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)', marginTop: 4 }}>{st.label}</div>
+          </div>
+        ))}
+      </div>
+      <a href="#demo" className="v2-btn v2-btn-primary">
+        {data.cta}
+      </a>
+    </div>
+  )
+}
+
 export function Audience() {
   const [audience, setAudience] = useState<AudienceKey>('firm')
   const isFirm = audience === 'firm'
-  const active = isFirm ? FIRM : INHOUSE
 
   return (
     <section id="accountants" style={{ borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)' }}>
@@ -231,53 +291,24 @@ export function Audience() {
         </div>
 
         <div className="ios-grid ios-2" style={{ display: 'grid', gridTemplateColumns: '1.08fr 0.92fr', gap: 64, alignItems: 'center', marginTop: 48 }}>
-          {/* LEFT: swapping product mock */}
-          <div>{isFirm ? <FirmMock /> : <InhouseMock />}</div>
+          {/* LEFT: both product mocks stacked; the cell holds the taller one's height */}
+          <div style={stackCell}>
+            <div style={layer(isFirm)} aria-hidden={!isFirm}>
+              <FirmMock />
+            </div>
+            <div style={layer(!isFirm)} aria-hidden={isFirm}>
+              <InhouseMock />
+            </div>
+          </div>
 
-          {/* RIGHT: swapping copy + features */}
-          <div>
-            <h3 style={{ fontSize: 32, lineHeight: 1.12, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 16px' }}>
-              {active.headline}
-            </h3>
-            <p style={{ fontSize: 16, lineHeight: 1.65, color: 'var(--fg-2)', margin: '0 0 26px' }}>{active.body}</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 28 }}>
-              {active.features.map((f) => (
-                <div key={f.title} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                  <span
-                    style={{
-                      flex: 'none',
-                      width: 24,
-                      height: 24,
-                      borderRadius: 4,
-                      background: 'var(--accent-tint)',
-                      color: 'var(--accent)',
-                      display: 'grid',
-                      placeItems: 'center',
-                      marginTop: 1,
-                    }}
-                  >
-                    {f.glyph}
-                  </span>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 1 }}>{f.title}</div>
-                    <div style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.5 }}>{f.body}</div>
-                  </div>
-                </div>
-              ))}
+          {/* RIGHT: both copy columns stacked; toggling never reflows the page below */}
+          <div style={stackCell}>
+            <div style={layer(isFirm)} aria-hidden={!isFirm}>
+              <AudienceCopy data={FIRM} />
             </div>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 30 }}>
-              {active.stats.map((st) => (
-                <div key={st.label} style={{ flex: 1, minWidth: 150, border: '1px solid var(--line-1)', borderRadius: 6, padding: '16px 18px' }}>
-                  <div className="mono" style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: st.color }}>
-                    {st.value}
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--fg-3)', marginTop: 4 }}>{st.label}</div>
-                </div>
-              ))}
+            <div style={layer(!isFirm)} aria-hidden={isFirm}>
+              <AudienceCopy data={INHOUSE} />
             </div>
-            <a href="#demo" className="v2-btn v2-btn-primary">
-              {active.cta}
-            </a>
           </div>
         </div>
       </div>

@@ -35,7 +35,7 @@ export function Nav({ onSignIn }: { onSignIn: () => void }) {
       >
         <a href="#top" style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg-1)' }}>
           <BrandMark size={22} />
-          <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: '-0.02em' }}>InvoiceOS</span>
+          <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: '-0.02em' }}>FiscalBridge</span>
           <span
             className="mono"
             style={{

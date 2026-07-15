@@ -37,7 +37,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-1)', marginBottom: 14 }}>
           <BrandMark size={20} />
           <span className="ops-nav-label" style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.02em' }}>
-            InvoiceOS
+            FiscalBridge
           </span>
           <span
             className="mono ops-nav-label"

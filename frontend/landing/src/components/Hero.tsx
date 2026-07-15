@@ -50,7 +50,7 @@ export function Hero() {
             accounting system.
           </h1>
           <p style={{ fontSize: 18, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 0 32px', maxWidth: 520 }}>
-            InvoiceOS Africa is the compliance layer between your business and Nigeria's Merchant Buyer Solution. Create,
+            FiscalBridge Africa is the compliance layer between your business and Nigeria's Merchant Buyer Solution. Create,
             validate, approve, archive, and transmit compliant invoices — through the dashboard or the API.
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 36 }}>

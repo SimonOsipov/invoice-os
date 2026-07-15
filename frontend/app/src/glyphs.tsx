@@ -39,10 +39,9 @@ export const rocketGlyph = (
   />
 )
 export const closeGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={16} strokeWidth={2} />
+// firmModeIcon doubles as the Clients nav glyph (NAV_CLIENTS). The former in-house
+// toggle icon was removed with the firm/in-house switch (workspace is persona-fixed).
 export const firmModeIcon = <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={14} />
-export const inhouseModeIcon = (
-  <Icon paths={['M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z', 'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2', 'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2', 'M10 6h4', 'M10 10h4', 'M10 14h4']} size={14} />
-)
 
 export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
 

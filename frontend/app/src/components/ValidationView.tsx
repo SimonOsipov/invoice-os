@@ -52,7 +52,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
   }
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+    <div style={{ padding: '30px 36px 56px', maxWidth: 1680, margin: '0 auto' }}>
       <div style={{ marginBottom: 22 }}>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Validation playground</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>Assemble an invoice payload and run it against the Nigeria MBS rule pack.</p>

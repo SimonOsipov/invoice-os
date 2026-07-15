@@ -10,7 +10,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   const dash = active.dash!
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+    <div style={{ padding: '30px 36px 56px', maxWidth: 1680, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 26, gap: 24 }}>
         <div>
           <div className="label" style={{ marginBottom: 10 }}>

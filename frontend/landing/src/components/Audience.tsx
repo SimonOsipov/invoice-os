@@ -216,7 +216,7 @@ export function Audience() {
             One platform. Two ways to run compliance.
           </h2>
           <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--fg-2)', maxWidth: 580, margin: '0 auto 26px' }}>
-            Whether you manage compliance for a roster of clients or own it inside a single finance department, InvoiceOS
+            Whether you manage compliance for a roster of clients or own it inside a single finance department, FiscalBridge
             reshapes the workspace — and the feature set — to fit how you work.
           </p>
           {/* audience toggle */}

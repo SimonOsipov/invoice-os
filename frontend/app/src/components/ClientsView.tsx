@@ -50,7 +50,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; entity?: Entity } | null>(null)
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+    <div style={{ padding: '30px 36px 56px', maxWidth: 1680, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>

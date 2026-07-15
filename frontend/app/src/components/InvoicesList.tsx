@@ -25,7 +25,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const visible = invList.filter((i) => filter === 'all' || i.status === filter)
 
   return (
-    <div style={{ padding: '30px 36px 56px' }}>
+    <div style={{ padding: '30px 36px 56px', maxWidth: 1680, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>

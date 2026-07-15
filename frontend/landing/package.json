@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "InvoiceOS Africa — public marketing landing page (Phase 1 showcase). LAND-01.",
+  "description": "FiscalBridge Africa — public marketing landing page (Phase 1 showcase). LAND-01.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

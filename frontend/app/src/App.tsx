@@ -43,7 +43,11 @@ const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracl
 function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const initialIdx = session.persona.mode === 'inhouse' ? INHOUSE_IDX : 1
   const [clients, setClients] = useState<Client[]>(() => buildClients())
-  const [mode, setMode_] = useState<Mode>(session.persona.mode)
+  // Workspace type is a property of the authenticated identity, not a user-flippable
+  // view: the firm persona gets the firm workspace, the in-house persona the in-house
+  // workspace, and there is no in-app switch between them (that would require signing
+  // in as the other persona). Under GoTrue (M8) this keys off the token's role/tenant.
+  const mode: Mode = session.persona.mode
   const [view, setView] = useState<View>('dashboard')
   const [activeIdx, setActiveIdx] = useState(initialIdx)
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(clients[initialIdx]))
@@ -83,20 +87,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     if (id === 'invoices') { setView('invoices'); setFilter('all'); setSwitcherOpen(false); return }
     setView(id as View)
     setSwitcherOpen(false)
-  }
-
-  function setMode(m: Mode) {
-    if (m === 'inhouse') {
-      setMode_(m)
-      setActiveIdx(INHOUSE_IDX)
-      setView('dashboard')
-      setSelectedId(null)
-      setFilter('all')
-      setSwitcherOpen(false)
-    } else {
-      setMode_(m)
-      setSwitcherOpen(false)
-    }
   }
 
   function toggleSwitcher() {
@@ -276,7 +266,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     parseIdx,
     nav,
     setFilter,
-    setMode,
     toggleSwitcher,
     switchClient,
     openCreate,

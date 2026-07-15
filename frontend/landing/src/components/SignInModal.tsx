@@ -1,4 +1,4 @@
-// The full sign-in experience (task-21), ported faithfully from the InvoiceOS Africa
+// The full sign-in experience (task-21), ported faithfully from the FiscalBridge Africa
 // sign-in prototype: a two-step modal — choose an account (persona picker), then verify
 // a 6-digit OTP — that routes each role to only the workspace it may open. The OTP is
 // client-side theater (the demo code is fixed); the real JWT mint + /v1/me round trip
@@ -117,7 +117,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <BrandMark size={19} />
-            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>InvoiceOS</span>
+            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
             <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
               AFRICA
             </span>

@@ -45,7 +45,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
       <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
-          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>InvoiceOS</span>
+          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
           <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
             AFRICA
           </span>

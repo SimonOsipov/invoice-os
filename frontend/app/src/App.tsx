@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { INHOUSE_IDX } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
-import { SignIn } from './components/SignIn'
+import { SignIn, SignInLoading } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
@@ -333,6 +333,16 @@ export default function App() {
   // no SignIn flash) so a reload / new tab returns straight to the workspace.
   const [session, setSession] = useState<Session | null>(() => loadSession())
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
+  // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot
+  // from the same guard the mount effect below uses: non-null only when boot produced NO
+  // session AND the param names a known persona. A non-null value means an auto-sign-in
+  // is in flight, so the render gate shows a loading splash instead of the "Choose an
+  // account" picker — the landing → app hand-off never flashes that redundant card
+  // before the mint → /me round trip resolves.
+  const [autoPersona] = useState<PersonaId | null>(() => {
+    const p = new URLSearchParams(window.location.search).get('persona')
+    return shouldAutoSignIn(session, p) ? (p as PersonaId) : null
+  })
 
   // Mirror the session to storage: persist while signed in, wipe on sign out / cleared session.
   useEffect(() => {
@@ -367,15 +377,19 @@ export default function App() {
   }, [])
 
   // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that
-  // persona. The `session` read here is the BOOT value (deps are [doSignIn] → mount-only):
-  // shouldAutoSignIn gates on "did boot produce a session?", so a rehydrated session wins
-  // over a stale deep-link param. The `p as PersonaId` cast is safe — shouldAutoSignIn
-  // returns true only for 'firm' | 'inhouse'.
+  // persona. autoPersona already encodes the shouldAutoSignIn guard (boot had no session
+  // AND a known persona param), resolved once at boot, so a rehydrated session wins over a
+  // stale deep-link param and this fires at most once on mount.
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search).get('persona')
-    if (shouldAutoSignIn(session, p)) void doSignIn(APP_PERSONAS[p as PersonaId])
-  }, [doSignIn])
+    if (autoPersona) void doSignIn(APP_PERSONAS[autoPersona])
+  }, [autoPersona, doSignIn])
 
-  if (!session) return <SignIn signingIn={signingIn} onPick={doSignIn} />
+  if (!session) {
+    // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
+    // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
+    // mint → /me round trip resolves. The picker only renders for a direct visit with no
+    // (valid) ?persona= deep link.
+    return autoPersona ? <SignInLoading persona={APP_PERSONAS[autoPersona]} /> : <SignIn signingIn={signingIn} onPick={doSignIn} />
+  }
   return <Workspace session={session} onSignOut={signOut} />
 }

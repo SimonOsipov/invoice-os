@@ -26,14 +26,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
-        <div>
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · create, validate, and transmit.</p>
-        </div>
-        <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
-          <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
-        </button>
+      {/* No page-level "New invoice" here: the persistent header-bar CTA (Header.tsx) is
+          the single create affordance for the populated list. The empty state below keeps
+          its own button (standard zero-state pattern). */}
+      <div style={{ marginBottom: 22 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Invoices</h1>
+        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · create, validate, and transmit.</p>
       </div>
 
       {invList.length > 0 && (

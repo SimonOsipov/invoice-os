@@ -1,7 +1,7 @@
 // M3-05-01 (Test-first: yes) — DB-backed proof that the MBS global rule-set
 // v1 seed migration (migrations/<goose-ts>_seed_mbs_v1.sql, not yet authored)
 // flips /v1/validate's evaluation surface from "no active rule-set" to live
-// content: the active version + its 17 rules load via
+// content: the active version + its 19 rules load via
 // NewStore(app).LoadActiveRuleSet, and get evaluated via
 // NewDefaultEngine().Evaluate against real payloads. This is the FIRST test
 // in the package to chain a DB load (store_test.go's pattern) into an engine
@@ -26,7 +26,7 @@
 // Coverage (story M3-05 Test Specs; see the story's System Design table +
 // .ralph/m3-05-exec-readiness.md for the exact signatures/harness):
 //  1. TestSeed_ActiveVersionLoads    -- Core AC 1: exactly one active
-//     version, version=1, 17 rules, keys matching the pinned rule table.
+//     version, version=1, 19 rules, keys matching the pinned rule table.
 //  2. TestSeed_DemoContract          -- Core AC 3: the demo's bad/valid
 //     payloads produce exactly the documented violations.
 //  3. TestSeed_TaxMathTolerance      -- Core AC 4: tolerance 0.005, strict >
@@ -210,9 +210,9 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 	}
 
 	rs := loadV1(t, app)
-	if len(rs.Rules) != 17 {
-		t.Fatalf("len(RuleSet.Rules) = %d, want 17 -- expected the migration-seeded v1 rule set "+
-			"(see the story's System Design pinned rule table)", len(rs.Rules))
+	if len(rs.Rules) != 19 {
+		t.Fatalf("len(RuleSet.Rules) = %d, want 19 -- expected the migration-seeded v1 rule set "+
+			"(17 base rules + the 2 line-item rules from the line_rules migration)", len(rs.Rules))
 	}
 
 	wantKeys := []string{
@@ -221,7 +221,9 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 		"currency-required",
 		"invoice-number-required",
 		"issue-date-required",
+		"line-cost-non-negative",
 		"line-items-required",
+		"line-items-sum-subtotal",
 		"no-duplicate-line-items",
 		"subtotal-non-negative",
 		"subtotal-required",
@@ -240,7 +242,7 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 	}
 	sort.Strings(gotKeys)
 	if !reflect.DeepEqual(gotKeys, wantKeys) {
-		t.Errorf("RuleSet.Rules keys = %v, want %v (the pinned v1 rule table's 17 keys)", gotKeys, wantKeys)
+		t.Errorf("RuleSet.Rules keys = %v, want %v (the v1 rule table's 19 keys: 17 base + 2 line-item rules)", gotKeys, wantKeys)
 	}
 }
 

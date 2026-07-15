@@ -24,7 +24,7 @@ import { buildInvoicePayload, emptyInvoiceForm, presetForm, type InvoiceFormStat
 // throw), matching the Clean preset's values so overriding a single field isolates
 // exactly that field's assembly behavior.
 function baseForm(overrides: Partial<InvoiceFormState> = {}): InvoiceFormState {
-  const lineItems: LineItemRow[] = [{ description: 'Widget', id: 'li-1' }]
+  const lineItems: LineItemRow[] = [{ id: 'li-1', description: 'Widget', quantity: '10', unitPrice: '100' }]
   return {
     supplierName: 'Acme Ltd',
     supplierTin: '12345678-1234',
@@ -54,7 +54,7 @@ describe('buildInvoicePayload presets (B1-B3)', () => {
         subtotal: 1000,
         vat: 75,
         total: 1075,
-        line_items: [{ description: 'Widget', id: 'li-1' }],
+        line_items: [{ id: 'li-1', description: 'Widget', quantity: 10, unit_price: 100 }],
       },
     })
   })
@@ -72,8 +72,8 @@ describe('buildInvoicePayload presets (B1-B3)', () => {
     expect(invoice.total).toBe(-5)
     expect(typeof invoice.total).toBe('number')
     expect(invoice.line_items).toEqual([
-      { description: 'A', id: 'dup' },
-      { description: 'B', id: 'dup' },
+      { id: 'dup', description: 'A', quantity: 1, unit_price: -10 },
+      { id: 'dup', description: 'B', quantity: 2, unit_price: 50 },
     ])
 
     expect(result).toEqual({
@@ -86,8 +86,8 @@ describe('buildInvoicePayload presets (B1-B3)', () => {
         vat: 100,
         total: -5,
         line_items: [
-          { description: 'A', id: 'dup' },
-          { description: 'B', id: 'dup' },
+          { id: 'dup', description: 'A', quantity: 1, unit_price: -10 },
+          { id: 'dup', description: 'B', quantity: 2, unit_price: 50 },
         ],
       },
     })
@@ -143,17 +143,41 @@ describe('buildInvoicePayload optional-object omission (B5-B6)', () => {
 
 describe('buildInvoicePayload per-row blank-field dropping (B7-B8)', () => {
   it('B7: a row with a blank description drops the description key, keeping only id', () => {
-    const result = buildInvoicePayload(baseForm({ lineItems: [{ description: '', id: 'x' }] }))
+    const result = buildInvoicePayload(baseForm({ lineItems: [{ id: 'x', description: '', quantity: '', unitPrice: '' }] }))
     const invoice = result.invoice as Record<string, unknown>
 
     expect(invoice.line_items).toEqual([{ id: 'x' }])
   })
 
   it('B8: a row with a blank id drops the id key, keeping only description (so has(x.id) is false — never false-triggers the duplicate rule)', () => {
-    const result = buildInvoicePayload(baseForm({ lineItems: [{ description: 'A', id: '' }] }))
+    const result = buildInvoicePayload(baseForm({ lineItems: [{ id: '', description: 'A', quantity: '', unitPrice: '' }] }))
     const invoice = result.invoice as Record<string, unknown>
 
     expect(invoice.line_items).toEqual([{ description: 'A' }])
+  })
+})
+
+describe('buildInvoicePayload line-item quantity/unit_price (new numeric fields)', () => {
+  it('numeric-string quantity/unitPrice assemble to JS numbers under keys quantity/unit_price', () => {
+    const result = buildInvoicePayload(baseForm({ lineItems: [{ id: 'li-1', description: 'Widget', quantity: '10', unitPrice: '100' }] }))
+    const invoice = result.invoice as Record<string, unknown>
+
+    expect(invoice.line_items).toEqual([{ id: 'li-1', description: 'Widget', quantity: 10, unit_price: 100 }])
+  })
+
+  it('a negative unitPrice ("-10") is preserved as the JS number -10 (so line-cost-non-negative fires honestly)', () => {
+    const result = buildInvoicePayload(baseForm({ lineItems: [{ id: 'a', description: 'A', quantity: '1', unitPrice: '-10' }] }))
+    const invoice = result.invoice as Record<string, unknown>
+
+    expect(invoice.line_items).toEqual([{ id: 'a', description: 'A', quantity: 1, unit_price: -10 }])
+  })
+
+  it('blank quantity/unitPrice are omitted; a non-numeric quantity assembles as the raw trimmed string', () => {
+    const blank = buildInvoicePayload(baseForm({ lineItems: [{ id: 'a', description: 'A', quantity: '', unitPrice: '' }] })).invoice as Record<string, unknown>
+    expect(blank.line_items).toEqual([{ id: 'a', description: 'A' }])
+
+    const bad = buildInvoicePayload(baseForm({ lineItems: [{ id: 'a', description: 'A', quantity: 'two', unitPrice: '100' }] })).invoice as Record<string, unknown>
+    expect(bad.line_items).toEqual([{ id: 'a', description: 'A', quantity: 'two', unit_price: 100 }])
   })
 })
 
@@ -189,7 +213,7 @@ describe('emptyInvoiceForm (AC-3, QA adversarial — untested by B1-B8)', () => 
 
   it('returns a fresh lineItems array each call (mutating one call does not leak into the next)', () => {
     const first = emptyInvoiceForm()
-    first.lineItems.push({ description: 'x', id: 'y' })
+    first.lineItems.push({ id: 'y', description: 'x', quantity: '', unitPrice: '' })
 
     const second = emptyInvoiceForm()
 
@@ -252,7 +276,7 @@ describe('buildInvoicePayload numeric edge cases (QA adversarial)', () => {
 
 describe('buildInvoicePayload fully-blank line-item row (QA adversarial)', () => {
   it('a row with BOTH description and id blank assembles to an empty object {} inside line_items — NOT dropped from the array', () => {
-    const result = buildInvoicePayload(baseForm({ lineItems: [{ description: '', id: '' }] }))
+    const result = buildInvoicePayload(baseForm({ lineItems: [{ id: '', description: '', quantity: '', unitPrice: '' }] }))
     const invoice = result.invoice as Record<string, unknown>
 
     // Documented/intentional, not a latent bug: line-items-required only checks the
@@ -271,11 +295,11 @@ describe("presetForm('clean') fresh-copy guarantee (QA adversarial)", () => {
     const first = presetForm('clean')
     first.supplierName = 'MUTATED'
     first.lineItems[0].description = 'MUTATED'
-    first.lineItems.push({ description: 'extra', id: 'extra' })
+    first.lineItems.push({ id: 'extra', description: 'extra', quantity: '1', unitPrice: '1' })
 
     const second = presetForm('clean')
 
     expect(second.supplierName).toBe('Acme Ltd')
-    expect(second.lineItems).toEqual([{ description: 'Widget', id: 'li-1' }])
+    expect(second.lineItems).toEqual([{ id: 'li-1', description: 'Widget', quantity: '10', unitPrice: '100' }])
   })
 })

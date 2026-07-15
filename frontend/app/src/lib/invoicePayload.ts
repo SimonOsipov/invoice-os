@@ -16,8 +16,10 @@
 import type { InvoicePayload } from './validationApi'
 
 export interface LineItemRow {
-  description: string
   id: string
+  description: string
+  quantity: string
+  unitPrice: string
 }
 
 export interface InvoiceFormState {
@@ -61,13 +63,20 @@ function numericField(value: string): number | string | undefined {
 }
 
 // A row -> an object of only its non-blank fields. A blank `id` is dropped so
-// `has(x.id)` is false downstream -- a blank row never false-triggers the duplicate rule.
-function buildLineItem(row: LineItemRow): Record<string, string> {
-  const item: Record<string, string> = {}
-  const description = row.description.trim()
+// `has(x.id)` is false downstream -- a blank row never false-triggers the duplicate
+// rule. quantity/unit_price go through numericField (number when finite, else raw
+// trimmed string) so they feed line-cost-non-negative / line-items-sum-subtotal
+// honestly; blank ones are omitted.
+function buildLineItem(row: LineItemRow): Record<string, unknown> {
+  const item: Record<string, unknown> = {}
   const id = row.id.trim()
-  if (description) item.description = description
+  const description = row.description.trim()
   if (id) item.id = id
+  if (description) item.description = description
+  const quantity = numericField(row.quantity)
+  if (quantity !== undefined) item.quantity = quantity
+  const unitPrice = numericField(row.unitPrice)
+  if (unitPrice !== undefined) item.unit_price = unitPrice
   return item
 }
 
@@ -122,7 +131,8 @@ export const PRESETS: Record<PresetKey, InvoiceFormState> = {
     subtotal: '1000',
     vat: '75',
     total: '1075',
-    lineItems: [{ description: 'Widget', id: 'li-1' }],
+    // 10 × ₦100 = ₦1,000 = subtotal (line-items-sum-subtotal passes); cost ≥ 0.
+    lineItems: [{ id: 'li-1', description: 'Widget', quantity: '10', unitPrice: '100' }],
   },
   'has-violations': {
     supplierName: '',
@@ -134,9 +144,12 @@ export const PRESETS: Record<PresetKey, InvoiceFormState> = {
     subtotal: '1000',
     vat: '100',
     total: '-5',
+    // Duplicate id 'dup'; a negative cost (line-cost-non-negative fires); and the
+    // amounts (1×-10 + 2×50 = 90) don't reconcile to subtotal 1000
+    // (line-items-sum-subtotal fires).
     lineItems: [
-      { description: 'A', id: 'dup' },
-      { description: 'B', id: 'dup' },
+      { id: 'dup', description: 'A', quantity: '1', unitPrice: '-10' },
+      { id: 'dup', description: 'B', quantity: '2', unitPrice: '50' },
     ],
   },
   minimal: {

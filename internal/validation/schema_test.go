@@ -328,10 +328,11 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 	ctx := context.Background()
 
 	// M3-05 permanently ships one sanctioned content row: the active v1
-	// rule_set_versions row (version=1) plus its 17 rules. Excluded here
-	// alongside the fixtureNotes exclusion so this test still guards against
-	// an accidental SECOND seed or stray hand-inserted rows -- a guard the
-	// seed_test.go "active v1 has exactly 17 rules" assertion does not
+	// rule_set_versions row (version=1) plus its 19 rules (17 base + the 2
+	// line-item rules from the line_rules migration). Excluded here alongside
+	// the fixtureNotes exclusion so this test still guards against an
+	// accidental SECOND seed or stray hand-inserted rows -- a guard the
+	// seed_test.go "active v1 has exactly 19 rules" assertion does not
 	// provide (NARROWED per the story's Decisions section, not retired).
 	var versionCount int
 	if err := super.QueryRow(ctx,

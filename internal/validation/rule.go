@@ -20,9 +20,10 @@ package validation
 
 import "encoding/json"
 
-// RuleType is the rule-row "type" column value — one of the eight
+// RuleType is the rule-row "type" column value — one of the nine
 // parameterized types plus the "cel" escape hatch (story Core AC #3). The
-// DB CHECK constraint (M3-04-01 migration) enumerates the identical set.
+// DB CHECK constraint (M3-04-01 migration, extended for line_sum) enumerates
+// the identical set.
 type RuleType string
 
 const (
@@ -35,6 +36,12 @@ const (
 	TypeConditional RuleType = "conditional"
 	TypeDate        RuleType = "date"
 	TypeCEL         RuleType = "cel"
+	// TypeLineSum aggregates a per-line-item amount (optionally weighted by a
+	// per-item quantity) across a list and compares the total to a scalar
+	// target with a tolerance — the one rule type that folds over a list
+	// rather than resolving a single scalar path (evaluators_math.go's
+	// lineSumEval). Added with the M3-05 seed's line-reconciliation rule.
+	TypeLineSum RuleType = "line_sum"
 )
 
 // Severity is the rule-row "severity" column value: "error" | "warning" |

@@ -44,7 +44,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
   }
 
   function addLineItem() {
-    setForm((f) => ({ ...f, lineItems: [...f.lineItems, { description: '', id: '' }] }))
+    setForm((f) => ({ ...f, lineItems: [...f.lineItems, { id: '', description: '', quantity: '', unitPrice: '' }] }))
   }
 
   function removeLineItem(idx: number) {
@@ -113,15 +113,19 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
           Line items
         </div>
         <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, overflow: 'hidden', marginBottom: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 200px 40px', gap: 10, padding: '9px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 90px 120px 40px', gap: 10, padding: '9px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+            <span className="label">Line ID</span>
             <span className="label">Description</span>
-            <span className="label">ID</span>
+            <span className="label">Quantity</span>
+            <span className="label">Cost</span>
             <span />
           </div>
           {form.lineItems.map((row, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 200px 40px', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
-              <input className="pf-input" type="text" value={row.description} onChange={(e) => updateLineItem(i, 'description', e.target.value)} />
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 90px 120px 40px', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
               <input className="pf-input" type="text" value={row.id} onChange={(e) => updateLineItem(i, 'id', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} />
+              <input className="pf-input" type="text" value={row.description} onChange={(e) => updateLineItem(i, 'description', e.target.value)} />
+              <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateLineItem(i, 'quantity', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} />
+              <input className="pf-input" type="text" value={row.unitPrice} onChange={(e) => updateLineItem(i, 'unitPrice', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} />
               <button
                 type="button"
                 onClick={() => removeLineItem(i)}

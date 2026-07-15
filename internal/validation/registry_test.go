@@ -3,7 +3,7 @@
 // (engine_test.go, evaluators_test.go, evaluators_math_test.go, cel_test.go)
 // all exercise their subject through a hand-rolled registry (NewEngine with
 // a fake/partial map) or an Evaluator's Eval method directly -- none of them
-// ever build the REAL production registry.go assembly and prove all nine
+// ever build the REAL production registry.go assembly and prove all ten
 // RuleType keys actually resolve through it. That is exactly the shape of
 // bug a wiring subtask can introduce silently: a RuleType constant added to
 // rule.go's const block (or a typo'd map key in registry.go) that never
@@ -103,10 +103,18 @@ func registeredTypeCases() []registeredTypeCase {
 			Params:   json.RawMessage(`{"expr":"invoice.amount > 0"}`),
 			Severity: "error", Message: "cel amount", Scope: "document", Enabled: true,
 		}},
+		{TypeLineSum, Rule{
+			// registeredTypesPayload has no line_items, so a line_sum rule is
+			// not-applicable and passes cleanly -- exactly the "constructed to
+			// PASS under the correct evaluator" contract this table needs.
+			Key: "line-sum", Type: TypeLineSum,
+			Params:   json.RawMessage(`{"items":"line_items","amount":"unit_price","quantity":"quantity","expected":"subtotal","tolerance":0.005}`),
+			Severity: "error", Message: "line sum", Scope: "document", Enabled: true,
+		}},
 	}
 }
 
-// TestNewDefaultEngine_AllTypesRegistered proves every one of the nine
+// TestNewDefaultEngine_AllTypesRegistered proves every one of the ten
 // RuleType constants (rule.go) resolves to a registered Evaluator in
 // registry.go's NewDefaultEngine assembly -- the highest-risk wiring bug
 // this subtask could introduce (an omitted map entry). A missing

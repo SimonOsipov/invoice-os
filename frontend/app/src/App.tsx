@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { INHOUSE_IDX } from './data'
-import { APP_PERSONAS, signIn, type Persona, type PersonaId, type Session } from './auth'
+import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { makeAuthedFetch } from './lib/authedFetch'
@@ -340,7 +340,17 @@ export default function App() {
     else clearSession()
   }, [session])
 
-  const signOut = useCallback(() => setSession(null), [])
+  // Sign out returns the user to the marketing landing page (the real sign-in front
+  // door). Nulling React state alone would only swap in the app's own minimal
+  // persona-picker AND leave any `?persona=` deep-link in the URL — so the next reload
+  // would auto-sign the same persona straight back in (see the mount effect below),
+  // defeating the logout. Wiping the persisted session then navigating away drops the
+  // param and lands on landing. Also the 401 handler (makeAuthedFetch → onSignOut):
+  // an invalidated session belongs back at the front door, not the in-app picker.
+  const signOut = useCallback(() => {
+    clearSession()
+    window.location.href = landingBase()
+  }, [])
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)

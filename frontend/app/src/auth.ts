@@ -60,6 +60,13 @@ export const APP_PERSONAS: Record<PersonaId, Persona> = {
   },
 }
 
+// Base URL of the marketing landing page — where Sign out returns the user (the real
+// sign-in front door), rather than the app's own minimal persona-picker. Mirrors the
+// landing's own appBase()/opsBase() convention (frontend/landing/src/auth.ts): a
+// VITE_ override with a dev-deploy default, so no build-time env wiring is required.
+const trimTrailingSlash = (s: string) => s.trim().replace(/\/+$/, '')
+export const landingBase = () => trimTrailingSlash(import.meta.env.VITE_LANDING_URL ?? 'https://landing-development-92a2.up.railway.app')
+
 export interface Me {
   tenant: { id: string; name: string }
   user: { id: string; role: string }

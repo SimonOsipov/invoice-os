@@ -45,7 +45,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
       <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
-          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>InvoiceOS</span>
+          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
           <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
             AFRICA
           </span>
@@ -92,6 +92,41 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
             <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Mock sign-in · swapped for Supabase at M8</span>
             <span className="mono" style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--fg-3)' }}>SSO · OAUTH2</span>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Loading splash shown while a landing deep-link (?persona=) auto-sign-in is in flight
+// (App.tsx render gate). It replaces the interactive persona picker for that window so
+// the landing → app hand-off shows a neutral "signing you in" state instead of flashing
+// the "Choose an account" card before the mint → /me round trip resolves. Same card
+// chrome as SignIn so the two never visually jump.
+export function SignInLoading({ persona }: { persona: Persona }) {
+  return (
+    <div
+      className="if-v2"
+      style={{ minHeight: '100vh', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+    >
+      <style>{`
+        @keyframes siSpin { to { transform: rotate(360deg); } }
+        .si-spin { animation: siSpin 0.7s linear infinite; }
+      `}</style>
+
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <BrandMark size={20} />
+          <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
+          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
+            AFRICA
+          </span>
+        </div>
+
+        <div style={{ padding: '44px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+          <Spinner />
+          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-2)' }}>Signing in as {persona.name}…</div>
+          <div style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Resolving your workspace with the backend.</div>
         </div>
       </div>
     </div>

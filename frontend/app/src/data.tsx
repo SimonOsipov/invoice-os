@@ -220,7 +220,7 @@ export const SETTINGS_TABS: { id: 'connectors' | 'api' | 'signing'; label: strin
   { id: 'signing', label: 'Signing & certificates' },
 ]
 
-export const API_BASE = 'https://api.invoiceos.africa/v1'
+export const API_BASE = 'https://api.fiscalbridge.africa/v1'
 
 export type ApiKeyDef = { env: 'LIVE' | 'TEST'; envBg: string; envColor: string; key: string; note: string }
 
@@ -259,7 +259,7 @@ export type CertDef = {
 }
 
 export const CERTS: CertDef[] = [
-  { name: 'Digital signing certificate', cn: 'CN=InvoiceOS SI · O=Okafor & Partners', issuer: 'FIRS MBS Root CA', serial: '3A:F2:8B:14:9C:02:7D:E1', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--accent)' },
+  { name: 'Digital signing certificate', cn: 'CN=FiscalBridge SI · O=Okafor & Partners', issuer: 'FIRS MBS Root CA', serial: '3A:F2:8B:14:9C:02:7D:E1', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--accent)' },
   { name: 'CSID stamping key', cn: 'RSA-2048 · SHA-256 signature', issuer: 'FIRS APP CA', serial: '7B:11:6E:A0:33:91:C4:4E', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--accent)' },
 ]
 

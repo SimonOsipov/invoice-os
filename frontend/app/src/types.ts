@@ -219,7 +219,6 @@ export type PlatformCtx = {
 
   nav: (id: NavId) => void
   setFilter: (f: string) => void
-  setMode: (m: Mode) => void
   toggleSwitcher: () => void
   switchClient: (i: number) => void
   openCreate: () => void

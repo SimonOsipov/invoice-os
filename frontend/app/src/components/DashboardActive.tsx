@@ -10,7 +10,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   const dash = active.dash!
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+    <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 26, gap: 24 }}>
         <div>
           <div className="label" style={{ marginBottom: 10 }}>
@@ -89,7 +89,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
                 <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
                   {k.delta}
                 </span>
-                <svg viewBox="0 0 88 30" width="88" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 'none' }}>
+                <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
                   <path d={k.spark} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </div>

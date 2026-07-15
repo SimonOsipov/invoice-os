@@ -3,8 +3,8 @@
 // by at least one passing + one violating case, split across two functions
 // by how their fixture data is sourced:
 //
-//   - TestAllRuleTypes ("seeded-6": required, format/regex, enum, range,
-//     tax_math, cel) drives a representative rule from the migration-seeded
+//   - TestAllRuleTypes ("seeded-7": required, format/regex, enum, range,
+//     tax_math, cel, line_sum) drives a representative rule from the migration-seeded
 //     v1 rule set (seed_test.go's loadV1) through the real engine. It is
 //     DB-backed and self-skips without DATABASE_URL/DATABASE_SUPERUSER_URL
 //     (dbTestPools, schema_test.go).
@@ -16,7 +16,7 @@
 //     `go` and `rls` CI jobs, so it must never call dbTestPools/loadV1.
 //
 // A final coverage subtest in TestAbsentRuleTypes asserts the union of
-// typeLabels across both tables is exactly the nine RuleType consts --
+// typeLabels across both tables is exactly the ten RuleType consts --
 // guarding against either table silently losing a case (mirroring
 // registry_test.go's "if a new RuleType is added, it must be added here
 // too" comment).
@@ -39,9 +39,9 @@ type seededTypeCase struct {
 	mutate    func(inv map[string]any)
 }
 
-// seededRuleTypeCases is the seeded-6 table. Every mutate func operates on
+// seededRuleTypeCases is the seeded-7 table. Every mutate func operates on
 // invoiceOf(p) in place; the unmodified validInvoicePayload() is the shared
-// "pass" fixture for all six (TestSeed_DemoContract already proves it fires
+// "pass" fixture for all seven (TestSeed_DemoContract already proves it fires
 // zero violations against the real v1 rule set).
 func seededRuleTypeCases() []seededTypeCase {
 	return []seededTypeCase{
@@ -90,11 +90,21 @@ func seededRuleTypeCases() []seededTypeCase {
 				})
 			},
 		},
+		{
+			typeLabel: string(TypeLineSum),
+			ruleKey:   "line-items-sum-subtotal",
+			mutate: func(inv map[string]any) {
+				// Break only the reconciliation: the sole line's unit_price
+				// drops to 50 (10*50=500 != subtotal 1000), leaving subtotal
+				// untouched so this isolates line-items-sum-subtotal.
+				inv["line_items"].([]any)[0].(map[string]any)["unit_price"] = 50.0
+			},
+		},
 	}
 }
 
-// TestAllRuleTypes (Core AC 4, seeded-6 half): each of required, format/
-// regex, enum, range, tax_math, cel is exercised through a representative
+// TestAllRuleTypes (Core AC 4, seeded-7 half): each of required, format/
+// regex, enum, range, tax_math, cel, line_sum is exercised through a representative
 // migration-seeded v1 rule via loadV1 + the real engine -- a fully valid
 // payload passes it, and the table's mutation makes it violate. Self-skips
 // (via dbTestPools) without DATABASE_URL/DATABASE_SUPERUSER_URL.
@@ -223,8 +233,8 @@ func absentRuleTypeCases() []absentTypeCase {
 // literal, entirely without a DB connection -- must run and pass in both the
 // `go` and `rls` CI jobs. cross_field additionally gets a boundary subtest
 // (QA Mode B adversarial addition) proving its op is "ge" and not "gt". A
-// trailing coverage subtest asserts the seeded-6 + absent-3 tables together
-// name all nine RuleType consts.
+// trailing coverage subtest asserts the seeded-7 + absent-3 tables together
+// name all ten RuleType consts.
 func TestAbsentRuleTypes(t *testing.T) {
 	engine := NewDefaultEngine()
 	cases := absentRuleTypeCases()
@@ -273,8 +283,8 @@ func TestAbsentRuleTypes(t *testing.T) {
 		})
 	}
 
-	t.Run("coverage: seeded-6 + absent-3 together name all nine rule types", func(t *testing.T) {
-		got := make([]string, 0, 9)
+	t.Run("coverage: seeded-7 + absent-3 together name all ten rule types", func(t *testing.T) {
+		got := make([]string, 0, 10)
 		for _, tc := range seededRuleTypeCases() {
 			got = append(got, tc.typeLabel)
 		}
@@ -286,11 +296,12 @@ func TestAbsentRuleTypes(t *testing.T) {
 		want := []string{
 			string(TypeRequired), string(TypeFormat), string(TypeEnum), string(TypeRange),
 			string(TypeTaxMath), string(TypeCrossField), string(TypeConditional), string(TypeDate), string(TypeCEL),
+			string(TypeLineSum),
 		}
 		sort.Strings(want)
 
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("rule types covered = %v, want %v (all nine RuleType consts, each exercised exactly once)", got, want)
+			t.Errorf("rule types covered = %v, want %v (all ten RuleType consts, each exercised exactly once)", got, want)
 		}
 	})
 }

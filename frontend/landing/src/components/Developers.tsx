@@ -54,7 +54,7 @@ export function Developers() {
           </div>
           <pre className="mono" style={{ margin: 0, padding: 20, fontSize: 12.5, lineHeight: 1.75, color: 'var(--slate-200)', overflowX: 'auto' }}>
             <span style={{ color: 'var(--slate-500)' }}># Validate an invoice against Nigeria MBS rules</span>
-            {'\ncurl https://api.invoiceos.africa/v1/invoices/validate \\\n  -H '}
+            {'\ncurl https://api.fiscalbridge.africa/v1/invoices/validate \\\n  -H '}
             <span style={{ color: 'var(--teal-300)' }}>"Authorization: Bearer sk_live_…"</span>
             {' \\\n  -d '}
             <span style={{ color: 'var(--teal-300)' }}>

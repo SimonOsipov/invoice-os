@@ -150,6 +150,111 @@ func resolveNumericOperand(p Payload, raw json.RawMessage) (decimal.Decimal, boo
 	return decimal.NewFromFloat(f), true
 }
 
+// lineSumEval implements the `line_sum` rule type: it folds a per-line-item
+// amount across a list and compares the total to a scalar target with a
+// tolerance. Params `{items, amount, quantity?, expected, tolerance?}`:
+//   - items:    dotted path to the line-item list (e.g. "line_items").
+//   - amount:   the per-ITEM field summed (a key on each item object, e.g.
+//     "unit_price") — NOT a dotted payload path.
+//   - quantity: an optional per-ITEM weight field (e.g. "quantity"); when
+//     given and present on a line, that line contributes amount*quantity,
+//     else amount*1.
+//   - expected: dotted path to the scalar the sum must match (e.g.
+//     "subtotal").
+//   - tolerance: literal number, default 0.
+//
+// Passes when |sum - expected| <= tolerance. Exact decimal math
+// (shopspring/decimal, mirroring taxMathEval) so a kobo-level rounding never
+// mis-fires against the tolerance.
+//
+// Config faults (=> error, N15): undecodable params; a missing items/amount/
+// expected key; a negative tolerance. Not-applicable (=> pass, nil): the
+// items path is absent, resolves to a non-list, or is empty — line-items-
+// required owns the "no lines at all" case, so this rule stays silent there
+// rather than double-reporting. Data faults (=> violation, mirroring
+// taxMathEval): a line item that is not an object; a line whose amount is
+// absent or non-numeric, or whose quantity is present-but-non-numeric; an
+// absent or non-numeric expected value.
+type lineSumEval struct{}
+
+func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
+	var params struct {
+		Items     string  `json:"items"`
+		Amount    string  `json:"amount"`
+		Quantity  string  `json:"quantity"`
+		Expected  string  `json:"expected"`
+		Tolerance float64 `json:"tolerance"`
+	}
+	if err := decodeParams(r.Params, &params); err != nil {
+		return nil, fmt.Errorf("validation: line_sum rule %q params: %w", r.Key, err)
+	}
+	if params.Items == "" {
+		return nil, fmt.Errorf("validation: line_sum rule %q missing items", r.Key)
+	}
+	if params.Amount == "" {
+		return nil, fmt.Errorf("validation: line_sum rule %q missing amount", r.Key)
+	}
+	if params.Expected == "" {
+		return nil, fmt.Errorf("validation: line_sum rule %q missing expected", r.Key)
+	}
+	// A negative tolerance would make |sum-expected| > tol true even for an
+	// exact match (0 > negative), silently flagging correct invoices — fail
+	// loud (N15), same rationale as taxMathEval.
+	if params.Tolerance < 0 {
+		return nil, fmt.Errorf("validation: line_sum rule %q tolerance must be non-negative, got %v", r.Key, params.Tolerance)
+	}
+
+	raw, present := resolvePath(p, params.Items)
+	if !present {
+		return nil, nil // no line-item list -> not applicable (line-items-required owns it)
+	}
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil, nil
+	}
+
+	sum := decimal.Zero
+	for _, it := range items {
+		m, ok := it.(map[string]any)
+		if !ok {
+			return violation(r), nil // a non-object line is malformed data for this rule
+		}
+		amountVal, ok := m[params.Amount]
+		if !ok {
+			return violation(r), nil // an amount-less line can't reconcile
+		}
+		amountF, ok := toFloat(amountVal)
+		if !ok {
+			return violation(r), nil
+		}
+		line := decimal.NewFromFloat(amountF)
+		if params.Quantity != "" {
+			if qtyVal, has := m[params.Quantity]; has {
+				qtyF, ok := toFloat(qtyVal)
+				if !ok {
+					return violation(r), nil
+				}
+				line = line.Mul(decimal.NewFromFloat(qtyF))
+			}
+			// quantity field absent on this line -> implicit weight of 1.
+		}
+		sum = sum.Add(line)
+	}
+
+	expectedVal, present := resolvePath(p, params.Expected)
+	if !present {
+		return violation(r), nil
+	}
+	expectedF, ok := toFloat(expectedVal)
+	if !ok {
+		return violation(r), nil
+	}
+	if sum.Sub(decimal.NewFromFloat(expectedF)).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
+		return violation(r), nil
+	}
+	return nil, nil
+}
+
 // crossFieldEval implements the `cross_field` rule type: params
 // `{left, op, right}`, left/right ALWAYS dotted payload paths. Passes when
 // the relation `left op right` holds; violates when it does not. An unknown

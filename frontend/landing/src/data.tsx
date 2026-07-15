@@ -207,7 +207,7 @@ export type Audience = {
 export const FIRM: Audience = {
   tabIcon: tg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']),
   headline: "Run every client's compliance from one portal.",
-  body: "Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner — and a distribution channel for InvoiceOS.",
+  body: "Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner — and a distribution channel for FiscalBridge.",
   features: [
     { title: 'Multi-client portal', body: 'Every client company in one switchable workspace.', glyph: fg(['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z']) },
     { title: 'Bulk validation queues', body: 'Run and clear validation across clients in one pass.', glyph: fg(['m3 17 2 2 4-4', 'm3 7 2 2 4-4', 'M13 6h8', 'M13 12h8', 'M13 18h8']) },
@@ -219,13 +219,13 @@ export const FIRM: Audience = {
     { value: '1 login', label: 'All client companies, switch instantly.', color: 'var(--fg-1)' },
     { value: '25%', label: 'Recurring partner revenue share.', color: 'var(--accent)' },
   ],
-  cta: 'Join the partner program',
+  cta: 'Book a demo',
 }
 
 export const INHOUSE: Audience = {
   tabIcon: tg(['M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z', 'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2', 'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2', 'M10 6h4', 'M10 10h4', 'M10 14h4']),
   headline: 'Give your finance team a compliance cockpit.',
-  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house.',
+  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house — from first draft to FIRS transmission.',
   features: [
     { title: 'Role-based approval chain', body: 'Creator → reviewer → approver, with rejection notes.', glyph: fg(['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']) },
     { title: 'Departmental readiness dashboard', body: 'One company, every metric your controller needs.', glyph: fg(['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z']) },
@@ -237,7 +237,7 @@ export const INHOUSE: Audience = {
     { value: '4 roles', label: 'Creator, reviewer, approver & admin built in.', color: 'var(--fg-1)' },
     { value: '1 company', label: 'Full control of your own compliance.', color: 'var(--accent)' },
   ],
-  cta: 'Book a team demo',
+  cta: 'Book a demo',
 }
 
 /* ------------------------------------------------------------------ */

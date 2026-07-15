@@ -44,7 +44,7 @@ export function Footer() {
           <div style={{ maxWidth: 300 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <BrandMark size={20} />
-              <span style={{ fontWeight: 600, fontSize: 15 }}>InvoiceOS Africa</span>
+              <span style={{ fontWeight: 600, fontSize: 15 }}>FiscalBridge Africa</span>
             </div>
             <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)', margin: 0 }}>
               E-invoicing compliance infrastructure for African businesses. Built for Nigeria's MBS, designed to expand.
@@ -78,7 +78,7 @@ export function Footer() {
           }}
         >
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-            © 2026 INVOICEOS AFRICA · LAGOS · NG
+            © 2026 FISCALBRIDGE AFRICA · LAGOS · NG
           </span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
             v 1.0 · MBS ADAPTER · SANDBOX

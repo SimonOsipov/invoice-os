@@ -58,10 +58,12 @@ export const badInvoice: InvoicePayload = {
 }
 
 // manyViolationsPayload() (collect_all_integration_test.go): validInvoice with
-// SIX independently-broken fields (invoice_number/issue_date deleted,
+// several independently-broken fields (invoice_number/issue_date deleted,
 // supplier.name deleted, currency + supplier.tin + subtotal broken, plus a
-// duplicate line-item id) — fires exactly MANY_VIOLATION_KEYS below (see the
-// committed golden internal/validation/testdata/golden/many_violations.json).
+// duplicate line-item id). The negative subtotal also leaves the positive line
+// amounts unable to reconcile, so line-items-sum-subtotal fires too — this
+// fires exactly MANY_VIOLATION_KEYS below (see the committed golden
+// internal/validation/testdata/golden/many_violations.json).
 export const manyViolations: InvoicePayload = {
   invoice: (() => {
     const inv: Record<string, unknown> = { ...validInvoice.invoice }
@@ -107,6 +109,7 @@ export const MANY_VIOLATION_KEYS = [
   'currency-allowed',
   'invoice-number-required',
   'issue-date-required',
+  'line-items-sum-subtotal',
   'no-duplicate-line-items',
   'subtotal-non-negative',
   'supplier-name-required',

@@ -22,12 +22,14 @@ import (
 	"testing"
 )
 
-// manyViolationsPayload returns a validInvoicePayload() mutated to break SIX
-// independent rules at once (invoice-number-required, issue-date-required,
-// supplier-name-required, currency-allowed, supplier-tin-format,
-// subtotal-non-negative, vat-standard-rate, no-duplicate-line-items -- eight
-// rule keys total once vat-standard-rate's own base-amount fallout is
-// included), while leaving every other seeded v1 rule passing:
+// manyViolationsPayload returns a validInvoicePayload() mutated to break a
+// spread of independent rules at once (invoice-number-required,
+// issue-date-required, supplier-name-required, currency-allowed,
+// supplier-tin-format, subtotal-non-negative, vat-standard-rate,
+// no-duplicate-line-items, line-items-sum-subtotal -- nine rule keys total
+// once vat-standard-rate's and line-items-sum-subtotal's fallout from the
+// negative subtotal is included), while leaving every other seeded v1 rule
+// passing:
 //   - invoice_number and issue_date are deleted outright (presence rules fire).
 //   - supplier.name is deleted, but supplier.tin stays present-but-malformed,
 //     so supplier-tin-required passes while supplier-tin-format fires.
@@ -36,7 +38,9 @@ import (
 //   - subtotal goes negative, but stays present, so subtotal-required passes
 //     while subtotal-non-negative fires; the same negative subtotal also
 //     drags vat-standard-rate's expected base far from the (now bogus) vat
-//     value, so that fires too.
+//     value, so that fires too, AND leaves the two positive line amounts
+//     (10*100 + 1*5 = 1005) unable to reconcile to it, so
+//     line-items-sum-subtotal (line_sum) fires as well.
 //   - vat itself stays present and non-negative, so vat-required and
 //     vat-non-negative both pass.
 //   - total and line_items are left untouched (total-*, line-items-required
@@ -70,8 +74,8 @@ func manyViolationsPayload() Payload {
 	return p
 }
 
-// TestCollectAll_ManyViolationsBreadth (Core AC 2): a payload with eight
-// independently-broken rules returns EXACTLY those eight violation keys,
+// TestCollectAll_ManyViolationsBreadth (Core AC 2): a payload with nine
+// independently-broken rules returns EXACTLY those nine violation keys,
 // sorted, each carrying a non-empty rule key/severity/message -- proving the
 // engine collects every applicable violation in one pass rather than
 // stopping at the first. A second control payload with a single defect
@@ -97,6 +101,7 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 			"currency-allowed",
 			"invoice-number-required",
 			"issue-date-required",
+			"line-items-sum-subtotal",
 			"no-duplicate-line-items",
 			"subtotal-non-negative",
 			"supplier-name-required",
@@ -104,7 +109,7 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 			"vat-standard-rate",
 		}
 		if got := violationKeys(result); !reflect.DeepEqual(got, wantKeys) {
-			t.Errorf("violation keys = %v, want %v (collect-ALL across eight independently-broken rules, sorted)", got, wantKeys)
+			t.Errorf("violation keys = %v, want %v (collect-ALL across nine independently-broken rules, sorted)", got, wantKeys)
 		}
 
 		for _, v := range result.Violations {
@@ -119,7 +124,7 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 			}
 		}
 
-		// Spot-check three of the eight triples (one required, one enum, one
+		// Spot-check three of the nine triples (one required, one enum, one
 		// cel rule type) against the migration-seeded content itself
 		// (migrations/20260711121327_seed_mbs_v1.sql) rather than only
 		// asserting non-empty above -- proves each triple carries the real
@@ -165,7 +170,7 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 
 	t.Run("clean_payload_zero_violations", func(t *testing.T) {
 		// Guards the other end of the breadth assertion: a payload that
-		// breaks none of the eight rules above returns no violations at
+		// breaks none of the nine rules above returns no violations at
 		// all, AND the result is still stamped with the active version --
 		// the version stamp is not something that only appears when there
 		// happens to be a violation to attach it to.

@@ -18,7 +18,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
   const connCount = CONNECTOR_DEFS.filter((c) => connectors[c.id]).length
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1080 }}>
+    <div style={{ padding: '30px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
       <div style={{ marginBottom: 22 }}>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Settings</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>Integrations, developer access, and signing certificates</p>

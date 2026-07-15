@@ -162,10 +162,12 @@ func absDiff(a, b float64) float64 {
 
 // TestSeed_CollectAllOrdering (gap: seed_test.go's demo contract always trips
 // exactly 2 rules; nothing in the RED suite exercises 3+ simultaneous
-// violations). Trips three independent rules at once (a malformed TIN, a
-// wrong VAT, and a negative subtotal) and asserts the engine's collect-all
-// pass returns all three, sorted by rule_key ascending (Decision N16) --
-// not fail-fast on the first, not returned in evaluation/insertion order.
+// violations). Starts from the malformed-TIN + wrong-VAT bad payload and
+// forces the subtotal negative: that alone trips BOTH subtotal-non-negative
+// and line-items-sum-subtotal (the still-positive line amounts no longer
+// reconcile to a negative subtotal), so four independent rules fire at once.
+// Asserts the engine's collect-all pass returns all four, sorted by rule_key
+// ascending (Decision N16) -- not fail-fast, not in evaluation/insertion order.
 func TestSeed_CollectAllOrdering(t *testing.T) {
 	_, app := dbTestPools(t)
 	rs := loadV1(t, app)
@@ -178,9 +180,9 @@ func TestSeed_CollectAllOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	wantKeys := []string{"subtotal-non-negative", "supplier-tin-format", "vat-standard-rate"}
+	wantKeys := []string{"line-items-sum-subtotal", "subtotal-non-negative", "supplier-tin-format", "vat-standard-rate"}
 	if got := violationKeys(result); !reflect.DeepEqual(got, wantKeys) {
-		t.Errorf("violation keys = %v, want %v (3 independent violations, sorted rule_key ascending)", got, wantKeys)
+		t.Errorf("violation keys = %v, want %v (4 independent violations, sorted rule_key ascending)", got, wantKeys)
 	}
 }
 

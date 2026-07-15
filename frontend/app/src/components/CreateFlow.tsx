@@ -23,7 +23,7 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
   const valCount = Math.min(valIdx, VAL_LABELS.length)
 
   return (
-    <div style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
+    <div style={{ padding: '24px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
         <button onClick={ctx.closeCreate} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, padding: '0 12px', fontSize: 13 }}>
           ← Cancel

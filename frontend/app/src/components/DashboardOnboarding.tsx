@@ -9,7 +9,7 @@ export function DashboardOnboarding({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+    <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ marginBottom: 26 }}>
         <div className="label" style={{ marginBottom: 10 }}>
           / COMPLIANCE OVERVIEW

@@ -20,6 +20,11 @@
       "path": "issue_date"
     },
     {
+      "rule_key": "line-items-sum-subtotal",
+      "severity": "error",
+      "message": "Line item amounts must sum to the invoice subtotal."
+    },
+    {
       "rule_key": "no-duplicate-line-items",
       "severity": "error",
       "message": "Invoice contains duplicate line items (a line id appears more than once)."

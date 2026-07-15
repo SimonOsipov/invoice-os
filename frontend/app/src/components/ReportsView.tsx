@@ -39,7 +39,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
 
   if (av.length === 0) {
     return (
-      <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+      <div style={{ padding: '30px 36px 56px' }}>
         <div style={{ marginBottom: 22 }}>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Reports &amp; analytics</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · tax summary, period to date · June 2026</p>
@@ -57,7 +57,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   }
 
   return (
-    <div style={{ padding: '30px 36px 56px', maxWidth: 1280 }}>
+    <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ marginBottom: 22 }}>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Reports &amp; analytics</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · tax summary, period to date · June 2026</p>

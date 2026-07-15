@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "InvoiceOS Africa — Platform app (Phase 1 showcase).",
+  "description": "FiscalBridge Africa — Platform app (Phase 1 showcase).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

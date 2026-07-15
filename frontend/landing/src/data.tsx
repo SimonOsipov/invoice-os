@@ -219,13 +219,13 @@ export const FIRM: Audience = {
     { value: '1 login', label: 'All client companies, switch instantly.', color: 'var(--fg-1)' },
     { value: '25%', label: 'Recurring partner revenue share.', color: 'var(--accent)' },
   ],
-  cta: 'Join the partner program',
+  cta: 'Book a demo',
 }
 
 export const INHOUSE: Audience = {
   tabIcon: tg(['M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z', 'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2', 'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2', 'M10 6h4', 'M10 10h4', 'M10 14h4']),
   headline: 'Give your finance team a compliance cockpit.',
-  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house.',
+  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house — from first draft to FIRS transmission.',
   features: [
     { title: 'Role-based approval chain', body: 'Creator → reviewer → approver, with rejection notes.', glyph: fg(['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']) },
     { title: 'Departmental readiness dashboard', body: 'One company, every metric your controller needs.', glyph: fg(['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z']) },
@@ -237,7 +237,7 @@ export const INHOUSE: Audience = {
     { value: '4 roles', label: 'Creator, reviewer, approver & admin built in.', color: 'var(--fg-1)' },
     { value: '1 company', label: 'Full control of your own compliance.', color: 'var(--accent)' },
   ],
-  cta: 'Book a team demo',
+  cta: 'Book a demo',
 }
 
 /* ------------------------------------------------------------------ */

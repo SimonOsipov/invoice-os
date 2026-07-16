@@ -171,7 +171,40 @@ export type Mode = 'firm' | 'inhouse'
 
 export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
-export type CreateStep = 'upload' | 'parsing' | 'form' | 'validating' | 'results'
+export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'review' | 'validating' | 'results'
+
+// A canonical invoice field the Map step places onto a spreadsheet column.
+// `required` marks the fiscal identifier that recognition never guesses.
+export type CanonField = { key: string; required?: boolean }
+
+// A parsed spreadsheet. One row is one invoice LINE ITEM, not one invoice —
+// rows group into invoices by the column mapped to `invoice_number`, so header
+// values (dates, buyer, totals) repeat across every row of the same invoice.
+export type FileData = {
+  delimiter: string
+  encoding: string
+  sizeMeta: string
+  headers: string[]
+  rows: Record<string, string>[]
+}
+
+// canonical field key -> source column header, or null while unplaced
+export type Mapping = Record<string, string | null>
+
+// Rows of one invoice disagreeing on a field that must be constant across it.
+// `rows` are spreadsheet row numbers so the user can find them in their file.
+export type HeaderConflict = { field: string; label: string; rows: number[]; values: string[] }
+
+export type InvoiceGroup = {
+  number: string
+  issueDate: string | null
+  buyer: string | null
+  total: string | null
+  lineCount: number
+  sheetRows: number[]
+  conflicts: HeaderConflict[]
+  quarantined: boolean
+}
 
 export type SettingsTab = 'connectors' | 'api' | 'signing'
 
@@ -207,6 +240,9 @@ export type PlatformCtx = {
   createStep: CreateStep
   validation: ValidationResult | null
   uploadFile: string | null
+  mapping: Mapping | null
+  armedField: string | null
+  dragField: string | null
   selectedId: string | null
   filter: string
   switcherOpen: boolean
@@ -230,6 +266,16 @@ export type PlatformCtx = {
   backToEdit: () => void
   selectFile: (id: string) => void
   parseFile: () => void
+  armField: (k: string) => void
+  setDrag: (k: string) => void
+  endDrag: () => void
+  dropOn: (header: string) => void
+  clickCol: (header: string) => void
+  unmap: (header: string) => void
+  continueMapping: () => void
+  backToImport: () => void
+  backToMapping: () => void
+  createDrafts: () => void
   skipUpload: () => void
   approve: () => void
   selectInvoice: (number: string) => void

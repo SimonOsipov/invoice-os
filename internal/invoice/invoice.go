@@ -123,6 +123,7 @@ type CreateInput struct {
 	VAT           *string
 	Total         *string
 	LineItems     []LineItemInput
+	ImportBatchID *string
 }
 
 // UpdateInput is the Store.Update argument: a partial update over invoices'

@@ -138,20 +138,40 @@ func fieldValue(row []string, colIndex map[string]int, field string) *string {
 }
 
 // parseIssueDate parses s (already the raw, un-normalized issue_date cell —
-// issue_date is not one of the 5 numeric fields) as an ISO 8601 date. A
-// blank or unparseable value returns nil (no issue_date recorded) rather than
-// failing the import — date parsing is not part of any [numeric-
-// normalization]/[no-derive] decision, and no test pins stricter behavior.
-func parseIssueDate(s string) *time.Time {
+// issue_date is not one of the 5 numeric fields) as the one canonical
+// YYYY-MM-DD date format this importer accepts. A blank (whitespace-only) s
+// is not an error: it returns (nil, nil), the faithful "they wrote nothing"
+// reading (store-invalid-faithfully). A NON-EMPTY s that fails to parse
+// returns (nil, err) — distinct from blank, so the classify step can tell
+// "wrote nothing" apart from "wrote something we can't understand" and
+// quarantine the latter (Core AC#7: silently NULLing a firm-written but
+// badly-formatted date would be an uncorrected-looking correction, and would
+// launder a "date format wrong" error into a misleading "date missing").
+func parseIssueDate(s string) (*time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return nil
+		return nil, nil
 	}
 	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
+		return nil, fmt.Errorf("issue_date %q is not in YYYY-MM-DD format", s)
+	}
+	return &t, nil
+}
+
+// issueDateParseError reports the parse error (if any) for a group's
+// issue_date value, read off rowIdxs[0]. By the time classify calls this,
+// headerConflictField has already confirmed the group's rows agree on
+// issue_date (it's a header field), so checking the first row once is
+// sufficient. Returns nil when issue_date is unmapped, blank, or parses
+// cleanly.
+func issueDateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int) error {
+	p := fieldValue(rows[rowIdxs[0]], colIndex, "issue_date")
+	if p == nil {
 		return nil
 	}
-	return &t
+	_, err := parseIssueDate(*p)
+	return err
 }
 
 // sheetRow converts a 0-based rows[] index into its 1-based spreadsheet row:
@@ -258,11 +278,16 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 	if p := fieldValue(firstRow, colIndex, "issue_date"); p != nil {
 		issueDateStr = *p
 	}
+	// classify (issueDateParseError) already rejected any non-empty,
+	// unparseable issue_date for this group before it ever reached
+	// readyGroups, so the error here is always nil — a blank cell (nil,
+	// nil) is the only remaining case, which is the correct NULL.
+	issueDate, _ := parseIssueDate(issueDateStr)
 
 	in := invoice.CreateInput{
 		EntityID:      entityID,
 		InvoiceNumber: g.number,
-		IssueDate:     parseIssueDate(issueDateStr),
+		IssueDate:     issueDate,
 		SupplierTIN:   supplierTIN,
 		SupplierName:  &supplierName,
 		BuyerTIN:      fieldValue(firstRow, colIndex, "buyer_tin"),
@@ -297,9 +322,12 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 //     sheet row.
 //  3. Classify each group: an in-file header-field disagreement quarantines
 //     it (RowError.Rows = every one of the group's sheet rows, [dedup]/
-//     [errors-shape]); else an against-stored hit (one ExistingNumbers call
-//     for the whole file, entity-scoped -- [dedup-boundary]) quarantines it
-//     too; else it's READY.
+//     [errors-shape]); else a non-empty issue_date that doesn't parse as
+//     YYYY-MM-DD quarantines it too (RowError.Field "issue_date" -- Core
+//     AC#7: a badly-formatted date must never be silently NULLed, only a
+//     genuinely blank cell reads as NULL); else an against-stored hit (one
+//     ExistingNumbers call for the whole file, entity-scoped --
+//     [dedup-boundary]) quarantines it too; else it's READY.
 //  4. Look up the entity's (name, tin) once ([supplier-from-entity]) --
 //     ErrNotFound propagates (the handler 404s), even for a dry run, since
 //     this also serves as the entity-exists check a dry run would otherwise
@@ -362,6 +390,16 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 				Rows:    sheetRows(g.rowIdxs),
 				Field:   field,
 				Message: fmt.Sprintf("rows disagree on %s", field),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
+		if dateErr := issueDateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(g.rowIdxs),
+				Field:   "issue_date",
+				Message: dateErr.Error(),
 			})
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)

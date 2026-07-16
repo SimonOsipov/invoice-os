@@ -398,3 +398,55 @@ func TestServiceImport_HeaderSubtotalNormalizedBeforeConflictCompareNoSpuriousCo
 		t.Errorf("line item count = %d, want 2", n)
 	}
 }
+
+// --- Part C4: issue_date whitespace symmetry in the header-conflict compare
+//     (CodeRabbit, M4-03 PR review) ------------------------------------------
+
+// A HEADER field ("issue_date") given as " 2026-01-10 " (surrounding
+// whitespace) in one row and "2026-01-10" in another row of the SAME group
+// must compare EQUAL post-trim -- headerConflictField's cellAt helper now
+// trims issue_date before comparing (mirroring parseIssueDate's own
+// strings.TrimSpace, service.go), so this must not be a spurious in-file
+// conflict. Before the fix, parsing already trimmed (so the persisted date
+// would have been correct) but conflict DETECTION didn't, so this group
+// would have been wrongly quarantined despite producing the same stored
+// date -- this test is RED against that bug.
+func TestServiceImport_HeaderIssueDateTrimmedBeforeConflictCompareNoSpuriousConflict(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "ADV-C4 tenant")
+	entityID := seedEntity(t, super, tenantID, "ADV-C4 entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-DATETRIM", " 2026-01-10 ", "T1", "B1", "NGN", "100.00", "0.00", "100.00", "Item1", "1", "50.00"), // sheet 2 -- surrounding whitespace
+		mkRow("INV-DATETRIM", "2026-01-10", "T1", "B1", "NGN", "100.00", "0.00", "100.00", "Item2", "1", "50.00"),   // sheet 3 -- same date, no whitespace
+	}
+
+	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.ReadyInvoices != 1 || res.QuarantinedInvoices != 0 || len(res.Errors) != 0 {
+		t.Fatalf("(ReadyInvoices=%d QuarantinedInvoices=%d Errors=%+v), want (1,0,[]) -- \" 2026-01-10 \" and \"2026-01-10\" are the SAME date post-trim, not a conflict", res.ReadyInvoices, res.QuarantinedInvoices, res.Errors)
+	}
+
+	invID := invoiceIDByNumber(t, super, entityID, "INV-DATETRIM")
+	if got := countLineItems(t, super, invID); got != 2 {
+		t.Errorf("line item count = %d, want 2", got)
+	}
+
+	var issueDate *string
+	if err := super.QueryRow(ctx,
+		`SELECT issue_date::text FROM invoices WHERE entity_id = $1 AND invoice_number = $2`,
+		entityID, "INV-DATETRIM",
+	).Scan(&issueDate); err != nil {
+		t.Fatalf("read issue_date: %v", err)
+	}
+	if issueDate == nil || *issueDate != "2026-01-10" {
+		t.Errorf("persisted issue_date = %v, want %q", issueDate, "2026-01-10")
+	}
+}

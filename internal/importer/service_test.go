@@ -772,6 +772,50 @@ func TestServiceImport_MappingReferencesAbsentHeaderValidationBeforeAnyWrite(t *
 	}
 }
 
+// --- IMP-SVC-10b (CodeRabbit, M4-03 PR review) -----------------------------
+
+// TestServiceImport_MappingUnknownKeyValidationBeforeAnyWrite: a mapping
+// containing a KEY that isn't one of the 11 canonical fields (e.g. a typo
+// "totla" instead of "total") must ErrValidation BEFORE any write, by exact
+// symmetry with IMP-SVC-10's absent-mapped-header check: [mapping]'s
+// guarantee is that the server structurally cannot mis-map, so an unknown
+// mapping KEY must 400 just as firmly as an absent mapped HEADER does --
+// silently ignoring "totla" would otherwise import total as NULL with no
+// error at all.
+func TestServiceImport_MappingUnknownKeyValidationBeforeAnyWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "IMP-SVC-10b tenant")
+	entityID := seedEntity(t, super, tenantID, "IMP-SVC-10b entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	mapping := cloneMapping(stdMapping)
+	delete(mapping, "total")
+	mapping["totla"] = "Total" // typo: not a canonical field name
+
+	rows := [][]string{
+		mkRow("INV-X", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
+	}
+
+	res, err := svc.Import(c, entityID, mapping, stdHeader, rows, false)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Import err = %v, want ErrValidation (mapping key %q is not a recognized canonical field)", err, "totla")
+	}
+	if res.RowsTotal != 0 || len(res.Errors) != 0 {
+		t.Errorf("on validation failure, res = %+v, want the zero BatchResult", res)
+	}
+
+	if got := countImportBatchesForEntity(t, super, entityID); got != 0 {
+		t.Errorf("import_batches rows = %d, want 0 (validation fails before any write)", got)
+	}
+	if got := countInvoicesForEntity(t, super, entityID); got != 0 {
+		t.Errorf("invoices rows = %d, want 0", got)
+	}
+}
+
 // --- IMP-SVC-11 -----------------------------------------------------------
 
 // IMP-SVC-11: a tin-less entity (seedEntity leaves tin NULL, same as
@@ -1136,5 +1180,163 @@ func TestServiceImport_EntityScopedDedupSameNumberUnderDifferentEntityNotDuplica
 	}
 	if got := countInvoicesByNumber(t, super, entityB, "INV-DUP"); got != 1 {
 		t.Errorf("entity B's INV-DUP rows = %d, want 1 (unaffected pre-seeded row)", got)
+	}
+}
+
+// --- Core AC#2 (CodeRabbit, M4-03 PR review) -------------------------------
+
+// nonNumericTotalFixture returns a header+rows combination with ONE group
+// whose `total` cell is "N/A" (a non-numeric residue surviving
+// [numeric-normalization], which only strips commas/whitespace) and a clean
+// sibling group -- used by BOTH the dry-run and real-import halves of
+// TestServiceImport_DryRunExactVerdictForNonNumericField below, so Core AC#2
+// ("the same file + mapping can be dry-run to get the EXACT READY/
+// QUARANTINED verdict the real import will produce") is asserted on the
+// SAME bytes.
+func nonNumericTotalFixture() [][]string {
+	return [][]string{
+		mkRow("INV-BADNUM", "2026-01-10", "T1", "B1", "NGN", "500.00", "0.00", "N/A", "BadItem", "1", "500.00"),     // sheet 2
+		mkRow("INV-CLEANNUM", "2026-01-11", "T2", "B2", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"), // sheet 3
+	}
+}
+
+// assertNonNumericTotalVerdict checks the classification-derived counts that
+// must hold identically whether nonNumericTotalFixture was run dry or real.
+func assertNonNumericTotalVerdict(t *testing.T, res BatchResult) {
+	t.Helper()
+	if res.RowsTotal != 2 || res.RowsValid != 1 || res.RowsInvalid != 1 {
+		t.Errorf("counts = (total=%d valid=%d invalid=%d), want (2,1,1)", res.RowsTotal, res.RowsValid, res.RowsInvalid)
+	}
+	if res.ReadyInvoices != 1 || res.QuarantinedInvoices != 1 {
+		t.Errorf("(ReadyInvoices=%d QuarantinedInvoices=%d), want (1,1)", res.ReadyInvoices, res.QuarantinedInvoices)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1: %+v", len(res.Errors), res.Errors)
+	}
+	re := res.Errors[0]
+	if got := rowNumbersOf(re); !intSliceEqual(got, []int{2}) {
+		t.Errorf("bad-total RowError rows = %v, want [2]", got)
+	}
+	if re.Field != "total" {
+		t.Errorf("bad-total RowError.Field = %q, want %q", re.Field, "total")
+	}
+}
+
+// TestServiceImport_DryRunExactVerdictForNonNumericField is Core AC#2's own
+// assertion. Before this fix, numeric validity was deferred entirely to
+// Postgres's ::numeric cast at Create time, which a dry-run never reaches --
+// so a `total` cell like "N/A" reported READY in dry-run but quarantined in
+// the real import, violating AC#2. bestEffortBadNumericField is now promoted
+// into the classify step (service.go), run in BOTH dry-run and real, so both
+// halves below -- run over the SAME fixture bytes -- must produce the
+// IDENTICAL verdict.
+func TestServiceImport_DryRunExactVerdictForNonNumericField(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "IMP-SVC-DRYNUM tenant")
+	entityID := seedEntity(t, super, tenantID, "IMP-SVC-DRYNUM entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	dryRes, err := svc.Import(c, entityID, stdMapping, stdHeader, nonNumericTotalFixture(), true)
+	if err != nil {
+		t.Fatalf("Import (dry-run): %v", err)
+	}
+	if dryRes.ID != "" || dryRes.Status != "" {
+		t.Errorf("dry-run (ID=%q Status=%q), want both empty", dryRes.ID, dryRes.Status)
+	}
+	assertNonNumericTotalVerdict(t, dryRes)
+	if got := countImportBatchesForEntity(t, super, entityID); got != 0 {
+		t.Errorf("dry-run wrote %d import_batches rows, want 0", got)
+	}
+	if got := countInvoicesForEntity(t, super, entityID); got != 0 {
+		t.Errorf("dry-run wrote %d invoices rows, want 0", got)
+	}
+
+	realRes, err := svc.Import(c, entityID, stdMapping, stdHeader, nonNumericTotalFixture(), false)
+	if err != nil {
+		t.Fatalf("Import (real): %v", err)
+	}
+	if realRes.Status != "completed" || realRes.ID == "" {
+		t.Errorf("real import (Status=%q ID=%q), want (completed, non-empty)", realRes.Status, realRes.ID)
+	}
+	assertNonNumericTotalVerdict(t, realRes)
+
+	if dryRes.RowsTotal != realRes.RowsTotal || dryRes.RowsValid != realRes.RowsValid ||
+		dryRes.RowsInvalid != realRes.RowsInvalid || dryRes.ReadyInvoices != realRes.ReadyInvoices ||
+		dryRes.QuarantinedInvoices != realRes.QuarantinedInvoices {
+		t.Errorf("dry-run verdict %+v does not match real verdict %+v -- Core AC#2 requires them to be EXACTLY the same", dryRes, realRes)
+	}
+
+	if got := countInvoicesByNumber(t, super, entityID, "INV-BADNUM"); got != 0 {
+		t.Errorf("INV-BADNUM persisted = %d, want 0 (quarantined at classify time, never reaches Create)", got)
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "INV-CLEANNUM"); got != 1 {
+		t.Errorf("INV-CLEANNUM persisted = %d, want 1", got)
+	}
+}
+
+// --- Domain-only quarantine (CodeRabbit, M4-03 PR review) ------------------
+
+// TestServiceImport_OperationalCreateFailureAbortsRunNotQuarantined: a
+// genuinely OPERATIONAL Create failure must ABORT the whole run (Finalize
+// best-effort to 'failed', Import returns the raw error) rather than being
+// quarantined as a bad ROW -- a DB-level failure must never masquerade as
+// "N invalid rows" or leak Postgres's raw error text to the client
+// ([review-authority] governs bad DATA, not infrastructure failure).
+//
+// HOW THIS IS SIMULATED, without contorting Service's design to inject a
+// fake Store (Service holds a concrete *invoice.Store, not an interface, so
+// there is no seam to return an arbitrary mocked error): an empty
+// auth.Identity.Subject passes db.WithinRequestTenantTx's own
+// identity-presence check (it only requires TenantID, see
+// internal/platform/db/tenant.go) but makes invoice_status_history's own
+// `actor` CHECK (char_length(actor) > 0, see
+// migrations/20260714111246_invoice_status_history.sql) fail once
+// invoice.Store.Create reaches that INSERT -- a genuine check_violation
+// (23514) on a DIFFERENT table's constraint, which is NOT one of Create's
+// own domain sentinels (ErrDuplicateNumber's 23505, ErrValidation's
+// 23503/22P02 on the invoices INSERT itself), so it propagates raw. This
+// stands in for "a connection failure / unexpected bug" as a real,
+// non-mocked non-domain error.
+func TestServiceImport_OperationalCreateFailureAbortsRunNotQuarantined(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "IMP-SVC-OPFAIL tenant")
+	entityID := seedEntity(t, super, tenantID, "IMP-SVC-OPFAIL entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: "", Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-OPFAIL", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
+	}
+
+	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	if err == nil {
+		t.Fatal("Import: err = nil, want the raw operational error to propagate (not be swallowed into a RowError)")
+	}
+	if errors.Is(err, invoice.ErrValidation) || errors.Is(err, invoice.ErrDuplicateNumber) {
+		t.Errorf("Import err = %v, want a NON-domain error (not ErrValidation/ErrDuplicateNumber)", err)
+	}
+	if res.ID != "" {
+		t.Errorf("res.ID = %q on an aborted run, want empty (BatchResult{} on error)", res.ID)
+	}
+
+	if got := countInvoicesByNumber(t, super, entityID, "INV-OPFAIL"); got != 0 {
+		t.Errorf("INV-OPFAIL persisted = %d, want 0 (Create's tx rolled back)", got)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx,
+		`SELECT status FROM import_batches WHERE entity_id = $1`, entityID,
+	).Scan(&status); err != nil {
+		t.Fatalf("read back the batch's terminal status: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("import_batches.status = %q, want %q (a truthful failed batch, never a laundered 'completed' with a fake RowError)", status, "failed")
 	}
 }

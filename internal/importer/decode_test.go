@@ -50,7 +50,12 @@ var csvTwinRows = [][]string{
 func assertHeader(t *testing.T, got, want []string) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("header = %#v, want %#v", got, want)
+		// t.Fatalf, not t.Errorf: several callers pass a data ROW (e.g.
+		// IMP-DECODE-08/09) and index straight into it (rows[0][1]) on the
+		// very next line -- a soft Errorf would let a too-short mismatched
+		// row fall through to that index and panic, masking the real
+		// mismatch this assertion already caught.
+		t.Fatalf("header = %#v, want %#v", got, want)
 	}
 }
 

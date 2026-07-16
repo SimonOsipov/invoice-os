@@ -234,3 +234,23 @@ func TestStoreExistingNumbers_DuplicateAndSpecialCharacterInputsHandledSafely(t 
 		t.Errorf("invoices count for tenant after crafted-string ExistingNumbers call = %d, want 1 (no injection occurred)", stillThere)
 	}
 }
+
+// Finalize on a batch id that doesn't exist at all (or that RLS makes
+// invisible under the caller's tenant -- same observable effect: 0 rows
+// match the WHERE) must return ErrNotFound rather than silently succeeding
+// on 0 affected rows (CodeRabbit finding, M4-03 PR review) -- a caller must
+// never be told a batch was finalized when nothing was actually updated.
+func TestStoreFinalize_UnknownIDReturnsNotFoundNoRowsAffected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "adversarial finalize-not-found tenant")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	err := store.Finalize(c, uuid.NewString(), 1, 1, 0, nil, "completed")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Finalize(unseeded id) err = %v, want ErrNotFound", err)
+	}
+}

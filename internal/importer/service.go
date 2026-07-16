@@ -7,6 +7,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -78,16 +79,42 @@ type invoiceGroup struct {
 	rowIdxs []int
 }
 
+// canonicalFields is the closed set of column keys a mapping is allowed to
+// use -- the 11 fields Import actually understands. A mapping key outside
+// this set (e.g. a typo like "totla") is rejected in resolveMapping, by
+// exact symmetry with the mapped-header-absent-from-row-1 check just below
+// it: [mapping]'s guarantee is that the server structurally cannot mis-map,
+// which requires rejecting an unrecognized KEY just as firmly as it rejects
+// a mapped HEADER string that doesn't exist -- silently ignoring an unknown
+// key would import that canonical field as NULL with no error at all.
+var canonicalFields = map[string]bool{
+	"invoice_number":   true,
+	"issue_date":       true,
+	"buyer_tin":        true,
+	"buyer_name":       true,
+	"currency":         true,
+	"subtotal":         true,
+	"vat":              true,
+	"total":            true,
+	"line_description": true,
+	"line_quantity":    true,
+	"line_unit_price":  true,
+}
+
 // resolveMapping resolves mapping (canonical field -> header string) into
 // canonical field -> column index against header (first match). An
-// invoice_number-less mapping, or a mapped header string absent from header,
-// is rejected as ErrValidation BEFORE any write.
+// invoice_number-less mapping, a mapping key outside canonicalFields, or a
+// mapped header string absent from header, is rejected as ErrValidation
+// BEFORE any write.
 func resolveMapping(mapping map[string]string, header []string) (map[string]int, error) {
 	if _, ok := mapping["invoice_number"]; !ok {
 		return nil, fmt.Errorf("%w: mapping is missing required field invoice_number", ErrValidation)
 	}
 	colIndex := make(map[string]int, len(mapping))
 	for field, headerName := range mapping {
+		if !canonicalFields[field] {
+			return nil, fmt.Errorf("%w: mapping key %q is not a recognized canonical field", ErrValidation, field)
+		}
 		idx := -1
 		for i, h := range header {
 			if h == headerName {
@@ -215,27 +242,44 @@ func headerConflictField(rows [][]string, colIndex map[string]int, rowIdxs []int
 }
 
 // cellAt reads row[idx] (or "" if out of range), normalizing it if field is
-// numeric — a shared helper for headerConflictField and
-// bestEffortBadNumericField, which both need the raw (not nil-on-blank)
-// normalized string rather than fieldValue's *string/nil-on-blank shape.
+// numeric, or trimming surrounding whitespace if field is issue_date — a
+// shared helper for headerConflictField and bestEffortBadNumericField, which
+// both need the raw (not nil-on-blank) normalized string rather than
+// fieldValue's *string/nil-on-blank shape. issue_date's trim mirrors
+// parseIssueDate's own strings.TrimSpace: without it, "2026-01-10" and
+// " 2026-01-10 " in the same group would spuriously conflict in
+// headerConflictField despite parseIssueDate resolving them to the identical
+// stored date.
 func cellAt(row []string, idx int, field string) string {
 	var v string
 	if idx < len(row) {
 		v = row[idx]
 	}
-	if numericFields[field] {
+	switch {
+	case numericFields[field]:
 		v = normalizeNumeric(v)
+	case field == "issue_date":
+		v = strings.TrimSpace(v)
 	}
 	return v
 }
 
-// bestEffortBadNumericField does a post-Create-error diagnostic scan of the
-// group's 5 numeric fields (header fields off rowIdxs[0], line fields off
-// every row), returning the FIRST whose normalized value doesn't parse as a
-// plain decimal number. This is diagnostic only (nothing is stored for a
-// quarantined invoice) — it just gives RowError.Field a best-effort value
-// when a Create error's SQLSTATE (e.g. 22P02) doesn't itself disambiguate
-// which column broke. Returns "" if no numeric field is clearly bad.
+// bestEffortBadNumericField scans the group's 5 numeric fields (header
+// fields off rowIdxs[0], line fields off every row), returning the FIRST
+// whose normalized value doesn't parse as a plain decimal number. It serves
+// two callers: (1) Import's classify step, where it is now authoritative —
+// promoted from a post-Create diagnostic per Core AC#2 ("the same file +
+// mapping dry-run gets the EXACT verdict the real import will produce"):
+// numeric validity used to be deferred entirely to Postgres's ::numeric cast
+// at Create time, which a dry-run never reaches, so a non-numeric cell (e.g.
+// "N/A") wrongly reported READY in dry-run but quarantined for real. Checking
+// it here, in BOTH dry-run and real, closes that gap — mirroring how
+// issueDateParseError already quarantines a non-empty unparseable issue_date
+// at classify time rather than at Create; (2) Create's error path (Import,
+// below), where it is still a best-effort diagnostic: if Create returns
+// invoice.ErrValidation for a reason THIS scan didn't catch, its SQLSTATE
+// (22P02) doesn't itself disambiguate which column broke, so this gives
+// RowError.Field a best guess. Returns "" if no numeric field is clearly bad.
 func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
 	first := rows[rowIdxs[0]]
 	for _, field := range []string{"subtotal", "vat", "total"} {
@@ -309,6 +353,27 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 	return in
 }
 
+// domainCreateErrorMessage reports whether createErr is one of the DOMAIN
+// errors invoice.Store.Create can return for genuinely bad input --
+// invoice.ErrDuplicateNumber (a 23505 racing past ExistingNumbers's upfront
+// precheck, [dedup]) or invoice.ErrValidation (a residual bad value the
+// classify step above didn't catch) -- and, if so, a sanitized,
+// human-readable message naming the reason (never createErr.Error()'s raw
+// Postgres text, which can leak internals). Any OTHER error (a connection
+// failure, a context cancellation, an unexpected bug) is NOT a domain error:
+// ok is false, and the caller must abort the run rather than quarantine it
+// as bad data.
+func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
+	switch {
+	case errors.Is(createErr, invoice.ErrDuplicateNumber):
+		return "invoice number already imported", true
+	case errors.Is(createErr, invoice.ErrValidation):
+		return "one or more fields failed validation", true
+	default:
+		return "", false
+	}
+}
+
 // Import is the importer's orchestration entrypoint (THE HEART): map ->
 // normalize -> group -> classify -> (dry-run classify-only | real
 // CreateBatch/Create/Finalize).
@@ -325,7 +390,13 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 //     [errors-shape]); else a non-empty issue_date that doesn't parse as
 //     YYYY-MM-DD quarantines it too (RowError.Field "issue_date" -- Core
 //     AC#7: a badly-formatted date must never be silently NULLed, only a
-//     genuinely blank cell reads as NULL); else an against-stored hit (one
+//     genuinely blank cell reads as NULL); else a non-empty numeric-mapped
+//     cell (subtotal/vat/total/line_quantity/line_unit_price) that doesn't
+//     parse as a plain decimal quarantines it too (RowError.Field the
+//     offending field -- Core AC#2: dry-run must report the EXACT same
+//     verdict the real import produces, so numeric validity is checked HERE,
+//     not deferred to Postgres's ::numeric cast at Create time, which a
+//     dry-run never reaches); else an against-stored hit (one
 //     ExistingNumbers call for the whole file, entity-scoped --
 //     [dedup-boundary]) quarantines it too; else it's READY.
 //  4. Look up the entity's (name, tin) once ([supplier-from-entity]) --
@@ -339,11 +410,15 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 //     written.
 //  7. Real import: CreateBatch mints the ONE batch id used for every
 //     CreateInput.ImportBatchID this run (never a caller-supplied id). Per
-//     READY group, invoice.Store.Create; ANY error (not just a duplicate
-//     number -- a residual non-numeric cell surviving normalization surfaces
-//     here as Postgres's 22P02, [review-authority]) quarantines just that
-//     group and the run continues ([batch semantics], partial success).
-//     Finalize records the terminal counts/status/errors.
+//     READY group, invoice.Store.Create; only a DOMAIN error (ErrDuplicateNumber
+//     -- a concurrent 23505 racing past the upfront ExistingNumbers check,
+//     [dedup]; or ErrValidation -- a residual bad value the classify step
+//     above didn't catch) quarantines just that group with a sanitized
+//     message, and the run continues ([batch semantics], partial success).
+//     Any OTHER error is operational, not bad input (e.g. a DB outage): the
+//     whole run aborts, Finalize best-effort records 'failed', and the raw
+//     error propagates (the handler 500s) rather than being laundered into a
+//     fake RowError. Finalize records the terminal counts/status/errors.
 func (s *Service) Import(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
@@ -400,6 +475,16 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 				Rows:    sheetRows(g.rowIdxs),
 				Field:   "issue_date",
 				Message: dateErr.Error(),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
+		if field := bestEffortBadNumericField(rows, colIndex, g.rowIdxs); field != "" {
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(g.rowIdxs),
+				Field:   field,
+				Message: fmt.Sprintf("%s is not a valid number", field),
 			})
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
@@ -470,18 +555,33 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 	readyCount := 0
 	for _, g := range readyGroups {
 		in := buildCreateInput(entityID, rows, colIndex, g, batchID, supplierName, supplierTIN)
-		if _, createErr := s.inv.Create(ctx, in); createErr != nil {
-			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(g.rowIdxs),
-				Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
-				Message: createErr.Error(),
-			})
-			quarantinedInvoices++
-			rowsInvalid += len(g.rowIdxs)
-			rowsValid -= len(g.rowIdxs)
+		_, createErr := s.inv.Create(ctx, in)
+		if createErr == nil {
+			readyCount++
 			continue
 		}
-		readyCount++
+
+		msg, isDomainErr := domainCreateErrorMessage(createErr)
+		if !isDomainErr {
+			// An operational failure (e.g. a DB outage, a context
+			// cancellation, an unexpected bug) is NOT bad input -- never
+			// quarantine it as N invalid rows, and never leak createErr's raw
+			// Postgres text to the client. Best-effort finalize the batch as
+			// 'failed' (its own error, if any, is secondary to createErr) and
+			// abort with the real error so the handler 500s instead of lying
+			// about a 'completed' run.
+			_ = s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "failed")
+			return BatchResult{}, createErr
+		}
+
+		errorsList = append(errorsList, RowError{
+			Rows:    sheetRows(g.rowIdxs),
+			Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
+			Message: msg,
+		})
+		quarantinedInvoices++
+		rowsInvalid += len(g.rowIdxs)
+		rowsValid -= len(g.rowIdxs)
 	}
 
 	if err := s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "completed"); err != nil {

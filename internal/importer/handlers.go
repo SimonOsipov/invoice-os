@@ -156,7 +156,21 @@ func CreateHandler(imp func(ctx context.Context, entityID string, mapping map[st
 			return
 		}
 
-		dryRun := r.URL.Query().Get("dry_run") == "true"
+		// dry_run must not fail open ([review-authority]/[quarantine]: nothing
+		// is written until the caller consents to a real import): only an
+		// ABSENT query param, "true", or "false" are recognized -- a typo
+		// like "1"/"TRUE"/"treu" 400s rather than silently falling through to
+		// a REAL (persisting) import.
+		var dryRun bool
+		switch r.URL.Query().Get("dry_run") {
+		case "", "false":
+			dryRun = false
+		case "true":
+			dryRun = true
+		default:
+			writeError(w, http.StatusBadRequest, "dry_run must be true or false")
+			return
+		}
 
 		res, err := imp(r.Context(), entityID, mapping, header, rows, dryRun)
 		if err != nil {

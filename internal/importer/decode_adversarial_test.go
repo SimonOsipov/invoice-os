@@ -204,3 +204,61 @@ func TestDecode_UnknownFormatReturnsError(t *testing.T) {
 		}
 	}
 }
+
+// --- XLSX unzip-size bound (CodeRabbit, M4-03 PR review: zip-bomb -> DoS) ---
+
+// TestDecode_XLSXUnzipSizeLimitEnforced proves decodeXLSX actually threads
+// maxXLSXUnzipBytes through to excelize.Options.UnzipSizeLimit, rather than
+// fabricating a real 100+ MiB zip-bomb fixture (unnecessary to prove the
+// wiring, and cataloguing exhaustive oversized/malicious uploads is M4-15's
+// job, not this story's): a trivial one-cell workbook's uncompressed total
+// (several KB across [Content_Types].xml/_rels/workbook.xml/styles.xml/
+// sheet1.xml) comfortably exceeds a near-zero limit, so temporarily lowering
+// maxXLSXUnzipBytes must make Decode error where it otherwise wouldn't.
+func TestDecode_XLSXUnzipSizeLimitEnforced(t *testing.T) {
+	fixture := buildXLSX(t, func(f *excelize.File, sheet string) {
+		if err := f.SetCellValue(sheet, "A1", "invoice_number"); err != nil {
+			t.Fatalf("SetCellValue: %v", err)
+		}
+	})
+
+	original := maxXLSXUnzipBytes
+	maxXLSXUnzipBytes = 16 // far below even a minimal workbook's real uncompressed size
+	defer func() { maxXLSXUnzipBytes = original }()
+
+	if _, _, _, err := Decode(bytes.NewReader(fixture), "xlsx"); err == nil {
+		t.Fatal("Decode: err = nil, want an unzip-size-limit error once maxXLSXUnzipBytes is set below the workbook's real uncompressed size")
+	}
+}
+
+// --- quote-aware delimiter sniff (CodeRabbit, M4-03 PR review) -------------
+
+// TestDecode_DelimiterSniffPicksSemicolonDespiteMoreCommasInsideQuotedFields:
+// a ";"-delimited header whose QUOTED fields contain MORE commas (4) than
+// there are real semicolon separators (2) must still sniff ";", not ",".
+// Raw byte-frequency counting (the old sniffDelimiter) would tally the 4
+// embedded commas against the 2 real semicolons and wrongly pick ",",
+// garbling the whole file; sniffDelimiter now parses the header LINE through
+// encoding/csv per candidate and picks whichever yields the most
+// successfully-parsed fields, which is quote-aware by construction --
+// parsing with the WRONG candidate as the delimiter fails outright (a
+// quoted field must be immediately followed by ITS delimiter or the line
+// end, and here it's followed by ';', not the candidate's ','), so only ';'
+// parses cleanly.
+func TestDecode_DelimiterSniffPicksSemicolonDespiteMoreCommasInsideQuotedFields(t *testing.T) {
+	fixture := []byte(`"Buyer, Inc, Ltd";"Address, Line, Two";total` + "\n" +
+		`"Acme, Global, Corp";"1 Main, St, Suite 2";100.00` + "\n")
+
+	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if facts.Delimiter != ";" {
+		t.Fatalf("facts.Delimiter = %q, want %q -- sniff must not be misled by more commas inside quoted fields than real semicolons", facts.Delimiter, ";")
+	}
+	assertHeader(t, header, []string{"Buyer, Inc, Ltd", "Address, Line, Two", "total"})
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	assertHeader(t, rows[0], []string{"Acme, Global, Corp", "1 Main, St, Suite 2", "100.00"})
+}

@@ -114,30 +114,62 @@ func headerLine(decoded []byte) []byte {
 	return decoded
 }
 
-// sniffDelimiter counts occurrences of each candidate delimiter on the
-// header line and returns the most frequent one, defaulting to ',' on a tie
-// (comma is checked first, so a strict-greater comparison keeps it as the
-// winner on equal counts) or when none of the candidates appear.
+// sniffDelimiter picks whichever candidate delimiter's encoding/csv parse of
+// the header line yields the most fields, defaulting to ',' on a tie (comma
+// is checked first, so a strict-greater comparison keeps it as the winner on
+// an equal field count) or when no candidate parses at all. This is
+// quote-aware BY CONSTRUCTION -- unlike a raw byte-frequency count, which
+// treats a delimiter character occurring INSIDE a quoted header field
+// (e.g. `"Buyer, Ltd";"Address, Line";total`, 2 embedded commas vs. 2 real
+// semicolons) as an ordinary separator and can pick the wrong delimiter
+// entirely. Parsing each candidate through the real csv.Reader instead means
+// its own quote handling does the work: a WRONG candidate whose delimiter
+// character appears only inside a quoted field fails to parse cleanly
+// (a quoted field must be immediately followed by its own delimiter or the
+// line end) and is skipped, while the correct candidate parses without error
+// and yields the true column count.
 func sniffDelimiter(header []byte) rune {
 	candidates := []rune{',', ';', '\t', '|'}
 	best := ','
-	bestCount := -1
+	bestFields := -1
 	for _, c := range candidates {
-		count := bytes.Count(header, []byte(string(c)))
-		if count > bestCount {
-			bestCount = count
+		cr := csv.NewReader(bytes.NewReader(header))
+		cr.Comma = c
+		cr.FieldsPerRecord = -1
+		record, err := cr.Read()
+		if err != nil {
+			continue
+		}
+		if len(record) > bestFields {
+			bestFields = len(record)
 			best = c
 		}
 	}
 	return best
 }
 
+// maxXLSXUnzipBytes bounds excelize's Options.UnzipSizeLimit: the total
+// uncompressed size excelize will unpack across an .xlsx archive's entries
+// before it errors out, rather than the ~16 GiB it defaults to
+// (xuri/excelize/v2@v2.11.0's UnzipSizeLimit constant, templates.go). The 10
+// MiB maxUploadBytes cap ([upload-cap], handlers.go) only bounds the
+// COMPRESSED request body -- it does nothing to stop a small, maliciously
+// crafted zip from unzipping to gigabytes in memory (a zip bomb -> DoS). 10x
+// maxUploadBytes comfortably clears any legitimate ≤5k-row invoice workbook
+// (a few MB uncompressed at most) while keeping worst-case memory use two
+// orders of magnitude below excelize's own default. A package-level var
+// (not const) so a test can lower it to prove the option is actually wired
+// through to OpenReader without needing a real oversized fixture.
+var maxXLSXUnzipBytes int64 = 10 * maxUploadBytes // 100 MiB
+
 // decodeXLSX implements the XLSX half of Decode: stream the first sheet's
 // rows via excelize's row iterator so display values (formatted dates,
 // grouped numbers) come back exactly as a human would see them in Excel —
-// no normalization, that is the service's job.
+// no normalization, that is the service's job. OpenReader is bounded by
+// maxXLSXUnzipBytes ([upload-cap]) so a small upload cannot decompress to an
+// unbounded size.
 func decodeXLSX(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
-	f, err := excelize.OpenReader(r)
+	f, err := excelize.OpenReader(r, excelize.Options{UnzipSizeLimit: maxXLSXUnzipBytes})
 	if err != nil {
 		return nil, nil, DecodeFacts{}, err
 	}

@@ -97,7 +97,11 @@ func (s *Store) CreateBatch(ctx context.Context, entityID string) (string, error
 // Finalize updates one import_batches row's terminal counts/status/errors. A
 // nil errs marshals to the jsonb empty array `[]`, never `null` (init to
 // []RowError{} first). RLS scopes the UPDATE's WHERE to the caller's tenant
-// automatically — no manual tenant filter.
+// automatically — no manual tenant filter. A missing id (or one RLS makes
+// invisible to the caller's tenant) updates zero rows; Postgres does not
+// error on that by itself, so the command tag's RowsAffected is checked
+// explicitly and mapped to ErrNotFound — otherwise a caller would be told a
+// batch was finalized when nothing was actually written.
 func (s *Store) Finalize(ctx context.Context, id string, rowsTotal, rowsValid, rowsInvalid int, errs []RowError, status string) error {
 	if errs == nil {
 		errs = []RowError{}
@@ -108,13 +112,19 @@ func (s *Store) Finalize(ctx context.Context, id string, rowsTotal, rowsValid, r
 	}
 
 	return db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx,
+		tag, err := tx.Exec(ctx,
 			`UPDATE import_batches
 			 SET status = $1, rows_total = $2, rows_valid = $3, rows_invalid = $4, errors = $5
 			 WHERE id = $6`,
 			status, rowsTotal, rowsValid, rowsInvalid, payload, id,
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
 	})
 }
 

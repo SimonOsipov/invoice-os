@@ -14,8 +14,10 @@
 //     pinned here as observed behavior, not a spec requirement).
 //   - a request with no "file" part 400s rather than panicking on
 //     r.FormFile's error.
-//   - dry_run is an EXACT "true" string match -- "1"/"false"/"TRUE" are all
-//     real (persisting) imports.
+//   - dry_run is an EXACT "true"/"false" string match (or absent, which is
+//     also a real import) -- anything else, e.g. "1"/"TRUE"/a typo, 400s
+//     rather than silently falling through to a real (persisting) import
+//     (CodeRabbit finding, M4-03 PR review: dry_run must not fail open).
 //   - the response envelope's delimiter/encoding fields are populated (non-
 //     null) for a real, non-comma-delimited CSV upload.
 //   - a mapping with no invoice_number key 400s end-to-end through the real
@@ -199,23 +201,25 @@ func TestCreateHandler_MissingFilePart400(t *testing.T) {
 	}
 }
 
-// --- dry_run query param: only an exact "true" dry-runs ---------------------
+// --- dry_run query param: only "true"/"false"/absent are recognized --------
 
-// TestCreateHandler_DryRunQueryParamVariants: "?dry_run=1", "?dry_run=false"
-// and "?dry_run=TRUE" (wrong case) must all be treated as REAL (persisting)
-// imports -- CreateHandler's dryRun test is `== "true"` exactly, per its own
-// doc comment ("dryRun := r.URL.Query().Get(\"dry_run\") == \"true\""). Each
-// case asserts both the 201 status AND that exactly one import_batches row
-// was actually persisted for the entity (a dry run would leave zero, as
-// IMP-API-03 already covers for the true-dry-run case).
+// TestCreateHandler_DryRunQueryParamVariants: "?dry_run=false" is a REAL
+// (persisting) import -- explicit "false" means the caller opted OUT of a
+// dry run; "?dry_run=1" and "?dry_run=TRUE" (wrong case) must both 400 with
+// NO batch persisted -- CreateHandler's dry_run parsing now recognizes only
+// absent/"true"/"false" (CodeRabbit finding, M4-03 PR review: dry_run must
+// not fail open -- a typo or non-canonical value must never silently fall
+// through to a real import).
 func TestCreateHandler_DryRunQueryParamVariants(t *testing.T) {
 	tests := []struct {
-		name  string
-		query string
+		name       string
+		query      string
+		wantStatus int
 	}{
-		{name: "dry_run=1 is a real import", query: "?dry_run=1"},
-		{name: "dry_run=false is a real import", query: "?dry_run=false"},
-		{name: "dry_run=TRUE (wrong case) is a real import", query: "?dry_run=TRUE"},
+		{name: "dry_run=false is a real import", query: "?dry_run=false", wantStatus: http.StatusCreated},
+		{name: "dry_run=1 is rejected, not silently real", query: "?dry_run=1", wantStatus: http.StatusBadRequest},
+		{name: "dry_run=TRUE (wrong case) is rejected, not silently real", query: "?dry_run=TRUE", wantStatus: http.StatusBadRequest},
+		{name: "dry_run=treu (typo) is rejected, not silently real", query: "?dry_run=treu", wantStatus: http.StatusBadRequest},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,11 +243,8 @@ func TestCreateHandler_DryRunQueryParamVariants(t *testing.T) {
 			body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
 			rec, resp := doImportCreate(t, svc.Import, &id, tc.query, contentType, body)
 
-			if rec.Code != http.StatusCreated {
-				t.Fatalf("status = %d, want 201 (only an exact \"true\" string dry-runs; body=%s)", rec.Code, rec.Body.String())
-			}
-			if resp.ID == "" {
-				t.Error("expected a non-empty id (a real import must persist a batch)")
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
 			}
 
 			ctx := context.Background()
@@ -251,8 +252,22 @@ func TestCreateHandler_DryRunQueryParamVariants(t *testing.T) {
 			if err := super.QueryRow(ctx, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, entityID).Scan(&batchCount); err != nil {
 				t.Fatalf("count import_batches: %v", err)
 			}
-			if batchCount != 1 {
-				t.Errorf("import_batches rows for entity = %d, want 1 (a non-exact-\"true\" dry_run value must persist)", batchCount)
+
+			switch tc.wantStatus {
+			case http.StatusCreated:
+				if resp.ID == "" {
+					t.Error("expected a non-empty id (a real import must persist a batch)")
+				}
+				if batchCount != 1 {
+					t.Errorf("import_batches rows for entity = %d, want 1 (dry_run=false persists)", batchCount)
+				}
+			case http.StatusBadRequest:
+				if resp.Error == "" {
+					t.Error("expected a non-empty error message in the body")
+				}
+				if batchCount != 0 {
+					t.Errorf("import_batches rows for entity = %d, want 0 (a rejected dry_run value must never persist)", batchCount)
+				}
 			}
 		})
 	}

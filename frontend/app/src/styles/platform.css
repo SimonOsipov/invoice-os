@@ -162,8 +162,18 @@ body {
   .pf-dash-row-c,
   .pf-create-grid,
   .pf-detail-grid,
+  .pf-funnel,
   .pf-onboard-grid {
     grid-template-columns: 1fr !important;
+  }
+  /* The connector health strip partitions its 5 tiles with left hairlines; wrapped
+     to two columns those dividers land wrong, so the rule flips to row separators. */
+  .pf-health {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .pf-health > * {
+    border-left: 0 !important;
+    border-top: 1px solid var(--line-1);
   }
 }
 

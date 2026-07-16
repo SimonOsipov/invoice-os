@@ -212,6 +212,14 @@ export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'd
 
 export type ConnectorsState = Record<ConnectorId, boolean>
 
+// One row of a connector's ERP -> UBL field mapping: the ERP's native field name and
+// the UBL 2.1 path it feeds (see data.tsx for each connector's defaults).
+export type FieldMapRow = { erp: string; ubl: string }
+
+// Mappings edited in the field-mapping modal, by connector. A connector absent here
+// still renders its default mapping — only edited ones are held.
+export type ConnectorMappings = Partial<Record<ConnectorId, FieldMapRow[]>>
+
 // Sidebar nav ids — a superset of `View`: 'approvals' is a synthetic in-house-mode nav
 // item that `nav()` translates into `{ view: 'invoices', filter: 'Pending' }`.
 export type NavId = View | 'approvals'
@@ -250,6 +258,7 @@ export type PlatformCtx = {
   settingsTab: SettingsTab
   xmlOpen: boolean
   connectors: ConnectorsState
+  connectorMappings: ConnectorMappings
   valIdx: number
   parseIdx: number
 
@@ -282,6 +291,7 @@ export type PlatformCtx = {
   toggleSandbox: () => void
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void
+  saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
   openXml: () => void
   closeXml: () => void
   transmit: () => void

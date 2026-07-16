@@ -23,9 +23,11 @@ import { XmlModal } from './components/XmlModal'
 import type {
   Client,
   ConnectorId,
+  ConnectorMappings,
   ConnectorsState,
   CreateStep,
   Draft,
+  FieldMapRow,
   Mapping,
   Mode,
   NavId,
@@ -66,6 +68,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>('connectors')
   const [xmlOpen, setXmlOpen] = useState(false)
   const [connectors, setConnectors] = useState<ConnectorsState>(INITIAL_CONNECTORS)
+  // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
+  // mapping survives navigating away from Settings and back.
+  const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [valIdx, setValIdx] = useState(0)
   const [parseIdx, setParseIdx] = useState(0)
 
@@ -306,6 +311,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setConnectors((c) => ({ ...c, [id]: !c[id] }))
   }
 
+  function saveConnectorMapping(id: ConnectorId, rows: FieldMapRow[]) {
+    setConnectorMappings((m) => ({ ...m, [id]: rows }))
+  }
+
   function openXml() {
     setXmlOpen(true)
   }
@@ -351,6 +360,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     settingsTab,
     xmlOpen,
     connectors,
+    connectorMappings,
     valIdx,
     parseIdx,
     nav,
@@ -382,6 +392,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     toggleSandbox,
     setSettingsTab,
     toggleConnector,
+    saveConnectorMapping,
     openXml,
     closeXml,
     transmit,

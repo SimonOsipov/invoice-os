@@ -38,7 +38,7 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
       : { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', iconBg: 'var(--status-green-text)', iconColor: '#fff', glyph: tickGlyph11, title: 'Compliant — ready to approve', sub: 'All 16 MBS checks passed. Transmit-ready.', titleColor: 'var(--status-green-text)', subColor: 'var(--fg-2)', score: '16/16' }
 
   const approveBtn = clear
-    ? { bg: 'var(--accent)', color: '#fff', cursor: 'pointer', label: 'Approve & archive', glyph: shieldGlyph }
+    ? { bg: 'var(--accent)', color: '#fff', cursor: 'pointer', label: 'Approve', glyph: shieldGlyph }
     : { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Resolve issues first', glyph: lockGlyph }
   const approveHint = clear ? 'Generates PDF + UBL, writes the audit log, and queues for FIRS transmit.' : 'Approval unlocks once all errors and warnings are cleared.'
 

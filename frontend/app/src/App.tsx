@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { INHOUSE_IDX } from './data'
+import { FILE_DATA, INHOUSE_IDX, PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
+import { groupInvoices, initMapping } from './lib/mapping'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -25,6 +26,7 @@ import type {
   ConnectorsState,
   CreateStep,
   Draft,
+  Mapping,
   Mode,
   NavId,
   PlatformCtx,
@@ -54,6 +56,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [createStep, setCreateStep] = useState<CreateStep>('form')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
   const [uploadFile, setUploadFile] = useState<string | null>(null)
+  const [mapping, setMapping] = useState<Mapping | null>(null)
+  const [armedField, setArmedField] = useState<string | null>(null)
+  const [dragField, setDragField] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [filter, setFilter] = useState('all')
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -111,6 +116,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDraft(defaultDraft(clients[activeIdx]))
     setValidation(null)
     setUploadFile(null)
+    setMapping(null)
     setSwitcherOpen(false)
   }
 
@@ -159,9 +165,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setValidation(validate(nd))
   }
 
+  // Leaving the results screen lands back on whichever step built the draft:
+  // the review table when the file resolved to many invoices, else the form.
   function backToEdit() {
     clearVal()
-    setCreateStep('form')
+    setCreateStep(groupInvoices(uploadFile, mapping).length > 1 ? 'review' : 'form')
   }
 
   function selectFile(id: string) {
@@ -171,7 +179,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   function parseFile() {
     if (!uploadFile) return
     clearVal()
-    const TOTAL = 6
+    const TOTAL = PARSE_LABELS.length
+    const fileId = uploadFile
     setCreateStep('parsing')
     setParseIdx(0)
     parseTimer.current = setInterval(() => {
@@ -180,7 +189,16 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
         if (next >= TOTAL) {
           if (parseTimer.current) clearInterval(parseTimer.current)
           parseTimer.current = null
-          parseDone.current = setTimeout(() => setCreateStep('form'), 320)
+          // Tabular files hand off to Map; PDF/JPG have no columns to map, so
+          // they go straight to the single-invoice form as before.
+          parseDone.current = setTimeout(() => {
+            if (FILE_DATA[fileId]) {
+              setMapping(initMapping(fileId))
+              setCreateStep('mapping')
+            } else {
+              setCreateStep('form')
+            }
+          }, 320)
           return TOTAL
         }
         return next
@@ -188,10 +206,78 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     }, 200)
   }
 
+  function armField(k: string) {
+    setArmedField((a) => (a === k ? null : k))
+  }
+
+  function setDrag(k: string) {
+    setDragField(k)
+  }
+
+  function endDrag() {
+    setDragField(null)
+  }
+
+  // A field lives on exactly one column: assigning clears whatever else held
+  // this column, so duplicate mappings are structurally impossible.
+  function assign(field: string, header: string) {
+    setMapping((m) => {
+      if (!m) return m
+      const next: Mapping = { ...m }
+      Object.keys(next).forEach((k) => {
+        if (next[k] === header) next[k] = null
+      })
+      next[field] = header
+      return next
+    })
+    setArmedField(null)
+    setDragField(null)
+  }
+
+  function dropOn(header: string) {
+    if (dragField) assign(dragField, header)
+    else setDragField(null)
+  }
+
+  function clickCol(header: string) {
+    if (armedField) assign(armedField, header)
+  }
+
+  function unmap(header: string) {
+    setMapping((m) => {
+      if (!m) return m
+      const next: Mapping = { ...m }
+      Object.keys(next).forEach((k) => {
+        if (next[k] === header) next[k] = null
+      })
+      return next
+    })
+  }
+
+  function continueMapping() {
+    if (!mapping || !mapping.invoice_number) return
+    setCreateStep(groupInvoices(uploadFile, mapping).length > 1 ? 'review' : 'form')
+  }
+
+  function backToImport() {
+    clearVal()
+    setCreateStep('upload')
+  }
+
+  function backToMapping() {
+    clearVal()
+    setCreateStep('mapping')
+  }
+
+  function createDrafts() {
+    runValidation()
+  }
+
   function skipUpload() {
     clearVal()
     setCreateStep('form')
     setUploadFile(null)
+    setMapping(null)
   }
 
   function approve() {
@@ -255,6 +341,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     createStep,
     validation,
     uploadFile,
+    mapping,
+    armedField,
+    dragField,
     selectedId,
     filter,
     switcherOpen,
@@ -277,6 +366,16 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     backToEdit,
     selectFile,
     parseFile,
+    armField,
+    setDrag,
+    endDrag,
+    dropOn,
+    clickCol,
+    unmap,
+    continueMapping,
+    backToImport,
+    backToMapping,
+    createDrafts,
     skipUpload,
     approve,
     selectInvoice,

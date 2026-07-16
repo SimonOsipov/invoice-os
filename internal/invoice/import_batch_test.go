@@ -174,3 +174,126 @@ func TestStoreCreate_NonExistentImportBatchIDRejected(t *testing.T) {
 		t.Errorf("audit_log invoice.created rows for tenant after rejected Create = %d, want 0", n)
 	}
 }
+
+// TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS (QA adversarial
+// coverage, task-102 Stage 4): pins the ACTUAL (permissive) behavior of the
+// $13 FK reference when the caller supplies another tenant's import_batches
+// id.
+//
+// import_batches carries the same FORCE-RLS tenant_isolation policy as every
+// other table here (migrations/20260714100953_import_batches.sql), so tenant
+// A's app-role connection cannot SELECT/UPDATE tenant B's batch row directly.
+// BUT Postgres foreign-key constraint enforcement is documented to run
+// internally, NOT subject to RLS (the referencing side's FK trigger checks
+// referential existence with row security effectively off) -- so the
+// invoices.import_batch_id -> import_batches(id) FK on Store.Create's INSERT
+// validates against ALL tenants' batches, not just the caller's.
+//
+// Result verified empirically below: tenant A's Create SUCCEEDS and commits
+// an invoice owned by tenant A whose import_batch_id points at tenant B's
+// batch -- a genuine cross-tenant reference leak at the Store.Create level.
+// This is NOT a violation of any M4-03-01 acceptance criterion (AC#1/#3 only
+// require "a re-read returns it" / "a non-existent id is FK-rejected" --
+// both true here; the id is NOT non-existent, just foreign-tenant) and
+// Store.Create is deliberately not hardened against it per this task's
+// instructions (no AC requires a same-tenant check at the store layer).
+//
+// The production path is safe ANYWAY: M4-03-04's CreateBatch (task-105, the
+// importer service) always mints a NEW same-tenant batch row before calling
+// Create, so no caller ever has a foreign tenant's batch id in hand to pass
+// through. This test exists purely to PIN the store-level permissiveness so
+// a future caller (or a refactor of M4-03-04) doesn't accidentally introduce
+// a real leak by feeding Store.Create a caller-supplied (rather than
+// self-minted) batch id without a tenant-ownership check.
+func TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-IMPBATCH-XTENANT tenant A")
+	entityA := seedEntity(t, super, tenantA, "INV-IMPBATCH-XTENANT A entity")
+
+	tenantB := seedTenant(t, super, "INV-IMPBATCH-XTENANT tenant B")
+	entityB := seedEntity(t, super, tenantB, "INV-IMPBATCH-XTENANT B entity")
+	batchB := seedImportBatch(t, super, tenantB, entityB)
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	inv, err := store.Create(cA, CreateInput{
+		EntityID:      entityA,
+		InvoiceNumber: "INV-IMPBATCH-XTENANT-A",
+		ImportBatchID: &batchB,
+	})
+
+	// ACTUAL (verified) behavior: this succeeds. If a future change to
+	// Store.Create (or to the import_batches/invoices FK) starts rejecting a
+	// foreign-tenant batch id, this assertion will fail loudly -- update it
+	// deliberately, don't just delete it, since that would re-introduce the
+	// silent-leak risk this test exists to catch.
+	if err != nil {
+		t.Fatalf("Create (tenant A, import_batch_id = tenant B's batch) err = %v, want nil (current Store.Create behavior: the FK check is not RLS-scoped, so a foreign-tenant batch id is accepted)", err)
+	}
+	if inv.ImportBatchID == nil || *inv.ImportBatchID != batchB {
+		t.Fatalf("Create returned import_batch_id = %v, want %q (tenant B's batch, linked despite tenant A being the caller)", inv.ImportBatchID, batchB)
+	}
+
+	// Confirm the leak is genuinely committed, not just reflected in the
+	// in-memory return value.
+	var persisted *string
+	if err := super.QueryRow(ctx,
+		`SELECT import_batch_id FROM invoices WHERE id = $1`, inv.ID,
+	).Scan(&persisted); err != nil {
+		t.Fatalf("read back invoice: %v", err)
+	}
+	if persisted == nil || *persisted != batchB {
+		t.Errorf("invoices.import_batch_id read back = %v, want %q (committed cross-tenant reference)", persisted, batchB)
+	}
+
+	// The invoice itself is still correctly scoped to tenant A (RLS on
+	// invoices.tenant_id is untouched by this FK-bypass finding) -- only the
+	// import_batch_id FK target crosses the tenant boundary.
+	var tenantOfInvoice string
+	if err := super.QueryRow(ctx,
+		`SELECT tenant_id FROM invoices WHERE id = $1`, inv.ID,
+	).Scan(&tenantOfInvoice); err != nil {
+		t.Fatalf("read back invoice tenant_id: %v", err)
+	}
+	if tenantOfInvoice != tenantA {
+		t.Errorf("invoices.tenant_id = %q, want %q (tenant A, the caller)", tenantOfInvoice, tenantA)
+	}
+}
+
+// TestStoreCreate_EmptyStringImportBatchIDRejected (QA adversarial coverage,
+// task-102 Stage 4): an empty-string ImportBatchID (distinct from nil) is
+// NOT a valid uuid literal, so Postgres's uuid parser raises 22P02
+// (invalid_text_representation) on the $13 bind -- same SQLSTATE bucket
+// store.go's header comment already documents for a malformed entity_id/
+// import_batch_id uuid, mapped to ErrValidation. Pins that this is a clean
+// validation error, not a panic and not silently coerced to NULL (an empty
+// string is NOT the same wire value as a nil pointer -- CreateInput.
+// ImportBatchID being a *string means a caller could construct
+// &"" by mistake, e.g. from an unchecked strings.TrimSpace of a CSV cell).
+func TestStoreCreate_EmptyStringImportBatchIDRejected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INV-IMPBATCH-EMPTY tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-IMPBATCH-EMPTY entity")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	empty := ""
+	_, err := store.Create(c, CreateInput{
+		EntityID:      entityID,
+		InvoiceNumber: "INV-IMPBATCH-EMPTY",
+		ImportBatchID: &empty,
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create with ImportBatchID = &\"\" err = %v, want ErrValidation (22P02 invalid_text_representation)", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantID); n != 0 {
+		t.Errorf("invoices rows for tenant after rejected Create = %d, want 0", n)
+	}
+}

@@ -13,5 +13,5 @@
     "noUnusedParameters": true,
     "types": ["@playwright/test", "node"]
   },
-  "include": ["smoke", "topology", "api", "demo", "import-meta-env.d.ts", "playwright.config.ts", "playwright.topology.config.ts", "playwright.api.config.ts", "playwright.demo.config.ts"]
+  "include": ["smoke", "topology", "api", "demo", "rule-set.ts", "import-meta-env.d.ts", "playwright.config.ts", "playwright.topology.config.ts", "playwright.api.config.ts", "playwright.demo.config.ts"]
 }

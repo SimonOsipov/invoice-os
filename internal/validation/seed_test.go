@@ -1,7 +1,7 @@
 // M3-05-01 (Test-first: yes) — DB-backed proof that the MBS global rule-set
 // v1 seed migration (migrations/<goose-ts>_seed_mbs_v1.sql, not yet authored)
 // flips /v1/validate's evaluation surface from "no active rule-set" to live
-// content: the active version + its 19 rules load via
+// content: the ACTIVE version + its 19 rules load via
 // NewStore(app).LoadActiveRuleSet, and get evaluated via
 // NewDefaultEngine().Evaluate against real payloads. This is the FIRST test
 // in the package to chain a DB load (store_test.go's pattern) into an engine
@@ -10,23 +10,25 @@
 //
 // This suite is RED until the seed migration lands: with no active version
 // in the migrated DB, LoadActiveRuleSet returns ErrNoActiveRuleSet and every
-// test below fails at loadV1's t.Fatalf (never a build/compile error, a
+// test below fails at loadActive's t.Fatalf (never a build/compile error, a
 // connection failure, or a skip -- see dbTestPools in schema_test.go for the
 // env-gated skip this suite reuses, which self-skips only when
 // DATABASE_URL/DATABASE_SUPERUSER_URL are unset).
 //
 // IMPORTANT: unlike schema_test.go/store_test.go's fixtures, this suite does
-// NOT seed its own rule_set_versions row -- it asserts the MIGRATED active
-// v1 directly, so it never contends for the partial-unique "one active
-// version" slot other tests' seedVersion(...,true) fixtures occupy
-// transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
+// NOT seed its own rule_set_versions row -- it asserts the MIGRATED ACTIVE
+// version directly (v2 since M4-04-01; see activeSeedVersion), so it never
+// contends for the partial-unique "one active version" slot other tests'
+// seedVersion(...,true) fixtures occupy transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
 // `enabled` column, via the real app-role Store.ToggleRule path) and
 // restores it in t.Cleanup; every other test in this file is read-only.
 //
 // Coverage (story M3-05 Test Specs; see the story's System Design table +
 // .ralph/m3-05-exec-readiness.md for the exact signatures/harness):
 //  1. TestSeed_ActiveVersionLoads    -- Core AC 1: exactly one active
-//     version, version=1, 19 rules, keys matching the pinned rule table.
+//     version, and it is activeSeedVersion (v2 since M4-04-01) with 19 rules,
+//     keys matching the pinned rule table. This is the ONE place the package
+//     asserts WHICH version is active.
 //  2. TestSeed_DemoContract          -- Core AC 3: the demo's bad/valid
 //     payloads produce exactly the documented violations.
 //  3. TestSeed_TaxMathTolerance      -- Core AC 4: tolerance 0.005, strict >
@@ -60,9 +62,10 @@
 // NOT covered here (belongs to the Execution-stage test reconciliation,
 // which touches schema_test.go/store_test.go directly -- explicitly out of
 // scope for this Mode A RED file, per M3-05-01's Implementation Plan step 3):
-//   - seedVersion(t,super,true)'s deactivate/reactivate-v1 LIFO fix.
-//   - TestStore_LoadNoActiveErrors's deactivate/restore-v1 fix.
-//   - TestSchema_NoRuleContentShipped's narrowing to exclude version=1.
+//   - seedVersion(t,super,true)'s deactivate/restore-by-id LIFO fix.
+//   - TestStore_LoadNoActiveErrors's deactivate/restore-by-id fix.
+//   - TestSchema_NoRuleContentShipped's narrowing to exclude the seeded
+//     versions (by their notes marker, not by version number).
 //
 // Run (same env gate as the rest of the package):
 //
@@ -95,24 +98,39 @@ func newTestIdentity() context.Context {
 	})
 }
 
-// loadV1 loads the active RuleSet via the real Store and asserts it is the
-// migration-seeded v1 -- the shared "DB load" half of this file's DB-load ->
-// engine-evaluate chain (combining store_test.go's load-with-identity pattern
-// with registry_test.go's NewDefaultEngine().Evaluate pattern, per this
-// file's header). Before the seed migration exists, LoadActiveRuleSet
-// returns ErrNoActiveRuleSet and every caller fails here with a message that
-// reads unambiguously as "the seed is not applied yet", not a build/skip/
-// connection fault.
-func loadV1(t *testing.T, app *pgxpool.Pool) RuleSet {
+// activeSeedVersion is the ONE place this package names the migration-seeded
+// ACTIVE rule-set version. M4-04-01 published v2 (v1's 17 base rules + the 2
+// line-item rules) and deactivated v1, restoring v1's immutability -- see
+// migrations/20260716185106_rule_set_v2.sql. Every fixture below that needs
+// "the sanctioned active version" resolves it through here or by discovering
+// it from the DB, so the next version publish is a one-line change here rather
+// than a scavenger hunt through scattered literals ([active-version-pinning-is-the-bug]).
+const activeSeedVersion = 2
+
+// loadActive loads the ACTIVE RuleSet via the real Store -- the shared "DB
+// load" half of this file's DB-load -> engine-evaluate chain (combining
+// store_test.go's load-with-identity pattern with registry_test.go's
+// NewDefaultEngine().Evaluate pattern, per this file's header).
+//
+// It deliberately does NOT assert a version: its callers each test something
+// else entirely (tax-math tolerance, TIN format, the kill-switch...), and a
+// version assertion here would t.Fatalf all of them at this line, BEFORE the
+// assertion each was written to make -- the exact trap the old loadV1's
+// `if rs.Version != 1` sprang on all 23 call sites the moment the active
+// version stopped being literally 1 (RS-V2-15). Which version is active is
+// asserted ONCE, on purpose, by TestSeed_ActiveVersionLoads.
+//
+// If the seed is missing entirely, LoadActiveRuleSet returns
+// ErrNoActiveRuleSet and callers fail here with a message that reads
+// unambiguously as "the seed is not applied yet", not a build/skip/connection
+// fault.
+func loadActive(t *testing.T, app *pgxpool.Pool) RuleSet {
 	t.Helper()
 	store := NewStore(app)
 	rs, err := store.LoadActiveRuleSet(newTestIdentity())
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSet: %v -- expected the migration-seeded active v1, got none "+
-			"(has migrations/<goose-ts>_seed_mbs_v1.sql been applied via `make migrate-up`?)", err)
-	}
-	if rs.Version != 1 {
-		t.Fatalf("RuleSet.Version = %d, want 1 -- expected the migration-seeded active v1", rs.Version)
+		t.Fatalf("LoadActiveRuleSet: %v -- expected the migration-seeded active rule-set, got none "+
+			"(have the migrations been applied via `make migrate-up`?)", err)
 	}
 	return rs
 }
@@ -198,21 +216,27 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
-	var activeV1Count int
+	var activeCount int
 	if err := app.QueryRow(ctx,
-		`SELECT count(*) FROM rule_set_versions WHERE is_active AND version = 1`,
-	).Scan(&activeV1Count); err != nil {
-		t.Fatalf("count active version=1 rows: %v", err)
+		`SELECT count(*) FROM rule_set_versions WHERE is_active`,
+	).Scan(&activeCount); err != nil {
+		t.Fatalf("count active rule_set_versions rows: %v", err)
 	}
-	if activeV1Count != 1 {
-		t.Fatalf("count(rule_set_versions WHERE is_active AND version=1) = %d, want 1 -- "+
-			"expected the migration-seeded active v1, got none", activeV1Count)
+	if activeCount != 1 {
+		t.Fatalf("count(rule_set_versions WHERE is_active) = %d, want exactly 1 -- "+
+			"expected the migration-seeded active rule-set", activeCount)
 	}
 
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
+	// The ONE place this package asserts WHICH version is active (loadActive
+	// itself is deliberately version-agnostic -- see its doc comment).
+	if rs.Version != activeSeedVersion {
+		t.Fatalf("active RuleSet.Version = %d, want %d -- expected the migration-seeded active version",
+			rs.Version, activeSeedVersion)
+	}
 	if len(rs.Rules) != 19 {
-		t.Fatalf("len(RuleSet.Rules) = %d, want 19 -- expected the migration-seeded v1 rule set "+
-			"(17 base rules + the 2 line-item rules from the line_rules migration)", len(rs.Rules))
+		t.Fatalf("len(RuleSet.Rules) = %d, want 19 -- expected the migration-seeded active (v2) rule set "+
+			"(v1's 17 base rules + the 2 line-item rules, re-issued under v2 by the rule_set_v2 migration)", len(rs.Rules))
 	}
 
 	wantKeys := []string{
@@ -242,17 +266,18 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 	}
 	sort.Strings(gotKeys)
 	if !reflect.DeepEqual(gotKeys, wantKeys) {
-		t.Errorf("RuleSet.Rules keys = %v, want %v (the v1 rule table's 19 keys: 17 base + 2 line-item rules)", gotKeys, wantKeys)
+		t.Errorf("RuleSet.Rules keys = %v, want %v (the active v2 rule table's 19 keys: 17 base + 2 line-item rules)", gotKeys, wantKeys)
 	}
 }
 
 // TestSeed_DemoContract (Core AC 3 / Test Spec "Demo: both violations" +
 // "Demo: valid -> zero"): the bad payload (malformed TIN + wrong VAT) returns
 // EXACTLY [supplier-tin-format, vat-standard-rate] (sorted, Decision N16),
-// stamped rule_set_version:1; the fully valid payload returns zero violations.
+// stamped with activeSeedVersion; the fully valid payload returns zero
+// violations.
 func TestSeed_DemoContract(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("bad payload: exactly supplier-tin-format + vat-standard-rate", func(t *testing.T) {
@@ -260,8 +285,8 @@ func TestSeed_DemoContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Evaluate(bad payload): %v", err)
 		}
-		if result.RuleSetVersion != 1 {
-			t.Errorf("RuleSetVersion = %d, want 1", result.RuleSetVersion)
+		if result.RuleSetVersion != activeSeedVersion {
+			t.Errorf("RuleSetVersion = %d, want %d", result.RuleSetVersion, activeSeedVersion)
 		}
 		wantKeys := []string{"supplier-tin-format", "vat-standard-rate"}
 		if got := violationKeys(result); !reflect.DeepEqual(got, wantKeys) {
@@ -287,7 +312,7 @@ func TestSeed_DemoContract(t *testing.T) {
 // VAT fails.
 func TestSeed_TaxMathTolerance(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	cases := []struct {
@@ -325,7 +350,7 @@ func TestSeed_TaxMathTolerance(t *testing.T) {
 // present" semantics).
 func TestSeed_TINFormat(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("malformed supplier TIN fires format, not required", func(t *testing.T) {
@@ -373,7 +398,7 @@ func TestSeed_TINFormat(t *testing.T) {
 // that field's *-required rule; the fully valid payload fires none of them.
 func TestSeed_MandatoryPresence(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("missing supplier.name fires supplier-name-required, and only it", func(t *testing.T) {
@@ -411,7 +436,7 @@ func TestSeed_MandatoryPresence(t *testing.T) {
 // currency-allowed fires for a non-NGN currency and passes for NGN.
 func TestSeed_CurrencyEnum(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("USD fires currency-allowed", func(t *testing.T) {
@@ -446,7 +471,7 @@ func TestSeed_CurrencyEnum(t *testing.T) {
 // does not.
 func TestSeed_RangeNonNegative(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("negative subtotal fires subtotal-non-negative", func(t *testing.T) {
@@ -483,7 +508,7 @@ func TestSeed_RangeNonNegative(t *testing.T) {
 // semantics, per the story's Decisions section).
 func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("duplicate ids fire no-duplicate-line-items", func(t *testing.T) {
@@ -563,11 +588,18 @@ func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 func TestSeed_KillSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 
+	// Restore on the ACTIVE version -- matching ToggleRule's own predicate
+	// (`WHERE is_active`, store.go:137-139), which is what disabled the rule
+	// below. Hardcoding `v.version = 1` here would silently restore the WRONG
+	// row once the active version is not literally 1, leaving vat-standard-rate
+	// DISABLED on the live active rule-set for every subsequent test and on the
+	// shared dev DB (RS-V2-11). Mirroring ToggleRule's predicate is what stops
+	// the two from drifting apart again.
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
 			   FROM rule_set_versions v
-			  WHERE r.rule_set_version_id = v.id AND v.version = 1 AND r.key = 'vat-standard-rate'`,
+			  WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = 'vat-standard-rate'`,
 		); err != nil {
 			t.Errorf("cleanup: restore vat-standard-rate enabled=true: %v", err)
 		}
@@ -578,7 +610,7 @@ func TestSeed_KillSwitch(t *testing.T) {
 		t.Fatalf("ToggleRule(vat-standard-rate, false): %v", err)
 	}
 
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 	result, err := engine.Evaluate(badInvoicePayload(), rs)
 	if err != nil {
@@ -645,12 +677,20 @@ func TestSeed_ReversibilityRollback(t *testing.T) {
 			"expected the migration-seeded active v1 to exist and be deletable", err)
 	}
 
-	var activeCount int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE is_active`).Scan(&activeCount); err != nil {
-		t.Fatalf("count active versions after Down: %v", err)
+	// Scoped to the M3-05 seed's OWN row, not the global active count: this
+	// test is about the M3-05 seed migration's Down (which deletes exactly
+	// `version = 1`), and v1 IS literally version 1, permanently, by
+	// definition. Asserting "zero ACTIVE versions globally" was only ever true
+	// because v1 happened to be the sole active version; post-v2-publish
+	// another version is active and deleting v1 correctly leaves it alone, so
+	// the global assertion falsifies for a reason that has nothing to do with
+	// this Down (RS-V2-13).
+	var v1Count int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE version = 1`).Scan(&v1Count); err != nil {
+		t.Fatalf("count version=1 rows after Down: %v", err)
 	}
-	if activeCount != 0 {
-		t.Errorf("active rule_set_versions count after Down = %d, want 0", activeCount)
+	if v1Count != 0 {
+		t.Errorf("rule_set_versions WHERE version=1 after Down = %d, want 0 (the M3-05 seed's own row is gone)", v1Count)
 	}
 
 	var v1RuleCount int

@@ -1,7 +1,7 @@
 // M3-05-01 QA (Mode B) -- adversarial / edge coverage added during
 // verification, closing gaps the Mode-A RED suite (seed_test.go) did not
 // cover. Reuses seed_test.go's shared fixtures and helpers verbatim
-// (loadV1, newTestIdentity, validInvoicePayload, badInvoicePayload,
+// (loadActive, newTestIdentity, validInvoicePayload, badInvoicePayload,
 // invoiceOf, hasViolation, violationKeys) -- same package, no re-declaration.
 //
 // Coverage added here:
@@ -68,7 +68,7 @@ func countViolations(result Result, key string) int {
 // returns zero violations.
 func TestSeed_DemoDecomposition(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("bad TIN + correct VAT -> only supplier-tin-format", func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestSeed_DemoDecomposition(t *testing.T) {
 // not just its documented value.
 func TestSeed_ToleranceBoundaryStrict(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	cases := []struct {
@@ -170,7 +170,7 @@ func absDiff(a, b float64) float64 {
 // ascending (Decision N16) -- not fail-fast, not in evaluation/insertion order.
 func TestSeed_CollectAllOrdering(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	p := badInvoicePayload() // already wrong TIN + wrong VAT
@@ -193,7 +193,7 @@ func TestSeed_CollectAllOrdering(t *testing.T) {
 // present: fires on a malformed TIN, passes on a well-formed one.
 func TestSeed_BuyerTINPresent(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("present malformed buyer TIN fires buyer-tin-format", func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestSeed_BuyerTINPresent(t *testing.T) {
 // cannot distinguish.
 func TestSeed_CELDupVariants(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("3 items, one dup pair -> fires exactly once", func(t *testing.T) {
@@ -290,7 +290,7 @@ func TestSeed_CELDupVariants(t *testing.T) {
 // silently passed non-numeric data would be caught here).
 func TestSeed_RangeNonNumericValue(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	p := validInvoicePayload()
@@ -315,11 +315,17 @@ func TestSeed_RangeNonNumericValue(t *testing.T) {
 func TestSeed_KillSwitchSymmetry(t *testing.T) {
 	super, app := dbTestPools(t)
 
+	// Restore on the ACTIVE version -- matching ToggleRule's own predicate
+	// (`WHERE is_active`, store.go:137-139), which is what disabled the rule
+	// below. The same live-data hazard as TestSeed_KillSwitch's cleanup
+	// (RS-V2-11): `v.version = 1` would silently leave supplier-tin-format
+	// DISABLED on the live active rule-set once the active version is not
+	// literally 1.
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
 			   FROM rule_set_versions v
-			  WHERE r.rule_set_version_id = v.id AND v.version = 1 AND r.key = 'supplier-tin-format'`,
+			  WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = 'supplier-tin-format'`,
 		); err != nil {
 			t.Errorf("cleanup: restore supplier-tin-format enabled=true: %v", err)
 		}
@@ -332,7 +338,7 @@ func TestSeed_KillSwitchSymmetry(t *testing.T) {
 
 	engine := NewDefaultEngine()
 
-	rsDisabled := loadV1(t, app)
+	rsDisabled := loadActive(t, app)
 	result, err := engine.Evaluate(badInvoicePayload(), rsDisabled)
 	if err != nil {
 		t.Fatalf("Evaluate(bad payload) after disabling supplier-tin-format: %v", err)
@@ -347,7 +353,7 @@ func TestSeed_KillSwitchSymmetry(t *testing.T) {
 	if _, err := store.ToggleRule(newTestIdentity(), "supplier-tin-format", true); err != nil {
 		t.Fatalf("ToggleRule(supplier-tin-format, true) restore: %v", err)
 	}
-	rsRestored := loadV1(t, app)
+	rsRestored := loadActive(t, app)
 	result, err = engine.Evaluate(badInvoicePayload(), rsRestored)
 	if err != nil {
 		t.Fatalf("Evaluate(bad payload) after restoring supplier-tin-format: %v", err)

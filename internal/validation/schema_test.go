@@ -37,6 +37,13 @@ import (
 // on every other test's t.Cleanup having already run (see that test's doc comment).
 const fixtureNotes = "qa-fixture:internal/validation/schema_test.go"
 
+// seededVersionNotes matches the notes marker every migration-seeded rule_set_versions
+// row carries ("MBS global rule-set v1 (M3-05 seed)", "MBS global rule-set v2 (M4-04-01:
+// ...)"). TestSchema_NoRuleContentShipped uses it to exclude the SANCTIONED seeds by what
+// they ARE rather than by naming version numbers -- a literal `version <> 1` had to be
+// edited on every publish, and silently mis-fired when v2 shipped.
+const seededVersionNotes = "MBS global rule-set v%"
+
 // versionSeq hands out globally-unique `version` ints for seeded rule_set_versions rows
 // across this whole test binary run. Based well above any real published version (which
 // starts at 1), so fixture rows can never collide with production-shaped data.
@@ -93,19 +100,35 @@ func seedVersion(t *testing.T, super *pgxpool.Pool, isActive bool) (id string, v
 	version = nextVersion()
 
 	if isActive {
-		// M3-05 seeds a permanent active v1, occupying the partial unique
-		// index's (WHERE is_active) single slot. Deactivate it first so this
-		// fixture's own is_active=true insert does not collide (23505 on
-		// rule_set_versions_one_active), then register a reactivate-v1
-		// cleanup BEFORE the delete-fixture cleanup below so LIFO order runs
-		// delete-fixture first, then reactivate v1 (you cannot reactivate v1
-		// while this fixture row is still active).
-		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
+		// The migrations seed a permanent active version, occupying the partial
+		// unique index's (WHERE is_active) single slot. CAPTURE whichever row
+		// holds it, deactivate it so this fixture's own is_active=true insert
+		// does not collide (23505 on rule_set_versions_one_active), then
+		// register a restore-BY-ID cleanup BEFORE the delete-fixture cleanup
+		// below so LIFO order runs delete-fixture first, then the restore (you
+		// cannot reactivate the previous row while this fixture row is still
+		// active).
+		//
+		// Restoring by CAPTURED ID rather than by naming a version number is
+		// the point: `WHERE version = 1` happened to be right only while v1 was
+		// the active version, and would silently reactivate the WRONG row -- and
+		// leave the real active version dark -- the moment that stopped being
+		// true (RS-V2-10). Discovering the id has no such expiry date.
+		var prevActiveID string
+		if err := super.QueryRow(ctx,
+			`SELECT id FROM rule_set_versions WHERE is_active`,
+		).Scan(&prevActiveID); err != nil {
+			t.Fatalf("capture the active version id before seeding fixture(version=%d, is_active=true): %v", version, err)
+		}
+		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE id = $1`, prevActiveID); err != nil {
 			t.Fatalf("deactivate active version before seeding fixture(version=%d, is_active=true): %v", version, err)
 		}
 		t.Cleanup(func() {
-			if _, err := super.Exec(context.Background(), `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
-				t.Errorf("cleanup: reactivate v1 after fixture(version=%d, is_active=true): %v", version, err)
+			if _, err := super.Exec(context.Background(),
+				`UPDATE rule_set_versions SET is_active = true WHERE id = $1`, prevActiveID,
+			); err != nil {
+				t.Errorf("cleanup: restore the previously-active version (id=%s) after fixture(version=%d, is_active=true): %v",
+					prevActiveID, version, err)
 			}
 		})
 	}
@@ -327,16 +350,24 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
-	// M3-05 permanently ships one sanctioned content row: the active v1
-	// rule_set_versions row (version=1) plus its 19 rules (17 base + the 2
-	// line-item rules from the line_rules migration). Excluded here alongside
-	// the fixtureNotes exclusion so this test still guards against an
-	// accidental SECOND seed or stray hand-inserted rows -- a guard the
-	// seed_test.go "active v1 has exactly 19 rules" assertion does not
+	// The migrations permanently ship sanctioned content rows: the (now
+	// inactive) v1 rule_set_versions row with its 17 base rules, and the active
+	// v2 row with 19 (v1's 17 + the 2 line-item rules) -- see
+	// migrations/20260716185106_rule_set_v2.sql. Both are excluded here
+	// alongside the fixtureNotes exclusion, so this test still guards against
+	// an accidental EXTRA seed or stray hand-inserted rows -- a guard the
+	// seed_test.go "the active version has exactly 19 rules" assertion does not
 	// provide (NARROWED per the story's Decisions section, not retired).
+	//
+	// The exclusion is expressed as "not a migration-seeded version" by reading
+	// the seeds' own notes marker, rather than by listing version numbers: a
+	// literal list (`version <> 1`) silently under-excludes on the next version
+	// publish and turns this guard into a false alarm -- which is exactly what
+	// v2 did to it.
 	var versionCount int
 	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM rule_set_versions WHERE notes IS DISTINCT FROM $1 AND version <> 1`, fixtureNotes,
+		`SELECT count(*) FROM rule_set_versions
+		  WHERE notes IS DISTINCT FROM $1 AND notes NOT LIKE $2`, fixtureNotes, seededVersionNotes,
 	).Scan(&versionCount); err != nil {
 		t.Fatalf("count non-fixture rule_set_versions: %v", err)
 	}
@@ -348,7 +379,7 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 	if err := super.QueryRow(ctx,
 		`SELECT count(*) FROM rules r
 		   JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		  WHERE v.notes IS DISTINCT FROM $1 AND v.version <> 1`, fixtureNotes,
+		  WHERE v.notes IS DISTINCT FROM $1 AND v.notes NOT LIKE $2`, fixtureNotes, seededVersionNotes,
 	).Scan(&ruleCount); err != nil {
 		t.Fatalf("count non-fixture rules: %v", err)
 	}

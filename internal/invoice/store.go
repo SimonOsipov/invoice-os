@@ -80,11 +80,14 @@ func scanLineItem(row scanner, li *LineItem) error {
 //
 // Only the invoices INSERT's pg error is mapped: a unique_violation (23505) on
 // invoices_tenant_entity_number_uq -> ErrDuplicateNumber, a foreign_key_violation
-// (23503, non-existent entity_id) or an invalid_text_representation (22P02,
-// entity_id is the only uuid-typed input here, so a malformed non-empty value
-// unambiguously means a bad entity_id) -> ErrValidation. The line_items/history/
-// audit errors propagate raw so their SQLSTATE (e.g. the actor CHECK's 23514) is
-// not masked -- the atomicity specs assert on it.
+// (23503, a non-existent entity_id or import_batch_id) or an
+// invalid_text_representation (22P02, a malformed entity_id/import_batch_id
+// uuid, OR a malformed numeric MBS-content value) -> ErrValidation. 22P02 does
+// not disambiguate which input was bad; the importer avoids this ambiguity by
+// pre-validating entity_id itself and quarantining the row on ANY Create
+// error. The line_items/history/audit errors propagate raw so their SQLSTATE
+// (e.g. the actor CHECK's 23514) is not masked -- the atomicity specs assert
+// on it.
 //
 // EntityID/InvoiceNumber are required non-empty ([D10]); an empty value is
 // rejected as ErrValidation BEFORE any tx opens, mirroring Update's all-nil
@@ -110,13 +113,13 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			`INSERT INTO invoices
 			   (tenant_id, entity_id, invoice_number,
 			    issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name,
-			    currency, subtotal, vat, total)
+			    currency, subtotal, vat, total, import_batch_id)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-			         $10::text::numeric, $11::text::numeric, $12::text::numeric)
+			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13)
 			 RETURNING `+invoiceColumns,
 			id.TenantID, in.EntityID, in.InvoiceNumber,
 			in.IssueDate, in.SupplierTIN, in.SupplierName, in.BuyerTIN, in.BuyerName,
-			in.Currency, in.Subtotal, in.VAT, in.Total,
+			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID,
 		), &inv); err != nil {
 			switch pgCode(err) {
 			case "23505":

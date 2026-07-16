@@ -107,9 +107,7 @@ type LineItemInput struct {
 // CreateInput is the Store.Create argument. EntityID and InvoiceNumber are
 // required (non-empty, [D10]); every other field is optional MBS content
 // that Store.Create persists un-rejected even when negative/NULL/blank
-// (store-invalid-faithfully, AC-6). ImportBatchID is deliberately NOT a
-// field here — M4-03's importer sets it via a later subtask, not this one
-// ([D10]).
+// (store-invalid-faithfully, AC-6).
 type CreateInput struct {
 	EntityID      string
 	InvoiceNumber string

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -51,6 +52,15 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/transitions", invoice.TransitionHandler(store.Transition, app.Logger))
+
+	// /v1/imports -- the bulk CSV/XLSX import surface (M4-03), reusing the SAME
+	// *invoice.Store instance above so an import's Create calls run through the
+	// identical invoice-write path as the manual endpoints. Reached via the
+	// gateway as /api/invoice/v1/imports (same mux, same middleware chain, so
+	// identity/tenant are already in context).
+	impStore := importer.NewStore(pool)
+	impSvc := importer.NewService(impStore, store)
+	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("invoice: %v", err)

@@ -259,6 +259,14 @@ jobs:
         # audit rows in the same tx (INV-STORE-* + cross-tenant child-scope). Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/invoice/...
+      - name: Importer /v1/imports suite (decode + import_batches store + service + handler as invoice_app) + per-test visibility & skip gate
+        # M4-03: proves the bulk-import path against a real Postgres — import_batches
+        # CreateBatch/Finalize, against-stored dedup + entity-supplier lookup under RLS,
+        # the map/normalize/group/classify/orchestrate service (quarantine granularity,
+        # partial success, dry-run-persists-nothing, store-verbatim) and the multipart
+        # handler, plus the 500-invoice/1500-row budget guard. Needs DATABASE_URL (app)
+        # + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/importer/...
       - name: Validation /v1 suite (engine + store + handlers as invoice_app) + per-test visibility & skip gate
         # M3-04: proves the rules-as-data engine, the DB-backed Store (LoadActiveRuleSet
         # + ToggleRule audit) and the HTTP handlers over the migrated rules tables. Needs

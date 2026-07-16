@@ -1,11 +1,20 @@
-// Settings — tabbed: ERP connectors (toggle connect/disconnect), API & webhooks
-// (base URL, keys dimmed by sandbox mode, endpoints, webhooks), and signing &
-// certificates. Ported from Platform.dc.html ~L847-951 + the settings slices of
-// renderVals() (~L1397-1435).
+// Settings — tabbed: ERP connectors (toggle connect/disconnect, plus a per-connector
+// detail view behind Manage), API & webhooks (base URL, keys dimmed by sandbox mode,
+// endpoints, webhooks), and signing & certificates. Ported from Platform.dc.html
+// ~L847-951 + the settings slices of renderVals() (~L1397-1435).
+//
+// The open connector, its env pill, and the mapping modal are view state scoped to this
+// tab, so they live here rather than in ctx (the EntityFormModal/ClientsView precedent).
+// Saved mappings are the exception — those are workspace state (ctx.connectorMappings),
+// so they outlive navigating away from Settings.
+
+import { useState } from 'react'
 
 import { API_BASE, API_KEYS, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
-import type { PlatformCtx } from '../types'
+import { ConnectorDetail } from './ConnectorDetail'
+import { FieldMappingModal } from './FieldMappingModal'
+import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
 
 function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
   if (m === 'POST') return { bg: 'var(--status-green-bg)', color: 'var(--status-green-text)' }
@@ -16,6 +25,21 @@ function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
 export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
   const { settingsTab, sandbox, connectors } = ctx
   const connCount = CONNECTOR_DEFS.filter((c) => connectors[c.id]).length
+  const [openId, setOpenId] = useState<ConnectorId | null>(null)
+  const [mappingOpen, setMappingOpen] = useState(false)
+  const [envs, setEnvs] = useState<Partial<Record<ConnectorId, 'SANDBOX'>>>({})
+  // A connector disconnected from another surface must not leave its detail view mounted.
+  const openDef = CONNECTOR_DEFS.find((c) => c.id === openId && connectors[c.id]) ?? null
+
+  function goList() {
+    setOpenId(null)
+    setMappingOpen(false)
+  }
+
+  function selectTab(t: SettingsTab) {
+    ctx.setSettingsTab(t)
+    goList()
+  }
 
   return (
     <div style={{ padding: '30px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
@@ -29,7 +53,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           return (
             <button
               key={t.id}
-              onClick={() => ctx.setSettingsTab(t.id)}
+              onClick={() => selectTab(t.id)}
               className="pf-btn"
               style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: a ? 600 : 500, color: a ? 'var(--fg-1)' : 'var(--fg-3)', padding: '0 0 12px', borderBottom: `2px solid ${a ? 'var(--accent)' : 'transparent'}`, marginBottom: -1 }}
             >
@@ -39,8 +63,23 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
         })}
       </div>
 
+      {/* Connector detail — replaces the list while a connector is open */}
+      {settingsTab === 'connectors' && openDef && (
+        <>
+          <ConnectorDetail
+            ctx={ctx}
+            def={openDef}
+            env={envs[openDef.id] ?? 'LIVE'}
+            onToggleEnv={() => setEnvs((e) => ({ ...e, [openDef.id]: e[openDef.id] ? undefined : 'SANDBOX' }))}
+            onBack={goList}
+            onEditMapping={() => setMappingOpen(true)}
+          />
+          {mappingOpen && <FieldMappingModal ctx={ctx} def={openDef} onClose={() => setMappingOpen(false)} />}
+        </>
+      )}
+
       {/* Connectors */}
-      {settingsTab === 'connectors' && (
+      {settingsTab === 'connectors' && !openDef && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: 0, maxWidth: 560, lineHeight: 1.55 }}>
@@ -69,6 +108,15 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                     <span style={{ width: 5, height: 5, borderRadius: 99, background: on ? 'var(--status-green-text)' : 'var(--fg-3)' }} />
                     <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: on ? 'var(--status-green-text)' : 'var(--fg-3)', letterSpacing: '0.04em' }}>{on ? 'CONNECTED' : 'NOT CONNECTED'}</span>
                   </span>
+                  {on && (
+                    <button
+                      onClick={() => setOpenId(c.id)}
+                      className="pf-btn"
+                      style={{ flex: 'none', height: 34, padding: '0 14px', borderRadius: 6, border: 0, background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
+                    >
+                      Manage
+                    </button>
+                  )}
                   <button
                     onClick={() => ctx.toggleConnector(c.id)}
                     className="pf-btn"

@@ -8,7 +8,7 @@
 // none is read anywhere else in the render output. They are intentionally omitted here;
 // dropping them changes nothing about what's rendered.
 
-import type { CanonField, ClientCfg, FileData, SectorDef, SectorKey } from './types'
+import type { CanonField, ClientCfg, FieldMapRow, FileData, SectorDef, SectorKey } from './types'
 
 export const SECTORS: Record<SectorKey, SectorDef> = {
   logistics: {
@@ -257,15 +257,62 @@ export const DOC_TYPE_DEFS: [string, string, string][] = [
 /* Settings — connectors / API & webhooks / signing & certificates     */
 /* ------------------------------------------------------------------ */
 
-export type ConnectorDef = { id: 'sap' | 'oracle' | 'quickbooks' | 'sage' | 'odoo' | 'dynamics'; name: string; cat: string; mono: string }
+// The UBL 2.1 targets every connector maps onto, in the order the detail view lists
+// them. Paths are the real ones lib/xml.ts emits, minus the /Invoice root.
+const UBL_TARGETS: string[] = [
+  'cbc:ID',
+  'cbc:IssueDate',
+  'cbc:DocumentCurrencyCode',
+  'cac:AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name',
+  'cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID',
+  'cac:TaxTotal/cbc:TaxAmount',
+  'cac:LegalMonetaryTotal/cbc:LineExtensionAmount',
+  'cac:LegalMonetaryTotal/cbc:PayableAmount',
+]
+
+// Each connector's native field names, in UBL_TARGETS order: SAP's table-column names,
+// NetSuite's SuiteTalk fields, the QBO Invoice entity, Sage 300's ARIBH columns, Odoo's
+// account.move fields, and the D365 CustInvoiceJour table.
+const ERP_FIELDS: Record<ConnectorDef['id'], string[]> = {
+  sap: ['VBRK-VBELN', 'VBRK-FKDAT', 'VBRK-WAERK', 'KNA1-NAME1', 'KNA1-STCD1', 'VBRK-MWSBK', 'VBRP-NETWR', 'VBRK-NETWR'],
+  oracle: ['tranid', 'trandate', 'currency.symbol', 'entity.companyname', 'entity.custentity_tin', 'taxtotal', 'subtotal', 'total'],
+  quickbooks: ['DocNumber', 'TxnDate', 'CurrencyRef.value', 'CustomerRef.name', 'CustomerRef.ResaleNum', 'TxnTaxDetail.TotalTax', 'Line.Amount', 'TotalAmt'],
+  sage: ['INVNUMBER', 'INVDATE', 'CURNCODE', 'BILNAME', 'IDCUSTTAX1', 'TXAMOUNT1', 'EXTINVNET', 'INVNETWTX'],
+  odoo: ['name', 'invoice_date', 'currency_id.name', 'partner_id.name', 'partner_id.vat', 'amount_tax', 'amount_untaxed', 'amount_total'],
+  dynamics: ['InvoiceId', 'InvoiceDate', 'CurrencyCode', 'InvoiceAccountName', 'VATNum', 'SumTax', 'SumLineAmount', 'InvoiceAmount'],
+}
+
+function mappingOf(id: ConnectorDef['id']): FieldMapRow[] {
+  return UBL_TARGETS.map((ubl, i) => ({ erp: ERP_FIELDS[id][i], ubl }))
+}
+
+export type ConnectorDef = {
+  id: 'sap' | 'oracle' | 'quickbooks' | 'sage' | 'odoo' | 'dynamics'
+  name: string
+  cat: string
+  mono: string
+  host: string
+  module: string
+  mapping: FieldMapRow[]
+}
 
 export const CONNECTOR_DEFS: ConnectorDef[] = [
-  { id: 'sap', name: 'SAP S/4HANA', cat: 'ERP', mono: 'SAP' },
-  { id: 'oracle', name: 'Oracle NetSuite', cat: 'ERP', mono: 'OR' },
-  { id: 'quickbooks', name: 'QuickBooks Online', cat: 'ACCOUNTING', mono: 'QB' },
-  { id: 'sage', name: 'Sage 300', cat: 'ACCOUNTING', mono: 'SG' },
-  { id: 'odoo', name: 'Odoo', cat: 'ERP', mono: 'OD' },
-  { id: 'dynamics', name: 'Microsoft Dynamics 365', cat: 'ERP', mono: 'D365' },
+  { id: 'sap', name: 'SAP S/4HANA', cat: 'ERP', mono: 'SAP', host: 'erp.honeywell.ng:44300', module: 'SD/FI billing', mapping: mappingOf('sap') },
+  { id: 'oracle', name: 'Oracle NetSuite', cat: 'ERP', mono: 'OR', host: 'td7842.suitetalk.api.netsuite.com', module: 'Invoicing', mapping: mappingOf('oracle') },
+  { id: 'quickbooks', name: 'QuickBooks Online', cat: 'ACCOUNTING', mono: 'QB', host: 'quickbooks.api.intuit.com', module: 'Sales · Invoice', mapping: mappingOf('quickbooks') },
+  { id: 'sage', name: 'Sage 300', cat: 'ACCOUNTING', mono: 'SG', host: 'sage300.honeywell.ng:8080', module: 'Accounts Receivable', mapping: mappingOf('sage') },
+  { id: 'odoo', name: 'Odoo', cat: 'ERP', mono: 'OD', host: 'odoo.honeywell.ng', module: 'account.move', mapping: mappingOf('odoo') },
+  { id: 'dynamics', name: 'Microsoft Dynamics 365', cat: 'ERP', mono: 'D365', host: 'honeywell.operations.dynamics.com', module: 'Accounts receivable', mapping: mappingOf('dynamics') },
+]
+
+// Mirrored from the ERP's tax-code table — the master-data card lists these, and its
+// "Tax codes" stat tile counts them (see lib/connectors.ts).
+export const CONNECTOR_TAX_CODES: { code: string; desc: string; rate: string }[] = [
+  { code: 'A1', desc: 'Standard rated VAT', rate: '7.5%' },
+  { code: 'Z0', desc: 'Zero rated', rate: '0%' },
+  { code: 'E0', desc: 'Exempt', rate: '—' },
+  { code: 'WH5', desc: 'Withholding — services', rate: '5%' },
+  { code: 'WH10', desc: 'Withholding — rent & royalties', rate: '10%' },
 ]
 
 export const SETTINGS_TABS: { id: 'connectors' | 'api' | 'signing'; label: string }[] = [

@@ -161,6 +161,22 @@ var (
 	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
 	ErrRedundantTransition = errors.New("invoice: redundant transition")
 	ErrIllegalTransition   = errors.New("invoice: illegal transition")
+
+	// ErrUpstream / ErrNoActiveRuleSet are the validation client's error model
+	// (validator.go, M4-04-04), declared here to keep one sentinel home per
+	// package. Declared by THIS subtask because it is their first consumer:
+	// the story originally assigned all three new sentinels to M4-04-05, but
+	// the client (order 4) precedes it, so M4-04-05 is narrowed to the two it
+	// still owns (ErrNotDraft, ErrStaleValidation) -- otherwise a redeclaration
+	// there is a duplicate-declaration CI red. [Stage-1 F3]
+	//
+	// They are DISTINGUISHABLE on purpose, and the distinction is what
+	// M4-04-06's statusForErr maps: ErrUpstream -> 502 (04 is broken or
+	// unreachable -- 03 cannot get a verdict), ErrNoActiveRuleSet -> 503 (04 is
+	// healthy but has no published rule-set to evaluate against). Both are
+	// outages, never verdicts: neither ever means "the invoice is clean".
+	ErrUpstream        = errors.New("invoice: upstream validation error")
+	ErrNoActiveRuleSet = errors.New("invoice: no active rule-set")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

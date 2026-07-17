@@ -24,6 +24,7 @@
 //	[A7]         TestStoreEdit_AllNilRejected
 //	[A8]         TestStoreEdit_GuardBeforeContentValidation
 //	existing     TestStoreEdit_NotFoundAndCrossTenant
+//	QA/Mode-B    TestStoreEdit_PartialNonMoneyFieldChangeDemotes
 //
 // Run: `make test-rls` (or `make test-audit`), or directly, e.g.:
 //
@@ -598,5 +599,102 @@ func TestStoreEdit_DemoteThenRevalidateSucceeds(t *testing.T) {
 	}
 	if freshViolationsText != "[]" {
 		t.Errorf("violations after re-validate = %q, want %q (re-stamped clean, stale warning cleared)", freshViolationsText, "[]")
+	}
+}
+
+// QA Mode-B adversarial: a validated invoice with SEVERAL fields set is
+// edited on exactly ONE non-money field (buyer_name) -- proving two things
+// no existing spec combines: (1) a text-typed column change (not a numeric
+// one -- every other demotion spec here only ever changes VAT/Total) is
+// enough to trip the fingerprint diff and demote, so contentFingerprint's
+// sensitivity to all ten MBS-content columns (unit-proven in
+// payload_fingerprint_test.go's TestContentFingerprint_
+// EachOfTenContentColumnsIsSignificant) is actually WIRED UP through
+// Store.Edit's real-change/demotion path, not just money fields; and (2)
+// updateContentTx's dynamic SET clause touches ONLY the one field named in
+// UpdateInput -- every sibling field (both the other text columns and the
+// money columns) survives byte-unchanged, guarding against an off-by-one in
+// the SET-clause/placeholder-index build silently clobbering an adjacent
+// column.
+func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-12 tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-12 entity")
+	subject := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{
+		EntityID:      entityID,
+		InvoiceNumber: "EDIT-12",
+		SupplierTIN:   strPtr("SUP-TIN-1"),
+		SupplierName:  strPtr("Supplier Co"),
+		BuyerTIN:      strPtr("BUY-TIN-1"),
+		BuyerName:     strPtr("Buyer Co"),
+		Currency:      strPtr("NGN"),
+		Subtotal:      strPtr("100.00"),
+		VAT:           strPtr("7.00"),
+		Total:         strPtr("107.00"),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
+
+	got, err := store.Edit(c, inv.ID, UpdateInput{BuyerName: strPtr("New Buyer Co")})
+	if err != nil {
+		t.Fatalf("Edit (single non-money field change on validated): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want %q (a non-money field change demotes too)", got.Status, StatusDraft)
+	}
+
+	// The one field named in UpdateInput changed...
+	if got.BuyerName == nil || *got.BuyerName != "New Buyer Co" {
+		t.Errorf("Edit: BuyerName = %v, want %q", got.BuyerName, "New Buyer Co")
+	}
+	// ...every sibling field, text AND numeric, survives byte-unchanged
+	// (updateContentTx's dynamic SET clause must not have touched them).
+	if got.SupplierTIN == nil || *got.SupplierTIN != "SUP-TIN-1" {
+		t.Errorf("Edit: SupplierTIN = %v, want unchanged %q", got.SupplierTIN, "SUP-TIN-1")
+	}
+	if got.SupplierName == nil || *got.SupplierName != "Supplier Co" {
+		t.Errorf("Edit: SupplierName = %v, want unchanged %q", got.SupplierName, "Supplier Co")
+	}
+	if got.BuyerTIN == nil || *got.BuyerTIN != "BUY-TIN-1" {
+		t.Errorf("Edit: BuyerTIN = %v, want unchanged %q", got.BuyerTIN, "BUY-TIN-1")
+	}
+	if got.Currency == nil || *got.Currency != "NGN" {
+		t.Errorf("Edit: Currency = %v, want unchanged %q", got.Currency, "NGN")
+	}
+	if got.Subtotal == nil || *got.Subtotal != "100.00" {
+		t.Errorf("Edit: Subtotal = %v, want unchanged %q", got.Subtotal, "100.00")
+	}
+	if got.VAT == nil || *got.VAT != "7.00" {
+		t.Errorf("Edit: VAT = %v, want unchanged %q", got.VAT, "7.00")
+	}
+	if got.Total == nil || *got.Total != "107.00" {
+		t.Errorf("Edit: Total = %v, want unchanged %q", got.Total, "107.00")
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID); n != beforeHistory+1 {
+		t.Errorf("invoice_status_history rows = %d, want %d (exactly one new demotion row)", n, beforeHistory+1)
+	}
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated+1 {
+		t.Errorf("audit_log invoice.updated rows = %d, want %d (exactly one new row)", n, beforeUpdated+1)
+	}
+	if a := auditActor(t, app, tenantID, "invoice.updated"); a != subject {
+		t.Errorf("invoice.updated audit actor = %q, want %q", a, subject)
+	}
+	if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != beforeTransitioned+1 {
+		t.Errorf("audit_log invoice.transitioned rows = %d, want %d (exactly one new row)", n, beforeTransitioned+1)
 	}
 }

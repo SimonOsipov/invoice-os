@@ -28,6 +28,10 @@ const (
 	headerUserID    = "X-User-ID"
 	headerUserRole  = "X-User-Role"
 	headerRequestID = "X-Request-ID"
+	// headerS2SToken is 04's service-to-service peer credential
+	// (internal/validation/s2s.go). The gateway never mints it and never
+	// forwards a client-supplied one -- see injectIdentity.
+	headerS2SToken = "X-S2S-Token"
 )
 
 // routePrefix is the public path space the gateway proxies. Everything under it
@@ -119,11 +123,22 @@ func newReverseProxy(service string, target *url.URL, log *slog.Logger) *httputi
 // from the verified token, discarding any client-supplied X-Tenant-ID / X-User-*
 // (Header.Set replaces every prior value). The request id comes from the platform
 // kit's requestIDMiddleware, which always sets one upstream of this handler.
+//
+// X-S2S-Token is DELETED rather than set: it is a peer credential, not an
+// identity the gateway can vouch for. The gateway proxies /api/validation/*
+// to 04 (routedServices in cmd/gateway/main.go includes "validation"), whose
+// batch route is guarded by that token -- so without this Del, a caller could
+// smuggle a leaked peer token to 04 through the one public backend surface
+// and be taken for 03. The gateway mints peer credentials for nobody, so the
+// only correct outbound value is none ([s2s-gateway-strip], M4-04-03). This is
+// the same discipline already applied to X-Tenant-ID/X-User-* above, extended
+// to the peer credential -- not a new mechanism.
 func injectIdentity(pr *httputil.ProxyRequest) {
 	id, _ := auth.IdentityFromContext(pr.In.Context())
 	pr.Out.Header.Set(headerTenantID, id.TenantID)
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)
+	pr.Out.Header.Del(headerS2SToken)
 	if rid := platform.RequestIDFromContext(pr.In.Context()); rid != "" {
 		pr.Out.Header.Set(headerRequestID, rid)
 	} else {

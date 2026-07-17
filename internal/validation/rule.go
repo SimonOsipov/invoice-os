@@ -72,7 +72,14 @@ type Rule struct {
 // number plus its rules, as returned by the (M3-04-06) Store's
 // LoadActiveRuleSet. Published versions are immutable (story Core AC #1) --
 // a content change always ships as a new RuleSet.Version.
+//
+// ID (M4-04-03, [uuid-stamp]) is the version's rule_set_versions.id (uuid) --
+// the same versionID LoadActiveRuleSet already scans and, until this
+// subtask, silently discarded (store.go:72-76). Additive only: every
+// RuleSet{...} literal in the tree is a keyed composite literal, so this
+// field breaks no existing caller.
 type RuleSet struct {
+	ID      string
 	Version int
 	Rules   []Rule
 }

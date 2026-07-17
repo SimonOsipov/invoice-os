@@ -254,6 +254,13 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 // (non-uuid) id raises 22P02, mapped to ErrValidation (CodeRabbit finding,
 // mirrors Get/Create). Numeric inputs are bound as $N::text::numeric, same
 // rationale as Create.
+//
+// A thin wrapper over updateContentTx (M4-05-02 extraction, [content-write-
+// extraction]): the guard/tx/audit shell stays HERE, byte-identical to before
+// the extraction; the SET-clause build/query/scan/error-map moved verbatim
+// into updateContentTx so Store.Edit's fix-loop can reuse it without an
+// audit write of its own (Edit's audit is conditional on a real content
+// change, which Update's is not, [D9]).
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
 	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
 		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
@@ -265,59 +272,10 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
 
-		var setClauses []string
-		var args []any
 		var changedFields []string
-
-		set := func(col, placeholder string, val any) {
-			args = append(args, val)
-			setClauses = append(setClauses, fmt.Sprintf(placeholder, col, len(args)))
-			changedFields = append(changedFields, col)
-		}
-		const text = "%s = $%d"
-		const numeric = "%s = $%d::text::numeric"
-
-		if in.IssueDate != nil {
-			set("issue_date", text, *in.IssueDate)
-		}
-		if in.SupplierTIN != nil {
-			set("supplier_tin", text, *in.SupplierTIN)
-		}
-		if in.SupplierName != nil {
-			set("supplier_name", text, *in.SupplierName)
-		}
-		if in.BuyerTIN != nil {
-			set("buyer_tin", text, *in.BuyerTIN)
-		}
-		if in.BuyerName != nil {
-			set("buyer_name", text, *in.BuyerName)
-		}
-		if in.Currency != nil {
-			set("currency", text, *in.Currency)
-		}
-		if in.Subtotal != nil {
-			set("subtotal", numeric, *in.Subtotal)
-		}
-		if in.VAT != nil {
-			set("vat", numeric, *in.VAT)
-		}
-		if in.Total != nil {
-			set("total", numeric, *in.Total)
-		}
-
-		args = append(args, id)
-		query := fmt.Sprintf(
-			`UPDATE invoices SET %s WHERE id = $%d RETURNING `+invoiceColumns,
-			strings.Join(setClauses, ", "), len(args),
-		)
-
-		if err := scanInvoice(tx.QueryRow(ctx, query, args...), &inv); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			if pgCode(err) == "22P02" {
-				return ErrValidation
-			}
+		var err error
+		inv, changedFields, err = updateContentTx(ctx, tx, id, in)
+		if err != nil {
 			return err
 		}
 
@@ -332,21 +290,187 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	return inv, nil
 }
 
+// updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
+// Store.Edit (M4-05-02 extraction from Store.Update): it builds the dynamic
+// SET clause over in's non-nil fields, runs the UPDATE ... RETURNING, and
+// maps the same errors Update always has (pgx.ErrNoRows -> ErrNotFound,
+// 22P02 -> ErrValidation). It does NO audit write and NO all-nil guard --
+// both callers enforce the guard themselves before opening a tx, and each
+// writes its own audit row under its own conditions (Update always; Edit
+// only when the DB-authoritative fingerprint says something really changed).
+// Assumes at least one field in in is non-nil.
+func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) (Invoice, []string, error) {
+	var setClauses []string
+	var args []any
+	var changedFields []string
+
+	set := func(col, placeholder string, val any) {
+		args = append(args, val)
+		setClauses = append(setClauses, fmt.Sprintf(placeholder, col, len(args)))
+		changedFields = append(changedFields, col)
+	}
+	const text = "%s = $%d"
+	const numeric = "%s = $%d::text::numeric"
+
+	if in.IssueDate != nil {
+		set("issue_date", text, *in.IssueDate)
+	}
+	if in.SupplierTIN != nil {
+		set("supplier_tin", text, *in.SupplierTIN)
+	}
+	if in.SupplierName != nil {
+		set("supplier_name", text, *in.SupplierName)
+	}
+	if in.BuyerTIN != nil {
+		set("buyer_tin", text, *in.BuyerTIN)
+	}
+	if in.BuyerName != nil {
+		set("buyer_name", text, *in.BuyerName)
+	}
+	if in.Currency != nil {
+		set("currency", text, *in.Currency)
+	}
+	if in.Subtotal != nil {
+		set("subtotal", numeric, *in.Subtotal)
+	}
+	if in.VAT != nil {
+		set("vat", numeric, *in.VAT)
+	}
+	if in.Total != nil {
+		set("total", numeric, *in.Total)
+	}
+
+	args = append(args, id)
+	query := fmt.Sprintf(
+		`UPDATE invoices SET %s WHERE id = $%d RETURNING `+invoiceColumns,
+		strings.Join(setClauses, ", "), len(args),
+	)
+
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx, query, args...), &inv); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, nil, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return Invoice{}, nil, ErrValidation
+		}
+		return Invoice{}, nil, err
+	}
+
+	return inv, changedFields, nil
+}
+
 // Edit is M4-05-02's fix-loop orchestrator (System Design §4): the edit +
 // validated->draft demotion sequence over the fixable states (draft,
-// validated). It is not yet implemented -- QA authored TestStoreEdit_*
-// (edit_test.go) test-first against this stub, ahead of the real Stage 3
-// sequence (all-nil guard -> lock+read `before` FOR UPDATE -> fixable-state
-// guard -> updateContentTx -> DB-authoritative no-op fingerprint check ->
-// conditional invoice.updated audit -> conditional transitionTx demotion, all
-// in one WithinRequestTenantTx).
+// validated), composed with Store.ApplyValidation's template ([A2]: one
+// WithinRequestTenantTx, lock-then-recheck, propagate raw errors so their
+// SQLSTATE survives). Inside ONE db.WithinRequestTenantTx:
 //
-// STUB — replaced by M4-05-02 executor. Returns a distinct not-implemented
-// error (never ErrNotFixable, so the guard-ordering/error-identity assertions
-// in edit_test.go fail on assertion, not a false-positive match against this
-// placeholder) and touches neither the DB nor Store.Update.
+//  1. all-nil guard (checked BEFORE any tx opens, mirroring Store.Update's
+//     own guard, [A7]) -- ErrValidation.
+//  2. lock+read `before`: SELECT <invoiceColumns> ... FOR UPDATE, same lock
+//     and error mapping as ApplyValidation/Transition (pgx.ErrNoRows ->
+//     ErrNotFound; 22P02 -> ErrValidation).
+//  3. fixable-state guard -- before.Status is neither draft nor validated ->
+//     ErrNotFixable, NOTHING written. This runs BEFORE the content write, so
+//     a not-fixable status wins over a malformed numeric in the same call
+//     ([A8], GuardBeforeContentValidation).
+//  4. preFP := contentFingerprint(before) -- taken on the LOCKED row, so it
+//     is authoritative under concurrency the same way ApplyValidation's
+//     re-check is.
+//  5. updateContentTx writes the content (shared with Store.Update, no audit
+//     of its own).
+//  6. DB-authoritative no-op check: contentFingerprint(after) == preFP means
+//     nothing really changed (either every field was resent unchanged, or
+//     only its NUMERIC SCALE changed and Postgres normalized it away, e.g.
+//     "100.00"->"100.0") -- return `after` with no audit, no demotion, no
+//     history row ([A6]: idempotence applies to draft AND validated).
+//  7. audit.Record("invoice.updated") -- a real content change, always.
+//  8. demote iff `before` was validated: transitionTx(validated->draft) on
+//     THIS same tx, so the content write and the demotion are one atomic
+//     unit -- a failure at either step (including this audit's own actor
+//     CHECK) rolls back the whole edit, never a partial one
+//     (ContentAuditFailureRollsBackWholeEdit). A draft `before` has nothing
+//     to demote from and stays draft.
+//  9. return `after` -- draft (demoted) after a validated content change,
+//     the demoted row's OWN state after a draft content change, or the
+//     no-op return from step 6 (a validated no-op stays validated).
+//
+// Edit never touches violations/rule_set_version_id -- a demotion leaves the
+// prior verdict's stamp deliberately STALE until Store.ApplyValidation
+// re-runs and re-stamps it (DemoteThenRevalidateSucceeds closes that loop
+// end to end through the gate, completely unmodified by M4-05, [A12]).
 func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
-	return Invoice{}, errors.New("Store.Edit: not implemented [M4-05-02]")
+	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
+		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
+		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
+		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		// 2. lock+read the full row -- the fingerprint and the fixable-state
+		// guard both need it.
+		var before Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &before); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		// 3. fixable-state guard -- BEFORE the content write, so it wins over
+		// a malformed numeric ([A8]).
+		if before.Status != StatusDraft && before.Status != StatusValidated {
+			return ErrNotFixable
+		}
+
+		// 4. the locked row's fingerprint, taken before the write.
+		preFP := contentFingerprint(before)
+
+		// 5. the content write, shared with Store.Update.
+		after, changed, err := updateContentTx(ctx, tx, id, in)
+		if err != nil {
+			return err
+		}
+
+		// 6. DB-authoritative no-op check -- nothing to audit, demote, or
+		// record history for.
+		if contentFingerprint(after) == preFP {
+			inv = after
+			return nil
+		}
+
+		// 7. the content change is real -- audit it.
+		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
+			"id":     id,
+			"fields": changed,
+		}); err != nil {
+			return err
+		}
+
+		// 8. demote iff `before` was validated -- a draft has nothing to
+		// demote from.
+		if before.Status == StatusValidated {
+			if after, err = transitionTx(ctx, tx, id, StatusValidated, StatusDraft); err != nil {
+				return err
+			}
+		}
+
+		inv = after
+		return nil
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
 }
 
 // legalTransitions is the SINGLE source of truth for the invoice lifecycle

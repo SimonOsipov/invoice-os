@@ -144,7 +144,7 @@ func TestStore_LoadActiveRuleSet(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, version := seedVersion(t, super, true)
+	versionID, version := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{
 		Key: "rule-a", Type: "range", Target: "invoice.total", Params: `{"min":0,"max":100}`,
 		Severity: "warning", Message: "total out of range", Scope: "document", Enabled: true,
@@ -153,6 +153,7 @@ func TestStore_LoadActiveRuleSet(t *testing.T) {
 		Key: "rule-b", Type: "required", Target: "supplier.tin", Params: `{}`,
 		Severity: "error", Message: "TIN required", Scope: "document", Enabled: false,
 	})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -272,8 +273,9 @@ func TestStore_ToggleFlipsAndAudits(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, version := seedVersion(t, super, true)
+	versionID, version := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -320,8 +322,9 @@ func TestStore_ToggleLiveReload(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -361,8 +364,9 @@ func TestStore_ToggleAppliesCrossTenant(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantA := uuid.NewString()
@@ -400,8 +404,9 @@ func TestStore_ToggleRedundant(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: false}) // already disabled
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -427,8 +432,9 @@ func TestStore_ToggleUnknownKey(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -456,8 +462,9 @@ func TestStore_AuditRollsBackWithToggle(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	ruleID := seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -499,8 +506,9 @@ func TestStore_LoadNoIdentityErrors(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background() // deliberately NOT auth.WithIdentity -- no identity in ctx
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	ruleID := seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 
@@ -547,8 +555,9 @@ func TestStore_ToggleRoundTripEvents(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, version := seedVersion(t, super, true)
+	versionID, version := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -657,8 +666,9 @@ func TestStore_ToggleRunsAsAppRole(t *testing.T) {
 		t.Fatalf("dbTestPools' app pool runs as %q, want invoice_app -- Store tests would be exercising the wrong role's grants entirely", currentUser)
 	}
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()
@@ -684,7 +694,7 @@ func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, true)
+	versionID, _ := seedVersion(t, super, false)
 	whenExpr := "invoice.total > 0"
 	paramsJSON := `{"expr":"invoice.total > 0 && invoice.total < 1000000"}`
 	// Seeded out of key order (zulu, alpha, mike) to prove LoadActiveRuleSet's
@@ -695,6 +705,7 @@ func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
 	})
 	seedFullRule(t, super, versionID, ruleFixture{Key: "alpha", Enabled: true})
 	seedFullRule(t, super, versionID, ruleFixture{Key: "mike", Enabled: true})
+	sealAndActivate(t, super, versionID)
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()

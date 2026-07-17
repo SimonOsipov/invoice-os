@@ -439,31 +439,8 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 // the real v2 migration exists.
 func simulateActiveVersion(t *testing.T, super *pgxpool.Pool) (id string, version int) {
 	t.Helper()
-	ctx := context.Background()
 	id, version = seedVersion(t, super, false)
-
-	// Capture the row that is sanctioned-active RIGHT NOW, so the cleanup can
-	// put exactly it back -- whatever version number it happens to carry.
-	var prevActiveID string
-	if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&prevActiveID); err != nil {
-		t.Fatalf("capture the currently active version id: %v", err)
-	}
-	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE id = $1`, prevActiveID); err != nil {
-		t.Fatalf("deactivate the currently active version: %v", err)
-	}
-	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE id = $1`, id); err != nil {
-		t.Fatalf("activate the simulated fixture version: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx := context.Background()
-		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
-			t.Errorf("cleanup: deactivate whatever is active before restoring the previous active version: %v", err)
-			return
-		}
-		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE id = $1`, prevActiveID); err != nil {
-			t.Errorf("cleanup: restore the previously-active version (id=%s): %v", prevActiveID, err)
-		}
-	})
+	sealAndActivate(t, super, id)
 	return id, version
 }
 
@@ -608,8 +585,13 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	baselineID, _ := simulateActiveVersion(t, super)
+	// M4-18: cannot use simulateActiveVersion here -- it now seals+activates immediately
+	// (zero rules), and Guard A (M4-17) forbids inserting rules into an
+	// already-sealed parent. Inline the same lawful publish order the 11 store_test.go
+	// sites use instead: seed unsealed+inactive, insert the rule, THEN seal+activate.
+	baselineID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, baselineID, ruleFixture{Key: "vat-standard-rate", Enabled: true})
+	sealAndActivate(t, super, baselineID)
 
 	store := NewStore(app)
 	if _, err := store.ToggleRule(newTestIdentity(), "vat-standard-rate", false); err != nil {

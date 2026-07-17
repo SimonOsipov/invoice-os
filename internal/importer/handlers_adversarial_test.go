@@ -147,7 +147,7 @@ func TestCreateHandler_FormatDetection_ActualMapping201(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			super, app := dbTestPools(t)
-			svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+			svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 			tenantID := seedTenant(t, super, "format-detection tenant")
 			entityID := seedEntity(t, super, tenantID, "format-detection entity")
@@ -224,7 +224,7 @@ func TestCreateHandler_DryRunQueryParamVariants(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			super, app := dbTestPools(t)
-			svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+			svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 			tenantID := seedTenant(t, super, "dry-run-variant tenant")
 			entityID := seedEntity(t, super, tenantID, "dry-run-variant entity")
@@ -306,7 +306,7 @@ func semicolonCSVBody(t *testing.T, header []string, rows [][]string) []byte {
 // IMP-API-07 (xlsx: both null).
 func TestCreateHandler_SemicolonCSVEnvelope(t *testing.T) {
 	super, app := dbTestPools(t)
-	svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "semicolon-csv tenant")
 	entityID := seedEntity(t, super, tenantID, "semicolon-csv entity")
@@ -348,7 +348,7 @@ func TestCreateHandler_SemicolonCSVEnvelope(t *testing.T) {
 // be seeded: resolveMapping runs before any Store call).
 func TestCreateHandler_MappingMissingInvoiceNumber400(t *testing.T) {
 	_, app := dbTestPools(t)
-	svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 

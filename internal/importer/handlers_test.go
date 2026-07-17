@@ -8,8 +8,9 @@
 // auth.WithIdentity idiom; the non-DB cases (401/413/400) use a fake imp
 // closure exactly like invoice's fake store closures, while the DB-backed
 // cases (201/dry-run/404/xlsx) build the REAL handler over a REAL *Service
-// (NewService(NewStore(app), invoice.NewStore(app), nil)), reusing
-// store_test.go's dbTestPools/seedTenant/seedEntity harness.
+// over an INERT gate (&fakeGate{} -- see newTestService's doc in
+// service_test.go for why inert and not nil), reusing store_test.go's
+// dbTestPools/seedTenant/seedEntity harness.
 //
 // Spec-to-test map (Test Specs table, M4-03-05 story / task-106):
 //
@@ -254,7 +255,7 @@ func TestCreateHandler_NoIdentity401(t *testing.T) {
 // stub: every field assertion fails (got status 501, empty body).
 func TestCreateHandler_201(t *testing.T) {
 	super, app := dbTestPools(t)
-	svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "IMP-API-02 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-02 entity")
@@ -298,7 +299,7 @@ func TestCreateHandler_201(t *testing.T) {
 // 501).
 func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 	super, app := dbTestPools(t)
-	svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "IMP-API-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-03 entity")
@@ -415,7 +416,7 @@ func TestCreateHandler_BadMapping400(t *testing.T) {
 // 501, want 404).
 func TestCreateHandler_EntityNotFound404(t *testing.T) {
 	super, app := dbTestPools(t)
-	svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "IMP-API-06 tenant")
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
@@ -448,7 +449,7 @@ func TestCreateHandler_EntityNotFound404(t *testing.T) {
 // (got 501, want 201).
 func TestCreateHandler_XLSX201(t *testing.T) {
 	super, app := dbTestPools(t)
-	svc := NewService(NewStore(app), invoice.NewStore(app), nil)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 
 	tenantID := seedTenant(t, super, "IMP-API-07 tenant")
 	entityID := seedEntity(t, super, tenantID, "IMP-API-07 entity")

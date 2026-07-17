@@ -497,6 +497,21 @@ func hasBlockingViolation(vs []Violation) bool {
 	return false
 }
 
+// HasBlockingViolation is hasBlockingViolation's exported face, for the
+// importer's DRY-RUN clean count (M4-04-07, [dry-run-evaluates]).
+//
+// A dry-run never writes, so it has no BatchOutcome to read Clean from —
+// ValidateBatch, which computes it, is the WRITING path. Without this the
+// importer would have to re-derive the severity test in another package: a
+// SECOND predicate that must agree with promotion forever. It would not.
+// The obvious guess — len(violations) == 0 — is already wrong today: a
+// warning-only invoice carries violations and still promotes ([error
+// semantics]), so it would under-report clean invoices on every dry-run
+// while the real run promoted them. Exporting the one predicate makes the
+// dry-run's count and ApplyValidation's promotion decision identical BY
+// CONSTRUCTION rather than by agreement.
+func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs) }
+
 // ApplyValidation is M4-04's validate GATE: it stamps an evaluation's verdict
 // onto a draft invoice and, when nothing blocks, promotes it draft->validated
 // — all inside ONE db.WithinRequestTenantTx, so a failure anywhere rolls back

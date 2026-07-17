@@ -97,13 +97,21 @@ func cloneMapping(m map[string]string) map[string]string {
 // newTestService builds a Service over the app-role pool, wiring the
 // importer Store and invoice.Store exactly as production code would
 // (NewService(importer.NewStore(appPool), invoice.NewStore(appPool), gate)),
-// passing nil for the gate: every pre-M4-04-07 test in this file exercises
-// only M4-03 (pre-gate) behavior, and Import() never dereferences s.gate
-// today (see service.go's QA Mode-A structural scaffold comment) -- nil is
-// safe. task-114/M4-04-07's own gate-integrated specs use
-// newTestServiceWithGate (service_gate_test.go) instead.
+// with an INERT fakeGate (service_gate_test.go): every test in this file
+// exercises M4-03 (pre-gate) orchestration -- decode/classify/create/
+// finalize and the five M4-03 counters -- for which the gate is a
+// collaborator, not the subject.
+//
+// Inert, NOT nil: as of task-114/M4-04-07 Import() dereferences s.gate on
+// both paths (dry-run Evaluate, real ValidateBatch) for any file with at
+// least one READY group, so nil now panics. A zero-value fakeGate returns a
+// zero-value BatchOutcome and nil error, so ApplyValidation never runs and
+// invoices stay draft with no violations -- PRECISELY the pre-gate behavior
+// these M4-03 specs were written against, preserved rather than weakened.
+// task-114's own gate-integrated specs use newTestServiceWithGate (a real
+// or recording gate) instead.
 func newTestService(app *pgxpool.Pool) *Service {
-	return NewService(NewStore(app), invoice.NewStore(app), nil)
+	return NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 }
 
 // --- super-pool read-back helpers (out-of-band verification, RLS-bypassing) ---

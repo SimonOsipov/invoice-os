@@ -22,7 +22,7 @@
 //	IMPV-10 TestServiceImport_ApplyValidationDBFaultAbortsRunNotLaunderedIntoRowErrors
 //	IMPV-11 TestServiceImport_ValidatorErrUpstreamAbortsRun
 //	IMPV-12 TestServiceImport_TinLessEntityCleanFileStaysDraftWithSupplierTinRequired
-//	IMPV-13 TestServiceImport_NoLineRowsMappedStaysDraftWithLineItemsRequired (see
+//	IMPV-13 TestServiceImport_NoLineRowsMappedStaysDraftViaLineItemsSumSubtotal (see
 //	        its own doc comment -- a FLAGGED, reported-not-reinterpreted spec
 //	        ambiguity: this looks architecturally unreachable via the real
 //	        import path as currently designed)
@@ -708,51 +708,53 @@ func TestServiceImport_TinLessEntityCleanFileStaysDraftWithSupplierTinRequired(t
 	}
 }
 
-// TestServiceImport_NoLineRowsMappedStaysDraftWithLineItemsRequired
-// (IMPV-13): "a file whose invoice has no line rows mapped ... stays draft
-// with line-items-required" (task-114's Test Specs table, verbatim).
+// TestServiceImport_NoLineRowsMappedStaysDraftViaLineItemsSumSubtotal
+// (IMPV-13). REFRAMED by ORCHESTRATOR RULING (task-114 Implementation
+// Notes) -- flagged, not silently reshaped.
 //
-// FLAGGED SPEC AMBIGUITY -- reported, not reinterpreted, per this story's
-// own established Mode A norm (its own QA return history already caught a
-// spec contradiction and an undiscriminating test by doing exactly this
-// rather than silently guessing):
+// IMPV-13 as written says: "a file whose invoice has no line rows mapped ...
+// stays draft with line-items-required". Mode A authored that literally and
+// FLAGGED it as possibly unreachable rather than forcing it green. The
+// orchestrator verified the flag and ruled: KEEP the test, REFRAME what it
+// proves. This executor then re-verified BOTH halves empirically against the
+// real v2 rule set before touching a line:
 //
-// buildCreateInput (service.go, UNCHANGED by this subtask's own plan -- its
-// real-path group->line-item mapping is not in task-114's Files to modify)
-// appends EXACTLY ONE invoice.LineItemInput per ROW in the group,
-// UNCONDITIONALLY, regardless of whether line_description/line_quantity/
-// line_unit_price are mapped at all:
+//  1. line-items-required is UNREACHABLE on the real import path.
+//     buildCreateInput (service.go) appends a LineItemInput per group ROW
+//     UNCONDITIONALLY, and a group is FORMED FROM rows -- so a READY group
+//     always yields >= 1 line item. line-items-required is a PRESENCE-only
+//     check (type `required`, target `line_items`, confirmed in the v2 rule
+//     row and by GAPI-14), so a present, non-empty array always passes it.
+//     Unmapped line columns produce a CONTENT-empty line ({id, line_no}),
+//     not an ABSENT array.
+//  2. The AC's INTENT -- "an invoice with no usable line data must not
+//     silently validate" -- IS still served, by a DIFFERENT rule.
+//     line-items-sum-subtotal (type `line_sum`) hits its "an amount-less
+//     line can't reconcile" branch: lineSumEval looks up each line's
+//     `unit_price` key, which putNumber OMITS for a nil field, so the lookup
+//     misses and it returns a violation. severity `error` => blocking => the
+//     invoice STAYS DRAFT. Observed, not assumed: the sole violation the
+//     real gate writes for this fixture is
+//     [{line-items-sum-subtotal error}].
 //
-//	for _, ri := range g.rowIdxs {
-//		row := rows[ri]
-//		in.LineItems = append(in.LineItems, invoice.LineItemInput{...})
-//	}
+// So this is a SPEC/REALITY MISMATCH, not a defect: the AC named the wrong
+// rule (it was written before the grouping code was read closely). The
+// invoice does exactly what the AC wants -- it does not silently validate.
 //
-// A READY group requires >= 1 row by construction (a group is built FROM
-// rows; there is no way to register an invoice_number with zero rows), so
-// len(CreateInput.LineItems) can NEVER be 0 on the real import path as
-// currently designed. MBSPayload's `len(inv.LineItems) > 0` guard
-// (payload.go) will therefore always see >= 1 (possibly content-empty) line
-// item for any real-path invoice, and line-items-required -- a
-// PRESENCE-only check on the line_items ARRAY, confirmed by
-// internal/invoice/gate_test.go's own GAPI-14 (which fires it ONLY via
-// CreateInput.LineItems being entirely OMITTED, i.e. a nil slice, not via
-// per-item content) -- cannot fire on any group that has at least one row.
+// What the test now proves, per the ruling:
+//   - THE INVARIANT that makes line-items-required unreachable, which is
+//     itself load-bearing (assertion 1): if a future change ever let a READY
+//     group be line-less, [payload-absence] would OMIT line_items and
+//     line-items-required would start violating PERFECTLY VALID invoices.
+//   - That line-items-required consequently does NOT fire here (assertion 2)
+//     -- pinning the reframe, so a future reader cannot mistake this for the
+//     AC's literal wording.
+//   - That the AC's intent holds via line-items-sum-subtotal (assertion 3).
 //
-// This test is authored as literally as IMPV-13's own wording allows (a
-// mapping that omits every line_* canonical field for a single-row group),
-// so it is runnable and traceable. It currently reds only because the
-// scaffold never calls the gate at all (violations stays '[]') -- NOT
-// because of the architectural gap above. Wiring the gate alone will NOT
-// make this test pass once implemented for real: reaching
-// line-items-required via the real import path, if it is reachable at all,
-// needs either a different fixture this analysis missed, or a design
-// decision outside this subtask's stated scope (e.g. buildCreateInput
-// skipping a LineItemInput for an all-blank line row -- which would also
-// change LineNo/[D10]'s "1..N by array position" semantics for the
-// remaining lines). Escalating for an architect/executor ruling rather than
-// silently reshaping the fixture or the AC.
-func TestServiceImport_NoLineRowsMappedStaysDraftWithLineItemsRequired(t *testing.T) {
+// NOT weakened: no assertion was dropped. "Stays draft" -- the AC's actual
+// safety property -- is asserted exactly as before; only the rule KEY it is
+// attributed to changed, to the one that provably fires.
+func TestServiceImport_NoLineRowsMappedStaysDraftViaLineItemsSumSubtotal(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	tenantID := seedTenant(t, super, "IMPV-13 tenant")
@@ -772,17 +774,43 @@ func TestServiceImport_NoLineRowsMappedStaysDraftWithLineItemsRequired(t *testin
 	}
 
 	id := invoiceIDByNumber(t, super, entityID, "IMPV13-NOLINES")
-	status, violations, _ := readInvoiceVerdict(t, super, id)
-	if status != "draft" {
-		t.Errorf("status = %q, want %q", status, "draft")
+
+	// (1) THE INVARIANT: a READY group is FORMED FROM rows, so it always
+	// yields >= 1 line item -- even when every line_* column is unmapped and
+	// the line is content-empty. This is what keeps line_items present in the
+	// payload, and thus what keeps line-items-required from firing on VALID
+	// invoices.
+	var lineCount int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM line_items WHERE invoice_id = $1`, id).Scan(&lineCount); err != nil {
+		t.Fatalf("count line_items for %s: %v", id, err)
 	}
+	if lineCount < 1 {
+		t.Fatalf("line_items rows = %d, want >= 1 -- a READY group must always yield at least one line item; "+
+			"if this ever breaks, [payload-absence] omits line_items and line-items-required starts violating VALID invoices", lineCount)
+	}
+
+	status, violations, _ := readInvoiceVerdict(t, super, id)
 	var vs []invoice.Violation
 	if err := json.Unmarshal(violations, &vs); err != nil {
 		t.Fatalf("unmarshal violations %s: %v", violations, err)
 	}
-	if !impvHasViolation(vs, "line-items-required") {
-		t.Errorf("violations = %+v, want one naming line-items-required (IMPV-13) -- see this test's doc comment: "+
-			"possibly unreachable via the real import path as currently designed; flagged for an architect ruling", vs)
+
+	// (2) line-items-required therefore CANNOT fire: the array is present and
+	// non-empty. Pins the ruling above against the AC's literal wording.
+	if impvHasViolation(vs, "line-items-required") {
+		t.Errorf("violations = %+v, want NO line-items-required -- the payload's line_items is present and non-empty "+
+			"(%d line), so a presence-only check must pass; see this test's doc comment", vs, lineCount)
+	}
+
+	// (3) THE AC's INTENT, served by the rule that actually fires: an invoice
+	// whose line data is unusable must NOT silently validate.
+	if status != "draft" {
+		t.Errorf("status = %q, want %q -- an invoice with no usable line data must never silently validate", status, "draft")
+	}
+	if !impvHasViolation(vs, "line-items-sum-subtotal") {
+		t.Errorf("violations = %+v, want one naming line-items-sum-subtotal -- an amount-less line cannot reconcile "+
+			"against a non-zero subtotal, which is what keeps this invoice draft (IMPV-13's intent, via a different rule "+
+			"than the AC names; see this test's doc comment)", vs)
 	}
 }
 

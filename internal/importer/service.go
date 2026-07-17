@@ -17,53 +17,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 )
 
-// ============================================================================
-// QA MODE-A STRUCTURAL SCAFFOLD (task-114/M4-04-07) -- read before editing
-// ============================================================================
-// The declarations from here through the "END QA MODE-A STRUCTURAL SCAFFOLD"
-// marker below are QA Mode-A's ONE exception to "scaffold new symbols in a
-// separate *_qa_scaffold.go file, never touch production files": Go has no
-// partial struct types and no function-signature overloading across files,
-// so BatchResult's four new fields and NewService's new parameter cannot be
-// isolated the way gate.go/EvalItem/ApplyValidation were for M4-04-05/06 --
-// they must be edited in this file, in place. Identical precedent already
-// in this story: internal/validation/rule.go's additive `ID string` field
-// for M4-04-03 (commit 9328b34: "This one field could not go in a scaffold
-// file -- Go has no partial struct types across files -- so it is the one
-// exception to 'scaffold, don't touch production files' in this subtask,
-// flagged here for reviewer sign-off"). Flagged here for the same reason.
-//
-// What changed, STRUCTURALLY ONLY (no behavior):
-//   - BatchResult gains RuleSetVersion/InvoicesClean/InvoicesWithViolations/
-//     InvoiceViolations ([import-report-shape]). Import() below is
-//     UNCHANGED and still only ever sets the five original M4-03 fields --
-//     these four stay at their Go zero value (nil/0/0/nil) on every return
-//     path today. That is deliberate: IMPV-01/02/04/06/16 assert non-zero
-//     values these zero values cannot satisfy, so they fail on a REAL
-//     assertion, never a compile error.
-//   - InvoiceViolations (the new type) and the importer-local `gate`
-//     interface just below are ADDITIVE, PERMANENT declarations -- not
-//     throwaway scaffold -- per the Stage-1 addendum's F3 fix ("an
-//     importer-local gate interface that *invoice.Gate satisfies
-//     structurally, zero change to package invoice"). *invoice.Gate already
-//     satisfies `gate` structurally (its Evaluate/ValidateBatch signatures
-//     match exactly), which is what lets cmd/invoice/main.go pass its
-//     existing `gate` variable straight through unchanged.
-//   - Service gains a `gate` field and NewService a third parameter to carry
-//     it. Import() below NEVER reads s.gate -- that is the one deliberately
-//     UNIMPLEMENTED piece QA Mode A leaves for the executor: the real
-//     dry-run Gate.Evaluate call, the real Gate.ValidateBatch call, and
-//     populating the four new BatchResult fields from their results, per
-//     task-114's plan + Stage-1 addendum (F1 export
-//     invoice.HasBlockingViolation, F2 null-not-zero guard on
-//     len(created)==0, F4 LineNo = i+1, F6 ValidateBatch's error aborts
-//     unconditionally, never through domainCreateErrorMessage). Every
-//     existing M4-03 call site (main.go, this package's own tests) passes a
-//     gate value that Import() never dereferences today, so nil is safe
-//     there -- do NOT "fix" that by wiring Import() partially; the executor
-//     implements it for real, in one pass, per the plan.
-// ============================================================================
-
 // BatchResult is Import's return shape, whether dry-run or real. For a
 // dry-run, ID/Status stay "" (no import_batches row is ever written).
 //
@@ -74,9 +27,19 @@ import (
 // touched by this addition. RuleSetVersion is a pointer so it can render
 // JSON null when NOTHING was evaluated (an all-quarantined batch, Stage-1
 // F2 / IMPV-16) -- a returned int 0 would be indistinguishable from a
-// genuine version 0, so the guard the executor writes must be on WHETHER
-// anything was evaluated (len(created)==0 real / len(readyGroups)==0
-// dry-run), never on Evaluate/ValidateBatch's returned RuleSetVersion value.
+// genuine version 0, so Import guards on WHETHER ANYTHING WAS EVALUATED
+// (len(created)==0 real / len(readyGroups)==0 dry-run), never on
+// Evaluate/ValidateBatch's returned RuleSetVersion value. Only the CALLER
+// knows the batch was empty; the returned 0 cannot tell it.
+//
+// InvoiceViolations REPORTS every invoice carrying at least one violation
+// of ANY severity, while InvoicesClean/InvoicesWithViolations COUNT by the
+// blocking predicate (invoice.HasBlockingViolation) that actually decides
+// promotion. The two therefore disagree, on purpose and only for a
+// warning-only invoice: it is counted CLEAN (it promotes -- [error
+// semantics]: warnings are advisory and never block) yet still LISTED, so
+// the firm can see the advisory. A non-empty InvoiceViolations alongside
+// InvoicesWithViolations==0 is that case, not a bug.
 type BatchResult struct {
 	ID                  string
 	Status              string
@@ -137,21 +100,14 @@ type Service struct {
 // caller owns both stores' pool lifecycles and the gate's own dependencies
 // (its store/validator).
 //
-// QA MODE-A SCAFFOLD NOTE: Import() below does not yet call any gate method
-// at all, so passing nil for g is safe today (every pre-M4-04-07 call site
-// in this package's own tests does exactly that). The executor's real
-// dry-run/real-import gate calls make a nil g a genuine runtime hazard once
-// they land -- production's one real call site (cmd/invoice/main.go) always
-// passes a real *invoice.Gate, so this is a theoretical concern for tests
-// only, not guarded here on purpose (Simplicity First: the executor's
-// implementation is what first has a reason to call s.gate at all).
+// g must be non-nil: Import dereferences it on BOTH paths (dry-run
+// Evaluate, real ValidateBatch) for any file with at least one READY group.
+// Not guarded here (Simplicity First) -- production's one call site
+// (cmd/invoice/main.go) always passes a real *invoice.Gate, and a nil gate
+// in a test fails loudly at the call, not silently.
 func NewService(batch *Store, inv *invoice.Store, g gate) *Service {
 	return &Service{batch: batch, inv: inv, gate: g}
 }
-
-// ============================================================================
-// END QA MODE-A STRUCTURAL SCAFFOLD
-// ============================================================================
 
 // numericFields are the 5 canonical fields that get [numeric-normalization]
 // (ASCII grouping commas + surrounding whitespace stripped) before becoming a
@@ -461,6 +417,80 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 	return in
 }
 
+// invoiceFromCreateInput projects the CreateInput buildCreateInput just
+// assembled onto the in-memory invoice.Invoice the DRY-RUN path evaluates
+// ([payload-mapper]). ONE mapper feeds both paths: the real path evaluates
+// the Invoice Store.Create RETURNS (already hydrated), the dry-run path
+// evaluates this projection of the very same CreateInput. Two mappers that
+// must agree forever is how dry-run and real drift.
+//
+// LineNo is i+1, NOT the slice index: Store.Create assigns line_no = i+1
+// (store.go, the INSERT's third bind), and LineItemInput's own doc pins it
+// as "system-assigned 1..N by the slice's array position" ([D10]). A 0-based
+// LineNo here would make the dry-run emit line_no 0 where the real run emits
+// 1 -- a gratuitous, reportable divergence in the exact field [payload-mapper]
+// exists to keep identical.
+//
+// ID is deliberately LEFT EMPTY. mbsLine omits an empty id ([payload-line-id]),
+// which is precisely what no-duplicate-line-items' `!has(x.id)` guard needs to
+// skip a dry-run line. Emitting "" instead would give every dry-run line the
+// SAME id and fire that rule on every multi-line dry-run invoice.
+//
+// Status/Violations/RuleSetVersionID/CreatedAt are likewise left at their zero
+// value: MBSPayload reads none of them (it projects invoice_number, issue_date,
+// currency, the three money fields, supplier/buyer and line_items only), so a
+// dry-run needs no id and no persisted state to be evaluated faithfully.
+//
+// KNOWN INCOMPLETENESS (recorded, deliberately NOT fixed -- Stage-1 F5), the
+// second of two on this path alongside M4-06's store-level duplicate rule,
+// which cannot be evaluated against rows that are not there:
+//
+//	Money written with a LEADING ZERO ("0100", "007", "-0100") diverges. This
+//	mapper carries the RAW CreateInput text, while the real path's money makes
+//	a round trip through Postgres ('0100'::text::numeric -> RETURNING ::text ->
+//	"100"). classify does NOT quarantine it: decimalNumberRe accepts "0100", so
+//	the group is READY. But jsonNumberRe REJECTS it -- JSON forbids leading
+//	zeros where Postgres numeric accepts them -- so jsonNumber falls back to the
+//	raw STRING, and 04's toFloat rejects strings: range/tax_math VIOLATE on the
+//	dry-run and PASS on the real run. Same invoice, two verdicts.
+//
+//	This is NOT fixed by tightening bestEffortBadNumericField: that would
+//	quarantine a row M4-03 ACCEPTS, moving rows_valid/rows_invalid/
+//	quarantined_invoices -- redefining shipped counters M4-08 is being built
+//	against ([import-report-shape], Core AC#5). Nor by normalizing here: a
+//	second normalizer that must agree with Postgres forever is the very drift
+//	[payload-mapper] exists to prevent.
+//
+//	The direction of the error is what makes it acceptable: a FALSE VIOLATION
+//	in an advisory preview. It never launders a real failure into "clean".
+func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
+	inv := invoice.Invoice{
+		EntityID:      in.EntityID,
+		ImportBatchID: in.ImportBatchID,
+		InvoiceNumber: in.InvoiceNumber,
+		IssueDate:     in.IssueDate,
+		SupplierTIN:   in.SupplierTIN,
+		SupplierName:  in.SupplierName,
+		BuyerTIN:      in.BuyerTIN,
+		BuyerName:     in.BuyerName,
+		Currency:      in.Currency,
+		Subtotal:      in.Subtotal,
+		VAT:           in.VAT,
+		Total:         in.Total,
+	}
+	for i, li := range in.LineItems {
+		inv.LineItems = append(inv.LineItems, invoice.LineItem{
+			LineNo:      i + 1,
+			Description: li.Description,
+			Quantity:    li.Quantity,
+			UnitPrice:   li.UnitPrice,
+			LineTotal:   li.LineTotal,
+			LineTax:     li.LineTax,
+		})
+	}
+	return inv
+}
+
 // domainCreateErrorMessage reports whether createErr is one of the DOMAIN
 // errors invoice.Store.Create can return for genuinely bad input --
 // invoice.ErrDuplicateNumber (a 23505 racing past ExistingNumbers's upfront
@@ -630,14 +660,80 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 	rowsValid := rowsTotal - rowsInvalid
 
 	if dryRun {
-		return BatchResult{
+		res := BatchResult{
 			RowsTotal:           rowsTotal,
 			RowsValid:           rowsValid,
 			RowsInvalid:         rowsInvalid,
 			ReadyInvoices:       len(readyGroups),
 			QuarantinedInvoices: quarantinedInvoices,
 			Errors:              errorsList,
-		}, nil
+		}
+
+		// [Stage-1 F2] Guard on the CALLER's knowledge, never on the
+		// returned value. Gate.Evaluate short-circuits an empty batch to a
+		// ZERO-VALUE RuleSetVersion (it needs no round trip to know nothing
+		// violates nothing), and a returned 0 is indistinguishable from a
+		// genuine version 0 -- only this caller knows the batch was empty.
+		// Nothing evaluated => rule_set_version stays nil => JSON null, not
+		// a false "0" stamp ([import-report-shape], IMPV-16).
+		if len(readyGroups) == 0 {
+			return res, nil
+		}
+
+		// Everything below is REPORT-ONLY and writes NOTHING
+		// ([dry-run-evaluates]): no CreateBatch, no Create, no
+		// ApplyValidation. Evaluate is the same no-write call the real
+		// path's ValidateBatch wraps, so the preview runs the SAME rules
+		// against the SAME payload shape the real run will.
+		items := make([]invoice.EvalItem, len(readyGroups))
+		for i, g := range readyGroups {
+			// batchID is "" -- no batch exists on a dry-run and none is
+			// minted. MBSPayload never reads ImportBatchID, so it cannot
+			// reach 04 or affect a single verdict.
+			in := buildCreateInput(entityID, rows, colIndex, g, "", supplierName, supplierTIN)
+			// Ref is the invoice_number, not an id: no id exists yet
+			// pre-Create. 04 echoes Ref back untouched and never interprets
+			// it, and group numbers are unique by construction (groups is
+			// keyed by them), so the refs cannot collide.
+			items[i] = invoice.EvalItem{Ref: g.number, Invoice: invoiceFromCreateInput(in)}
+		}
+
+		eval, err := s.gate.Evaluate(ctx, items)
+		if err != nil {
+			// An unreachable 04 is an OUTAGE, not "everything is clean" --
+			// propagate raw (the handler 502/503s) rather than report a
+			// clean preview nobody evaluated ([create-error-classification]).
+			return BatchResult{}, err
+		}
+
+		version := eval.RuleSetVersion
+		res.RuleSetVersion = &version
+		for _, g := range readyGroups {
+			// ByRef is TOTAL over the sent refs (Validator.Validate refuses
+			// any response that is not), so a nil here means genuinely no
+			// violations -- never an invoice 04 silently skipped.
+			vs := eval.ByRef[g.number]
+			// invoice.HasBlockingViolation is the SAME predicate
+			// ApplyValidation promotes on ([Stage-1 F1]) -- so this preview's
+			// count is identical BY CONSTRUCTION to what the real run then
+			// does, not merely intended to agree. len(vs)==0 would be WRONG:
+			// a warning-only invoice carries violations and still promotes.
+			if invoice.HasBlockingViolation(vs) {
+				res.InvoicesWithViolations++
+			} else {
+				res.InvoicesClean++
+			}
+			if len(vs) > 0 {
+				res.InvoiceViolations = append(res.InvoiceViolations, InvoiceViolations{
+					InvoiceNumber: g.number,
+					// InvoiceID stays "" -> omitempty omits it: no id
+					// exists yet ([Stage-1 F7]).
+					Rows:       sheetRows(g.rowIdxs),
+					Violations: vs,
+				})
+			}
+		}
+		return res, nil
 	}
 
 	// The run itself can't report anything for a header with zero data
@@ -660,12 +756,30 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 		return BatchResult{}, err
 	}
 
+	// created pairs each successfully-created invoice with the sheet rows it
+	// came from. Store.Create RETURNS the Invoice with its LineItems ALREADY
+	// HYDRATED (store.go's Create tx appends every RETURNING-ed line item),
+	// so the gate below re-reads NOTHING for the whole batch (AC#13) -- and
+	// must not: Store.List leaves LineItems nil by design ([D7]), and
+	// MBSPayload is pure and CANNOT tell a nil LineItems from a genuinely
+	// line-less invoice, so a List-sourced batch would omit line_items and
+	// make line-items-required violate every PERFECTLY VALID invoice of a
+	// 500-row import. The rowIdxs travel WITH the invoice rather than in a
+	// parallel slice because a group can drop out mid-loop on a domain error:
+	// index alignment would be an invariant waiting to break.
+	type createdInvoice struct {
+		inv     invoice.Invoice
+		rowIdxs []int
+	}
+	var created []createdInvoice
+
 	readyCount := 0
 	for _, g := range readyGroups {
 		in := buildCreateInput(entityID, rows, colIndex, g, batchID, supplierName, supplierTIN)
-		_, createErr := s.inv.Create(ctx, in)
+		inv, createErr := s.inv.Create(ctx, in)
 		if createErr == nil {
 			readyCount++
+			created = append(created, createdInvoice{inv: inv, rowIdxs: g.rowIdxs})
 			continue
 		}
 
@@ -692,6 +806,74 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 		rowsValid -= len(g.rowIdxs)
 	}
 
+	// [import-validates] Run every created draft through the SAME gate the
+	// manual POST /v1/invoices/{id}/validate path uses -- ONE 04 round trip
+	// for the whole file ([batch-of-one]), then one atomic ApplyValidation
+	// per invoice. This is what makes an import actually IMPORT AND VALIDATE:
+	// clean invoices land `validated`, dirty ones stay `draft` carrying their
+	// violations. Stamping violations without promoting was rejected -- it
+	// leaves a 500-invoice import with 500 unvalidated drafts and forces 500
+	// manual clicks.
+	//
+	// This runs BEFORE Finalize on purpose: a fault here must finalize the
+	// batch `failed` ONCE, not walk back a `completed` it already wrote.
+	//
+	// Quarantined groups cannot reach here at all -- they were never created,
+	// so `created` is exactly the set 04 sees (IMPV-09).
+	var ruleSetVersion *int
+	invoicesClean := 0
+	invoicesWithViolations := 0
+	var invoiceViolations []InvoiceViolations
+
+	// [Stage-1 F2] Same caller-side guard as the dry-run: an all-quarantined
+	// file creates zero invoices, and ValidateBatch would return version 0
+	// having evaluated nothing (its loop body never runs, so no
+	// rule_set_version_id can reach the DB either). Guard on len(created),
+	// never on the returned version -- nothing evaluated => null, not 0.
+	if len(created) > 0 {
+		invs := make([]invoice.Invoice, len(created))
+		for i, c := range created {
+			invs[i] = c.inv
+		}
+
+		outcome, valErr := s.gate.ValidateBatch(ctx, invs)
+		if valErr != nil {
+			// [Stage-1 F6] ABORT UNCONDITIONALLY -- never route this through
+			// domainCreateErrorMessage. ValidateBatch wraps ApplyValidation's
+			// error with %w, and ApplyValidation CAN return ErrValidation (a
+			// 22P02); domainCreateErrorMessage matches on errors.Is, so
+			// reusing it here would quarantine a DB FAULT as bad data --
+			// exactly the laundering [create-error-classification] forbids. A
+			// validator ErrUpstream is likewise an OUTAGE, not "everything is
+			// clean". Best-effort finalize `failed` (its own error is
+			// secondary to valErr) and propagate valErr RAW so the handler
+			// 500s instead of lying about a completed run.
+			_ = s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "failed")
+			return BatchResult{}, valErr
+		}
+
+		version := outcome.RuleSetVersion
+		ruleSetVersion = &version
+		// Clean/WithViolations come STRAIGHT from the outcome -- ValidateBatch
+		// already counted them with the same blocking predicate that decided
+		// each promotion. Recounting here would be a second predicate to keep
+		// in sync forever.
+		invoicesClean = outcome.Clean
+		invoicesWithViolations = outcome.WithViolations
+		for _, c := range created {
+			vs := outcome.ByID[c.inv.ID]
+			if len(vs) == 0 {
+				continue
+			}
+			invoiceViolations = append(invoiceViolations, InvoiceViolations{
+				InvoiceNumber: c.inv.InvoiceNumber,
+				InvoiceID:     c.inv.ID,
+				Rows:          sheetRows(c.rowIdxs),
+				Violations:    vs,
+			})
+		}
+	}
+
 	if err := s.batch.Finalize(ctx, batchID, rowsTotal, rowsValid, rowsInvalid, errorsList, "completed"); err != nil {
 		return BatchResult{}, err
 	}
@@ -705,5 +887,10 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 		ReadyInvoices:       readyCount,
 		QuarantinedInvoices: quarantinedInvoices,
 		Errors:              errorsList,
+
+		RuleSetVersion:         ruleSetVersion,
+		InvoicesClean:          invoicesClean,
+		InvoicesWithViolations: invoicesWithViolations,
+		InvoiceViolations:      invoiceViolations,
 	}, nil
 }

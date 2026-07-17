@@ -99,13 +99,21 @@ type lineItemWire struct {
 // invoiceBody mirrors the (future) Invoice JSON response shape, plus an Error
 // field for the shared {"error":"..."} envelope -- same convention as
 // portfolio_test.go's entityBody.
+//
+// Violations/RuleSetVersionID (task-113/M4-04-06, GAPI-02/03) are additive:
+// no existing Create/Get/List/Transition test above references either
+// field, so decoding their responses into this wider struct leaves those
+// two simply zero-valued, unchanged behaviour for every test already in
+// this file.
 type invoiceBody struct {
-	ID            string         `json:"id"`
-	EntityID      string         `json:"entity_id"`
-	InvoiceNumber string         `json:"invoice_number"`
-	Status        string         `json:"status"`
-	LineItems     []lineItemWire `json:"line_items"`
-	Error         string         `json:"error"`
+	ID               string          `json:"id"`
+	EntityID         string          `json:"entity_id"`
+	InvoiceNumber    string          `json:"invoice_number"`
+	Status           string          `json:"status"`
+	Violations       json.RawMessage `json:"violations"`
+	RuleSetVersionID *string         `json:"rule_set_version_id"`
+	LineItems        []lineItemWire  `json:"line_items"`
+	Error            string          `json:"error"`
 }
 
 // transitionRequest mirrors the POST /v1/invoices/{id}/transitions wire body
@@ -196,6 +204,25 @@ func doInvoiceTransition(t *testing.T, transition func(ctx context.Context, id s
 	}
 	rec := httptest.NewRecorder()
 	TransitionHandler(transition, nil).ServeHTTP(rec, r)
+	var resp invoiceBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	return rec, resp
+}
+
+// doInvoiceValidate drives POST /v1/invoices/{id}/validate (task-113/
+// M4-04-06's ValidateHandler) -- no request body (unlike Transition), same
+// identity-injection/path-value/decode shape as doInvoiceGet.
+func doInvoiceValidate(t *testing.T, validate func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
+	t.Helper()
+	r := httptest.NewRequest("POST", "/v1/invoices/"+invoiceID+"/validate", nil)
+	r.SetPathValue("id", invoiceID)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	ValidateHandler(validate, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -864,6 +891,350 @@ func TestTransitionHandler_NoIdentity401(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// task-113 / M4-04-06 -- Mode A RED specs for the HTTP half of GAPI-01..17:
+// the new ValidateHandler (GAPI-01..09) and the transitions guard
+// (GAPI-15..17). GAPI-10..14 (Gate.Evaluate/Validate, no HTTP layer) live in
+// gate_test.go instead.
+//
+// GAPI-01..09 run against ValidateHandler, currently gate_qa_scaffold.go's
+// blanket-501 stub (see that file's header) -- every test below fails on
+// the real status-code assertion it names, not a compile error.
+//
+// GAPI-15..17 run against the REAL, shipped TransitionHandler above
+// (handlers.go) -- this section adds NO scaffold and touches NO existing
+// test. The `target == StatusValidated` -> 409 pre-call guard
+// ([validated-is-earned] [R1]) is simply absent from TransitionHandler
+// today, so GAPI-15 (POST .../transitions {"target":"validated"}) currently
+// falls through to the stub `transition` closure and returns whatever it
+// returns (200, called=true) -- the OPPOSITE of the 409/not-called this
+// spec demands, which is exactly what makes it discriminate the guard's
+// absence. GAPI-16/17 assert properties that are ALREADY true of the
+// shipped handler (a non-"validated" target is unaffected by a guard that
+// only checks target==validated; the pre-existing !target.valid() 400
+// check is untouched) -- they are boundary/regression coverage for the
+// guard's NARROWNESS, proving it does not overreach, not new RED specs; they
+// are expected to already pass and to keep passing once the guard lands
+// (see this story's task-113 return-to-orchestrator notes for the explicit
+// call-out).
+//
+// Spec-to-test map (task-113's Test Specs table):
+//
+//	GAPI-01 TestValidateHandler_NoIdentity401
+//	GAPI-02 TestValidateHandler_CleanDraft200
+//	GAPI-03 TestValidateHandler_BlockingViolation200StaysDraft
+//	GAPI-04 TestValidateHandler_NotFound404
+//	GAPI-05 TestValidateHandler_NotDraft409
+//	GAPI-06 TestValidateHandler_StaleValidation409
+//	GAPI-07 TestValidateHandler_Upstream502
+//	GAPI-08 TestValidateHandler_NoActiveRuleSet503
+//	GAPI-09 TestValidateHandler_MalformedID400
+//	GAPI-15 TestTransitionHandler_ValidatedTarget409GuardPreCall
+//	GAPI-16 TestTransitionHandler_QueuedTargetStillReachesStub200
+//	GAPI-17 TestTransitionHandler_NonsenseTargetStill400UnknownStatus
+// ---------------------------------------------------------------------------
+
+// --- Validate handler tests (GAPI-01..09) -----------------------------------
+
+// TestValidateHandler_NoIdentity401 (GAPI-01): no identity in the request
+// context must 401 before validate ever runs -- same identity-first-401
+// order as every other handler in this file.
+func TestValidateHandler_NoIdentity401(t *testing.T) {
+	invoiceID := uuid.NewString()
+	validate := func(ctx context.Context, id string) (Invoice, error) {
+		t.Fatal("validate must not run without an identity")
+		return Invoice{}, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, nil, invoiceID)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestValidateHandler_CleanDraft200 (GAPI-02, Core AC #6): a draft that
+// passes must 200 with status:"validated", violations:[], and a non-null
+// rule_set_version_id -- and validate must be called with the exact path
+// id.
+func TestValidateHandler_CleanDraft200(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	want := Invoice{
+		ID:               invoiceID,
+		Status:           StatusValidated,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &versionID,
+	}
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		if gotID != invoiceID {
+			t.Fatalf("validate called with id=%q, want %q", gotID, invoiceID)
+		}
+		return want, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusValidated) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusValidated)
+	}
+	if string(resp.Violations) != "[]" {
+		t.Errorf("violations = %s, want []", resp.Violations)
+	}
+	if resp.RuleSetVersionID == nil || *resp.RuleSetVersionID != versionID {
+		t.Errorf("rule_set_version_id = %v, want %q", resp.RuleSetVersionID, versionID)
+	}
+}
+
+// TestValidateHandler_BlockingViolation200StaysDraft (GAPI-03, [error
+// semantics], Core AC #3): a draft that fails must still 200 -- NEVER an
+// HTTP error -- with status staying "draft" and the violation present in
+// the body as ordinary data.
+func TestValidateHandler_BlockingViolation200StaysDraft(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	violations := json.RawMessage(`[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]`)
+	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: violations}
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- a blocking violation is normal success-payload data, never an HTTP "+
+			"error [error semantics] (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusDraft) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusDraft)
+	}
+	if len(resp.Violations) == 0 || string(resp.Violations) == "[]" || string(resp.Violations) == "null" {
+		t.Errorf("violations = %s, want a non-empty violation set carried in the body", resp.Violations)
+	}
+}
+
+// TestValidateHandler_NotFound404 (GAPI-04): the gate returning ErrNotFound
+// must map to 404.
+func TestValidateHandler_NotFound404(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return Invoice{}, ErrNotFound
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestValidateHandler_NotDraft409 (GAPI-05): the gate returning ErrNotDraft
+// must map to 409 ([gate-scope-draft-only]: the gate is draft-only).
+func TestValidateHandler_NotDraft409(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return Invoice{}, ErrNotDraft
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestValidateHandler_StaleValidation409 (GAPI-06): the gate returning
+// ErrStaleValidation must map to 409 ([toctou-staleness]).
+func TestValidateHandler_StaleValidation409(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return Invoice{}, ErrStaleValidation
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestValidateHandler_Upstream502 (GAPI-07): the gate returning ErrUpstream
+// (04 down/broken) must map to 502 -- and MUST NOT be a 200 with no
+// violations, which would launder an outage into "clean".
+func TestValidateHandler_Upstream502(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return Invoice{}, ErrUpstream
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 -- an unreachable/broken 04 must never be laundered into a clean 200 "+
+			"(body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestValidateHandler_NoActiveRuleSet503 (GAPI-08): the gate returning
+// ErrNoActiveRuleSet must map to 503 -- 04 is healthy but has nothing
+// published to evaluate against, distinguishable from ErrUpstream's 502.
+func TestValidateHandler_NoActiveRuleSet503(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return Invoice{}, ErrNoActiveRuleSet
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestValidateHandler_MalformedID400 (GAPI-09): a malformed (non-uuid) path
+// id traces to Gate.Validate's Store.Get raising 22P02 -> ErrValidation,
+// which the EXISTING statusForErr case (unchanged by this story) already
+// maps to 400 -- exercised here at the HTTP layer via the injected closure,
+// same as every other error-map row above.
+func TestValidateHandler_MalformedID400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+		return Invoice{}, fmt.Errorf("%w: malformed invoice id", ErrValidation)
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, "not-a-uuid")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// --- Transitions guard tests (GAPI-15..17, [validated-is-earned] [R1]) -----
+
+// TestTransitionHandler_ValidatedTarget409GuardPreCall (GAPI-15): POST
+// .../transitions {"target":"validated"} must 409 BEFORE the store is
+// called -- the stub transition func must never run. This is the guard's
+// own discriminating test: TransitionHandler today has no guard, so
+// target=="validated" clears the shipped !target.valid() check and falls
+// straight through to the stub, which returns success -- yielding 200 with
+// called==true, the OPPOSITE of what this test demands. It fails on BOTH
+// the status-code assertion and the not-called assertion until the guard
+// is added.
+func TestTransitionHandler_ValidatedTarget409GuardPreCall(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	called := false
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		called = true
+		return Invoice{ID: gotID, Status: target}, nil
+	}
+	body, err := json.Marshal(transitionRequest{Target: "validated"})
+	if err != nil {
+		t.Fatalf("marshal transition request: %v", err)
+	}
+	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, string(body))
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 -- validated is earned only via POST .../validate, never via the "+
+			"transitions endpoint [validated-is-earned] [R1] (body=%s)", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Error("the stub transition func WAS called -- the guard must be a PRE-CALL check that refuses " +
+			"target=validated before Store.Transition ever runs")
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestTransitionHandler_QueuedTargetStillReachesStub200 (GAPI-16): a
+// non-"validated" legal target (queued) must be UNAFFECTED by the guard --
+// still reaches the stub and still 200s. Proves the guard is narrow
+// (target==validated only), not a blanket refusal of the whole endpoint.
+// Already true of the shipped handler (there is no guard yet to overreach);
+// stays true once the guard lands, since it only special-cases
+// target==StatusValidated.
+func TestTransitionHandler_QueuedTargetStillReachesStub200(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusQueued}
+	called := false
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		called = true
+		if gotID != invoiceID || target != StatusQueued {
+			t.Fatalf("transition called with id=%q target=%q, want id=%q target=%q", gotID, target, invoiceID, StatusQueued)
+		}
+		return want, nil
+	}
+	body, err := json.Marshal(transitionRequest{Target: "queued"})
+	if err != nil {
+		t.Fatalf("marshal transition request: %v", err)
+	}
+	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, string(body))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- the guard is narrow (target==validated only), not a blanket refusal "+
+			"[validated-is-earned] [R1] (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Error("the stub transition func was NOT called -- a non-validated target must still reach the store")
+	}
+	if resp.Status != string(StatusQueued) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusQueued)
+	}
+}
+
+// TestTransitionHandler_NonsenseTargetStill400UnknownStatus (GAPI-17): an
+// unknown target string must still 400 "unknown status" via the shipped
+// !target.valid() check, unchanged by the new guard -- the guard sits AFTER
+// that check (handlers.go's order: !target.valid() -> 400, THEN the new
+// target==validated -> 409, THEN transition(...)), so a garbage target
+// never reaches the guard at all. Already true of the shipped handler;
+// stays true once the guard lands, since !target.valid() rejects "nonsense"
+// before the guard's own comparison ever runs.
+func TestTransitionHandler_NonsenseTargetStill400UnknownStatus(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
+		t.Fatal("transition must not run for an unknown target status")
+		return Invoice{}, nil
+	}
+	body, err := json.Marshal(transitionRequest{Target: "nonsense"})
+	if err != nil {
+		t.Fatalf("marshal transition request: %v", err)
+	}
+	rec, resp := doInvoiceTransition(t, transition, &id, invoiceID, string(body))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 -- the shipped !target.valid() guard fires first, unchanged by the new "+
+			"validated-target guard [validated-is-earned] [R1] (body=%s)", rec.Code, rec.Body.String())
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")

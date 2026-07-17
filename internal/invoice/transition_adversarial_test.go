@@ -2,7 +2,7 @@
 // TestRLS_InvoicesTransitionCrossTenantRefused (transition_test.go /
 // cross_tenant_integration_test.go), written during the Mode B
 // (post-implementation) verify pass. transition_test.go's INV-SM-01/02/03
-// exercise 6 legal + 13 representative-illegal + 3 redundant cases -- a
+// exercise 7 legal + 12 representative-illegal + 3 redundant cases -- a
 // deliberately partial sample of the 7x7 = 49 ordered (from,target) pairs.
 // This file closes that gap with an EXHAUSTIVE matrix over all 49 pairs
 // (independent of legalTransitions/canTransition, so it actually locks the
@@ -35,7 +35,7 @@ var allStatuses = []Status{
 }
 
 // wantLegalEdge is a HARD-CODED, independent restatement of the story's
-// 6-edge table (System Design / Test Specs, M4-02-02) -- deliberately NOT
+// 7-edge table (System Design / Test Specs, M4-02-02) -- deliberately NOT
 // derived from canTransition/legalTransitions in store.go. If the matrix test
 // below instead asked canTransition for the expected outcome, a future edit
 // that silently added or dropped an edge in legalTransitions would make the
@@ -48,6 +48,7 @@ var wantLegalEdge = map[[2]Status]bool{
 	{StatusSubmitted, StatusAccepted}: true,
 	{StatusSubmitted, StatusRejected}: true,
 	{StatusSubmitted, StatusFailed}:   true,
+	{StatusValidated, StatusDraft}:    true,
 }
 
 // seedInvoiceAtStatus creates a normal draft invoice (via seedInvoice) then,
@@ -74,10 +75,10 @@ func seedInvoiceAtStatus(t *testing.T, super *pgxpool.Pool, tenantID, entityID, 
 
 // TestTransition_ExhaustiveMatrixLocksLegalEdgeTable drives all 7x7 = 49
 // ordered (from,target) pairs through the REAL Store.Transition and asserts
-// the outcome class against the hard-coded wantLegalEdge oracle above: the 6
+// the outcome class against the hard-coded wantLegalEdge oracle above: the 7
 // legal pairs must succeed (status=target, +1 history row, +1
 // invoice.transitioned audit row); the 7 self-pairs must resolve to
-// ErrRedundantTransition; the remaining 36 must resolve to
+// ErrRedundantTransition; the remaining 35 must resolve to
 // ErrIllegalTransition -- the non-success classes leaving
 // status/history/audit completely unchanged. This pins legalTransitions'
 // shape completely: a future edit that silently added or dropped ANY edge
@@ -158,14 +159,14 @@ func TestTransition_ExhaustiveMatrixLocksLegalEdgeTable(t *testing.T) {
 		}
 	}
 
-	if legalCount != 6 {
-		t.Errorf("classified as legal = %d, want 6", legalCount)
+	if legalCount != 7 {
+		t.Errorf("classified as legal = %d, want 7", legalCount)
 	}
 	if redundantCount != 7 {
 		t.Errorf("classified as redundant (self-edge) = %d, want 7", redundantCount)
 	}
-	if illegalCount != 36 {
-		t.Errorf("classified as illegal = %d, want 36", illegalCount)
+	if illegalCount != 35 {
+		t.Errorf("classified as illegal = %d, want 35", illegalCount)
 	}
 }
 

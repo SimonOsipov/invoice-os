@@ -235,7 +235,11 @@ migration is **reversible**. It bootstraps from empty every run (no reliance on 
 and is folded into the required `CI` gate, so a migration that errors, leaves pending state,
 or fails the round-trip **blocks merge**. The CI Postgres **major version must match the
 Railway-provisioned major** (both `18` today — Railway's `postgres-ssl` template
-provisioned PG18) — bump them together.
+provisioned PG18) — bump them together. `reset` rolls migrations back in **reverse
+application order** (goose's documented `Reset()` semantics) — the newest migration's Down
+runs first. `20260717120000_rule_immutability_lock.sql` (M4-17) and `20260716185106_rule_set_v2.sql`
+both depend on this: the lock's Down must drop its guards before either older migration's own
+Down runs against `rule_set_versions`/`rules`.
 
 A second DB-backed job, **`rls`**, bootstraps the roles the same way, applies the
 migrations, and then runs the M2-07 adversarial isolation suite (§8) as the app, migrator,

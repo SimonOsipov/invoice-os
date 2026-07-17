@@ -654,6 +654,21 @@ func TestSeed_ReversibilityRollback(t *testing.T) {
 		_ = tx.Rollback(ctx) // always roll back -- proves the Down's effect without a lasting mutation.
 	}()
 
+	// M4-17: v1 is now SEALED, so the DELETE below (this test's simulated Down) would be
+	// rejected by the rule_set_versions_seal_guard trigger (Guard C) -- modeling the real
+	// `goose reset` ordering, where M4-17's own Down drops the lock (this DISABLE) before
+	// any older migration's Down runs. DISABLE TRIGGER USER is transactional (rolled back
+	// with tx) and disables only USER triggers, leaving the FK RI/cascade triggers intact,
+	// so the "rules gone via ON DELETE CASCADE" post-condition below still holds. Do NOT
+	// use `SET LOCAL session_replication_role = 'replica'` here -- that also suppresses RI
+	// triggers, which would make the cascade assertion pass for the wrong reason.
+	if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER USER`); err != nil {
+		t.Fatalf("disable USER triggers on rule_set_versions: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER USER`); err != nil {
+		t.Fatalf("disable USER triggers on rules: %v", err)
+	}
+
 	var preCount, preRuleCount int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE version = 1`).Scan(&preCount); err != nil {
 		t.Fatalf("count version=1 rows before Down: %v", err)

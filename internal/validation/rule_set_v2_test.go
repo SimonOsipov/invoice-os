@@ -324,6 +324,23 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 		_ = tx.Rollback(ctx) // always roll back -- proves the Down's effect without a lasting mutation.
 	}()
 
+	// M4-17: v1 and v2 are now SEALED, so this test's simulated Down (DELETE v2, then
+	// re-INSERT the line-item rules under v1) would be rejected by the seal guards --
+	// modeling the real `goose reset` ordering, where M4-17's own Down drops the lock (this
+	// DISABLE) before this migration's own Down runs. DISABLE TRIGGER USER is transactional
+	// (rolled back with tx) and disables only USER triggers, leaving the FK RI/cascade
+	// triggers intact, so the "rules gone via ON DELETE CASCADE" post-condition below still
+	// holds. Do NOT use `SET LOCAL session_replication_role = 'replica'` here -- that also
+	// suppresses RI triggers, which would make the cascade assertion pass for the wrong
+	// reason. Both tables: rule_set_versions for the sealed-version DELETE (Guard C), rules
+	// for the re-INSERT into sealed v1 (Guard A).
+	if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER USER`); err != nil {
+		t.Fatalf("disable USER triggers on rule_set_versions: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER USER`); err != nil {
+		t.Fatalf("disable USER triggers on rules: %v", err)
+	}
+
 	var v2ID string
 	if err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE version = 2 AND is_active`).Scan(&v2ID); err != nil {
 		t.Fatalf("read the active version=2 row: %v -- expected the v2 migration's active row, got none "+

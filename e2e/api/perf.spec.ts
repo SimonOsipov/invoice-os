@@ -54,7 +54,14 @@ import {
 } from './client'
 import { freshTin } from './fixtures'
 import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
-import { dbEnabled, activeRuleSetVersionId, statusHistoryHasTransition, correctInvoiceVAT, dbNow } from './db'
+import {
+  dbEnabled,
+  requireDbInCI,
+  activeRuleSetVersionId,
+  statusHistoryHasTransition,
+  correctInvoiceVAT,
+  dbNow,
+} from './db'
 
 const TOTAL_INVOICES = 500
 // The designed split PERF-02 asserts against: the first 50 invoice numbers
@@ -154,6 +161,16 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     // itself asserts: the import+validate call, plus several follow-up
     // GET/list/DB round trips against a possibly-cold shared dev fleet.
     test.setTimeout(150_000)
+
+    // In CI a missing DSN is a HARD failure, never a skip: without it PERF-03/04
+    // silently narrow to a self-consistency check and PERF-05 -- the Day-60
+    // stamp gate this whole story "Ships when true" on -- vanishes entirely,
+    // while the job still reports green. That invisible green is precisely the
+    // bug this call closes; see api/db.ts's requireDbInCI. Asserted HERE, at the
+    // top, so a mis-wired workflow fails in milliseconds rather than after the
+    // ~40s 500-invoice import below. Locally it is a no-op and the env-gated
+    // branches further down skip as designed.
+    requireDbInCI()
 
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: 'M4-04 Perf Co', tin: freshTin() })

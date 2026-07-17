@@ -29,7 +29,7 @@ import {
   CLIENTS_NAV,
   VALIDATION_NAV,
 } from './fixtures'
-import { dbEnabled, auditRowExists, dbNow } from './db'
+import { dbEnabled, requireDbInCI, auditRowExists, dbNow } from './db'
 
 // keysOf(): the sorted rule_key set of a ValidateResult. Engine.Evaluate already
 // sorts its output (Decision N16); we sort again so the AC-6 exact-set assertion
@@ -210,6 +210,12 @@ test.describe('Day-30 wedge demo (browser journey + API kill-switch + DB audit, 
     // BEFORE the toggle (D7), then toggle → re-validate assertion → audit-row assertion,
     // then restore. Keeping AC-7 inside the same try as AC-6 asserts the row the toggle
     // wrote in-tx (store.go:170-181) from the exact t0 that preceded that toggle.
+    // In CI, D8's skip below is a HARD failure instead: a missing DSN there means
+    // the workflow stopped passing it, and AC-7 skipping quietly would leave this
+    // demo green with its audit assertion never run (api/db.ts's requireDbInCI
+    // exists because that exact invisible green shipped once). No-op locally.
+    requireDbInCI()
+
     const dbOn = dbEnabled()
     const t0 = dbOn ? await dbNow() : null
 

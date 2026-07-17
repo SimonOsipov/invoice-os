@@ -61,9 +61,37 @@ async function withClient<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> 
 // dbEnabled(): the DSN is a CI secret, absent on a local run -- PERF-03/04's
 // uuid-equality assertion narrows to a self-consistency check, and the whole
 // of PERF-05 skips (with a loud annotation), when this is false. Mirrors
-// demo/db.ts's dbEnabled/D8 precedent exactly.
+// demo/db.ts's dbEnabled/D8 precedent exactly. LOCAL ONLY: in CI a false here
+// is a hard failure, never a skip -- see requireDbInCI.
 export function dbEnabled(): boolean {
   return !!process.env.DATABASE_SUPERUSER_URL_DEV
+}
+
+// requireDbInCI(): the guard that stops a missing DSN from becoming an INVISIBLE
+// GREEN. Skipping is correct LOCALLY -- the DSN is a CI secret and a dev has no
+// dev-Postgres access -- but in CI the secret is GUARANTEED present: the
+// reset-seed job (dev-env.yml:243-246) already hard-fails the whole run without
+// it, and the e2e job `needs:` reset-seed. So !dbEnabled() in CI cannot mean
+// "no secret"; it can only mean the workflow stopped PASSING it to this step.
+// That is exactly what happened: the test:api step shipped with no env: block,
+// PERF-05 -- the Day-60 draft->validated stamp gate, this story's "Ships when
+// true" clause -- skipped silently, and the job went green anyway. Fail loudly
+// instead, the same way reset-seed's own `::error::` guard does, and for the
+// same reason scripts/ci/rls-test-gate.sh exists at all: a skipped test must
+// never read as a passing one.
+export function requireDbInCI(): void {
+  if (dbEnabled() || !process.env.CI) return
+  throw new Error(
+    [
+      'DATABASE_SUPERUSER_URL_DEV is not set, but this is CI (process.env.CI) -- refusing to skip.',
+      'PERF-05 (the Day-60 draft->validated stamp gate, the M4 "Ships when true" clause) and',
+      "PERF-03/04's live rule_set_version_id equality CANNOT be proven without it; skipping them",
+      'would make this gate an invisible green. reset-seed already requires this same secret, so',
+      'it exists -- the "API E2E" step in .github/workflows/dev-env.yml is not passing it. Add:',
+      '  env:',
+      '    DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}',
+    ].join('\n'),
+  )
 }
 
 // activeRuleSetVersionId(): v2's rule_set_versions.id, queried LIVE against

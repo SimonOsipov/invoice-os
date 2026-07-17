@@ -45,6 +45,33 @@ export function dbEnabled(): boolean {
   return !!process.env.DATABASE_SUPERUSER_URL_DEV
 }
 
+// requireDbInCI(): D8's skip is correct LOCALLY (no superuser DSN for a dev) but
+// must never happen in CI, where the secret is GUARANTEED present -- the
+// reset-seed job (dev-env.yml:243-246) hard-fails the whole run without it and
+// the e2e job `needs:` reset-seed. So !dbEnabled() in CI cannot mean "no
+// secret"; it can only mean this step stopped being PASSED it, in which case
+// AC-7 would skip and the demo would still report green. M4-04-08 hit exactly
+// that in the api suite (its test:api step shipped with no env: block, so the
+// Day-60 stamp gate silently vanished from a green run); this closes the same
+// trap here before it fires. Deliberately DUPLICATED from api/db.ts's
+// requireDbInCI rather than shared: demo imports FROM api (api/client.ts), never
+// the reverse (see api/db.ts's header), and a third shared module for four
+// lines would cost more than the duplication.
+export function requireDbInCI(): void {
+  if (dbEnabled() || !process.env.CI) return
+  throw new Error(
+    [
+      'DATABASE_SUPERUSER_URL_DEV is not set, but this is CI (process.env.CI) -- refusing to skip.',
+      "AC-7 (the kill-switch's audit_log row) CANNOT be proven without it, and skipping it would",
+      'make this demo gate an invisible green. reset-seed already requires this same secret, so it',
+      'exists -- the "Demo (Day-30 wedge journey)" step in .github/workflows/dev-env.yml is not',
+      'passing it. Restore:',
+      '  env:',
+      '    DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}',
+    ].join('\n'),
+  )
+}
+
 export interface AuditRowQuery {
   event: string
   key: string

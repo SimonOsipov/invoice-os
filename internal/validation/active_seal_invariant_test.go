@@ -423,3 +423,136 @@ func TestASI07_SimulateActiveVersionRestoresAndSeals(t *testing.T) {
 			restoredID, originalActiveID)
 	}
 }
+
+// ---------------------------------------------------------------------
+// QA Mode B adversarial coverage -- combined unseal-while-active, multi-row
+// activate (no partial commit), and a permanent convalidated regression guard.
+// Mirrors the TestRILAdv_* naming/placement convention (rule_immutability_adversarial_test.go)
+// for QA-added coverage on top of an architect-authored ASI-NN suite. All rolled back.
+// ---------------------------------------------------------------------
+
+// TestASIAdv_UnsealWhileActiveRejectedByGuardC: a combined
+// `SET is_active = true, sealed = false` on the real sealed ACTIVE row
+// (attempting to unseal it while it stays active) must be rejected -- but by
+// Guard C (M4-17's rule_set_versions_seal_guard, BEFORE UPDATE), not by the
+// M4-18 CHECK. Guard C's condition (`OLD.sealed AND NOT NEW.sealed`) fires
+// unconditionally on ANY sealed->unsealed transition, regardless of what else
+// the same UPDATE changes, and a BEFORE-trigger abort happens before Postgres
+// ever evaluates the row's CHECK constraints -- so the SQLSTATE must be
+// restrict_violation (23001), not check_violation (23514). Verified against
+// the running migration (docker exec psql) before being encoded here: the
+// combined UPDATE on v2 raises "a sealed rule-set version cannot be unsealed
+// (version=2)" with ERRCODE restrict_violation.
+func TestASIAdv_UnsealWhileActiveRejectedByGuardC(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin super tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var activeID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&activeID); err != nil {
+		t.Fatalf("capture the currently active version id: %v", err)
+	}
+
+	opErr := attemptWithSavepoint(t, ctx, tx,
+		`UPDATE rule_set_versions SET is_active = true, sealed = false WHERE id = $1`, activeID,
+	)
+	assertSQLState(t, opErr, "23001")
+
+	var isActive, sealed bool
+	if err := tx.QueryRow(ctx, `SELECT is_active, sealed FROM rule_set_versions WHERE id = $1`, activeID).Scan(&isActive, &sealed); err != nil {
+		t.Fatalf("read is_active/sealed after rejected unseal-while-active: %v", err)
+	}
+	if !isActive || !sealed {
+		t.Errorf("active version (id=%s) is_active=%t sealed=%t after a rejected unseal-while-active UPDATE, want both still true (unchanged)",
+			activeID, isActive, sealed)
+	}
+}
+
+// TestASIAdv_MultiRowActivateMixedSealNoPartialActivate: a single UPDATE
+// statement flips is_active=true across TWO rows in one command -- one
+// already sealed (would satisfy the CHECK in isolation), one still unsealed
+// (violates it). Per-row CHECK evaluation means the unsealed row's own
+// violation aborts the statement; Postgres statement-level atomicity means
+// NEITHER row's change survives -- the sealed row must not end up "partially
+// activated" just because its own row would have passed the CHECK alone.
+func TestASIAdv_MultiRowActivateMixedSealNoPartialActivate(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin super tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Clear the active slot so this multi-row UPDATE's failure is unambiguously the
+	// CHECK (23514), not the (unrelated) one-active partial-unique index (23505).
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
+		t.Fatalf("clear the active slot: %v", err)
+	}
+
+	var sealedDraftID, unsealedDraftID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO rule_set_versions (version, is_active, sealed, notes) VALUES ($1, false, true, $2) RETURNING id`,
+		nextVersion(), fixtureNotes,
+	).Scan(&sealedDraftID); err != nil {
+		t.Fatalf("insert inactive+SEALED draft: %v", err)
+	}
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO rule_set_versions (version, is_active, sealed, notes) VALUES ($1, false, false, $2) RETURNING id`,
+		nextVersion(), fixtureNotes,
+	).Scan(&unsealedDraftID); err != nil {
+		t.Fatalf("insert inactive+UNSEALED draft: %v", err)
+	}
+
+	opErr := attemptWithSavepoint(t, ctx, tx,
+		`UPDATE rule_set_versions SET is_active = true WHERE id IN ($1, $2)`, sealedDraftID, unsealedDraftID,
+	)
+	assertSQLState(t, opErr, "23514")
+
+	var sealedIsActive, unsealedIsActive bool
+	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE id = $1`, sealedDraftID).Scan(&sealedIsActive); err != nil {
+		t.Fatalf("read sealed draft is_active after rejected multi-row activate: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE id = $1`, unsealedDraftID).Scan(&unsealedIsActive); err != nil {
+		t.Fatalf("read unsealed draft is_active after rejected multi-row activate: %v", err)
+	}
+	if sealedIsActive {
+		t.Error("sealed draft is_active = true after the multi-row UPDATE was rejected -- the statement's failure on " +
+			"the unsealed row must roll back ALL of its row changes, not just the failing row (no partial activate)")
+	}
+	if unsealedIsActive {
+		t.Error("unsealed draft is_active = true after the multi-row UPDATE was rejected, want still false")
+	}
+}
+
+// TestASIAdv_ConstraintIsValidated: a permanent regression guard that the
+// CHECK was added as a plain, VALIDATED constraint (per the story's §1.2
+// "plain ADD CONSTRAINT, not NOT VALID + VALIDATE" decision), not `NOT
+// VALID`. A `NOT VALID` constraint would still pass ASI-04's existence check
+// and would still reject NEW violations, but would silently leave any
+// PRE-EXISTING violating rows unenforced until a later `VALIDATE
+// CONSTRAINT` -- defeating the "no backfill needed, scan is trivial" claim
+// this migration relies on. Read-only, no tx wrap needed.
+func TestASIAdv_ConstraintIsValidated(t *testing.T) {
+	_, app := dbTestPools(t)
+	ctx := context.Background()
+
+	var convalidated bool
+	if err := app.QueryRow(ctx,
+		`SELECT convalidated FROM pg_constraint
+		  WHERE conname = 'rule_set_versions_active_is_sealed'
+		    AND conrelid = 'rule_set_versions'::regclass`,
+	).Scan(&convalidated); err != nil {
+		t.Fatalf("query pg_constraint.convalidated for rule_set_versions_active_is_sealed: %v", err)
+	}
+	if !convalidated {
+		t.Error("rule_set_versions_active_is_sealed.convalidated = false -- the CHECK was added NOT VALID (or " +
+			"never validated), so it does not guarantee pre-existing rows satisfy the active⟹sealed invariant")
+	}
+}

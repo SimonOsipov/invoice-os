@@ -21,6 +21,7 @@ import { test, expect } from '@playwright/test'
 import { login, validate, toggleRule, PERSONAS, ApiError, type ValidateResult } from '../api/client'
 import { badInvoice, BAD_INVOICE_KEYS, freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA } from '../topology/targets'
+import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 import {
   ensurePortfolioSeeded,
   DISABLED_RULE_KEY,
@@ -191,8 +192,15 @@ test.describe('Day-30 wedge demo (browser journey + API kill-switch + DB audit, 
       await expect(row.locator('td').nth(2)).toHaveText(key)
       // Message cell (2nd column, ViolationsTable.tsx:60) is a non-empty human message.
       await expect(row.locator('td').nth(1)).not.toBeEmpty()
-      // Rule-set version cell (last column, ViolationsTable.tsx:67) is 1.
-      await expect(row.locator('td').last()).toHaveText('1')
+      // Rule-set version cell (last column, ViolationsTable.tsx:67). The cell is
+      // LIVE-DRIVEN, not a constant: ValidationView.tsx:159 feeds it
+      // validation.data.rule_set_version straight from the POST /v1/validate response,
+      // which 04 stamps from the ACTIVE rule-set (handlers.go:284 -> store.go:106's
+      // `WHERE is_active`). So this asserts the cell TRACKS the active rule-set; it must
+      // never re-state today's number in prose or as a literal. It resolves through the
+      // shared ../rule-set module -- the one place the e2e package names the active
+      // version ([e2e-active-version]) -- so a publish moves this in lockstep.
+      await expect(row.locator('td').last()).toHaveText(String(ACTIVE_RULE_SET_VERSION))
     }
 
     // The browser journey (AC-1…AC-5) must have run clean — same convention as topology.

@@ -138,7 +138,7 @@ func TestValidatorClient_SendsS2STokenNoIdentityHeaders(t *testing.T) {
 		captured = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[]}`, cannedRuleSetVersion)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[]}]}`, cannedRuleSetVersion)))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -321,7 +321,8 @@ func TestValidatorClient_RequestBodyPreservesOrderAndShape(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		capturedBody = b
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[]}`, cannedRuleSetVersion)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[`+
+			`{"ref":"inv-1","violations":[]},{"ref":"inv-2","violations":[]},{"ref":"inv-3","violations":[]}]}`, cannedRuleSetVersion)))
 	}))
 	t.Cleanup(srv.Close)
 

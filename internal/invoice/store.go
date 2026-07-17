@@ -332,6 +332,23 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	return inv, nil
 }
 
+// Edit is M4-05-02's fix-loop orchestrator (System Design §4): the edit +
+// validated->draft demotion sequence over the fixable states (draft,
+// validated). It is not yet implemented -- QA authored TestStoreEdit_*
+// (edit_test.go) test-first against this stub, ahead of the real Stage 3
+// sequence (all-nil guard -> lock+read `before` FOR UPDATE -> fixable-state
+// guard -> updateContentTx -> DB-authoritative no-op fingerprint check ->
+// conditional invoice.updated audit -> conditional transitionTx demotion, all
+// in one WithinRequestTenantTx).
+//
+// STUB — replaced by M4-05-02 executor. Returns a distinct not-implemented
+// error (never ErrNotFixable, so the guard-ordering/error-identity assertions
+// in edit_test.go fail on assertion, not a false-positive match against this
+// placeholder) and touches neither the DB nor Store.Update.
+func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
+	return Invoice{}, errors.New("Store.Edit: not implemented [M4-05-02]")
+}
+
 // legalTransitions is the SINGLE source of truth for the invoice lifecycle
 // state machine ([D1], [D11] -- no generic FSM framework, Simplicity First):
 // forward-only in M4-02 -- 6 edges, 3 terminals (accepted/rejected/failed have

@@ -212,6 +212,20 @@ var (
 	// catch this — status stays draft across a Store.Update.
 	ErrNotDraft        = errors.New("invoice: not draft")
 	ErrStaleValidation = errors.New("invoice: stale validation")
+
+	// ErrNotFixable is Store.Edit's own precondition sentinel (M4-05-02,
+	// architect [A2]): the edit surface is restricted to the two fixable
+	// states (draft, validated, [A1]/System Design §4 step 3) -- any other
+	// status (queued/submitted/accepted/rejected/failed) is refused with
+	// NOTHING written. A 409 in statusForErr (M4-05-03), like ErrNotDraft/
+	// ErrStaleValidation.
+	//
+	// Deliberately NOT ErrIllegalTransition (that names a state-machine EDGE,
+	// which is the wrong vocabulary here -- Edit's guard reads the CURRENT
+	// status before any transition is even attempted) and NOT ErrNotDraft
+	// (Edit's guard also accepts validated, so "not draft" would be simply
+	// wrong for that case).
+	ErrNotFixable = errors.New("invoice: not fixable")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

@@ -79,8 +79,15 @@ func main() {
 	// identical invoice-write path as the manual endpoints. Reached via the
 	// gateway as /api/invoice/v1/imports (same mux, same middleware chain, so
 	// identity/tenant are already in context).
+	// Reuses the SAME gate constructed above for the single-invoice validate
+	// route: importer.NewService's third parameter is an importer-local
+	// interface (task-114/M4-04-07's Stage-1 addendum F3) that *invoice.Gate
+	// satisfies structurally (its Evaluate/ValidateBatch signatures match
+	// exactly) -- no second gate, no adapter type, one gate driving both the
+	// manual validate endpoint and the importer's batch pre-check
+	// ([import-validates]/[dry-run-evaluates]).
 	impStore := importer.NewStore(pool)
-	impSvc := importer.NewService(impStore, store)
+	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {

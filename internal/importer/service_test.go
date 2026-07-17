@@ -96,9 +96,14 @@ func cloneMapping(m map[string]string) map[string]string {
 
 // newTestService builds a Service over the app-role pool, wiring the
 // importer Store and invoice.Store exactly as production code would
-// (NewService(importer.NewStore(appPool), invoice.NewStore(appPool))).
+// (NewService(importer.NewStore(appPool), invoice.NewStore(appPool), gate)),
+// passing nil for the gate: every pre-M4-04-07 test in this file exercises
+// only M4-03 (pre-gate) behavior, and Import() never dereferences s.gate
+// today (see service.go's QA Mode-A structural scaffold comment) -- nil is
+// safe. task-114/M4-04-07's own gate-integrated specs use
+// newTestServiceWithGate (service_gate_test.go) instead.
 func newTestService(app *pgxpool.Pool) *Service {
-	return NewService(NewStore(app), invoice.NewStore(app))
+	return NewService(NewStore(app), invoice.NewStore(app), nil)
 }
 
 // --- super-pool read-back helpers (out-of-band verification, RLS-bypassing) ---

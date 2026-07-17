@@ -17,8 +17,66 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 )
 
+// ============================================================================
+// QA MODE-A STRUCTURAL SCAFFOLD (task-114/M4-04-07) -- read before editing
+// ============================================================================
+// The declarations from here through the "END QA MODE-A STRUCTURAL SCAFFOLD"
+// marker below are QA Mode-A's ONE exception to "scaffold new symbols in a
+// separate *_qa_scaffold.go file, never touch production files": Go has no
+// partial struct types and no function-signature overloading across files,
+// so BatchResult's four new fields and NewService's new parameter cannot be
+// isolated the way gate.go/EvalItem/ApplyValidation were for M4-04-05/06 --
+// they must be edited in this file, in place. Identical precedent already
+// in this story: internal/validation/rule.go's additive `ID string` field
+// for M4-04-03 (commit 9328b34: "This one field could not go in a scaffold
+// file -- Go has no partial struct types across files -- so it is the one
+// exception to 'scaffold, don't touch production files' in this subtask,
+// flagged here for reviewer sign-off"). Flagged here for the same reason.
+//
+// What changed, STRUCTURALLY ONLY (no behavior):
+//   - BatchResult gains RuleSetVersion/InvoicesClean/InvoicesWithViolations/
+//     InvoiceViolations ([import-report-shape]). Import() below is
+//     UNCHANGED and still only ever sets the five original M4-03 fields --
+//     these four stay at their Go zero value (nil/0/0/nil) on every return
+//     path today. That is deliberate: IMPV-01/02/04/06/16 assert non-zero
+//     values these zero values cannot satisfy, so they fail on a REAL
+//     assertion, never a compile error.
+//   - InvoiceViolations (the new type) and the importer-local `gate`
+//     interface just below are ADDITIVE, PERMANENT declarations -- not
+//     throwaway scaffold -- per the Stage-1 addendum's F3 fix ("an
+//     importer-local gate interface that *invoice.Gate satisfies
+//     structurally, zero change to package invoice"). *invoice.Gate already
+//     satisfies `gate` structurally (its Evaluate/ValidateBatch signatures
+//     match exactly), which is what lets cmd/invoice/main.go pass its
+//     existing `gate` variable straight through unchanged.
+//   - Service gains a `gate` field and NewService a third parameter to carry
+//     it. Import() below NEVER reads s.gate -- that is the one deliberately
+//     UNIMPLEMENTED piece QA Mode A leaves for the executor: the real
+//     dry-run Gate.Evaluate call, the real Gate.ValidateBatch call, and
+//     populating the four new BatchResult fields from their results, per
+//     task-114's plan + Stage-1 addendum (F1 export
+//     invoice.HasBlockingViolation, F2 null-not-zero guard on
+//     len(created)==0, F4 LineNo = i+1, F6 ValidateBatch's error aborts
+//     unconditionally, never through domainCreateErrorMessage). Every
+//     existing M4-03 call site (main.go, this package's own tests) passes a
+//     gate value that Import() never dereferences today, so nil is safe
+//     there -- do NOT "fix" that by wiring Import() partially; the executor
+//     implements it for real, in one pass, per the plan.
+// ============================================================================
+
 // BatchResult is Import's return shape, whether dry-run or real. For a
 // dry-run, ID/Status stay "" (no import_batches row is ever written).
+//
+// RuleSetVersion/InvoicesClean/InvoicesWithViolations/InvoiceViolations are
+// M4-04-07's additive rule-outcome fields ([import-report-shape]) -- purely
+// ADDITIVE alongside the five M4-03 fields above them, which keep their
+// EXACT existing meaning (Core AC#5, M4-03's [counters]) and are NOT
+// touched by this addition. RuleSetVersion is a pointer so it can render
+// JSON null when NOTHING was evaluated (an all-quarantined batch, Stage-1
+// F2 / IMPV-16) -- a returned int 0 would be indistinguishable from a
+// genuine version 0, so the guard the executor writes must be on WHETHER
+// anything was evaluated (len(created)==0 real / len(readyGroups)==0
+// dry-run), never on Evaluate/ValidateBatch's returned RuleSetVersion value.
 type BatchResult struct {
 	ID                  string
 	Status              string
@@ -28,22 +86,72 @@ type BatchResult struct {
 	ReadyInvoices       int
 	QuarantinedInvoices int
 	Errors              []RowError
+
+	RuleSetVersion         *int
+	InvoicesClean          int
+	InvoicesWithViolations int
+	InvoiceViolations      []InvoiceViolations
+}
+
+// InvoiceViolations is one entry of BatchResult.InvoiceViolations: one
+// invoice that carried at least one rule violation (blocking or not, per
+// [error semantics] -- warnings are reported too, they just don't block),
+// citing the spreadsheet rows it came from so the firm can find them
+// ([import-report-shape]). InvoiceID is omitempty because the dry-run path
+// has no id yet (ref = invoice_number, per gate.go's EvalItem doc) -- it
+// must be ABSENT on a dry-run response, never emitted as "" [Stage-1 F7].
+type InvoiceViolations struct {
+	InvoiceNumber string              `json:"invoice_number"`
+	InvoiceID     string              `json:"invoice_id,omitempty"`
+	Rows          []int               `json:"rows"`
+	Violations    []invoice.Violation `json:"violations"`
+}
+
+// gate is the importer's OWN, minimal view of internal/invoice.Gate
+// ([Stage-1 addendum F3]) -- a consumer-side interface (idiomatic Go:
+// accept interfaces, return structs), declared HERE rather than depending
+// on a concrete *invoice.Gate field, so IMPV-08/09/10/11 can drive call
+// counts and injected faults with a test double instead of needing a real
+// DB fault to reach ApplyValidation (M4-03's own precedent -- an empty
+// auth.Identity.Subject -- cannot reach it: Store.Create writes its own
+// history row with the same actor and aborts FIRST, per Stage-1 F3).
+// *invoice.Gate satisfies this interface STRUCTURALLY (zero change to
+// package invoice): its Evaluate/ValidateBatch signatures match exactly.
+type gate interface {
+	Evaluate(ctx context.Context, items []invoice.EvalItem) (invoice.EvalResult, error)
+	ValidateBatch(ctx context.Context, invs []invoice.Invoice) (invoice.BatchOutcome, error)
 }
 
 // Service orchestrates decode-output (a header + data rows, already produced
 // by Decode) into invoice drafts, holding both the importer Store
-// (import_batches) and the invoice Store (invoices/line_items) it writes
-// through.
+// (import_batches), the invoice Store (invoices/line_items) it writes
+// through, and the validate gate ([import-validates]/[dry-run-evaluates],
+// M4-04-07) every batch runs through.
 type Service struct {
 	batch *Store
 	inv   *invoice.Store
+	gate  gate
 }
 
-// NewService wraps the two stores the orchestration needs. The caller owns
-// both stores' pool lifecycles.
-func NewService(batch *Store, inv *invoice.Store) *Service {
-	return &Service{batch: batch, inv: inv}
+// NewService wraps the three dependencies the orchestration needs. The
+// caller owns both stores' pool lifecycles and the gate's own dependencies
+// (its store/validator).
+//
+// QA MODE-A SCAFFOLD NOTE: Import() below does not yet call any gate method
+// at all, so passing nil for g is safe today (every pre-M4-04-07 call site
+// in this package's own tests does exactly that). The executor's real
+// dry-run/real-import gate calls make a nil g a genuine runtime hazard once
+// they land -- production's one real call site (cmd/invoice/main.go) always
+// passes a real *invoice.Gate, so this is a theoretical concern for tests
+// only, not guarded here on purpose (Simplicity First: the executor's
+// implementation is what first has a reason to call s.gate at all).
+func NewService(batch *Store, inv *invoice.Store, g gate) *Service {
+	return &Service{batch: batch, inv: inv, gate: g}
 }
+
+// ============================================================================
+// END QA MODE-A STRUCTURAL SCAFFOLD
+// ============================================================================
 
 // numericFields are the 5 canonical fields that get [numeric-normalization]
 // (ASCII grouping commas + surrounding whitespace stripped) before becoming a

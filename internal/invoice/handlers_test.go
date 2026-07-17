@@ -692,17 +692,27 @@ func TestListHandler_NoIdentity401(t *testing.T) {
 // TestTransitionHandler_200 (INV-HTTP-07): a legal target must produce 200
 // with the updated Invoice's status in the body, AND transition must be
 // called with the exact path id + decoded target.
+//
+// RETARGETED from "validated" to "queued" by M4-04-06/task-113. This test's
+// SUBJECT is unchanged and was never the target's identity: it is the 200, the
+// body's status, and the exact id/target passthrough. "validated" is no longer
+// expressible here -- TransitionHandler now refuses it with a 409 pre-call
+// guard ([validated-is-earned] [R1]: that status is earned only via POST
+// /v1/invoices/{id}/validate), which would turn this test into an assertion
+// about the guard rather than about its own subject. "queued" is canonical
+// (invoice.go:32) and clears !target.valid() identically, so every original
+// assertion still runs unchanged. The refused target's own coverage is GAPI-15.
 func TestTransitionHandler_200(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	want := Invoice{ID: invoiceID, Status: StatusQueued}
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
-		if gotID != invoiceID || target != StatusValidated {
-			t.Fatalf("transition called with id=%q target=%q, want id=%q target=%q", gotID, target, invoiceID, StatusValidated)
+		if gotID != invoiceID || target != StatusQueued {
+			t.Fatalf("transition called with id=%q target=%q, want id=%q target=%q", gotID, target, invoiceID, StatusQueued)
 		}
 		return want, nil
 	}
-	body, err := json.Marshal(transitionRequest{Target: "validated"})
+	body, err := json.Marshal(transitionRequest{Target: "queued"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}
@@ -711,8 +721,8 @@ func TestTransitionHandler_200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if resp.Status != string(StatusValidated) {
-		t.Errorf("status = %q, want %q", resp.Status, StatusValidated)
+	if resp.Status != string(StatusQueued) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusQueued)
 	}
 }
 
@@ -855,13 +865,18 @@ func TestTransitionHandler_MissingOrEmptyTarget400_StoreNotCalled(t *testing.T) 
 // TestTransitionHandler_NotFound404 (error-map table; not separately
 // numbered in the 13-row Test Specs table, but required by the story's error
 // model): the store returning ErrNotFound must map to 404.
+//
+// RETARGETED to "queued" by M4-04-06/task-113 (subject unchanged -- the
+// ErrNotFound -> 404 mapping). Under "validated" the new pre-call guard would
+// 409 before the store ran at all, so the stub's ErrNotFound would never be
+// reached and this test would silently stop testing its own mapping.
 func TestTransitionHandler_NotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
 		return Invoice{}, ErrNotFound
 	}
-	body, err := json.Marshal(transitionRequest{Target: "validated"})
+	body, err := json.Marshal(transitionRequest{Target: "queued"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}
@@ -877,13 +892,18 @@ func TestTransitionHandler_NotFound404(t *testing.T) {
 
 // TestTransitionHandler_NoIdentity401 (INV-HTTP-11): no identity in the
 // request context must 401 before transition ever runs.
+//
+// RETARGETED to "queued" by M4-04-06/task-113 for CONSISTENCY, not necessity:
+// the identity check runs first, so this test 401s before reaching the new
+// validated-target guard either way and was never at risk. Retargeted so that
+// no test in this file posts a target the endpoint now refuses.
 func TestTransitionHandler_NoIdentity401(t *testing.T) {
 	invoiceID := uuid.NewString()
 	transition := func(ctx context.Context, gotID string, target Status) (Invoice, error) {
 		t.Fatal("transition must not run without an identity")
 		return Invoice{}, nil
 	}
-	body, err := json.Marshal(transitionRequest{Target: "validated"})
+	body, err := json.Marshal(transitionRequest{Target: "queued"})
 	if err != nil {
 		t.Fatalf("marshal transition request: %v", err)
 	}

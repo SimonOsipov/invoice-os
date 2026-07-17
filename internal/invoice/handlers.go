@@ -250,10 +250,24 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 // single endpoint, {"target":...}). Same identity-first-401 order, decodes
 // the body (400 on decode error), 400 "unknown status" if target is not one
 // of the 7 canonical Status values -- WITHOUT ever calling transition (the
-// store's own legality/redundancy checks are a distinct, later 409) -- else
+// store's own legality/redundancy checks are a distinct, later 409) -- then
+// 409 if target is validated ([validated-is-earned] [R1]: that status is
+// reachable ONLY through POST /v1/invoices/{id}/validate, the gate) -- else
 // calls transition, maps ErrNotFound/ErrRedundantTransition/
 // ErrIllegalTransition (and anything else) via statusForErr, 200 + updated
 // Invoice on success.
+//
+// The validated guard lives HERE and not in Store.Transition on purpose. The
+// two placements have IDENTICAL production reach -- cmd/invoice/main.go is
+// Store.Transition's sole production consumer, and it passes the method value
+// straight into this factory -- but the store placement additionally destroys
+// the state-machine suite: legalTransitions[StatusDraft] = {StatusValidated}
+// makes validated the only reachable second state, so the transition tests
+// route through it. Trading that proof for a guard with no additional reach is
+// a bad trade. Residual risk, named: a future IN-PROCESS caller of
+// Store.Transition could promote without validating -- there is none today.
+// Hand-off: if M4-05 adds a second production consumer of Store.Transition,
+// re-evaluate this placement.
 func TransitionHandler(transition func(ctx context.Context, id string, target Status) (Invoice, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -276,11 +290,66 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 			return
 		}
 
+		// validated is EARNED, never asserted ([validated-is-earned] [R1]). A
+		// pre-call refusal, written exactly like the !target.valid() check above
+		// it: no sentinel, no statusForErr case, no store change. Without it any
+		// caller could mark an invoice validated having never run a rule --
+		// status='validated' with violations='[]' and rule_set_version_id=NULL,
+		// precisely the lie this story exists to make impossible. Narrow on
+		// purpose: only this one target is refused, every other target still
+		// reaches the store untouched (GAPI-16), and a garbage target still 400s
+		// at the check above before ever reaching here (GAPI-17).
+		if target == StatusValidated {
+			writeError(w, http.StatusConflict, "validated is earned via POST /v1/invoices/{id}/validate, not via this endpoint")
+			return
+		}
+
 		inv, err := transition(r.Context(), r.PathValue("id"), target)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "invoice: transition", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// ValidateHandler returns POST /v1/invoices/{id}/validate -- THE gate
+// ([gate-endpoint]): the only route by which an invoice reaches validated, and
+// therefore also the on-demand re-validate endpoint (Core AC #6). It is
+// re-callable at any time on a stored invoice, and re-calling it IS
+// re-validation; it is named /validate rather than /revalidate because the
+// first call is not a RE-validation.
+//
+// Same identity-first-401 order as every other handler here, then the injected
+// gate closure, then statusForErr. There is no body to decode -- the id is the
+// whole request.
+//
+// A blocking violation is a 200 carrying the violations as ordinary data
+// ([error semantics]), never an HTTP error: "this invoice has errors" is a
+// legitimate OUTCOME of the gate, and the fix loop and the violations panel
+// read it as data. The HTTP error codes are reserved for the cases where no
+// verdict was reached at all -- 502 (04 unreachable/broken) and 503 (04 healthy
+// but with no published rule-set), never laundered into a clean 200.
+func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		inv, err := validate(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: validate", slog.Any("err", err))
 			}
 			writeError(w, status, msg)
 			return
@@ -299,7 +368,16 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 // ErrRedundantTransition/ErrIllegalTransition are 409; anything else
 // (including a 22P02 malformed-numeric-input pgconn error, [D15] accepted
 // residual) is 500 with a generic body -- this helper never leaks internals
-// into the response. Logging the unrecognized (500) case via slog is the
+// into the response.
+//
+// The gate's four rows ([error-mapping], M4-04-06). ErrNotDraft and
+// ErrStaleValidation are 409: the caller asked for something that is no longer
+// true, not something malformed (400) or missing (404). ErrUpstream and
+// ErrNoActiveRuleSet are DELIBERATELY distinguishable -- 502 means 04 is broken
+// or unreachable so 03 could not get a verdict; 503 means 04 is healthy but has
+// nothing published to evaluate against. Both are outages; NEITHER ever means
+// "the invoice is clean". All four are independent sentinels (none wraps
+// ErrValidation), so their order among these cases carries no meaning. Logging the unrecognized (500) case via slog is the
 // caller's responsibility, since only the caller knows the operation name to
 // log.
 func statusForErr(err error) (status int, msg string) {
@@ -316,6 +394,14 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "redundant transition"
 	case errors.Is(err, ErrIllegalTransition):
 		return http.StatusConflict, "illegal transition"
+	case errors.Is(err, ErrNotDraft):
+		return http.StatusConflict, "invoice is not a draft"
+	case errors.Is(err, ErrStaleValidation):
+		return http.StatusConflict, "invoice changed during validation"
+	case errors.Is(err, ErrUpstream):
+		return http.StatusBadGateway, "validation service unavailable"
+	case errors.Is(err, ErrNoActiveRuleSet):
+		return http.StatusServiceUnavailable, "no active rule-set"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

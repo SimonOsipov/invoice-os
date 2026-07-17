@@ -1508,3 +1508,107 @@ func TestStatusForErr_NotFixableIs409(t *testing.T) {
 		t.Error("expected a non-empty error message")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// M4-05-03 (task-122) -- QA Mode B adversarial coverage for EditHandler,
+// added post-implementation (commit 7bd2a8c). All 8 Mode A specs above are
+// green; the two tests below close the one genuine gap found on top of them.
+// ---------------------------------------------------------------------------
+
+// TestEditHandler_AllFieldsMapOneToOne (Mode B adversarial, highest-value
+// gap): a PATCH body carrying values for ALL 9 header MBS-content fields
+// must produce an UpdateInput with every corresponding field non-nil and
+// equal to what was sent. TestEditHandler_DemotionReturns200Draft above only
+// asserts VAT passthrough -- EditHandler's editReq->UpdateInput mapping is
+// hand-written field-by-field (not a loop or reflection-based copy), so a
+// typo or omission on any ONE of the other 8 lines (e.g. dropping
+// BuyerName, or transposing SupplierTIN/BuyerTIN) would slip past every
+// other Edit test in this file undetected.
+func TestEditHandler_AllFieldsMapOneToOne(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	issueDate := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	req := editInvoiceRequest{
+		IssueDate:    &issueDate,
+		SupplierTIN:  strPtr("TIN-SUP-1"),
+		SupplierName: strPtr("Supplier Co"),
+		BuyerTIN:     strPtr("TIN-BUY-1"),
+		BuyerName:    strPtr("Buyer Co"),
+		Currency:     strPtr("NGN"),
+		Subtotal:     strPtr("100.00"),
+		VAT:          strPtr("7.50"),
+		Total:        strPtr("107.50"),
+	}
+
+	var gotIn UpdateInput
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	body := marshalEdit(t, req)
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotIn.IssueDate == nil || !gotIn.IssueDate.Equal(issueDate) {
+		t.Errorf("UpdateInput.IssueDate = %v, want %v", gotIn.IssueDate, issueDate)
+	}
+	if gotIn.SupplierTIN == nil || *gotIn.SupplierTIN != "TIN-SUP-1" {
+		t.Errorf("UpdateInput.SupplierTIN = %v, want a non-nil pointer to %q", gotIn.SupplierTIN, "TIN-SUP-1")
+	}
+	if gotIn.SupplierName == nil || *gotIn.SupplierName != "Supplier Co" {
+		t.Errorf("UpdateInput.SupplierName = %v, want a non-nil pointer to %q", gotIn.SupplierName, "Supplier Co")
+	}
+	if gotIn.BuyerTIN == nil || *gotIn.BuyerTIN != "TIN-BUY-1" {
+		t.Errorf("UpdateInput.BuyerTIN = %v, want a non-nil pointer to %q", gotIn.BuyerTIN, "TIN-BUY-1")
+	}
+	if gotIn.BuyerName == nil || *gotIn.BuyerName != "Buyer Co" {
+		t.Errorf("UpdateInput.BuyerName = %v, want a non-nil pointer to %q", gotIn.BuyerName, "Buyer Co")
+	}
+	if gotIn.Currency == nil || *gotIn.Currency != "NGN" {
+		t.Errorf("UpdateInput.Currency = %v, want a non-nil pointer to %q", gotIn.Currency, "NGN")
+	}
+	if gotIn.Subtotal == nil || *gotIn.Subtotal != "100.00" {
+		t.Errorf("UpdateInput.Subtotal = %v, want a non-nil pointer to %q", gotIn.Subtotal, "100.00")
+	}
+	if gotIn.VAT == nil || *gotIn.VAT != "7.50" {
+		t.Errorf("UpdateInput.VAT = %v, want a non-nil pointer to %q", gotIn.VAT, "7.50")
+	}
+	if gotIn.Total == nil || *gotIn.Total != "107.50" {
+		t.Errorf("UpdateInput.Total = %v, want a non-nil pointer to %q", gotIn.Total, "107.50")
+	}
+}
+
+// TestEditHandler_UnknownFieldIgnored200 (Mode B adversarial): an unknown/
+// extra JSON key in the PATCH body -- including entity_id, which [D9] says
+// is deliberately NOT part of editReq -- must be silently ignored (standard
+// encoding/json Decoder behavior; EditHandler never calls
+// .DisallowUnknownFields(), same as every other decode path in this file)
+// rather than 400, and must not interfere with decoding the known fields
+// alongside it.
+func TestEditHandler_UnknownFieldIgnored200(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	var gotIn UpdateInput
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID,
+		`{"vat":"7.50","not_a_real_field":"whatever","entity_id":"should-be-ignored"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for an unknown JSON field (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusValidated) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusValidated)
+	}
+	if gotIn.VAT == nil || *gotIn.VAT != "7.50" {
+		t.Errorf("UpdateInput.VAT = %v, want a non-nil pointer to %q -- the unknown fields must not have "+
+			"interfered with decoding the known one", gotIn.VAT, "7.50")
+	}
+}

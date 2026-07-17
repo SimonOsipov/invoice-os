@@ -34,7 +34,22 @@ const maxUploadBytes = 10 << 20 // 10 MiB
 const maxMultipartMemory = 8 << 20 // 8 MiB
 
 // importResponse is the POST /v1/imports success body: BatchResult's fields
-// plus the DecodeFacts merged in (format/delimiter/encoding). ID/Status carry
+// plus the DecodeFacts merged in (format/delimiter/encoding).
+//
+// The four rule-outcome fields are ADDITIVE (M4-04-07, [import-report-shape]):
+// the five M4-03 counters above them keep their EXACT shipped meaning -- M4-08
+// is being built against them -- and `errors` stays STRUCTURAL ONLY, M4-03's
+// unchanged RowError set. The two outcomes NEVER MIX (Core AC#5): `errors`
+// means "couldn't read this row"; `invoice_violations` means "read fine, but
+// the rule failed". A rule failure is not a structural error and must never
+// appear in `errors`.
+//
+// RuleSetVersion is a *int with NO omitempty on purpose: it must render an
+// explicit `null` when nothing was evaluated, never be absent and never be a
+// false `0` stamp ([Stage-1 F2] / IMPV-16). RuleSetVersion/InvoicesClean/
+// InvoicesWithViolations/InvoiceViolations are populated on BOTH the real and
+// dry-run paths -- `invoices_clean` is named for that: on a real import clean
+// means promoted to `validated`, on a dry-run it is the count that WOULD pass. ID/Status carry
 // their zero value ("") for a dry run -- BatchResult never sets them in that
 // case -- and are marked omitempty so a dry-run body omits both rather than
 // emitting empty strings. Delimiter/Encoding are pointers so an xlsx upload
@@ -51,6 +66,11 @@ type importResponse struct {
 	ReadyInvoices       int        `json:"ready_invoices"`
 	QuarantinedInvoices int        `json:"quarantined_invoices"`
 	Errors              []RowError `json:"errors"`
+
+	RuleSetVersion         *int                `json:"rule_set_version"`
+	InvoicesClean          int                 `json:"invoices_clean"`
+	InvoicesWithViolations int                 `json:"invoices_with_violations"`
+	InvoiceViolations      []InvoiceViolations `json:"invoice_violations"`
 }
 
 // nilIfEmpty returns nil for "" and &s otherwise -- used for Delimiter/
@@ -198,6 +218,11 @@ func CreateHandler(imp func(ctx context.Context, entityID string, mapping map[st
 			ReadyInvoices:       res.ReadyInvoices,
 			QuarantinedInvoices: res.QuarantinedInvoices,
 			Errors:              res.Errors,
+
+			RuleSetVersion:         res.RuleSetVersion,
+			InvoicesClean:          res.InvoicesClean,
+			InvoicesWithViolations: res.InvoicesWithViolations,
+			InvoiceViolations:      res.InvoiceViolations,
 		})
 	}
 }

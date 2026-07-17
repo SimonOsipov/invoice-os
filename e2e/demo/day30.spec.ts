@@ -21,6 +21,7 @@ import { test, expect } from '@playwright/test'
 import { login, validate, toggleRule, PERSONAS, ApiError, type ValidateResult } from '../api/client'
 import { badInvoice, BAD_INVOICE_KEYS, freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA } from '../topology/targets'
+import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 import {
   ensurePortfolioSeeded,
   DISABLED_RULE_KEY,
@@ -28,7 +29,7 @@ import {
   CLIENTS_NAV,
   VALIDATION_NAV,
 } from './fixtures'
-import { dbEnabled, auditRowExists, dbNow } from './db'
+import { dbEnabled, requireDbInCI, auditRowExists, dbNow } from './db'
 
 // keysOf(): the sorted rule_key set of a ValidateResult. Engine.Evaluate already
 // sorts its output (Decision N16); we sort again so the AC-6 exact-set assertion
@@ -191,8 +192,15 @@ test.describe('Day-30 wedge demo (browser journey + API kill-switch + DB audit, 
       await expect(row.locator('td').nth(2)).toHaveText(key)
       // Message cell (2nd column, ViolationsTable.tsx:60) is a non-empty human message.
       await expect(row.locator('td').nth(1)).not.toBeEmpty()
-      // Rule-set version cell (last column, ViolationsTable.tsx:67) is 1.
-      await expect(row.locator('td').last()).toHaveText('1')
+      // Rule-set version cell (last column, ViolationsTable.tsx:67). The cell is
+      // LIVE-DRIVEN, not a constant: ValidationView.tsx:159 feeds it
+      // validation.data.rule_set_version straight from the POST /v1/validate response,
+      // which 04 stamps from the ACTIVE rule-set (handlers.go:284 -> store.go:106's
+      // `WHERE is_active`). So this asserts the cell TRACKS the active rule-set; it must
+      // never re-state today's number in prose or as a literal. It resolves through the
+      // shared ../rule-set module -- the one place the e2e package names the active
+      // version ([e2e-active-version]) -- so a publish moves this in lockstep.
+      await expect(row.locator('td').last()).toHaveText(String(ACTIVE_RULE_SET_VERSION))
     }
 
     // The browser journey (AC-1…AC-5) must have run clean — same convention as topology.
@@ -202,6 +210,12 @@ test.describe('Day-30 wedge demo (browser journey + API kill-switch + DB audit, 
     // BEFORE the toggle (D7), then toggle → re-validate assertion → audit-row assertion,
     // then restore. Keeping AC-7 inside the same try as AC-6 asserts the row the toggle
     // wrote in-tx (store.go:170-181) from the exact t0 that preceded that toggle.
+    // In CI, D8's skip below is a HARD failure instead: a missing DSN there means
+    // the workflow stopped passing it, and AC-7 skipping quietly would leave this
+    // demo green with its audit assertion never run (api/db.ts's requireDbInCI
+    // exists because that exact invisible green shipped once). No-op locally.
+    requireDbInCI()
+
     const dbOn = dbEnabled()
     const t0 = dbOn ? await dbNow() : null
 

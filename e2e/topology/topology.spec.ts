@@ -84,8 +84,11 @@ test('deployed app: validation playground round-trips the live engine', async ({
   const firstRow = table.locator('tbody tr').first()
   await expect(firstRow.locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
 
-  // All seeded MBS v1 rules are error severity (migrations/20260711121327_seed_mbs_v1.sql)
-  // -- severityStyle maps error -> the "Error" pill label (validationApi.ts).
+  // Every rule in the ACTIVE seeded MBS set is error severity -- v1's 17 base rules
+  // (migrations/20260711121327_seed_mbs_v1.sql) and the two line-item rules v2 re-issues
+  // (20260716185106_rule_set_v2.sql) alike -- so this claim needs no version label to stay
+  // true. severityStyle maps error -> the "Error" pill label (validationApi.ts). Only ONE
+  // such pill is required, so this holds even if a later set ever mixes severities.
   await expect(table.getByText('Error', { exact: false }).first()).toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

@@ -336,6 +336,42 @@ func TestMockIssuerEnabled(t *testing.T) {
 	}
 }
 
+// TestS2STokenNeverReachesUpstream (VB-16, task-109/M4-04-03,
+// [s2s-gateway-strip], Stage-1 addendum G4): the gateway proxies
+// /api/validation/* to 04 (routedServices in cmd/gateway/main.go includes
+// "validation"), and injectIdentity today Sets/Dels X-Tenant-ID/X-User-*/
+// X-Request-ID but never touches X-S2S-Token (gateway.go:118-132) -- so a
+// client-supplied X-S2S-Token currently rides through to the upstream
+// unchanged. A leaked peer token smuggled this way would let a caller
+// impersonate a fleet peer at 04's batch route through the one public
+// backend surface.
+//
+// The smuggler must first clear authorize(), which 403s on an empty
+// TenantID (gateway.go:90-95) -- so this test uses a TENANT-BEARING
+// identity (validToken, testTenant), per Stage-1 addendum G4: a request
+// with no tenant never reaches the proxy and would assert nothing.
+func TestS2STokenNeverReachesUpstream(t *testing.T) {
+	tg := setupGateway(t)
+	r := request("POST", "/api/validation/v1/validate/batch", tg.validToken(t))
+	r.Header.Set("X-S2S-Token", "sneaky")
+
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	cap := tg.caps["validation"]
+	if cap.hits != 1 {
+		t.Fatalf("validation hits = %d, want 1", cap.hits)
+	}
+	if got := cap.header.Get("X-S2S-Token"); got != "" {
+		t.Errorf("upstream saw X-S2S-Token = %q, want empty -- a client-supplied peer token must never "+
+			"reach the upstream [s2s-gateway-strip] (injectIdentity, gateway.go:118-132, does not yet Del "+
+			"this header)", got)
+	}
+}
+
 func assertHeader(t *testing.T, h http.Header, key, want string) {
 	t.Helper()
 	if got := h.Get(key); got != want {

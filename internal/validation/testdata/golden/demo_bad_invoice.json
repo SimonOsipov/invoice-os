@@ -1,5 +1,5 @@
 {
-  "rule_set_version": 1,
+  "rule_set_version": "<active>",
   "violations": [
     {
       "rule_key": "supplier-tin-format",

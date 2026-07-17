@@ -213,30 +213,45 @@ func TestStore_LoadNoActiveErrors(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	// M3-05 ships a permanent active v1, so "no active version" is no longer
-	// the migrated DB's natural resting state -- deactivate it here and
-	// restore it on cleanup (independent of seedVersion, since this test
-	// seeds no fixture of its own) so the ErrNoActiveRuleSet path is
-	// genuinely exercised. The leaked-fixture pre-check below is narrowed to
-	// exclude v1 itself: it still catches a real leaked fixture (or stray
-	// hand-seeded content) from a prior test/run, just not the sanctioned
-	// seed this test is about to deactivate.
-	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE version = 1`); err != nil {
-		t.Fatalf("deactivate v1: %v", err)
+	// The migrations ship a permanent active version, so "no active version" is
+	// no longer the migrated DB's natural resting state -- CAPTURE whichever row
+	// holds it, deactivate it here, and restore THAT ROW BY ID on cleanup
+	// (independent of seedVersion, since this test seeds no fixture of its own)
+	// so the ErrNoActiveRuleSet path is genuinely exercised.
+	//
+	// Capturing the id rather than naming `version = 1` is the point: the
+	// hardcode was correct only while v1 was the active version, and would
+	// otherwise deactivate nothing (leaving the real active version up, so this
+	// test asserts ErrNoActiveRuleSet against a DB that still HAS one) while
+	// reactivating the wrong row on the way out (RS-V2-12).
+	var activeID string
+	if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&activeID); err != nil {
+		t.Fatalf("capture the active version id: %v", err)
+	}
+	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE id = $1`, activeID); err != nil {
+		t.Fatalf("deactivate the active version (id=%s): %v", activeID, err)
 	}
 	t.Cleanup(func() {
-		if _, err := super.Exec(context.Background(), `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
-			t.Errorf("cleanup: reactivate v1: %v", err)
+		if _, err := super.Exec(context.Background(),
+			`UPDATE rule_set_versions SET is_active = true WHERE id = $1`, activeID,
+		); err != nil {
+			t.Errorf("cleanup: restore the active version (id=%s): %v", activeID, err)
 		}
 	})
 
+	// The leaked-fixture pre-check excludes the row just deactivated (by id, the
+	// same discovered value) -- it still catches a real leaked fixture (or stray
+	// hand-seeded content) from a prior test/run, just not the sanctioned seed
+	// this test is about to deactivate.
 	var leaked int
-	if err := super.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE is_active AND version <> 1`).Scan(&leaked); err != nil {
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM rule_set_versions WHERE is_active AND id <> $1`, activeID,
+	).Scan(&leaked); err != nil {
 		t.Fatalf("check pre-existing active version: %v", err)
 	}
 	if leaked != 0 {
-		t.Fatalf("found %d pre-existing is_active=true rule_set_versions row(s) (other than v1) -- a prior test leaked an "+
-			"active fixture (or the dev DB has real seeded content); reset the local DB and re-run", leaked)
+		t.Fatalf("found %d pre-existing is_active=true rule_set_versions row(s) (other than the sanctioned seed) -- a prior "+
+			"test leaked an active fixture (or the dev DB has real seeded content); reset the local DB and re-run", leaked)
 	}
 
 	store := NewStore(app)
@@ -430,7 +445,7 @@ func TestStore_ToggleUnknownKey(t *testing.T) {
 // ToggleRule under an identity whose Subject is "" -- WithinRequestTenantTx
 // only requires a valid TenantID uuid to proceed (Subject is not validated
 // there), so the tx opens and the UPDATE runs, but audit.Record's
-// `INSERT INTO audit_log (actor, ...) VALUES ('', ...)` then violates
+// `INSERT INTO audit_log (actor, ...) VALUES (”, ...)` then violates
 // audit_log's `audit_actor_length` CHECK (char_length(actor) > 0) --
 // migrations/20260708062657_audit_log.sql:56 -- and errors. Because
 // ToggleRule must run both statements inside ONE db.WithinRequestTenantTx
@@ -744,5 +759,100 @@ func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
 				t.Errorf("%s.When = %q, want nil (no when guard seeded)", key, *r.When)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// M4-04-03 (task-109) -- VB-14/VB-15: [uuid-stamp] + [tenant-free-ruleset-
+// load]'s Stage-1 addendum G3 fix.
+// ---------------------------------------------------------------------
+
+// TestStore_LoadActiveRuleSetGlobalNoIdentity (VB-14, Stage-1 addendum G3's
+// required fix): LoadActiveRuleSetGlobal must succeed with NO identity in
+// ctx (auth.WithIdentity is never called here -- that is the whole point of
+// the tenant-free load, platform/db/tenant.go:21-27 is why this method must
+// exist as something OTHER than a thin wrapper over LoadActiveRuleSet) --
+// rs.Version and rs.ID must match the live active row, and critically
+// len(rs.Rules) must equal that row's real rule count.
+//
+// The rule-count assertion is the G3 fix: [tenant-free-ruleset-load]'s
+// "fails closed" claim is true for the version SELECT (RLS there -> zero
+// rows -> ErrNoActiveRuleSet -> 503) but FALSE for the rules SELECT alone
+// (RLS there, under the house nullif(...,missing_ok=true) idiom -> zero
+// rows, NO ERROR -> rs.Rules = [] -> err == nil -> EVERY invoice validates
+// clean, HTTP 200 -- a silent fail-OPEN in a compliance gate). VB-12
+// (a valid invoice -> zero violations) cannot catch an empty rule-set on
+// its own -- it is satisfied VACUOUSLY by zero rules. This
+// len(rs.Rules)==<live count> assertion is the one thing standing between
+// "fails closed" being ASSERTED (in prose) and being TESTED.
+func TestStore_LoadActiveRuleSetGlobalNoIdentity(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background() // deliberately NOT auth.WithIdentity
+
+	var wantID string
+	var wantVersion int
+	var wantRuleCount int
+	if err := super.QueryRow(ctx,
+		`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+	).Scan(&wantID, &wantVersion); err != nil {
+		t.Fatalf("read the active rule_set_versions row: %v", err)
+	}
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM rules WHERE rule_set_version_id = $1`, wantID,
+	).Scan(&wantRuleCount); err != nil {
+		t.Fatalf("count rules for the active version: %v", err)
+	}
+	if wantRuleCount == 0 {
+		t.Fatalf("active version (id=%s) has 0 rules -- the fixture itself is broken; this test needs a "+
+			"non-empty active rule-set to distinguish a real load from the G3 silent-empty failure mode", wantID)
+	}
+
+	store := NewStore(app)
+	rs, err := store.LoadActiveRuleSetGlobal(ctx)
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSetGlobal with no identity: err = %v, want nil -- a db.ErrNoTenant here would mean "+
+			"the tenant-free load structurally cannot run without identity (platform/db/tenant.go:21-27 is why this "+
+			"method must exist as something OTHER than a thin wrapper over LoadActiveRuleSet)", err)
+	}
+	if rs.Version != wantVersion {
+		t.Errorf("rs.Version = %d, want %d (the live active version)", rs.Version, wantVersion)
+	}
+	if rs.ID != wantID {
+		t.Errorf("rs.ID = %q, want %q (the active rule_set_versions.id) [uuid-stamp]", rs.ID, wantID)
+	}
+	if len(rs.Rules) != wantRuleCount {
+		t.Fatalf("len(rs.Rules) = %d, want %d (the active version's live rule count) -- an empty/short Rules "+
+			"slice here is the G3 silent fail-OPEN: zero rules means Evaluate finds nothing to check and every "+
+			"invoice validates clean", len(rs.Rules), wantRuleCount)
+	}
+}
+
+// TestStore_LoadActiveRuleSetPopulatesID (VB-15): the EXISTING
+// LoadActiveRuleSet path (identity required, unchanged signature/tenant
+// wrap, unchanged behavior) must keep succeeding exactly as before, and now
+// ALSO populate rs.ID -- the versionID it already scans and, until this
+// subtask, silently discarded (store.go:72-76, [uuid-stamp]).
+func TestStore_LoadActiveRuleSetPopulatesID(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	var wantID string
+	if err := super.QueryRow(ctx,
+		`SELECT id FROM rule_set_versions WHERE is_active LIMIT 1`,
+	).Scan(&wantID); err != nil {
+		t.Fatalf("read the active rule_set_versions row: %v", err)
+	}
+
+	store := NewStore(app)
+	tenantID := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID})
+
+	rs, err := store.LoadActiveRuleSet(c)
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSet: %v", err)
+	}
+	if rs.ID != wantID {
+		t.Errorf("rs.ID = %q, want %q -- LoadActiveRuleSet already scans versionID (store.go:72-76), it must "+
+			"now ALSO assign it to rs.ID [uuid-stamp]", rs.ID, wantID)
 	}
 }

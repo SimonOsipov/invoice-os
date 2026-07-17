@@ -36,6 +36,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -127,6 +128,163 @@ func ToggleHandler(toggle func(ctx context.Context, key string, enabled bool) (R
 		}
 
 		writeJSON(w, http.StatusOK, rule)
+	}
+}
+
+// --------------------------------------------------------------------------
+// M4-04-03 -- POST /v1/validate/batch, the tenant-free peer surface.
+// --------------------------------------------------------------------------
+
+const (
+	// maxBatchBytes caps the request body. Armed with http.MaxBytesReader
+	// DOWNSTREAM of S2SMiddleware, so an unauthenticated oversized body is a
+	// 401, never a 413 (see s2s.go).
+	maxBatchBytes = 16 << 20 // 16 MiB
+	// maxBatchItems caps per-batch fan-out: a hard bound on the work one
+	// request can ask for, sized to pair with the 16 MiB body cap
+	// (5,000 x ~3KB ~= 15MB). This is an independent choice, NOT inherited
+	// from the importer -- the importer enforces no row/item ceiling at all,
+	// only a 10 MiB byte cap (M4-04-03 Stage-1 addendum G2). Do not "re-align"
+	// the two against a ceiling that does not exist.
+	maxBatchItems = 5000
+)
+
+// batchItem is one wire item: an opaque caller-owned ref plus the invoice
+// object to evaluate. Ref is echoed back untouched -- 04 never interprets it
+// (it is 03's correlation handle).
+type batchItem struct {
+	Ref     string         `json:"ref"`
+	Invoice map[string]any `json:"invoice"`
+}
+
+// batchRequest is the POST /v1/validate/batch request body.
+type batchRequest struct {
+	Invoices []batchItem `json:"invoices"`
+}
+
+// batchItemResult is one item's outcome: its echoed ref + every collected
+// violation (collect-ALL, same as the single-invoice Result).
+type batchItemResult struct {
+	Ref        string      `json:"ref"`
+	Violations []Violation `json:"violations"`
+}
+
+// batchResponse is the POST /v1/validate/batch success body. The rule-set
+// version + its uuid are stamped ONCE for the whole batch, not per item --
+// one load means one version, so a per-item stamp could only ever repeat
+// itself ([uuid-stamp]).
+type batchResponse struct {
+	RuleSetVersion   int               `json:"rule_set_version"`
+	RuleSetVersionID string            `json:"rule_set_version_id"`
+	Results          []batchItemResult `json:"results"`
+}
+
+// BatchValidateHandler returns POST /v1/validate/batch: 03 submits many
+// invoices in one request and gets each one's violations back, stamped with
+// the single rule-set version they were all evaluated against ([batch-wire]).
+//
+// It reads NO tenant. It never touches X-Tenant-ID and never calls
+// auth.IdentityFromContext ([s2s-identity]) -- contrast ValidateHandler's
+// identity-first-401 above. Evaluation is a pure function of (payload, active
+// global rule-set): there is no tenant to assert and no tenant-scoped data
+// behind this endpoint to leak, so the trust boundary does not widen. Peer
+// authentication is S2SMiddleware's job, upstream of here; all tenant-scoped
+// work stays in 03.
+//
+// loadRuleSet is injected (rather than reaching for a Store) so the single-
+// load-per-batch property is provable with a counting fake, and so this file
+// keeps its no-DB-import shape -- the same discipline as ValidateHandler's
+// loadAndEval closure. main.go binds it to Store.LoadActiveRuleSetGlobal.
+// eng is the shipped, stateless *Engine, reused across every item.
+//
+// Order of operations is load-bearing:
+//  1. cap the body (MaxBytesReader) -- but only after S2SMiddleware's 401.
+//  2. decode; an oversized body is a 413, checked BEFORE the generic 400
+//     (Stage-1 addendum G1: statusForErr has no 413 branch and cannot grow
+//     one usefully, since only the decode site knows the body was capped --
+//     house pattern, internal/importer/handlers.go:112-120).
+//  3. bound the item count (400 on empty or over-cap) BEFORE loading, so a
+//     junk request never costs a query.
+//  4. load the rule-set EXACTLY ONCE for the whole batch -- the entire point
+//     of this endpoint, and what makes the <60s gate reachable.
+//  5. evaluate every item against that one rule-set, results in REQUEST
+//     order.
+func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error), eng *Engine, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBatchBytes)
+
+		var req batchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			// The 413 check MUST precede the generic 400: MaxBytesReader
+			// surfaces the cap as a *http.MaxBytesError from Decode, which is
+			// otherwise indistinguishable from malformed JSON.
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the batch size limit")
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if len(req.Invoices) == 0 {
+			writeError(w, http.StatusBadRequest, "invoices must not be empty")
+			return
+		}
+		if len(req.Invoices) > maxBatchItems {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invoices exceeds the %d-item batch limit", maxBatchItems))
+			return
+		}
+
+		// ONE load for the whole batch, however many invoices it carries.
+		// ErrNoActiveRuleSet (and ErrEmptyRuleSet, which wraps it) -> 503 via
+		// statusForErr: the gate cannot evaluate, so it refuses -- it never
+		// answers a clean 200 it cannot stand behind.
+		rs, err := loadRuleSet(r.Context())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "validation: batch validate: load rule-set", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		results := make([]batchItemResult, 0, len(req.Invoices))
+		for _, it := range req.Invoices {
+			// RE-ROOT: the engine's resolvePath roots at p["invoice"]
+			// (Decision N19), so each item's invoice object must be wrapped
+			// back into a Payload before evaluation. Passing it.Invoice
+			// unwrapped fails LOUDLY but misleadingly -- every target resolves
+			// as absent, so every `required` rule fires on data that is in
+			// fact valid ([batch-payload-rooting]). This wrap is one typed
+			// line inside the one function that owns it; VB-12 (a fully valid
+			// invoice -> zero violations) is what discriminates it.
+			result, err := eng.Evaluate(Payload{"invoice": it.Invoice}, rs)
+			if err != nil {
+				// A config fault (unknown rule type, bad regex, broken CEL) is
+				// a property of the RULE-SET, not of this item -- it would fail
+				// identically for every item, so the WHOLE batch fails with a
+				// 500 and no partial results (Decision N15 / [batch-fault-
+				// semantics]: fail loud on a broken rule, never silently pass).
+				// Bad DATA is always a violation, never an error, so this can
+				// never be triggered by a caller's payload.
+				log.ErrorContext(r.Context(), "validation: batch validate: evaluate",
+					slog.Any("err", err), slog.String("ref", it.Ref))
+				writeError(w, http.StatusInternalServerError, "internal server error")
+				return
+			}
+			results = append(results, batchItemResult{Ref: it.Ref, Violations: result.Violations})
+		}
+
+		writeJSON(w, http.StatusOK, batchResponse{
+			RuleSetVersion:   rs.Version,
+			RuleSetVersionID: rs.ID,
+			Results:          results,
+		})
 	}
 }
 

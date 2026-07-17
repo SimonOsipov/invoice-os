@@ -4,6 +4,8 @@
 // default to the live dev deployments and are overridable via env, matching the smoke
 // pattern so the same suite runs against a PR preview or any other deploy.
 
+import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
+
 const resolve = (envVar: string, fallback: string): string => process.env[envVar]?.trim() || fallback
 
 // The public gateway (mock issuer + /api/*) and the app SPA on the dev environment.
@@ -49,11 +51,15 @@ export const FIRM_PERSONA = {
   tenantName: 'Okafor & Partners',
 } as const
 
-// The seeded MBS v1 rule-set (migrations/20260711121327_seed_mbs_v1.sql, M3-05) that the
-// live gateway evaluates. The "has-violations" preset (invoicePayload.ts PRESETS) fires a
-// subset of these — a robust sample rather than all 16 — plus the rule-set version the
-// engine tags every violation row with.
+// The seeded, ACTIVE MBS rule-set that the live gateway evaluates (v2 since M4-04-01 --
+// migrations/20260716185106_rule_set_v2.sql). The "has-violations" preset
+// (invoicePayload.ts PRESETS) fires a subset of these — a robust sample rather than all
+// 19 — plus the rule-set version the engine tags every violation row with, which
+// topology.spec.ts asserts against a live rendered table cell.
+//
+// The version comes from the shared ../rule-set module, NOT a literal here: it is the one
+// place the e2e package names it ([e2e-active-version]).
 export const VALIDATION_EXPECTED = {
-  ruleSetVersion: 1,
+  ruleSetVersion: ACTIVE_RULE_SET_VERSION,
   sampleRuleKeys: ['supplier-name-required', 'vat-standard-rate', 'currency-allowed'],
 } as const

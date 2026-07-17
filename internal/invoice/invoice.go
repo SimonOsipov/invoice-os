@@ -66,12 +66,20 @@ type LineItem struct {
 // Invoice is an invoices row plus its hydrated LineItems (Store.Get only;
 // Store.List returns headers with LineItems left nil, [D7]/[D8]). Money
 // fields (Subtotal/VAT/Total) are *string, read via ::text ([D13]) — see
-// LineItem. Violations/RuleSetVersionID are read-only here: M4-02 never
-// writes them (M4-04's validate gate owns both). RuleSetVersionID is
-// intentionally NOT surfaced on the wire (json:"-") — it is always null in
-// M4-02 and M4-04 will define its eventual wire shape; Violations IS
-// surfaced (always the literal "[]" here) since it is a real, if currently
-// always-empty, part of the row.
+// LineItem. Violations/RuleSetVersionID have exactly ONE writer:
+// Store.ApplyValidation, M4-04's validate gate (M4-02 wrote neither).
+//
+// RuleSetVersionID IS surfaced on the wire as rule_set_version_id. M4-02
+// deliberately hid it (json:"-") because it was always null then, and
+// deferred its eventual shape to M4-04 — this is M4-04 defining it
+// (M4-04-05 §c): the stamp is the auditable answer to "which rule-set
+// version produced these violations?", so it belongs beside them rather
+// than hidden. It stays null until the gate stamps it, and carries no
+// omitempty on purpose — an un-validated invoice renders an explicit null
+// rather than dropping the key, so a consumer can tell "not yet validated"
+// from "field absent". Violations is likewise surfaced, and is the literal
+// "[]" until the gate writes — never null (Store.ApplyValidation's
+// [violations-write]).
 type Invoice struct {
 	ID               string          `json:"id"`
 	EntityID         string          `json:"entity_id"`
@@ -88,7 +96,7 @@ type Invoice struct {
 	VAT              *string         `json:"vat"`
 	Total            *string         `json:"total"`
 	Violations       json.RawMessage `json:"violations"`
-	RuleSetVersionID *string         `json:"-"`
+	RuleSetVersionID *string         `json:"rule_set_version_id"`
 	CreatedAt        time.Time       `json:"created_at"`
 	LineItems        []LineItem      `json:"line_items,omitempty"`
 }
@@ -161,6 +169,49 @@ var (
 	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
 	ErrRedundantTransition = errors.New("invoice: redundant transition")
 	ErrIllegalTransition   = errors.New("invoice: illegal transition")
+
+	// ErrUpstream / ErrNoActiveRuleSet are the validation client's error model
+	// (validator.go, M4-04-04), declared here to keep one sentinel home per
+	// package. Declared by THIS subtask because it is their first consumer:
+	// the story originally assigned all three new sentinels to M4-04-05, but
+	// the client (order 4) precedes it, so M4-04-05 is narrowed to the two it
+	// still owns (ErrNotDraft, ErrStaleValidation) -- otherwise a redeclaration
+	// there is a duplicate-declaration CI red. [Stage-1 F3]
+	//
+	// They are DISTINGUISHABLE on purpose, and the distinction is what
+	// M4-04-06's statusForErr maps: ErrUpstream -> 502 (04 is broken or
+	// unreachable -- 03 cannot get a verdict), ErrNoActiveRuleSet -> 503 (04 is
+	// healthy but has no published rule-set to evaluate against). Both are
+	// outages, never verdicts: neither ever means "the invoice is clean".
+	ErrUpstream        = errors.New("invoice: upstream validation error")
+	ErrNoActiveRuleSet = errors.New("invoice: no active rule-set")
+
+	// ErrNotDraft / ErrStaleValidation are Store.ApplyValidation's own error
+	// model (M4-04-05), declared here because the gate's two in-tx re-checks
+	// are their first consumer. Both are 409s in M4-04-06's statusForErr: the
+	// caller asked for something that is no longer true, not something
+	// malformed (400) or missing (404).
+	//
+	// ErrNotDraft — the gate is draft-only ([gate-scope-draft-only]); any
+	// other status is refused with NOTHING written. From draft the gate needs
+	// only edges that already exist (clean -> draft->validated; blocked ->
+	// stay draft). A validated-but-now-dirty invoice would need a
+	// validated->draft demotion edge, which does not exist, is asserted
+	// ILLEGAL today (transition_test.go:163), and which legalTransitions
+	// reserves for the M4-05 fix loop — M4-05 widens the accepted states here
+	// and adds that edge.
+	//
+	// ErrStaleValidation — the invoice's content changed under the validate
+	// run ([toctou-staleness]). The write tx cannot span the HTTP call to 04
+	// (it would pin a pool connection and hold a row lock under unbounded
+	// remote latency), so the gate evaluates with no tx open, then re-checks
+	// the LOCKED row's contentFingerprint against the one taken when the
+	// payload was built. A mismatch means the violations describe content that
+	// no longer exists, and stamping those as validated is the same class of
+	// lie [validated-is-earned] forbids. The status re-check alone does NOT
+	// catch this — status stays draft across a Store.Update.
+	ErrNotDraft        = errors.New("invoice: not draft")
+	ErrStaleValidation = errors.New("invoice: stale validation")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

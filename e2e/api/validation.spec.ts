@@ -27,6 +27,7 @@
 import { test, expect } from '@playwright/test'
 import { login, validate, toggleRule, PERSONAS, ApiError, type ValidateResult } from './client'
 import { validInvoice, badInvoice, manyViolations, currencyUsdInvoice, BAD_INVOICE_KEYS, MANY_VIOLATION_KEYS } from './fixtures'
+import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 
 // keysOf(): the sorted rule_key set of a ValidateResult (Engine.Evaluate sorts
 // its output — Decision N16 — but we sort again here so this assertion doesn't
@@ -144,16 +145,16 @@ test.describe('validation collect-all + live kill-switch (API E2E, over the depl
     await ensureEnabled(token, 'currency-allowed')
   })
 
-  test('valid invoice -> zero violations, stamped rule_set_version 1', async () => {
+  test('valid invoice -> zero violations, stamped with the active rule_set_version', async () => {
     const result = await validate(token, validInvoice)
-    expect(result.rule_set_version).toBe(1)
+    expect(result.rule_set_version).toBe(ACTIVE_RULE_SET_VERSION)
     expect(result.violations).toEqual([])
   })
 
   test('bad invoice -> exactly [supplier-tin-format, vat-standard-rate], each fully stamped', async () => {
     const result = await validate(token, badInvoice)
     expect(keysOf(result)).toEqual(BAD_INVOICE_KEYS)
-    expect(result.rule_set_version).toBe(1)
+    expect(result.rule_set_version).toBe(ACTIVE_RULE_SET_VERSION)
     for (const violation of result.violations) {
       expect(violation.rule_key.length).toBeGreaterThan(0)
       expect(violation.severity.length).toBeGreaterThan(0)

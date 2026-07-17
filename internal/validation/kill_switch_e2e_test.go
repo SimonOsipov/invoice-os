@@ -110,7 +110,7 @@ func TestKillSwitch_E2E(t *testing.T) {
 			const enabledEvent = "validation.rule.enabled"
 
 			// Step 1: baseline -- the rule fires on the seeded, enabled v1.
-			rs := loadV1(t, app)
+			rs := loadActive(t, app)
 			result, err := engine.Evaluate(firePayload, rs)
 			if err != nil {
 				t.Fatalf("Evaluate(firePayload) baseline: %v", err)
@@ -139,11 +139,11 @@ func TestKillSwitch_E2E(t *testing.T) {
 
 			// Adversarial: column-level persistence, read directly via
 			// superuser -- independent of and complementary to step 3's
-			// validate-effect check (which goes through loadV1+Evaluate, not
+			// validate-effect check (which goes through loadActive+Evaluate, not
 			// the raw column). A ToggleRule that returned Enabled=false in its
 			// Rule struct without the UPDATE actually landing would pass the
 			// earlier `toggled.Enabled` check but fail here.
-			if got := ruleEnabledV1(t, super, tc.key); got {
+			if got := ruleEnabledActive(t, super, tc.key); got {
 				t.Errorf("%s: rules.enabled column = true after ToggleRule(false), want false (column-level persistence)", tc.key)
 			}
 			// Adversarial: event isolation -- a disable must not ALSO write an
@@ -158,7 +158,7 @@ func TestKillSwitch_E2E(t *testing.T) {
 			// the disabled rule (no redeploy). A control rule (supplier-tin-format,
 			// untouched, format-type) on the independently-bad demo payload must
 			// STILL fire, proving only the toggled rule dropped.
-			rs2 := loadV1(t, app)
+			rs2 := loadActive(t, app)
 			result2, err := engine.Evaluate(firePayload, rs2)
 			if err != nil {
 				t.Fatalf("Evaluate(firePayload) after disable: %v", err)
@@ -193,7 +193,7 @@ func TestKillSwitch_E2E(t *testing.T) {
 
 			// Adversarial: column-level persistence after re-enable (mirrors
 			// the step 2 check above).
-			if got := ruleEnabledV1(t, super, tc.key); !got {
+			if got := ruleEnabledActive(t, super, tc.key); !got {
 				t.Errorf("%s: rules.enabled column = false after ToggleRule(true), want true (column-level persistence)", tc.key)
 			}
 			// Adversarial: event isolation -- re-enabling must not ALSO write a
@@ -205,7 +205,7 @@ func TestKillSwitch_E2E(t *testing.T) {
 			}
 
 			// Step 5: reversibility -- a FRESH load+evaluate fires the rule again.
-			rs3 := loadV1(t, app)
+			rs3 := loadActive(t, app)
 			result3, err := engine.Evaluate(firePayload, rs3)
 			if err != nil {
 				t.Fatalf("Evaluate(firePayload) after re-enable: %v", err)
@@ -221,7 +221,7 @@ func TestKillSwitch_E2E(t *testing.T) {
 // (auditPayloadTenant, store_test.go) and asserts its payload carries the
 // exact field names store.go's ToggleRule actually serializes: "key",
 // "version", "from", "to" (see store.go's audit.Record call). wantVersion is
-// the caller's own baseline-load RuleSet.Version (step 1's loadV1, taken
+// the caller's own baseline-load RuleSet.Version (step 1's loadActive, taken
 // before any toggle) rather than a hardcoded literal -- it asserts the
 // payload's "version" is actually the active rule_set_versions.version at
 // toggle time, not merely "some number" (store_test.go's
@@ -250,16 +250,22 @@ func assertTogglePayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, key 
 	}
 }
 
-// ruleEnabledV1 reads rules.enabled directly via the superuser pool for key
-// under the migrated v1 rule_set_versions row -- column-level persistence,
+// ruleEnabledActive reads rules.enabled directly via the superuser pool for key
+// under the ACTIVE rule_set_versions row -- column-level persistence,
 // independent of and complementary to the validate-effect assertions (steps
-// 3/5 above), which go through loadV1+Evaluate rather than the raw column.
-func ruleEnabledV1(t *testing.T, pool *pgxpool.Pool, key string) bool {
+// 3/5 above), which go through loadActive+Evaluate rather than the raw column.
+//
+// It matches on `v.is_active`, the same predicate ToggleRule itself writes
+// through (store.go:137-139), so this read and the production write it verifies
+// can never target different rows. Hardcoding `v.version = 1` would have read a
+// stale, inactive version's column -- reporting the rule still enabled while
+// ToggleRule had in fact disabled it on the live set.
+func ruleEnabledActive(t *testing.T, pool *pgxpool.Pool, key string) bool {
 	t.Helper()
 	var enabled bool
 	if err := pool.QueryRow(context.Background(),
 		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON r.rule_set_version_id = v.id
-		 WHERE v.version = 1 AND r.key = $1`, key,
+		 WHERE v.is_active AND r.key = $1`, key,
 	).Scan(&enabled); err != nil {
 		t.Fatalf("read rules.enabled for key=%q: %v", key, err)
 	}

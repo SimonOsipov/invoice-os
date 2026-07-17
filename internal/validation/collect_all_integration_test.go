@@ -2,7 +2,7 @@
 // applicable violation across the migration-seeded v1 rule set in one pass
 // -- never fail-fast -- and stamps the result with the active version it
 // evaluated against. Chains the same DB-load -> engine-evaluate pattern
-// seed_test.go's loadV1/hasViolation/violationKeys helpers were built for
+// seed_test.go's loadActive/hasViolation/violationKeys helpers were built for
 // (see that file's header), but exercises breadth across SIX simultaneously
 // broken fields in one payload rather than one demo fixture's two.
 //
@@ -84,7 +84,7 @@ func manyViolationsPayload() Payload {
 // assertion above vacuously true.
 func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	t.Run("many_violations", func(t *testing.T) {
@@ -93,8 +93,8 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 			t.Fatalf("Evaluate(manyViolationsPayload): %v", err)
 		}
 
-		if result.RuleSetVersion != 1 {
-			t.Errorf("RuleSetVersion = %d, want 1", result.RuleSetVersion)
+		if result.RuleSetVersion != activeSeedVersion {
+			t.Errorf("RuleSetVersion = %d, want %d", result.RuleSetVersion, activeSeedVersion)
 		}
 
 		wantKeys := []string{
@@ -179,14 +179,14 @@ func TestCollectAll_ManyViolationsBreadth(t *testing.T) {
 			t.Fatalf("Evaluate(validInvoicePayload): %v", err)
 		}
 
-		if result.RuleSetVersion != 1 {
-			t.Errorf("RuleSetVersion = %d, want 1 (stamped even on a clean pass)", result.RuleSetVersion)
+		if result.RuleSetVersion != activeSeedVersion {
+			t.Errorf("RuleSetVersion = %d, want %d (stamped even on a clean pass)", result.RuleSetVersion, activeSeedVersion)
 		}
 		if result.Violations == nil {
 			t.Error("Violations = nil, want [] (never nil, even when empty -- Result doc)")
 		}
 		if len(result.Violations) != 0 {
-			t.Errorf("Violations = %v, want none -- validInvoicePayload() breaks no seeded v1 rule", result.Violations)
+			t.Errorf("Violations = %v, want none -- validInvoicePayload() breaks no rule in the seeded active rule-set", result.Violations)
 		}
 	})
 }

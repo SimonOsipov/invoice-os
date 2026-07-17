@@ -5,7 +5,7 @@
 //
 //   - TestAllRuleTypes ("seeded-7": required, format/regex, enum, range,
 //     tax_math, cel, line_sum) drives a representative rule from the migration-seeded
-//     v1 rule set (seed_test.go's loadV1) through the real engine. It is
+//     v1 rule set (seed_test.go's loadActive) through the real engine. It is
 //     DB-backed and self-skips without DATABASE_URL/DATABASE_SUPERUSER_URL
 //     (dbTestPools, schema_test.go).
 //
@@ -13,7 +13,7 @@
 //     three types with no representative in the v1 seed) drives an
 //     in-memory fixture RuleSet literal through NewDefaultEngine().Evaluate
 //     directly. Pure Go, no DB: this function must run and pass in BOTH the
-//     `go` and `rls` CI jobs, so it must never call dbTestPools/loadV1.
+//     `go` and `rls` CI jobs, so it must never call dbTestPools/loadActive.
 //
 // A final coverage subtest in TestAbsentRuleTypes asserts the union of
 // typeLabels across both tables is exactly the ten RuleType consts --
@@ -30,7 +30,7 @@ import (
 )
 
 // seededTypeCase pairs a RuleType label with a representative rule KEY from
-// the migration-seeded v1 rule set (see seed_test.go's loadV1 / the wantKeys
+// the migration-seeded v1 rule set (see seed_test.go's loadActive / the wantKeys
 // list in TestSeed_ActiveVersionLoads) and a mutation that flips a fresh
 // validInvoicePayload() from passing to violating that rule.
 type seededTypeCase struct {
@@ -105,12 +105,12 @@ func seededRuleTypeCases() []seededTypeCase {
 
 // TestAllRuleTypes (Core AC 4, seeded-7 half): each of required, format/
 // regex, enum, range, tax_math, cel, line_sum is exercised through a representative
-// migration-seeded v1 rule via loadV1 + the real engine -- a fully valid
+// migration-seeded v1 rule via loadActive + the real engine -- a fully valid
 // payload passes it, and the table's mutation makes it violate. Self-skips
 // (via dbTestPools) without DATABASE_URL/DATABASE_SUPERUSER_URL.
 func TestAllRuleTypes(t *testing.T) {
 	_, app := dbTestPools(t)
-	rs := loadV1(t, app)
+	rs := loadActive(t, app)
 	engine := NewDefaultEngine()
 
 	for _, tc := range seededRuleTypeCases() {

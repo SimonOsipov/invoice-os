@@ -96,6 +96,48 @@ func migratorPool(t *testing.T) *pgxpool.Pool {
 	if err := m.Ping(ctx); err != nil {
 		t.Fatalf("ping migrator (is the DB up and bootstrapped?): %v", err)
 	}
+
+	// CodeRabbit C2: self-assert this pool is really the non-superuser,
+	// table-owning migrator -- not a mistakenly-supplied superuser DSN. A
+	// superuser DSN would make every "owner-proof" assertion in this file
+	// pass VACUOUSLY (a BEFORE trigger fires for a superuser too, but a
+	// superuser also bypasses RLS/grants, so it would silently duplicate the
+	// `super` pool's coverage rather than proving the trigger binds the
+	// actual NOSUPERUSER table owner). Fail loudly, before returning the
+	// pool, if any of the three checks below don't hold.
+	var currentUser string
+	if err := m.QueryRow(ctx, `SELECT current_user`).Scan(&currentUser); err != nil {
+		t.Fatalf("read current_user on the migrator pool: %v", err)
+	}
+	if currentUser != "invoice_migrator" {
+		t.Fatalf("migrator pool's current_user = %q, want %q -- DATABASE_MIGRATION_URL is not "+
+			"connecting as the table-owning migrator role", currentUser, "invoice_migrator")
+	}
+
+	var isSuperuser bool
+	if err := m.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&isSuperuser); err != nil {
+		t.Fatalf("read rolsuper for %s: %v", currentUser, err)
+	}
+	if isSuperuser {
+		t.Fatalf("migrator pool's role %q is a SUPERUSER -- DATABASE_MIGRATION_URL must point at the "+
+			"NOSUPERUSER invoice_migrator role, or the owner-proof assertions in this file are "+
+			"meaningless (a superuser bypasses everything the `super` pool already covers)", currentUser)
+	}
+
+	for _, table := range []string{"rules", "rule_set_versions"} {
+		var owner string
+		if err := m.QueryRow(ctx,
+			`SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = $1`, table,
+		).Scan(&owner); err != nil {
+			t.Fatalf("read tableowner for %s: %v", table, err)
+		}
+		if owner != currentUser {
+			t.Fatalf("table %s is owned by %q, want %q (the migrator pool) -- the owner-proof "+
+				"assertions in this file require the migrator to actually OWN the tables it attacks",
+				table, owner, currentUser)
+		}
+	}
+
 	return m
 }
 
@@ -675,11 +717,23 @@ func TestRIL11_SealFalseToTrueAndNoOpAllowed(t *testing.T) {
 
 // TestRIL12_KillSwitchProductionPathUnbroken (RIL-12): the real production
 // Store.ToggleRule (store.go:229) must still succeed against the sealed
-// active version -- disable then re-enable a known rule, round-tripping the
-// value and writing an audit row each time (M3-06). Precondition
-// (requireSealed) makes this 42703 pre-migration, per the spec's Setup
-// ("sealed active v2 with a known rule"). Restores the rule's original
-// enabled state in Cleanup unconditionally, mirroring TestSeed_KillSwitch.
+// active version -- flip a known rule's enabled value and flip it back,
+// round-tripping and writing exactly one audit row per call (M3-06).
+// Precondition (requireSealed) makes this 42703 pre-migration, per the
+// spec's Setup ("sealed active v2 with a known rule"). Restores the rule's
+// original enabled state in Cleanup unconditionally, mirroring
+// TestSeed_KillSwitch.
+//
+// CodeRabbit C3: toggles to `!original` then back to `original`, never a
+// hardcoded false-then-true -- ToggleRule returns ErrRedundantTransition
+// when the rule's current value already equals the requested target
+// (store.go:259-261), so a hardcoded false-then-true would spuriously
+// t.Fatalf if a prior run (or a leaked fixture on the shared 5433 DB)
+// already left the rule disabled. Also asserts the audit count against a
+// captured BASELINE for an EXACT delta of 2, not a bare `>= 2`: audit_log
+// is append-only and shared across every run against this DB, so `>= 2`
+// would pass vacuously even if THIS run wrote zero new rows, as long as a
+// prior run already left two or more behind.
 func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -704,47 +758,58 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 		}
 	})
 
-	identityCtx := newTestIdentity()
-	store := NewStore(app)
-
-	if _, err := store.ToggleRule(identityCtx, key, false); err != nil {
-		t.Fatalf("ToggleRule(%s, false) against the sealed active version: %v", key, err)
-	}
-	var afterDisable bool
-	if err := super.QueryRow(ctx,
-		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = $1`, key,
-	).Scan(&afterDisable); err != nil {
-		t.Fatalf("read enabled after disable: %v", err)
-	}
-	if afterDisable {
-		t.Error("enabled still true after ToggleRule(false)")
-	}
-
-	if _, err := store.ToggleRule(identityCtx, key, true); err != nil {
-		t.Fatalf("ToggleRule(%s, true) against the sealed active version: %v", key, err)
-	}
-	var afterEnable bool
-	if err := super.QueryRow(ctx,
-		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = $1`, key,
-	).Scan(&afterEnable); err != nil {
-		t.Fatalf("read enabled after re-enable: %v", err)
-	}
-	if !afterEnable {
-		t.Error("enabled still false after ToggleRule(true)")
-	}
-
-	var auditCount int
+	var auditBaseline int
 	if err := super.QueryRow(ctx,
 		`SELECT count(*) FROM audit_log
 		 WHERE event IN ('validation.rule.disabled', 'validation.rule.enabled') AND payload->>'key' = $1`,
 		key,
-	).Scan(&auditCount); err != nil {
+	).Scan(&auditBaseline); err != nil {
+		t.Fatalf("count baseline audit_log rows for %s: %v", key, err)
+	}
+
+	identityCtx := newTestIdentity()
+	store := NewStore(app)
+
+	flipped := !original
+	if _, err := store.ToggleRule(identityCtx, key, flipped); err != nil {
+		t.Fatalf("ToggleRule(%s, %t) against the sealed active version: %v", key, flipped, err)
+	}
+	var afterFlip bool
+	if err := super.QueryRow(ctx,
+		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
+		 WHERE v.is_active AND r.key = $1`, key,
+	).Scan(&afterFlip); err != nil {
+		t.Fatalf("read enabled after first flip: %v", err)
+	}
+	if afterFlip != flipped {
+		t.Errorf("enabled = %t after ToggleRule(%t), want %t", afterFlip, flipped, flipped)
+	}
+
+	if _, err := store.ToggleRule(identityCtx, key, original); err != nil {
+		t.Fatalf("ToggleRule(%s, %t) (restore) against the sealed active version: %v", key, original, err)
+	}
+	var afterRestore bool
+	if err := super.QueryRow(ctx,
+		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
+		 WHERE v.is_active AND r.key = $1`, key,
+	).Scan(&afterRestore); err != nil {
+		t.Fatalf("read enabled after restore flip: %v", err)
+	}
+	if afterRestore != original {
+		t.Errorf("enabled = %t after ToggleRule(%t) (restore), want %t", afterRestore, original, original)
+	}
+
+	var auditAfter int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log
+		 WHERE event IN ('validation.rule.disabled', 'validation.rule.enabled') AND payload->>'key' = $1`,
+		key,
+	).Scan(&auditAfter); err != nil {
 		t.Fatalf("count audit_log rows for %s: %v", key, err)
 	}
-	if auditCount < 2 {
-		t.Errorf("audit_log rows for key=%s = %d, want >= 2 (one per ToggleRule call)", key, auditCount)
+	if want := auditBaseline + 2; auditAfter != want {
+		t.Errorf("audit_log rows for key=%s = %d, want exactly %d (baseline %d + one per ToggleRule call)",
+			key, auditAfter, want, auditBaseline)
 	}
 }
 

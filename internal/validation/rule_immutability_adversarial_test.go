@@ -228,6 +228,12 @@ func TestRILAdv_NoOpUpdateOnSealedAllowedButPKChangeRejected(t *testing.T) {
 // INSERT before/after seal; this closes the loop for UPDATE and DELETE too,
 // on rows that predate the seal (not just post-seal INSERT attempts).
 // Entirely inside a rolled-back super tx.
+//
+// CodeRabbit C5: the doc comment above claims the unsealed draft "freely
+// accepts INSERT/UPDATE/DELETE", but the DELETE half of that claim went
+// untested -- a second rule is inserted under the draft solely to be
+// DELETEd pre-seal (proving the claim for real) before the retained rule
+// continues through the rest of the lifecycle unchanged.
 func TestRILAdv_PartialSealLifecycleEndToEnd(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
@@ -257,6 +263,29 @@ func TestRILAdv_PartialSealLifecycleEndToEnd(t *testing.T) {
 
 	if _, err := tx.Exec(ctx, `UPDATE rules SET message = 'pre-seal-edited' WHERE id = $1`, rID); err != nil {
 		t.Fatalf("content UPDATE under unsealed draft: %v -- must succeed", err)
+	}
+
+	// Pre-seal DELETE: a second, disposable rule under the same unsealed draft is
+	// inserted then immediately deleted -- proving the draft "freely accepts... DELETE"
+	// claim above for real, distinct from rID (which survives to be exercised through
+	// the rest of this lifecycle).
+	var deletedRID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO rules (rule_set_version_id, key, type, severity, message)
+		 VALUES ($1, 'ril-adv-lifecycle-rule-to-delete', 'required', 'error', 'pre-seal-doomed') RETURNING id`,
+		draftID,
+	).Scan(&deletedRID); err != nil {
+		t.Fatalf("insert second rule under unsealed draft (to be deleted): %v -- must succeed", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM rules WHERE id = $1`, deletedRID); err != nil {
+		t.Fatalf("DELETE rule under unsealed draft: %v -- must succeed (unsealed versions accept DELETE)", err)
+	}
+	var deletedStillThere bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rules WHERE id = $1)`, deletedRID).Scan(&deletedStillThere); err != nil {
+		t.Fatalf("check pre-seal-deleted rule is gone: %v", err)
+	}
+	if deletedStillThere {
+		t.Error("rule still exists after a pre-seal DELETE under an unsealed draft, want gone")
 	}
 
 	// Seal it -- the publish step's last action.

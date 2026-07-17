@@ -371,6 +371,56 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 	return ""
 }
 
+// canonicalFIRSTIN matches the 12-digit canonical form portfolio's ValidateTIN
+// (internal/portfolio/tin.go) produces for a FIRS TIN -- the hyphen-stripped
+// spelling of NNNNNNNN-NNNN. A 10-digit JTB TIN is deliberately NOT matched
+// (see mbsSupplierTIN).
+var canonicalFIRSTIN = regexp.MustCompile(`^\d{12}$`)
+
+// mbsSupplierTIN restores the MBS wire spelling of an ENTITY's TIN as it
+// crosses the entity -> invoice boundary ([supplier-from-entity]).
+//
+// WHY THIS EXISTS: portfolio.ValidateTIN accepts a FIRS TIN in either
+// spelling (bare 12-digit or hyphenated NNNNNNNN-NNNN) and CANONICALIZES it
+// to 12 bare digits before persisting (tin.go:39, strings.Replace(trimmed,
+// "-", "", 1)) -- its own doc: "both spellings of a FIRS TIN persist
+// identically". The MBS rule supplier-tin-format
+// (migrations/20260711121327_seed_mbs_v1.sql) demands ^[0-9]{8}-[0-9]{4}$.
+// So an entity created through the REAL API path carries a TIN the wire rule
+// rejects, and every invoice imported for it reports a FALSE
+// supplier-tin-format violation -- a firm's valid invoices rejected.
+//
+// WHY HERE, and not in invoice.MBSPayload: an ENTITY tin is KNOWN-VALID (it
+// passed ValidateTIN + Luhn on the way in, and WE stripped the hyphen), so
+// restoring the spelling we removed is a faithful MAPPING, not a repair. A
+// user-supplied invoice TIN (POST /v1/invoices) has UNKNOWN validity, and
+// re-hyphenating it in the pure wire mapper would be FIXING USER DATA --
+// breaking store-invalid-faithfully (migrations/20260714103137_invoices.sql's
+// header), under which a malformed TIN MUST still violate. Restore the format
+// only where we stripped it.
+//
+// SHAPES -- the exact inverse of tin.go's canonicalization, which is the only
+// thing that writes business_entities.tin:
+//   - 12 bare digits -> NNNNNNNN-NNNN. Both FIRS spellings canonicalize to the
+//     same 12 digits and ARE the same TIN (tin.go's own doc), so both map onto
+//     the single MBS spelling.
+//   - 10-digit JTB TIN -> UNCHANGED. There is no hyphen to restore, and an 8+4
+//     split would fabricate a FIRS TIN out of a JTB one. Such a TIN genuinely
+//     cannot satisfy supplier-tin-format: that is a REAL violation to report
+//     (flagged by M4-04-08), not a formatting bug to paper over here.
+//   - anything else -- an already-hyphenated row we never canonicalized
+//     (db/demo-reset.sql's literals, raw-seeded fixtures) -> UNCHANGED.
+//
+// nil (an entity with no TIN) stays nil: supplier-tin-required fires, which is
+// the correct pre-existing signal (IMPV-12).
+func mbsSupplierTIN(tin *string) *string {
+	if tin == nil || !canonicalFIRSTIN.MatchString(*tin) {
+		return tin
+	}
+	wire := (*tin)[:8] + "-" + (*tin)[8:]
+	return &wire
+}
+
 // buildCreateInput assembles one invoice.CreateInput for a READY group:
 // header fields (issue_date/buyer_tin/buyer_name/currency/subtotal/vat/total)
 // come from the group's first row (they agree across the group, by
@@ -654,6 +704,11 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 	if err != nil {
 		return BatchResult{}, err
 	}
+	// Restore the entity TIN's MBS wire spelling ONCE, here at the entity ->
+	// invoice boundary, so the real (buildCreateInput below) and dry-run paths
+	// -- which both read this single variable -- structurally cannot disagree.
+	// EntitySupplier itself keeps returning the row EXACTLY as stored.
+	supplierTIN = mbsSupplierTIN(supplierTIN)
 
 	rowsTotal := len(rows)
 	rowsInvalid := invalidRows

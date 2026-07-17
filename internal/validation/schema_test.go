@@ -23,6 +23,7 @@ package validation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -81,24 +82,47 @@ func sweepOrphanFixtures(superURL string) {
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, superURL)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "sweepOrphanFixtures: connect superuser: %v\n", err)
 		return
 	}
 	defer pool.Close()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "sweepOrphanFixtures: begin tx: %v\n", err)
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	_, _ = tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER USER`)
-	_, _ = tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER USER`)
-	_, _ = tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE notes = $1 AND version NOT IN (1, 2)`, fixtureNotes)
-	_, _ = tx.Exec(ctx, `ALTER TABLE rules ENABLE TRIGGER USER`)
-	_, _ = tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER USER`)
+
+	// Best-effort: keep attempting every step even if one fails, but remember the FIRST
+	// error so an abnormal sweep failure surfaces on stderr instead of silently leaving
+	// the shared DB unrecovered (which would defeat the self-heal this sweep exists for).
+	var firstErr error
+	record := func(op string, err error) {
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", op, err)
+		}
+	}
+	_, err = tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER USER`)
+	record("disable rule_set_versions triggers", err)
+	_, err = tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER USER`)
+	record("disable rules triggers", err)
+	_, err = tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE notes = $1 AND version NOT IN (1, 2)`, fixtureNotes)
+	record("delete orphan fixtures", err)
+	_, err = tx.Exec(ctx, `ALTER TABLE rules ENABLE TRIGGER USER`)
+	record("enable rules triggers", err)
+	_, err = tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER USER`)
+	record("enable rule_set_versions triggers", err)
 	// The DELETE above may have cleared an active orphan (freeing the one-active slot);
 	// ensure v2 is active. Ordered delete-then-activate so the non-deferrable partial
 	// unique index never sees two active rows at once.
-	_, _ = tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 2 AND NOT is_active`)
-	_ = tx.Commit(ctx)
+	_, err = tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 2 AND NOT is_active`)
+	record("reactivate v2", err)
+	if err := tx.Commit(ctx); err != nil {
+		record("commit", err)
+	}
+	if firstErr != nil {
+		fmt.Fprintf(os.Stderr, "sweepOrphanFixtures: best-effort pre-flight sweep hit an error (shared DB may need manual cleanup): %v\n", firstErr)
+	}
 }
 
 // dbTestPools returns the superuser (seed) and app-role pools for this db-integration

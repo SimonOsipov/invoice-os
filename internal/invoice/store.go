@@ -335,13 +335,15 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 // legalTransitions is the SINGLE source of truth for the invoice lifecycle
 // state machine ([D1], [D11] -- no generic FSM framework, Simplicity First):
 // forward-only in M4-02 -- 6 edges, 3 terminals (accepted/rejected/failed have
-// no outgoing edge, so they are simply absent as map keys). Recovery/retry
-// edges (e.g. validated->draft, rejected->draft, failed->queued) are added by
-// the consumer stories that DRIVE them (the M4-05 fix loop, M5 submission
-// retries), never speculatively here.
+// no outgoing edge, so they are simply absent as map keys). M4-05 adds the
+// first recovery edge, validated->draft (the fix-loop demotion: editing a
+// validated invoice sends it back to draft for re-validation) -- 7 edges now.
+// Remaining recovery/retry edges (e.g. rejected->draft, failed->queued) are
+// added by the consumer stories that DRIVE them (M5 submission retries),
+// never speculatively here.
 var legalTransitions = map[Status][]Status{
 	StatusDraft:     {StatusValidated},
-	StatusValidated: {StatusQueued},
+	StatusValidated: {StatusQueued, StatusDraft},
 	StatusQueued:    {StatusSubmitted},
 	StatusSubmitted: {StatusAccepted, StatusRejected, StatusFailed},
 }

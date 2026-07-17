@@ -195,11 +195,11 @@ var (
 	// ErrNotDraft — the gate is draft-only ([gate-scope-draft-only]); any
 	// other status is refused with NOTHING written. From draft the gate needs
 	// only edges that already exist (clean -> draft->validated; blocked ->
-	// stay draft). A validated-but-now-dirty invoice would need a
-	// validated->draft demotion edge, which does not exist, is asserted
-	// ILLEGAL today (transition_test.go:163), and which legalTransitions
-	// reserves for the M4-05 fix loop — M4-05 widens the accepted states here
-	// and adds that edge.
+	// stay draft). M4-05 adds a validated->draft demotion edge to
+	// legalTransitions so a validated-but-now-dirty invoice can be fixed: the
+	// edit demotes it to draft FIRST, and re-validate then runs through this
+	// same, unchanged, draft-only gate -- M4-05 does NOT widen the states
+	// this gate accepts.
 	//
 	// ErrStaleValidation — the invoice's content changed under the validate
 	// run ([toctou-staleness]). The write tx cannot span the HTTP call to 04

@@ -351,15 +351,24 @@ func TestCreateHandler_DuplicateNumber409(t *testing.T) {
 // TestCreateHandler_201_WireShape (QA Mode B adversarial, Surface-Conflict
 // verification): a created invoice's RAW response body must be the
 // snake_case wire shape the story's System Design specifies -- entity_id,
-// invoice_number, status, violations, and line_items all present -- AND must
-// NOT contain rule_set_version_id at all. Invoice.Violations carries
-// `json:"violations"` (surfaced, always "[]" in M4-02) while
-// Invoice.RuleSetVersionID carries `json:"-"` (hidden, M4-04's field); this
-// test sets RuleSetVersionID to a non-nil value specifically so a regression
-// that dropped the `json:"-"` tag (reverting to a normal `json:"rule_set_version_id"`
-// tag) would leak the value into the body and fail this test -- checking the
-// raw bytes rather than a decoded struct (whose Go type simply lacks the
-// field) is what makes this non-vacuous.
+// invoice_number, status, violations, line_items and rule_set_version_id all
+// present.
+//
+// HISTORY: through M4-02 this test asserted the exact OPPOSITE for
+// rule_set_version_id -- that it must NOT appear at all. Invoice.RuleSetVersionID
+// carried `json:"-"` because M4-02 never wrote the column (it was always null)
+// and M4-02 explicitly DEFERRED the field's wire shape to M4-04; the assertion
+// was a deliberate tripwire, set so that dropping the `json:"-"` tag could not
+// happen silently -- it had to be a considered decision by whoever defined that
+// shape. M4-04-05 §c IS that decision: the validate gate now writes the column,
+// so the tag became `json:"rule_set_version_id"` and the tripwire is flipped to
+// assert PRESENCE. The tripwire did its job; this comment is its record.
+//
+// The test still sets RuleSetVersionID to a non-nil value and still checks the
+// RAW bytes rather than a decoded struct -- that is what keeps it non-vacuous
+// in EITHER direction: a decoded struct would prove nothing about the tag, and
+// a nil value would render `null` and pass a naive presence check without
+// proving the value is carried.
 func TestCreateHandler_201_WireShape(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	entityID := uuid.NewString()
@@ -385,8 +394,9 @@ func TestCreateHandler_201_WireShape(t *testing.T) {
 			t.Errorf("body = %s, want raw JSON to contain %s", raw, want)
 		}
 	}
-	if bytes.Contains(raw, []byte(`rule_set_version_id`)) {
-		t.Errorf("body = %s, must NOT contain rule_set_version_id (json:\"-\", hidden per M4-02 System Design)", raw)
+	if !bytes.Contains(raw, []byte(`"rule_set_version_id":"some-rule-set-version-id"`)) {
+		t.Errorf("body = %s, want raw JSON to carry the stamped rule_set_version_id "+
+			"(json:\"rule_set_version_id\" -- M4-04-05 §c defines the shape M4-02 deferred)", raw)
 	}
 }
 

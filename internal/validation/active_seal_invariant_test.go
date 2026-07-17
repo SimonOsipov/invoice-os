@@ -362,7 +362,7 @@ func TestASI06_SeedVersionActiveIsSealed(t *testing.T) {
 		t.Errorf("seedVersion(t, super, true) row is_active = false, want true")
 	}
 	if !sealed {
-		t.Errorf("seedVersion(t, super, true) row sealed = false, want true -- an active version must also be "+
+		t.Errorf("seedVersion(t, super, true) row sealed = false, want true -- an active version must also be " +
 			"sealed under the active⟹sealed invariant (pre-rework, seedVersion activates without sealing)")
 	}
 }
@@ -400,7 +400,7 @@ func TestASI07_SimulateActiveVersionRestoresAndSeals(t *testing.T) {
 			t.Errorf("simulateActiveVersion fixture is_active = false, want true")
 		}
 		if !sealed {
-			t.Errorf("simulateActiveVersion fixture sealed = false, want true -- an active fixture must also be "+
+			t.Errorf("simulateActiveVersion fixture sealed = false, want true -- an active fixture must also be " +
 				"sealed under the active⟹sealed invariant (pre-rework, simulateActiveVersion activates without sealing)")
 		}
 	})

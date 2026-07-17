@@ -255,3 +255,67 @@ export function toggleRule(token: string, key: string, enabled: boolean): Promis
     token,
   })
 }
+
+// Invoice mirrors internal/invoice/invoice.go's Invoice struct exactly (M4-04-08,
+// task-115). violations is Go json.RawMessage on the wire -- always a JSON array in
+// practice (invoices.violations jsonb NOT NULL DEFAULT '[]', migrations/
+// 20260714103137_invoices.sql), so Violation[] is the accurate wire shape, not a raw
+// string. rule_set_version_id is the LIVE-STAMPED uuid ([uuid-stamp]) -- distinct from
+// ValidateResult.rule_set_version above, which is the plain int the /v1/validate route
+// echoes; no route returns both on the same object.
+export interface Invoice {
+  id: string
+  entity_id: string
+  import_batch_id: string | null
+  invoice_number: string
+  status: 'draft' | 'validated' | 'queued' | 'submitted' | 'accepted' | 'rejected' | 'failed'
+  issue_date: string | null
+  supplier_tin: string | null
+  supplier_name: string | null
+  buyer_tin: string | null
+  buyer_name: string | null
+  currency: string | null
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  violations: Violation[]
+  rule_set_version_id: string | null
+  created_at: string
+  line_items?: unknown[]
+}
+
+export interface ListInvoicesQuery {
+  limit?: number
+  offset?: number
+}
+
+export interface ListInvoicesResponse {
+  invoices: Invoice[]
+  pagination: Pagination
+}
+
+// listInvoices(): GET /v1/invoices. NO entity/invoice_number/status filter exists
+// ([D8], internal/invoice/handlers.go's ListHandler doc: "No status/entity filters") --
+// only limit/offset, mirroring this file's listEntities shape. Callers that need to find
+// one particular invoice among a tenant's whole history must page and filter
+// client-side (see api/perf.spec.ts's findInvoiceId).
+export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<ListInvoicesResponse> {
+  const params = new URLSearchParams()
+  if (query?.limit !== undefined) params.set('limit', String(query.limit))
+  if (query?.offset !== undefined) params.set('offset', String(query.offset))
+  const qs = params.toString()
+  return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
+}
+
+export function getInvoice(token: string, id: string): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { token })
+}
+
+// validateInvoice(): POST /v1/invoices/{id}/validate -- THE gate ([gate-endpoint]), the
+// only route to `validated` and the on-demand re-validate endpoint. A blocking verdict
+// is still a 200 carrying violations as data (internal/invoice/handlers.go's
+// ValidateHandler doc), never an HTTP error -- ApiError from this call means 04 was
+// unreachable (502) or has no published rule-set (503), never "the invoice has errors".
+export function validateInvoice(token: string, id: string): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
+}

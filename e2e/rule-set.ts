@@ -1,14 +1,16 @@
 // The single source of truth for the ACTIVE global MBS rule-set version across the
 // whole e2e package ([e2e-active-version]).
 //
-// All THREE deployed-dev suites that observe the version resolve through here:
+// All FOUR deployed-dev suites that observe the version resolve through here:
 //   - api/validation.spec.ts   -- asserts the version /v1/validate stamps on its result.
 //   - topology/targets.ts      -- VALIDATION_EXPECTED.ruleSetVersion, which
 //                                 topology.spec.ts asserts against a LIVE RENDERED
 //                                 browser table cell.
 //   - demo/day30.spec.ts       -- asserts the same LIVE RENDERED cell inside the Day-30
 //                                 journey (the AC-5 violations table).
-// All three are steps of the one gated `e2e` job in dev-env.yml, so a version publish
+//   - api/perf.spec.ts         -- asserts the version POST /v1/imports stamps into its
+//                                 response body's rule_set_version (M4-04-08's PERF-02).
+// All four are steps of the one gated `e2e` job in dev-env.yml, so a version publish
 // breaks them together -- and one constant fixes them together.
 //
 // ONE module, not three constants in three directories: scattered version literals are

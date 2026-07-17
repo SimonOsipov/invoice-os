@@ -63,6 +63,22 @@ type transitionReq struct {
 	Target string `json:"target"`
 }
 
+// editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
+// optional header MBS-content fields, snake_case tags IDENTICAL to
+// createRequest's own (above) minus entity_id/invoice_number/line_items --
+// identity and lifecycle are not the edit's job ([D9]).
+type editReq struct {
+	IssueDate    *time.Time `json:"issue_date"`
+	SupplierTIN  *string    `json:"supplier_tin"`
+	SupplierName *string    `json:"supplier_name"`
+	BuyerTIN     *string    `json:"buyer_tin"`
+	BuyerName    *string    `json:"buyer_name"`
+	Currency     *string    `json:"currency"`
+	Subtotal     *string    `json:"subtotal"`
+	VAT          *string    `json:"vat"`
+	Total        *string    `json:"total"`
+}
+
 // listPagination is the "pagination" object in ListHandler's response
 // envelope: the effective limit/offset applied (after defaulting/clamping)
 // plus the total filtered count across all pages ([D8]).
@@ -356,6 +372,15 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, err
 		}
 
 		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// EditHandler returns PATCH /v1/invoices/{id} (M4-05-03).
+//
+// STUB — replaced by M4-05-03 executor
+func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented [M4-05-03]")
 	}
 }
 

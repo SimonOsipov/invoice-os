@@ -34,6 +34,7 @@ package db_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -44,6 +45,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	dbsql "github.com/SimonOsipov/invoice-os/db"
+	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 // bootstrapSQLPath is db/bootstrap.sql relative to this package directory
@@ -757,5 +762,392 @@ func TestMakefileDevDBPipesBootstrapViaExplicitFileFlag(t *testing.T) {
 	}
 	if !strings.Contains(window, "-f -") {
 		t.Errorf("dev-db recipe pipes db/bootstrap.sql via stdin without an explicit `-f -` flag — psql silently ignores redirected stdin once any -c flag is present (confirmed empirically), which would make the whole roles/passwords bootstrap step a silent no-op:\n%s", window)
+	}
+}
+
+// ---- [M4-21-03] Go provisioning runner (Test-first RED, Mode A) ------------------
+//
+// Pre-authored (task-127) BEFORE internal/platform/db/bootstrap.go's real bodies
+// exist — Test-first: yes. bootstrap.go currently ships only Mode-A stubs (a
+// hardcoded false / a "not implemented" error) so this file compiles; every test
+// below fails on an ASSERTION against that stub, never on a missing symbol.
+//
+// DB-backed cases follow the same conventions as the M4-21-02 section above: skip
+// on DATABASE_SUPERUSER_URL only, mutate the SAME three shared roles as the rest
+// of this file so none use t.Parallel(), and register their restore-to-baseline
+// t.Cleanup BEFORE mutating anything, so a RED failure never leaves the shared
+// roles rotated for the rest of the package's run. TestBootstrapEnabledAllowlist
+// is the one exception: task-127 requires the allowlist guard to be a pure
+// unit test with no DB dependency at all, so `go test ./...` stays green with no
+// database.
+
+// TestBootstrapEnabledAllowlist: Test Spec row 1 / AC-3. The crux fail-closed
+// behavior (QA F1, BLOCKER): db.BootstrapEnabled must be an ALLOWLIST, not a
+// blocklist — unset/unknown/production-lookalike environments are false
+// regardless of the flag, and only "development" or a PR-env name shape is ever
+// true, and only with flag == "true" exactly. The first ten cases are the
+// architect's own Test Specs row verbatim; the rest are the "production
+// lookalikes" (mixed case, surrounding whitespace) and PR-env-shape edge cases
+// this task's brief calls out as required assertions for this specific guard.
+func TestBootstrapEnabledAllowlist(t *testing.T) {
+	cases := []struct {
+		name        string
+		environment string
+		flag        string
+		want        bool
+	}{
+		// --- architect's Test Specs row, verbatim ---
+		{`("development","true")`, "development", "true", true},
+		{`("pr-42","true")`, "pr-42", "true", true},
+		{`("invoice-os-pr-42","true")`, "invoice-os-pr-42", "true", true},
+		{`("production","true")`, "production", "true", false},
+		{`("development","false")`, "development", "false", false},
+		{`("production","")`, "production", "", false},
+		{`("","true") — QA F1: was true under the old blocklist`, "", "true", false},
+		{`("staging","true") — unrecognised value, QA F1`, "staging", "true", false},
+		{`("Production","true")`, "Production", "true", false},
+		{`("prod","true")`, "prod", "true", false},
+
+		// --- additional required assertions: production/allowlist lookalikes ---
+		{"leading-whitespace production", " production", "true", false},
+		{"trailing-whitespace production", "production ", "true", false},
+		{"leading-whitespace development (not an exact match)", " development", "true", false},
+		{"trailing-whitespace development (not an exact match)", "development ", "true", false},
+		{"all-caps DEVELOPMENT", "DEVELOPMENT", "true", false},
+
+		// --- additional required assertions: PR-env shape edge cases ---
+		{"uppercase PR- prefix", "PR-42", "true", false},
+		{"pr- with non-numeric suffix", "pr-abc", "true", false},
+		{"pr- with no number", "pr-", "true", false},
+		{"pr- with trailing garbage after the number", "pr-42x", "true", false},
+		{"pr- with trailing whitespace", "pr-42 ", "true", false},
+
+		// --- additional required assertions: the flag itself must be exactly "true" ---
+		{"flag uppercase TRUE", "development", "TRUE", false},
+		{"flag numeric 1", "development", "1", false},
+		{"flag yes", "invoice-os-pr-42", "yes", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := db.BootstrapEnabled(tc.environment, tc.flag); got != tc.want {
+				t.Errorf("BootstrapEnabled(%q, %q) = %v, want %v", tc.environment, tc.flag, got, tc.want)
+			}
+		})
+	}
+}
+
+// closedPortDSN rewrites superDSN's host:port to one this process just bound and
+// immediately released — guaranteed nobody is listening there — while keeping the
+// same user/password/dbname/sslmode. Used by
+// TestBootstrapRetriesThenFailsOnUnreachableDB so "unreachable" is a real closed
+// port, not a guess at one that happens to be free.
+func closedPortDSN(t *testing.T, superDSN string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind a port to find one to close: %v", err)
+	}
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split host:port: %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close the port before returning it as 'unreachable': %v", err)
+	}
+
+	u, err := url.Parse(superDSN)
+	if err != nil {
+		t.Fatalf("parse superuser dsn: %v", err)
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), port)
+	return u.String()
+}
+
+// advisoryKeyGranted reports whether pg_locks currently shows ANY session holding
+// the session-level advisory lock for key (the single-bigint-argument
+// pg_advisory_lock form, which Postgres records with objsubid = 1, classid = the
+// key's high 32 bits and objid = its low 32 bits). db.BootstrapAdvisoryLockKey is
+// a small positive constant, so its classid is always 0 here.
+func advisoryKeyGranted(t *testing.T, pool *pgxpool.Pool, key int64) bool {
+	t.Helper()
+	var held bool
+	err := pool.QueryRow(context.Background(),
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_locks
+			WHERE locktype = 'advisory' AND granted
+			  AND objsubid = 1 AND classid = 0 AND objid = $1
+		)`, key,
+	).Scan(&held)
+	if err != nil {
+		t.Fatalf("query pg_locks for advisory key %d: %v", key, err)
+	}
+	return held
+}
+
+// acquireAdvisoryLockRoundTrip proves key is actually free (not merely absent from
+// pg_locks) by acquiring and releasing it on ONE held connection — the real
+// guarantee AC-5 promises: "a later boot is not deadlocked by a leaked lock".
+// Deliberately uses pool.Acquire (one physical connection) rather than two
+// separate pool.QueryRow calls, since a pgxpool.Pool method call may land on a
+// different physical connection each time, and a session-level advisory lock is
+// tied to the connection that took it.
+func acquireAdvisoryLockRoundTrip(t *testing.T, pool *pgxpool.Pool, key int64) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection to test advisory key %d: %v", key, err)
+	}
+	defer conn.Release()
+
+	var acquired bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&acquired); err != nil {
+		t.Fatalf("pg_try_advisory_lock(%d): %v", key, err)
+	}
+	if !acquired {
+		t.Fatalf("pg_try_advisory_lock(%d) = false — another session still holds it after Bootstrap returned; a leaked lock would deadlock every subsequent boot", key)
+	}
+
+	var released bool
+	if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, key).Scan(&released); err != nil {
+		t.Fatalf("pg_advisory_unlock(%d): %v", key, err)
+	}
+	if !released {
+		t.Errorf("pg_advisory_unlock(%d) = false — this connection did not actually hold the lock it just acquired", key)
+	}
+}
+
+// TestBootstrapFromEmbedded: Test Spec row 2 / AC-1. Runs db.Bootstrap against
+// dbsql.FS (the EMBEDDED copy, go:embed'd from db/), never the on-disk file
+// readBootstrapSQL(t) uses elsewhere in this file — this is what proves the
+// embedded copy is complete, exactly as TestMigrateUpFromEmbedded does for
+// migrations. As with the M4-21-02 section's tests, this package's shared dev/CI
+// Postgres already has the three roles bootstrapped and owning the migrated
+// schema; forcibly dropping them to honor a literal "empty DB" precondition would
+// destroy that schema out from under every other test in this package, so — like
+// TestBootstrapSQLCreatesRolesWithGivenPasswords — this exercises the
+// create-or-converge path with unique per-run passwords and proves them via an
+// actual login, which is exactly what a genuinely fresh/empty DB's first boot
+// would also exercise.
+func TestBootstrapFromEmbedded(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+
+	pw := db.RolePasswords{
+		Migrator: "boot-embed-mig-" + uuid.NewString(),
+		App:      "boot-embed-app-" + uuid.NewString(),
+		Reader:   "boot-embed-rdr-" + uuid.NewString(),
+	}
+
+	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
+		t.Fatalf("Bootstrap from embedded dbsql.FS: %v", err)
+	}
+
+	for _, tc := range []struct{ role, password string }{
+		{"invoice_migrator", pw.Migrator},
+		{"invoice_app", pw.App},
+		{"invoice_tenant_reader", pw.Reader},
+	} {
+		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
+			t.Errorf("%s: login with the Bootstrap-injected password failed: %v", tc.role, err)
+		}
+	}
+}
+
+// TestBootstrapRejectsEmptyPasswords: Test Spec row 3 / AC-4. A RolePasswords with
+// any ONE field empty must be rejected — with an error naming that field — before
+// any statement touches the database. Sentinel passwords are planted on all three
+// roles beforehand (mirroring TestBootstrapSQLFailsClosedOnMissingPassword) and
+// re-checked afterward: if Bootstrap validated only the empty field and still
+// applied the other two (valid) passwords it supplied, that would be a partial,
+// non-fail-closed rotation — so EVERY role's sentinel, not just the empty one's,
+// must still work after the rejected call.
+func TestBootstrapRejectsEmptyPasswords(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+
+	sentinels := map[string]string{
+		"invoice_migrator":      "boot-empty-sentinel-mig",
+		"invoice_app":           "boot-empty-sentinel-app",
+		"invoice_tenant_reader": "boot-empty-sentinel-rdr",
+	}
+	for role, pw := range sentinels {
+		alterRolePassword(t, pool, role, pw)
+	}
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
+	for role, pw := range sentinels {
+		if err := attemptLogin(t, loginDSN(t, superDSN, role, pw)); err != nil {
+			t.Fatalf("sanity: login as %s with its sentinel password before the test: %v", role, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		pw        db.RolePasswords
+		wantField string
+	}{
+		{
+			name:      "empty migrator",
+			pw:        db.RolePasswords{Migrator: "", App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString()},
+			wantField: "migrator",
+		},
+		{
+			name:      "empty app",
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "", Reader: "boot-empty-rdr-" + uuid.NewString()},
+			wantField: "app",
+		},
+		{
+			name:      "empty reader",
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: ""},
+			wantField: "reader",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := db.Bootstrap(context.Background(), superDSN, tc.pw, dbsql.FS)
+			if err == nil {
+				t.Fatalf("Bootstrap with %s: got nil error, want a fail-closed error naming the empty field", tc.name)
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), tc.wantField) {
+				t.Errorf("error = %q, want it to name the empty field %q", err.Error(), tc.wantField)
+			}
+			for role, pw := range sentinels {
+				if loginErr := attemptLogin(t, loginDSN(t, superDSN, role, pw)); loginErr != nil {
+					t.Errorf("%s: its sentinel password no longer works after the rejected call — the database was modified despite the validation failure: %v", role, loginErr)
+				}
+			}
+		})
+	}
+}
+
+// TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock: Test Spec row 4 / AC-5.
+// The crux advisory-lock behavior (QA F7): TestBootstrapSQLConcurrentInvocationConverges
+// above already proved EMPIRICALLY that concurrent bootstrap.sql execution with no
+// serialization can raise Postgres's "tuple concurrently updated" (SQLSTATE
+// XX000) — the exact failure mode the advisory lock exists to prevent. Here N=4
+// goroutines call db.Bootstrap CONCURRENTLY with the SAME passwords; unlike that
+// baseline test, every single call must return nil — the lock is what turns "may
+// race" into "always serializes" — and the roles must exist exactly once with the
+// final password logging in.
+func TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+
+	pw := db.RolePasswords{
+		Migrator: "boot-conc-run-mig-" + uuid.NewString(),
+		App:      "boot-conc-run-app-" + uuid.NewString(),
+		Reader:   "boot-conc-run-rdr-" + uuid.NewString(),
+	}
+
+	const n = 4
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Bootstrap call returned an error — the advisory lock must serialize these so every call succeeds, not just a race survivor: %v", err)
+		}
+	}
+
+	for _, tc := range []struct{ role, password string }{
+		{"invoice_migrator", pw.Migrator},
+		{"invoice_app", pw.App},
+		{"invoice_tenant_reader", pw.Reader},
+	} {
+		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
+			t.Errorf("%s: login after the concurrent Bootstrap calls failed — end state did not converge: %v", tc.role, err)
+		}
+	}
+}
+
+// TestBootstrapReleasesAdvisoryLock: Test Spec row 5 / AC-5. After a completed
+// Bootstrap, db.BootstrapAdvisoryLockKey must show granted=false in pg_locks (no
+// session left holding it), AND a fresh session must actually be able to acquire
+// it — the real guarantee AC-5 promises ("a later boot is not deadlocked by a
+// leaked lock"), not merely that a catalog view looks empty.
+func TestBootstrapReleasesAdvisoryLock(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+
+	pw := db.RolePasswords{
+		Migrator: "boot-lock-mig-" + uuid.NewString(),
+		App:      "boot-lock-app-" + uuid.NewString(),
+		Reader:   "boot-lock-rdr-" + uuid.NewString(),
+	}
+	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	if advisoryKeyGranted(t, pool, db.BootstrapAdvisoryLockKey) {
+		t.Errorf("pg_locks still shows advisory key %d granted after Bootstrap returned — the lock was not released", db.BootstrapAdvisoryLockKey)
+	}
+	acquireAdvisoryLockRoundTrip(t, pool, db.BootstrapAdvisoryLockKey)
+}
+
+// TestBootstrapRetriesThenFailsOnUnreachableDB: Test Spec row 6 / AC-6. A DSN
+// pointing at a port this test just closed must make Bootstrap return a non-nil
+// error within a bounded window — never hang, never panic. Critically, the error
+// must actually be CONNECTION-shaped (mentions "connect"), not just "any non-nil
+// error": a stub that immediately returns an unrelated "not implemented" error
+// would otherwise satisfy "non-nil, no hang" vacuously without ever having
+// attempted a connection at all.
+func TestBootstrapRetriesThenFailsOnUnreachableDB(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	dsn := closedPortDSN(t, superDSN)
+	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x"}
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- db.Bootstrap(context.Background(), dsn, pw, dbsql.FS) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("Bootstrap against a closed port returned nil, want a connect error")
+		}
+		if elapsed := time.Since(start); elapsed > 30*time.Second {
+			t.Errorf("Bootstrap took %s to fail against a closed port — want a bounded connect-retry window", elapsed)
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "connect") {
+			t.Errorf("error = %q, want it to indicate a connection failure (e.g. contain \"connect\"), proving Bootstrap actually attempted to reach the DB rather than failing for an unrelated reason", err.Error())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("Bootstrap against a closed port did not return within 30s — the connect retry is not bounded (hangs)")
+	}
+}
+
+// TestBootstrapThenMigrateSucceedsAsMigrator: Test Spec row 8 / AC-1. End-to-end
+// proof of the one-source invariant (Decision [one-bootstrap-file]): Bootstrap
+// issues a migrator password, and logging in as invoice_migrator with EXACTLY
+// that password and running MigrateUp must succeed with nothing pending — proving
+// the Go runner's password never diverges from what the role actually accepts.
+func TestBootstrapThenMigrateSucceedsAsMigrator(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+
+	pw := db.RolePasswords{
+		Migrator: "boot-mig-e2e-" + uuid.NewString(),
+		App:      "boot-app-e2e-" + uuid.NewString(),
+		Reader:   "boot-rdr-e2e-" + uuid.NewString(),
+	}
+	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	migratorDSN := loginDSN(t, superDSN, "invoice_migrator", pw.Migrator)
+	if err := db.MigrateUp(context.Background(), migratorDSN, migrations.FS); err != nil {
+		t.Fatalf("MigrateUp with the Bootstrap-issued migrator password: %v", err)
 	}
 }

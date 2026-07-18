@@ -260,3 +260,84 @@ describe('QUOTA', () => {
     expect(q.over).toBe(8214)
   })
 })
+
+// Adversarial (QA Mode B, M4-20-08) — STATUS_COMPONENTS/INCIDENTS/STATUS_TONE are plain
+// exported data.tsx constants like the seed blocks above, so they get the same direct
+// unit coverage rather than only being exercised indirectly through the Phase 3.5
+// screenshot gate. Status.tsx's nested `strip.map` inside `components.map` is this
+// story's highest console-error risk (task-145 A4): the outer list is keyed on
+// `c.name` and the incident list on `inc.date`, so a silent seed edit that duplicated
+// either would collide a React key and red the smoke build on `console.error`. These
+// pin the seed invariants: exactly six components, exactly one DEGRADED, unique names,
+// bad (red) cells confined to the degraded component at its documented indices, and
+// exactly three incidents with unique dates.
+import { INCIDENTS, STATUS_COMPONENTS, STATUS_TONE } from './data'
+
+describe('STATUS_COMPONENTS', () => {
+  it('status_components_has_exactly_six_rows_in_proto_order: proto:1045-1052 lists API gateway first and Evidence store last', () => {
+    expect(STATUS_COMPONENTS.length).toBe(6)
+    expect(STATUS_COMPONENTS[0]!.name).toBe('API gateway')
+    expect(STATUS_COMPONENTS[5]!.name).toBe('Evidence store')
+  })
+
+  it('status_component_names_are_unique: no two rows share a name — this is the outer .map key, so a collision would red the smoke build on a duplicate-key console.error', () => {
+    const names = STATUS_COMPONENTS.map((c) => c.name)
+    expect(names.length).toBe(6)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('status_has_exactly_one_degraded_component_and_it_is_the_tax_authority_connection: the other five are OPERATIONAL/green (guards filter()/every() against a vacuous pass on an emptied array)', () => {
+    expect(STATUS_COMPONENTS.length).toBeGreaterThan(0)
+    const degraded = STATUS_COMPONENTS.filter((c) => c.status === 'DEGRADED')
+    expect(degraded.length).toBe(1)
+    expect(degraded[0]!.name).toBe('Tax-authority connection (FIRS/MBS)')
+    expect(degraded[0]!.tone).toBe('amber')
+    const operational = STATUS_COMPONENTS.filter((c) => c.status === 'OPERATIONAL')
+    expect(operational.length).toBe(5)
+    expect(operational.every((c) => c.tone === 'green')).toBe(true)
+  })
+
+  it('every_strip_has_exactly_ninety_cells: upStrip(seed, badIdx) returns 90 entries for all six seeds actually wired into this screen', () => {
+    expect(STATUS_COMPONENTS.every((c) => c.strip.length === 90)).toBe(true)
+  })
+
+  it('bad_red_cells_are_confined_to_the_degraded_component_at_indices_86_through_89: the other five components (badIdx=[]) carry zero red cells; pins the seed/badIdx wiring in data.tsx itself, not just upStrip in isolation', () => {
+    const RED = 'var(--status-red-text)'
+    const [gateway, validation, pipeline, tax, webhook, evidence] = STATUS_COMPONENTS
+    for (const c of [gateway!, validation!, pipeline!, webhook!, evidence!]) {
+      expect(c.strip.some((d) => d.fill === RED)).toBe(false)
+    }
+    const redIndices = tax!.strip.reduce<number[]>((acc, d, i) => (d.fill === RED ? [...acc, i] : acc), [])
+    expect(redIndices).toEqual([86, 87, 88, 89])
+  })
+
+  it('status_tone_lookup_resolves_for_every_component: STATUS_TONE[c.tone] is never undefined (guards the badge-colour lookup Status.tsx performs per row)', () => {
+    expect(STATUS_COMPONENTS.every((c) => STATUS_TONE[c.tone] !== undefined)).toBe(true)
+  })
+})
+
+describe('INCIDENTS', () => {
+  it('incidents_has_exactly_three_rows_in_proto_order: proto:1055-1058 order is Jul 14, Jul 02, Jun 21', () => {
+    expect(INCIDENTS.length).toBe(3)
+    expect(INCIDENTS.map((i) => i.date)).toEqual(['Jul 14', 'Jul 02', 'Jun 21'])
+  })
+
+  it('incident_dates_are_unique: no two rows share a date — this is the .map key', () => {
+    const dates = INCIDENTS.map((i) => i.date)
+    expect(new Set(dates).size).toBe(dates.length)
+  })
+
+  it('incident_statuses_match_tone_by_the_prototype_rule: MONITORING is amber, both RESOLVED rows are green (guards filter()/every() against a vacuous pass on an emptied array)', () => {
+    expect(INCIDENTS.length).toBeGreaterThan(0)
+    const monitoring = INCIDENTS.filter((i) => i.status === 'MONITORING')
+    expect(monitoring.length).toBe(1)
+    expect(monitoring[0]!.tone).toBe('amber')
+    const resolved = INCIDENTS.filter((i) => i.status === 'RESOLVED')
+    expect(resolved.length).toBe(2)
+    expect(resolved.every((i) => i.tone === 'green')).toBe(true)
+  })
+
+  it('incident_tone_lookup_resolves_for_every_row: STATUS_TONE[i.tone] is never undefined', () => {
+    expect(INCIDENTS.every((i) => STATUS_TONE[i.tone] !== undefined)).toBe(true)
+  })
+})

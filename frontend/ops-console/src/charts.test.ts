@@ -27,6 +27,7 @@ import {
   rng,
   SCALE_PLAN,
   series,
+  spendTotals,
   upStrip,
   type RejectionInput,
 } from './charts'
@@ -283,6 +284,61 @@ describe('buildSpendBars', () => {
   // (not just per-field) equality across two calls is the guard.
   it('spend_bars_are_fully_deterministic: buildSpendBars() called twice returns a deeply equal 30-element array', () => {
     expect(buildSpendBars()).toEqual(buildSpendBars())
+  })
+})
+
+// QA Mode B (M4-20-03) — spendTotals() is the one new export this subtask adds to
+// charts.ts (D1): buildSpendBars() only returns bar geometry, so the Spend MTD KPI card
+// and the Spend-over-time card's two headline figures need their own export. Both specs
+// below were re-derived independently in Node against the shipped implementation, not
+// guessed.
+describe('spendTotals', () => {
+  it('spend_totals_seeded_values: spendTotals() returns the seeded 22-day sum/projection and nairaC compacts both to the pinned KPI strings', () => {
+    const { mtd, proj } = spendTotals()
+
+    expect(mtd).toBeCloseTo(3722091.704105027, 6)
+    expect(proj).toBeCloseTo(5075579.5965068545, 6)
+    expect(nairaC(mtd)).toBe('₦3.72M')
+    expect(nairaC(proj)).toBe('₦5.08M')
+  })
+
+  // Product-advisor recommendation: spendTotals() and buildSpendBars() currently share
+  // a private `spendSeries()` helper (structural coupling) — nothing stops a future edit
+  // from giving one of them its own seed and silently drifting the two apart. A first
+  // draft of this spec tried to recover buildSpendBars()'s internal scale (spMax) from
+  // spendTotals().mtd and reconstruct the total from bar heights; mutation-testing that
+  // draft (drift spendTotals() to a different seed) proved it a tautology — because
+  // buildSpendBars() defines its projected-bar height as the *mean* of its own actual
+  // bars by construction, feeding any mtd back through that ratio always reconstructs
+  // the same mtd, independent of whether the two functions actually share a seed. That
+  // reconstruction is scale-bound to whatever `mtd` you feed it, so it can never fail.
+  //
+  // This version is genuinely independent: it regenerates the documented ground-truth
+  // series via the *exported*, pure `series()` (same literal params buildSpendBars is
+  // documented to use: n=22, base=148000, amp=52000, trend=1500, seed=213) — not the
+  // module-private `spendSeries()` helper the two functions actually share — and checks
+  // that buildSpendBars()'s 22 actual-bar heights are *proportional* to that ground
+  // truth (ratio-to-first-bar, scale-free, so it isn't vulnerable to the same
+  // tautology). A same-seed run's ratios track the ground truth within ~0.001; any
+  // other seed's ratios diverge by ~0.09-0.12 on average (re-derived in Node against
+  // seeds 71/88/44) — nearly two orders of magnitude apart, so 0.02 is a safe cutoff.
+  it('spend_totals_matches_bar_series: buildSpendBars() actual-bar heights are proportional to the same seed-213 series spendTotals().mtd sums (shared-seed invariant)', () => {
+    const groundTruth = series(22, 148000, 52000, 1500, 213)
+    const { mtd } = spendTotals()
+    expect(mtd).toBeCloseTo(
+      groundTruth.reduce((a, b) => a + b, 0),
+      6,
+    )
+
+    const bars = buildSpendBars()
+    const actualHeights = bars.slice(0, 22).map((b) => pct(b.h))
+    let totalRatioDiff = 0
+    for (let i = 1; i < 22; i++) {
+      const barRatio = actualHeights[i]! / actualHeights[0]!
+      const seriesRatio = groundTruth[i]! / groundTruth[0]!
+      totalRatioDiff += Math.abs(barRatio - seriesRatio)
+    }
+    expect(totalRatioDiff / 21).toBeLessThan(0.02)
   })
 })
 

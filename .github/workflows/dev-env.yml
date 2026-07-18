@@ -432,9 +432,23 @@ jobs:
     container: ghcr.io/railwayapp/cli:4.66.0
     steps:
       - uses: actions/checkout@v4
-      - name: railway up gateway
+      # PR path — account-scoped token. RAILWAY_TOKEN must be ABSENT, not empty:
+      # measured 2026-07-19 in ghcr.io/railwayapp/cli:4.66.0, RAILWAY_TOKEN='' alongside a
+      # valid RAILWAY_API_TOKEN still fails "Unauthorized", and a ternary cannot omit an
+      # env key. Hence two steps rather than one.
+      - name: railway up gateway (PR — account token)
+        if: github.event_name != 'workflow_dispatch'
         env:
-          RAILWAY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh gateway
+        timeout-minutes: 15
+      # Dispatch path — project token scoped to `development`. Proven working by real
+      # deploys (runs 29508626447, 29317896755 on main). Unchanged deliberately.
+      - name: railway up gateway (dispatch — project token)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
           RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
         run: sh scripts/ci/railway-up-ci.sh gateway
         timeout-minutes: 15
@@ -460,7 +474,7 @@ jobs:
           echo "Waiting for $GATEWAY_URL/healthz ..."
           ok=0
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
-          # services (M4-21 per-PR environments, Decision
+          # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
           # exception the old 360s window assumed. Widen further if the
           # first green cold run needs it.
@@ -489,9 +503,20 @@ jobs:
         service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications]
     steps:
       - uses: actions/checkout@v4
-      - name: railway up ${{ matrix.service }}
+      # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
+      # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
+      # fails too, so the PR path needs the key genuinely absent.
+      - name: railway up ${{ matrix.service }} (PR — account token)
+        if: github.event_name != 'workflow_dispatch'
         env:
-          RAILWAY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
+        timeout-minutes: 15
+      - name: railway up ${{ matrix.service }} (dispatch — project token)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
           RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
@@ -514,9 +539,20 @@ jobs:
         service: [landing, app, ops-console]
     steps:
       - uses: actions/checkout@v4
-      - name: railway up ${{ matrix.service }}
+      # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
+      # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
+      # fails too, so the PR path needs the key genuinely absent.
+      - name: railway up ${{ matrix.service }} (PR — account token)
+        if: github.event_name != 'workflow_dispatch'
         env:
-          RAILWAY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
+        timeout-minutes: 15
+      - name: railway up ${{ matrix.service }} (dispatch — project token)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
           RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
@@ -602,7 +638,7 @@ jobs:
         run: |
           echo "Polling $GATEWAY_URL/healthz/fleet ..."
           code=000
-          # 600s (120 x 5s): every environment is now a cold build (M4-21 per-PR
+          # 600s (120 x 5s): every environment is now a cold build (M4-23 per-PR
           # environments, Decision [gate-windows-provisional]) — widened from 200s.
           for _ in $(seq 1 120); do
             code=$(curl -sS --connect-timeout 5 --max-time 10 -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
@@ -652,7 +688,7 @@ jobs:
           for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL"; do
             echo "Waiting for $url/health ..."
             ok=0
-            # 600s (120 x 5s): every environment is now a cold build (M4-21
+            # 600s (120 x 5s): every environment is now a cold build (M4-23
             # per-PR environments, Decision [gate-windows-provisional]) —
             # widened from 200s.
             for _ in $(seq 1 120); do

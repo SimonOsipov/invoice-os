@@ -1,6 +1,9 @@
 package main
 
-import "regexp"
+import (
+	"regexp"
+	"strconv"
+)
 
 // envNamePattern anchors both Railway PR-environment name shapes at both
 // ends: bare "pr-<N>" and repo-qualified "<repo>-pr-<N>". The <repo>-
@@ -15,19 +18,24 @@ import "regexp"
 // what rejects a leading-zero lookalike like pr-01 without complicating
 // the character class (technique carried over verbatim from the deleted
 // match.go's shapePattern).
+//
+// Deliberate asymmetry (AC-9): internal/platform/db/bootstrap.go:39's
+// prEnvironmentPattern uses this same shape and therefore ACCEPTS
+// "pr-01", while ParsePR rejects it. Unreachable via the automated path
+// (Name never emits a leading zero) and it fails safe in both directions,
+// so no code change follows from it.
 var envNamePattern = regexp.MustCompile(`^(?:.+-)?pr-([0-9]+)$`)
-
-// STUB NOTICE: Name and ParsePR are compile-only stubs for the Stage 2.5
-// (QA Mode A / RED) test-spec pass of M4-23-01 (task-154). Both panic
-// unconditionally -- the real logic (bare string construction for Name;
-// anchored-match, overflow-checked, parse-then-re-render for ParsePR)
-// lands in Stage 3 (Executor). Every name_test.go case that expects a
-// non-panicking result is RED until then.
 
 // Name returns the Railway PR-environment name for pr: "pr-<pr>". It is
 // the only place in the repo that constructs an environment name (AC-1).
+//
+// Name is deliberately total and unvalidating: Name(-1) returns "pr--1"
+// rather than an error. The trust boundary is argv -- main rejects pr < 1
+// with exit 2 -- not this pure function, whose only in-process caller
+// passes github.event.number (>= 1 by construction). The round trip with
+// ParsePR therefore holds for pr >= 1 only, by design.
 func Name(pr int) string {
-	panic("not implemented")
+	return "pr-" + strconv.Itoa(pr)
 }
 
 // ParsePR reports the PR number encoded in a Railway PR-environment name,
@@ -36,5 +44,21 @@ func Name(pr int) string {
 // runs such as a leading zero (AC-3). Returns (0, false) for any name that
 // is not a PR-environment name in either shape (AC-4).
 func ParsePR(name string) (int, bool) {
-	panic("not implemented")
+	submatch := envNamePattern.FindStringSubmatch(name)
+	if submatch == nil {
+		return 0, false
+	}
+	// Reachable, not defensive: [0-9]+ is unbounded, so a digit run long
+	// enough to overflow int makes Atoi return ErrRange.
+	n, err := strconv.Atoi(submatch[1])
+	if err != nil {
+		return 0, false
+	}
+	// Parse-then-re-render: the inverse of the deleted match.go's
+	// `submatch[1] != want` check. Requiring the captured digits to equal
+	// their own canonical rendering is what rejects "pr-01".
+	if strconv.Itoa(n) != submatch[1] {
+		return 0, false
+	}
+	return n, true
 }

@@ -320,12 +320,26 @@ cmd_ensure_environment() {
 
   echo "No environment named '$name' exists — creating it as a fork of $RAILWAY_DEV_ENVIRONMENT_ID ..."
 
-  local err1="" err2="" why attempt
+  local err1="" err2="" why attempt created_ok=0
   for attempt in 1 2; do
     why=""
-    if attempt_create "$name"; then
+    if [ "$attempt" = "2" ] && [ "$created_ok" = "1" ]; then
+      # Attempt 1's environmentCreate REPORTED SUCCESS and the confirming
+      # re-query still could not see it. Do NOT create again: read-after-write
+      # lag is far likelier than a phantom success, and a second create would
+      # fork a DUPLICATE pr-<N> — which lookup_environment would then refuse as
+      # ambiguous on every subsequent run, leaving two environments to clean up
+      # by hand. Wait longer and re-query instead.
+      echo "The environment is still not visible after a create that reported success — waiting again and re-querying. Deliberately NOT creating a second time: that would fork a duplicate."
+      sleep 15
+    elif attempt_create "$name"; then
+      created_ok=1
       echo "environmentCreate (attempt $attempt) returned without error; confirming with an INDEPENDENT re-query rather than trusting the mutation's own selection set ..."
+      # Railway is read-after-write lagged often enough that an instant re-query
+      # is the worst possible moment to ask.
+      sleep 10
     else
+      created_ok=0
       why="$GQL_ERROR"
       echo "::warning::environmentCreate attempt $attempt failed: $why"
       echo "Railway can report failure having created the environment anyway — waiting 15s and re-querying instead of blindly retrying."
@@ -348,7 +362,7 @@ cmd_ensure_environment() {
     if [ "$attempt" = "1" ]; then err1="$why"; else err2="$why"; fi
   done
 
-  echo "::error::Failed to create or adopt the ephemeral environment '$name' after 2 attempts, each followed by an independent re-query."
+  echo "::error::Failed to create or adopt the ephemeral environment '$name' after 2 rounds, each followed by an independent re-query."
   echo "  attempt 1: $err1"
   echo "  attempt 2: $err2"
   exit 1

@@ -164,3 +164,129 @@ func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
 		})
 	}
 }
+
+// --- sweep-decide CLI contract (M4-23-06, task-150) ---
+//
+// STUB NOTICE (Stage 2.5 / Mode A): sweep-decide is not yet a recognised
+// subcommand in main.go's dispatch switch -- every call below currently
+// falls into the `default:` arm ("unknown subcommand ...", exit 2). The
+// subcommand itself lands in Stage 3 (sweep.go's ShouldReap/ParsePRState
+// go from panicking stubs to real bodies at the same time). See each
+// test's own comment for how it reads today vs. once implemented.
+
+// TestCLISweepDecideExitContract pins sweep-decide's exit/stdout
+// contract from task-150: exit 0 (reap) with the reason on stdout for a
+// closed/merged PR; exit 1 (skip) with the reason on stdout for an open
+// PR. stderr is empty in both cases -- the deliberate divergence from
+// `parse` (which writes to stderr on exit 1): here exit 1 is the common
+// per-environment outcome (every open PR, every run), and stderr noise
+// would bury real failures.
+//
+// Currently fails on every assertion (actual exit code 2, stdout empty,
+// "unknown subcommand" on stderr) -- a legitimate RED via wrong exit
+// code and wrong stdout, not a build error.
+func TestCLISweepDecideExitContract(t *testing.T) {
+	cases := []struct {
+		name       string
+		ghJSON     string
+		wantCode   int
+		wantStdout string
+	}{
+		{"closed-and-merged PR reaps", `{"state":"MERGED"}`, 0, "pr-merged\n"},
+		{"open PR is skipped", `{"state":"OPEN"}`, 1, "pr-open\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code := runCLI(t, "sweep-decide", "pr-42", "true", "0", tc.ghJSON)
+			if code != tc.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tc.wantCode)
+			}
+			if stdout != tc.wantStdout {
+				t.Errorf("stdout = %q, want %q", stdout, tc.wantStdout)
+			}
+			if stderr != "" {
+				t.Errorf("stderr = %q, want empty", stderr)
+			}
+		})
+	}
+}
+
+// TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout covers the
+// "called wrong" path for sweep-decide: wrong arity, an is-ephemeral
+// argument strconv.ParseBool can't parse, and a gh-exit-code argument
+// strconv.Atoi can't parse. All must exit 2 with empty stdout -- the
+// property the workflow's `if` structurally depends on to distinguish a
+// mechanism failure from a real reap/skip answer.
+//
+// CAVEAT (untestable as a true RED right now): because sweep-decide
+// isn't a recognised subcommand yet, EVERY case here already exits 2 via
+// main.go's existing "unknown subcommand" default arm -- these
+// assertions pass today, but for the wrong reason (the dispatcher's
+// catch-all, not sweep-decide's own argument validation, which doesn't
+// exist yet). This test cannot be made to genuinely fail red without
+// either implementing argument validation now (out of scope for Mode A)
+// or asserting on the exact diagnostic text (which the codebase's
+// existing convention, TestCLICalledWrongExitsTwoWithCleanStdout above,
+// deliberately does not do). It is included now because it is correct
+// and becomes meaningful the moment Stage 3 adds sweep-decide -- but
+// flagged here explicitly per the QA report rather than silently
+// claimed as RED.
+func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
+	cases := []struct {
+		desc string
+		args []string
+	}{
+		{"missing all args", []string{"sweep-decide"}},
+		{"missing one arg", []string{"sweep-decide", "pr-42", "true", "0"}},
+		{"extra arg", []string{"sweep-decide", "pr-42", "true", "0", "{}", "extra"}},
+		{"is-ephemeral empty", []string{"sweep-decide", "pr-42", "", "0", "{}"}},
+		{"is-ephemeral not a bool", []string{"sweep-decide", "pr-42", "yes", "0", "{}"}},
+		{"gh-exit-code empty", []string{"sweep-decide", "pr-42", "true", "", "{}"}},
+		{"gh-exit-code not numeric", []string{"sweep-decide", "pr-42", "true", "abc", "{}"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			stdout, stderr, code := runCLI(t, tc.args...)
+			if code != 2 {
+				t.Errorf("args=%v: exit code = %d, want 2", tc.args, code)
+			}
+			if stdout != "" {
+				t.Errorf("args=%v: stdout = %q, want empty", tc.args, stdout)
+			}
+			if stderr == "" {
+				t.Errorf("args=%v: stderr is empty, want a diagnostic message", tc.args)
+			}
+		})
+	}
+}
+
+// TestCLISweepDecideNeverReapsOnGhFailure asserts the fail-safe property
+// at the exact process boundary the sweeper workflow crosses: a non-zero
+// gh-exit-code must exit 1 (skip) regardless of what gh printed to
+// stdout -- including reap-looking JSON, so a caller can never trigger a
+// reap by racing gh's own exit code against its stdout. This is what
+// directly answers task-150 AC-8's "fail-safe logic its real caller
+// cannot reach is not fail-safe": it asserts the whole
+// gh-exit-code -> ParsePRState -> ShouldReap -> CLI exit chain at the
+// process boundary the sweeper actually crosses, not just the pure Go
+// functions in isolation.
+//
+// Currently fails (actual exit code 2 via the "unknown subcommand" path)
+// -- a legitimate RED, not a build error.
+func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
+	cases := []struct {
+		name   string
+		ghJSON string
+	}{
+		{"empty stdout on gh failure", ""},
+		{"reap-looking stdout on gh failure must not reap", `{"state":"MERGED"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, code := runCLI(t, "sweep-decide", "pr-42", "true", "1", tc.ghJSON)
+			if code != 1 {
+				t.Errorf("gh-exit-code=1, gh-json=%q: exit code = %d, want 1", tc.ghJSON, code)
+			}
+		})
+	}
+}

@@ -541,6 +541,30 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 	return inv
 }
 
+// M4-06-01 QA Mode-A scaffold: an against-store `(entity, invoice_number)`
+// collision must report as a first-class, rule-shaped violation (RuleKey +
+// Severity set) rather than the bare pre-M4-06 RowError{Message:"already
+// imported"} shape -- see storeDuplicateRowError's own doc comment.
+const (
+	ruleKeyDuplicateInvoiceNumber = "no-duplicate-invoice-number"
+	msgDuplicateInvoiceNumber     = "An invoice with this number already exists for this entity."
+)
+
+// storeDuplicateRowError builds the RowError for an against-store duplicate
+// (both the upfront precheck at ExistingNumbers time and the racing-INSERT
+// backstop at Create time). NOT YET WIRED into either emit site -- this is
+// QA Mode-A scaffold only, so the package compiles ahead of the executor's
+// implementation.
+//
+// TODO(M4-06-01 executor): populate RuleKey/Severity + wire both emit sites
+// (the precheck's `if existing[num]` branch and the race backstop's
+// domain-error branch) to call this. The stub below deliberately returns the
+// OLD BARE shape and does NOT set RuleKey/Severity, so the RED tests in
+// service_dup_test.go fail on the missing rule fields until this is wired.
+func storeDuplicateRowError(rowIdxs []int) RowError {
+	return RowError{Rows: sheetRows(rowIdxs), Field: "invoice_number", Message: "already imported"}
+}
+
 // domainCreateErrorMessage reports whether createErr is one of the DOMAIN
 // errors invoice.Store.Create can return for genuinely bad input --
 // invoice.ErrDuplicateNumber (a 23505 racing past ExistingNumbers's upfront

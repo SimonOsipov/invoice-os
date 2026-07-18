@@ -263,6 +263,43 @@ func TestParsePRStateMapsRealGhPayloads(t *testing.T) {
 	}
 }
 
+// TestParsePRStateIsCaseSensitiveOnClosedAndMerged: AC-8, QA-added
+// (post-implementation coverage hole). The inherited specs only probe
+// case-sensitivity on the OPEN payload (see
+// TestParsePRStateNeverYieldsAReapableDecision's `{"state":"open"}`
+// case) -- but PRStateOpen never reaps either way, so a regression that
+// made the match case-INSENSITIVE would sail through every existing
+// test while accepting `{"state":"closed"}` / `{"state":"merged"}` as
+// genuine reap evidence. Confirmed by mutation: switching
+// ParsePRState's match to strings.ToUpper(payload.State) killed nothing
+// in this file. This test pins the two branches that actually matter --
+// the ones that authorize a delete -- directly, both at the parser and
+// composed through ShouldReap.
+func TestParsePRStateIsCaseSensitiveOnClosedAndMerged(t *testing.T) {
+	cases := []string{
+		`{"state":"closed"}`,
+		`{"state":"Closed"}`,
+		`{"state":"merged"}`,
+		`{"state":"Merged"}`,
+		`{"state":"MeRgEd"}`,
+	}
+	for _, stdout := range cases {
+		t.Run(stdout, func(t *testing.T) {
+			state := ParsePRState(stdout, 0)
+			if state != PRStateUnknown {
+				t.Errorf("ParsePRState(%q, 0) = %d, want PRStateUnknown (%d) -- lowercase/mixed-case must not be accepted", stdout, int(state), int(PRStateUnknown))
+			}
+			reap, reason := ShouldReap("pr-42", true, state)
+			if reap {
+				t.Errorf(`ShouldReap("pr-42", true, ParsePRState(%q, 0)) reaped -- a non-uppercase state must never authorize a delete`, stdout)
+			}
+			if reason != ReasonPRStateUnknown {
+				t.Errorf(`ShouldReap("pr-42", true, ParsePRState(%q, 0)) reason = %q, want %q`, stdout, reason, ReasonPRStateUnknown)
+			}
+		})
+	}
+}
+
 // TestPRStateUnknownIsZeroValue: AC-2, added. Without this pin, a future
 // reorder of the iota block would silently make an uninitialised/
 // forgotten PRState decode as Open or Closed instead of failing safe.

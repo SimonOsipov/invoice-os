@@ -14,6 +14,7 @@ package db_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
@@ -93,6 +94,39 @@ func TestSeedFromEmbeddedIsIdempotent(t *testing.T) {
 		}
 		if role != tc.role {
 			t.Errorf("membership %s/%s: role = %q, want %q", tc.tenantID, tc.userID, role, tc.role)
+		}
+	}
+}
+
+// ---- QA adversarial coverage (post-implementation, Mode B, task-127) ------------
+
+// TestSeedConcurrentInvocationIsSafeWithoutALock: adversarial coverage for AC-7.
+// db.Seed deliberately takes NO advisory lock (unlike Bootstrap) — the
+// implementation's rationale is that seed.dev.sql's inserts are already
+// idempotent via ON CONFLICT, so concurrent invocation should converge cleanly
+// rather than racing the way unprotected concurrent bootstrap.sql execution does
+// (SQLSTATE XX000, see TestBootstrapSQLConcurrentInvocationConverges in
+// bootstrap_test.go). This proves that rationale empirically instead of trusting
+// the comment: N goroutines all call Seed concurrently, and every one of them
+// must return nil.
+func TestSeedConcurrentInvocationIsSafeWithoutALock(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+
+	const n = 6
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- db.Seed(context.Background(), superDSN, dbsql.FS)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Seed call returned an error — expected ON CONFLICT to make this always safe with no lock: %v", err)
 		}
 	}
 }

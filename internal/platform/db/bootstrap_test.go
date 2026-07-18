@@ -40,6 +40,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/google/uuid"
@@ -1150,4 +1151,198 @@ func TestBootstrapThenMigrateSucceedsAsMigrator(t *testing.T) {
 	if err := db.MigrateUp(context.Background(), migratorDSN, migrations.FS); err != nil {
 		t.Fatalf("MigrateUp with the Bootstrap-issued migrator password: %v", err)
 	}
+}
+
+// ---- QA adversarial coverage (post-implementation, Mode B, task-127) ------------
+//
+// The tests below were NOT part of the architect's pre-authored Test Specs table
+// for M4-21-03; they were added during QA verification of task-127 to close gaps
+// mutation testing found or to exercise realistic scenarios the 8 authored rows
+// didn't cover: rotation over already-provisioned roles (not just a fresh DB),
+// advisory-lock contention from an UNRELATED session, an unbounded-looking PR
+// number, a genuinely unreachable (not just closed-port) host, and lock release
+// on a mid-sequence failure rather than only the happy path.
+
+// TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords: adversarial
+// coverage for AC-1/AC-7's "one-source invariant" under a precondition no Test
+// Spec row exercises: NOT a fresh/empty DB, but one where all three roles already
+// exist with a DIFFERENT password from a prior Bootstrap run (e.g. a redeployed
+// gateway rotating its own secrets). db.Bootstrap must converge every role to the
+// NEW password and the OLD password must stop working — proving the Go runner
+// rotates deterministically, one layer above what
+// TestBootstrapSQLRotatesPasswordDeterministically already proves for the raw SQL
+// file directly.
+func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+
+	original := db.RolePasswords{
+		Migrator: "boot-rot-old-mig-" + uuid.NewString(),
+		App:      "boot-rot-old-app-" + uuid.NewString(),
+		Reader:   "boot-rot-old-rdr-" + uuid.NewString(),
+	}
+	if err := db.Bootstrap(context.Background(), superDSN, original, dbsql.FS); err != nil {
+		t.Fatalf("first Bootstrap (planting the OLD passwords): %v", err)
+	}
+	if err := attemptLogin(t, loginDSN(t, superDSN, "invoice_migrator", original.Migrator)); err != nil {
+		t.Fatalf("sanity: login with the old migrator password right after planting it: %v", err)
+	}
+
+	rotated := db.RolePasswords{
+		Migrator: "boot-rot-new-mig-" + uuid.NewString(),
+		App:      "boot-rot-new-app-" + uuid.NewString(),
+		Reader:   "boot-rot-new-rdr-" + uuid.NewString(),
+	}
+	if err := db.Bootstrap(context.Background(), superDSN, rotated, dbsql.FS); err != nil {
+		t.Fatalf("second Bootstrap (rotating to NEW passwords over already-provisioned roles): %v", err)
+	}
+
+	for _, tc := range []struct{ role, password string }{
+		{"invoice_migrator", rotated.Migrator},
+		{"invoice_app", rotated.App},
+		{"invoice_tenant_reader", rotated.Reader},
+	} {
+		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
+			t.Errorf("%s: login with the NEW password failed after rotation: %v", tc.role, err)
+		}
+	}
+	if err := attemptLogin(t, loginDSN(t, superDSN, "invoice_migrator", original.Migrator)); err == nil {
+		t.Errorf("invoice_migrator: login with the OLD password still succeeded after rotation — Bootstrap did not actually converge to the new password")
+	}
+}
+
+// TestBootstrapRespectsContextDeadlineUnderAdvisoryLockContention: adversarial
+// coverage for AC-5. pg_advisory_lock (the single-bigint blocking form) waits
+// indefinitely for a busy lock by design — that's what makes two concurrent
+// Bootstrap calls serialize instead of racing CREATE ROLE (QA F7). But
+// "serializes" must not silently mean "the Go caller can never bound its own
+// wait": a completely UNRELATED session (not another Bootstrap call — e.g. an
+// operator's stray psql session, or a lock leaked by a crashed process) holding
+// BootstrapAdvisoryLockKey must not make Bootstrap hang forever when the CALLER
+// supplies a context with a deadline. This confirms Bootstrap actually plumbs ctx
+// through to the pg_advisory_lock Exec, rather than e.g. hardcoding
+// context.Background() internally for that call (which would silently defeat any
+// caller-side timeout).
+func TestBootstrapRespectsContextDeadlineUnderAdvisoryLockContention(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+
+	holder, err := pgx.Connect(context.Background(), superDSN)
+	if err != nil {
+		t.Fatalf("connect lock-holder session: %v", err)
+	}
+	// Plain defers, not t.Cleanup: t.Cleanup callbacks run AFTER the test function's
+	// own defers have already unwound, so registering the unlock via t.Cleanup would
+	// run it against an already-closed connection. LIFO defer order makes this run
+	// unlock-then-close, in that order, before the function returns.
+	defer holder.Close(context.Background())
+	if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_lock($1)`, db.BootstrapAdvisoryLockKey); err != nil {
+		t.Fatalf("holder acquire advisory lock: %v", err)
+	}
+	defer func() {
+		if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, db.BootstrapAdvisoryLockKey); err != nil {
+			t.Errorf("release holder's advisory lock: %v", err)
+		}
+	}()
+
+	pw := db.RolePasswords{
+		Migrator: "boot-contend-mig-" + uuid.NewString(),
+		App:      "boot-contend-app-" + uuid.NewString(),
+		Reader:   "boot-contend-rdr-" + uuid.NewString(),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err = db.Bootstrap(ctx, superDSN, pw, dbsql.FS)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("Bootstrap succeeded while an unrelated session held the advisory lock the whole time — it should have blocked until the ctx deadline instead")
+	}
+	if elapsed > 8*time.Second {
+		t.Fatalf("Bootstrap took %s to return under lock contention with a 3s context deadline — ctx is not being honored while waiting on pg_advisory_lock", elapsed)
+	}
+}
+
+// TestBootstrapEnabledAllowlistAcceptsArbitrarilyLargePRNumber: adversarial
+// coverage for AC-3. prEnvironmentPattern matches "[0-9]+" with no upper bound on
+// digit count and BootstrapEnabled never parses the number as an integer, so a
+// very large PR number must still be treated as a VALID shape (no overflow/panic
+// risk from an int conversion that doesn't exist) rather than silently rejected —
+// Railway PR numbers are unbounded over a repo's lifetime.
+func TestBootstrapEnabledAllowlistAcceptsArbitrarilyLargePRNumber(t *testing.T) {
+	huge := "pr-99999999999999999999999999999999999999"
+	if !db.BootstrapEnabled(huge, "true") {
+		t.Errorf("BootstrapEnabled(%q, \"true\") = false, want true (arbitrarily large PR numbers must still match the pr-<N> shape)", huge)
+	}
+}
+
+// TestBootstrapBoundedAgainstBlackHoleHost: adversarial coverage for AC-6.
+// TestBootstrapRetriesThenFailsOnUnreachableDB above covers a CLOSED port
+// (immediate ECONNREFUSED); this covers the different failure mode of a
+// non-routable/black-hole host (203.0.113.1, RFC 5737 TEST-NET-3 — reserved,
+// never routed, no RST ever returned), which exercises the dial-level timeout
+// path instead of an instant refusal. With a caller-supplied context deadline,
+// Bootstrap must still return within a bounded window rather than waiting out an
+// OS's own multi-minute TCP retransmission timeout.
+func TestBootstrapBoundedAgainstBlackHoleHost(t *testing.T) {
+	dsn := "postgres://postgres:x@203.0.113.1:5432/invoice_os?sslmode=disable"
+	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := db.Bootstrap(ctx, dsn, pw, dbsql.FS)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("Bootstrap against a black-hole host returned nil, want a connect error")
+	}
+	if elapsed > 12*time.Second {
+		t.Errorf("Bootstrap took %s to fail against a black-hole host with a 4s ctx deadline — connect attempts are not bounded by the caller's context", elapsed)
+	}
+}
+
+// TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure: adversarial coverage
+// for AC-5. TestBootstrapReleasesAdvisoryLock above only covers the HAPPY path;
+// this proves release also happens when bootstrap.sql itself fails PARTWAY
+// through execution (after the lock is acquired and the three GUCs are set,
+// unlike a Go-level validation rejection which never acquires the lock at all).
+// Uses an in-memory fs.FS with a deliberately broken bootstrap.sql so the failure
+// is deterministic and doesn't depend on mutating the real file.
+//
+// NOTE (QA finding, see task-127 verdict): this cannot by itself distinguish
+// "the explicit pg_advisory_unlock ran" from "the lock merely evaporated because
+// Bootstrap's very next deferred statement closes the session-scoped connection
+// anyway" — both defers fire on every return path, and a session-level advisory
+// lock is released by Postgres the instant its owning backend disconnects,
+// regardless of whether pg_advisory_unlock was ever called. So this test (like
+// TestBootstrapReleasesAdvisoryLock) confirms the OBSERVABLE guarantee AC-5
+// actually promises ("no session holds it after Bootstrap returns, so a later
+// boot isn't deadlocked") even on a mid-sequence failure, but does not by itself
+// prove the explicit-unlock code path (bootstrap.go's unlock-error-surfacing
+// defer) is exercised — see the mutation-testing note in the QA verdict.
+func TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+
+	pw := db.RolePasswords{
+		Migrator: "boot-midfail-mig-" + uuid.NewString(),
+		App:      "boot-midfail-app-" + uuid.NewString(),
+		Reader:   "boot-midfail-rdr-" + uuid.NewString(),
+	}
+	brokenFS := fstest.MapFS{
+		"bootstrap.sql": &fstest.MapFile{Data: []byte(
+			`DO $$ BEGIN RAISE EXCEPTION 'deliberate mid-sequence failure for QA coverage'; END $$;`,
+		)},
+	}
+
+	if err := db.Bootstrap(context.Background(), superDSN, pw, brokenFS); err == nil {
+		t.Fatalf("Bootstrap with a deliberately broken bootstrap.sql returned nil, want an error")
+	}
+
+	if advisoryKeyGranted(t, pool, db.BootstrapAdvisoryLockKey) {
+		t.Errorf("pg_locks still shows advisory key %d granted after a MID-SEQUENCE Bootstrap failure — the lock was not released on the error path", db.BootstrapAdvisoryLockKey)
+	}
+	acquireAdvisoryLockRoundTrip(t, pool, db.BootstrapAdvisoryLockKey)
 }

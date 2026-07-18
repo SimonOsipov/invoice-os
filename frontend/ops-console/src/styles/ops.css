@@ -50,6 +50,14 @@ body {
     opacity: 1;
   }
 }
+@keyframes opsGrow {
+  from {
+    transform: scaleY(0.001);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
 @keyframes opsPulse {
   0%,
   100% {
@@ -76,6 +84,10 @@ body {
 .ops-chip {
   transition: background 120ms, border-color 120ms, color 120ms;
   cursor: pointer;
+}
+.ops-bar {
+  transform-origin: bottom;
+  animation: opsGrow 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 .ops-btn {
   transition: background 120ms ease-out, transform 90ms, border-color 120ms;

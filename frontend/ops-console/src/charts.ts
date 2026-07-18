@@ -78,10 +78,20 @@ export interface SpendBar {
   proj: boolean
 }
 
+// Prototype lines 888-892: the spend month is 22 actual days + 8 projected, and the
+// actual days come from one seeded series. `buildSpendBars` and `spendTotals` MUST read
+// the same series or the bars and the headline numbers drift — hence the shared private
+// helper rather than two copies of the seed tuple.
+const SPEND_ACTUAL = 22
+const SPEND_N = 30
+function spendSeries(): number[] {
+  return series(SPEND_ACTUAL, 148000, 52000, 1500, 213)
+}
+
 export function buildSpendBars(): SpendBar[] {
-  const spActual = 22
-  const spN = 30
-  const spSeries = series(spActual, 148000, 52000, 1500, 213)
+  const spActual = SPEND_ACTUAL
+  const spN = SPEND_N
+  const spSeries = spendSeries()
   const spMTDnum = spSeries.reduce((a, b) => a + b, 0)
   const spAvg = spMTDnum / spActual
   const spMax = Math.max(Math.max(...spSeries), spAvg) * 1.08
@@ -97,6 +107,20 @@ export function buildSpendBars(): SpendBar[] {
     })
   }
   return spendBars
+}
+
+// Prototype lines 890-892. `buildSpendBars` returns only bar geometry, so the two
+// headline figures the Spend card and the `Spend MTD` KPI render (₦3.72M month-to-date,
+// ₦5.08M projected month-end) had no export to come from. Additive — `buildSpendBars`'s
+// signature and output are unchanged.
+export interface SpendTotals {
+  mtd: number
+  proj: number
+}
+
+export function spendTotals(): SpendTotals {
+  const mtd = spendSeries().reduce((a, b) => a + b, 0)
+  return { mtd, proj: (mtd / SPEND_ACTUAL) * SPEND_N }
 }
 
 export interface OutcomeCol {

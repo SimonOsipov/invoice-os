@@ -52,15 +52,29 @@ function isFocusable(el: HTMLElement): boolean {
   return !(el as HTMLButtonElement).disabled && el.offsetParent !== null
 }
 
-export function DemoModal({ onClose }: { onClose: () => void }) {
+export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: () => Promise<void> }) {
   const [form, setForm] = useState<DemoFormState>(DEFAULT_FORM)
   const [errors, setErrors] = useState<DemoFormErrors>({})
   const [demoStep, setDemoStep] = useState<DemoStep>('form')
   const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mounted = useRef(true)
+
+  // Default submit stub: client-side theater, always resolves to success after
+  // ~1300ms (matching the prototype's submitDemo). Its timer is stored on the
+  // shared submitTimer ref so unmount cleanup still clears it. A real `submit`
+  // (or an injected failing one from QA/tests) is used instead when provided.
+  const runSubmit =
+    submit ??
+    (() =>
+      new Promise<void>((resolve) => {
+        submitTimer.current = setTimeout(resolve, 1300)
+      }))
 
   // Close on Escape (never a native dialog); focus the first field on open (added —
-  // SignInModal lacks this); clear any pending submit timer on unmount.
+  // SignInModal lacks this); clear any pending submit timer on unmount; restore
+  // focus to whatever opened the modal so keyboard users land back where they were.
   useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
@@ -70,6 +84,8 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
       window.removeEventListener('keydown', onKey)
       clearTimeout(focusTimer)
       if (submitTimer.current) clearTimeout(submitTimer.current)
+      mounted.current = false
+      opener?.focus?.()
     }
   }, [onClose])
 
@@ -89,7 +105,7 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (demoStep === 'submitting') return
     const nextErrors = validateDemoForm(form)
@@ -101,10 +117,17 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
     }
     setErrors({})
     setDemoStep('submitting')
-    // Client-side theater, matching the prototype's submitDemo — always resolves
-    // to success. The error branch below is fully implemented and reachable
-    // (QA forces it), but nothing on the happy path invents a failure sentinel.
-    submitTimer.current = setTimeout(() => setDemoStep('success'), 1300)
+    // The default runSubmit stub always resolves (client-side theater, matching
+    // the prototype's submitDemo), so the happy path never invents a failure
+    // sentinel. The error branch is reachable by construction: any rejection —
+    // from a future real submit, or an injected failing `submit` in QA/tests —
+    // routes here.
+    try {
+      await runSubmit()
+      if (mounted.current) setDemoStep('success')
+    } catch {
+      if (mounted.current) setDemoStep('error')
+    }
   }
 
   function retry() {
@@ -156,7 +179,7 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
       <div
         onClick={(e) => e.stopPropagation()}
         onKeyDown={trapTab}
-        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden', animation: 'dmCardIn 200ms var(--ease-out)' }}
+        style={{ width: '100%', maxWidth: 452, maxHeight: 'calc(100dvh - 48px)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflowY: 'auto', animation: 'dmCardIn 200ms var(--ease-out)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -172,7 +195,7 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {(demoStep === 'form' || demoStep === 'submitting') && (
-          <form onSubmit={handleSubmit} style={{ padding: 20 }}>
+          <form noValidate onSubmit={handleSubmit} style={{ padding: 20 }}>
             <div className="label" style={{ marginBottom: 8 }}>/ BOOK A DEMO</div>
             <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>See your invoices pass compliance in real time.</h3>
             <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '0 0 18px' }}>A 20-minute walkthrough with a compliance specialist. Bring a sample invoice file — we'll validate it live.</p>
@@ -191,11 +214,13 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
                   placeholder="Ada Okafor"
                   autoComplete="name"
                   aria-required="true"
+                  aria-invalid={Boolean(errors.name)}
+                  aria-describedby={errors.name ? 'dm-name-error' : undefined}
                   disabled={submitting}
                   style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.name && (
-                  <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                  <div id="dm-name-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
                     <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.name}
                   </div>
                 )}
@@ -214,11 +239,13 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
                   placeholder="you@company.com"
                   autoComplete="email"
                   aria-required="true"
+                  aria-invalid={Boolean(errors.email)}
+                  aria-describedby={errors.email ? 'dm-email-error' : undefined}
                   disabled={submitting}
                   style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.email && (
-                  <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                  <div id="dm-email-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
                     <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.email}
                   </div>
                 )}
@@ -237,11 +264,13 @@ export function DemoModal({ onClose }: { onClose: () => void }) {
                   placeholder="Okafor & Partners"
                   autoComplete="organization"
                   aria-required="true"
+                  aria-invalid={Boolean(errors.company)}
+                  aria-describedby={errors.company ? 'dm-company-error' : undefined}
                   disabled={submitting}
                   style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.company && (
-                  <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                  <div id="dm-company-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
                     <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.company}
                   </div>
                 )}

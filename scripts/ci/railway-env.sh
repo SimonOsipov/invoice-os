@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments>
+# scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -29,8 +29,13 @@
 # echoing projectUpdate's own selection set; echoing the mutation response back is the
 # silent-no-op defect this exists to close.
 #
+# `ensure-environment <name>` (M4-23-03) is the create-or-reuse path that replaced the
+# ~300s poll for an environment Railway was supposed to create for us. Idempotent: it
+# looks the name up first and mutates nothing when it already exists.
+#
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
-# token is pinned to one environment and cannot perform projectUpdate.
+# token is pinned to one environment and cannot perform projectUpdate, nor reach an
+# ephemeral PR environment.
 #
 # bash, not POSIX sh: unlike scripts/ci/railway-up-ci.sh this does NOT run inside the
 # minimal ghcr.io/railwayapp/cli container.
@@ -66,8 +71,35 @@ DISABLE_MUTATION='mutation disablePrEnvironments($id: String!, $input: ProjectUp
   projectUpdate(id: $id, input: $input) { id name prDeploys botPrEnvironments focusedPrEnvironments }
 }'
 
+# M4-23-03. DELIBERATELY UNFILTERED — `isEphemeral` is selected as a DISCRIMINATOR, not
+# passed as a server-side filter. With `environments(projectId:$p, isEphemeral:true)` a
+# PERSISTENT environment that happens to hold our name is invisible, so we would try to
+# create over it on every run, forever. Unfiltered + a client-side name match lets arity
+# decide (see lookup_environment).
+# shellcheck disable=SC2016  # $p is a GraphQL variable — it must NOT be shell-expanded.
+ENV_LIST_QUERY='query envList($p: String!) {
+  environments(projectId: $p) {
+    edges { node { id name isEphemeral } }
+  }
+}'
+
+# `stageInitialChanges` is OMITTED (defaults false). true is the dashboard "Duplicate
+# Environment" behaviour, which stages every service and needs an explicit
+# environmentPatchCommitStaged before anything deploys. false commits immediately;
+# `skipInitialDeploys` suppresses only the deployments.
+# Read/write asymmetry, easy bug: the WRITE field is `ephemeral`, the READ field is
+# `isEphemeral`.
+# shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
+ENV_CREATE_MUTATION='mutation createPrEnvironment($input: EnvironmentCreateInput!) {
+  environmentCreate(input: $input) { id name isEphemeral }
+}'
+
 # Response of the most recent successful GraphQL call.
 GQL_RESPONSE=""
+# Failure text of the most recent graphql_try that returned non-zero.
+GQL_ERROR=""
+# Environment id found by the most recent successful lookup_environment.
+LOOKUP_ID=""
 
 require_env() {
   if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
@@ -100,6 +132,31 @@ graphql_post() {
     echo "::error::Railway GraphQL error while $ctx: $(echo "$GQL_RESPONSE" | jq -c '.errors')"
     exit 1
   fi
+}
+
+# graphql_try <json-body> <context-label>
+# Same request as graphql_post, but RETURNS 1 (leaving the reason in GQL_ERROR) instead
+# of exiting. The create path must be able to survive its own failure in order to
+# re-query and adopt, which graphql_post's exit-on-error makes impossible.
+graphql_try() {
+  local body="$1" ctx="$2"
+  GQL_ERROR=""
+
+  if ! GQL_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 \
+        --request POST \
+        --url "$RAILWAY_GRAPHQL_URL" \
+        --header "Authorization: Bearer $RAILWAY_API_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$body"); then
+    GQL_ERROR="Railway GraphQL request failed (transport) while $ctx"
+    return 1
+  fi
+
+  if echo "$GQL_RESPONSE" | jq -e '.errors' >/dev/null 2>&1; then
+    GQL_ERROR="Railway GraphQL error while $ctx: $(echo "$GQL_RESPONSE" | jq -c '.errors')"
+    return 1
+  fi
+  return 0
 }
 
 # Issues the read-back query as its own request and leaves it in GQL_RESPONSE.
@@ -148,6 +205,155 @@ assert_pr_environments_off() {
   echo "Railway PR Environments OFF: prDeploys=$pr_deploys botPrEnvironments=$bot_pr focusedPrEnvironments=$focused baseEnvironmentId=$base_env deploymentTriggers=$trigger_count"
 }
 
+require_source_env() {
+  if [ -z "${RAILWAY_DEV_ENVIRONMENT_ID:-}" ]; then
+    echo "::error::RAILWAY_DEV_ENVIRONMENT_ID is not set — expected the workflow-level constant from dev-env.yml. It is passed EXPLICITLY as environmentCreate's sourceEnvironmentId and there is NO fallback: this project's baseEnvironmentId was measured null (2026-07-18), so an omitted source does not quietly default to \`development\` — it forks from nothing and yields an EMPTY environment (or a hard API error)."
+    exit 1
+  fi
+}
+
+# lookup_environment <name>
+# Sets LOOKUP_ID and returns 0 when exactly one EPHEMERAL environment carries the name.
+# Returns 1 when the name is definitively absent (0 matches) — the only condition that
+# may lead to a create.
+#
+# A transport/GraphQL failure is NEVER reported as "absent": that conflation would let a
+# blip trigger a create and duplicate an environment that already exists. It is retried a
+# bounded number of times and then exits loudly. Arity violations are not transient and
+# exit immediately.
+lookup_environment() {
+  local name="$1" body count ephemeral try
+  body=$(jq -n --arg q "$ENV_LIST_QUERY" --arg p "$RAILWAY_PROJECT_ID" \
+    '{query: $q, variables: {p: $p}}')
+
+  for try in 1 2 3; do
+    if graphql_try "$body" "listing environments in project $RAILWAY_PROJECT_ID"; then
+      break
+    fi
+    if [ "$try" = "3" ]; then
+      echo "::error::Could not list environments in project $RAILWAY_PROJECT_ID after 3 attempts: $GQL_ERROR. Refusing to treat an unreadable environment list as 'the environment does not exist' — that would create a duplicate."
+      exit 1
+    fi
+    echo "  (lookup attempt $try) $GQL_ERROR — retrying in 5s ..."
+    sleep 5
+  done
+
+  count=$(echo "$GQL_RESPONSE" | jq --arg n "$name" \
+    '[.data.environments.edges[]?.node | select(.name == $n)] | length')
+
+  if [ "$count" = "0" ]; then
+    LOOKUP_ID=""
+    return 1
+  fi
+
+  if [ "$count" != "1" ]; then
+    echo "::error::$count environments in project $RAILWAY_PROJECT_ID are named '$name'. Refusing to guess which one is this PR's — that ambiguity must be resolved by hand. Matches:"
+    echo "$GQL_RESPONSE" | jq -r --arg n "$name" \
+      '.data.environments.edges[]?.node | select(.name == $n) | "  id=\(.id) isEphemeral=\(.isEphemeral)"'
+    exit 1
+  fi
+
+  ephemeral=$(echo "$GQL_RESPONSE" | jq -r --arg n "$name" \
+    '.data.environments.edges[]?.node | select(.name == $n) | .isEphemeral')
+  LOOKUP_ID=$(echo "$GQL_RESPONSE" | jq -r --arg n "$name" \
+    '.data.environments.edges[]?.node | select(.name == $n) | .id')
+
+  if [ "$ephemeral" != "true" ]; then
+    echo "::error::An environment named '$name' exists but is NOT ephemeral (isEphemeral=$ephemeral, id=$LOOKUP_ID). Refusing to create over it or deploy into it: both the teardown workflow and the orphan sweeper filter on isEphemeral, so a persistent environment wearing a PR name would never be cleaned up and would leak forever. Rename or delete it by hand."
+    exit 1
+  fi
+
+  return 0
+}
+
+# attempt_create <name>
+# One environmentCreate. Returns non-zero (reason in GQL_ERROR) instead of exiting, so the
+# caller can re-query and adopt.
+attempt_create() {
+  local name="$1" body
+  body=$(jq -n --arg q "$ENV_CREATE_MUTATION" --arg n "$name" \
+    --arg p "$RAILWAY_PROJECT_ID" --arg s "$RAILWAY_DEV_ENVIRONMENT_ID" \
+    '{query: $q, variables: {input: {
+        name: $n,
+        projectId: $p,
+        sourceEnvironmentId: $s,
+        ephemeral: true,
+        skipInitialDeploys: true
+      }}}')
+
+  graphql_try "$body" "creating ephemeral environment '$name' as a fork of $RAILWAY_DEV_ENVIRONMENT_ID"
+}
+
+emit_environment_outputs() {
+  local name="$1" id="$2"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    {
+      echo "environment=$name"
+      echo "environment_id=$id"
+    } >> "$GITHUB_OUTPUT"
+  fi
+  echo "environment=$name environment_id=$id"
+}
+
+# cmd_ensure_environment <name>
+# Idempotent create-or-reuse. Reuse costs ZERO mutations. Creation is bounded at TWO
+# attempts, and every attempt — successful or not — is followed by an INDEPENDENT
+# re-query, never by a blind retry. Railway can return 504 having created the environment
+# anyway, so a create that reports failure is not evidence that nothing was created; only
+# the re-query is. This is the same discipline cmd_disable_pr_environments applies when it
+# refuses to trust projectUpdate's own selection set.
+cmd_ensure_environment() {
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    echo "::error::usage: railway-env.sh ensure-environment <name>"
+    exit 2
+  fi
+  require_env
+  require_source_env
+
+  echo "Looking for an environment named '$name' in project $RAILWAY_PROJECT_ID ..."
+  if lookup_environment "$name"; then
+    echo "Reusing the existing ephemeral environment '$name' ($LOOKUP_ID) — no mutation performed."
+    emit_environment_outputs "$name" "$LOOKUP_ID"
+    return 0
+  fi
+
+  echo "No environment named '$name' exists — creating it as a fork of $RAILWAY_DEV_ENVIRONMENT_ID ..."
+
+  local err1="" err2="" why attempt
+  for attempt in 1 2; do
+    why=""
+    if attempt_create "$name"; then
+      echo "environmentCreate (attempt $attempt) returned without error; confirming with an INDEPENDENT re-query rather than trusting the mutation's own selection set ..."
+    else
+      why="$GQL_ERROR"
+      echo "::warning::environmentCreate attempt $attempt failed: $why"
+      echo "Railway can report failure having created the environment anyway — waiting 15s and re-querying instead of blindly retrying."
+      sleep 15
+    fi
+
+    if lookup_environment "$name"; then
+      if [ -n "$why" ]; then
+        echo "Adopted '$name' ($LOOKUP_ID) after a create that reported failure (Railway 504-still-creates)."
+      else
+        echo "Created ephemeral environment '$name' ($LOOKUP_ID)."
+      fi
+      emit_environment_outputs "$name" "$LOOKUP_ID"
+      return 0
+    fi
+
+    if [ -z "$why" ]; then
+      why="environmentCreate (attempt $attempt) reported success but an independent re-query found no environment named '$name'"
+    fi
+    if [ "$attempt" = "1" ]; then err1="$why"; else err2="$why"; fi
+  done
+
+  echo "::error::Failed to create or adopt the ephemeral environment '$name' after 2 attempts, each followed by an independent re-query."
+  echo "  attempt 1: $err1"
+  echo "  attempt 2: $err2"
+  exit 1
+}
+
 cmd_assert_project_settings() {
   require_env
   read_project_settings
@@ -181,8 +387,9 @@ cmd_disable_pr_environments() {
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
+  ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>>"
     exit 2
     ;;
 esac

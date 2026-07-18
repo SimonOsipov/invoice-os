@@ -541,10 +541,10 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 	return inv
 }
 
-// M4-06-01 QA Mode-A scaffold: an against-store `(entity, invoice_number)`
-// collision must report as a first-class, rule-shaped violation (RuleKey +
-// Severity set) rather than the bare pre-M4-06 RowError{Message:"already
-// imported"} shape -- see storeDuplicateRowError's own doc comment.
+// M4-06-01: an against-store `(entity, invoice_number)` collision reports as
+// a first-class, rule-shaped violation (RuleKey + Severity set) rather than
+// the bare pre-M4-06 RowError{Message:"already imported"} shape -- see
+// storeDuplicateRowError's own doc comment.
 const (
 	ruleKeyDuplicateInvoiceNumber = "no-duplicate-invoice-number"
 	msgDuplicateInvoiceNumber     = "An invoice with this number already exists for this entity."
@@ -552,17 +552,16 @@ const (
 
 // storeDuplicateRowError builds the RowError for an against-store duplicate
 // (both the upfront precheck at ExistingNumbers time and the racing-INSERT
-// backstop at Create time). NOT YET WIRED into either emit site -- this is
-// QA Mode-A scaffold only, so the package compiles ahead of the executor's
-// implementation.
-//
-// TODO(M4-06-01 executor): populate RuleKey/Severity + wire both emit sites
-// (the precheck's `if existing[num]` branch and the race backstop's
-// domain-error branch) to call this. The stub below deliberately returns the
-// OLD BARE shape and does NOT set RuleKey/Severity, so the RED tests in
-// service_dup_test.go fail on the missing rule fields until this is wired.
+// backstop at Create time), so both emit sites report the IDENTICAL enriched
+// shape (DUP-03).
 func storeDuplicateRowError(rowIdxs []int) RowError {
-	return RowError{Rows: sheetRows(rowIdxs), Field: "invoice_number", Message: "already imported"}
+	return RowError{
+		Rows:     sheetRows(rowIdxs),
+		Field:    "invoice_number",
+		RuleKey:  ruleKeyDuplicateInvoiceNumber,
+		Severity: "error",
+		Message:  msgDuplicateInvoiceNumber,
+	}
 }
 
 // domainCreateErrorMessage reports whether createErr is one of the DOMAIN
@@ -703,11 +702,7 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 			continue
 		}
 		if existing[num] {
-			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(g.rowIdxs),
-				Field:   "invoice_number",
-				Message: "already imported",
-			})
+			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs))
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
 			continue
@@ -875,11 +870,18 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 			return BatchResult{}, createErr
 		}
 
-		errorsList = append(errorsList, RowError{
-			Rows:    sheetRows(g.rowIdxs),
-			Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
-			Message: msg,
-		})
+		if errors.Is(createErr, invoice.ErrDuplicateNumber) {
+			// [dedup] A concurrent 23505 racing past the upfront
+			// ExistingNumbers precheck -- report the SAME enriched shape the
+			// precheck itself emits (DUP-04), never the bare generic form.
+			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs))
+		} else {
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(g.rowIdxs),
+				Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
+				Message: msg,
+			})
+		}
 		quarantinedInvoices++
 		rowsInvalid += len(g.rowIdxs)
 		rowsValid -= len(g.rowIdxs)

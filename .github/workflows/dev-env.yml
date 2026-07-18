@@ -265,8 +265,17 @@ jobs:
 
           # An unrendered template here means the variable exists but its inputs
           # (the TCP proxy) did not fork — a different failure with a different fix.
+          #
+          # The needle is ASSEMBLED AT RUNTIME and never written literally, not even
+          # in a comment. A dollar sign followed by two braces ANYWHERE in a run:
+          # block — comments included, since they are part of the same string — is
+          # consumed by GitHub as the start of an Actions expression BEFORE the shell
+          # sees it, which makes the whole workflow file unparseable: the run then
+          # fails with zero jobs and no usable annotation. Do not "simplify" this
+          # back to a literal.
+          unrendered_prefix='$'"{{"
           case "$dsn" in
-            *'${{'*)
+            *"$unrendered_prefix"*)
               echo "::error::DATABASE_PUBLIC_URL in environment $ENV_ID is still an UNRENDERED template, i.e. the variable forked but its TCP-proxy inputs did not. Postgres is unreachable over the public proxy."
               exit 1
               ;;

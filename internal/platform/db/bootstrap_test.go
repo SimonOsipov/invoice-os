@@ -37,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -501,6 +502,41 @@ func TestBootstrapSQLGrantsSchemaPrivileges(t *testing.T) {
 	sql := readBootstrapSQL(t)
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
 
+	// Registered before the pre-mutation below (mirrors
+	// TestBootstrapSQLAssertsSecurityAttributes's ordering): must fire even if a
+	// REVOKE/GRANT statement here itself fails, or the shared dev/CI roles would be
+	// left without their normal schema grants for the rest of the package's test run.
+	t.Cleanup(func() {
+		ctx := context.Background()
+		if _, err := pool.Exec(ctx, `GRANT USAGE, CREATE ON SCHEMA public TO invoice_migrator`); err != nil {
+			t.Errorf("restore invoice_migrator schema grants: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `GRANT USAGE ON SCHEMA public TO invoice_tenant_reader`); err != nil {
+			t.Errorf("restore invoice_tenant_reader schema grants: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`); err != nil {
+			t.Errorf("restore PUBLIC schema grants: %v", err)
+		}
+	})
+
+	// Pre-mutate every grant this test asserts to its WRONG state first. Without
+	// this, the assertions below would pass unconditionally: the shared dev/CI DB
+	// already carries these exact grants from an earlier bootstrap run (this job's
+	// own preceding `make db-bootstrap` step in CI, or a prior `make dev-db`
+	// locally) — proven by mutation testing (deleting every GRANT/REVOKE line from
+	// db/bootstrap.sql's step 4 left this test green, because it was reading grants
+	// nobody in the test run itself had ever applied).
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `REVOKE USAGE, CREATE ON SCHEMA public FROM invoice_migrator`); err != nil {
+		t.Fatalf("pre-mutate: revoke invoice_migrator schema grants: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `REVOKE USAGE ON SCHEMA public FROM invoice_tenant_reader`); err != nil {
+		t.Fatalf("pre-mutate: revoke invoice_tenant_reader schema grants: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `GRANT CREATE ON SCHEMA public TO PUBLIC`); err != nil {
+		t.Fatalf("pre-mutate: grant PUBLIC CREATE on schema public: %v", err)
+	}
+
 	if err := applyBootstrap(t, pool, devDefaultGUCs(), sql); err != nil {
 		t.Fatalf("apply db/bootstrap.sql: %v", err)
 	}
@@ -516,5 +552,210 @@ func TestBootstrapSQLGrantsSchemaPrivileges(t *testing.T) {
 	}
 	if hasSchemaPrivilege(t, pool, "public", "CREATE") {
 		t.Errorf("PUBLIC pseudo-role has CREATE on schema public, want it revoked")
+	}
+}
+
+// ---- QA adversarial coverage (post-implementation, Mode B) -----------------------
+//
+// The tests below were NOT part of the architect's pre-authored Test Specs table;
+// they were added during QA verification of task-126 to close gaps mutation testing
+// found or to lock in behavior the Test Specs never exercised: %L-quoting safety
+// against injection-shaped passwords, the actual (accepted, not rejected) handling
+// of a whitespace-only GUC, safety under concurrent/repeated invocation, and a
+// static regression guard for the highest-risk fix in this subtask (psql silently
+// no-op'ing on redirected stdin once a `-c` flag is present).
+
+// TestBootstrapSQLPasswordSpecialCharactersRoundTrip: adversarial coverage for the
+// %L (literal-quoting) EXECUTE format(...) path db/bootstrap.sql's step 3 uses to
+// apply passwords. A password containing a single quote, a backslash, an embedded
+// SQL-injection-shaped payload aimed at breaking out of the %L literal (e.g. to
+// append `GRANT SUPERUSER`), and a value that collides with the dollar-quote tag
+// this test file's own alterRolePassword helper uses elsewhere, must all round-trip
+// EXACTLY (login succeeds with the literal string) and must never grant SUPERUSER —
+// proving %L quoting, not string concatenation, is what's actually happening.
+func TestBootstrapSQLPasswordSpecialCharactersRoundTrip(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+
+	for _, tc := range []struct {
+		name string
+		pw   string
+	}{
+		{"single_quote", `boot-o'brien-` + uuid.NewString()},
+		{"backslash", `boot-back\slash\pw-` + uuid.NewString()},
+		{"percent_L_breakout_attempt", `x', SUPERUSER); RAISE NOTICE 'pwned` + uuid.NewString()},
+		{"dollar_quote_tag_collision", `pw$pw$injected-` + uuid.NewString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guc := bootstrapGUCs{migrator: pwGUC(tc.pw), app: pwGUC(tc.pw), reader: pwGUC(tc.pw)}
+			if err := applyBootstrap(t, pool, guc, sql); err != nil {
+				t.Fatalf("apply db/bootstrap.sql with a %s password: %v", tc.name, err)
+			}
+			if err := attemptLogin(t, loginDSN(t, superDSN, "invoice_migrator", tc.pw)); err != nil {
+				t.Errorf("login with the exact %s password failed — %%L quoting did not round-trip it: %v", tc.name, err)
+			}
+			attrs := readRoleAttrs(t, pool, "invoice_migrator")
+			if attrs.super {
+				t.Errorf("invoice_migrator has rolsuper = true after a %s password — an injection payload escaped the %%L literal", tc.name)
+			}
+		})
+	}
+}
+
+// TestBootstrapSQLWhitespaceOnlyGUCIsAcceptedNotRejected documents ACTUAL behavior
+// (not asserted by any Test Spec row): db/bootstrap.sql's fail-closed check is
+// `coalesce(current_setting(name, true), ”) = ”`, which does NOT trim whitespace.
+// A GUC explicitly set to a whitespace-only string is therefore NOT considered
+// missing/empty — it is silently accepted as a valid password, unlike an actual
+// empty string (covered by TestBootstrapSQLFailsClosedOnMissingPassword). This is a
+// real, mutation-confirmed gap in the fail-closed check's coverage (a whitespace GUC
+// from a misconfigured env/CI substitution — e.g. `MIGRATOR_PASSWORD=" "` — would
+// silently produce a valid-but-useless password instead of the loud failure AC-3
+// intends for a blank one); flagged to the executor/architect as a candidate for a
+// stricter `btrim(...) = ”` check, not fixed here since it's a production-code
+// change outside QA's remit.
+func TestBootstrapSQLWhitespaceOnlyGUCIsAcceptedNotRejected(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
+
+	const whitespacePW = "   "
+	guc := bootstrapGUCs{migrator: pwGUC(whitespacePW), app: pwGUC("app"), reader: pwGUC("reader")}
+
+	err := applyBootstrap(t, pool, guc, sql)
+	if err != nil {
+		t.Fatalf("apply db/bootstrap.sql with a whitespace-only migrator GUC returned an error (documenting current behavior — if this now fails closed, update this test's expectation and its comment): %v", err)
+	}
+	if loginErr := attemptLogin(t, loginDSN(t, superDSN, "invoice_migrator", whitespacePW)); loginErr != nil {
+		t.Errorf("documented current behavior changed: login with the whitespace-only password no longer succeeds: %v", loginErr)
+	}
+}
+
+// TestBootstrapSQLConcurrentInvocationConverges: adversarial coverage for
+// concurrent/repeated invocation (e.g. two CI jobs or two operators accidentally
+// running bootstrap against the same DB at once). Three goroutines apply
+// db/bootstrap.sql concurrently — each on its OWN acquired connection, with the
+// SAME GUC values set on that connection.
+//
+// A transient race IS tolerated (logged, not failed): empirically, concurrent
+// ALTER ROLE/GRANT/REVOKE on the same catalog rows can raise Postgres's "tuple
+// concurrently updated" (SQLSTATE XX000) — a non-MVCC catalog-update conflict, not
+// a hang or silent corruption. This is PRECISELY why serializing invocations is the
+// Go caller's job (M4-21-03's advisory lock, Decision [advisory-lock-on-bootstrap])
+// and deliberately not this single-session-oriented file's — so this test documents
+// that limitation rather than asserting a guarantee this subtask never promised.
+// What MUST hold regardless: no corruption, and one final serial re-apply (the
+// realistic recovery/retry a caller would do) converges cleanly.
+//
+// (Deliberately does NOT call the shared applyBootstrap/t.Fatalf helpers from
+// inside the goroutines: testing.T's Fatal/FailNow family may only be called from
+// the test's own goroutine, never from another goroutine it spawns.)
+func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+	ctx := context.Background()
+
+	guc := bootstrapGUCs{
+		migrator: pwGUC("boot-conc-mig-" + uuid.NewString()),
+		app:      pwGUC("boot-conc-app-" + uuid.NewString()),
+		reader:   pwGUC("boot-conc-rdr-" + uuid.NewString()),
+	}
+
+	const n = 3
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				errs <- fmt.Errorf("acquire connection: %w", err)
+				return
+			}
+			defer conn.Release()
+			for _, kv := range []struct{ name, value string }{
+				{"fiscalbridge.migrator_password", guc.migrator.value},
+				{"fiscalbridge.app_password", guc.app.value},
+				{"fiscalbridge.reader_password", guc.reader.value},
+			} {
+				if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
+					errs <- fmt.Errorf("set_config(%s): %w", kv.name, err)
+					return
+				}
+			}
+			_, err = conn.Exec(ctx, sql)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	raced := 0
+	for err := range errs {
+		if err != nil {
+			raced++
+			t.Logf("concurrent apply of db/bootstrap.sql raced (tolerated — see the advisory-lock note above): %v", err)
+		}
+	}
+	if raced == n {
+		t.Logf("all %d concurrent invocations raced each other; falling through to the serial re-apply to force convergence", n)
+	}
+
+	// The realistic recovery path: one more serial (non-concurrent) apply with the
+	// SAME GUCs. This must always succeed and must be what the convergence
+	// assertions below are checked against — it is the caller's actual guarantee,
+	// not "concurrent invocation is safe on its own".
+	if err := applyBootstrap(t, pool, guc, sql); err != nil {
+		t.Fatalf("serial re-apply of db/bootstrap.sql after the concurrent race did not converge: %v", err)
+	}
+
+	for _, tc := range []struct{ role, password string }{
+		{"invoice_migrator", guc.migrator.value},
+		{"invoice_app", guc.app.value},
+		{"invoice_tenant_reader", guc.reader.value},
+	} {
+		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
+			t.Errorf("%s: login after the concurrent race + serial re-apply failed — end state did not converge: %v", tc.role, err)
+		}
+		attrs := readRoleAttrs(t, pool, tc.role)
+		if attrs.super || attrs.bypassRLS || attrs.createDB || attrs.createRole || !attrs.canLogin {
+			t.Errorf("%s: attributes did not converge cleanly: %+v", tc.role, attrs)
+		}
+	}
+}
+
+// TestMakefileDevDBPipesBootstrapViaExplicitFileFlag: a static (no-database-needed)
+// regression guard for the highest-risk fix in this subtask. Confirmed empirically
+// during QA: psql silently ignores redirected stdin once ANY `-c` flag is also
+// given — it exits 0, emits none of db/bootstrap.sql's command tags (no DO/ALTER
+// ROLE/GRANT/REVOKE), and leaves every role's password untouched — unless the input
+// is also named explicitly via `-f -`. `make dev-db`'s in-container invocation sets
+// three `-c "SELECT set_config(...)"` GUCs and pipes db/bootstrap.sql over stdin, so
+// it depends entirely on that explicit `-f -` to not be a silent no-op. This guards
+// against a future edit reverting to bare `< db/bootstrap.sql` redirection.
+func TestMakefileDevDBPipesBootstrapViaExplicitFileFlag(t *testing.T) {
+	b, err := os.ReadFile("../../../Makefile")
+	if err != nil {
+		t.Fatalf("read Makefile: %v", err)
+	}
+	mk := string(b)
+
+	idx := strings.Index(mk, "docker compose exec -T postgres psql")
+	if idx == -1 {
+		t.Fatalf("Makefile no longer contains the dev-db target's in-container psql invocation; this test needs updating")
+	}
+	window := mk[idx:min(idx+800, len(mk))]
+
+	if !strings.Contains(window, "< db/bootstrap.sql") {
+		t.Fatalf("dev-db recipe no longer pipes db/bootstrap.sql via stdin redirection; this test needs updating:\n%s", window)
+	}
+	if !strings.Contains(window, "-f -") {
+		t.Errorf("dev-db recipe pipes db/bootstrap.sql via stdin without an explicit `-f -` flag — psql silently ignores redirected stdin once any -c flag is present (confirmed empirically), which would make the whole roles/passwords bootstrap step a silent no-op:\n%s", window)
 	}
 }

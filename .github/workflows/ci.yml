@@ -90,11 +90,18 @@ jobs:
           fi
 
   # Prove the shared multi-service Dockerfile (M2-04) actually builds before it
-  # reaches Railway (M2-12). Building one service is enough — all seven stamp the
-  # same root Dockerfile with only the SERVICE build arg differing. This also
-  # guards "Option B": the build only sees Go source because Dockerfile.dockerignore
-  # overrides the SPA-tuned root .dockerignore, so a regression in either fails
-  # here (BuildKit via buildx) instead of at deploy time. No image is pushed.
+  # reaches Railway (M2-12). All seven services stamp the same root Dockerfile
+  # with only the SERVICE build arg differing, so one plain service (tenancy) is
+  # enough to guard "Option B": the build only sees Go source because
+  # Dockerfile.dockerignore overrides the SPA-tuned root .dockerignore, so a
+  # regression in either fails here (BuildKit via buildx) instead of at deploy
+  # time. gateway is built separately (task-128, M4-21-04): it is the ONE service
+  # that imports package db (dbsql.FS, for db.Provision's bootstrap/seed steps),
+  # so it is the only build that actually exercises Dockerfile.dockerignore's
+  # `!db/bootstrap.sql` / `!db/seed.dev.sql` / `!db/embed.go` carve-out — tenancy
+  # alone would never catch a regression there (confirmed empirically: removing
+  # the carve-out still builds tenancy fine but fails gateway's compile). No
+  # image is pushed.
   docker-canary:
     name: Docker image (canary)
     needs: changes
@@ -103,13 +110,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build one service image (SERVICE=tenancy)
+      - name: Build one plain service image (SERVICE=tenancy)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           build-args: |
             SERVICE=tenancy
+          push: false
+      - name: Build the gateway image (SERVICE=gateway) — exercises the db/ dockerignore carve-out
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            SERVICE=gateway
           push: false
 
   # The independent migration gate (M2-01, task-9.2): prove the goose harness end to
@@ -141,11 +156,14 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      # bootstrap runs as the superuser; goose runs as the migrator. The app role
-      # (DATABASE_URL) is deliberately never used here. Dev-safe passwords only —
-      # this is an ephemeral throwaway DB.
+      # bootstrap runs as the superuser; goose runs as the migrator. DATABASE_URL
+      # (the app role) is added ONLY so TestSuperuserDSNNotRetainedForRequestPath
+      # (task-128 / AC-4) can prove the request-serving pool it opens comes from
+      # DATABASE_URL, not the superuser DSN — no other step in this job uses it.
+      # Dev-safe passwords only — this is an ephemeral throwaway DB.
       DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
@@ -195,6 +213,16 @@ jobs:
         # deterministic password rotation, and schema-grant shape. Needs only
         # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestBootstrapSQL ./internal/platform/db/...
+      - name: Gateway boot-path provisioning suite (bootstrap->migrate->seed) + per-test visibility & skip gate
+        # M4-21-04 (task-128, AC-6): proves db.Provision — the entry point
+        # cmd/gateway/main.go calls at boot — composes bootstrap (gated) -> migrate
+        # (unconditional) -> seed (gated) in order, short-circuits on the first
+        # error, honors the raw-ENVIRONMENT allowlist guard, and never retains the
+        # superuser DSN past boot (QA F1/F3). Needs all three of
+        # DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL/DATABASE_URL, all already in
+        # this job's env; the gate turns a silently-skipped test (e.g. a future PR
+        # that drops DATABASE_URL again) into a failed step instead of a quiet pass.
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestSuperuserDSNNotRetainedForRequestPath' ./internal/platform/db/...
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real

@@ -722,9 +722,13 @@ SETTLE_ATTEMPTS=6          # x10s = 60s. Insurance only — see settle_fork.
 SETTLE_INTERVAL=10
 PG_WAIT_ATTEMPTS=42        # x10s = 420s.
 PG_WAIT_INTERVAL=10
-VOLUME_CONFIRM_ATTEMPTS=6  # x5s = 30s. Read-after-write lag was already measured
+VOLUME_CONFIRM_ATTEMPTS=12 # x5s = 60s. Read-after-write lag was already measured
 VOLUME_CONFIRM_INTERVAL=5  # on the environment list (M4-23-03), so confirm with a
-                           # bounded poll rather than a single racy read.
+                           # bounded poll rather than a single racy read. Sized
+                           # generously ON PURPOSE: the branch after this poll
+                           # HARD-FAILS the run, and a slow-propagating
+                           # volumeInstances read is far likelier than a genuinely
+                           # lost volume. Cheap to wait, expensive to false-positive.
 
 # gql_body <query> <variables-json>
 gql_body() {
@@ -985,6 +989,19 @@ ensure_postgres_running() {
     case "$status" in
       NONE|NEEDS_APPROVAL|SKIPPED) : ;;
       *)
+        # An IN-FLIGHT deployment must reach a terminal state BEFORE the
+        # redeploy. Firing a second deploy into an active build races it, and
+        # the subsequent wait would then be polling the service instance's
+        # latest deployment — which may be either one. Settle first, redeploy
+        # second, so exactly one deployment is in flight at a time.
+        # FAILED/REMOVED are NOT settled here: they are already terminal, and
+        # waiting on them would burn the full 420s budget before failing.
+        case "$status" in
+          BUILDING|DEPLOYING|QUEUED|INITIALIZING|WAITING|CRASHED)
+            echo "postgres in $env_id is still in flight (status=$status) — letting that deployment settle BEFORE redeploying, so the redeploy does not race an active build."
+            wait_for_postgres "$env_id" "$dep_id"
+            ;;
+        esac
         echo "::warning::postgres in $env_id has a deployment (status=$status) that PREDATES the volume just created, so it is running WITHOUT storage mounted. Redeploying to attach the volume."
         if ! graphql_try "$(gql_body "$SERVICE_REDEPLOY_MUTATION" \
           "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \

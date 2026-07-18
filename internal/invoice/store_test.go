@@ -463,6 +463,72 @@ func TestStoreCreate_DuplicateNumberRejectedAtomically(t *testing.T) {
 	}
 }
 
+// PAR-03 (M4-06-02): manual-path DB backstop, state-blind (Core AC#3/AC#4,
+// M4-06 Store-Level Duplicate Rule). Extends INV-STORE-06
+// (TestStoreCreate_DuplicateNumberRejectedAtomically, directly above) with
+// the state-blind half the M4-06 story adds: the unique index rejects a
+// duplicate Create regardless of the ALREADY-STORED sibling row's own
+// lifecycle state, not merely against a fresh draft.
+//
+//   - (a) mirrors INV-STORE-06 itself (a fresh draft sibling): first Create
+//     succeeds, an identical second Create -> ErrDuplicateNumber,
+//     superuser read-back exactly 1 row.
+//   - (b) the NEW case: a superuser-seeded NON-draft stored row (status
+//     'accepted', bypassing the state machine -- a fixture concern, per
+//     the story's own note) still backstops a manual Create for the same
+//     (entity, number) -> ErrDuplicateNumber, proving the index enforces
+//     uniqueness independent of the stored row's status.
+func TestStoreCreate_DuplicateRejectedRegardlessOfStoredRowState(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	store := NewStore(app)
+
+	t.Run("draft sibling backstop (PAR-03a)", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "PAR-03a tenant")
+		entityID := seedEntity(t, super, tenantID, "PAR-03a entity")
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		const number = "INV-M"
+		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); err != nil {
+			t.Fatalf("first Create: %v", err)
+		}
+		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); !errors.Is(err, ErrDuplicateNumber) {
+			t.Fatalf("second Create err = %v, want ErrDuplicateNumber", err)
+		}
+		if n := mustCount(t, super,
+			`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND entity_id = $2 AND invoice_number = $3`,
+			tenantID, entityID, number,
+		); n != 1 {
+			t.Errorf("rows for (tenant,entity,%q) = %d, want exactly 1", number, n)
+		}
+	})
+
+	t.Run("non-draft stored row backstop (PAR-03b)", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "PAR-03b tenant")
+		entityID := seedEntity(t, super, tenantID, "PAR-03b entity")
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		const number = "INV-M2"
+		invID := seedInvoice(t, super, tenantID, entityID, number)
+		if _, err := super.Exec(ctx,
+			`UPDATE invoices SET status = $1 WHERE id = $2`, string(StatusAccepted), invID,
+		); err != nil {
+			t.Fatalf("seed status=accepted: %v", err)
+		}
+
+		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); !errors.Is(err, ErrDuplicateNumber) {
+			t.Fatalf("Create against an accepted stored row: err = %v, want ErrDuplicateNumber -- the index backstops regardless of the stored row's state (PAR-03b, Core AC#3/AC#4)", err)
+		}
+		if n := mustCount(t, super,
+			`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND entity_id = $2 AND invoice_number = $3`,
+			tenantID, entityID, number,
+		); n != 1 {
+			t.Errorf("rows for (tenant,entity,%q) = %d, want exactly 1 (the pre-seeded accepted row, no duplicate inserted)", number, n)
+		}
+	})
+}
+
 // INV-STORE-07: Create's atomicity — a later in-tx write failing rolls back
 // the WHOLE closure, including the earlier, already-executed writes. Two
 // crafted-actor injections hit the SAME guarantee at two different points in

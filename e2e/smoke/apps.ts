@@ -29,9 +29,9 @@ export const APPS: AppTarget[] = [
     name: 'ops-console',
     url: resolveUrl('OPS_CONSOLE_URL', 'https://ops-console-development.up.railway.app'),
     assertMainView: async (page) => {
-      // Sidebar brand + the default Submissions screen heading.
+      // Sidebar brand + the default Overview screen heading.
       await expect(page.getByText('FiscalBridge').first()).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Submissions ops' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
     },
   },
 ]

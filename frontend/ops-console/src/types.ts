@@ -1,15 +1,13 @@
-// Typed re-authoring of the prototype's `this.state` shape (OpsConsole.dc.html,
-// Component constructor, line ~703) plus the seed-data record shapes.
+// Typed re-authoring of the prototype's `this.state` shape (Developer
+// Console.dc.html, Component constructor, line ~744) plus the seed-data record
+// shapes.
 
-export type Screen = 'submissions' | 'rules' | 'audit' | 'tenants' | 'health'
+export type Screen = 'overview' | 'submissions' | 'evidence' | 'api' | 'billing' | 'status'
 export type Env = 'sandbox' | 'live'
-export type SubTab = 'jobs' | 'recon'
+export type Range = '7d' | '30d' | '90d'
 
 export type JobState = 'queued' | 'submitting' | 'pending' | 'accepted' | 'rejected' | 'failed' | 'dead-letter'
 export type JobFilter = 'all' | JobState
-
-export type Severity = 'error' | 'warn' | 'info'
-export type Scope = 'global' | 'tenant-override'
 
 export type Job = {
   id: string
@@ -23,17 +21,7 @@ export type Job = {
   app: string
 }
 
-export type Rule = {
-  key: string
-  type: string
-  field: string
-  severity: Severity
-  scope: Scope
-  enabled: boolean
-  message: string
-}
-
-export type DrawerState = { type: 'job' | 'audit' | 'rule'; id: string } | null
+export type DrawerState = { type: 'job' | 'evidence'; id: string } | null
 
 export type ToastTone = 'ok' | 'red'
 export type ToastState = { msg: string; tag: string; tone: ToastTone } | null

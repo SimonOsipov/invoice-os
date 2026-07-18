@@ -2,8 +2,8 @@
 // D2/D7/D8).
 //
 // There is NO audit-read API/UI surface (audit is a write-only in-process
-// module; the gateway routes no `audit` service; the ops-console Audit view is a
-// hardcoded mock). AC-7 therefore asserts the real audit_log row directly over
+// module; the gateway routes no `audit` service; the ops-console has no audit
+// view at all). AC-7 therefore asserts the real audit_log row directly over
 // DATABASE_SUPERUSER_URL_DEV — the superuser secret CI already uses for
 // reset+seed. Superuser is BYPASSRLS, so it can read the tenant-scoped,
 // FORCE-RLS audit_log (migrations/20260708062657_audit_log.sql).

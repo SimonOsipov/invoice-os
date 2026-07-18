@@ -109,6 +109,9 @@ body {
 .mono {
   font-variant-numeric: tabular-nums;
 }
+.ops-screen-pad {
+  padding: 24px 26px 56px;
+}
 pre.ops-json {
   margin: 0;
   font-family: var(--font-mono);
@@ -141,17 +144,14 @@ pre.ops-json {
   .ops-sidebar .ops-nav {
     justify-content: center;
   }
-  .ops-rules-grid {
+  .ops-overview-grid,
+  .ops-api-grid,
+  .ops-billing-grid,
+  .ops-status-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
-  .ops-tenants-grid {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-  .ops-recon-grid {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-  .ops-health-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  .ops-kpi-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   }
 }
 
@@ -162,8 +162,9 @@ pre.ops-json {
   .ops-sub-stats {
     display: none !important;
   }
-  .ops-health-grid {
-    grid-template-columns: minmax(0, 1fr) !important;
+  .ops-kpi-strip,
+  .ops-billing-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
   .ops-drawer {
     width: 100vw !important;
@@ -179,10 +180,8 @@ pre.ops-json {
   .ops-screen-pad {
     padding: 18px 14px 40px !important;
   }
-  .ops-tenant-kpis {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-  .ops-tenant-detail-grid {
+  .ops-kpi-strip,
+  .ops-billing-kpis {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }

@@ -65,7 +65,7 @@ import (
 // INDISTINGUISHABLE from a present-but-empty one. omitempty is only proven by
 // checking the KEY is absent, not that the decoded value is "".
 func TestRowError_OmitemptyDistinguishesRuleShapedFromStructural(t *testing.T) {
-	ruleShaped := storeDuplicateRowError([]int{0, 1})
+	ruleShaped := storeDuplicateRowError([]int{1, 0})
 	bareStructural := RowError{
 		Rows:    sheetRows([]int{4, 6}),
 		Field:   "total",
@@ -294,7 +294,7 @@ func TestServiceImport_StoreDuplicateNeverReachesGateEvaluation(t *testing.T) {
 
 	fg := &fakeGate{
 		validateBatchResult: invoice.BatchOutcome{
-			RuleSetVersion:   1,
+			RuleSetVersion:   2,
 			RuleSetVersionID: uuid.NewString(),
 			Clean:            1,
 			WithViolations:   0,

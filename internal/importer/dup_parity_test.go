@@ -204,6 +204,18 @@ func TestPredicateParity_CrossTenantNoFalseCollision(t *testing.T) {
 		t.Errorf(`ExistingNumbers(as tenant A)["INV-X"] = true, want absent -- tenant B's row must be RLS-scoped out (PAR-05, Core AC#5)`)
 	}
 
+	// (i.b) the importer precheck does not see tenant B's row even when
+	// queried through the FOREIGN entity (entityB) -- proves RLS scoping,
+	// not mere entity-scoping (a query that only filtered by entity_id
+	// would still find it here).
+	foreign, err := ibStore.ExistingNumbers(cA, entityB, []string{"INV-X"})
+	if err != nil {
+		t.Fatalf("ExistingNumbers(as tenant A, foreign entityB): %v", err)
+	}
+	if foreign["INV-X"] {
+		t.Error(`ExistingNumbers(as tenant A, entityB)["INV-X"] = true, want absent -- tenant B's row must be RLS-scoped out, not merely entity-scoped (PAR-05, Core AC#5)`)
+	}
+
 	// (ii) a manual Create for tenant A's own entity succeeds -- the DB
 	// backstop is likewise tenant-scoped (the unique index leads with
 	// tenant_id).

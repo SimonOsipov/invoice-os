@@ -58,7 +58,7 @@ import (
 // against the scaffold: the stub returns the bare shape, so RuleKey/
 // Severity are both "".
 func TestStoreDuplicateRowError_ReturnsRuleShapedViolation(t *testing.T) {
-	got := storeDuplicateRowError([]int{0, 1})
+	got := storeDuplicateRowError([]int{1, 0})
 
 	wantRows := []int{2, 3}
 	if !intSliceEqual(got.Rows, wantRows) {
@@ -435,7 +435,7 @@ func (g *contentViolationGate) ValidateBatch(ctx context.Context, invs []invoice
 		clean++
 	}
 	return invoice.BatchOutcome{
-		RuleSetVersion:   1,
+		RuleSetVersion:   2,
 		RuleSetVersionID: uuid.NewString(),
 		Clean:            clean,
 		WithViolations:   withViolations,

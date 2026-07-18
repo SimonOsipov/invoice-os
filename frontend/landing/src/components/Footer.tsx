@@ -27,7 +27,7 @@ const COLS = [
   },
 ]
 
-export function Footer() {
+export function Footer({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <footer style={{ background: 'var(--bg-2)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '56px 32px 40px' }}>
@@ -57,11 +57,22 @@ export function Footer() {
                   {col.title}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                  {col.links.map((l) => (
-                    <a key={l.label} href={l.href} className="ios-link" style={{ fontSize: 13, color: 'var(--fg-2)' }}>
-                      {l.label}
-                    </a>
-                  ))}
+                  {col.links.map((l) =>
+                    l.label === 'Book a demo' ? (
+                      <button
+                        key={l.label}
+                        onClick={onBookDemo}
+                        className="ios-link"
+                        style={{ fontSize: 13, color: 'var(--fg-2)', textAlign: 'left', background: 'none', border: 0, padding: 0, cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                      >
+                        {l.label}
+                      </button>
+                    ) : (
+                      <a key={l.label} href={l.href} className="ios-link" style={{ fontSize: 13, color: 'var(--fg-2)' }}>
+                        {l.label}
+                      </a>
+                    ),
+                  )}
                 </div>
               </div>
             ))}

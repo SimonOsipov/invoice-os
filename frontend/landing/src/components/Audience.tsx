@@ -212,7 +212,7 @@ function InhouseMock() {
 
 // Right-hand copy column for one audience — extracted so both variants can be rendered
 // stacked (see `stackCell`/`layer`) and the cell reserves the taller one's height.
-function AudienceCopy({ data }: { data: AudienceData }) {
+function AudienceCopy({ data, onBookDemo }: { data: AudienceData; onBookDemo: () => void }) {
   return (
     <div>
       <h3 style={{ fontSize: 32, lineHeight: 1.12, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 16px' }}>
@@ -254,14 +254,14 @@ function AudienceCopy({ data }: { data: AudienceData }) {
           </div>
         ))}
       </div>
-      <a href="#demo" className="v2-btn v2-btn-primary">
+      <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ cursor: 'pointer' }}>
         {data.cta}
-      </a>
+      </button>
     </div>
   )
 }
 
-export function Audience() {
+export function Audience({ onBookDemo }: { onBookDemo: () => void }) {
   const [audience, setAudience] = useState<AudienceKey>('firm')
   const isFirm = audience === 'firm'
 
@@ -304,10 +304,10 @@ export function Audience() {
           {/* RIGHT: both copy columns stacked; toggling never reflows the page below */}
           <div style={stackCell}>
             <div style={layer(isFirm)} aria-hidden={!isFirm}>
-              <AudienceCopy data={FIRM} />
+              <AudienceCopy data={FIRM} onBookDemo={onBookDemo} />
             </div>
             <div style={layer(!isFirm)} aria-hidden={isFirm}>
-              <AudienceCopy data={INHOUSE} />
+              <AudienceCopy data={INHOUSE} onBookDemo={onBookDemo} />
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-export function DemoCta() {
+export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <section id="demo" className="dot-bg" style={{ borderBottom: '1px solid var(--line-1)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '96px 32px' }}>
@@ -33,13 +33,34 @@ export function DemoCta() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
                 <div className="label" style={{ marginBottom: 6 }}>
-                  Work email
+                  Full name <span style={{ color: 'var(--status-red-text)' }}>*</span>
                 </div>
                 <div
                   style={{
                     height: 42,
+                    background: 'var(--bg-1)',
                     border: '1px solid var(--line-2)',
-                    borderRadius: 5,
+                    borderRadius: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '0 13px',
+                    fontSize: 14,
+                    color: 'var(--fg-4)',
+                  }}
+                >
+                  Ada Okafor
+                </div>
+              </div>
+              <div>
+                <div className="label" style={{ marginBottom: 6 }}>
+                  Work email <span style={{ color: 'var(--status-red-text)' }}>*</span>
+                </div>
+                <div
+                  style={{
+                    height: 42,
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--line-2)',
+                    borderRadius: 8,
                     display: 'flex',
                     alignItems: 'center',
                     padding: '0 13px',
@@ -50,16 +71,58 @@ export function DemoCta() {
                   you@company.com
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 12 }}>
+              <div>
+                <div className="label" style={{ marginBottom: 6 }}>
+                  Company <span style={{ color: 'var(--status-red-text)' }}>*</span>
+                </div>
+                <div
+                  style={{
+                    height: 42,
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--line-2)',
+                    borderRadius: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '0 13px',
+                    fontSize: 14,
+                    color: 'var(--fg-4)',
+                  }}
+                >
+                  Okafor &amp; Partners
+                </div>
+              </div>
+              <div>
+                <div className="label" style={{ marginBottom: 6 }}>
+                  Role <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
+                </div>
+                <div
+                  style={{
+                    height: 42,
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--line-2)',
+                    borderRadius: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0 13px',
+                    fontSize: 14,
+                    color: 'var(--fg-2)',
+                  }}
+                >
+                  Finance or Accounting lead <span style={{ color: 'var(--fg-3)' }}>▾</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
                   <div className="label" style={{ marginBottom: 6 }}>
-                    Taxpayer size
+                    Taxpayer size <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
                   </div>
                   <div
                     style={{
                       height: 42,
+                      background: 'var(--bg-1)',
                       border: '1px solid var(--line-2)',
-                      borderRadius: 5,
+                      borderRadius: 8,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
@@ -68,18 +131,19 @@ export function DemoCta() {
                       color: 'var(--fg-2)',
                     }}
                   >
-                    Medium <span style={{ color: 'var(--fg-4)' }}>▾</span>
+                    Medium <span style={{ color: 'var(--fg-3)' }}>▾</span>
                   </div>
                 </div>
                 <div style={{ flex: 1 }}>
                   <div className="label" style={{ marginBottom: 6 }}>
-                    Monthly invoices
+                    Monthly invoices <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
                   </div>
                   <div
                     style={{
                       height: 42,
+                      background: 'var(--bg-1)',
                       border: '1px solid var(--line-2)',
-                      borderRadius: 5,
+                      borderRadius: 8,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
@@ -88,16 +152,15 @@ export function DemoCta() {
                       color: 'var(--fg-2)',
                     }}
                   >
-                    1k–10k <span style={{ color: 'var(--fg-4)' }}>▾</span>
+                    1k–10k <span style={{ color: 'var(--fg-3)' }}>▾</span>
                   </div>
                 </div>
               </div>
-              {/* Stub — real lead capture is out of scope for LAND-01. */}
-              <a href="#" className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 4 }}>
+              <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 4, cursor: 'pointer' }}>
                 Book my demo →
-              </a>
+              </button>
               <p style={{ fontSize: 12, color: 'var(--fg-3)', textAlign: 'center', margin: '2px 0 0' }}>
-                No card required · SOC 2 in progress · Data resident in-region
+                No card required · Data resident in-region
               </p>
             </div>
           </div>

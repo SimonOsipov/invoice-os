@@ -782,8 +782,8 @@ jobs:
   # environment's teardown is Railway's own automatic PR-Environment
   # deprovisioning (task-131 Part 4) once M4-21-07 is live. A
   # workflow_dispatch run against `development` still stays up.
-  # dev-env-cleanup.yml's OWN teardown model (the old shared-env
-  # `railway down` sweep) is a separate, NOT-yet-updated concern — task-135 —
-  # left untouched here; see this story's notes for the consequence of the
-  # concurrency rekey above on that file's now-mismatched `dev-preview-shared`
-  # group.
+  # dev-env-cleanup.yml (the old shared-env `railway down` sweep, whose
+  # `dev-preview-shared` concurrency group no longer intersects this
+  # workflow's per-PR groups above) is DELETED (M4-21-11) — see Decision
+  # [cleanup-workflow-deleted]: tearing down `development` would contradict
+  # Decision [dev-env-status], which keeps it persistent.

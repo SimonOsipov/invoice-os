@@ -9,6 +9,7 @@ import { Billing } from './components/Billing'
 import { Status } from './components/Status'
 import { JobDrawer } from './components/JobDrawer'
 import { EvidenceDrawer } from './components/EvidenceDrawer'
+import { RotateConfirm } from './components/RotateConfirm'
 import { Toast } from './components/Toast'
 import { EVIDENCE_DATA, SEED_SUBMISSIONS } from './data'
 import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
@@ -19,10 +20,10 @@ import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone 
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
 export default function App() {
   // Mirrors the prototype's constructor state (Developer Console.dc.html:744).
-  // `reveal`/`confirmRotate` (M4-20-06) land with the screens that read them —
-  // `noUnusedLocals` rejects state that nothing consumes yet. `subQuery` arrives
-  // with its two consumers on Submissions (the search input and the empty state);
-  // `evQuery` likewise with Evidence's search input and its filter derivation.
+  // Every field lands with the screen that reads it — `noUnusedLocals` rejects
+  // state that nothing consumes yet. `subQuery` arrived with its two consumers on
+  // Submissions (the search input and the empty state), `evQuery` likewise with
+  // Evidence, and `reveal`/`confirmRotate` with API & webhooks.
   const [screen, setScreen] = useState<Screen>('overview')
   const [env, setEnv] = useState<Env>('live')
   const [range, setRange] = useState<Range>('30d')
@@ -32,6 +33,13 @@ export default function App() {
   const [drawer, setDrawer] = useState<DrawerState>(null)
   const [reqOpen, setReqOpen] = useState(true)
   const [resOpen, setResOpen] = useState(true)
+  // proto:754 — keyId -> revealed. A plain record, not a Set: the prototype toggles it
+  // with a spread (`{ ...reveal, [id]: !revealed }`) and a Set would need clone-mutate-set
+  // boilerplate for no gain.
+  const [reveal, setReveal] = useState<Record<string, boolean>>({})
+  // proto:755 — holds the env LABEL of the key being rotated ('LIVE' | 'SANDBOX'), which
+  // doubles as the modal heading and the toast subject. null = modal closed.
+  const [confirmRotate, setConfirmRotate] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState>(null)
   const [jobs, setJobs] = useState(SEED_SUBMISSIONS)
 
@@ -112,7 +120,16 @@ export default function App() {
               onExportAll={() => showToast('All evidence bundles queued for export', 'ZIP')}
             />
           )}
-          {screen === 'api' && <ApiWebhooks />}
+          {screen === 'api' && (
+            <ApiWebhooks
+              env={env}
+              reveal={reveal}
+              onToggleReveal={(id) => setReveal((prev) => ({ ...prev, [id]: !prev[id] }))}
+              onCopyKey={(name) => showToast(name + ' key copied', 'CLIPBOARD')}
+              onRotate={(tag) => setConfirmRotate(tag)}
+              onAddWebhook={() => showToast('New webhook endpoint added', 'WEBHOOKS')}
+            />
+          )}
           {screen === 'billing' && <Billing />}
           {screen === 'status' && <Status />}
         </div>
@@ -140,6 +157,19 @@ export default function App() {
           onClose={() => setDrawer(null)}
           onCopy={() => showToast('Evidence JSON copied to clipboard', 'CLIPBOARD')}
           onDownload={() => showToast('Signed evidence bundle downloaded', 'PDF + JSON')}
+        />
+      )}
+
+      {/* z 90 — above the drawers (80/81), below the toast (95), so the confirmation
+          toast still reads over the closing modal. */}
+      {confirmRotate && (
+        <RotateConfirm
+          env={confirmRotate}
+          onClose={() => setConfirmRotate(null)}
+          onConfirm={() => {
+            setConfirmRotate(null)
+            showToast('Rotated ' + confirmRotate + ' secret key', 'NEW KEY ISSUED')
+          }}
         />
       )}
 

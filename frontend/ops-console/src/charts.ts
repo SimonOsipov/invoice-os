@@ -337,17 +337,14 @@ export function buildEvidenceBundles(): EvidenceBundle[] {
   })
 }
 
-// RED (M4-20-06, task-143 A1 mandated carve-out) — httpCodeColor is the pure status-code
-// -> token map applied across the deliveries and request-log tables (11 rows total). The
-// 300 and 499/500 boundaries are NOT falsifiable by screenshot: the seed data only
-// contains 200/202/422/500, so a wrong boundary would ship invisibly. Same shape as the
-// showDeadLetterCallout / vatSplit carve-outs. Source: `Developer Console.dc.html`
-// (Claude Design project 6269a212-5677-4abd-b8a9-08aad10b1c65, read-only) line 1006,
-// transcribed verbatim (not trusted from prose):
+// The pure status-code -> token map applied across the deliveries and request-log tables
+// (11 rows total). The 300 and 499/500 boundaries are NOT falsifiable by screenshot: the
+// seed data only contains 200/202/422/500, so a wrong boundary would ship invisibly —
+// hence the spec carve-out in charts.test.ts. Same shape as the showDeadLetterCallout /
+// vatSplit carve-outs. Source: `Developer Console.dc.html` (Claude Design project
+// 6269a212-5677-4abd-b8a9-08aad10b1c65, read-only) line 1006, transcribed verbatim:
 //   const codeColor = (c) => c < 300 ? 'var(--status-green-text)'
 //     : c < 500 ? 'var(--status-amber-text)' : 'var(--status-red-text)';
-// Currently throws `new Error('not implemented')` — that IS the correct RED reason
-// (assertion/not-implemented), not a compile/import error.
-export function httpCodeColor(_code: number): string {
-  throw new Error('not implemented')
+export function httpCodeColor(code: number): string {
+  return code < 300 ? 'var(--status-green-text)' : code < 500 ? 'var(--status-amber-text)' : 'var(--status-red-text)'
 }

@@ -6,7 +6,7 @@
 import type { ReactNode } from 'react'
 import { buildEvidenceBundles, type EvidenceBundle } from './charts'
 import { Icon } from './icons'
-import type { Job, JobState, Screen } from './types'
+import type { ApiKey, ApiRequest, Delivery, Env, Job, JobState, RateLimit, Screen, Webhook } from './types'
 
 /* ------------------------------------------------------------------ */
 /* Common icon glyphs (this.g(paths, size) in the prototype)           */
@@ -129,3 +129,97 @@ export const JOB_FILTER_KEYS: JobState[] = ['queued', 'submitting', 'pending', '
 // module load. EvidenceDrawer computes it per render instead — the same split
 // JobDrawer already uses.
 export const EVIDENCE_DATA: EvidenceBundle[] = buildEvidenceBundles()
+
+/* ------------------------------------------------------------------ */
+/* API & webhooks                                                      */
+/* ------------------------------------------------------------------ */
+
+// proto:992-995. Both card colours and the LIVE card's green border are seed fields, not
+// derived from `tag` — note the asymmetry: LIVE gets --status-green-border, SANDBOX the
+// neutral --line-1. The mask is 20 x U+00B7 MIDDLE DOT (NOT '*' and NOT the '•' bullet);
+// it is built exactly as the prototype builds it rather than redacted from `full`.
+export const API_KEYS: ApiKey[] = [
+  {
+    id: 'live',
+    tag: 'LIVE',
+    name: 'Production secret',
+    full: 'fb_live_sk_9f2a71c4d8e0b6a3f19c72e4',
+    mask: 'fb_live_sk_' + '·'.repeat(20) + '72e4',
+    tagBg: 'var(--status-green-bg)',
+    tagBorder: 'var(--status-green-border)',
+    tagText: 'var(--status-green-text)',
+    created: 'Jan 12, 2026',
+    lastUsed: '12s ago',
+    borderColor: 'var(--status-green-border)',
+  },
+  {
+    id: 'sandbox',
+    tag: 'SANDBOX',
+    name: 'Sandbox secret',
+    full: 'fb_test_sk_4c71a90f2b8e6d13c05a9f4c',
+    mask: 'fb_test_sk_' + '·'.repeat(20) + '9f4c',
+    tagBg: 'var(--status-amber-bg)',
+    tagBorder: 'var(--status-amber-border)',
+    tagText: 'var(--status-amber-text)',
+    created: 'Jan 12, 2026',
+    lastUsed: '2m ago',
+    borderColor: 'var(--line-1)',
+  },
+]
+
+// proto:1002-1005. The ACTIVE pill both cards carry is hardcoded in the markup, not a
+// seed field — every endpoint in the prototype is active.
+export const WEBHOOKS: Webhook[] = [
+  {
+    url: 'https://api.zephyrpay.io/hooks/fiscalbridge',
+    env: 'LIVE',
+    envBg: 'var(--status-green-bg)',
+    envBorder: 'var(--status-green-border)',
+    envText: 'var(--status-green-text)',
+    events: ['invoice.cleared', 'invoice.rejected', 'submission.failed'],
+  },
+  {
+    url: 'https://sandbox.zephyrpay.io/hooks/fiscalbridge',
+    env: 'SANDBOX',
+    envBg: 'var(--status-amber-bg)',
+    envBorder: 'var(--status-amber-border)',
+    envText: 'var(--status-amber-text)',
+    events: ['invoice.cleared', 'invoice.rejected'],
+  },
+]
+
+// proto:1007-1012. The `id` field is ours, not the prototype's: `invoice.cleared` occurs
+// three times, so keying on `event` would trip React's duplicate-key console.error and
+// (via e2e/smoke/smoke.spec.ts) red the smoke gate. Row colours are applied at render —
+// httpCodeColor(code) for the status, an inline ternary for the retry counter — so this
+// table stays free of a `charts` import.
+export const DELIVERIES: Delivery[] = [
+  { id: 'dlv_1', event: 'invoice.cleared', code: 200, latency: '142ms', retry: '—' },
+  { id: 'dlv_2', event: 'invoice.rejected', code: 200, latency: '118ms', retry: '—' },
+  { id: 'dlv_3', event: 'submission.failed', code: 500, latency: '—', retry: '2/3' },
+  { id: 'dlv_4', event: 'invoice.cleared', code: 200, latency: '96ms', retry: '—' },
+  { id: 'dlv_5', event: 'invoice.cleared', code: 200, latency: '134ms', retry: '—' },
+]
+
+// proto:1016-1022. Same story as DELIVERIES: `POST /v2/invoices` occurs four times, so
+// the `id` is what makes the key unique without falling back to the array index.
+export const REQ_LOG: ApiRequest[] = [
+  { id: 'req_1', m: 'POST', ep: '/v2/invoices', code: 202, lat: '88ms' },
+  { id: 'req_2', m: 'GET', ep: '/v2/invoices/sub_9f2a91', code: 200, lat: '42ms' },
+  { id: 'req_3', m: 'POST', ep: '/v2/invoices', code: 202, lat: '91ms' },
+  { id: 'req_4', m: 'POST', ep: '/v2/invoices', code: 422, lat: '76ms' },
+  { id: 'req_5', m: 'GET', ep: '/v2/evidence/ZP-INV-0088412', code: 200, lat: '38ms' },
+  { id: 'req_6', m: 'POST', ep: '/v2/invoices', code: 202, lat: '84ms' },
+]
+
+// proto:1024-1026. Env-aware, and every field is a literal — including `width`. The live
+// bar is pinned at '68%' even though 341/500 is 68.2%, so deriving the width from
+// current/limit would drift from the design. Do not compute it.
+export const RATE_LIMIT: Record<Env, RateLimit> = {
+  sandbox: { current: '58', limit: '100', width: '58%', color: 'var(--accent)', detail: 'Sandbox throughput · resets each second' },
+  live: { current: '341', limit: '500', width: '68%', color: 'var(--accent)', detail: 'Production throughput · burst to 750 req·s' },
+}
+
+// proto:1014-1015. Two-entry lookup maps kept beside the seed they colour.
+export const METHOD_BG: Record<string, string> = { POST: 'var(--accent-tint)', GET: 'var(--status-muted-bg)' }
+export const METHOD_FG: Record<string, string> = { POST: 'var(--accent)', GET: 'var(--fg-2)' }

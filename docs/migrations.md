@@ -366,8 +366,15 @@ real passwords live **only** in Railway.
    ```bash
    docker run --rm -v "$PWD/db:/db:ro" postgres:18 \
      psql "<Postgres.DATABASE_PUBLIC_URL>" -v ON_ERROR_STOP=1 \
-       -v migrator_password="<MIGRATOR_PW>" -v app_password="<APP_PW>" -f /db/bootstrap.sql
+       -c "SELECT set_config('fiscalbridge.migrator_password', '<MIGRATOR_PW>', false)" \
+       -c "SELECT set_config('fiscalbridge.app_password', '<APP_PW>', false)" \
+       -c "SELECT set_config('fiscalbridge.reader_password', '<READER_PW>', false)" \
+       -f /db/bootstrap.sql
    ```
+   Note: these `-c` arguments carry the plaintext passwords on argv, visible to `ps`
+   and to shell history on whatever machine runs this — use a throwaway/trusted
+   machine and clear scrollback/history after, same care as any other place a
+   secret briefly touches a command line.
 
 3. **Store the app + migrator URLs**, built from the **private** host — never the public
    proxy, per §2:

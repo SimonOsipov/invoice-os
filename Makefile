@@ -53,10 +53,15 @@ help: ## List the available targets
 
 db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs psql)
 	@test -n "$(DATABASE_SUPERUSER_URL)" || { echo "DATABASE_SUPERUSER_URL is not set (set it in .env or the environment)"; exit 1; }
+	# NOTE: passwords land in the `-c` argv here (and below in `dev-db`), so they're
+	# visible to `ps` on this machine and to the server's statement log if
+	# log_statement=all. Fine for dev-default placeholders (real Railway/prod
+	# passwords never flow through this Makefile) — don't copy this exact pattern
+	# into a script that handles real secrets.
 	psql "$(DATABASE_SUPERUSER_URL)" -v ON_ERROR_STOP=1 \
-		-v migrator_password="$(MIGRATOR_PASSWORD)" \
-		-v app_password="$(APP_PASSWORD)" \
-		-v reader_password="$(READER_PASSWORD)" \
+		-c "SELECT set_config('fiscalbridge.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.app_password', '$(APP_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.reader_password', '$(READER_PASSWORD)', false)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -81,9 +86,13 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 	docker compose up -d --wait
 	# Bootstrap the roles INSIDE the container: its psql is always present, so
 	# no host psql client is required. -T disables the TTY so the file pipes to stdin.
+	# `-f -` is required (not bare stdin redirection): psql ignores stdin when -c
+	# options are also given unless the input is explicitly named as a file via "-".
 	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
-		-v migrator_password="$(MIGRATOR_PASSWORD)" -v app_password="$(APP_PASSWORD)" \
-		-v reader_password="$(READER_PASSWORD)" \
+		-c "SELECT set_config('fiscalbridge.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.app_password', '$(APP_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.reader_password', '$(READER_PASSWORD)', false)" \
+		-f - \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"
 	# Seed a couple of test tenants (M2-06). Runs as the in-container superuser, which

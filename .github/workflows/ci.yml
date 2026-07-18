@@ -186,6 +186,15 @@ jobs:
         # stale/incomplete go:embed; this can. DATABASE_MIGRATION_URL is already in
         # this job's env, so the test runs here (it self-skips everywhere else).
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestMigrateUpFromEmbedded ./internal/platform/db/...
+      - name: Bootstrap-SQL pgx-caller suite (fail-closed GUCs, idempotency, rotation) + per-test visibility & skip gate
+        # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its three
+        # role passwords from session GUCs instead of psql-only \set/:'var', so a pgx
+        # caller (not just psql) can execute the identical file (Decision
+        # [one-bootstrap-file]). Covers create-or-converge, security-attribute
+        # re-assertion, fail-closed on a missing/empty password GUC, idempotency,
+        # deterministic password rotation, and schema-grant shape. Needs only
+        # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestBootstrapSQL ./internal/platform/db/...
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real

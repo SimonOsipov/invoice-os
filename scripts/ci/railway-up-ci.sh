@@ -11,14 +11,26 @@
 # the known stream-failure exit is tolerated; any OTHER non-zero exit (auth, unknown
 # service, genuine build error) still fails the step.
 #
+# M4-21-09: every PR now deploys to its OWN Railway environment. An
+# account-scoped RAILWAY_API_TOKEN (the new PR-path auth, M4-21-07/task-131)
+# has no implicit project/environment scope the way the old project-scoped
+# RAILWAY_API_DEV_TOKEN did — so this script now requires RAILWAY_ENVIRONMENT
+# + RAILWAY_PROJECT_ID in its environment and passes them through as
+# `--environment`/`--project` on every `railway up` call, for BOTH the PR
+# path and the workflow_dispatch (development) path, so the target is always
+# named explicitly rather than relying on whatever the token happens to be
+# scoped to.
+#
 # POSIX sh (not bash) on purpose: runs inside the minimal ghcr.io/railwayapp/cli
 # container. Invoke as: sh scripts/ci/railway-up-ci.sh <service>
 set -u
 
 svc="${1:?usage: railway-up-ci.sh <service>}"
+: "${RAILWAY_ENVIRONMENT:?RAILWAY_ENVIRONMENT is not set — expected the Railway environment name resolved by dev-env.yml resolve-env job (M4-21-09)}"
+: "${RAILWAY_PROJECT_ID:?RAILWAY_PROJECT_ID is not set — expected the workflow-level constant from dev-env.yml}"
 
 rc=0
-out="$(railway up --ci --service "$svc" 2>&1)" || rc=$?
+out="$(railway up --ci --service "$svc" --environment "$RAILWAY_ENVIRONMENT" --project "$RAILWAY_PROJECT_ID" 2>&1)" || rc=$?
 printf '%s\n' "$out"
 
 if [ "$rc" -ne 0 ]; then

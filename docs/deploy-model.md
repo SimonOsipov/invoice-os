@@ -222,6 +222,49 @@ This empty-Watch-Paths invariant remains Railway-side dashboard config, not codi
 directly in `railway.json` (per the M3-16 decision above) — only *asserted* by CI now, not
 *set* by it.
 
+## What a fork actually inherits (M4-23-04, measured)
+
+Measured 2026-07-18 against a real probe fork of `development`, created with the exact
+payload `railway-env.sh` ships (`ephemeral: true, skipInitialDeploys: true`), inspected,
+then deleted. These are observations, not inferences from Railway's docs — several
+contradict what the docs imply.
+
+| Thing | Carries into a fork? | Consequence for `prepare-env` |
+|---|---|---|
+| Service instances | Yes — all 12, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. The settle poll is insurance only. |
+| Public domains | Yes, auto-renamed `<svc>-pr-<N>.up.railway.app` | Domain reconcile is a **no-op**: one query per service, zero mutations. The create path is insurance. |
+| `targetPort` on those domains | `null` — in the fork **and** in `development` | Null is the NORMAL state (Railway magic-port detection). CI must **not** fail on it, and must not invent `8080`. |
+| Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 7 contexts + 3 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
+| Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | Postgres still deploys, reaches SUCCESS and accepts TCP connections without one. A PR database is **ephemeral by design** and is meant to be born empty: the gateway bootstraps, migrates and seeds at boot. CI **records** this and must **not** fail on it. |
+| TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | No reconciliation needed. `pg_isready` against the forked DSN remains the authoritative liveness proof. |
+| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. |
+| Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
+
+**Postgres reports `CRASHED` transiently mid-startup, then settles to `SUCCESS`.** The
+wait in `railway-env.sh` therefore has **no early exit on a bad status** — it polls until
+`SUCCESS` or until its budget is exhausted. This is not defensive padding: during the
+probe run a poll that broke on the first `CRASHED` produced a *false* story-blocking
+finding for a deployment that read `SUCCESS` moments later. Any early-fail threshold is a
+guess about how long `CRASHED` can persist, and every such guess reintroduces that false
+fatal.
+
+### `ENVIRONMENT` is decorative in a fork
+
+`ENVIRONMENT` is inherited **verbatim**, so inside `pr-<N>` it resolves to the literal
+string `development`, while `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
+
+`provisionableEnvironment` (`internal/platform/db/bootstrap.go`) returns true for exactly
+`development` or `^(?:.+-)?pr-[0-9]+$`. A fork passes on the **first** branch; a fork whose
+`ENVIRONMENT` were "correctly" `pr-<N>` would pass on the **second**. Both pass — so in a
+PR environment the fail-closed allowlist **distinguishes nothing**. It retains full value
+on the paths it was written for: `production`, `staging`, and empty.
+
+This is recorded, **not repaired**. Setting `ENVIRONMENT` per-fork would be a regression,
+not a fix: the environment *name* is a CI convention this workflow is free to change
+(`[env-name-is-convention]`), and coupling provisioning behaviour to it would make a
+rename silently change whether a database bootstraps. No variable is set and no app code
+is touched.
+
 ## Related
 
 - [add-a-service.md](./add-a-service.md) — how each service was provisioned (the

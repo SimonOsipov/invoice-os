@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>>
+# scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
+#                            ensure-environment <name>|audit-sealed-variables|
+#                            reconcile-fork <environment-id>>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -32,6 +34,10 @@
 # `ensure-environment <name>` (M4-23-03) is the create-or-reuse path that replaced the
 # ~300s poll for an environment Railway was supposed to create for us. Idempotent: it
 # looks the name up first and mutates nothing when it already exists.
+#
+# `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
+# fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
+# for are deliberately absent because a live probe proved they would fail every run.
 #
 # Auth: account-scoped RAILWAY_API_TOKEN, `Authorization: Bearer`. A Railway *project*
 # token is pinned to one environment and cannot perform projectUpdate, nor reach an
@@ -398,12 +404,547 @@ cmd_disable_pr_environments() {
   echo "Independent read-back confirms prDeploys=false botPrEnvironments=false."
 }
 
+# ===========================================================================
+# M4-23-04 — fork fidelity.
+#
+# EVERY behaviour below was MEASURED against a real probe fork on 2026-07-18
+# (forked from `development` with the exact payload attempt_create sends), not
+# inferred from the docs. Where a measurement contradicted the design, the
+# measurement won. Two checks the design called for are DELIBERATELY ABSENT
+# because measuring them showed they would have failed every healthy run:
+#
+#   1. NO failure on a null `targetPort`. Measured null on the gateway domain in
+#      BOTH the fork AND `development`. Null is the normal state here.
+#   2. NO failure on an absent volume. A fork gets NO volume at all
+#      (volumeInstances == []) while `development` has a 5000MB one — and
+#      Postgres still deploys, reaches SUCCESS and accepts TCP connections. A PR
+#      database is EPHEMERAL BY DESIGN and that is correct: the gateway
+#      bootstraps, migrates and seeds at boot, so it is meant to be born empty.
+#
+# Do not "restore" either check. Each would have converted every green run red.
+# ===========================================================================
+
+# Domains and the TCP proxy were both measured to CARRY into a fork (auto-renamed
+# `<svc>-pr-<N>.up.railway.app`, and a proxy with its own distinct port). The
+# create path below is INSURANCE, not the expected path: the normal run is one
+# query per service and zero mutations.
+# shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
+DOMAINS_QUERY='query dom($p: String!, $e: String!, $s: String!) {
+  domains(projectId: $p, environmentId: $e, serviceId: $s) {
+    serviceDomains { id domain targetPort syncStatus }
+  }
+}'
+
+# shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
+DOMAIN_CREATE_MUTATION='mutation domCreate($input: ServiceDomainCreateInput!) {
+  serviceDomainCreate(input: $input) { id domain targetPort }
+}'
+
+# shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
+SEALED_AUDIT_QUERY='query sealedAudit($e: String!) {
+  environment(id: $e) {
+    id
+    name
+    variables(first: 500) { edges { node { name isSealed serviceId } } }
+  }
+}'
+
+# shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
+SETTLE_QUERY='query settle($e: String!) {
+  environment(id: $e) { serviceInstances { edges { node { serviceId serviceName } } } }
+}'
+
+# shellcheck disable=SC2016  # $e/$s are GraphQL variables — not shell expansions.
+SERVICE_INSTANCE_QUERY='query svcInstance($e: String!, $s: String!) {
+  serviceInstance(environmentId: $e, serviceId: $s) {
+    serviceName
+    latestDeployment { id status createdAt }
+  }
+}'
+
+# `commitSha` is optional (verified by introspection) and is OMITTED: Postgres is
+# image-sourced, so there is no commit to pin. V2 is the create-a-deployment verb
+# and returns a deployment ID; `serviceInstanceRedeploy` returns a bare Boolean,
+# which is indistinguishable from a silent no-op when there is nothing to redeploy.
+# shellcheck disable=SC2016  # $e/$s are GraphQL variables — not shell expansions.
+SERVICE_DEPLOY_MUTATION='mutation svcDeploy($e: String!, $s: String!) {
+  serviceInstanceDeployV2(environmentId: $e, serviceId: $s)
+}'
+
+# shellcheck disable=SC2016  # $e/$s are GraphQL variables — not shell expansions.
+SERVICE_REDEPLOY_MUTATION='mutation svcRedeploy($e: String!, $s: String!) {
+  serviceInstanceRedeploy(environmentId: $e, serviceId: $s)
+}'
+
+# shellcheck disable=SC2016  # $id is a GraphQL variable — not a shell expansion.
+DEPLOYMENT_STATUS_QUERY='query dep($id: String!) { deployment(id: $id) { id status } }'
+
+# shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
+VOLUMES_QUERY='query vols($e: String!) {
+  environment(id: $e) {
+    volumeInstances { edges { node { id serviceId mountPath sizeMB currentSizeMB state } } }
+  }
+}'
+
+# shellcheck disable=SC2016  # $e/$s are GraphQL variables — not shell expansions.
+TCP_PROXIES_QUERY='query proxies($e: String!, $s: String!) {
+  tcpProxies(environmentId: $e, serviceId: $s) { id domain proxyPort applicationPort syncStatus }
+}'
+
+# Returns the RENDERED variable map. Never logged wholesale — only the two named
+# keys are read out of it, because the same map carries live credentials.
+# shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
+SERVICE_VARIABLES_QUERY='query svcVars($p: String!, $e: String!, $s: String!) {
+  variables(projectId: $p, environmentId: $e, serviceId: $s)
+}'
+
+# Attempt counts, not wall-clock deadlines: a count remains bounded when `sleep` is
+# stubbed out under test, whereas a $SECONDS deadline would spin forever.
+SETTLE_ATTEMPTS=6          # x10s = 60s. Insurance only — see settle_fork.
+SETTLE_INTERVAL=10
+PG_WAIT_ATTEMPTS=42        # x10s = 420s.
+PG_WAIT_INTERVAL=10
+
+# gql_body <query> <variables-json>
+gql_body() {
+  jq -n --arg q "$1" --argjson v "$2" '{query: $q, variables: $v}'
+}
+
+require_fork_ids() {
+  local v missing=""
+  for v in RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID \
+           RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_POSTGRES_ID; do
+    if [ -z "${!v:-}" ]; then missing="$missing $v"; fi
+  done
+  if [ -n "$missing" ]; then
+    echo "::error::Missing Railway service id(s):$missing — expected the workflow-level constants in dev-env.yml's env: block."
+    exit 1
+  fi
+}
+
+# --- Reconcile A: sealed variables in `development` -------------------------
+#
+# Sealed variables do NOT fork. A fork would be created with them silently
+# missing, surfacing much later as an unexplained boot or auth error in a PR
+# environment that looks correctly configured. Assert, never repair — a sealed
+# value is unreadable by definition, so there is nothing to copy.
+cmd_audit_sealed_variables() {
+  require_env
+  require_source_env
+
+  local body total count offenders
+  body=$(gql_body "$SEALED_AUDIT_QUERY" "$(jq -n --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" '{e: $e}')")
+  graphql_post "$body" "auditing sealed variables in the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
+
+  # "Cannot audit" is NEVER "none present" — the same discipline
+  # assert_pr_environments_off applies to a null project.
+  if echo "$GQL_RESPONSE" | jq -e '.data.environment == null' >/dev/null 2>&1; then
+    echo "::error::Railway returned a null environment for the source id $RAILWAY_DEV_ENVIRONMENT_ID, so the sealed-variable audit could not run. This is NOT evidence that no sealed variables exist."
+    exit 1
+  fi
+
+  total=$(echo "$GQL_RESPONSE" | jq '[.data.environment.variables.edges[]?.node] | length')
+  count=$(echo "$GQL_RESPONSE" | jq '[.data.environment.variables.edges[]?.node | select(.isSealed == true)] | length')
+
+  if [ "$count" != "0" ]; then
+    offenders=$(echo "$GQL_RESPONSE" | jq -r '
+      .data.environment.variables.edges[]?.node
+      | select(.isSealed == true)
+      | "  \(.name) (serviceId=\(.serviceId // "environment-scoped"))"')
+    echo "::error::$count sealed variable(s) found in the source environment $RAILWAY_DEV_ENVIRONMENT_ID. Sealed variables do NOT fork: every pr-<N> environment would be created with these SILENTLY MISSING, surfacing much later as an unexplained boot or auth failure. Unseal them or move them to a non-sealed variable. Offenders:"
+    echo "$offenders"
+    exit 1
+  fi
+
+  echo "Sealed-variable audit clean: 0 of $total variables in the source environment are sealed."
+}
+
+# --- Reconcile B: settle -----------------------------------------------------
+#
+# MEASURED: all 12 service instances materialise IMMEDIATELY after
+# environmentCreate. There is NO settle race. This poll is kept as cheap
+# insurance against read-after-write lag only, and is deliberately SHORT (60s)
+# because it is not guarding a race that was ever observed. Do not cite a race
+# as its justification.
+#
+# It checks only the 5 service ids this command goes on to act on. It is NOT a
+# second copy of the Watch-Paths assertion's 11-service list, which remains the
+# sole authority on fleet membership.
+settle_fork() {
+  local env_id="$1" try body present missing v
+  body=$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")
+
+  for try in $(seq 1 "$SETTLE_ATTEMPTS"); do
+    if graphql_try "$body" "listing service instances in environment $env_id"; then
+      present=$(echo "$GQL_RESPONSE" | jq -r '.data.environment.serviceInstances.edges[]?.node.serviceId')
+      missing=""
+      for v in "$RAILWAY_SVC_GATEWAY_ID" "$RAILWAY_SVC_APP_ID" "$RAILWAY_SVC_LANDING_ID" \
+               "$RAILWAY_SVC_OPS_CONSOLE_ID" "$RAILWAY_SVC_POSTGRES_ID"; do
+        if ! echo "$present" | grep -qx "$v"; then missing="$missing $v"; fi
+      done
+      if [ -z "$missing" ]; then
+        echo "All 5 reconciled service instances are present in $env_id (attempt $try)."
+        return 0
+      fi
+      echo "  (settle attempt $try) still missing:$missing — retrying in ${SETTLE_INTERVAL}s ..."
+    else
+      echo "  (settle attempt $try) $GQL_ERROR — retrying in ${SETTLE_INTERVAL}s ..."
+    fi
+    sleep "$SETTLE_INTERVAL"
+  done
+
+  echo "::error::Environment $env_id did not materialise its service instances within $((SETTLE_ATTEMPTS * SETTLE_INTERVAL))s — still missing:$missing. This is NOT evidence that the development environment drifted; the Watch-Paths assertion would misreport an unmaterialised fork as exactly that."
+  exit 1
+}
+
+# --- Reconcile C: domains ----------------------------------------------------
+#
+# F7 is absolute: this NEVER emits a URL. It only makes domains EXIST. The
+# untouched `urls` step remains the sole discoverer and still fails if any is
+# missing, so no URL is ever constructed from a pattern.
+reconcile_domain() {
+  local env_id="$1" svc_id="$2" label="$3" existing target src_count input body
+
+  graphql_post "$(gql_body "$DOMAINS_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "reading $label domains in environment $env_id"
+
+  existing=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].domain // empty')
+  if [ -n "$existing" ]; then
+    echo "  $label: domain already present ($existing, targetPort=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].targetPort // "null"')) — no mutation. This is the expected path; domains were measured to carry into a fork."
+    return 0
+  fi
+
+  echo "::warning::$label has NO domain in environment $env_id. Domains were measured to CARRY into a fork, so this is the unexpected branch — creating one as insurance."
+
+  # AC #4: targetPort is READ from `development`, never hardcoded.
+  graphql_post "$(gql_body "$DOMAINS_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "reading the $label targetPort from the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
+
+  src_count=$(echo "$GQL_RESPONSE" | jq '[.data.domains.serviceDomains[]?] | length')
+  if [ "$src_count" = "0" ]; then
+    echo "::error::$label (service $svc_id) has no domain in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID either, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
+    exit 1
+  fi
+  target=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].targetPort // empty')
+
+  if [ -n "$target" ]; then
+    input=$(jq -n --arg e "$env_id" --arg s "$svc_id" --argjson t "$target" \
+      '{input: {environmentId: $e, serviceId: $s, targetPort: $t}}')
+    echo "  $label: creating a domain with targetPort=$target, read from the source environment."
+  else
+    # MEASURED: targetPort is null on the gateway domain in BOTH the fork and
+    # `development`. Null is the normal state, so this is NOT a failure — it is
+    # Railway's magic-port detection, which is exactly what the source
+    # environment relies on. Replicate that by OMITTING targetPort. Hardcoding
+    # 8080 here would invent a value the source environment does not have.
+    input=$(jq -n --arg e "$env_id" --arg s "$svc_id" '{input: {environmentId: $e, serviceId: $s}}')
+    echo "  $label: the source environment domain has a null targetPort (measured normal — Railway magic-port detection), so targetPort is OMITTED rather than invented."
+  fi
+
+  body=$(gql_body "$DOMAIN_CREATE_MUTATION" "$input")
+  graphql_post "$body" "creating a $label domain in environment $env_id"
+
+  # Never trust the mutation's own selection set — re-query independently, the
+  # same discipline cmd_disable_pr_environments applies to projectUpdate.
+  sleep 5
+  graphql_post "$(gql_body "$DOMAINS_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading $label domains in environment $env_id after create"
+
+  existing=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].domain // empty')
+  if [ -z "$existing" ]; then
+    echo "::error::serviceDomainCreate reported success for $label (service $svc_id) in environment $env_id but an INDEPENDENT re-query still finds no domain. The urls step below would fail to discover it."
+    exit 1
+  fi
+  echo "  $label: created and confirmed by re-query ($existing)."
+}
+
+reconcile_domains() {
+  local env_id="$1"
+  echo "Reconciling domains for the 4 public services in $env_id ..."
+  reconcile_domain "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway
+  reconcile_domain "$env_id" "$RAILWAY_SVC_APP_ID" app
+  reconcile_domain "$env_id" "$RAILWAY_SVC_LANDING_ID" landing
+  reconcile_domain "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console
+}
+
+# --- Reconcile D: Postgres bring-up ------------------------------------------
+#
+# wait_for_postgres <env-id> <deployment-id|"">
+#
+# THE SINGLE MOST IMPORTANT CONSTRAINT IN THIS FILE.
+#
+# MEASURED: Postgres reports CRASHED TRANSIENTLY mid-startup and then settles to
+# SUCCESS. A poll that breaks on the first CRASHED reports a FALSE FATAL
+# FAILURE — precisely the mistake made during the probe run, where a
+# story-blocking finding was reported for a deployment that read SUCCESS moments
+# later.
+#
+# Therefore this loop has NO early-exit on a bad status. It polls until the
+# status is SUCCESS or until the attempt budget is exhausted, and only then
+# fails. Nothing here may be "optimised" into an early break: one probe does not
+# bound how long CRASHED can persist, so ANY early-fail threshold is a guess and
+# every guess reintroduces the false fatal.
+wait_for_postgres() {
+  local env_id="$1" dep_id="$2" try status last="" seq="" body
+
+  if [ -n "$dep_id" ]; then
+    body=$(gql_body "$DEPLOYMENT_STATUS_QUERY" "$(jq -n --arg id "$dep_id" '{id: $id}')")
+  else
+    body=$(gql_body "$SERVICE_INSTANCE_QUERY" \
+      "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")
+  fi
+
+  for try in $(seq 1 "$PG_WAIT_ATTEMPTS"); do
+    # A transport blip must not end the wait either — retry on the next tick.
+    if graphql_try "$body" "polling the postgres deployment status in environment $env_id"; then
+      if [ -n "$dep_id" ]; then
+        status=$(echo "$GQL_RESPONSE" | jq -r '.data.deployment.status // "UNKNOWN"')
+      else
+        status=$(echo "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.status // "UNKNOWN"')
+      fi
+    else
+      status="UNREADABLE"
+    fi
+
+    if [ "$status" != "$last" ]; then
+      seq="${seq:+$seq -> }$status"
+      last="$status"
+      echo "  (postgres poll $try) status=$status"
+    fi
+
+    if [ "$status" = "SUCCESS" ]; then
+      echo "postgres reached SUCCESS in environment $env_id (observed: $seq)."
+      return 0
+    fi
+
+    # DO NOT add a break for CRASHED/FAILED/REMOVED here. See the header above.
+    sleep "$PG_WAIT_INTERVAL"
+  done
+
+  echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID, deployment ${dep_id:-<none>}) in environment $env_id never reached SUCCESS within $((PG_WAIT_ATTEMPTS * PG_WAIT_INTERVAL))s. Last status: $last. Observed sequence: $seq. This is a POSTGRES failure, not a generic timeout — the gateway would be unable to connect and migrations would never run."
+  exit 1
+}
+
+# MEASURED: Postgres in a fresh fork has latestDeployment == NONE. Nothing in
+# this repo has ever deployed Postgres (the `railway up` matrices are gateway +
+# 7 contexts + 3 SPAs, and the Watch-Paths assertion excludes it); it works in
+# `development` only because it has been running there since M1. So a fork needs
+# an EXPLICIT deploy, and this is where it happens.
+ensure_postgres_running() {
+  local env_id="$1" status dep_id
+
+  graphql_post "$(gql_body "$SERVICE_INSTANCE_QUERY" \
+    "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+    "reading the postgres service instance in environment $env_id"
+
+  if echo "$GQL_RESPONSE" | jq -e '.data.serviceInstance == null' >/dev/null 2>&1; then
+    echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID) has no service instance in environment $env_id. The fork did not receive it."
+    exit 1
+  fi
+
+  status=$(echo "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.status // "NONE"')
+  dep_id=$(echo "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.id // empty')
+  echo "postgres in $env_id: latestDeployment status=$status id=${dep_id:-<none>}"
+
+  case "$status" in
+    SUCCESS)
+      echo "postgres already has a successful deployment — no mutation. The pg_isready probe is the real liveness proof."
+      return 0
+      ;;
+    SLEEPING)
+      echo "::warning::postgres reports SLEEPING in $env_id. Not redeploying — Railway wakes it on connect, and the pg_isready probe is the authoritative test."
+      return 0
+      ;;
+    NEEDS_APPROVAL)
+      echo "::error::postgres in $env_id reports NEEDS_APPROVAL, meaning the fork STAGED its changes instead of committing them. That contradicts the omitted-stageInitialChanges assumption environmentCreate relies on (M4-23-03). Refusing to auto-approve: this is a finding about how forks now behave, not something to repair blind."
+      exit 1
+      ;;
+    SKIPPED)
+      echo "::error::postgres in $env_id reports SKIPPED — the likeliest cause is a non-empty Watch Path on the Postgres service, which makes Railway silently decline the deployment."
+      exit 1
+      ;;
+    NONE)
+      # The measured case: skipInitialDeploys:true leaves Postgres with zero
+      # deployments and no running container, which no other workflow step
+      # would ever start.
+      echo "postgres has NEVER been deployed in $env_id (the measured skipInitialDeploys result) — deploying it explicitly ..."
+      ;;
+    FAILED|REMOVED)
+      # Deliberately NOT including CRASHED here: CRASHED was measured to be a
+      # TRANSIENT mid-startup state, so redeploying on it would abort a
+      # deployment that was about to succeed. CRASHED falls through to the
+      # poll instead, which is what actually distinguishes the two.
+      echo "::warning::postgres reports $status in $env_id — redeploying it."
+      if graphql_try "$(gql_body "$SERVICE_REDEPLOY_MUTATION" \
+        "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+        "redeploying postgres in environment $env_id"; then
+        wait_for_postgres "$env_id" ""
+        return 0
+      fi
+      echo "::error::serviceInstanceRedeploy failed for postgres in environment $env_id: $GQL_ERROR"
+      exit 1
+      ;;
+    *)
+      # BUILDING / DEPLOYING / QUEUED / INITIALIZING / WAITING / CRASHED —
+      # already in flight or still settling. No mutation; let the poll decide.
+      echo "postgres is already in flight or still settling (status=$status) — polling rather than mutating."
+      wait_for_postgres "$env_id" "$dep_id"
+      return 0
+      ;;
+  esac
+
+  if ! graphql_try "$(gql_body "$SERVICE_DEPLOY_MUTATION" \
+    "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+    "deploying postgres in environment $env_id"; then
+    echo "::warning::serviceInstanceDeployV2 failed for postgres in $env_id ($GQL_ERROR) — falling back once to serviceInstanceRedeploy."
+    if ! graphql_try "$(gql_body "$SERVICE_REDEPLOY_MUTATION" \
+      "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+      "redeploying postgres in environment $env_id"; then
+      echo "::error::Both serviceInstanceDeployV2 and serviceInstanceRedeploy failed for postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $env_id: $GQL_ERROR"
+      exit 1
+    fi
+    echo "serviceInstanceRedeploy worked where serviceInstanceDeployV2 did not — worth recording in docs/deploy-model.md."
+    wait_for_postgres "$env_id" ""
+    return 0
+  fi
+
+  dep_id=$(echo "$GQL_RESPONSE" | jq -r '.data.serviceInstanceDeployV2 // empty')
+  echo "serviceInstanceDeployV2 returned deployment id ${dep_id:-<none>} for postgres in $env_id."
+  wait_for_postgres "$env_id" "$dep_id"
+}
+
+# --- Reconcile E: volume (OBSERVE ONLY — never fails) ------------------------
+#
+# MEASURED: a fork gets NO volume (volumeInstances == []) while `development`
+# has a 5000MB one, and Postgres deploys, reaches SUCCESS and accepts TCP
+# connections regardless. The design's "absent volume = fail loudly" check would
+# therefore have failed EVERY run. It is intentionally not implemented.
+#
+# A PR database is EPHEMERAL BY DESIGN, and that is the correct shape: the
+# gateway bootstraps, migrates and seeds at boot (M4-21-04), so a PR database is
+# meant to be born empty. Recorded as an observation for the run log only.
+observe_volumes() {
+  local env_id="$1" fork_count dev_count
+
+  graphql_post "$(gql_body "$VOLUMES_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "reading volume instances in environment $env_id"
+  fork_count=$(echo "$GQL_RESPONSE" | jq --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+    '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)] | length')
+
+  if [ "$fork_count" != "0" ]; then
+    echo "postgres volume in $env_id:"
+    echo "$GQL_RESPONSE" | jq -r --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+      '.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)
+       | "  mountPath=\(.mountPath) sizeMB=\(.sizeMB) currentSizeMB=\(.currentSizeMB) state=\(.state // "null")"'
+    return 0
+  fi
+
+  graphql_post "$(gql_body "$VOLUMES_QUERY" "$(jq -n --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" '{e: $e}')")" \
+    "reading volume instances in the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
+  dev_count=$(echo "$GQL_RESPONSE" | jq --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+    '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)] | length')
+
+  echo "OBSERVATION: environment $env_id received NO postgres volume (source environment has $dev_count). This is EXPECTED and is NOT a failure — measured 2026-07-18: a fork gets no volume and Postgres still deploys and accepts connections. A PR database is ephemeral by design; the gateway bootstraps, migrates and seeds it at boot."
+}
+
+# --- Reconcile F: TCP proxy (OBSERVE ONLY — never fails) ---------------------
+#
+# MEASURED: the TCP proxy CARRIES into a fork with its own distinct port, and
+# both DATABASE_PUBLIC_URL and DATABASE_URL resolve. No reconciliation is needed
+# in practice.
+#
+# The create path is deliberately NOT implemented: `tcpProxyCreate` is DEPRECATED
+# ("Use staged changes and apply them ... requires you to redeploy the service for
+# it to be active"), so calling it blind would both stage work this step does not
+# apply and depend on a field Railway may remove. If the proxy is ever genuinely
+# absent, the pg_isready probe in dev-env.yml fails loudly and names it — that
+# probe is the authoritative liveness gate, not this observation.
+#
+# M4-22: "Close the Public Database Door" intends to remove the
+# DATABASE_PUBLIC_URL dependency entirely. When it lands, this observation and
+# the pg_isready probe go with it.
+observe_tcp_proxy() {
+  local env_id="$1" count
+
+  graphql_post "$(gql_body "$TCP_PROXIES_QUERY" \
+    "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+    "reading postgres TCP proxies in environment $env_id"
+
+  count=$(echo "$GQL_RESPONSE" | jq '[.data.tcpProxies[]?] | length')
+  if [ "$count" = "0" ]; then
+    echo "::warning::No postgres TCP proxy found in environment $env_id. Measured behaviour is that it CARRIES into a fork, so this is unexpected. NOT auto-created: tcpProxyCreate is deprecated in favour of staged changes and needs a redeploy to activate. The pg_isready probe is the authoritative gate and will fail naming DATABASE_PUBLIC_URL if this really is broken."
+    return 0
+  fi
+  echo "postgres TCP proxy in $env_id:"
+  echo "$GQL_RESPONSE" | jq -r '.data.tcpProxies[]? | "  domain=\(.domain) proxyPort=\(.proxyPort) applicationPort=\(.applicationPort) syncStatus=\(.syncStatus)"'
+}
+
+# --- ENVIRONMENT audit (RECORD ONLY — sets nothing) --------------------------
+#
+# MEASURED: `ENVIRONMENT` in a fork resolves to the literal `development`
+# (inherited verbatim), while RAILWAY_ENVIRONMENT_NAME is `pr-<N>`. Consequence
+# is documented in docs/deploy-model.md. Nothing is set here
+# ([env-name-is-convention]) and no app code is touched.
+record_environment_variable() {
+  local env_id="$1" env_value rw_value
+
+  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$RAILWAY_SVC_GATEWAY_ID" '{p: $p, e: $e, s: $s}')")" \
+    "reading the gateway variables in environment $env_id"
+
+  # Only the two named keys are read out. The map also carries live credentials,
+  # so it is never logged wholesale.
+  env_value=$(echo "$GQL_RESPONSE" | jq -r '.data.variables.ENVIRONMENT // "<unset>"')
+  rw_value=$(echo "$GQL_RESPONSE" | jq -r '.data.variables.RAILWAY_ENVIRONMENT_NAME // "<unset>"')
+
+  echo "RECORD (no variable is set): gateway ENVIRONMENT=$env_value RAILWAY_ENVIRONMENT_NAME=$rw_value in $env_id."
+  if [ "$env_value" = "development" ]; then
+    echo "  As documented in docs/deploy-model.md, ENVIRONMENT is inherited verbatim from the source environment, so the fail-closed provisioning allowlist is DECORATIVE in a fork: it passes on its == \"development\" branch rather than its pr-<N> branch. It retains full value on the paths it was written for (production, staging, empty)."
+  else
+    echo "::warning::gateway ENVIRONMENT resolved to '$env_value', not the measured-expected literal 'development'. Recorded, not repaired — update docs/deploy-model.md if fork inheritance has changed."
+  fi
+}
+
+# cmd_reconcile_fork <environment-id>
+# The five reconciles are one command on purpose: they are strictly sequential,
+# share the fork environment id and the auth context, and produce one coherent
+# CI step.
+cmd_reconcile_fork() {
+  local env_id="${1:-}"
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh reconcile-fork <environment-id>"
+    exit 2
+  fi
+  require_env
+  require_source_env
+  require_fork_ids
+
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to run fork reconciliation against the persistent development environment ($env_id). It is not a fork ([development-not-ephemeral]); this command only ever targets an ephemeral pr-<N> environment."
+    exit 1
+  fi
+
+  echo "Reconciling fork fidelity for environment $env_id ..."
+  settle_fork "$env_id"
+  reconcile_domains "$env_id"
+  ensure_postgres_running "$env_id"
+  observe_volumes "$env_id"
+  observe_tcp_proxy "$env_id"
+  record_environment_variable "$env_id"
+  echo "Fork reconciliation complete for $env_id."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
+  audit-sealed-variables)    cmd_audit_sealed_variables ;;
+  reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>>"
     exit 2
     ;;
 esac

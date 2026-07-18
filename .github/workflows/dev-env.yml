@@ -146,7 +146,12 @@ jobs:
       ( github.event_name == 'workflow_dispatch' ||
         github.event.pull_request.draft == false )
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised 10 -> 20 by M4-23-04. The seam now brings Postgres up in a fresh
+    # fork and waits for it (<=420s) plus a <=120s pg_isready probe. At 10
+    # minutes a slow-but-CORRECT fork would die as a bare job-level timeout with
+    # no annotation naming a cause — the exact failure mode the seam exists to
+    # prevent. A job knob, not a restructure.
+    timeout-minutes: 20
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
       environment_id: ${{ steps.resolve.outputs.environment_id }}
@@ -190,12 +195,94 @@ jobs:
           bash scripts/ci/railway-env.sh ensure-environment "$name"
 
       # --- STEP SEAM (M4-23-04) ---------------------------------------------
-      # Domain reconciliation for a freshly forked environment is inserted HERE,
-      # between `resolve` and `urls`, as a pure insertion: `urls` DISCOVERS the 4
-      # public domains and fails if any is missing, so anything that has to make
-      # them exist must run before it and after the environment exists. Do not
-      # merge it into either neighbour.
+      # Fork reconciliation is inserted HERE, between `resolve` and `urls`, as a
+      # pure insertion: `urls` DISCOVERS the 4 public domains and fails if any is
+      # missing, so anything that has to make them exist must run before it and
+      # after the environment exists. Do not merge these into either neighbour.
+      #
+      # Every step in the seam is skipped on workflow_dispatch. Load-bearing, not
+      # cosmetic: on dispatch the target is `development` (nothing to reconcile —
+      # it is not a fork) AND railway-env.sh authenticates with
+      # `Authorization: Bearer`, which the dispatch path's Railway PROJECT token
+      # cannot satisfy. Drop the guard and every dispatch run breaks.
       # ----------------------------------------------------------------------
+
+      - name: Audit sealed variables in development (they do not fork)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: bash scripts/ci/railway-env.sh audit-sealed-variables
+
+      - name: Reconcile fork fidelity (domains, Postgres bring-up, volume + proxy audit)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
+
+      # The AUTHORITATIVE liveness proof. A SUCCESS deployment status says the
+      # container started; only this says Postgres accepts connections. It also
+      # proves DATABASE_PUBLIC_URL resolves to a live TCP proxy in a fork, which
+      # the e2e job's superuser-DSN discovery and the api + demo suites' direct DB
+      # assertions all depend on.
+      #
+      # Lives in YAML rather than railway-env.sh because it needs `pg_isready`
+      # from the runner image, which the script has no business assuming.
+      #
+      # M4-22 ("Close the Public Database Door") deletes the DATABASE_PUBLIC_URL
+      # dependency; this step and observe_tcp_proxy in railway-env.sh go with it.
+      - name: Probe Postgres liveness in the fork (pg_isready)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_QUERY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: |
+          set -euo pipefail
+
+          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
+
+          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
+                --request POST \
+                --url https://backboard.railway.com/graphql/v2 \
+                --header "Authorization: Bearer $RAILWAY_QUERY_TOKEN" \
+                --header "Content-Type: application/json" \
+                --data "$query_body"); then
+            echo "::error::Railway GraphQL request failed reading the Postgres variables in environment $ENV_ID"
+            exit 1
+          fi
+          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
+            echo "::error::Railway GraphQL error reading the Postgres variables: $(echo "$resp" | jq -c '.errors')"
+            exit 1
+          fi
+
+          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
+          if [ -z "$dsn" ]; then
+            echo "::error::DATABASE_PUBLIC_URL is absent on the Postgres service ($RAILWAY_SVC_POSTGRES_ID) in the forked environment $ENV_ID. It was MEASURED to carry into a fork, so this is a real regression in fork fidelity — the e2e job's superuser-DSN discovery would fail later with less context."
+            exit 1
+          fi
+          echo "::add-mask::$dsn"
+
+          # An unrendered template here means the variable exists but its inputs
+          # (the TCP proxy) did not fork — a different failure with a different fix.
+          case "$dsn" in
+            *'${{'*)
+              echo "::error::DATABASE_PUBLIC_URL in environment $ENV_ID is still an UNRENDERED template, i.e. the variable forked but its TCP-proxy inputs did not. Postgres is unreachable over the public proxy."
+              exit 1
+              ;;
+          esac
+
+          for attempt in $(seq 1 12); do
+            if pg_isready -d "$dsn" -t 5; then
+              echo "postgres accepts connections in environment $ENV_ID (attempt $attempt)."
+              exit 0
+            fi
+            echo "  (pg_isready attempt $attempt) not ready yet — retrying in 10s ..."
+            sleep 10
+          done
+
+          echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID never accepted a connection via DATABASE_PUBLIC_URL within 120s. This is a POSTGRES failure, NOT a generic gateway timeout: left unaddressed it would have surfaced as health-gate burning its full 900s with no cause named."
+          exit 1
 
       - name: Assert Watch Paths are empty on all 11 non-Postgres services (M3-16 invariant)
         env:

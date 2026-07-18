@@ -86,6 +86,21 @@ type createInvoiceRequest struct {
 	LineItems     []lineItemWire `json:"line_items,omitempty"`
 }
 
+// editInvoiceRequest mirrors the PATCH /v1/invoices/{id} wire body
+// (M4-05-03, [A1]) -- the 9 optional header fields, no entity_id/
+// invoice_number/line_items.
+type editInvoiceRequest struct {
+	IssueDate    *time.Time `json:"issue_date,omitempty"`
+	SupplierTIN  *string    `json:"supplier_tin,omitempty"`
+	SupplierName *string    `json:"supplier_name,omitempty"`
+	BuyerTIN     *string    `json:"buyer_tin,omitempty"`
+	BuyerName    *string    `json:"buyer_name,omitempty"`
+	Currency     *string    `json:"currency,omitempty"`
+	Subtotal     *string    `json:"subtotal,omitempty"`
+	VAT          *string    `json:"vat,omitempty"`
+	Total        *string    `json:"total,omitempty"`
+}
+
 // lineItemWire mirrors one line_items entry in the create wire body / the
 // Invoice response body's line_items array.
 type lineItemWire struct {
@@ -164,6 +179,15 @@ func doInvoiceCreate(t *testing.T, create func(ctx context.Context, in CreateInp
 	return rec, resp
 }
 
+func marshalEdit(t *testing.T, body editInvoiceRequest) string {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal edit request: %v", err)
+	}
+	return string(b)
+}
+
 func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
@@ -204,6 +228,26 @@ func doInvoiceTransition(t *testing.T, transition func(ctx context.Context, id s
 	}
 	rec := httptest.NewRecorder()
 	TransitionHandler(transition, nil).ServeHTTP(rec, r)
+	var resp invoiceBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	return rec, resp
+}
+
+// doInvoiceEdit drives PATCH /v1/invoices/{id} (M4-05-03) -- cloned from
+// doInvoiceTransition: same identity-injection/path-value shape, PATCH
+// method, request body optional (an empty rawBody is a valid, if
+// content-length-zero, PATCH).
+func doInvoiceEdit(t *testing.T, edit func(ctx context.Context, id string, in UpdateInput) (Invoice, error), id *auth.Identity, invoiceID, rawBody string) (*httptest.ResponseRecorder, invoiceBody) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPatch, "/v1/invoices/"+invoiceID, strings.NewReader(rawBody))
+	r.SetPathValue("id", invoiceID)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	EditHandler(edit, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -1258,5 +1302,313 @@ func TestTransitionHandler_NonsenseTargetStill400UnknownStatus(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// M4-05-03 (task-122) -- Mode A RED specs for PATCH /v1/invoices/{id}
+// (EditHandler) and the new ErrNotFixable->409 statusForErr row.
+//
+// EditHandler is currently handlers.go's blanket-501 STUB (see its own
+// "STUB — replaced by M4-05-03 executor" marker): it always answers 501
+// "not implemented [M4-05-03]" without decoding the request, checking
+// identity, or calling the injected edit closure -- every status-code
+// assertion below fails on that mismatch, never on a compile error.
+// statusForErr has NO ErrNotFixable case yet, so it falls through to the
+// default (500, "internal server error") -- TestStatusForErr_NotFixableIs409
+// fails on that value, also not a compile error.
+//
+// Spec-to-test map (Test Specs table, M4-05-03 story / task-122):
+//
+//	identity   TestEditHandler_Unauthenticated401
+//	decode     TestEditHandler_MalformedBody400
+//	Core AC #1 TestEditHandler_NotFixable409
+//	[A7]       TestEditHandler_AllNil400
+//	not-found  TestEditHandler_NotFound404
+//	Core AC #2 TestEditHandler_DemotionReturns200Draft
+//	Core AC #3 TestEditHandler_NoOpReturns200Validated
+//	Core AC #1 TestStatusForErr_NotFixableIs409
+// ---------------------------------------------------------------------------
+
+// TestEditHandler_Unauthenticated401: no identity in the request context
+// must 401 before edit ever runs -- same identity-first-401 order as every
+// other handler in this file.
+func TestEditHandler_Unauthenticated401(t *testing.T) {
+	invoiceID := uuid.NewString()
+	called := false
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		called = true
+		return Invoice{}, nil
+	}
+	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
+	rec, resp := doInvoiceEdit(t, edit, nil, invoiceID, body)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Error("edit must not run without an identity")
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestEditHandler_MalformedBody400: an unparseable request body (with
+// identity present) must 400 "invalid request body" before edit ever runs --
+// portfolio/Create/Transition parity.
+func TestEditHandler_MalformedBody400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	called := false
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		called = true
+		return Invoice{}, nil
+	}
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID, `{"vat":`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Error("edit must not run when the request body is malformed JSON")
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestEditHandler_NotFixable409 (Core AC #1): the store returning
+// ErrNotFixable must map to 409 -- the edit surface is restricted to the two
+// fixable states (draft, validated), and this is the HTTP-layer proof of
+// that guard's error mapping.
+func TestEditHandler_NotFixable409(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		return Invoice{}, ErrNotFixable
+	}
+	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID, body)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestEditHandler_AllNil400 ([A7]): the store returning ErrValidation (the
+// all-nil UpdateInput guard) must map to 400 with the wrapped message --
+// matching the EXISTING statusForErr ErrValidation case, unchanged by this
+// story.
+func TestEditHandler_AllNil400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+	body := marshalEdit(t, editInvoiceRequest{})
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+	if !strings.Contains(resp.Error, "no fields to update") {
+		t.Errorf("error = %q, want it to carry the wrapped ErrValidation message", resp.Error)
+	}
+}
+
+// TestEditHandler_NotFound404: the store returning ErrNotFound must map to
+// 404 -- covers both a genuinely unknown id and a cross-tenant one.
+func TestEditHandler_NotFound404(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		return Invoice{}, ErrNotFound
+	}
+	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
+	rec, resp := doInvoiceEdit(t, edit, &id, uuid.NewString(), body)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestEditHandler_DemotionReturns200Draft (Core AC #2): a content-changing
+// edit to a validated invoice must 200 with body status "draft" -- AND edit
+// must be called with an UpdateInput whose fields map 1:1 from the decoded
+// request body (VAT passthrough, the same passthrough-assertion pattern as
+// TestCreateHandler_201/TestGetHandler_200).
+func TestEditHandler_DemotionReturns200Draft(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	var gotIn UpdateInput
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		if gotID != invoiceID {
+			t.Fatalf("edit called with id = %q, want %q", gotID, invoiceID)
+		}
+		gotIn = in
+		return want, nil
+	}
+	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("9.99")})
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusDraft) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusDraft)
+	}
+	if gotIn.VAT == nil || *gotIn.VAT != "9.99" {
+		t.Errorf("edit called with UpdateInput.VAT = %v, want a non-nil pointer to %q", gotIn.VAT, "9.99")
+	}
+}
+
+// TestEditHandler_NoOpReturns200Validated (Core AC #3): a no-op edit on a
+// validated invoice must 200 with body status "validated" -- no demotion.
+func TestEditHandler_NoOpReturns200Validated(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		return want, nil
+	}
+	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusValidated) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusValidated)
+	}
+}
+
+// TestStatusForErr_NotFixableIs409 (Core AC #1): statusForErr(ErrNotFixable)
+// must return (409, non-empty msg) -- unit-level, no HTTP round-trip. This
+// is the discriminating test for the new statusForErr case itself: today
+// ErrNotFixable falls through to the unmapped default (500, "internal
+// server error"), so this fails on BOTH the status code and, incidentally,
+// the message-emptiness check would still pass (the default message is
+// non-empty) -- the status-code assertion alone is the RED signal.
+func TestStatusForErr_NotFixableIs409(t *testing.T) {
+	status, msg := statusForErr(ErrNotFixable)
+	if status != http.StatusConflict {
+		t.Errorf("status = %d, want 409", status)
+	}
+	if msg == "" {
+		t.Error("expected a non-empty error message")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// M4-05-03 (task-122) -- QA Mode B adversarial coverage for EditHandler,
+// added post-implementation (commit 7bd2a8c). All 8 Mode A specs above are
+// green; the two tests below close the one genuine gap found on top of them.
+// ---------------------------------------------------------------------------
+
+// TestEditHandler_AllFieldsMapOneToOne (Mode B adversarial, highest-value
+// gap): a PATCH body carrying values for ALL 9 header MBS-content fields
+// must produce an UpdateInput with every corresponding field non-nil and
+// equal to what was sent. TestEditHandler_DemotionReturns200Draft above only
+// asserts VAT passthrough -- EditHandler's editReq->UpdateInput mapping is
+// hand-written field-by-field (not a loop or reflection-based copy), so a
+// typo or omission on any ONE of the other 8 lines (e.g. dropping
+// BuyerName, or transposing SupplierTIN/BuyerTIN) would slip past every
+// other Edit test in this file undetected.
+func TestEditHandler_AllFieldsMapOneToOne(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	issueDate := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	req := editInvoiceRequest{
+		IssueDate:    &issueDate,
+		SupplierTIN:  strPtr("TIN-SUP-1"),
+		SupplierName: strPtr("Supplier Co"),
+		BuyerTIN:     strPtr("TIN-BUY-1"),
+		BuyerName:    strPtr("Buyer Co"),
+		Currency:     strPtr("NGN"),
+		Subtotal:     strPtr("100.00"),
+		VAT:          strPtr("7.50"),
+		Total:        strPtr("107.50"),
+	}
+
+	var gotIn UpdateInput
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	body := marshalEdit(t, req)
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotIn.IssueDate == nil || !gotIn.IssueDate.Equal(issueDate) {
+		t.Errorf("UpdateInput.IssueDate = %v, want %v", gotIn.IssueDate, issueDate)
+	}
+	if gotIn.SupplierTIN == nil || *gotIn.SupplierTIN != "TIN-SUP-1" {
+		t.Errorf("UpdateInput.SupplierTIN = %v, want a non-nil pointer to %q", gotIn.SupplierTIN, "TIN-SUP-1")
+	}
+	if gotIn.SupplierName == nil || *gotIn.SupplierName != "Supplier Co" {
+		t.Errorf("UpdateInput.SupplierName = %v, want a non-nil pointer to %q", gotIn.SupplierName, "Supplier Co")
+	}
+	if gotIn.BuyerTIN == nil || *gotIn.BuyerTIN != "TIN-BUY-1" {
+		t.Errorf("UpdateInput.BuyerTIN = %v, want a non-nil pointer to %q", gotIn.BuyerTIN, "TIN-BUY-1")
+	}
+	if gotIn.BuyerName == nil || *gotIn.BuyerName != "Buyer Co" {
+		t.Errorf("UpdateInput.BuyerName = %v, want a non-nil pointer to %q", gotIn.BuyerName, "Buyer Co")
+	}
+	if gotIn.Currency == nil || *gotIn.Currency != "NGN" {
+		t.Errorf("UpdateInput.Currency = %v, want a non-nil pointer to %q", gotIn.Currency, "NGN")
+	}
+	if gotIn.Subtotal == nil || *gotIn.Subtotal != "100.00" {
+		t.Errorf("UpdateInput.Subtotal = %v, want a non-nil pointer to %q", gotIn.Subtotal, "100.00")
+	}
+	if gotIn.VAT == nil || *gotIn.VAT != "7.50" {
+		t.Errorf("UpdateInput.VAT = %v, want a non-nil pointer to %q", gotIn.VAT, "7.50")
+	}
+	if gotIn.Total == nil || *gotIn.Total != "107.50" {
+		t.Errorf("UpdateInput.Total = %v, want a non-nil pointer to %q", gotIn.Total, "107.50")
+	}
+}
+
+// TestEditHandler_UnknownFieldIgnored200 (Mode B adversarial): an unknown/
+// extra JSON key in the PATCH body -- including entity_id, which [D9] says
+// is deliberately NOT part of editReq -- must be silently ignored (standard
+// encoding/json Decoder behavior; EditHandler never calls
+// .DisallowUnknownFields(), same as every other decode path in this file)
+// rather than 400, and must not interfere with decoding the known fields
+// alongside it.
+func TestEditHandler_UnknownFieldIgnored200(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	var gotIn UpdateInput
+	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	rec, resp := doInvoiceEdit(t, edit, &id, invoiceID,
+		`{"vat":"7.50","not_a_real_field":"whatever","entity_id":"should-be-ignored"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for an unknown JSON field (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusValidated) {
+		t.Errorf("status = %q, want %q", resp.Status, StatusValidated)
+	}
+	if gotIn.VAT == nil || *gotIn.VAT != "7.50" {
+		t.Errorf("UpdateInput.VAT = %v, want a non-nil pointer to %q -- the unknown fields must not have "+
+			"interfered with decoding the known one", gotIn.VAT, "7.50")
 	}
 }

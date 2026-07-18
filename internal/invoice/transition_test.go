@@ -62,9 +62,10 @@ var legalEdges = []legalEdgeCase{
 	{"submitted->accepted", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusAccepted},
 	{"submitted->rejected", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusRejected},
 	{"submitted->failed", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusFailed},
+	{"validated->draft", []Status{StatusValidated}, StatusValidated, StatusDraft},
 }
 
-// INV-SM-01: each of the 6 legal edges succeeds, writing status + exactly one
+// INV-SM-01: each of the 7 legal edges succeeds, writing status + exactly one
 // invoice_status_history row (from,to) + exactly one invoice.transitioned
 // audit row, atomically; actor on both new rows is the caller's Subject.
 func TestTransition_LegalEdgesSucceedWithTripleWrite(t *testing.T) {
@@ -160,7 +161,6 @@ var illegalEdges = []illegalEdgeCase{
 	{"validated->accepted", []Status{StatusValidated}, StatusValidated, StatusAccepted},
 	{"queued->accepted", []Status{StatusValidated, StatusQueued}, StatusQueued, StatusAccepted},
 	{"submitted->draft", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusDraft},
-	{"validated->draft", []Status{StatusValidated}, StatusValidated, StatusDraft},
 	{"rejected->draft", []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusRejected}, StatusRejected, StatusDraft},
 	{"failed->queued", []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusFailed}, StatusFailed, StatusQueued},
 	{"accepted->validated", []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted}, StatusAccepted, StatusValidated},
@@ -565,5 +565,27 @@ func TestTransition_RejectedTransitionLeavesStatusByteIdentical(t *testing.T) {
 	}
 	if after != before {
 		t.Errorf("invoices.status after rejected Transition = %q, want byte-identical to pre-call %q", after, before)
+	}
+}
+
+// TestTransition_ValidatedToDraftLegalityUnit is a DB-free unit pin on
+// canTransition(validated, draft): the M4-05 fix loop needs this demotion
+// edge to become legal so a rejected/dirty validated invoice can be sent back
+// to draft for correction. This is independent of (and narrower than) the
+// DB-backed TestTransition_ExhaustiveMatrixLocksLegalEdgeTable, which already
+// covers the same edge as part of its full 49-pair sweep -- this test just
+// pins canTransition's own return value directly, with no DB required. Also
+// spot-checks that a couple of unrelated illegal edges stay illegal, so a
+// change that makes canTransition permissive across the board would not
+// pass this test by accident.
+func TestTransition_ValidatedToDraftLegalityUnit(t *testing.T) {
+	if !canTransition(StatusValidated, StatusDraft) {
+		t.Errorf("canTransition(validated, draft) = false, want true (M4-05 demotion edge)")
+	}
+	if canTransition(StatusDraft, StatusAccepted) {
+		t.Errorf("canTransition(draft, accepted) = true, want false (unrelated illegal edge must stay illegal)")
+	}
+	if canTransition(StatusQueued, StatusDraft) {
+		t.Errorf("canTransition(queued, draft) = true, want false (unrelated illegal edge must stay illegal)")
 	}
 }

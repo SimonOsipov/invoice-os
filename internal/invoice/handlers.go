@@ -63,6 +63,22 @@ type transitionReq struct {
 	Target string `json:"target"`
 }
 
+// editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
+// optional header MBS-content fields, snake_case tags IDENTICAL to
+// createRequest's own (above) minus entity_id/invoice_number/line_items --
+// identity and lifecycle are not the edit's job ([D9]).
+type editReq struct {
+	IssueDate    *time.Time `json:"issue_date"`
+	SupplierTIN  *string    `json:"supplier_tin"`
+	SupplierName *string    `json:"supplier_name"`
+	BuyerTIN     *string    `json:"buyer_tin"`
+	BuyerName    *string    `json:"buyer_name"`
+	Currency     *string    `json:"currency"`
+	Subtotal     *string    `json:"subtotal"`
+	VAT          *string    `json:"vat"`
+	Total        *string    `json:"total"`
+}
+
 // listPagination is the "pagination" object in ListHandler's response
 // envelope: the effective limit/offset applied (after defaulting/clamping)
 // plus the total filtered count across all pages ([D8]).
@@ -359,6 +375,56 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, err
 	}
 }
 
+// EditHandler returns PATCH /v1/invoices/{id} (M4-05-03). Same
+// identity-first-401 order as every other handler here, then decodes the
+// snake_case wire body (400 on decode error) into the 9 optional
+// header MBS-content fields, builds UpdateInput 1:1 from the decoded
+// request (identity/lifecycle are not the edit's job, [D9]), and calls edit.
+// Errors map via statusForErr -- including the new ErrNotFixable->409 case
+// (Core AC #1) and the existing ErrValidation->400 case for the all-nil
+// guard ([A7]) -- 200 + updated Invoice on success (Core AC #2/#3).
+func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var req editReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		id := r.PathValue("id")
+
+		inv, err := edit(r.Context(), id, UpdateInput{
+			IssueDate:    req.IssueDate,
+			SupplierTIN:  req.SupplierTIN,
+			SupplierName: req.SupplierName,
+			BuyerTIN:     req.BuyerTIN,
+			BuyerName:    req.BuyerName,
+			Currency:     req.Currency,
+			Subtotal:     req.Subtotal,
+			VAT:          req.VAT,
+			Total:        req.Total,
+		})
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status >= http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: edit", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in
@@ -398,6 +464,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice is not a draft"
 	case errors.Is(err, ErrStaleValidation):
 		return http.StatusConflict, "invoice changed during validation"
+	case errors.Is(err, ErrNotFixable):
+		return http.StatusConflict, "invoice is not in a fixable state"
 	case errors.Is(err, ErrUpstream):
 		return http.StatusBadGateway, "validation service unavailable"
 	case errors.Is(err, ErrNoActiveRuleSet):

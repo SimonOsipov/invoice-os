@@ -195,11 +195,11 @@ var (
 	// ErrNotDraft — the gate is draft-only ([gate-scope-draft-only]); any
 	// other status is refused with NOTHING written. From draft the gate needs
 	// only edges that already exist (clean -> draft->validated; blocked ->
-	// stay draft). A validated-but-now-dirty invoice would need a
-	// validated->draft demotion edge, which does not exist, is asserted
-	// ILLEGAL today (transition_test.go:163), and which legalTransitions
-	// reserves for the M4-05 fix loop — M4-05 widens the accepted states here
-	// and adds that edge.
+	// stay draft). M4-05 adds a validated->draft demotion edge to
+	// legalTransitions so a validated-but-now-dirty invoice can be fixed: the
+	// edit demotes it to draft FIRST, and re-validate then runs through this
+	// same, unchanged, draft-only gate -- M4-05 does NOT widen the states
+	// this gate accepts.
 	//
 	// ErrStaleValidation — the invoice's content changed under the validate
 	// run ([toctou-staleness]). The write tx cannot span the HTTP call to 04
@@ -212,6 +212,20 @@ var (
 	// catch this — status stays draft across a Store.Update.
 	ErrNotDraft        = errors.New("invoice: not draft")
 	ErrStaleValidation = errors.New("invoice: stale validation")
+
+	// ErrNotFixable is Store.Edit's own precondition sentinel (M4-05-02,
+	// architect [A2]): the edit surface is restricted to the two fixable
+	// states (draft, validated, [A1]/System Design §4 step 3) -- any other
+	// status (queued/submitted/accepted/rejected/failed) is refused with
+	// NOTHING written. A 409 in statusForErr (M4-05-03), like ErrNotDraft/
+	// ErrStaleValidation.
+	//
+	// Deliberately NOT ErrIllegalTransition (that names a state-machine EDGE,
+	// which is the wrong vocabulary here -- Edit's guard reads the CURRENT
+	// status before any transition is even attempted) and NOT ErrNotDraft
+	// (Edit's guard also accepts validated, so "not draft" would be simply
+	// wrong for that case).
+	ErrNotFixable = errors.New("invoice: not fixable")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

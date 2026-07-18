@@ -1,0 +1,17 @@
+name: TW Trigger Probe
+# THROWAWAY — M4-23-05 trigger experiment. Decides whether a workflow present only
+# on a PR branch fires on that PR's own unmerged close.
+#   `opened` is the CONTROL: without it a non-fire on close is uninterpretable
+#   (cannot distinguish "closed does not fire" from "file never discovered").
+on:
+  pull_request:
+    types: [opened, closed]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report what fired
+        run: |
+          echo "PROBE_ACTION=${{ github.event.action }}"
+          echo "PROBE_MERGED=${{ github.event.pull_request.merged }}"
+          echo "PROBE_PR=${{ github.event.pull_request.number }}"

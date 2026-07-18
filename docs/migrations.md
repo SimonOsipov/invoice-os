@@ -221,7 +221,9 @@ needs **no `.env`**; the lower-level targets read the §1 `DATABASE_*` URLs from
 | `make migrate-create name=<slug>` | scaffold a timestamped SQL migration | — |
 
 The local DB comes from `docker-compose.yml` — a `postgres:18` service on
-`localhost:5432`, database `invoice_os`; its major matches the CI/Railway major (the
+`localhost:$DEV_DB_PORT` (default `5432`; override to run multiple worktrees'
+stacks concurrently, e.g. `DEV_DB_PORT=5433 make dev-db`), database `invoice_os`;
+its major matches the CI/Railway major (the
 §6 rule below). `make dev-db` bootstraps the roles *inside* the container, so a host
 `psql` client is **not** required for the local loop (only `make db-bootstrap` run on
 its own needs one). The app and `go test` connect as `invoice_app`, so RLS behaves

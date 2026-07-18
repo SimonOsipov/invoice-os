@@ -14,7 +14,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: invoice_os
     ports:
-      - "5432:5432"
+      - "${DEV_DB_PORT:-5432}:5432"
     volumes:
       # PG18's PGDATA is /var/lib/postgresql/18/docker and the image's declared
       # VOLUME is the parent /var/lib/postgresql — mount the named volume THERE.

@@ -27,6 +27,7 @@ import {
   rng,
   SCALE_PLAN,
   series,
+  showDeadLetterCallout,
   spendTotals,
   upStrip,
   type RejectionInput,
@@ -497,5 +498,38 @@ describe('computeQuota', () => {
     expect(Number.isNaN(q.pct)).toBe(true)
     expect(Number.isNaN(q.widthPct)).toBe(true)
     expect(q.over).toBe(0)
+  })
+})
+
+// RED (M4-20-04) — showDeadLetterCallout is a DOM-free pure predicate extracted per QA
+// finding F7 / decision [dead-letter-predicate-extracted]: the dead-letter callout's
+// visibility is a three-term conjunction whose default-state rendering is identical
+// whether or not the two guards (filter, query) were ported, so a screenshot gate
+// cannot falsify a dropped guard. Target contract (prototype :1104 + :949):
+// dlCount > 0 && filter === 'all' && !query. Currently fails on `not implemented`
+// (the stub body throws) — that IS the correct RED reason, not a compile/import error.
+describe('showDeadLetterCallout', () => {
+  it('dl_callout_shows_when_all_three_conditions_hold: dlCount 3, filter "all", empty query is true', () => {
+    expect(showDeadLetterCallout(3, 'all', '')).toBe(true)
+  })
+
+  it('dl_callout_hidden_when_no_dead_letters: dlCount 0, filter "all", empty query is false', () => {
+    expect(showDeadLetterCallout(0, 'all', '')).toBe(false)
+  })
+
+  it('dl_callout_hidden_when_filter_guard_dropped: dlCount 3, filter "rejected", empty query is false', () => {
+    expect(showDeadLetterCallout(3, 'rejected', '')).toBe(false)
+  })
+
+  it('dl_callout_hidden_when_query_guard_dropped: dlCount 3, filter "all", query "ZP-INV" is false', () => {
+    expect(showDeadLetterCallout(3, 'all', 'ZP-INV')).toBe(false)
+  })
+
+  it('dl_callout_hidden_when_both_guards_dropped: dlCount 3, filter "accepted", query "ZP-INV" is false', () => {
+    expect(showDeadLetterCallout(3, 'accepted', 'ZP-INV')).toBe(false)
+  })
+
+  it('dl_callout_hidden_when_filter_is_dead_letter_itself: dlCount 3, filter "dead-letter", empty query is false', () => {
+    expect(showDeadLetterCallout(3, 'dead-letter', '')).toBe(false)
   })
 })

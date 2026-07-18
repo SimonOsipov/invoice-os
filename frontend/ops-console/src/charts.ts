@@ -14,6 +14,12 @@
 // Kept dependency-free of React so these stay unit-testable pure functions, matching
 // the existing helpers.ts doc comment.
 
+import type { JobFilter } from './types'
+
+export function showDeadLetterCallout(_dlCount: number, _filter: JobFilter, _query: string): boolean {
+  throw new Error('not implemented')
+}
+
 export function rng(seed: number): () => number {
   let s = (seed >>> 0) || 1
   return () => {

@@ -4,6 +4,7 @@
 // exact same derived/rendered values the prototype computed in renderVals().
 
 import type { ReactNode } from 'react'
+import { vatSplit } from './charts'
 import type { Env, Job, JobState } from './types'
 
 /* ---------- status styling (this.st / this.sev) ---------- */
@@ -32,8 +33,7 @@ export function jobStateStyle(state: JobState): StatusStyle {
 
 // proto:820-821 — seller/buyer shape. `tenant_tin`/`app_target` are gone.
 export function reqJSON(j: Pick<Job, 'id' | 'buyer' | 'btin' | 'invoice' | 'raw' | 'desc'>, env: Env): string {
-  const net = Math.round(j.raw / 1.075)
-  const vat = j.raw - net
+  const { net, vat } = vatSplit(j.raw)
   return (
     '{\n  "idempotency_key": "' +
     j.id.replace('sub_', 'idem_') +

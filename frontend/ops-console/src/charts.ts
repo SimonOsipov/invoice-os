@@ -264,8 +264,9 @@ export function computeQuota(
 // helpers.ts:35-36's inline reqJSON math. Both reqJSON and the evidence response are
 // meant to call this shared helper once wired (not done in this Mode A commit — stubs
 // and specs only).
-export function vatSplit(_raw: number): { net: number; vat: number } {
-  throw new Error('not implemented')
+export function vatSplit(raw: number): { net: number; vat: number } {
+  const net = Math.round(raw / 1.075)
+  return { net, vat: raw - net }
 }
 
 export interface EvidenceBundle {
@@ -284,6 +285,54 @@ export interface EvidenceBundle {
   response: string
 }
 
+// proto:1214-1223 — the literal base rows. Everything on the bundle beyond these six
+// fields is derived in buildEvidenceBundles below.
+const EVIDENCE_SEED = [
+  { invoice: 'ZP-INV-0088412', buyer: 'Konga Online Ltd', btin: '20184412-0001', raw: 4120000, cleared: '2026-07-18 09:14', desc: 'Marketplace settlement' },
+  { invoice: 'ZP-INV-0088340', buyer: 'Chowdeck Ltd', btin: '20554418-0001', raw: 412700, cleared: '2026-07-18 07:22', desc: 'Delivery commission' },
+  { invoice: 'ZP-INV-0088320', buyer: 'Piggyvest', btin: '22887301-0001', raw: 305000, cleared: '2026-07-18 06:58', desc: 'Savings payout fee' },
+  { invoice: 'ZP-INV-0088291', buyer: 'MTN Nigeria', btin: '18772300-0001', raw: 22140000, cleared: '2026-07-17 21:40', desc: 'Airtime bulk settlement' },
+  { invoice: 'ZP-INV-0088277', buyer: 'ShopRite NG', btin: '22310984-0001', raw: 1980000, cleared: '2026-07-17 18:03', desc: 'POS settlement' },
+  { invoice: 'ZP-INV-0088255', buyer: 'GTBank Merchant Svcs', btin: '21004552-0001', raw: 6410000, cleared: '2026-07-17 15:29', desc: 'Card settlement' },
+  { invoice: 'ZP-INV-0088231', buyer: 'Bolt Nigeria', btin: '19847720-0001', raw: 884300, cleared: '2026-07-17 12:11', desc: 'Ride commission' },
+  { invoice: 'ZP-INV-0088210', buyer: 'Jumia Foods', btin: '20991043-0001', raw: 1145000, cleared: '2026-07-17 09:47', desc: 'Vendor payout' },
+]
+
+// proto:1224-1235. Note the four different slice lengths (id -6, irn -5, csid/hash -4,
+// prevHash -3) and that `i` is interpolated into csid/hash/prevHash as well as driving
+// the `91 - i` IRN sequence.
 export function buildEvidenceBundles(): EvidenceBundle[] {
-  throw new Error('not implemented')
+  return EVIDENCE_SEED.map((e, i) => {
+    const irn = 'IRN-NG-' + e.invoice.slice(-5) + '-A' + (91 - i)
+    const { net, vat } = vatSplit(e.raw)
+    return {
+      // The row id (`ev_`) is NOT the id reqJSON receives (`sub_`, proto:1232) — the
+      // latter exists only to derive the `idem_` idempotency key. Two ids, on purpose.
+      id: 'ev_' + e.invoice.slice(-6),
+      invoice: e.invoice,
+      irn,
+      buyer: e.buyer,
+      btin: e.btin,
+      raw: e.raw,
+      value: naira(e.raw),
+      cleared: e.cleared,
+      desc: e.desc,
+      csid: 'MBS-CSID:9f2a' + e.invoice.slice(-4) + 'e1b7c4d0' + i + '9f8e2c5a1f0b6d3e7c9a4b',
+      hash: 'sha256:9f' + e.invoice.slice(-4) + 'a3e1b7c4d09f' + i + '8e2c5a1f0b6d3e7c9a4d21b8',
+      // Despite the "HASH-CHAINED" copy, this is NOT a chain: prevHash is derived from
+      // the row's own invoice + index, never from bundles[i-1].hash (proto:1231).
+      // Ported verbatim; charts.test.ts locks the non-chained behaviour in place.
+      prevHash: 'sha256:8e' + e.invoice.slice(-3) + 'c2' + i,
+      response:
+        '{\n  "status": "CLEARED",\n  "irn": "' +
+        irn +
+        '",\n  "csid": "MBS.9f2a\u2026c7",\n  "cleared_at": "' +
+        e.cleared.replace(' ', 'T') +
+        ':00Z",\n  "net": ' +
+        net +
+        ',\n  "vat": ' +
+        vat +
+        '\n}',
+    }
+  })
 }

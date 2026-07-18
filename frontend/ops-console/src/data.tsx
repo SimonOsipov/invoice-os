@@ -4,6 +4,7 @@
 // stay pure layout.
 
 import type { ReactNode } from 'react'
+import { buildEvidenceBundles, type EvidenceBundle } from './charts'
 import { Icon } from './icons'
 import type { Job, JobState, Screen } from './types'
 
@@ -44,6 +45,24 @@ export const GEAR_ICON = (
     ]}
     size={16}
   />
+)
+
+// proto:1204-1213 — the evidence bundle's QR mark. Three 16x16 finder squares plus
+// five 6x6 dots, all hand-placed: it is decorative, not a generated block matrix, so
+// there is no .map here. Byte-identical for all 8 bundles, hence one shared node
+// rather than a per-row `qr` field. The #fff values stay literal on purpose — CSS
+// var() does not resolve inside SVG presentation attributes.
+export const EVIDENCE_QR = (
+  <svg width={64} height={64} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+    <rect x={6} y={6} width={16} height={16} rx={2} stroke="#fff" strokeWidth={3} />
+    <rect x={42} y={6} width={16} height={16} rx={2} stroke="#fff" strokeWidth={3} />
+    <rect x={6} y={42} width={16} height={16} rx={2} stroke="#fff" strokeWidth={3} />
+    <rect x={30} y={30} width={6} height={6} fill="#fff" />
+    <rect x={42} y={30} width={6} height={6} fill="#fff" />
+    <rect x={30} y={42} width={6} height={6} fill="#fff" />
+    <rect x={42} y={42} width={6} height={6} fill="#fff" />
+    <rect x={52} y={52} width={6} height={6} fill="#fff" />
+  </svg>
 )
 
 /* ------------------------------------------------------------------ */
@@ -96,3 +115,17 @@ export const SEED_SUBMISSIONS: Job[] = [
 ]
 
 export const JOB_FILTER_KEYS: JobState[] = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead-letter']
+
+/* ------------------------------------------------------------------ */
+/* Evidence — signed bundles                                           */
+/* ------------------------------------------------------------------ */
+
+// proto:1203-1236, via the tested pure builder in charts.ts. Derived once at import:
+// every field on the bundle is env-independent.
+//
+// The drawer's "Submitted invoice" JSON is deliberately NOT part of this const. It is
+// built by reqJSON(row, env), which interpolates the live sandbox/live toggle, so
+// freezing it here would silently pin every bundle to whichever env was active at
+// module load. EvidenceDrawer computes it per render instead — the same split
+// JobDrawer already uses.
+export const EVIDENCE_DATA: EvidenceBundle[] = buildEvidenceBundles()

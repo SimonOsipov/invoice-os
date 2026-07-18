@@ -8,8 +8,9 @@ import { ApiWebhooks } from './components/ApiWebhooks'
 import { Billing } from './components/Billing'
 import { Status } from './components/Status'
 import { JobDrawer } from './components/JobDrawer'
+import { EvidenceDrawer } from './components/EvidenceDrawer'
 import { Toast } from './components/Toast'
-import { SEED_SUBMISSIONS } from './data'
+import { EVIDENCE_DATA, SEED_SUBMISSIONS } from './data'
 import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.if-v2` — that scope defines the design-system
@@ -18,15 +19,16 @@ import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone 
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
 export default function App() {
   // Mirrors the prototype's constructor state (Developer Console.dc.html:744).
-  // `evQuery` (M4-20-05) and `reveal`/`confirmRotate` (M4-20-06) land with the
-  // screens that read them — `noUnusedLocals` rejects state that nothing
-  // consumes yet. `subQuery` arrives here with its two consumers on Submissions
-  // (the search input and the empty state).
+  // `reveal`/`confirmRotate` (M4-20-06) land with the screens that read them —
+  // `noUnusedLocals` rejects state that nothing consumes yet. `subQuery` arrives
+  // with its two consumers on Submissions (the search input and the empty state);
+  // `evQuery` likewise with Evidence's search input and its filter derivation.
   const [screen, setScreen] = useState<Screen>('overview')
   const [env, setEnv] = useState<Env>('live')
   const [range, setRange] = useState<Range>('30d')
   const [filter, setFilter] = useState<JobFilter>('all')
   const [subQuery, setSubQuery] = useState('')
+  const [evQuery, setEvQuery] = useState('')
   const [drawer, setDrawer] = useState<DrawerState>(null)
   const [reqOpen, setReqOpen] = useState(true)
   const [resOpen, setResOpen] = useState(true)
@@ -71,6 +73,7 @@ export default function App() {
 
   // ---- resolve open drawer entities ----
   const drawerJob = drawer?.type === 'job' ? jobs.find((j) => j.id === drawer.id) : undefined
+  const drawerEvidence = drawer?.type === 'evidence' ? EVIDENCE_DATA.find((e) => e.id === drawer.id) : undefined
 
   return (
     <div
@@ -101,7 +104,14 @@ export default function App() {
               onReDriveAll={reDriveAll}
             />
           )}
-          {screen === 'evidence' && <Evidence />}
+          {screen === 'evidence' && (
+            <Evidence
+              query={evQuery}
+              onQueryChange={setEvQuery}
+              onOpen={(id) => setDrawer({ type: 'evidence', id })}
+              onExportAll={() => showToast('All evidence bundles queued for export', 'ZIP')}
+            />
+          )}
           {screen === 'api' && <ApiWebhooks />}
           {screen === 'billing' && <Billing />}
           {screen === 'status' && <Status />}
@@ -120,6 +130,16 @@ export default function App() {
           onReDrive={() => reDriveOne(drawerJob.id)}
           onRePoll={() => showToast('Re-poll dispatched · ' + drawerJob.id, 'POLLING')}
           onCancel={() => cancelJob(drawerJob.id)}
+        />
+      )}
+
+      {drawerEvidence && (
+        <EvidenceDrawer
+          evidence={drawerEvidence}
+          env={env}
+          onClose={() => setDrawer(null)}
+          onCopy={() => showToast('Evidence JSON copied to clipboard', 'CLIPBOARD')}
+          onDownload={() => showToast('Signed evidence bundle downloaded', 'PDF + JSON')}
         />
       )}
 

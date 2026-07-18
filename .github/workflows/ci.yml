@@ -32,6 +32,7 @@ jobs:
             go:
               - 'cmd/**'
               - 'internal/**'
+              - 'tools/**'
               - 'migrations/**'
               - 'go.mod'
               - 'go.sum'

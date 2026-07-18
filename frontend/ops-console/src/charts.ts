@@ -240,3 +240,50 @@ export function computeQuota(
   const detail = `${compactCount(used)} / ${compactCount(included)} included · ${compactCount(over)} over`
   return { pct, widthPct, over, detail }
 }
+
+
+// M4-20-05 (Mode A RED, task-142 E2) — the evidence-bundle derivation. The 8 seed rows
+// (invoice/buyer/btin/raw/cleared/desc) are literal, but each row's id/irn/csid/hash/
+// prevHash/response are NOT: four different `.slice()` lengths (id -6, irn -5,
+// csid/hash -4, prevHash -3) plus `91 - i` index arithmetic interpolated into
+// irn/csid/hash/prevHash, plus the VAT split shared with helpers.ts:35-36's reqJSON.
+// That is exactly the "plausible-but-wrong number" surface a screenshot cannot catch,
+// so it gets RED specs before the component work, same as spendTotals/
+// showDeadLetterCallout. Source: `Developer Console.dc.html` (Claude Design project
+// 6269a212-5677-4abd-b8a9-08aad10b1c65, read-only) lines 1203-1236 (`evidenceData()`).
+//
+// `request` is deliberately excluded from `EvidenceBundle` (task-142 E1): it embeds the
+// live sandbox/live `env` toggle via the existing `reqJSON(row, env)` (helpers.ts:34),
+// so it must be computed per-render in EvidenceDrawer, not frozen at module scope.
+// Everything else here is env-independent and safe to derive once.
+//
+// Both stubs currently throw `new Error('not implemented')` — that IS the correct RED
+// reason (assertion/not-implemented), not a compile/import error.
+
+// Dedup target (task-142 E2 "Dedup"): net/vat here is a verbatim copy of
+// helpers.ts:35-36's inline reqJSON math. Both reqJSON and the evidence response are
+// meant to call this shared helper once wired (not done in this Mode A commit — stubs
+// and specs only).
+export function vatSplit(_raw: number): { net: number; vat: number } {
+  throw new Error('not implemented')
+}
+
+export interface EvidenceBundle {
+  id: string
+  invoice: string
+  irn: string
+  buyer: string
+  btin: string
+  raw: number
+  value: string
+  cleared: string
+  desc: string
+  csid: string
+  hash: string
+  prevHash: string
+  response: string
+}
+
+export function buildEvidenceBundles(): EvidenceBundle[] {
+  throw new Error('not implemented')
+}

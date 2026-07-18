@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildEvidenceBundles,
   buildOutcomeColumns,
   buildRejectionReasons,
   buildSpendBars,
@@ -30,6 +31,7 @@ import {
   showDeadLetterCallout,
   spendTotals,
   upStrip,
+  vatSplit,
   type RejectionInput,
 } from './charts'
 
@@ -531,5 +533,90 @@ describe('showDeadLetterCallout', () => {
 
   it('dl_callout_hidden_when_filter_is_dead_letter_itself: dlCount 3, filter "dead-letter", empty query is false', () => {
     expect(showDeadLetterCallout(3, 'dead-letter', '')).toBe(false)
+  })
+})
+
+// RED (M4-20-05, task-142 E2) — vatSplit is the dedup target for helpers.ts:35-36's
+// inline reqJSON net/vat math, and is also what the evidence response embeds. Currently
+// fails on `not implemented` (the stub body throws) — that IS the correct RED reason.
+describe('vatSplit', () => {
+  it('vat_split_matches_the_pinned_seed_value: vatSplit(4120000) is exactly { net: 3832558, vat: 287442 }', () => {
+    expect(vatSplit(4120000)).toEqual({ net: 3832558, vat: 287442 })
+  })
+
+  it('vat_split_formula_holds_with_no_rounding_leak: net === Math.round(raw / 1.075), vat === raw - net, and net + vat === raw across several magnitudes', () => {
+    for (const raw of [4120000, 412700, 305000, 22140000, 1, 100, 1000, 7, 999999]) {
+      const { net, vat } = vatSplit(raw)
+      expect(net).toBe(Math.round(raw / 1.075))
+      expect(vat).toBe(raw - net)
+      expect(net + vat).toBe(raw)
+    }
+  })
+})
+
+// RED (M4-20-05, task-142 E2) — buildEvidenceBundles ports evidenceData() (proto
+// 1203-1236). Every golden value below was independently re-derived against the
+// prototype's literal base rows + the `91 - i` / four-slice-length formulas, not
+// trusted from prose.
+describe('buildEvidenceBundles', () => {
+  it('evidence_bundles_returns_eight_rows: buildEvidenceBundles() returns exactly 8 rows', () => {
+    expect(buildEvidenceBundles().length).toBe(8)
+  })
+
+  it('evidence_bundle_row_zero_is_golden_pinned: row 0 (i=0) pins id/irn/csid/hash/prevHash exactly, catching the -6/-5/-4/-3 slice lengths and the 91-i base case', () => {
+    const row = buildEvidenceBundles()[0]!
+
+    expect(row.id).toBe('ev_088412')
+    expect(row.irn).toBe('IRN-NG-88412-A91')
+    expect(row.csid).toBe('MBS-CSID:9f2a8412e1b7c4d009f8e2c5a1f0b6d3e7c9a4b')
+    expect(row.hash).toBe('sha256:9f8412a3e1b7c4d09f08e2c5a1f0b6d3e7c9a4d21b8')
+    expect(row.prevHash).toBe('sha256:8e412c20')
+  })
+
+  it('evidence_bundle_row_seven_is_golden_pinned: row 7 (i=7) pins id/irn/csid/hash/prevHash exactly, catching the 91-i arithmetic and slice lengths at the far end of the array', () => {
+    const row = buildEvidenceBundles()[7]!
+
+    expect(row.id).toBe('ev_088210')
+    expect(row.irn).toBe('IRN-NG-88210-A84')
+    expect(row.csid).toBe('MBS-CSID:9f2a8210e1b7c4d079f8e2c5a1f0b6d3e7c9a4b')
+    expect(row.hash).toBe('sha256:9f8210a3e1b7c4d09f78e2c5a1f0b6d3e7c9a4d21b8')
+    expect(row.prevHash).toBe('sha256:8e210c27')
+  })
+
+  it('evidence_bundle_irn_descends_a91_to_a84_in_order: the 8 rows’ irn suffixes are exactly A91 down to A84, i.e. 91 - i for i = 0..7', () => {
+    const suffixes = buildEvidenceBundles().map((r) => r.irn.slice(r.irn.lastIndexOf('-A') + 2))
+
+    expect(suffixes).toEqual(['91', '90', '89', '88', '87', '86', '85', '84'])
+  })
+
+  it('evidence_bundle_ids_are_unique: all 8 ids are distinct (no invoice-suffix collision)', () => {
+    const ids = buildEvidenceBundles().map((r) => r.id)
+
+    expect(new Set(ids).size).toBe(8)
+  })
+
+  // The prototype's copy claims "HASH-CHAINED" (proto:320 pill text), but
+  // evidenceData() does NOT actually chain prevHash to the previous row's hash:
+  // prevHash is an independent template keyed only on the row's own invoice + index
+  // ('sha256:8e' + invoice.slice(-3) + 'c2' + i), never derived from bundles[i-1].hash.
+  // Port as-is (task-142 E2 verdict: "not a real chain... do not fix it into one").
+  // This spec locks in the real (non-chained) behavior so a future "fix" that wires
+  // prevHash to the prior row's actual hash is a deliberate, visible change, not a
+  // silent one.
+  it('evidence_bundle_prev_hash_is_independently_derived_not_chained_to_the_prior_row: row i prevHash never equals, and is never a substring of, row i-1 hash', () => {
+    const bundles = buildEvidenceBundles()
+
+    for (let i = 1; i < bundles.length; i++) {
+      expect(bundles[i]!.prevHash).not.toBe(bundles[i - 1]!.hash)
+      expect(bundles[i - 1]!.hash.includes(bundles[i]!.prevHash)).toBe(false)
+    }
+  })
+
+  it('evidence_bundle_response_is_byte_exact_and_embeds_the_vat_split: row 0 response JSON pins irn/cleared_at reformatting and vatSplit(4120000)’s net/vat', () => {
+    const row = buildEvidenceBundles()[0]!
+
+    expect(row.response).toBe(
+      '{\n  "status": "CLEARED",\n  "irn": "IRN-NG-88412-A91",\n  "csid": "MBS.9f2a…c7",\n  "cleared_at": "2026-07-18T09:14:00Z",\n  "net": 3832558,\n  "vat": 287442\n}',
+    )
   })
 })

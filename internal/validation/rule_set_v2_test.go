@@ -742,11 +742,24 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 			// active version and pins the result to 1. v1 is version 1
 			// permanently, by definition.
 			file == "migrations/20260716185106_rule_set_v2.sql" ||
-			file == "pnpm-lock.yaml"
+			file == "pnpm-lock.yaml" ||
+			// M4-06: two hand-rolled fake ValidateBatch gate doubles
+			// (contentViolationGate in service_dup_test.go,
+			// fakeGate{validateBatchResult:...} in
+			// service_dup_adversarial_test.go) each return a fixed
+			// invoice.BatchOutcome{RuleSetVersion: 1, ...} as their canned
+			// return value. Category B by the same rule as the in-memory
+			// RuleSet{Version:1} unit fixtures called out above: these
+			// doubles never read or write the live active rule-set version --
+			// the literal 1 is an arbitrary stand-in value for "some
+			// version", not an assumption that v1 is active.
+			file == "internal/importer/service_dup_test.go" ||
+			file == "internal/importer/service_dup_adversarial_test.go"
 		if !allowed {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
 				"internal/validation/**, the two §c e2e artifacts, validationApi.test.ts, the "+
-				"version-defining seed migrations, or pnpm-lock.yaml [RS-V2-14 scope]", line)
+				"version-defining seed migrations, pnpm-lock.yaml, or the two named M4-06 fake-gate "+
+				"fixtures [RS-V2-14 scope]", line)
 		}
 	}
 }

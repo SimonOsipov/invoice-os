@@ -16,24 +16,21 @@ environment.
   > this repo's PR events, so its PR Environments feature never created anything here —
   > see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below. M4-23
   > replaces it with self-provisioning from CI.
-- **Close a PR (merged or abandoned — GitHub's `closed` event fires for both)** →
-  Railway automatically deprovisions that PR's ephemeral environment, Postgres included.
-  There is no repo-side teardown workflow (`dev-env-cleanup.yml` was **deleted**, M4-21-11
-  — see Decision `[cleanup-workflow-deleted]`): tearing down `development` on every PR
-  close would contradict Decision `[dev-env-status]` below.
-  > **⚠ Rests on a false premise (M4-23).** This describes Railway's documented
-  > PR-Environments behavior — but that feature is OFF and never applied to this project
-  > (see [Railway PR Environments are OFF](#railway-pr-environments-are-off)), so nothing
-  > here auto-deprovisions anything. A real teardown mechanism is M4-23's to design; this
-  > paragraph is retained only until it lands. Never empirically confirmed either: Task-131 (M4-21-07, Part 4,
-  > step 15 — HUMAN-ONLY) requires closing a throwaway PR and recording whether Railway
-  > actually removes the environment; as of this writing that task is still **In
-  > Progress**, so the observation has not been done. If it turns out Railway does
-  > *not* auto-remove a closed PR's environment, environments would accumulate
-  > unboundedly (cost + orphaned Postgres instances) and a real teardown mechanism would
-  > need to be designed — **not** a reinstated shared-env `dev-env-cleanup.yml` sweep,
-  > per Decision `[cleanup-workflow-deleted]`, since per-PR environments have no shared
-  > target to sweep. Whoever completes task-131 must record the result here.
+- **Close a PR (merged or abandoned)** → **nothing is deprovisioned.** There is no
+  automatic teardown, and there is no repo-side teardown workflow
+  (`dev-env-cleanup.yml` was **deleted**, M4-21-11 — see Decision
+  `[cleanup-workflow-deleted]`; tearing down `development` on every PR close would
+  contradict Decision `[dev-env-status]` below).
+  > **Corrected (M4-23).** This previously claimed Railway automatically deprovisions
+  > the PR's environment, Postgres included, on close. That was Railway's *documented
+  > PR-Environments behavior* — a feature that is OFF and never applied to this project
+  > (see [Railway PR Environments are OFF](#railway-pr-environments-are-off)). It was
+  > never observed happening here: task-131 was supposed to confirm it by closing a
+  > throwaway PR and never did. Environments therefore accumulate until something removes
+  > them (cost + orphaned Postgres instances). **A teardown mechanism is still to be
+  > built — M4-23-06.** It will not be a reinstated shared-env `dev-env-cleanup.yml`
+  > sweep (per Decision `[cleanup-workflow-deleted]`, per-PR environments have no shared
+  > target to sweep).
 - **`workflow_dispatch`** → targets the **persistent `development` environment** directly
   (never an ephemeral PR environment) — the same fleet-deploy + verify flow, plus the
   reset-seed step (M4-21-06), still serialized against itself (`dev-preview-development`-
@@ -95,6 +92,18 @@ CI), and the project has **zero deployment triggers**, so no service is attached
 GitHub. With nothing subscribed, `prDeploys = true` produced exactly nothing. M4-23
 established this: the flag was on, the base environment was set correctly, and the
 feature was completely **inert**.
+
+**First CI observation (2026-07-18), against the live Railway API:**
+
+```
+prDeploys=false botPrEnvironments=false focusedPrEnvironments=false baseEnvironmentId=null deploymentTriggers=0
+```
+
+Note `baseEnvironmentId=null` and `deploymentTriggers=0`. The project has **no fork base
+configured at all** and **nothing subscribed to GitHub** — so even with `prDeploys=true`
+the feature had neither a base to fork from nor an event to fire on. This is the direct
+measurement behind the claim above; `dev-env.yml`'s old header comment asserting
+"PR Environments ON, base = `development`" was wrong on both counts.
 
 **`prDeploys` is not the load-bearing condition — `deploymentTriggers == 0` is.**
 Asserting only that a suggestively-named flag reads `false` is what produced M4-23 in the

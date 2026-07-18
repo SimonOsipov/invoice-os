@@ -857,3 +857,46 @@ func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 		t.Errorf("audit_log invoice.created rows for tenant after rejected Create = %d, want 0", n)
 	}
 }
+
+// M4-06-03 (QA Mode A, RED): closes the invoices->entity leg of the D8
+// cross-tenant dangling-reference residual for Store.Create. This is the
+// entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS
+// (import_batch_test.go), which pins the SAME shape of leak for
+// ImportBatchID and — per that test's own doc comment — is deliberately left
+// OPEN as an accepted residual (no AC requires a same-tenant check there,
+// and the only production caller always mints a fresh same-tenant batch id).
+// EntityID is different: M4-06 requires it be closed, so unlike the
+// import_batch leg, a caller-supplied EntityID belonging to a DIFFERENT
+// tenant must be rejected as ErrValidation rather than silently accepted.
+//
+// RED today: the entity_id foreign_key_violation check runs with RLS
+// bypassed (same mechanism TestRLS_InvoicesCrossTenantDanglingEntityRef,
+// internal/platform/db/invoices_rls_test.go, pins at the raw-SQL layer), and
+// Store.Create has no tenant-scoped ownership pre-check on EntityID, so this
+// Create call SUCCEEDS (err == nil) instead of returning ErrValidation. The
+// fix — a composite FK (tenant_id, entity_id) -> business_entities(tenant_id,
+// id) plus a friendly tenant-scoped pre-check in Store.Create — lands in a
+// later subtask; this test does not add it.
+func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "M4-06-03 tenant A")
+	tenantB := seedTenant(t, super, "M4-06-03 tenant B")
+	entityB := seedEntity(t, super, tenantB, "M4-06-03 B entity")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	_, err := store.Create(cA, CreateInput{EntityID: entityB, InvoiceNumber: "INV-XT-1"})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity) err = %v, want ErrValidation (M4-06 closes the invoices->entity leg of the D8 cross-tenant residual)", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {
+		t.Errorf("invoices rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.created'`, tenantA); n != 0 {
+		t.Errorf("audit_log invoice.created rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+}

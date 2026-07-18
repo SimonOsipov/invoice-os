@@ -635,6 +635,65 @@ func TestRLS_InvoicesCrossTenantDanglingEntityRef(t *testing.T) {
 	}
 }
 
+// M4-06-03 (QA Mode A, RED): TestRLS_InvoicesCrossTenantDanglingEntityRef
+// directly above documents TODAY's accepted D8 residual for invoices ->
+// business_entities, and its own doc comment already anticipates this test:
+// "If a future story adopts composite same-tenant FKs, this spec flips to
+// expect 23503." M4-06 is that future story for the invoices->entity leg
+// (the import_batch_id leg, pinned separately by
+// TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS in
+// internal/invoice/import_batch_test.go, stays an accepted residual and is
+// NOT touched by this story).
+//
+// This is added as a NEW, additive test rather than an in-place edit of
+// TestRLS_InvoicesCrossTenantDanglingEntityRef, so that test keeps
+// documenting today's actual (still-permissive) behavior until the
+// composite FK ships. FLAG for whoever implements the fix: once the
+// composite (tenant_id, entity_id) FK lands, THIS test's insert starts
+// failing with 23503 (making it pass) while
+// TestRLS_InvoicesCrossTenantDanglingEntityRef's insert ALSO starts failing
+// with 23503 (making that one's "want success" assertion wrong) — that
+// test's assertion (and its join-based no-read-leak check, which becomes
+// moot once the FK rejects the row outright) must be flipped in the SAME
+// change, or the suite ships two directly contradictory specs.
+//
+// RED today: business_entities carries no UNIQUE(tenant_id, id) for a
+// composite FK to reference, so only the single-column entity_id FK exists;
+// its referential-integrity trigger checks existence with RLS bypassed
+// (same mechanism TestRLS_LineItemsCrossTenantDanglingInvoiceRef,
+// line_items_rls_test.go, pins for the line_items->invoices leg) and finds
+// tenant B's entity regardless of caller tenant. So this insert SUCCEEDS
+// today (no error), and the test fails on the 23503 assertion below.
+func TestRLS_InvoicesCrossTenantEntityRefRejected(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "M4-06-03 B Corp")
+	defer cleanupEntityB()
+
+	// Captured even though the assertions below expect err != nil: TODAY the
+	// insert actually SUCCEEDS (that is the RED), so this must still be
+	// cleaned up to avoid leaking a row onto the shared harness tenant A.
+	var invoiceID string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, 'INV-M4-06-03-XT') RETURNING id`,
+			h.tenantA, entityB,
+		).Scan(&invoiceID)
+	})
+	if invoiceID != "" {
+		defer func() {
+			_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, invoiceID)
+		}()
+	}
+	if err == nil {
+		t.Fatal("insert invoice with cross-tenant entity_id succeeded, want foreign_key_violation (SQLSTATE 23503) -- the composite (tenant_id, entity_id) FK is not enforced yet [M4-06]")
+	}
+	if code := pgCode(err); code != "23503" {
+		t.Fatalf("insert invoice with cross-tenant entity_id: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)
+	}
+}
+
 // INV-RLS-16: entity_id is ON DELETE RESTRICT. Deleting a business_entities row that
 // still has a live invoice is refused — a portfolio edit must not silently destroy a
 // durable legal/fiscal record (D9). An explicit ON DELETE RESTRICT raises 23001

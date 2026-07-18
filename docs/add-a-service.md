@@ -5,7 +5,11 @@ services; M7-01: opsconsole). Follow it verbatim — every value below is either
 convention or derived mechanically from the service name. If you find yourself making a
 judgment call, the recipe is broken: fix the recipe, then the service.
 
-**Railway target (only one environment exists):**
+**Railway target — the base environment a new service is created in.** Since M4-21 each
+PR also gets its own ephemeral, Railway-forked environment, but a new service is never
+created *in* one of those directly: it is created once, here, on `development`, and every
+subsequent PR fork inherits it automatically via Railway's own environment-fork mechanism.
+`$ENV` throughout this recipe always means `development`'s id below:
 
 | | ID |
 |---|---|
@@ -74,16 +78,7 @@ substitute `<svc>`/`<ctx>`:
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile",
-    "watchPatterns": [
-      "cmd/<svc>/**",
-      "internal/<ctx>/**",
-      "internal/platform/**",
-      "internal/audit/**",
-      "go.mod",
-      "go.sum",
-      "Dockerfile"
-    ]
+    "dockerfilePath": "Dockerfile"
   },
   "deploy": {
     "healthcheckPath": "/healthz",
@@ -91,6 +86,11 @@ substitute `<svc>`/`<ctx>`:
   }
 }
 ```
+
+No `build.watchPatterns` field: Railway ignores it entirely regardless of value (§3), and
+per-PR ephemeral environments (M4-21) require every service to **always** rebuild — the
+opposite of what a populated watch-path list would suggest. Leave it out; do not add one
+"for documentation" — see §3.
 
 Fixed by convention, not per-service choice:
 
@@ -102,49 +102,44 @@ Fixed by convention, not per-service choice:
 - **No `buildArgs`.** `SERVICE=<svc>` is set as a **service variable** instead (§4,
   and the §1 M2-12 note) — Railway config-as-code has no `buildArgs` field.
 
-## 3. Watch-path convention
+## 3. Watch-path convention: always empty (M3-16, mandatory since M4-21)
 
-The watch patterns answer one question: *which paths, when changed on `main`, mean this
-service must rebuild?* For a Go service that is exactly:
+**Every service's Watch Paths must be empty. Never populate them.** This inverts the
+recipe's original M1-06/M2-12 convention (a per-service path list, mirroring what changed
+on `main`) after M3-16's cold-fleet-deploy incident, and per-PR ephemeral environments
+(M4-21) make emptiness load-bearing rather than a nice-to-have:
 
-| Pattern | Why |
-|---|---|
-| `cmd/<svc>/**` | the binary itself |
-| `internal/<ctx>/**` | its domain context (omit for gateway) |
-| `internal/platform/**` | shared db/config/river/jwt code — imported by every service |
-| `internal/audit/**` | shared audit module (D7) — imported by every service |
-| `go.mod`, `go.sum` | dependency changes |
-| `Dockerfile` | the shared build definition |
-
-> **Note on `internal/audit/**`:** the build plan's M2-12 line names only
-> `cmd/<svc> + internal/<ctx> + internal/platform`. `internal/audit` is added here
-> because it is a shared module of the same class as `internal/platform` (imported by
-> all services per D7) — omitting it would leave stale deployments after audit-module
-> changes. If M2 restructures audit, revisit this line.
-
-Do **not** add `migrations/**` — for a **context service** schema migrations are not a
-service-image concern and must not trigger a rebuild. **The gateway is the one exception**
-(realized in M2-12): it embeds the migrations via `go:embed` and applies them at boot
-(migrations.md §2), so a migration change *does* change its image — its watch patterns
-therefore include `migrations/**`. No other service does. Do **not** add another
-service's context dir; if service A needs service B's types, that coupling is the problem,
-not the watch list.
-
-### ⚠️ The instance-level gotcha (this is half the reason this doc exists)
-
-`railway.json` is applied when a **build starts** — but watch patterns are evaluated
-**at trigger time**, from the **service instance** settings, *before* any config file is
-read. A freshly created service has instance `watchPatterns: []`, which Railway treats
-as "rebuild on every push". Net effect: config-as-code alone silently breaks deploy
-isolation — every push to `main` rebuilds every service.
-
-**Therefore: after creating the service, always mirror the watch patterns onto the
-service instance via `serviceInstanceUpdate` (runbook step 3).** This was hit and
-confirmed in M1-06; the live check (2026-07-05) shows the same asymmetry the other way:
-instance fields report `builder: RAILPACK` and `healthcheckPath: null` while the
-deployments demonstrably build via Dockerfile and answer the healthcheck — i.e. the
-instance record and the effective config genuinely diverge. Trust `railway.json` for
-build/deploy behavior; trust (and maintain) the **instance** for trigger behavior.
+- **Why empty is now required.** Since M4-21 every deploy target is either a *fresh
+  ephemeral PR environment* (Railway forks the whole service graph from `development` for
+  each PR) or a `workflow_dispatch` run against `development` — either way, `dev-env.yml`
+  needs **every** service to actually build and deploy on `railway up`, regardless of
+  whether that particular run's diff touches the service's own paths. A non-empty Watch
+  Paths list makes `railway up` **skip** (no deployment created, `no changes detected in
+  watch paths, build will skip`) whenever the diff misses it — which, after a torn-down or
+  freshly-forked service, means that service never comes up at all, failing `health-gate`
+  or `fleet-gate` before the E2E suites ever run (the M3-16 incident, `docs/deploy-model.md`
+  "Cold-fleet recovery"). Emptying it makes `railway up` fall back to its documented
+  default: always upload and build the working tree, for every service, on every run
+  (Approach 3: always-rebuild).
+- **`railway.json`'s `build.watchPatterns` field is inert regardless of value** — Railway
+  never reads it (confirmed live; see §2) — so it is not part of this invariant at all; do
+  not add it to a new service's config file.
+- **The field that matters is the *service instance*'s `watchPatterns`**, set via
+  `serviceInstanceUpdate` (runbook step 3) — **always to `[]`**, never to a path list.
+  `railway.json` is applied when a **build starts**, but watch patterns are evaluated **at
+  trigger time**, from the instance settings, *before* any config file is read — a
+  freshly created service already defaults to instance `watchPatterns: []` (confirmed live,
+  2026-07-05: instance fields also report `builder: RAILPACK` and `healthcheckPath: null`
+  while deployments demonstrably build via Dockerfile and answer the healthcheck — the
+  instance record and the effective config genuinely diverge on several fields, not just
+  this one). **After creating the service, explicitly set (or confirm) instance
+  `watchPatterns: []`** — do not leave it to chance, and never "helpfully" populate it with
+  a path list.
+- **Runtime-enforced, not just documented (M4-21-09):** `dev-env.yml`'s `resolve-env` job
+  queries every non-Postgres service instance's Watch Paths in the target environment on
+  every run and **fails the run, naming the offender(s)**, if any are non-empty (Decision
+  `[watch-paths-asserted]`) — a service accidentally recreated with a populated Watch Paths
+  list, or a config drift, can no longer reach the deploy steps silently.
 
 ## 4. `.env.example` and env-var conventions
 
@@ -226,12 +221,11 @@ returned by step 1.
    mutation { serviceInstanceUpdate(serviceId: "$SVC", environmentId: "$ENV",
      input: { railwayConfigFile: "cmd/<svc>/railway.json" }) }
    ```
-3. **Mirror the watch patterns onto the instance** (see §3 gotcha — never skip):
+3. **Explicitly set the instance Watch Paths to empty** (see §3 — this is the M3-16
+   invariant per-PR environments depend on; never populate this with a path list):
    ```graphql
    mutation { serviceInstanceUpdate(serviceId: "$SVC", environmentId: "$ENV",
-     input: { watchPatterns: ["cmd/<svc>/**", "internal/<ctx>/**",
-       "internal/platform/**", "internal/audit/**",
-       "go.mod", "go.sum", "Dockerfile"] }) }
+     input: { watchPatterns: [] }) }
    ```
 4. **Pin the port:**
    ```graphql
@@ -259,21 +253,23 @@ false` means Railway deploys on push **without waiting for GitHub CI** — curre
 behavior, kept as-is; `deploymentTriggerUpdate` is the knob if we later gate deploys
 on green CI.
 
-## 6. Verification checklist — "correctly added" means all four
+## 6. Verification checklist — "correctly added" means all three
 
 1. **Healthy:** deployment status `SUCCESS`; `/healthz` answers on the private network
    (for public services, `curl https://<domain>/healthz` — SPAs: `/health`).
-2. **Instance watch patterns really set** (this catches the §3 gotcha):
+2. **Instance Watch Paths are really empty** (this catches the §3 invariant — the same
+   query `dev-env.yml`'s `resolve-env` job runs on every run, M4-21-09):
    ```graphql
    query { environment(id: "$ENV") { serviceInstances { edges { node {
      serviceName watchPatterns } } } } }
    ```
-   The new service's `watchPatterns` must be non-empty and match §3.
-3. **Positive isolation probe:** push a trivial commit to `main` touching only
-   `cmd/<svc>/` → only this service redeploys.
-4. **Negative isolation probe:** a push touching a *different* service's paths does
-   **not** redeploy this one. (Steps 3+4 are the M1-06 task-6.3 method; in practice one
-   probe commit checks both directions across the fleet at once.)
+   The new service's `watchPatterns` **must be empty** (`[]`). Non-empty here is the M3-16
+   failure mode, not success — see §3.
+3. **Always-rebuild proof:** trigger a `dev-env.yml` run (any PR, or `workflow_dispatch`)
+   whose diff does **not** touch this service's own code, and confirm it still builds and
+   redeploys rather than being skipped. (Supersedes the old M1-06 task-6.3
+   positive/negative *isolation* probes, which proved the opposite property — selective
+   rebuild-on-touch — now deliberately retired.)
 
 ---
 
@@ -287,7 +283,7 @@ same runbook, different config block. Differences:
 | Config file | `cmd/<svc>/railway.json` | `frontend/<app>/railway.json` |
 | Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-app `frontend/<app>/Dockerfile` (pnpm build → Caddy) |
 | Health | `/healthz` (in the binary) | `/health` (shared root `Caddyfile`) |
-| Watch patterns | §3 | `frontend/<app>/**`, `packages/design-tokens/**`, `pnpm-lock.yaml` |
+| Watch patterns | empty (§3) | empty (§3) — same invariant, no per-service-type difference |
 | Public domain | gateway only | yes (all three) |
 
 Live services (dev): `landing`, `app`, `ops-console` — see `frontend/*/railway.json`

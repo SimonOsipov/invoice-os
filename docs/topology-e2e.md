@@ -28,87 +28,107 @@ M2-14.4).
 
 There is no standalone topology workflow. These assertions run automatically as the
 post-deploy verification steps of `.github/workflows/dev-env.yml`, on every ready
-(non-draft) PR — after the fleet is deployed and the dev DB is reset + seeded, alongside the
-smoke suite. `dev-env.yml` flow:
+(non-draft) PR — after the fleet is deployed to that PR's own ephemeral Railway
+environment (M4-21) and its Postgres is bootstrapped + seeded fresh at gateway boot
+(M4-21-04), alongside the smoke, api, and demo suites. `dev-env.yml` flow:
 
 ```
-gateway ──> gate on /healthz (schema migrated)
-        ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL set)
-        ──> reset + seed the dev DB (data-only, superuser)
-        ──> verify: smoke (landing + ops-console) + topology (fleet gate, browser login, isolation)
+resolve-env ──> poll for this run's target environment (this PR's ephemeral fork, or
+                `development` on workflow_dispatch) ──> assert Watch Paths empty
+                (M3-16 invariant) ──> discover the 4 public URLs fresh
+gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
+            ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL
+                is a durable Railway reference variable, M4-21-05)
+            ──> verify: smoke (landing + ops-console) + api (typed contract suite) +
+                topology (fleet gate, browser login, isolation) + demo (Day-30 journey)
 ```
 
-The whole coherent env then stays up (see [deploy-model.md](./deploy-model.md)) rather than
-being torn down after the assertions run. `dev-env.yml` remains dispatchable by hand
-(`workflow_dispatch`) to re-run the deploy + verify flow on demand.
+reset-seed (`db/reset.dev.sql` + `db/seed.dev.sql`, superuser) is **dispatch-path-only**
+now (M4-21-06) — it runs only on a `workflow_dispatch` run against the persistent
+`development` environment, never on a PR run, whose own Postgres is born empty and
+self-seeds at gateway boot instead (see "The data-only reset" below). The PR's environment
+then stays up while the PR is open — Railway deprovisions it automatically on close (see
+[deploy-model.md](./deploy-model.md)); `development` is never deprovisioned. `dev-env.yml`
+remains dispatchable by hand (`workflow_dispatch`) to re-run the deploy + verify flow
+against `development` on demand.
 
-## One-time prerequisites (human-applied)
+## Prerequisites
 
-The workflow is self-contained **except** for credentials and pre-existing gateway auth
-config it deliberately does not clobber. Apply these once:
+Most of the workflow's inputs are now **discovered at runtime** rather than pre-applied —
+see [deploy-model.md](./deploy-model.md) for the full per-PR-environment prerequisites list
+(Railway PR Environments enabled, the account-scoped `RAILWAY_API_TOKEN`, the
+empty-Watch-Paths invariant). What remains one-time / human-applied:
 
-### Railway service variables
+### Railway variables (durable reference variables, not per-run `--set`)
 
-The workflow **sets these itself** at deploy time (`railway variables --set … --skip-deploys`),
-so no manual step is needed — listed here for the record:
+`app.VITE_GATEWAY_URL`, `gateway.GATEWAY_MOCK_ISSUER`, and `gateway.CORS_ALLOWED_ORIGINS`
+are durable Railway **reference variables** on `development` (M4-21-05, task-129) — Railway
+forks them into every PR environment along with the rest of `development`'s variable
+topology, so the workflow no longer sets any of them per-run.
 
-| Service | Variable | Value |
-|---|---|---|
-| `app` | `VITE_GATEWAY_URL` | `https://gateway-development-997b.up.railway.app` (Vite bakes it at build) |
-| `gateway` | `GATEWAY_MOCK_ISSUER` | `true` |
-| `gateway` | `CORS_ALLOWED_ORIGINS` | `https://app-development-3b4b.up.railway.app` |
-
-**Assumed already present on the gateway (from M2-12/M2-13 — NOT set by this workflow):**
-`AUTH_ISSUER`, and `AUTH_JWKS_URL` pointing at the gateway's **own**
-`https://gateway-development-997b.up.railway.app/.well-known/jwks.json` so the mock round
-trip verifies. If the round trip 401s, this is the first thing to check.
+**Assumed already present on the gateway (from M2-12/M2-13):** `AUTH_ISSUER`, and
+`AUTH_JWKS_URL` pointing at the gateway's **own**
+`<discovered gateway URL>/.well-known/jwks.json` so the mock round trip verifies — this,
+too, is forked per-environment by Railway. If the round trip 401s on a PR environment, this
+is the first thing to check.
 
 ### GitHub secrets
 
 | Secret | Value |
 |---|---|
-| `DATABASE_SUPERUSER_URL_DEV` | The dev Postgres **PUBLIC** superuser DSN (Railway → Postgres → Connect → Public Network). Required because GitHub runners can't reach `*.railway.internal`, and `tenants` is FORCE ROW LEVEL SECURITY so only the superuser (BYPASSRLS) can TRUNCATE + seed it. |
-| `RAILWAY_API_DEV_TOKEN` | Already present — the same dev project token the rest of `dev-env.yml` uses. |
+| `RAILWAY_API_DEV_TOKEN` | The `development` project token — used by `workflow_dispatch` runs and by every run's Watch-Paths/URL/DSN discovery queries when the trigger is `workflow_dispatch`. |
+| `RAILWAY_API_TOKEN` | The account-scoped token (task-131) every PR-triggered run authenticates with — a project token cannot reach an ephemeral PR environment (F6). |
 
-## The data-only reset
+No workflow reads a `DATABASE_SUPERUSER_URL_DEV` GitHub secret anymore (M4-21-10) — the
+Postgres superuser DSN is discovered fresh per run via the Railway GraphQL API
+(`variables(projectId, environmentId, serviceId)` → `DATABASE_PUBLIC_URL`), masked with
+`::add-mask::` inside the job that uses it, never a job output. `make demo-reset`'s
+same-named **local** environment variable is unrelated and unaffected.
+
+## The data-only reset (`development` / `workflow_dispatch` only)
 
 `db/reset.dev.sql` (`TRUNCATE tenants CASCADE`) then `db/seed.dev.sql` re-applies the
 canonical fixtures — the isolation pair (`aaaa…`/`bbbb…`) plus the persona tenants (`1111…`
-Okafor & Partners / `2222…` Honeywell Group). It is **data-only**: schema and migration
-history are untouched and persist (the dev Postgres is always-on). Idempotent — safe to
+Okafor & Partners / `2222…` Honeywell Group) — against `development`'s Postgres. It is
+**data-only**: schema and migration history are untouched and persist. Idempotent — safe to
 re-run. Setup owns correctness, not teardown, so the fixtures are deterministic regardless
-of prior state.
+of prior state. A PR's own ephemeral environment never runs this step — its Postgres is
+born empty and the gateway seeds it once, at boot (`internal/platform/db.Provision`,
+M4-21-04), so there is nothing to reset.
 
 ## Cold-fleet recovery (M3-16)
 
 The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
 `deploy-spas` are both green — so it depends on every service in the fleet actually coming
-up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. That
-was not reliably true before M3-16: each Railway service has a service-level **Watch Paths**
-filter that makes `railway up` skip (no deployment created) when the PR's diff misses the
-service's watched paths. After a PR-close teardown (`dev-env-cleanup.yml`'s `railway down`,
-which removes the deployment), the next PR's `railway up` for an untouched service would
-skip rather than rebuild, leaving that service Offline and failing `health-gate` or
-`fleet-gate` before the E2E suites ever ran. (`railway.json`'s `build.watchPatterns` field
-looks like it should control this but Railway ignores it entirely — it is not wired to
-anything, which is why an earlier attempt to fix this via `railway.json` had no effect.)
+up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Since
+M4-21 every environment is a **fresh, cold, from-scratch 11-service build** (a new PR fork,
+or a `workflow_dispatch` run against `development`), so this is the norm on every run, not
+an edge case: each Railway service has a service-level **Watch Paths** filter that makes
+`railway up` skip (no deployment created) when the diff misses the service's watched
+paths — a skip would leave that service Offline and fail `health-gate` or `fleet-gate`
+before the E2E suites ever ran. (`railway.json`'s `build.watchPatterns` field looks like it
+should control this but Railway ignores it entirely — it is not wired to anything, which is
+why an earlier attempt to fix this via `railway.json` had no effect.)
 
-**Fix / invariant:** service-level Watch Paths were cleared to empty, out-of-band, on all 11
-non-Postgres services. With Watch Paths empty, `railway up --ci --service <svc>` always
-builds and deploys the working tree — for every service, on every `dev-env.yml` run —
-so a torn-down fleet always comes back regardless of which files a PR touched. Teardown
-itself (`railway down` in `dev-env-cleanup.yml`) is unchanged; it is recoverable only because
-of this invariant. This is Railway-side config applied once, not something expressed in this
-repo — see [deploy-model.md](./deploy-model.md) "Cold-fleet recovery (M3-16)" for the root
-cause and the full rationale (Approach 3: always-rebuild, chosen after live experiments
-falsified scale-to-0 and diff-driven alternatives).
+**Fix / invariant, now runtime-asserted:** service-level Watch Paths were cleared to empty,
+out-of-band, on all 11 non-Postgres services. With Watch Paths empty, `railway up --ci
+--service <svc>` always builds and deploys the working tree — for every service, on every
+`dev-env.yml` run. `resolve-env` (M4-21-09) additionally **asserts** every non-Postgres
+service instance in the target environment still reports empty Watch Paths and fails the
+run, naming the offender(s), if not — a regression can no longer reach the deploy steps
+silently. This is Railway-side config applied once, not something expressed in
+`railway.json` — see [deploy-model.md](./deploy-model.md) "Cold-fleet recovery (M3-16)" for
+the root cause and the full rationale (Approach 3: always-rebuild, chosen after live
+experiments falsified scale-to-0 and diff-driven alternatives).
 
-The gateway `health-gate` window was also widened from 200s to 360s to cover a genuinely
-cold build → container start → `goose migrate` boot path, not just a warm redeploy.
+The gateway `health-gate` window was widened again under M4-21 (360s → 900s) — and
+`fleet-gate` / the e2e SPA `/health` wait (200s → 600s) — since every environment is now a
+cold 11-service build, not the exception a warm redeploy used to be (Decision
+`[gate-windows-provisional]`).
 
 ## Related
 
-- [deploy-model.md](./deploy-model.md) — the unified deploy + verify flow this suite runs
-  inside of, and the scale-to-zero teardown on PR close.
+- [deploy-model.md](./deploy-model.md) — the per-PR-environment deploy + verify flow this
+  suite runs inside of, and Railway's automatic teardown on PR close.
 - `e2e/README.md` — the smoke + topology suites, run commands, and target-URL conventions.
 - `db/seed.dev.sql` — the canonical fixtures re-applied on every run.

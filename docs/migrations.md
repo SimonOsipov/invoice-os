@@ -25,7 +25,7 @@ each with its own connection string:
 |---|---|---|---|---|
 | `DATABASE_URL` | `invoice_app` | no (NOBYPASSRLS) | every service binary | runtime queries |
 | `DATABASE_MIGRATION_URL` | `invoice_migrator` | no (NOBYPASSRLS) | goose | the migration step only |
-| `DATABASE_SUPERUSER_URL` | Postgres superuser | yes | `db/bootstrap.sql` | **once**, at provisioning |
+| `DATABASE_SUPERUSER_URL` | Postgres superuser | yes | `db/bootstrap.sql` | at boot, gated (see below) |
 
 **The load-bearing rule:** never point the app or the migration step at Railway's
 `${{Postgres.DATABASE_URL}}` (the superuser). A superuser has **BYPASSRLS** — every
@@ -34,6 +34,22 @@ cross-tenant leak. `invoice_migrator` also owns every table, and a table's **own
 bypasses RLS *unless the table is `FORCE`d* — which is exactly why the app connects as a
 *separate* role (`invoice_app`), never as the migrator. (M2-07 proves the owner-bypass
 case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
+
+> **`DATABASE_SUPERUSER_URL` on the gateway itself (M4-21-04, Decision
+> `[superuser-dsn-on-gateway]`).** Provisioning a fresh ephemeral PR-environment Postgres
+> with no human in the loop means the gateway binary — not just a human running psql, and
+> not just CI — now holds a superuser DSN as one of its own runtime environment variables.
+> That is a deliberately accepted, narrowed tradeoff, not an oversight: `db.Provision`
+> (`internal/platform/db/provision.go`) gates bootstrap/seed behind `BootstrapEnabled`'s
+> ALLOWLIST (exactly `development` or a Railway PR-environment name — never a blocklist,
+> never production, QA F1), and `Bootstrap`/`Seed` (`internal/platform/db/bootstrap.go`)
+> each open and close their **own** dedicated superuser connection — the DSN is read once
+> per gated step and **never retained** past the call that used it (QA F3); it is not
+> stored, logged, or reachable from any request-serving code path
+> (`TestSuperuserDSNNotRetainedForRequestPath` proves the request pool comes from
+> `DATABASE_URL`, never the superuser DSN). This is why `db/bootstrap.sql` is no longer
+> "once, at provisioning" the way it was before M4-21 — it now runs on every gated boot,
+> idempotently.
 
 ### Role model (created by `db/bootstrap.sql`)
 
@@ -63,6 +79,13 @@ passwords live only in Railway.
 > just the new role without rotating the existing roles' passwords (step 3 rotates all
 > three — it would invalidate the live `INVOICE_*_DATABASE_URL` vars), run only its
 > `CREATE ROLE` + `ALTER ROLE … NOSUPERUSER NOBYPASSRLS` + schema `GRANT USAGE` lines.
+>
+> **Since M4-21-04** this specific failure mode is structurally mitigated for any
+> environment where gated boot-time provisioning is enabled (see the
+> `[superuser-dsn-on-gateway]` note above): `db.Provision` re-runs the idempotent
+> `bootstrap.sql` on every gateway boot, so a role added to it is picked up automatically
+> on that environment's next deploy rather than requiring a manual re-run. This history
+> stands as the reason that behavior exists.
 
 ---
 
@@ -92,11 +115,16 @@ it doubles as the migrator. No context service is granted the migrator URL.
 > listener**. `/healthz` is always-200 liveness, so it can only answer *after* migration
 > returns — that is the "migrated before healthy" guarantee, enforced by process order
 > rather than a probe. A migration error is fatal (`log.Fatal`), so the deploy never goes
-> healthy. The CI ordering lives in `.github/workflows/preview-backend.yml`: deploy the
+> healthy. The CI ordering lives in `.github/workflows/dev-env.yml` (the `preview-backend.yml`
+> name above is retired — dev-env.yml superseded it at M2-14): deploy the
 > gateway → poll its public `/healthz` until 200 (the health-gate, which also surfaces a
 > failed migration) → deploy the seven context services. Because the gateway embeds the
 > SQL, its `cmd/gateway/railway.json` watch patterns include `migrations/**` — the one
-> service for which a migration change rebuilds the image (add-a-service.md §3).
+> service for which a migration change would rebuild the image if Railway's committed
+> `watchPatterns` field were wired to anything (it isn't — add-a-service.md §3's gotcha;
+> since M3-16 every service's *instance-level* Watch Paths are cleared to empty and
+> `dev-env.yml`'s `resolve-env` job asserts that invariant at runtime, so triggering no
+> longer depends on this field at all).
 
 **Dev vs CI, two different gates:**
 
@@ -250,15 +278,20 @@ runs the same suite against the `make dev-db` Postgres.
 
 ---
 
-## 7. Scale-to-zero: the dev Postgres is always-on
+## 7. Per-PR Postgres (M4-21) vs. the always-on `development` Postgres
 
-The dev SPAs scale to zero on PR close ([deploy-model.md](./deploy-model.md)). The dev
-**Postgres does not** — it is **stateful and shared across PRs**, so it is deliberately
-**excluded from the `preview-cleanup.yml` teardown matrix** (which lists only
-`landing, app, ops-console`). A database that scaled to zero on every PR close would lose
-migration state and break every open PR. Dev migrations are therefore forward-only/additive;
-the reversibility guarantee is enforced against the *ephemeral CI* Postgres (§6), not the
-shared dev one.
+Since M4-21, each PR forks its **own** ephemeral Railway environment — including its **own**
+Postgres, born empty and bootstrapped + migrated + seeded fresh at gateway boot
+(`internal/platform/db.Provision`, M4-21-04). There is no repo-side teardown workflow
+(`dev-env-cleanup.yml` was **deleted**, M4-21-11): Railway deprovisions a PR's whole
+environment — Postgres included — automatically when the PR closes. Losing that ephemeral
+DB's state costs nothing; nothing else depends on it once the PR is gone.
+
+The **`development` environment's own Postgres is different: it is stateful, persistent,
+and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
+environment is created from, and the target of `make demo-reset` / live demo calls.
+Migrations against it are therefore forward-only/additive; the reversibility guarantee is
+enforced against the *ephemeral CI* Postgres (§6) instead, never against `development`'s.
 
 ---
 
@@ -347,6 +380,13 @@ so the default `go` job and a bare `go test ./...` stay green without a database
 
 ## Appendix: Provisioning the dev Postgres (M2-01 subtask 4)
 
+**Scope note (M4-21):** this runbook provisions `development`'s own Postgres — the one
+persistent, always-on service (§7). It is a one-time / re-provision runbook, not something
+run per-PR: a PR's own ephemeral Postgres is created automatically by Railway's
+environment-fork (task-131) and bootstrapped/migrated/seeded by the gateway at boot
+(`db.Provision`, M4-21-04, `[superuser-dsn-on-gateway]` above) — no human runs the steps
+below for it.
+
 **Status: DONE (2026-07-06).** The dev `Postgres` service exists in the `development`
 environment (project `9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3`, service
 `98723af0-50ca-42a4-a56a-3e0438b9ce8a`), image `postgres-ssl:18`, Online. Both roles are
@@ -395,8 +435,9 @@ real passwords live **only** in Railway.
    sets `DATABASE_MIGRATION_URL=${{Postgres.INVOICE_MIGRATOR_DATABASE_URL}}`. **Never** hand
    any service `${{Postgres.DATABASE_URL}}` (superuser — disables RLS).
 
-4. **Stays always-on:** the `Postgres` service is **not** in `preview-cleanup.yml`'s
-   teardown matrix (§7) — that matrix is guarded with a comment and lists SPAs only.
+4. **Stays always-on:** there is no repo-side teardown workflow at all anymore
+   (`dev-env-cleanup.yml` was deleted, M4-21-11) — `development`, Postgres included, is
+   simply never torn down by CI (§7).
 
 ## Related
 

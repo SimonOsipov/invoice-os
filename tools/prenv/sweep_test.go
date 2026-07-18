@@ -29,13 +29,10 @@
 //  15. TestParsePRStateNeverYieldsAReapableDecision     -- AC-8, added: composes ParsePRState -> ShouldReap. Nothing in the inherited 12 did this, and a fail-safe branch its real caller can never reach is not fail-safe.
 //
 // NOTE on spec 13 (TestPRStateUnknownIsZeroValue): this test calls no
-// stubbed function -- it only checks the const block's declared order,
-// which is part of the STUB (a type/const declaration, not logic) and is
-// already correct in sweep.go. It therefore PASSES immediately, even in
-// this Mode A / pre-implementation commit. That is intentional: it is a
-// structural regression guard, not a test of unimplemented behavior. All
-// other tests in this file call ShouldReap and/or ParsePRState and
-// therefore panic on sweep.go's "not implemented" stub bodies.
+// function -- it only checks the const block's declared order, so it
+// passed even against the pre-implementation stubs. That is intentional:
+// it is a structural regression guard against a future reorder of the
+// iota block, not a test of behavior.
 package main
 
 import (

@@ -167,12 +167,12 @@ func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
 
 // --- sweep-decide CLI contract (M4-23-06, task-150) ---
 //
-// STUB NOTICE (Stage 2.5 / Mode A): sweep-decide is not yet a recognised
-// subcommand in main.go's dispatch switch -- every call below currently
-// falls into the `default:` arm ("unknown subcommand ...", exit 2). The
-// subcommand itself lands in Stage 3 (sweep.go's ShouldReap/ParsePRState
-// go from panicking stubs to real bodies at the same time). See each
-// test's own comment for how it reads today vs. once implemented.
+// These tests exec the real binary, so they pin the 0/1/2 exit codes as
+// the BINARY reports them. That is the right boundary: `go run` collapses
+// every non-zero exit to 1 (measured, Go 1.26 -- it does the same to
+// `name` and `parse` above), so a caller that needs to tell exit 1 from
+// exit 2 must invoke a built binary rather than `go run`. See task-150's
+// implementation notes -- this constrains M4-23-07's workflow wiring.
 
 // TestCLISweepDecideExitContract pins sweep-decide's exit/stdout
 // contract from task-150: exit 0 (reap) with the reason on stdout for a
@@ -181,10 +181,6 @@ func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
 // `parse` (which writes to stderr on exit 1): here exit 1 is the common
 // per-environment outcome (every open PR, every run), and stderr noise
 // would bury real failures.
-//
-// Currently fails on every assertion (actual exit code 2, stdout empty,
-// "unknown subcommand" on stderr) -- a legitimate RED via wrong exit
-// code and wrong stdout, not a build error.
 func TestCLISweepDecideExitContract(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -218,19 +214,14 @@ func TestCLISweepDecideExitContract(t *testing.T) {
 // property the workflow's `if` structurally depends on to distinguish a
 // mechanism failure from a real reap/skip answer.
 //
-// CAVEAT (untestable as a true RED right now): because sweep-decide
-// isn't a recognised subcommand yet, EVERY case here already exits 2 via
-// main.go's existing "unknown subcommand" default arm -- these
-// assertions pass today, but for the wrong reason (the dispatcher's
-// catch-all, not sweep-decide's own argument validation, which doesn't
-// exist yet). This test cannot be made to genuinely fail red without
-// either implementing argument validation now (out of scope for Mode A)
-// or asserting on the exact diagnostic text (which the codebase's
-// existing convention, TestCLICalledWrongExitsTwoWithCleanStdout above,
-// deliberately does not do). It is included now because it is correct
-// and becomes meaningful the moment Stage 3 adds sweep-decide -- but
-// flagged here explicitly per the QA report rather than silently
-// claimed as RED.
+// HISTORY: pre-implementation, every case here already exited 2 via
+// main.go's "unknown subcommand" default arm -- so it passed for the
+// wrong reason and could not be made a true RED without asserting on
+// exact diagnostic text (a convention this file deliberately avoids).
+// Now that sweep-decide is dispatched, it exercises the subcommand's OWN
+// validation: the three arity cases print usage, and the four
+// ParseBool/Atoi cases print a sweep-decide-specific diagnostic. Verified
+// by hand at implementation time -- no case reaches the catch-all.
 func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 	cases := []struct {
 		desc string
@@ -270,9 +261,6 @@ func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 // gh-exit-code -> ParsePRState -> ShouldReap -> CLI exit chain at the
 // process boundary the sweeper actually crosses, not just the pure Go
 // functions in isolation.
-//
-// Currently fails (actual exit code 2 via the "unknown subcommand" path)
-// -- a legitimate RED, not a build error.
 func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
 	cases := []struct {
 		name   string

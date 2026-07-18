@@ -35,14 +35,21 @@ import (
 
 const usage = `usage:
   prenv name <pr-number>       print the Railway environment name for a PR
-  prenv parse <env-name>       print the PR number encoded in an environment name`
+  prenv parse <env-name>       print the PR number encoded in an environment name
+  prenv sweep-decide <env-name> <is-ephemeral> <gh-exit-code> <gh-json>
+                               decide whether to reap a PR environment
+                               (exit 0 = reap, 1 = skip; reason on stdout)`
 
 // main dispatches the subcommands. Exit codes are a contract, not an
 // afterthought: 2 means "you called me wrong" (unknown subcommand, wrong
-// arity, unparseable or non-positive PR number) and 1 means "well-formed
-// call, negative answer" (the name is not a PR environment name). The
-// sweeper depends on that split to tell a bug from a non-PR environment
-// it should simply skip.
+// arity, unparseable or non-positive PR number, an unparseable
+// is-ephemeral or gh-exit-code) and 1 means "well-formed call, negative
+// answer" (the name is not a PR environment name; or sweep-decide says
+// do not reap). The sweeper depends on that split to tell a bug from a
+// non-PR environment it should simply skip.
+//
+// That split only survives if the caller execs a BUILT binary: `go run`
+// collapses every non-zero exit to 1 (measured, Go 1.26).
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, usage)
@@ -79,6 +86,35 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println(pr)
+
+	case "sweep-decide":
+		// Exit 0 = reap, 1 = skip, 2 = called wrong. The reason goes to
+		// STDOUT on both 0 and 1 -- here the reason IS the answer, and the
+		// sweeper captures it for its log line.
+		//
+		// stderr stays EMPTY on exit 1, a deliberate divergence from
+		// `parse` above (which does write to stderr on exit 1): there exit 1
+		// is unusual, here it is the common per-environment outcome (every
+		// open PR, every run) and stderr noise would bury real failures.
+		if len(os.Args) != 6 {
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(2)
+		}
+		isEphemeral, err := strconv.ParseBool(os.Args[3])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "prenv: invalid is-ephemeral %q: %v\n", os.Args[3], err)
+			os.Exit(2)
+		}
+		ghExitCode, err := strconv.Atoi(os.Args[4])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "prenv: invalid gh-exit-code %q: %v\n", os.Args[4], err)
+			os.Exit(2)
+		}
+		reap, reason := ShouldReap(os.Args[2], isEphemeral, ParsePRState(os.Args[5], ghExitCode))
+		fmt.Println(reason)
+		if !reap {
+			os.Exit(1)
+		}
 
 	default:
 		fmt.Fprintf(os.Stderr, "prenv: unknown subcommand %q\n%s\n", os.Args[1], usage)

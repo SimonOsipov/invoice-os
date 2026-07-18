@@ -2,7 +2,7 @@
 # scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
 #                            ensure-environment <name>|audit-sealed-variables|
 #                            reconcile-fork <environment-id>|
-#                            delete-environment <name>>
+#                            delete-environment <name>|list-environments>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -40,6 +40,9 @@
 # dev-env-teardown.yml on PR close. It takes a NAME and never an id, so the
 # never-delete-`development` guard cannot be bypassed by the caller, and it proves the
 # delete by an independent re-query rather than by environmentDelete's bare Boolean.
+#
+# `list-environments` (M4-23-07) is the sweeper's enumeration: one TSV row per environment
+# on stdout, diagnostics on stderr. Deliberately UNFILTERED — see cmd_list_environments.
 #
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
@@ -232,6 +235,34 @@ require_source_env() {
   fi
 }
 
+# fetch_environment_list
+# One ENV_LIST_QUERY, retried 3x, leaving the payload in GQL_RESPONSE. EXITS 1 rather than
+# returning, because every caller's failure mode for "unreadable" is identical: it must
+# never be conflated with "absent" (would create a duplicate) or with "empty" (would report
+# an orphan as already reaped). Extracted from lookup_environment in M4-23-07 so the
+# sweeper's enumeration INHERITS that property instead of reimplementing it.
+#
+# Diagnostics go to STDERR so cmd_list_environments can treat stdout as data. That is
+# behaviour-preserving for lookup_environment's four call sites (:335, :369, :423, :466):
+# every one is `if [!] lookup_environment "$name"; then` and none captures its stdout.
+fetch_environment_list() {
+  local body try
+  body=$(jq -n --arg q "$ENV_LIST_QUERY" --arg p "$RAILWAY_PROJECT_ID" \
+    '{query: $q, variables: {p: $p}}')
+
+  for try in 1 2 3; do
+    if graphql_try "$body" "listing environments in project $RAILWAY_PROJECT_ID"; then
+      return 0
+    fi
+    if [ "$try" = "3" ]; then
+      echo "::error::Could not list environments in project $RAILWAY_PROJECT_ID after 3 attempts: $GQL_ERROR. Refusing to treat an unreadable environment list as 'the environment does not exist' — that would create a duplicate, or report an orphan as already reaped." >&2
+      exit 1
+    fi
+    echo "  (environment-list attempt $try) $GQL_ERROR — retrying in 5s ..." >&2
+    sleep 5
+  done
+}
+
 # lookup_environment <name>
 # Sets LOOKUP_ID and returns 0 when exactly one EPHEMERAL environment carries the name.
 # Returns 1 when the name is definitively absent (0 matches) — the only condition that
@@ -239,24 +270,11 @@ require_source_env() {
 #
 # A transport/GraphQL failure is NEVER reported as "absent": that conflation would let a
 # blip trigger a create and duplicate an environment that already exists. It is retried a
-# bounded number of times and then exits loudly. Arity violations are not transient and
-# exit immediately.
+# bounded number of times and then exits loudly (see fetch_environment_list). Arity
+# violations are not transient and exit immediately.
 lookup_environment() {
-  local name="$1" body count ephemeral try
-  body=$(jq -n --arg q "$ENV_LIST_QUERY" --arg p "$RAILWAY_PROJECT_ID" \
-    '{query: $q, variables: {p: $p}}')
-
-  for try in 1 2 3; do
-    if graphql_try "$body" "listing environments in project $RAILWAY_PROJECT_ID"; then
-      break
-    fi
-    if [ "$try" = "3" ]; then
-      echo "::error::Could not list environments in project $RAILWAY_PROJECT_ID after 3 attempts: $GQL_ERROR. Refusing to treat an unreadable environment list as 'the environment does not exist' — that would create a duplicate."
-      exit 1
-    fi
-    echo "  (lookup attempt $try) $GQL_ERROR — retrying in 5s ..."
-    sleep 5
-  done
+  local name="$1" count ephemeral
+  fetch_environment_list
 
   count=$(echo "$GQL_RESPONSE" | jq --arg n "$name" \
     '[.data.environments.edges[]?.node | select(.name == $n)] | length')
@@ -386,6 +404,44 @@ cmd_ensure_environment() {
   echo "  attempt 1: $err1"
   echo "  attempt 2: $err2"
   exit 1
+}
+
+# cmd_list_environments
+# M4-23-07. Prints one TAB-separated `<name>\t<isEphemeral>\t<id>` line per environment to
+# STDOUT and NOTHING else; every diagnostic goes to stderr, so the sweeper can read stdout
+# as data. Local divergence from the rest of this file (which logs to stdout) — the same
+# stdout-is-data discipline tools/prenv follows.
+#
+# DELIBERATELY UNFILTERED, for ENV_LIST_QUERY's stated reason (:86) plus one more:
+# `isEphemeral` is an ARGUMENT to `prenv sweep-decide`, and ShouldReap's first guard is
+# `!isEphemeral -> skip`. A server-side `isEphemeral: true` filter would pin that argument
+# to the constant `true` and make the guard — and its unit test — unreachable in
+# production, the exact "fail-safe logic its real caller can never reach" defect
+# M4-23-06 AC-8 was written against. Unfiltered also keeps `development` and any PERSISTENT
+# environment wearing a `pr-<N>` name VISIBLE in the sweeper's log as examined-and-skipped,
+# rather than silently absent.
+#
+# Exit 0 = list read and non-empty. Exit 1 = unreadable, or empty.
+cmd_list_environments() {
+  require_env
+  fetch_environment_list
+
+  local count
+  count=$(echo "$GQL_RESPONSE" | jq '[.data.environments.edges[]?.node] | length')
+  if [ "$count" = "0" ]; then
+    # `development` is persistent ([dev-env-status]) and always exists, so zero rows means
+    # a broken query shape or a token that lost project access — NOT an empty project.
+    echo "::error::Railway returned ZERO environments for project $RAILWAY_PROJECT_ID. The persistent 'development' environment always exists, so this is a broken query or a token that lost access — not an empty project. Refusing to report an empty list, which the sweeper would read as 'nothing to reap'." >&2
+    exit 1
+  fi
+
+  # Count logged so a human (and M4-23-09) can cross-check it against the Railway
+  # dashboard: ENV_LIST_QUERY requests no pageInfo, so a Railway-imposed default page size
+  # would truncate silently. Adding pageInfo blind would risk a GraphQL error on a query
+  # SHARED with ensure-environment, breaking every deploy — so this is observed, not
+  # engineered around.
+  echo "Enumerated $count environment(s) in project $RAILWAY_PROJECT_ID." >&2
+  echo "$GQL_RESPONSE" | jq -r '.data.environments.edges[]?.node | [.name, (.isEphemeral|tostring), .id] | @tsv'
 }
 
 # cmd_delete_environment <name>
@@ -1054,8 +1110,9 @@ case "${1:-}" in
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
+  list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>|delete-environment <name>>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

@@ -123,7 +123,7 @@ it doubles as the migrator. No context service is granted the migrator URL.
 > service for which a migration change would rebuild the image if Railway's committed
 > `watchPatterns` field were wired to anything (it isn't — add-a-service.md §3's gotcha;
 > since M3-16 every service's *instance-level* Watch Paths are cleared to empty and
-> `dev-env.yml`'s `resolve-env` job asserts that invariant at runtime, so triggering no
+> `dev-env.yml`'s `prepare-env` job asserts that invariant at runtime, so triggering no
 > longer depends on this field at all).
 
 **Dev vs CI, two different gates:**
@@ -278,14 +278,14 @@ runs the same suite against the `make dev-db` Postgres.
 
 ---
 
-## 7. Per-PR Postgres (M4-21) vs. the always-on `development` Postgres
+## 7. Per-PR Postgres (M4-23) vs. the always-on `development` Postgres
 
-Since M4-21, each PR forks its **own** ephemeral Railway environment — including its **own**
+Since M4-23, each PR gets its **own** ephemeral Railway environment — including its **own**
 Postgres, born empty and bootstrapped + migrated + seeded fresh at gateway boot
-(`internal/platform/db.Provision`, M4-21-04). There is no repo-side teardown workflow
-(`dev-env-cleanup.yml` was **deleted**, M4-21-11): Railway deprovisions a PR's whole
-environment — Postgres included — automatically when the PR closes. Losing that ephemeral
-DB's state costs nothing; nothing else depends on it once the PR is gone.
+(`internal/platform/db.Provision`, M4-21-04). When the PR closes, merged or not,
+`dev-env-teardown.yml` deletes that whole environment — Postgres included — and the daily
+`dev-env-sweeper.yml` reaps any the close event missed (M4-23). Losing that ephemeral DB's
+state costs nothing; nothing else depends on it once the PR is gone.
 
 The **`development` environment's own Postgres is different: it is stateful, persistent,
 and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
@@ -380,10 +380,12 @@ so the default `go` job and a bare `go test ./...` stay green without a database
 
 ## Appendix: Provisioning the dev Postgres (M2-01 subtask 4)
 
-**Scope note (M4-21):** this runbook provisions `development`'s own Postgres — the one
+**Scope note:** this runbook provisions `development`'s own Postgres — the one
 persistent, always-on service (§7). It is a one-time / re-provision runbook, not something
-run per-PR: a PR's own ephemeral Postgres is created automatically by Railway's
-environment-fork (task-131) and bootstrapped/migrated/seeded by the gateway at boot
+run per-PR: a PR's ephemeral Postgres comes from the `environmentCreate` fork that
+`dev-env.yml`'s `prepare-env` job issues (the *service* is inherited from `development`;
+the fork carries no deployment, so `prepare-env` deploys it explicitly), and is then
+bootstrapped/migrated/seeded by the gateway at boot
 (`db.Provision`, M4-21-04, `[superuser-dsn-on-gateway]` above) — no human runs the steps
 below for it.
 
@@ -435,14 +437,14 @@ real passwords live **only** in Railway.
    sets `DATABASE_MIGRATION_URL=${{Postgres.INVOICE_MIGRATOR_DATABASE_URL}}`. **Never** hand
    any service `${{Postgres.DATABASE_URL}}` (superuser — disables RLS).
 
-4. **Stays always-on:** there is no repo-side teardown workflow at all anymore
-   (`dev-env-cleanup.yml` was deleted, M4-21-11) — `development`, Postgres included, is
-   simply never torn down by CI (§7).
+4. **Stays always-on:** `development`, Postgres included, is never torn down by CI (§7).
+   The teardown workflows act only on ephemeral `pr-<N>` environments and refuse
+   `development` outright.
 
 ## Related
 
 - [add-a-service.md](./add-a-service.md) — provisioning compute services; §4 covers the
   per-service `cmd/<svc>/.env.example` and env-var conventions for service binaries.
-- [deploy-model.md](./deploy-model.md) — the PR-preview + scale-to-zero model the dev
-  Postgres is exempt from.
+- [deploy-model.md](./deploy-model.md) — the per-PR ephemeral-environment model (create →
+  deploy → verify → teardown → sweep) the dev Postgres is exempt from.
 - `db/bootstrap.sql`, root `Makefile`, `migrations/` — the harness this doc specifies.

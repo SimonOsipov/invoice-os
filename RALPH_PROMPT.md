@@ -2,13 +2,13 @@
 
 ## Overview
 
-Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — provisioned fresh at gateway boot, M4-21 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
+Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — created by `dev-env.yml`'s `prepare-env` job as a fork of `development`, M4-23; its database is bootstrapped, migrated and seeded at gateway boot, M4-21-04 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
 
 **Story unit:** one **build-plan task** = one story = one branch = one PR (e.g. `M3-04` "Validation v1"). RALPH decomposes it into sub-subtasks (`M3-04-01`, …) internally. This matches exactly how M1/M2 shipped (`task-20` → `task-20.1–.4`).
 
 Stories arrive in one of two states: **basic** (intent-only — Objective, Core ACs, Out of Scope; produced by `/pm-review`; zero Backlog subtasks) or **pre-planned** (Backlog subtasks already exist, or the Obsidian story is already architect-level like the M1/M2 stories). Basic stories are planned **in-run** by Phase 0.6; pre-planned stories skip Phase 0.6.
 
-**Invocation**: `/ralph <STORY-ID>` (e.g., `/ralph M3-04`). Each invocation runs one story, in its own worktree and branch. Since M4-21, every PR deploys to its **own ephemeral Railway environment** (`dev-env.yml` concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — not a shared lock), so multiple `/ralph` invocations MAY run concurrently, each verifying its own story against its own isolated environment with no cross-story interference.
+**Invocation**: `/ralph <STORY-ID>` (e.g., `/ralph M3-04`). Each invocation runs one story, in its own worktree and branch. Since M4-23, every PR deploys to its **own ephemeral Railway environment** (`dev-env.yml` concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — not a shared lock), so multiple `/ralph` invocations MAY run concurrently, each verifying its own story against its own isolated environment with no cross-story interference.
 
 ## Model Selection
 
@@ -45,12 +45,19 @@ gh pr checks [PR_NUMBER]
 # Aggregate per-push check (ci.yml): CI  — rolls up: go, frontend, clean-clone,
 #   migrations, docker-canary, rls, queue, audit (each gated on `changes`).
 # Deploy gate (dev-env.yml, fires when the PR is marked ready): await-ci +
-#   resolve-env (parallel, resolves the PR's own ephemeral Railway env) →
-#   deploy-gateway (migrator) → health-gate → deploy-context ×7 + deploy-spas ×3
-#   → fleet-gate → e2e (smoke + api + topology + demo). reset-seed is
-#   dispatch-path-only (targets `development`, not this PR's env). Required
-#   for completion.
+#   prepare-env (parallel, creates — or reuses — the PR's own ephemeral Railway
+#   env by forking `development`) → deploy-gateway (migrator) → health-gate →
+#   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api +
+#   topology + demo). reset-seed is dispatch-path-only (targets `development`,
+#   not this PR's env). Required for completion.
 ```
+
+Three other Railway workflows exist and are NOT part of this gate:
+`dev-env-teardown.yml` (deletes the PR's environment on close), `dev-env-sweeper.yml`
+(daily backstop that reaps orphaned per-PR environments), and `railway-invariants.yml`
+(asserts on every PR — drafts included — that Railway's PR Environments stay OFF and no
+deployment trigger exists). Environments are torn down by CI; never reach for destructive
+Railway MCP calls to clean one up.
 
 ### 4. ONE Branch, ONE PR per Story
 All subtasks of a single build-plan task share one feature branch and one draft PR, all in one worktree. Never mix subtasks from different stories on one branch.
@@ -274,6 +281,15 @@ Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This i
    BRANCH="$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD)"
    gh workflow run dev-env.yml --ref "$BRANCH"
    ```
+   - **The dispatch fallback is not equivalent to the PR gate.** A `workflow_dispatch` run
+     targets `development`, not this PR's environment, so a green dispatch run does not
+     prove the PR's fleet deploys. Use it only to diagnose; the gate is the `pull_request`
+     run.
+   - **`dev-env.yml` is paths-filtered** (`frontend/ packages/ e2e/ cmd/ internal/
+     migrations/ db/ tools/prenv/ scripts/ci/`, go.mod/sum, Dockerfile, Caddyfile,
+     package.json, pnpm-*, `.github/workflows/dev-env.yml`). `docs/**` and this file are
+     NOT listed, so a docs-only PR never fires the gate at all — do not dispatch-fake it
+     green; escalate to the user instead.
    - **Freshness check (mandatory):** `git -C "$WORKTREE_PATH" fetch origin` — if `origin/main` has commits not in the branch, `git merge origin/main`, push, and let `CI` + the deploy gate re-run on the merged head. A base missing main's migrations crash-loops the PR's own environment's backend (the gateway is the migrator).
 3. **Wait for the `dev-env.yml` run** on this branch and watch it to conclusion (concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — so this run does not queue behind any other story's deploy; only a second push to this SAME PR would supersede it):
    ```bash
@@ -302,7 +318,7 @@ git -C "$MAIN_CHECKOUT" worktree remove "$WORKTREE_PATH"
 git -C "$MAIN_CHECKOUT" branch -d "$BRANCH"
 ```
 
-Railway is expected to automatically deprovision the PR's ephemeral environment (Postgres included) when the PR closes, merged or not (M4-21) — there is no repo-side teardown workflow (`dev-env-cleanup.yml` was deleted, M4-21-11). This is Railway's documented behavior, not yet independently confirmed for this project — see `docs/deploy-model.md`'s caveat and task-131 (M4-21-07) Part 4 step 15. A `workflow_dispatch` run against the persistent `development` environment is unaffected and stays up.
+Teardown is repo-side, in two layers (M4-23). `dev-env-teardown.yml` deletes the PR's whole ephemeral environment (Postgres included) via `environmentDelete` on `pull_request: [closed]` — proven by experiment to fire on an *unmerged* close (PR #68, control run 29660556112 `opened`, decisive run 29660575019 `closed`/`merged=false`). It is the fast path and is best-effort: `pull_request: closed` is documented as firing inconsistently. `dev-env-sweeper.yml` is the authority — daily cron `17 4 * * *` plus `workflow_dispatch`, reaping only on positive evidence that a PR is closed or merged, never on age, never `development`. **Known limitation: `schedule:` runs only from the default branch, so the cron itself is unprovable until this merges; before then only the dispatch path is exercisable.** A `workflow_dispatch` run against the persistent `development` environment is unaffected and stays up. See `docs/deploy-model.md`.
 
 ---
 
@@ -390,7 +406,7 @@ gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databas
 | Hand-setting a goose migration order or shipping an untested `Down` | `make migrate-create` in the worktree; verify `migrate-up` + reversibility round-trip locally (the gateway migrates on deploy) |
 | Querying as superuser to "get past" RLS | Run inside `WithinTenantTx` as `invoice_app`; RLS isolation is the product |
 | Working in main checkout | Always work in `$WORKTREE_PATH`; main is the user's space |
-| Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-21) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
+| Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-23) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
 | Mixing subtasks from different stories on one branch | One story (build-plan task) per branch, always |
 | Title-parsing Backlog tasks to find a story's subtasks | Use the `story:<slug>` label |
 | Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs (or a build-plan row) = BASIC → run Phase 0.6 |

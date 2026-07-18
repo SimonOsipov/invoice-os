@@ -5,10 +5,13 @@ services; M7-01: opsconsole). Follow it verbatim — every value below is either
 convention or derived mechanically from the service name. If you find yourself making a
 judgment call, the recipe is broken: fix the recipe, then the service.
 
-**Railway target — the base environment a new service is created in.** Since M4-21 each
-PR also gets its own ephemeral, Railway-forked environment, but a new service is never
-created *in* one of those directly: it is created once, here, on `development`, and every
-subsequent PR fork inherits it automatically via Railway's own environment-fork mechanism.
+**Railway target — the base environment a new service is created in.** Since M4-23 each PR
+also gets its own ephemeral environment, forked from `development` by `dev-env.yml`'s
+`prepare-env` job, but a new service is never created *in* one of those directly: it is
+created once, here, on `development`, and every subsequent PR fork inherits it. Measured
+(M4-23-04): a fork inherits all 12 service instances with `watchPatterns: []`, the service
+domains (auto-renamed) and the Postgres TCP proxy. It does **not** inherit a Postgres
+*deployment* (started explicitly), a *volume*, or **sealed variables**.
 `$ENV` throughout this recipe always means `development`'s id below:
 
 | | ID |
@@ -109,9 +112,10 @@ recipe's original M1-06/M2-12 convention (a per-service path list, mirroring wha
 on `main`) after M3-16's cold-fleet-deploy incident, and per-PR ephemeral environments
 (M4-21) make emptiness load-bearing rather than a nice-to-have:
 
-- **Why empty is now required.** Since M4-21 every deploy target is either a *fresh
-  ephemeral PR environment* (Railway forks the whole service graph from `development` for
-  each PR) or a `workflow_dispatch` run against `development` — either way, `dev-env.yml`
+- **Why empty is now required.** Every deploy target is either a *fresh ephemeral PR
+  environment* (`dev-env.yml`'s `prepare-env` job forks the whole service graph from
+  `development` via `environmentCreate`) or a `workflow_dispatch` run against
+  `development` — either way, `dev-env.yml`
   needs **every** service to actually build and deploy on `railway up`, regardless of
   whether that particular run's diff touches the service's own paths. A non-empty Watch
   Paths list makes `railway up` **skip** (no deployment created, `no changes detected in
@@ -135,7 +139,7 @@ on `main`) after M3-16's cold-fleet-deploy incident, and per-PR ephemeral enviro
   this one). **After creating the service, explicitly set (or confirm) instance
   `watchPatterns: []`** — do not leave it to chance, and never "helpfully" populate it with
   a path list.
-- **Runtime-enforced, not just documented (M4-21-09):** `dev-env.yml`'s `resolve-env` job
+- **Runtime-enforced, not just documented (M4-21-09):** `dev-env.yml`'s `prepare-env` job
   queries every non-Postgres service instance's Watch Paths in the target environment on
   every run and **fails the run, naming the offender(s)**, if any are non-empty (Decision
   `[watch-paths-asserted]`) — a service accidentally recreated with a populated Watch Paths
@@ -216,6 +220,12 @@ returned by step 1.
      source: { repo: "SimonOsipov/invoice-os" }, branch: "main"
    }) { id } }
    ```
+   > ⚠️ **This step may attach a deployment trigger, which now reds every open PR.** It did
+   > when verified on 2026-07-05 (`branch: main`, `checkSuites: false`); whether it still
+   > does is unverified. `railway-invariants.yml` fails **any** PR while **any** deployment
+   > trigger exists in **any** environment. **Query the service's deployment triggers now
+   > and `deploymentTriggerDelete` any that exist** — before continuing, not at the end of
+   > the recipe. Full rationale under step 6.
 2. **Point it at the config file:**
    ```graphql
    mutation { serviceInstanceUpdate(serviceId: "$SVC", environmentId: "$ENV",
@@ -247,18 +257,24 @@ returned by step 1.
      environmentId: "$ENV", serviceId: "$SVC", targetPort: 8080 }) { domain } }
    ```
 
-Auto-deploy on push to `main` comes with step 1 (the deployment trigger is created with
-the service; verified live: `branch: main`, `checkSuites: false`). Note `checkSuites:
-false` means Railway deploys on push **without waiting for GitHub CI** — current
-behavior, kept as-is; `deploymentTriggerUpdate` is the knob if we later gate deploys
-on green CI.
+> ⚠️ **Deployment triggers are now forbidden — remove one before opening a PR.**
+> `railway-invariants.yml` (M4-23-02) fails **any** PR while **any** deployment trigger
+> exists in **any** environment: Railway must never deploy this project outside CI's
+> ordering. **Mandatory step: after creating the service, query its deployment triggers and
+> delete any that exist** (`deploymentTriggerDelete`), then confirm the invariants workflow
+> is green.
+>
+> This recipe was verified 2026-07-05, when `serviceCreate` did attach a trigger
+> (`branch: main`, `checkSuites: false`). M4-23 measured `deploymentTriggers = 0`
+> project-wide today. Whether `serviceCreate` **still** creates one is **unverified** —
+> check, do not assume either way.
 
 ## 6. Verification checklist — "correctly added" means all three
 
 1. **Healthy:** deployment status `SUCCESS`; `/healthz` answers on the private network
    (for public services, `curl https://<domain>/healthz` — SPAs: `/health`).
 2. **Instance Watch Paths are really empty** (this catches the §3 invariant — the same
-   query `dev-env.yml`'s `resolve-env` job runs on every run, M4-21-09):
+   query `dev-env.yml`'s `prepare-env` job runs on every run, M4-21-09):
    ```graphql
    query { environment(id: "$ENV") { serviceInstances { edges { node {
      serviceName watchPatterns } } } } }

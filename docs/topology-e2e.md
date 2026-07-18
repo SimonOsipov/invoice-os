@@ -29,13 +29,13 @@ M2-14.4).
 There is no standalone topology workflow. These assertions run automatically as the
 post-deploy verification steps of `.github/workflows/dev-env.yml`, on every ready
 (non-draft) PR — after the fleet is deployed to that PR's own ephemeral Railway
-environment (M4-21) and its Postgres is bootstrapped + seeded fresh at gateway boot
+environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway boot
 (M4-21-04), alongside the smoke, api, and demo suites. `dev-env.yml` flow:
 
 ```
-resolve-env ──> poll for this run's target environment (this PR's ephemeral fork, or
-                `development` on workflow_dispatch) ──> assert Watch Paths empty
-                (M3-16 invariant) ──> discover the 4 public URLs fresh
+prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
+                workflow_dispatch: target `development` itself) ──> assert Watch Paths
+                empty (M3-16 invariant) ──> discover the 4 public URLs fresh
 gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
             ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
@@ -47,8 +47,9 @@ reset-seed (`db/reset.dev.sql` + `db/seed.dev.sql`, superuser) is **dispatch-pat
 now (M4-21-06) — it runs only on a `workflow_dispatch` run against the persistent
 `development` environment, never on a PR run, whose own Postgres is born empty and
 self-seeds at gateway boot instead (see "The data-only reset" below). The PR's environment
-then stays up while the PR is open — Railway deprovisions it automatically on close (see
-[deploy-model.md](./deploy-model.md)); `development` is never deprovisioned. `dev-env.yml`
+then stays up while the PR is open — `dev-env-teardown.yml` deletes it when the PR closes,
+merged or not, and the daily `dev-env-sweeper.yml` reaps any that the close event missed
+(see [deploy-model.md](./deploy-model.md)); `development` is never torn down. `dev-env.yml`
 remains dispatchable by hand (`workflow_dispatch`) to re-run the deploy + verify flow
 against `development` on demand.
 
@@ -56,21 +57,29 @@ against `development` on demand.
 
 Most of the workflow's inputs are now **discovered at runtime** rather than pre-applied —
 see [deploy-model.md](./deploy-model.md) for the full per-PR-environment prerequisites list
-(Railway PR Environments enabled, the account-scoped `RAILWAY_API_TOKEN`, the
-empty-Watch-Paths invariant). What remains one-time / human-applied:
+(Railway PR Environments **OFF — and they must stay off**; the account-scoped
+`RAILWAY_API_TOKEN`; the empty-Watch-Paths invariant). CI creates each PR environment
+itself, so the PR Environments feature is not needed — and `railway-invariants.yml` **fails
+every PR** while it is enabled or while any deployment trigger exists. Do not turn it on.
+What remains one-time / human-applied:
 
 ### Railway variables (durable reference variables, not per-run `--set`)
 
 `app.VITE_GATEWAY_URL`, `gateway.GATEWAY_MOCK_ISSUER`, and `gateway.CORS_ALLOWED_ORIGINS`
-are durable Railway **reference variables** on `development` (M4-21-05, task-129) — Railway
-forks them into every PR environment along with the rest of `development`'s variable
-topology, so the workflow no longer sets any of them per-run.
+are durable Railway **reference variables** on `development` (M4-21-05, task-129). They are
+carried into every PR environment along with the rest of `development`'s variable topology
+by the `environmentCreate` fork `prepare-env` issues (not by Railway's PR Environments
+feature, which is off), so the workflow no longer sets any of them per-run.
+
+**Exception, measured (M4-23-04): sealed variables do NOT fork.** A sealed variable on
+`development` would simply be absent in every PR environment. `prepare-env` therefore fails
+loudly if `development` holds any — do not add one.
 
 **Assumed already present on the gateway (from M2-12/M2-13):** `AUTH_ISSUER`, and
 `AUTH_JWKS_URL` pointing at the gateway's **own**
 `<discovered gateway URL>/.well-known/jwks.json` so the mock round trip verifies — this,
-too, is forked per-environment by Railway. If the round trip 401s on a PR environment, this
-is the first thing to check.
+too, is carried into each PR environment by that same fork. If the round trip 401s on a PR
+environment, this is the first thing to check.
 
 ### GitHub secrets
 
@@ -113,7 +122,7 @@ why an earlier attempt to fix this via `railway.json` had no effect.)
 **Fix / invariant, now runtime-asserted:** service-level Watch Paths were cleared to empty,
 out-of-band, on all 11 non-Postgres services. With Watch Paths empty, `railway up --ci
 --service <svc>` always builds and deploys the working tree — for every service, on every
-`dev-env.yml` run. `resolve-env` (M4-21-09) additionally **asserts** every non-Postgres
+`dev-env.yml` run. `prepare-env` (M4-21-09, renamed M4-23) additionally **asserts** every non-Postgres
 service instance in the target environment still reports empty Watch Paths and fails the
 run, naming the offender(s), if not — a regression can no longer reach the deploy steps
 silently. This is Railway-side config applied once, not something expressed in
@@ -129,6 +138,7 @@ cold 11-service build, not the exception a warm redeploy used to be (Decision
 ## Related
 
 - [deploy-model.md](./deploy-model.md) — the per-PR-environment deploy + verify flow this
-  suite runs inside of, and Railway's automatic teardown on PR close.
+  suite runs inside of, and the repo-side teardown (`dev-env-teardown.yml` on PR close,
+  `dev-env-sweeper.yml` as the daily backstop).
 - `e2e/README.md` — the smoke + topology suites, run commands, and target-URL conventions.
 - `db/seed.dev.sql` — the canonical fixtures re-applied on every run.

@@ -1,21 +1,19 @@
-# Dev Deploy Model — per-PR ephemeral environments (M2-14, reworked M4-21)
+# Dev Deploy Model — per-PR ephemeral environments (M2-14, reworked M4-21, M4-23)
 
 How the full fleet — the gateway, the 7 context services, and the three frontend SPAs
 (`landing`, `app`, `ops-console`) — is deployed to Railway. Adopted in M2-14 (one unified
-fleet deploy, superseding the M1-08 split model); reworked in M4-21 so **each PR deploys to
-its own ephemeral Railway environment** instead of every PR sharing one `development`
-environment.
+fleet deploy, superseding the M1-08 split model); reworked in M4-21 to end the shared-
+`development` model, and completed in **M4-23**, which is when per-PR environments started
+actually existing: CI now creates, tears down and sweeps them itself.
 
 ## The model
 
 - **Open / update a non-draft PR** → CI deploys and verifies the **whole fleet** together,
   coherently, from the PR's code, into a **fresh ephemeral Railway environment forked from
   `development`** — never into `development` itself. (`.github/workflows/dev-env.yml`)
-  > **Correction (M4-23).** This previously said the fork happens "via Railway's own PR
-  > Environments feature (task-131)". That was **false**. Railway is not subscribed to
-  > this repo's PR events, so its PR Environments feature never created anything here —
-  > see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below. M4-23
-  > replaces it with self-provisioning from CI.
+  > The fork is issued by **CI**, not by Railway's PR Environments feature — that feature
+  > never created anything here (Railway is not subscribed to this repo's PR events) and is
+  > OFF, see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below.
 - **Close a PR (merged or abandoned)** → `.github/workflows/dev-env-teardown.yml`
   (**M4-23-05**) deletes that PR's **whole ephemeral environment** via `environmentDelete`,
   at environment granularity (Decision `[teardown-deletes-environment]`) — not the old
@@ -32,19 +30,16 @@ environment.
   fails the run loudly (exit 1), because a red teardown run is the only notification
   channel there is. An already-absent environment is **success** (exit 0) — nothing to
   delete is the desired end state, and the sweeper may simply have got there first.
-  > **Corrected twice (M4-23).** This originally claimed Railway automatically
-  > deprovisions the PR's environment, Postgres included, on close. That was Railway's
-  > *documented PR-Environments behavior* — a feature that is OFF and never applied to
-  > this project (see [Railway PR Environments are OFF](#railway-pr-environments-are-off)),
-  > never observed happening here. It was then corrected to "nothing is deprovisioned, a
-  > teardown mechanism is still to be built — M4-23-06", which was right about the gap but
-  > **misattributed the subtask**: teardown is **M4-23-05**; M4-23-06 is `ShouldReap`, the
-  > sweeper's pure reap predicate. M4-23-05 closed the gap — see
-  > [Teardown](#teardown-m4-23-05) below.
+  > Railway tears down nothing here — its PR Environments feature is OFF and never
+  > applied to this project (see
+  > [Railway PR Environments are OFF](#railway-pr-environments-are-off)). Teardown is
+  > **M4-23-05**, below; M4-23-06 is `ShouldReap`, the sweeper's pure reap predicate.
 - **`workflow_dispatch`** → targets the **persistent `development` environment** directly
   (never an ephemeral PR environment) — the same fleet-deploy + verify flow, plus the
-  reset-seed step (M4-21-06), still serialized against itself (`dev-preview-development`-
-  style concurrency, keyed by `github.ref` for dispatch runs).
+  reset-seed step (M4-21-06). Its concurrency group is
+  `dev-preview-${{ github.event.pull_request.number || github.ref }}`, so a dispatch run's
+  group is `dev-preview-refs/heads/<branch>` — it serializes only against **other dispatch
+  runs from the same ref**, not across refs.
 - **`development` itself** is a stable, always-up base + demo environment (Decision
   `[dev-env-status]`) — it is the fork base every PR environment is created from, and it is
   what `make demo-reset` / live demo calls point at. It is **not** torn down by any
@@ -59,9 +54,11 @@ across PRs the way `development`'s own four URLs (still constant, still hardcode
 
 ```
 PR opened ──> dev-env.yml:
-                resolve-env: poll for this PR's ephemeral environment (tools/prenv's
-                             pure Match, M4-21-08) ──> assert Watch Paths empty (M3-16
-                             invariant, now runtime-asserted) ──> discover the 4 URLs
+                prepare-env: derive `pr-<N>` (prenv.Name) ──> environmentCreate, forked
+                             from `development` (skipInitialDeploys, create-or-reuse)
+                             ──> deploy Postgres + probe ──> assert Watch Paths empty
+                             (M3-16 invariant, now runtime-asserted) ──> discover the
+                             4 URLs
                 gateway ──> gate on /healthz (schema migrated + seeded at boot, M4-21-04)
                 ──> 7 context services + 3 SPAs (app is gateway-wired)
                 ──> verify: smoke (landing + ops-console) + api + topology (app login,
@@ -71,7 +68,7 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
                ephemeral environments ──> environmentDelete ──> confirm by re-query.
                Best-effort; the daily sweeper (M4-23-07) is the authority.
 
-workflow_dispatch ──> targets `development` directly (persistent, never deprovisioned)
+workflow_dispatch ──> targets `development` directly (persistent, never torn down)
                    ──> same deploy + verify flow, PLUS reset-seed (data-only, superuser)
 ```
 
@@ -80,8 +77,8 @@ workflow_dispatch ──> targets `development` directly (persistent, never depr
 The old M2-14 model reasoned "dev is single-branch, single-agent: only one PR is ever
 meaningfully 'the' dev env at a time" — true when stories ran one at a time, but it meant
 every PR queued behind `dev-env.yml`'s single shared concurrency lock, serializing all CI
-deploys. M4-21 removes that constraint: each PR forks its own environment, so
-`dev-env.yml`'s concurrency group is now keyed **per-PR**
+deploys. M4-21 designed the constraint away and M4-23 delivered it: each PR forks its own
+environment, so `dev-env.yml`'s concurrency group is now keyed **per-PR**
 (`dev-preview-${{ github.event.pull_request.number || github.ref }}`) — two different PRs'
 groups never collide, so their deploys run **fully in parallel**. A `workflow_dispatch` run
 has no PR number and falls back to `github.ref` (constant across dispatch runs), so
@@ -101,9 +98,9 @@ Railway dashboard on **2026-07-18**, so no committed command ever observed the p
 **Why it is off.** It never worked here and never could. Railway is not subscribed to
 this repo's pull-request events: the fleet is deployed by `railway up` (a CLI push from
 CI), and the project has **zero deployment triggers**, so no service is attached to
-GitHub. With nothing subscribed, `prDeploys = true` produced exactly nothing. M4-23
-established this: the flag was on, the base environment was set correctly, and the
-feature was completely **inert**.
+GitHub. With nothing subscribed, `prDeploys = true` produced exactly nothing — the flag
+was on and the feature was completely **inert**. (That the flag was on is a dashboard
+observation by hand, not a CI measurement; see the "before" caveat above.)
 
 **First CI observation (2026-07-18), against the live Railway API:**
 
@@ -114,8 +111,10 @@ prDeploys=false botPrEnvironments=false focusedPrEnvironments=false baseEnvironm
 Note `baseEnvironmentId=null` and `deploymentTriggers=0`. The project has **no fork base
 configured at all** and **nothing subscribed to GitHub** — so even with `prDeploys=true`
 the feature had neither a base to fork from nor an event to fire on. This is the direct
-measurement behind the claim above; `dev-env.yml`'s old header comment asserting
-"PR Environments ON, base = `development`" was wrong on both counts.
+measurement behind the claim above. `dev-env.yml`'s old header comment asserted
+"PR Environments ON, base = `development`": the first half was true at the time and is now
+false by design; the second half was **never** true — no base was ever configured. What the
+comment implied — that this produced working PR environments — was false throughout.
 
 **`prDeploys` is not the load-bearing condition — `deploymentTriggers == 0` is.**
 Asserting only that a suggestively-named flag reads `false` is what produced M4-23 in the
@@ -182,7 +181,10 @@ Railway auto-deploys the service on `development` outside CI's control, alongsid
 Disabling auto-deploy does **not** affect `railway up` — that uploads a deployment
 directly and keeps working. Only push-triggered auto-deploy stops.
 
-**Run this once, after `dev-env.yml` is on `main`:**
+**Done, and now CI-asserted.** M4-23 measured `deploymentTriggers = 0` across every
+environment, and `railway-invariants.yml` re-asserts that on every PR — any trigger
+reappearing fails the build. The procedure below is retained for the case where a service
+is recreated and arrives with a trigger attached.
 
 For each of the 11 services (gateway, the 7 context services, and `landing`, `app`,
 `ops-console`) **on the `development` environment**:
@@ -194,12 +196,17 @@ For each of the 11 services (gateway, the 7 context services, and `landing`, `ap
 Verify: push a trivial no-op commit to `main` and confirm no service redeploys
 on `development` (Deployments tab shows nothing new). Open a throwaway PR and confirm
 `dev-env.yml` deploys + verifies its own ephemeral environment, then close it and confirm
-Railway deprovisions that environment automatically.
+`dev-env-teardown.yml` ran and the `pr-<N>` environment is gone. Expect
+`railway-invariants.yml` to be **red** on that throwaway PR until the last trigger is gone —
+that is the invariant working, not a fault. If it is still there, the
+daily sweeper reaps it within a day.
 
 ### Rollback
 
 To revert to the M1-06 always-on single-environment model: re-enable auto-deploy per
-service on `development` (Settings → **Enable**), and disable/remove `dev-env.yml`.
+service on `development` (Settings → **Enable**), and disable/remove `dev-env.yml`,
+`dev-env-teardown.yml`, `dev-env-sweeper.yml` and `railway-invariants.yml` — the last of
+these will otherwise fail every PR once the deployment triggers are back.
 
 ## Cold-fleet recovery (M3-16)
 
@@ -223,7 +230,7 @@ services, and `landing`/`app`/`ops-console`) via the Railway API, out-of-band, o
 With Watch Paths empty, `railway up` reverts to its documented default — it always uploads
 and builds the working tree, for every service, on every run (Approach 3: always-rebuild).
 Per-PR environments promote this from a documented human invariant to a **mandatory
-runtime assertion**: `dev-env.yml`'s `resolve-env` job (M4-21-09) queries every non-Postgres
+runtime assertion**: `dev-env.yml`'s `prepare-env` job (M4-21-09, renamed M4-23) queries every non-Postgres
 service instance's Watch Paths in the target environment and **fails the run, naming the
 offending service(s)**, if any are non-empty (Decision `[watch-paths-asserted]`) — a silent
 regression can no longer reach the deploy steps undetected. If a service is ever deleted
@@ -280,6 +287,27 @@ equals `RAILWAY_DEV_ENVIRONMENT_ID`. The second catches what the first structura
 Railway ever mislabelling `development` as ephemeral, or a human renaming it to `pr-<N>`.
 The subcommand takes a **name and never an id** for the same reason: an id argument would
 let a caller pass `development`'s id straight through and bypass the ephemeral filter.
+
+## Sweeper (M4-23-07) — the authority
+
+`.github/workflows/dev-env-sweeper.yml` is what actually guarantees no environment leaks.
+Teardown is a fast path that can miss (`pull_request: closed` is documented as firing
+inconsistently, and merge conflicts suppress `pull_request` events entirely); the sweeper
+reconciles regardless.
+
+- **Schedule:** cron `'17 4 * * *'` (daily), plus `workflow_dispatch`. Not on the hour —
+  GitHub oversubscribes on-the-hour crons and drops or delays them.
+- **Reap predicate** (`prenv.ShouldReap`, M4-23-06): reaps **only** on positive evidence
+  that the environment's PR is CLOSED or MERGED. **Never on age** — an age TTL can kill an
+  environment someone is actively using. Never `development`. An environment whose PR state
+  cannot be determined is left alone.
+- **Concurrency:** single-flight against itself (`dev-env-sweeper`). It deliberately does
+  *not* join teardown's `dev-preview-<N>` lock — one sweep spans many PRs and has no single
+  N. The residual race (sweeping `pr-<N>` while `dev-env.yml` deploys it) is accepted: it
+  requires PR N to be closed, in which case deleting is correct anyway.
+
+**Known limitation:** `schedule:` runs only from the **default branch**, so the daily cron
+cannot be exercised until this merges. Before then only `workflow_dispatch` is provable.
 
 ## What a fork actually inherits (M4-23-04, measured)
 

@@ -37,6 +37,9 @@ on:
       - 'migrations/**'
       - 'db/**'
       - 'tools/prenv/**'
+      # M4-23-08: the create/reconcile/teardown/sweep logic lives here now, so a PR
+      # touching it must fire the gate that validates it.
+      - 'scripts/ci/**'
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'

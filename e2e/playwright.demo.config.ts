@@ -13,6 +13,8 @@ import { defineConfig, devices } from '@playwright/test'
 // entities within it — see the story's Seeding-cost watch-item).
 export default defineConfig({
   testDir: './demo',
+  // Playwright suites are *.spec.ts; *.test.ts are vitest (see playwright.api.config.ts).
+  testMatch: '**/*.spec.ts',
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

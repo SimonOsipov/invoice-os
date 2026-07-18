@@ -15,6 +15,11 @@ import { defineConfig } from '@playwright/test'
 // contention) — see the story's Decision A8.
 export default defineConfig({
   testDir: './api',
+  // Playwright's default testMatch also matches *.test.ts, which are this package's
+  // vitest unit tests (see vitest.config.ts for the mirror-image exclusion). Collecting
+  // one aborts the ENTIRE run — "0 tests in 0 files", reported as a suite failure —
+  // so restrict Playwright to *.spec.ts.
+  testMatch: '**/*.spec.ts',
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

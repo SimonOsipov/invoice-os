@@ -442,6 +442,12 @@ jobs:
         run: pnpm --filter @invoice-os/app test
       - name: Unit tests (ops-console)
         run: pnpm --filter @invoice-os/ops-console test
+      # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
+      # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
+      # until this line. Cheap and deployment-free: they assert local seam logic
+      # (requireDbInCI, resolveTarget), not anything about a live environment.
+      - name: Unit tests (e2e seams)
+        run: pnpm --filter @invoice-os/e2e test:unit
 
   # Unconditional clean-clone guard (M1-09). The path-filtered go/frontend jobs
   # above only rebuild the half that changed, and the frontend job warms the pnpm

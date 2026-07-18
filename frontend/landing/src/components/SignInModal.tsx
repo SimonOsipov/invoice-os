@@ -72,8 +72,11 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
   function verify() {
     if (loading || !persona) return
     if (code.join('') === DEMO_CODE) {
-      setLoading(true)
       const dest = destUrl(persona)
+      // No-gateway path (M4-21): the target SPA's VITE_* URL isn't configured — stay put
+      // rather than navigate to null (destUrl no longer defaults to a hardcoded deploy).
+      if (!dest) return
+      setLoading(true)
       redirectTimer.current = setTimeout(() => {
         window.location.href = dest
       }, 1100)

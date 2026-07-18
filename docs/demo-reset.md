@@ -27,12 +27,16 @@ It is idempotent — re-running always converges to the same 27 rows, never accu
 DATABASE_SUPERUSER_URL_DEV="<deployed-dev superuser DSN>" make demo-reset
 ```
 
-**The one env var:** `DATABASE_SUPERUSER_URL_DEV` — the deployed-dev Postgres superuser
-DSN (Railway → Postgres → Connect → Public Network). Same secret `dev-env.yml` uses to
-seed the dev DB — see [topology-e2e.md](./topology-e2e.md) for where it comes from.
-Superuser is required because `tenants`/`business_entities` are `FORCE ROW LEVEL
-SECURITY`, and re-enabling a rule or curating another tenant's-worth of client rows needs
-`BYPASSRLS`.
+**The one env var:** `DATABASE_SUPERUSER_URL_DEV` — the deployed `development` Postgres
+superuser DSN (Railway → Postgres → Connect → Public Network), supplied by hand on the
+command line each time. This is a **local-only** variable, unrelated to the
+same-named `DATABASE_SUPERUSER_URL_DEV` GitHub Actions secret that `dev-env.yml` used to
+read — no workflow reads that secret anymore (M4-21-10): `dev-env.yml` discovers this DSN
+fresh per run via the Railway API instead (see [topology-e2e.md](./topology-e2e.md)), so
+this local variable is unaffected regardless of whether that now-unused secret is deleted
+from the repo. Superuser is required
+because `tenants`/`business_entities` are `FORCE ROW LEVEL SECURITY`, and re-enabling a
+rule or curating another tenant's-worth of client rows needs `BYPASSRLS`.
 
 **When to run it:** right before a firm call — it takes seconds and needs no other setup.
 
@@ -54,6 +58,7 @@ or CI wiring that runs it automatically. Nobody is meant to trigger it from the 
 - `db/demo-reset.sql` — the guarded SQL itself.
 - `internal/platform/db/demo_reset_test.go` — the DB-backed test suite proving the guard,
   rule re-enable, and clear/curate behavior.
-- [topology-e2e.md](./topology-e2e.md) — the sibling deployed-dev reset/seed flow
-  (`db/reset.dev.sql` + `db/seed.dev.sql`) this command deliberately does not reuse (that
-  one wipes *all* tenants; this one is scoped to the demo tenant only).
+- [topology-e2e.md](./topology-e2e.md) — the sibling `development`-only, dispatch-path-only
+  reset/seed flow (`db/reset.dev.sql` + `db/seed.dev.sql`, still present — M4-21-06 scoped
+  it to `workflow_dispatch` only, never deleted it) this command deliberately does not
+  reuse (that one wipes *all* tenants; this one is scoped to the demo tenant only).

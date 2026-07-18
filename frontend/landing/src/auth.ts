@@ -64,16 +64,26 @@ export const LANDING_PERSONAS: LandingPersona[] = [
   },
 ]
 
-const trim = (s: string) => s.trim().replace(/\/+$/, '')
-const appBase = () => trim(import.meta.env.VITE_APP_URL ?? 'https://app-development-3b4b.up.railway.app')
-const opsBase = () => trim(import.meta.env.VITE_OPS_URL ?? 'https://ops-console-development.up.railway.app')
+// Mirrors gatewayBase()'s null-when-unset contract (@invoice-os/api-client/client,
+// C8b/C8c): each PR now deploys to its own ephemeral Railway environment with an
+// unpredictable domain suffix (M4-21), so a hardcoded dev-deploy fallback would silently
+// route a sign-in to the wrong environment. Return null rather than defaulting.
+const resolveBase = (v: string | undefined): string | null => {
+  const trimmed = (v ?? '').trim().replace(/\/+$/, '')
+  return trimmed || null
+}
+const appBase = () => resolveBase(import.meta.env.VITE_APP_URL)
+const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
 
 // destUrl is the SPA the persona's role may open. The Platform app gets ?persona=<id>
 // so it auto-signs-in that persona (reusing M2-13's mint + /me path); the Ops Console
-// is opened directly (its token consumption arrives at M7).
-export function destUrl(p: LandingPersona): string {
+// is opened directly (its token consumption arrives at M7). Returns null — the
+// documented no-gateway path — when the target SPA's URL isn't configured; callers must
+// not navigate on null.
+export function destUrl(p: LandingPersona): string | null {
   if (p.target === 'ops') return opsBase()
-  return `${appBase()}?persona=${p.id}`
+  const base = appBase()
+  return base ? `${base}?persona=${p.id}` : null
 }
 
 // maskedEmail hides the local part except its first character, e.g. c•••@okafor.ng.

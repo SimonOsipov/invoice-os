@@ -16,17 +16,25 @@
 -- migrator (table owner) and the app (query identity) are deliberately distinct, and
 -- neither is the Railway superuser. See docs/migrations.md.
 --
--- Run ONCE as the Postgres superuser, via psql (uses \set and :'var' interpolation):
+-- Run ONCE as the Postgres superuser. Password values come from three session GUCs
+-- the caller sets on the SAME connection before this file runs — no psql-only
+-- meta-commands or client-side interpolation, so both psql and a pgx caller (the
+-- migration runner, M4-21-03) execute this identical file (Decision
+-- [one-bootstrap-file]):
 --   psql "$DATABASE_SUPERUSER_URL" -v ON_ERROR_STOP=1 \
---     -v migrator_password="…" -v app_password="…" -v reader_password="…" -f db/bootstrap.sql
--- `make db-bootstrap` does exactly this with dev-default passwords. Idempotent:
--- safe to re-run (it also rotates the passwords and re-asserts the attributes).
-
-\set ON_ERROR_STOP on
+--     -c "SELECT set_config('fiscalbridge.migrator_password', '…', false)" \
+--     -c "SELECT set_config('fiscalbridge.app_password',      '…', false)" \
+--     -c "SELECT set_config('fiscalbridge.reader_password',   '…', false)" \
+--     -f db/bootstrap.sql
+-- `make db-bootstrap` / `make dev-db` do exactly this with dev-default passwords.
+-- Idempotent: safe to re-run (it also rotates the passwords and re-asserts the
+-- attributes). Fails closed: a missing/empty GUC raises before any password is
+-- touched (step 3 below).
 
 -- 1. Create the roles if they don't exist. PG has no CREATE ROLE IF NOT EXISTS, and
---    psql does NOT interpolate :'var' inside a dollar-quoted block — so create here
---    without a password, then set passwords at top level (step 3).
+--    CREATE ROLE ... PASSWORD does not accept a bind parameter/GUC directly — so
+--    create here without a password, then set passwords at step 3 via
+--    EXECUTE format(...).
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'invoice_migrator') THEN
@@ -49,10 +57,35 @@ ALTER ROLE invoice_migrator      WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB N
 ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 
--- 3. Set / rotate passwords (top level so psql :'var' interpolation applies).
-ALTER ROLE invoice_migrator      PASSWORD :'migrator_password';
-ALTER ROLE invoice_app           PASSWORD :'app_password';
-ALTER ROLE invoice_tenant_reader PASSWORD :'reader_password';
+-- 3. Set / rotate passwords, read from three session GUCs the caller sets beforehand
+--    (`fiscalbridge.migrator_password` / `.app_password` / `.reader_password`) —
+--    replaces psql's :'var' client-side interpolation, which a pgx caller has no
+--    equivalent of. Fail closed: every GUC is checked BEFORE any password is
+--    applied, so a partial run never rotates one role while leaving another's GUC
+--    missing. current_setting(name, true)'s `true` = missing_ok, so an unset GUC
+--    reads NULL (coalesced to '' below) instead of erroring here — the explicit
+--    RAISE is what turns that into a loud failure. An explicitly-set empty string
+--    is treated identically to unset (both coalesce to ''): neither is ever a valid
+--    password, so both fail closed the same way. CREATE/ALTER ROLE ... PASSWORD
+--    does not accept a bind parameter, which is why this needs EXECUTE at all;
+--    %L (literal quoting) is what makes that EXECUTE format(...) injection-safe.
+DO $$
+BEGIN
+  IF coalesce(current_setting('fiscalbridge.migrator_password', true), '') = '' THEN
+    RAISE EXCEPTION 'fiscalbridge.migrator_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  END IF;
+  IF coalesce(current_setting('fiscalbridge.app_password', true), '') = '' THEN
+    RAISE EXCEPTION 'fiscalbridge.app_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  END IF;
+  IF coalesce(current_setting('fiscalbridge.reader_password', true), '') = '' THEN
+    RAISE EXCEPTION 'fiscalbridge.reader_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  END IF;
+
+  EXECUTE format('ALTER ROLE invoice_migrator      PASSWORD %L', current_setting('fiscalbridge.migrator_password'));
+  EXECUTE format('ALTER ROLE invoice_app           PASSWORD %L', current_setting('fiscalbridge.app_password'));
+  EXECUTE format('ALTER ROLE invoice_tenant_reader PASSWORD %L', current_setting('fiscalbridge.reader_password'));
+END
+$$;
 
 -- 4. Grants.
 --    Migrator owns the objects it creates → needs CREATE + USAGE on the schema.

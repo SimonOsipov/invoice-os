@@ -1,43 +1,12 @@
-// M4-04-08 (task-115): the api/ suite's env-gated superuser DB access, for
-// PERF-03/04/05's assertions that have NO API surface today:
+// Superuser DB access for PERF-03/04/05 assertions with no HTTP surface:
+// the rule_set_versions uuid (validate echoes only the integer version) and
+// invoice_status_history (no read API).
 //
-//   - v2's rule_set_versions.id (uuid) -- /v1/validate only echoes the
-//     INTEGER version (client.ts's ValidateResult.rule_set_version); the uuid
-//     internal/invoice stamps onto invoices.rule_set_version_id is never
-//     returned by any GET/list/validate response, so PERF-03/04's "assert it
-//     equals v2's actual uuid, queried live" (never a hardcoded literal, per
-//     the task's Stage-1 addendum -- both this story's pin detectors watch
-//     for exactly that) has no HTTP path -- only the DB has it.
+// correctInvoiceVAT is NOT in that category any more: PATCH /v1/invoices/{id}
+// shipped in M4-05-03 (7bd2a8c). It should move to HTTP.
 //
-//   - invoice_status_history has no read API at all (mirrors day30.spec.ts's
-//     db.ts precedent for audit_log, which likewise has none) -- PERF-05's
-//     Day-60 stamp-gate check (draft->validated, per this story's "Ships when
-//     true" clause) can only be read from Postgres.
-//
-//   - PERF-05's "correct a failing invoice" step ALSO has no HTTP path:
-//     internal/invoice/store.go's Store.Update exists, but cmd/invoice/main.go
-//     wires no PATCH/PUT /v1/invoices/{id} route to it -- verified by reading
-//     every app.Mux.HandleFunc/Handle call there (only POST /v1/invoices, GET
-//     /v1/invoices/{id}, GET /v1/invoices, POST .../transitions, POST
-//     .../validate, and POST /v1/imports are registered). This is a genuine
-//     gap between the task's plan text ("fix it via Store.Update") and the
-//     shipped surface, not a design choice made here -- flagged in the Mode A
-//     return for the PR description; a future subtask should wire the route
-//     if the product wants firms to self-correct an invoice over HTTP.
-//     correctInvoiceVAT below writes directly, superuser, bypassing that
-//     (unreachable-over-HTTP) production update path so PERF-05 can still run
-//     as a real, working spec rather than being left unimplemented.
-//
-// Mirrors e2e/demo/db.ts's pg wiring verbatim (default-import + destructure
-// for ESM/CommonJS interop -- pg ships no ESM-native named exports; TLS
-// rejectUnauthorized:false for Railway's managed cert; bounded timeouts so a
-// stalled cold-DB connect/query fails clearly instead of hanging out to the
-// Playwright test timeout) rather than importing that module directly --
-// demo/db.ts is a demo-suite-scoped module (its own header says so) and api/
-// already has its own project/config boundary (playwright.api.config.ts), so
-// a fresh, small file here keeps the two projects' DB access independent
-// rather than introducing an api -> demo dependency that runs the wrong
-// direction (demo already imports FROM api/client.ts, never the reverse).
+// Duplicates demo/db.ts's pg wiring rather than importing it, to keep the two
+// suites independent. pg has no ESM named exports, hence the default import.
 import pg from 'pg'
 import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 
@@ -58,27 +27,15 @@ async function withClient<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> 
   }
 }
 
-// dbEnabled(): the DSN is a CI secret, absent on a local run -- PERF-03/04's
-// uuid-equality assertion narrows to a self-consistency check, and the whole
-// of PERF-05 skips (with a loud annotation), when this is false. Mirrors
-// demo/db.ts's dbEnabled/D8 precedent exactly. LOCAL ONLY: in CI a false here
-// is a hard failure, never a skip -- see requireDbInCI.
+// Absent locally (CI-only DSN): PERF-03/04 narrow to self-consistency and
+// PERF-05 skips. In CI a false here is a hard failure — see requireDbInCI.
 export function dbEnabled(): boolean {
   return !!process.env.DATABASE_SUPERUSER_URL_DEV
 }
 
-// requireDbInCI(): the guard that stops a missing DSN from becoming an INVISIBLE
-// GREEN. Skipping is correct LOCALLY -- the DSN is a CI secret and a dev has no
-// dev-Postgres access -- but in CI the secret is GUARANTEED present: the
-// reset-seed job (dev-env.yml:243-246) already hard-fails the whole run without
-// it, and the e2e job `needs:` reset-seed. So !dbEnabled() in CI cannot mean
-// "no secret"; it can only mean the workflow stopped PASSING it to this step.
-// That is exactly what happened: the test:api step shipped with no env: block,
-// PERF-05 -- the Day-60 draft->validated stamp gate, this story's "Ships when
-// true" clause -- skipped silently, and the job went green anyway. Fail loudly
-// instead, the same way reset-seed's own `::error::` guard does, and for the
-// same reason scripts/ci/rls-test-gate.sh exists at all: a skipped test must
-// never read as a passing one.
+// Skipping is right locally, never in CI: a missing DSN there means the
+// workflow stopped passing it, not that it doesn't exist. That already
+// happened once — PERF-05 skipped silently and the job went green.
 export function requireDbInCI(): void {
   if (dbEnabled() || !process.env.CI) return
   throw new Error(
@@ -86,8 +43,9 @@ export function requireDbInCI(): void {
       'DATABASE_SUPERUSER_URL_DEV is not set, but this is CI (process.env.CI) -- refusing to skip.',
       'PERF-05 (the Day-60 draft->validated stamp gate, the M4 "Ships when true" clause) and',
       "PERF-03/04's live rule_set_version_id equality CANNOT be proven without it; skipping them",
-      'would make this gate an invisible green. reset-seed already requires this same secret, so',
-      'it exists -- the "API E2E" step in .github/workflows/dev-env.yml is not passing it. Add:',
+      'would make this gate an invisible green. DATABASE_SUPERUSER_URL_DEV is a GitHub Actions repo',
+      'secret, guaranteed to exist -- the "API E2E" step in .github/workflows/dev-env.yml is not',
+      'passing it. Add:',
       '  env:',
       '    DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}',
     ].join('\n'),

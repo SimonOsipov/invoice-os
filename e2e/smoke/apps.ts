@@ -1,10 +1,12 @@
 import { expect, type Page } from '@playwright/test'
+import { resolveTarget } from '../targets'
 
 // The two pure SPAs under smoke test (landing, ops-console) — no backend round trip, so a
-// render check is sufficient. The app SPA is always gateway-wired in the unified dev env, so
+// render check is sufficient. The app SPA is always gateway-wired in the deployed env, so
 // its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
-// Each URL defaults to its live dev deployment and is overridable via an env var, so the
-// same suite runs locally and against any deploy (e.g. a PR preview) without code changes.
+// Each PR now deploys to its own ephemeral Railway environment (M4-21), so each URL is
+// REQUIRED — resolveTarget throws rather than falling back to a hardcoded dev deployment
+// (Decision [fail-loud-targets]).
 export interface AppTarget {
   name: string
   url: string
@@ -13,12 +15,10 @@ export interface AppTarget {
   assertMainView: (page: Page) => Promise<void>
 }
 
-const resolveUrl = (envVar: string, fallback: string): string => process.env[envVar]?.trim() || fallback
-
 export const APPS: AppTarget[] = [
   {
     name: 'landing',
-    url: resolveUrl('LANDING_URL', 'https://landing-development-92a2.up.railway.app'),
+    url: resolveTarget('LANDING_URL'),
     assertMainView: async (page) => {
       const h1 = page.getByRole('heading', { level: 1 })
       await expect(h1).toBeVisible()
@@ -27,7 +27,7 @@ export const APPS: AppTarget[] = [
   },
   {
     name: 'ops-console',
-    url: resolveUrl('OPS_CONSOLE_URL', 'https://ops-console-development.up.railway.app'),
+    url: resolveTarget('OPS_CONSOLE_URL'),
     assertMainView: async (page) => {
       // Sidebar brand + the default Submissions screen heading.
       await expect(page.getByText('FiscalBridge').first()).toBeVisible()

@@ -17,6 +17,7 @@ import {
   buildOutcomeColumns,
   buildRejectionReasons,
   buildSpendBars,
+  compactCount,
   computeBillLine,
   computeQuota,
   fmt,
@@ -76,6 +77,18 @@ describe('rng', () => {
 
     expect(seqA).not.toEqual(seqB)
   })
+
+  // Adversarial (QA Mode B): the implementation guards `(seed >>> 0) || 1`, so seed 0
+  // must fall back to seed 1's sequence rather than dividing-by/propagating a degenerate
+  // LCG state of 0.
+  it('rng_seed_zero_falls_back_to_seed_one: rng(0) draws the exact same sequence as rng(1)', () => {
+    const zero = rng(0)
+    const one = rng(1)
+    const seqZero = Array.from({ length: 5 }, () => zero())
+    const seqOne = Array.from({ length: 5 }, () => one())
+
+    expect(seqZero).toEqual(seqOne)
+  })
 })
 
 describe('series', () => {
@@ -100,6 +113,16 @@ describe('series', () => {
     expect(atFloor.length).toBe(13)
     expect(Math.min(...s)).toBe(1)
     expect(s.some((v) => v === 1)).toBe(true)
+  })
+
+  // Adversarial (QA Mode B): series() delegates to rng() internally, so the same
+  // same-seed-same-sequence / different-seed-divergence contract rng carries must
+  // survive the base/amp/trend transform layered on top of it.
+  it('series_different_seeds_diverge: series(5, 1500, 640, 5, 71) and series(5, 1500, 640, 5, 88) are not deeply equal', () => {
+    const a = series(5, 1500, 640, 5, 71)
+    const b = series(5, 1500, 640, 5, 88)
+
+    expect(a).not.toEqual(b)
   })
 })
 
@@ -138,6 +161,36 @@ describe('lineChart', () => {
     expect(area).toBe(`${line} L1000 240 L0 240 Z`)
     expect(area).toBe('M0.0 234.0 L1000.0 12.0 L1000 240 L0 240 Z')
   })
+
+  // Adversarial (QA Mode B): a single-point series makes `st = W / (n - 1)` divide by
+  // zero, so `i * st` is `0 * Infinity = NaN` for the (only) point's x coordinate. This
+  // is a genuine, verified property of the verbatim-ported algorithm (Node re-derivation,
+  // not a guess) — pinned here as a known consumer hazard: any caller that can pass a
+  // 1-point series (e.g. a dynamic time-range selector) will render a broken path. Not a
+  // defect in this subtask (AC-1 requires a verbatim port, and computeQuota/SCALE_PLAN's
+  // GAP-4 precedent already establishes new edge behavior is pinned, not silently
+  // "fixed"), but real enough to lock in rather than leave undocumented.
+  it('line_chart_single_point_x_is_nan: lineChart([5],100,50,5,5) has NaN in the x coordinate (n-1 divide-by-zero) but a finite y', () => {
+    const { line } = lineChart([5], 100, 50, 5, 5)
+
+    expect(line).toBe('MNaN 45.0')
+    const y = Number(line.split(' ')[1])
+    expect(Number.isNaN(y)).toBe(false)
+  })
+
+  it('line_chart_empty_array_no_nan: lineChart([],100,50,5,5) has an empty line and no NaN in either path', () => {
+    const { line, area } = lineChart([], 100, 50, 5, 5)
+
+    expect(line).toBe('')
+    expect(line).not.toContain('NaN')
+    expect(area).not.toContain('NaN')
+  })
+
+  it('line_chart_two_identical_points_is_byte_exact: lineChart([7,7],100,50,5,5) is exact under the (mx-mn)||1 flat guard', () => {
+    const { line } = lineChart([7, 7], 100, 50, 5, 5)
+
+    expect(line).toBe('M0.0 45.0 L100.0 45.0')
+  })
 })
 
 describe('fmt', () => {
@@ -159,6 +212,33 @@ describe('nairaC', () => {
 describe('naira', () => {
   it('naira_full_grouping: naira(4120000) is "₦4,120,000"', () => {
     expect(naira(4120000)).toBe('₦4,120,000')
+  })
+})
+
+// Adversarial (QA Mode B): compactCount (GAP-1) is only exercised indirectly today, via
+// computeQuota's `detail` string at the single pinned value 48214/40000/8214. Direct
+// boundary coverage below closes that gap — every value below independently re-derived
+// in Node against the shipped implementation, not guessed.
+describe('compactCount', () => {
+  it('compact_count_below_threshold_stays_bare: compactCount(999) is "999" (no K suffix below 1000)', () => {
+    expect(compactCount(999)).toBe('999')
+  })
+
+  it('compact_count_exact_thousand_strips_trailing_zero: compactCount(1000) is "1K", not "1.0K"', () => {
+    expect(compactCount(1000)).toBe('1K')
+  })
+
+  it('compact_count_rounds_half_up_at_the_tenth_boundary: compactCount(1049) is "1K" (rounds down to 1.0, stripped) and compactCount(1050) is "1.1K" (rounds up)', () => {
+    expect(compactCount(1049)).toBe('1K')
+    expect(compactCount(1050)).toBe('1.1K')
+  })
+
+  it('compact_count_exact_multiple_of_thousand: compactCount(40000) is "40K"', () => {
+    expect(compactCount(40000)).toBe('40K')
+  })
+
+  it('compact_count_zero: compactCount(0) is "0"', () => {
+    expect(compactCount(0)).toBe('0')
   })
 })
 
@@ -196,6 +276,14 @@ describe('buildSpendBars', () => {
       expect(h).toBeLessThanOrEqual(100)
     }
   })
+
+  // Adversarial (QA Mode B): buildSpendBars() feeds the spend-bars screenshot directly.
+  // Non-determinism here (e.g. an accidental Math.random or Date.now creeping in later)
+  // would make the visual QA gate flaky without any test catching it — full-array
+  // (not just per-field) equality across two calls is the guard.
+  it('spend_bars_are_fully_deterministic: buildSpendBars() called twice returns a deeply equal 30-element array', () => {
+    expect(buildSpendBars()).toEqual(buildSpendBars())
+  })
 })
 
 describe('buildOutcomeColumns', () => {
@@ -227,6 +315,14 @@ describe('buildOutcomeColumns', () => {
 
     expect(cols[0]).toEqual({ acc: '96.08%', rej: '2.83%', fail: '0.54%', pend: '0.54%' })
     expect(cols[23]).toEqual({ acc: '94.71%', rej: '4.01%', fail: '0.64%', pend: '0.64%' })
+  })
+
+  // Adversarial (QA Mode B): buildOutcomeColumns() feeds the outcomes-strip screenshot.
+  // The golden pin above only locks columns 0 and 23; this locks the full 24-column
+  // array across two calls, so a regression in any of the other 22 columns (e.g. RNG
+  // state leaking or a Date-seeded fallback) is still caught, not just visually.
+  it('outcome_columns_are_fully_deterministic: buildOutcomeColumns() called twice returns a deeply equal 24-element array', () => {
+    expect(buildOutcomeColumns()).toEqual(buildOutcomeColumns())
   })
 })
 
@@ -292,5 +388,58 @@ describe('computeQuota', () => {
     expect(q.over).toBe(8214)
     expect(q.widthPct).toBe(100)
     expect(q.detail).toBe('48.2K / 40K included · 8.2K over')
+  })
+
+  // Adversarial (QA Mode B): boundary re-derived in Node against the shipped
+  // implementation. At used === included exactly, pct and widthPct must both land on
+  // 100 (not 99 from float slack, not 101), and there must be no overage.
+  it('quota_used_equals_included_is_exactly_full: computeQuota(40000, 40000) is pct 100, widthPct 100, over 0', () => {
+    const q = computeQuota(40000, 40000)
+
+    expect(q.pct).toBe(100)
+    expect(q.widthPct).toBe(100)
+    expect(q.over).toBe(0)
+  })
+
+  // Adversarial (QA Mode B): `Math.max(0, used - included)` must clamp `over` at 0 when
+  // usage is under quota — a naive `used - included` would go negative and corrupt the
+  // billing display (a negative "over" line item).
+  it('quota_used_below_included_never_goes_negative: computeQuota(30000, 40000) has over === 0, not -10000', () => {
+    const q = computeQuota(30000, 40000)
+
+    expect(q.pct).toBe(75)
+    expect(q.widthPct).toBe(75)
+    expect(q.over).toBe(0)
+  })
+
+  // Adversarial (QA Mode B): included === 0 is a division by zero. The implementation
+  // has no explicit guard for this case, so the actual behavior below was independently
+  // re-derived in Node against the shipped code (not assumed): used/0*100 is +Infinity,
+  // Math.floor(Infinity) stays Infinity, and Math.min(100, Infinity) clamps widthPct to
+  // 100 — so the bar geometry stays safe even though pct itself is not a finite number.
+  // Pinning this locks in the chosen (implicit) behavior per the task's instruction to
+  // assert it rather than leave it undefined; SCALE_PLAN.includedRequests is a hardcoded
+  // 40000 so this path is not reachable via the real plan today, but computeQuota is a
+  // general pure function and this is a real input for any future caller.
+  it('quota_included_zero_pct_is_infinite_but_width_stays_clamped: computeQuota(100, 0) has pct === Infinity, widthPct === 100, over === 100', () => {
+    const q = computeQuota(100, 0)
+
+    expect(q.pct).toBe(Infinity)
+    expect(q.widthPct).toBe(100)
+    expect(q.over).toBe(100)
+    expect(q.detail).toBe('100 / 0 included · 100 over')
+  })
+
+  // Adversarial (QA Mode B): the doubly-degenerate 0/0 case is NaN, not Infinity — a
+  // distinct failure mode from the included=0-with-nonzero-used case above, and one a
+  // naive `pct > 0` or `pct === 100` check downstream would silently mishandle (NaN
+  // fails every numeric comparison). widthPct inherits the NaN via Math.min; over stays
+  // a clean 0 because Math.max(0, 0 - 0) does not involve division.
+  it('quota_used_and_included_both_zero_is_nan_not_zero: computeQuota(0, 0) has NaN pct and widthPct, but over is still exactly 0', () => {
+    const q = computeQuota(0, 0)
+
+    expect(Number.isNaN(q.pct)).toBe(true)
+    expect(Number.isNaN(q.widthPct)).toBe(true)
+    expect(q.over).toBe(0)
   })
 })

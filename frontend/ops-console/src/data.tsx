@@ -1,32 +1,42 @@
-// All Ops Console seed content, re-authored from the prototype's support.js
-// state/seed methods (seedJobs, seedRules, auditData, tenantData, diffData,
-// versionRows, learnedRows, reconRows) as typed, static TS constants. Glyphs
-// are pre-built <Icon> nodes so section components stay pure layout.
+// All Developer Console seed content, re-authored from the prototype's
+// support.js state/seed methods (seedJobs, apiKeys, webhooks, …) as typed,
+// static TS constants. Glyphs are pre-built <Icon> nodes so section components
+// stay pure layout.
 
 import type { ReactNode } from 'react'
+import { buildEvidenceBundles, computeBillLine, naira, nairaC, SCALE_PLAN, spendTotals, upStrip, type EvidenceBundle } from './charts'
 import { Icon } from './icons'
-import { jobStateStyle } from './helpers'
-import type { AuditTone } from './helpers'
-import type { Job, JobState, Rule, Screen } from './types'
+import type { ApiKey, ApiRequest, BillItem, Delivery, Env, Incident, InvoiceKind, InvoiceStatus, Job, JobState, PastInvoice, Quota, RateLimit, Screen, StatusComponent, Tone, ToneStyle, Webhook } from './types'
 
 /* ------------------------------------------------------------------ */
 /* Common icon glyphs (this.g(paths, size) in the prototype)           */
 /* ------------------------------------------------------------------ */
 
 export const SEARCH_ICON = <Icon paths={['M21 21l-4.35-4.35', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z']} size={16} />
-export const FILTER_ICON = <Icon paths={['M22 3H2l8 9.46V19l4 2v-8.54L22 3Z']} size={14} />
 export const CHEVRON_RIGHT_ICON = <Icon paths={['m9 18 6-6-6-6']} size={14} />
 export const CLOSE_ICON = <Icon paths={['M18 6 6 18M6 6l12 12']} size={15} />
 export const ALERT_ICON = <Icon paths={['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z', 'M12 9v4', 'M12 17h.01']} size={18} />
 export const LOCK_ICON = <Icon paths={['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']} size={15} />
+// Prototype's rotateGlyph — the same path array is used for the re-drive
+// action and the API-key rotate action (proto:866).
 export const REDRIVE_ICON = <Icon paths={['M21 2v6h-6', 'M3 12a9 9 0 0 1 15-6.7L21 8', 'M3 22v-6h6', 'M21 12a9 9 0 0 1-15 6.7L3 16']} size={15} />
-export const PUBLISH_ICON = <Icon paths={['M12 19V5', 'm5 12 7-7 7 7']} size={15} />
-export const KILL_ICON = <Icon paths={['M18.36 6.64a9 9 0 1 1-12.73 0', 'M12 2v10']} size={15} />
-export const SPARK_ICON = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 19 12 16.1 6.82 19 8 12.91l-4-3.64 5.91-1.01z']} size={15} />
 export const COPY_ICON = <Icon paths={['M20 9H11a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2Z', 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1']} size={15} />
+// Prototype defines downloadGlyph and exportGlyph as the same path array
+// (proto:864) — one const covers both.
 export const EXPORT_ICON = <Icon paths={['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']} size={15} />
 export const CHECK_ICON = <Icon paths={['M20 6 9 17l-5-5']} size={16} />
-export const GLOBE_ICON = <Icon paths={['M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z', 'M3.6 9h16.8M3.6 15h16.8', 'M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z']} size={16} />
+export const SHIELD_ICON = <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={13} />
+export const EYE_ICON = <Icon paths={['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z']} size={15} />
+export const EYE_OFF_ICON = (
+  <Icon
+    paths={['m2 2 20 20', 'M6.7 6.7C3.9 8.3 2 12 2 12s3.5 7 10 7c1.9 0 3.6-.5 5-1.3', 'M9.9 5.1A9.8 9.8 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-2.2 3.1']}
+    size={15}
+  />
+)
+export const LINK_ICON = <Icon paths={['M9 17H7A5 5 0 0 1 7 7h2', 'M15 7h2a5 5 0 1 1 0 10h-2', 'M8 12h8']} size={16} />
+export const PLUS_ICON = <Icon paths={['M12 5v14', 'M5 12h14']} size={15} />
+export const ARROW_UP_ICON = <Icon paths={['M12 19V5', 'm5 12 7-7 7 7']} size={13} />
+export const ARROW_DOWN_ICON = <Icon paths={['M12 5v14', 'm19 12-7 7-7-7']} size={13} />
 export const GEAR_ICON = (
   <Icon
     paths={[
@@ -37,292 +47,289 @@ export const GEAR_ICON = (
   />
 )
 
+// proto:1204-1213 — the evidence bundle's QR mark. Three 16x16 finder squares plus
+// five 6x6 dots, all hand-placed: it is decorative, not a generated block matrix, so
+// there is no .map here. Byte-identical for all 8 bundles, hence one shared node
+// rather than a per-row `qr` field. The #fff values stay literal on purpose — CSS
+// var() does not resolve inside SVG presentation attributes.
+export const EVIDENCE_QR = (
+  <svg width={64} height={64} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+    <rect x={6} y={6} width={16} height={16} rx={2} stroke="#fff" strokeWidth={3} />
+    <rect x={42} y={6} width={16} height={16} rx={2} stroke="#fff" strokeWidth={3} />
+    <rect x={6} y={42} width={16} height={16} rx={2} stroke="#fff" strokeWidth={3} />
+    <rect x={30} y={30} width={6} height={6} fill="#fff" />
+    <rect x={42} y={30} width={6} height={6} fill="#fff" />
+    <rect x={30} y={42} width={6} height={6} fill="#fff" />
+    <rect x={42} y={42} width={6} height={6} fill="#fff" />
+    <rect x={52} y={52} width={6} height={6} fill="#fff" />
+  </svg>
+)
+
 /* ------------------------------------------------------------------ */
-/* Sidebar nav                                                         */
+/* Sidebar nav (prototype lines 838–843)                               */
 /* ------------------------------------------------------------------ */
 
 export type NavItem = { key: Screen; label: string; glyph: ReactNode }
 
 export const NAV_ITEMS: NavItem[] = [
+  { key: 'overview', label: 'Overview', glyph: <Icon paths={['M3 3h8v8H3z', 'M13 3h8v5h-8z', 'M13 12h8v9h-8z', 'M3 15h8v6H3z']} size={17} /> },
   { key: 'submissions', label: 'Submissions', glyph: <Icon paths={['M3 12h4l2 5 4-12 2 7h6']} size={17} /> },
   {
-    key: 'rules',
-    label: 'Rules',
-    glyph: <Icon paths={['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']} size={17} />,
+    key: 'evidence',
+    label: 'Evidence',
+    glyph: <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={17} />,
   },
-  { key: 'audit', label: 'Audit', glyph: <Icon paths={['M21 8v13H3V8', 'M1 3h22v5H1z', 'M10 12h4']} size={17} /> },
-  {
-    key: 'tenants',
-    label: 'Tenants',
-    glyph: (
-      <Icon
-        paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']}
-        size={17}
-      />
-    ),
-  },
-  { key: 'health', label: 'System health', glyph: <Icon paths={['M22 12h-4l-3 9L9 3l-3 9H2']} size={17} /> },
+  { key: 'api', label: 'API & webhooks', glyph: <Icon paths={['m18 16 4-4-4-4', 'm6 8-4 4 4 4', 'm14.5 4-5 16']} size={17} /> },
+  { key: 'billing', label: 'Usage & billing', glyph: <Icon paths={['M2 5h20v14H2z', 'M2 10h20']} size={17} /> },
+  { key: 'status', label: 'Status', glyph: <Icon paths={['M3 12h4l2-7 4 14 2-7h6']} size={17} /> },
 ]
 
+// The crumb intentionally differs from the nav label (and from the screen <h1>)
+// on `evidence` and `status` — ported verbatim from prototype line 849.
 export const CRUMB_BY_SCREEN: Record<Screen, string> = {
-  submissions: 'Submissions ops',
-  rules: 'Rules admin',
-  audit: 'Audit & evidence',
-  tenants: 'Tenants',
-  health: 'System health',
+  overview: 'Overview',
+  submissions: 'Submissions',
+  evidence: 'Compliance evidence',
+  api: 'API & webhooks',
+  billing: 'Usage & billing',
+  status: 'API status',
 }
 
 /* ------------------------------------------------------------------ */
 /* Submissions — jobs                                                  */
 /* ------------------------------------------------------------------ */
 
-export const SEED_JOBS: Job[] = [
-  { id: 'job_8f2a91', tenant: 'Lagos Freight & Logistics Ltd', tin: 'TIN 20184412-0001', invoice: 'INV-2026-04417', state: 'accepted', attempts: 1, lastError: '—', age: '2m', app: 'AP-Sterling' },
-  { id: 'job_8f2a72', tenant: 'Sahara Foods Distribution', tin: 'TIN 19847720-0001', invoice: 'INV-2026-04416', state: 'submitting', attempts: 1, lastError: '—', age: '3m', app: 'AP-Sterling' },
-  { id: 'job_8f2a55', tenant: 'Nigerian Delta Supplies Co.', tin: 'TIN 22310984-0001', invoice: 'INV-2026-04410', state: 'pending', attempts: 2, lastError: 'APP poll: clearance in progress', age: '11m', app: 'AP-Interswitch' },
-  { id: 'job_8f29d1', tenant: 'Adeyemi & Sons Trading', tin: 'TIN 20991043-0001', invoice: 'INV-2026-04402', state: 'rejected', attempts: 3, lastError: 'MBS-422 buyer TIN not registered', age: '24m', app: 'AP-Sterling' },
-  { id: 'job_8f29a8', tenant: 'Kano Textile Mills Plc', tin: 'TIN 18772300-0001', invoice: 'INV-2026-04391', state: 'dead-letter', attempts: 5, lastError: 'APP 503 — gateway timeout (x5)', age: '1h 12m', app: 'AP-Interswitch' },
-  { id: 'job_8f2987', tenant: 'Port Harcourt Steel Co.', tin: 'TIN 21004552-0001', invoice: 'INV-2026-04388', state: 'dead-letter', attempts: 5, lastError: 'Signature mismatch — CSID rejected', age: '1h 40m', app: 'AP-Sterling' },
-  { id: 'job_8f2961', tenant: 'Abuja Medical Supplies', tin: 'TIN 20554418-0001', invoice: 'INV-2026-04377', state: 'failed', attempts: 4, lastError: 'Schema: lines[2].vat_rate missing', age: '2h 03m', app: 'AP-Interswitch' },
-  { id: 'job_8f2944', tenant: 'Lagos Freight & Logistics Ltd', tin: 'TIN 20184412-0001', invoice: 'INV-2026-04371', state: 'queued', attempts: 0, lastError: '—', age: '4s', app: 'AP-Sterling' },
-  { id: 'job_8f2930', tenant: 'Sahara Foods Distribution', tin: 'TIN 19847720-0001', invoice: 'INV-2026-04369', state: 'accepted', attempts: 1, lastError: '—', age: '5m', app: 'AP-Sterling' },
-  { id: 'job_8f2911', tenant: 'Westgate Pharma Ltd', tin: 'TIN 22887301-0001', invoice: 'INV-2026-04358', state: 'queued', attempts: 0, lastError: '—', age: '12s', app: 'AP-Interswitch' },
+// proto:785-794. Client-facing submissions: `buyer`/`btin`/`raw`/`desc`/`latency`
+// replace the operator-era `tenant`/`tin`/`app`. `btin` carries no `TIN ` prefix.
+export const SEED_SUBMISSIONS: Job[] = [
+  { id: 'sub_9f2a91', buyer: 'Konga Online Ltd', btin: '20184412-0001', invoice: 'ZP-INV-0088412', raw: 4120000, desc: 'Marketplace settlement', state: 'accepted', attempts: 1, lastError: '—', age: '2m', latency: '1.6s' },
+  { id: 'sub_9f2a72', buyer: 'Bolt Nigeria', btin: '19847720-0001', invoice: 'ZP-INV-0088410', raw: 918500, desc: 'Ride commission', state: 'submitting', attempts: 1, lastError: '—', age: '3m', latency: '—' },
+  { id: 'sub_9f2a55', buyer: 'ShopRite NG', btin: '22310984-0001', invoice: 'ZP-INV-0088402', raw: 2740000, desc: 'POS settlement', state: 'pending', attempts: 2, lastError: 'Awaiting FIRS clearance', age: '11m', latency: '—' },
+  { id: 'sub_9f29d1', buyer: 'Jumia Foods', btin: '20991043-0001', invoice: 'ZP-INV-0088388', raw: 663200, desc: 'Vendor payout', state: 'rejected', attempts: 3, lastError: 'MBS-422 buyer TIN not registered', age: '24m', latency: '2.1s' },
+  { id: 'sub_9f29a8', buyer: 'MTN Nigeria', btin: '18772300-0001', invoice: 'ZP-INV-0088371', raw: 15400000, desc: 'Airtime bulk settlement', state: 'dead-letter', attempts: 5, lastError: 'FIRS 503 — gateway timeout (x5)', age: '1h 12m', latency: '—' },
+  { id: 'sub_9f2987', buyer: 'GTBank Merchant Svcs', btin: '21004552-0001', invoice: 'ZP-INV-0088355', raw: 8730000, desc: 'Card settlement', state: 'failed', attempts: 4, lastError: 'Schema: lines[2].description missing', age: '2h 03m', latency: '—' },
+  { id: 'sub_9f2961', buyer: 'Chowdeck Ltd', btin: '20554418-0001', invoice: 'ZP-INV-0088340', raw: 412700, desc: 'Delivery commission', state: 'accepted', attempts: 1, lastError: '—', age: '2h', latency: '1.5s' },
+  { id: 'sub_9f2944', buyer: 'Konga Online Ltd', btin: '20184412-0001', invoice: 'ZP-INV-0088331', raw: 1240000, desc: 'Marketplace settlement', state: 'queued', attempts: 0, lastError: '—', age: '6s', latency: '—' },
+  { id: 'sub_9f2930', buyer: 'Piggyvest', btin: '22887301-0001', invoice: 'ZP-INV-0088320', raw: 305000, desc: 'Savings payout fee', state: 'accepted', attempts: 1, lastError: '—', age: '8m', latency: '1.7s' },
+  { id: 'sub_9f2911', buyer: 'Bolt Nigeria', btin: '19847720-0001', invoice: 'ZP-INV-0088314', raw: 756000, desc: 'Ride commission', state: 'queued', attempts: 0, lastError: '—', age: '14s', latency: '—' },
 ]
 
 export const JOB_FILTER_KEYS: JobState[] = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead-letter']
 
 /* ------------------------------------------------------------------ */
-/* Submissions — reconciliation                                        */
+/* Evidence — signed bundles                                           */
 /* ------------------------------------------------------------------ */
 
-export type ReconRowBase = { id: string; tenant: string; int: JobState; app: JobState; detail: string }
-
-export const RECON_BASE: ReconRowBase[] = [
-  { id: 'job_8f28f0', tenant: 'Sahara Foods Distribution', int: 'pending', app: 'accepted', detail: 'APP cleared, local poll missed webhook' },
-  { id: 'job_8f28c4', tenant: 'Adeyemi & Sons Trading', int: 'accepted', app: 'rejected', detail: 'Late MBS reversal — duplicate IRN' },
-  { id: 'job_8f2890', tenant: 'Kano Textile Mills Plc', int: 'submitting', app: 'pending', detail: 'Stuck submitting > 30m, APP holds it' },
-  { id: 'job_8f2851', tenant: 'Westgate Pharma Ltd', int: 'failed', app: 'accepted', detail: 'Local schema fail after APP accepted' },
-]
-
-/* ------------------------------------------------------------------ */
-/* Rules                                                                */
-/* ------------------------------------------------------------------ */
-
-export const SEED_RULES: Rule[] = [
-  { key: 'buyer.tin.required', type: 'required', field: 'buyer.tin', severity: 'error', scope: 'global', enabled: true, message: 'Buyer TIN is mandatory' },
-  { key: 'buyer.tin.format', type: 'format-regex', field: 'buyer.tin', severity: 'error', scope: 'global', enabled: true, message: 'TIN must match NNNNNNNN-NNNN' },
-  { key: 'vat.rate.taxmath', type: 'tax_math', field: 'lines[].vat', severity: 'error', scope: 'global', enabled: true, message: 'VAT must equal 7.5% of line net' },
-  { key: 'wht.services.crossfield', type: 'cross_field', field: 'lines[].wht', severity: 'warn', scope: 'global', enabled: true, message: 'WHT expected on service lines' },
-  { key: 'currency.enum', type: 'enum', field: 'header.currency', severity: 'error', scope: 'global', enabled: true, message: 'Currency must be NGN, USD or EUR' },
-  { key: 'invoice.no.unique', type: 'expression-CEL', field: 'header.invoice_no', severity: 'error', scope: 'global', enabled: true, message: 'Invoice number must be unique per seller' },
-  { key: 'issue.date.sequence', type: 'date_rule', field: 'header.issue_date', severity: 'warn', scope: 'tenant-override', enabled: true, message: 'Issue date must not precede prior invoice' },
-  { key: 'line.qty.range', type: 'range', field: 'lines[].qty', severity: 'info', scope: 'global', enabled: false, message: 'Quantity outside expected range' },
-]
-
-export type VersionRow = { version: string; meta: string; tag: string; bg: string; tagBg: string; tagBorder: string; tagText: string }
-
-const VERSION_SEED: { version: string; meta: string; tag: string; kind: 'draft' | 'active' | 'arch' }[] = [
-  { version: 'v9 · draft', meta: 'editing · 3 changes', tag: 'DRAFT', kind: 'draft' },
-  { version: 'v8', meta: 'eff. 2026-06-01 · 42 rules', tag: 'ACTIVE', kind: 'active' },
-  { version: 'v7', meta: 'eff. 2026-04-15 · 40 rules', tag: 'ARCHIVED', kind: 'arch' },
-  { version: 'v6', meta: 'eff. 2026-02-01 · 38 rules', tag: 'ARCHIVED', kind: 'arch' },
-]
-
-export const VERSION_ROWS: VersionRow[] = VERSION_SEED.map((v) => {
-  const tg =
-    v.kind === 'active'
-      ? ['var(--status-green-bg)', 'var(--status-green-border)', 'var(--status-green-text)']
-      : v.kind === 'draft'
-        ? ['var(--status-amber-bg)', 'var(--status-amber-border)', 'var(--status-amber-text)']
-        : ['var(--status-muted-bg)', 'var(--status-muted-border)', 'var(--status-muted-text)']
-  return {
-    version: v.version,
-    meta: v.meta,
-    tag: v.tag,
-    bg: v.kind === 'draft' ? 'var(--accent-tint)' : 'var(--bg-2)',
-    tagBg: tg[0],
-    tagBorder: tg[1],
-    tagText: tg[2],
-  }
-})
-
-export type LearnedRuleBase = { key: string; source: string }
-
-export const LEARNED_ROWS: LearnedRuleBase[] = [
-  { key: 'buyer.email.format', source: 'Derived from 47 MBS-419 rejections this week' },
-  { key: 'lines[].hsn.required', source: 'Derived from 23 MBS-431 rejections' },
-  { key: 'fx.rate.range', source: 'Derived from 11 USD invoice anomalies' },
-]
-
-export type DiffRow = { sign: string; key: string; detail: string; tag: string; bg: string; color: string }
-
-export const DIFF_ROWS: DiffRow[] = [
-  { sign: '+', key: 'buyer.email.format', detail: 'format-regex · warn · from learned inbox', tag: 'ADDED', bg: 'var(--status-green-bg)', color: 'var(--status-green-text)' },
-  { sign: '+', key: 'lines[].hsn.required', detail: 'required · error · global', tag: 'ADDED', bg: 'var(--status-green-bg)', color: 'var(--status-green-text)' },
-  { sign: '+', key: 'fx.rate.range', detail: 'range · info · global', tag: 'ADDED', bg: 'var(--status-green-bg)', color: 'var(--status-green-text)' },
-  { sign: '~', key: 'vat.rate.taxmath', detail: 'tolerance ±0.01 → ±0.005 NGN', tag: 'CHANGED', bg: 'var(--status-amber-bg)', color: 'var(--status-amber-text)' },
-  { sign: '−', key: 'line.qty.range', detail: 'disabled rule removed from set', tag: 'REMOVED', bg: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
-]
+// proto:1203-1236, via the tested pure builder in charts.ts. Derived once at import:
+// every field on the bundle is env-independent.
+//
+// The drawer's "Submitted invoice" JSON is deliberately NOT part of this const. It is
+// built by reqJSON(row, env), which interpolates the live sandbox/live toggle, so
+// freezing it here would silently pin every bundle to whichever env was active at
+// module load. EvidenceDrawer computes it per render instead — the same split
+// JobDrawer already uses.
+export const EVIDENCE_DATA: EvidenceBundle[] = buildEvidenceBundles()
 
 /* ------------------------------------------------------------------ */
-/* Audit                                                                */
+/* API & webhooks                                                      */
 /* ------------------------------------------------------------------ */
 
-export type AuditObjectType = 'submission' | 'rule' | 'state'
-
-export type AuditEntry = {
-  id: string
-  ts: string
-  action: string
-  object: string
-  objectType: AuditObjectType
-  tenant: string
-  actor: string
-  who: string
-  tone: AuditTone
-  glyph: ReactNode
-  hash: string
-  prevHash: string
-  response: string
-  // fields needed to reconstruct the captured request against the current env
-  reqTin: string
-  reqInvoice: string
-}
-
-const auditGlyph = (paths: string[]) => <Icon paths={paths} size={13} />
-
-function mkAuditEntry(
-  id: string,
-  ts: string,
-  action: string,
-  object: string,
-  objectType: AuditObjectType,
-  tenant: string,
-  actor: string,
-  who: string,
-  tone: AuditTone,
-  glyph: ReactNode,
-): AuditEntry {
-  return {
-    id,
-    ts,
-    action,
-    object,
-    objectType,
-    tenant,
-    actor,
-    who,
-    tone,
-    glyph,
-    hash: 'sha256:9f' + id.slice(-4) + 'a3e1b7c4d09f' + id.slice(-2) + '8e2c5a1f0b6d3e7c9a4',
-    prevHash: 'sha256:8e' + id.slice(-3) + 'c2',
-    response: '{\n  "result": "ok",\n  "actor": "' + actor + '",\n  "object": "' + object + '",\n  "action": "' + action + '"\n}',
-    reqTin: 'TIN ' + tenant.replace(/\D/g, '').slice(0, 8) + '-0001',
-    reqInvoice: object,
-  }
-}
-
-export const AUDIT_ENTRIES: AuditEntry[] = [
-  mkAuditEntry('evt_b71f04', '09:14:22.118', 'Submission accepted', 'INV-2026-04417 · IRN-NG-A91', 'submission', 'Lagos Freight & Logistics Ltd', 'system', 'SY', 'green', auditGlyph(['M20 6 9 17l-5-5'])),
-  mkAuditEntry('evt_b71ef2', '09:12:09.004', 'Kill-switch · rule disabled', 'line.qty.range', 'rule', 'All tenants', 'Emeka Iroha', 'EI', 'red', auditGlyph(['M18.36 6.64a9 9 0 1 1-12.73 0', 'M12 2v10'])),
-  mkAuditEntry('evt_b71e88', '09:08:41.553', 'Dead-letter re-driven', 'job_8f29a8', 'state', 'Kano Textile Mills Plc', 'Emeka Iroha', 'EI', 'amber', auditGlyph(['M21 2v6h-6', 'M3 12a9 9 0 0 1 15-6.7L21 8'])),
-  mkAuditEntry('evt_b71e10', '09:02:17.900', 'Submission rejected', 'INV-2026-04402 · MBS-422', 'submission', 'Adeyemi & Sons Trading', 'system', 'SY', 'red', auditGlyph(['M18 6 6 18M6 6l12 12'])),
-  mkAuditEntry('evt_b71d9c', '08:55:03.221', 'Rule promoted to draft', 'buyer.email.format', 'rule', 'All tenants', 'Ada Nwosu', 'AN', 'teal', auditGlyph(['M12 19V5', 'm5 12 7-7 7 7'])),
-  mkAuditEntry('evt_b71d22', '08:49:55.087', 'State change · pending→accepted', 'INV-2026-04369', 'state', 'Sahara Foods Distribution', 'system', 'SY', 'green', auditGlyph(['M5 12h14', 'm12 5 7 7-7 7'])),
-  mkAuditEntry('evt_b71ca0', '08:41:12.640', 'Submission queued', 'INV-2026-04371', 'submission', 'Lagos Freight & Logistics Ltd', 'system', 'SY', 'teal', auditGlyph(['M3 12h4l2 5 4-12 2 7h6'])),
-]
-
-/* ------------------------------------------------------------------ */
-/* Tenants                                                              */
-/* ------------------------------------------------------------------ */
-
-type RoleTriplet = { bg: string; border: string; text: string }
-const ROLE_STYLE: Record<'admin' | 'reviewer' | 'preparer', RoleTriplet> = {
-  admin: { bg: 'var(--accent-tint)', border: 'var(--teal-200)', text: 'var(--accent)' },
-  reviewer: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
-  preparer: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
-}
-
-export type TenantMember = { name: string; initials: string; role: string; roleBg: string; roleBorder: string; roleColor: string }
-export type TenantRecent = { invoice: string; age: string; stBg: string; stBorder: string; stText: string; stLabel: string }
-export type TenantKpi = { label: string; value: string; color: string }
-
-export type Tenant = {
-  id: string
-  name: string
-  initials: string
-  tin: string
-  status: 'ok' | 'warn' | 'red'
-  entityCount: string
-  kpis: TenantKpi[]
-  members: TenantMember[]
-  recent: TenantRecent[]
-}
-
-const kpi = (label: string, value: string, color?: string): TenantKpi => ({ label, value, color: color || 'var(--fg-1)' })
-const member = (name: string, initials: string, role: 'admin' | 'reviewer' | 'preparer'): TenantMember => {
-  const rc = ROLE_STYLE[role]
-  return { name, initials, role: role.toUpperCase(), roleBg: rc.bg, roleBorder: rc.border, roleColor: rc.text }
-}
-const recent = (invoice: string, state: JobState, age: string): TenantRecent => {
-  const b = jobStateStyle(state)
-  return { invoice, age, stBg: b.bg, stBorder: b.border, stText: b.text, stLabel: b.label }
-}
-
-export const TENANTS: Tenant[] = [
+// proto:992-995. Both card colours and the LIVE card's green border are seed fields, not
+// derived from `tag` — note the asymmetry: LIVE gets --status-green-border, SANDBOX the
+// neutral --line-1. The mask is 20 x U+00B7 MIDDLE DOT (NOT '*' and NOT the '•' bullet);
+// it is built exactly as the prototype builds it rather than redacted from `full`.
+export const API_KEYS: ApiKey[] = [
   {
-    id: 't1',
-    name: 'Lagos Freight & Logistics Ltd',
-    initials: 'LF',
-    tin: '20184412-0001',
-    status: 'ok',
-    entityCount: '3 entities · Growth plan',
-    kpis: [kpi('Readiness', '94%', 'var(--status-green-text)'), kpi('Submitted 30d', '2,841'), kpi('Rejected', '12', 'var(--status-red-text)'), kpi('Members', '6')],
-    members: [member('Tunde Adeyemi', 'TA', 'admin'), member('Kemi Eze', 'KE', 'preparer'), member('Ola Bello', 'OB', 'reviewer')],
-    recent: [recent('INV-2026-04417', 'accepted', '2m'), recent('INV-2026-04371', 'queued', '4s'), recent('INV-2026-04355', 'accepted', '18m'), recent('INV-2026-04340', 'pending', '32m')],
+    id: 'live',
+    tag: 'LIVE',
+    name: 'Production secret',
+    full: 'fb_live_sk_9f2a71c4d8e0b6a3f19c72e4',
+    mask: 'fb_live_sk_' + '·'.repeat(20) + '72e4',
+    tagBg: 'var(--status-green-bg)',
+    tagBorder: 'var(--status-green-border)',
+    tagText: 'var(--status-green-text)',
+    created: 'Jan 12, 2026',
+    lastUsed: '12s ago',
+    borderColor: 'var(--status-green-border)',
   },
   {
-    id: 't2',
-    name: 'Sahara Foods Distribution',
-    initials: 'SF',
-    tin: '19847720-0001',
-    status: 'ok',
-    entityCount: '1 entity · Growth plan',
-    kpis: [kpi('Readiness', '88%', 'var(--status-green-text)'), kpi('Submitted 30d', '1,204'), kpi('Rejected', '8', 'var(--status-red-text)'), kpi('Members', '4')],
-    members: [member('Chidi Okeke', 'CO', 'admin'), member('Ngozi Udeh', 'NU', 'preparer')],
-    recent: [recent('INV-2026-04416', 'submitting', '3m'), recent('INV-2026-04369', 'accepted', '5m'), recent('INV-2026-04350', 'accepted', '22m')],
+    id: 'sandbox',
+    tag: 'SANDBOX',
+    name: 'Sandbox secret',
+    full: 'fb_test_sk_4c71a90f2b8e6d13c05a9f4c',
+    mask: 'fb_test_sk_' + '·'.repeat(20) + '9f4c',
+    tagBg: 'var(--status-amber-bg)',
+    tagBorder: 'var(--status-amber-border)',
+    tagText: 'var(--status-amber-text)',
+    created: 'Jan 12, 2026',
+    lastUsed: '2m ago',
+    borderColor: 'var(--line-1)',
+  },
+]
+
+// proto:1002-1005. The ACTIVE pill both cards carry is hardcoded in the markup, not a
+// seed field — every endpoint in the prototype is active.
+export const WEBHOOKS: Webhook[] = [
+  {
+    url: 'https://api.zephyrpay.io/hooks/fiscalbridge',
+    env: 'LIVE',
+    envBg: 'var(--status-green-bg)',
+    envBorder: 'var(--status-green-border)',
+    envText: 'var(--status-green-text)',
+    events: ['invoice.cleared', 'invoice.rejected', 'submission.failed'],
   },
   {
-    id: 't3',
-    name: 'Nigerian Delta Supplies Co.',
-    initials: 'ND',
-    tin: '22310984-0001',
-    status: 'warn',
-    entityCount: '2 entities · Starter plan',
-    kpis: [kpi('Readiness', '71%', 'var(--status-amber-text)'), kpi('Submitted 30d', '642'), kpi('Rejected', '24', 'var(--status-red-text)'), kpi('Members', '3')],
-    members: [member('Ibrahim Sani', 'IS', 'admin'), member('Funke Ade', 'FA', 'reviewer')],
-    recent: [recent('INV-2026-04410', 'pending', '11m'), recent('INV-2026-04388', 'rejected', '1h')],
+    url: 'https://sandbox.zephyrpay.io/hooks/fiscalbridge',
+    env: 'SANDBOX',
+    envBg: 'var(--status-amber-bg)',
+    envBorder: 'var(--status-amber-border)',
+    envText: 'var(--status-amber-text)',
+    events: ['invoice.cleared', 'invoice.rejected'],
+  },
+]
+
+// proto:1007-1012. The `id` field is ours, not the prototype's: `invoice.cleared` occurs
+// three times, so keying on `event` would trip React's duplicate-key console.error and
+// (via e2e/smoke/smoke.spec.ts) red the smoke gate. Row colours are applied at render —
+// httpCodeColor(code) for the status, an inline ternary for the retry counter — so this
+// table stays free of a `charts` import.
+export const DELIVERIES: Delivery[] = [
+  { id: 'dlv_1', event: 'invoice.cleared', code: 200, latency: '142ms', retry: '—' },
+  { id: 'dlv_2', event: 'invoice.rejected', code: 200, latency: '118ms', retry: '—' },
+  { id: 'dlv_3', event: 'submission.failed', code: 500, latency: '—', retry: '2/3' },
+  { id: 'dlv_4', event: 'invoice.cleared', code: 200, latency: '96ms', retry: '—' },
+  { id: 'dlv_5', event: 'invoice.cleared', code: 200, latency: '134ms', retry: '—' },
+]
+
+// proto:1016-1022. Same story as DELIVERIES: `POST /v2/invoices` occurs four times, so
+// the `id` is what makes the key unique without falling back to the array index.
+export const REQ_LOG: ApiRequest[] = [
+  { id: 'req_1', m: 'POST', ep: '/v2/invoices', code: 202, lat: '88ms' },
+  { id: 'req_2', m: 'GET', ep: '/v2/invoices/sub_9f2a91', code: 200, lat: '42ms' },
+  { id: 'req_3', m: 'POST', ep: '/v2/invoices', code: 202, lat: '91ms' },
+  { id: 'req_4', m: 'POST', ep: '/v2/invoices', code: 422, lat: '76ms' },
+  { id: 'req_5', m: 'GET', ep: '/v2/evidence/ZP-INV-0088412', code: 200, lat: '38ms' },
+  { id: 'req_6', m: 'POST', ep: '/v2/invoices', code: 202, lat: '84ms' },
+]
+
+// proto:1024-1026. Env-aware, and every field is a literal — including `width`. The live
+// bar is pinned at '68%' even though 341/500 is 68.2%, so deriving the width from
+// current/limit would drift from the design. Do not compute it.
+export const RATE_LIMIT: Record<Env, RateLimit> = {
+  sandbox: { current: '58', limit: '100', width: '58%', color: 'var(--accent)', detail: 'Sandbox throughput · resets each second' },
+  live: { current: '341', limit: '500', width: '68%', color: 'var(--accent)', detail: 'Production throughput · burst to 750 req·s' },
+}
+
+// proto:1014-1015. Two-entry lookup maps kept beside the seed they colour.
+export const METHOD_BG: Record<string, string> = { POST: 'var(--accent-tint)', GET: 'var(--status-muted-bg)' }
+export const METHOD_FG: Record<string, string> = { POST: 'var(--accent)', GET: 'var(--fg-2)' }
+
+/* ------------------------------------------------------------------ */
+/* Usage & billing (proto:1029-1041)                                   */
+/* ------------------------------------------------------------------ */
+
+// proto:468-487. Only the *amount* fields below are computed; the meter's headline,
+// legend and sub-stat figures are seed literals formatted with `fmt` at render.
+export const QUOTA: Quota = {
+  used: 48214,
+  includedWidth: '83%',
+  overWidth: '17%',
+  clearedInvoices: 46820,
+  evidenceExports: 1020,
+}
+
+// proto:1029-1034. `label`, `detail`, `qty` and `color` are display literals ported
+// verbatim (the `detail` strings use U+00D7 MULTIPLICATION SIGN and the platform-fee
+// qty is U+2014 EM DASH). Every ₦ amount routes through `computeBillLine`/`SCALE_PLAN`
+// so the unit-tested arithmetic and the rendered figure cannot drift apart. The
+// Evidence exports row has no amount at all — it renders the word `included`.
+//
+// These four rows deliberately do NOT sum to the total row: Σ = ₦3,417,788 while the
+// total renders `spendTotals().proj` = ₦5.08M. The billing line items and the seeded
+// spend series are unlinked streams in the prototype (task-138 GAP-4). Do not
+// reconcile them — porting the discrepancy is the correct behaviour.
+export const BILL_ITEMS: BillItem[] = [
+  { label: 'Scale platform fee', detail: 'Monthly base', qty: '—', amount: naira(SCALE_PLAN.baseFee), color: 'var(--fg-1)' },
+  { label: 'Cleared invoices', detail: '46,820 × ₦40', qty: '46,820', amount: naira(computeBillLine(46820, SCALE_PLAN.clearedRate)), color: 'var(--fg-1)' },
+  { label: 'Overage requests', detail: '8,214 over included × ₦42', qty: '8,214', amount: naira(computeBillLine(8214, SCALE_PLAN.overageRate)), color: 'var(--status-amber-text)' },
+  { label: 'Evidence exports', detail: '1,020 signed bundles', qty: '1,020', amount: 'included', color: 'var(--fg-3)' },
+]
+
+// proto:1036-1040. Keyed on `id` at render — never on `amount`, which mixes a computed
+// compact figure with three literals and would collide on a seed change.
+export const PAST_INVOICES: PastInvoice[] = [
+  { id: 'FB-2026-07', period: 'Jul 2026 · due Aug 5', amount: nairaC(spendTotals().proj), kind: 'open' },
+  { id: 'FB-2026-06', period: 'Jun 2026', amount: '₦3,184,200', kind: 'paid' },
+  { id: 'FB-2026-05', period: 'May 2026', amount: '₦2,940,500', kind: 'paid' },
+  { id: 'FB-2026-04', period: 'Apr 2026', amount: '₦2,712,300', kind: 'paid' },
+]
+
+// proto:1035's `invSt(kind)` — a two-entry lookup map, same shape as METHOD_BG/METHOD_FG
+// above, kept beside the seed it colours.
+export const INVOICE_STATUS: Record<InvoiceKind, InvoiceStatus> = {
+  paid: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'PAID' },
+  open: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'OPEN' },
+}
+
+/* ------------------------------------------------------------------ */
+/* API status (proto:1044-1058)                                        */
+/* ------------------------------------------------------------------ */
+
+// proto:1090. A static literal, not a live clock: a Date.now()-derived string would
+// render differently on every visual-gate run. Read by the Overview header
+// (proto:126, `UPDATED {ago}`) and the Status header (proto:535, `REFRESHED {ago}`) —
+// one field in the prototype's state, so one const here.
+export const UPDATED_AGO = '8s ago'
+
+// proto:1053 + 1054, collapsed into one map. The component badge (dot / pill bg /
+// pill border) and the incident chip (text / bg / border) read the identical
+// --status-{green,amber}-* triplet; the prototype writes it out twice because its two
+// call sites key off different things (a boolean vs a tone string).
+export const STATUS_TONE: Record<Tone, ToneStyle> = {
+  green: { text: 'var(--status-green-text)', bg: 'var(--status-green-bg)', border: 'var(--status-green-border)' },
+  amber: { text: 'var(--status-amber-text)', bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)' },
+}
+
+// proto:1045-1052. Order is significant — the screen renders these top to bottom.
+// `latency` and `uptime` are seed literals: `uptime` is NOT counted off `strip`, and the
+// banner's headline figure is not averaged from this list (see Status.tsx). Only
+// `strip` is computed, by the unit-tested `upStrip` (charts.ts, proto:1044), which is
+// seeded and therefore deterministic across renders and across CI runs.
+//
+// `Tax-authority connection (FIRS/MBS)` is the one DEGRADED row: bad indices 86-89 put
+// four red cells at the right-hand (most recent) end of its 90-day strip.
+export const STATUS_COMPONENTS: StatusComponent[] = [
+  { name: 'API gateway', status: 'OPERATIONAL', latency: '20ms', uptime: '100%', tone: 'green', strip: upStrip(1, []) },
+  { name: 'Validation engine', status: 'OPERATIONAL', latency: '40ms', uptime: '99.99%', tone: 'green', strip: upStrip(2, []) },
+  { name: 'Submission pipeline', status: 'OPERATIONAL', latency: '1.6s', uptime: '99.97%', tone: 'green', strip: upStrip(3, []) },
+  { name: 'Tax-authority connection (FIRS/MBS)', status: 'DEGRADED', latency: '2.1s', uptime: '99.91%', tone: 'amber', strip: upStrip(4, [86, 87, 88, 89]) },
+  { name: 'Webhook delivery', status: 'OPERATIONAL', latency: '130ms', uptime: '99.98%', tone: 'green', strip: upStrip(5, []) },
+  { name: 'Evidence store', status: 'OPERATIONAL', latency: '55ms', uptime: '100%', tone: 'green', strip: upStrip(6, []) },
+]
+
+// proto:1055-1058. Detail copy is ported verbatim, including the U+2014 EM DASH in the
+// Jul 02 title and the `~1,200` in the Jun 21 detail.
+export const INCIDENTS: Incident[] = [
+  {
+    date: 'Jul 14',
+    title: 'Elevated FIRS clearance latency',
+    status: 'MONITORING',
+    tone: 'amber',
+    detail:
+      'p95 clearance time rose to 2.1s during peak hours. Submissions are still clearing; retries and webhooks are unaffected. FIRS has acknowledged upstream load.',
   },
   {
-    id: 't4',
-    name: 'Kano Textile Mills Plc',
-    initials: 'KT',
-    tin: '18772300-0001',
-    status: 'red',
-    entityCount: '1 entity · Starter plan',
-    kpis: [kpi('Readiness', '58%', 'var(--status-red-text)'), kpi('Submitted 30d', '388'), kpi('Rejected', '41', 'var(--status-red-text)'), kpi('Members', '2')],
-    members: [member('Musa Bello', 'MB', 'admin')],
-    recent: [recent('INV-2026-04391', 'dead-letter', '1h 12m')],
+    date: 'Jul 02',
+    title: 'Scheduled maintenance — validation engine',
+    status: 'RESOLVED',
+    tone: 'green',
+    detail: 'Rolling deploy of rule-set v42 completed with no downtime. Validation latency briefly rose to 90ms.',
   },
   {
-    id: 't5',
-    name: 'Westgate Pharma Ltd',
-    initials: 'WP',
-    tin: '22887301-0001',
-    status: 'ok',
-    entityCount: '1 entity · Growth plan',
-    kpis: [kpi('Readiness', '90%', 'var(--status-green-text)'), kpi('Submitted 30d', '910'), kpi('Rejected', '6', 'var(--status-red-text)'), kpi('Members', '5')],
-    members: [member('Grace Obi', 'GO', 'admin'), member('Peter Aluko', 'PA', 'preparer')],
-    recent: [recent('INV-2026-04358', 'queued', '12s')],
+    date: 'Jun 21',
+    title: 'Webhook delivery delays',
+    status: 'RESOLVED',
+    tone: 'green',
+    detail: 'A retry backlog delayed delivery of ~1,200 events by up to 8 minutes. All events were delivered; no data loss.',
   },
 ]

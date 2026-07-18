@@ -16,8 +16,13 @@
 
 import type { JobFilter } from './types'
 
-export function showDeadLetterCallout(_dlCount: number, _filter: JobFilter, _query: string): boolean {
-  throw new Error('not implemented')
+// The dead-letter callout's visibility rule (proto:1104). It is suppressed under a
+// narrowed filter (the filtered view already lists only those rows, so the callout
+// would double-report) and while searching (re-drive-all would act on rows the user
+// cannot currently see). The prototype tests `!q` on the lowercased query; lowercasing
+// preserves emptiness, so this takes the RAW query and must not lowercase it.
+export function showDeadLetterCallout(dlCount: number, filter: JobFilter, query: string): boolean {
+  return dlCount > 0 && filter === 'all' && !query
 }
 
 export function rng(seed: number): () => number {

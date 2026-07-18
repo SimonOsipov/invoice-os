@@ -9,7 +9,7 @@ import { Billing } from './components/Billing'
 import { Status } from './components/Status'
 import { JobDrawer } from './components/JobDrawer'
 import { Toast } from './components/Toast'
-import { SEED_JOBS } from './data'
+import { SEED_SUBMISSIONS } from './data'
 import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.if-v2` — that scope defines the design-system
@@ -18,18 +18,20 @@ import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone 
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
 export default function App() {
   // Mirrors the prototype's constructor state (Developer Console.dc.html:744).
-  // `subQuery`/`evQuery` (M4-20-04/05) and `reveal`/`confirmRotate` (M4-20-06)
-  // land with the screens that read them — `noUnusedLocals` rejects state that
-  // nothing consumes yet.
+  // `evQuery` (M4-20-05) and `reveal`/`confirmRotate` (M4-20-06) land with the
+  // screens that read them — `noUnusedLocals` rejects state that nothing
+  // consumes yet. `subQuery` arrives here with its two consumers on Submissions
+  // (the search input and the empty state).
   const [screen, setScreen] = useState<Screen>('overview')
   const [env, setEnv] = useState<Env>('live')
   const [range, setRange] = useState<Range>('30d')
   const [filter, setFilter] = useState<JobFilter>('all')
+  const [subQuery, setSubQuery] = useState('')
   const [drawer, setDrawer] = useState<DrawerState>(null)
   const [reqOpen, setReqOpen] = useState(true)
   const [resOpen, setResOpen] = useState(true)
   const [toast, setToast] = useState<ToastState>(null)
-  const [jobs, setJobs] = useState(SEED_JOBS)
+  const [jobs, setJobs] = useState(SEED_SUBMISSIONS)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -54,17 +56,17 @@ export default function App() {
   const reDriveOne = (id: string) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'queued', lastError: '—' } : j)))
     setDrawer(null)
-    showToast('Re-drive queued · ' + id, 'AUDIT LOGGED')
+    showToast('Re-drive queued · ' + id, 'ACCEPTED')
   }
   const reDriveAll = () => {
     const ids = jobs.filter((j) => j.state === 'dead-letter').map((j) => j.id)
     setJobs((prev) => prev.map((j) => (j.state === 'dead-letter' ? { ...j, state: 'queued', lastError: '—' } : j)))
-    showToast('Re-drove ' + ids.length + ' dead-letter jobs', 'AUDIT LOGGED')
+    showToast('Re-drove ' + ids.length + ' dead-letter submissions', 'QUEUED')
   }
   const cancelJob = (id: string) => {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'failed', lastError: 'Cancelled by operator' } : j)))
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'failed', lastError: 'Cancelled by user' } : j)))
     setDrawer(null)
-    showToast('Cancelled · ' + id, 'AUDIT LOGGED', 'red')
+    showToast('Cancelled · ' + id, '', 'red')
   }
 
   // ---- resolve open drawer entities ----
@@ -89,7 +91,15 @@ export default function App() {
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {screen === 'overview' && <Overview range={range} onRangeChange={setRange} />}
           {screen === 'submissions' && (
-            <Submissions jobs={jobs} filter={filter} onFilterChange={setFilter} onOpenJob={openJob} onReDriveAll={reDriveAll} />
+            <Submissions
+              jobs={jobs}
+              filter={filter}
+              query={subQuery}
+              onFilterChange={setFilter}
+              onQueryChange={setSubQuery}
+              onOpenJob={openJob}
+              onReDriveAll={reDriveAll}
+            />
           )}
           {screen === 'evidence' && <Evidence />}
           {screen === 'api' && <ApiWebhooks />}

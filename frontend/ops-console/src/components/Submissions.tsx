@@ -1,28 +1,31 @@
-import { CHEVRON_RIGHT_ICON, FILTER_ICON, JOB_FILTER_KEYS, REDRIVE_ICON } from '../data'
-import { Icon } from '../icons'
+import { ALERT_ICON, CHEVRON_RIGHT_ICON, JOB_FILTER_KEYS, REDRIVE_ICON, SEARCH_ICON } from '../data'
+import { naira, showDeadLetterCallout } from '../charts'
 import { jobStateStyle } from '../helpers'
 import type { Job, JobFilter } from '../types'
-
-const alertGlyph = <Icon paths={['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z', 'M12 9v4', 'M12 17h.01']} size={18} />
 
 type Props = {
   jobs: Job[]
   filter: JobFilter
+  query: string
   onFilterChange: (f: JobFilter) => void
+  onQueryChange: (q: string) => void
   onOpenJob: (id: string) => void
   onReDriveAll: () => void
 }
 
-const tableGridCols = '150px minmax(220px,1.3fr) 130px 116px 56px minmax(200px,1.2fr) 64px 96px 22px'
-
-export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDriveAll }: Props) {
+export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange, onOpenJob, onReDriveAll }: Props) {
   const dlCount = jobs.filter((j) => j.state === 'dead-letter').length
   const dlAges = jobs.filter((j) => j.state === 'dead-letter').map((j) => j.age)
-  const filtered = filter === 'all' ? jobs : jobs.filter((j) => j.state === filter)
+
+  // proto:950-951 — filter first, then the query. The placeholder omits "buyer"
+  // but the predicate matches on it; both are verbatim from the prototype.
+  const q = query.toLowerCase()
+  let filtered = filter === 'all' ? jobs : jobs.filter((j) => j.state === filter)
+  if (q) filtered = filtered.filter((j) => (j.invoice + ' ' + j.id + ' ' + j.buyer).toLowerCase().includes(q))
 
   const subStats = [
     { label: 'In flight', value: String(jobs.filter((j) => ['queued', 'submitting', 'pending'].includes(j.state)).length), color: 'var(--fg-1)' },
-    { label: 'Accepted 24h', value: '1,204', color: 'var(--status-green-text)' },
+    { label: 'Cleared 24h', value: '1,204', color: 'var(--status-green-text)' },
     { label: 'Rejected', value: String(jobs.filter((j) => ['rejected', 'failed'].includes(j.state)).length), color: 'var(--status-red-text)' },
     { label: 'Dead-letter', value: String(dlCount), color: '#8A1F18' },
   ]
@@ -50,7 +53,7 @@ export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDrive
         </div>
       </div>
 
-      {dlCount > 0 && (
+      {showDeadLetterCallout(dlCount, filter, query) && (
         <div
           style={{
             display: 'flex',
@@ -64,9 +67,9 @@ export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDrive
             marginBottom: 16,
           }}
         >
-          <span style={{ flex: 'none', color: '#8A1F18', display: 'inline-flex' }}>{alertGlyph}</span>
+          <span style={{ flex: 'none', color: '#8A1F18', display: 'inline-flex' }}>{ALERT_ICON}</span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: '#8A1F18' }}>{dlCount} jobs in the dead-letter queue</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: '#8A1F18' }}>{dlCount} submissions in the dead-letter queue</div>
             <div className="mono" style={{ fontSize: 11, color: '#A12822', marginTop: 1 }}>
               Max retries exhausted · oldest {dlAges.length ? dlAges[dlAges.length - 1] : '—'} · review before re-driving
             </div>
@@ -96,7 +99,7 @@ export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDrive
         </div>
       )}
 
-      {/* filters */}
+      {/* filters + search */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {(['all', ...JOB_FILTER_KEYS] as JobFilter[]).map((k) => {
           const active = filter === k
@@ -129,39 +132,41 @@ export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDrive
             </button>
           )
         })}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div className="ops-input ops-hide-narrow" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg-2)', cursor: 'pointer' }}>
-            {FILTER_ICON} All tenants <span style={{ color: 'var(--fg-4)' }}>▾</span>
-          </div>
-          <div className="ops-input ops-hide-narrow" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg-2)', cursor: 'pointer' }}>
-            Last 24h <span style={{ color: 'var(--fg-4)' }}>▾</span>
-          </div>
+        <div className="ops-input" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
+          <input
+            className="ops-input"
+            style={{ border: 0, boxShadow: 'none', height: 30, width: 230, padding: 0 }}
+            placeholder="Search invoice # or job ID…"
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+          />
         </div>
       </div>
 
       {/* jobs table */}
       <div style={{ border: '1px solid var(--line-1)', borderRadius: 9, overflowX: 'auto', background: 'var(--bg-2)' }}>
         <div
+          className="ops-jobs-table"
           style={{
             display: 'grid',
-            gridTemplateColumns: tableGridCols,
+            gridTemplateColumns: '150px minmax(200px,1.3fr) 130px 122px 116px 56px 74px 22px',
             gap: 0,
             padding: '10px 16px',
             background: 'var(--bg-1)',
             borderBottom: '1px solid var(--line-1)',
-            minWidth: 1040,
+            minWidth: 980,
           }}
         >
           <span className="label">Job ID</span>
-          <span className="label">Tenant / entity</span>
-          <span className="label">Invoice #</span>
+          <span className="label">Buyer / reference</span>
+          <span className="label">Amount</span>
           <span className="label">State</span>
+          <span className="label">Last error</span>
           <span className="label" style={{ textAlign: 'center' }}>
             Try
           </span>
-          <span className="label">Last error</span>
-          <span className="label">Age</span>
-          <span className="label">APP</span>
+          <span className="label">Latency</span>
           <span />
         </div>
         {filtered.map((j) => {
@@ -172,20 +177,28 @@ export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDrive
             <div
               key={j.id}
               onClick={() => onOpenJob(j.id)}
-              className="ops-row"
-              style={{ display: 'grid', gridTemplateColumns: tableGridCols, gap: 0, padding: '12px 16px', borderBottom: '1px solid var(--line-1)', alignItems: 'center', minWidth: 1040 }}
+              className="ops-row ops-jobs-table"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '150px minmax(200px,1.3fr) 130px 122px 116px 56px 74px 22px',
+                gap: 0,
+                padding: '12px 16px',
+                borderBottom: '1px solid var(--line-1)',
+                alignItems: 'center',
+                minWidth: 980,
+              }}
             >
               <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>
                 {j.id}
               </span>
               <span style={{ minWidth: 0, paddingRight: 12 }}>
-                <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{j.tenant}</span>
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{j.buyer}</span>
                 <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
-                  {j.tin}
+                  {j.invoice}
                 </span>
               </span>
-              <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>
-                {j.invoice}
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)' }}>
+                {naira(j.raw)}
               </span>
               <span>
                 <span
@@ -197,22 +210,26 @@ export function Submissions({ jobs, filter, onFilterChange, onOpenJob, onReDrive
                   </span>
                 </span>
               </span>
-              <span className="mono" style={{ fontSize: 12, color: attemptColor, textAlign: 'center', fontWeight: 600 }}>
-                {j.attempts}
-              </span>
               <span className="mono" style={{ fontSize: 11, color: errColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 12 }}>
                 {j.lastError}
               </span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                {j.age}
+              <span className="mono" style={{ fontSize: 12, color: attemptColor, textAlign: 'center', fontWeight: 600 }}>
+                {j.attempts}
               </span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                {j.app}
+                {j.latency}
               </span>
               <span style={{ color: 'var(--fg-4)' }}>{CHEVRON_RIGHT_ICON}</span>
             </div>
           )
         })}
+        {filtered.length === 0 && (
+          <div style={{ padding: 40, textAlign: 'center' }}>
+            <div className="mono" style={{ fontSize: 12, color: 'var(--fg-4)' }}>
+              No submissions match "{query}".
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

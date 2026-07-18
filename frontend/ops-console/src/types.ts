@@ -9,16 +9,21 @@ export type Range = '7d' | '30d' | '90d'
 export type JobState = 'queued' | 'submitting' | 'pending' | 'accepted' | 'rejected' | 'failed' | 'dead-letter'
 export type JobFilter = 'all' | JobState
 
+// The client-facing submission record (proto:785-794). `tenant`/`tin`/`app` were
+// operator concepts and are gone; `buyer`/`btin`/`raw`/`desc`/`latency` replace them.
+// The type name stays `Job` — the prototype likewise keeps `jobs`/`jobRows`/`Job ID`.
 export type Job = {
   id: string
-  tenant: string
-  tin: string
+  buyer: string
+  btin: string
   invoice: string
+  raw: number
+  desc: string
   state: JobState
   attempts: number
   lastError: string
   age: string
-  app: string
+  latency: string
 }
 
 export type DrawerState = { type: 'job' | 'evidence'; id: string } | null

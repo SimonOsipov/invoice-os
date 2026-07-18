@@ -12,7 +12,6 @@ import type { Job, JobState, Screen } from './types'
 /* ------------------------------------------------------------------ */
 
 export const SEARCH_ICON = <Icon paths={['M21 21l-4.35-4.35', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z']} size={16} />
-export const FILTER_ICON = <Icon paths={['M22 3H2l8 9.46V19l4 2v-8.54L22 3Z']} size={14} />
 export const CHEVRON_RIGHT_ICON = <Icon paths={['m9 18 6-6-6-6']} size={14} />
 export const CLOSE_ICON = <Icon paths={['M18 6 6 18M6 6l12 12']} size={15} />
 export const ALERT_ICON = <Icon paths={['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z', 'M12 9v4', 'M12 17h.01']} size={18} />
@@ -81,17 +80,19 @@ export const CRUMB_BY_SCREEN: Record<Screen, string> = {
 /* Submissions — jobs                                                  */
 /* ------------------------------------------------------------------ */
 
-export const SEED_JOBS: Job[] = [
-  { id: 'job_8f2a91', tenant: 'Lagos Freight & Logistics Ltd', tin: 'TIN 20184412-0001', invoice: 'INV-2026-04417', state: 'accepted', attempts: 1, lastError: '—', age: '2m', app: 'AP-Sterling' },
-  { id: 'job_8f2a72', tenant: 'Sahara Foods Distribution', tin: 'TIN 19847720-0001', invoice: 'INV-2026-04416', state: 'submitting', attempts: 1, lastError: '—', age: '3m', app: 'AP-Sterling' },
-  { id: 'job_8f2a55', tenant: 'Nigerian Delta Supplies Co.', tin: 'TIN 22310984-0001', invoice: 'INV-2026-04410', state: 'pending', attempts: 2, lastError: 'APP poll: clearance in progress', age: '11m', app: 'AP-Interswitch' },
-  { id: 'job_8f29d1', tenant: 'Adeyemi & Sons Trading', tin: 'TIN 20991043-0001', invoice: 'INV-2026-04402', state: 'rejected', attempts: 3, lastError: 'MBS-422 buyer TIN not registered', age: '24m', app: 'AP-Sterling' },
-  { id: 'job_8f29a8', tenant: 'Kano Textile Mills Plc', tin: 'TIN 18772300-0001', invoice: 'INV-2026-04391', state: 'dead-letter', attempts: 5, lastError: 'APP 503 — gateway timeout (x5)', age: '1h 12m', app: 'AP-Interswitch' },
-  { id: 'job_8f2987', tenant: 'Port Harcourt Steel Co.', tin: 'TIN 21004552-0001', invoice: 'INV-2026-04388', state: 'dead-letter', attempts: 5, lastError: 'Signature mismatch — CSID rejected', age: '1h 40m', app: 'AP-Sterling' },
-  { id: 'job_8f2961', tenant: 'Abuja Medical Supplies', tin: 'TIN 20554418-0001', invoice: 'INV-2026-04377', state: 'failed', attempts: 4, lastError: 'Schema: lines[2].vat_rate missing', age: '2h 03m', app: 'AP-Interswitch' },
-  { id: 'job_8f2944', tenant: 'Lagos Freight & Logistics Ltd', tin: 'TIN 20184412-0001', invoice: 'INV-2026-04371', state: 'queued', attempts: 0, lastError: '—', age: '4s', app: 'AP-Sterling' },
-  { id: 'job_8f2930', tenant: 'Sahara Foods Distribution', tin: 'TIN 19847720-0001', invoice: 'INV-2026-04369', state: 'accepted', attempts: 1, lastError: '—', age: '5m', app: 'AP-Sterling' },
-  { id: 'job_8f2911', tenant: 'Westgate Pharma Ltd', tin: 'TIN 22887301-0001', invoice: 'INV-2026-04358', state: 'queued', attempts: 0, lastError: '—', age: '12s', app: 'AP-Interswitch' },
+// proto:785-794. Client-facing submissions: `buyer`/`btin`/`raw`/`desc`/`latency`
+// replace the operator-era `tenant`/`tin`/`app`. `btin` carries no `TIN ` prefix.
+export const SEED_SUBMISSIONS: Job[] = [
+  { id: 'sub_9f2a91', buyer: 'Konga Online Ltd', btin: '20184412-0001', invoice: 'ZP-INV-0088412', raw: 4120000, desc: 'Marketplace settlement', state: 'accepted', attempts: 1, lastError: '—', age: '2m', latency: '1.6s' },
+  { id: 'sub_9f2a72', buyer: 'Bolt Nigeria', btin: '19847720-0001', invoice: 'ZP-INV-0088410', raw: 918500, desc: 'Ride commission', state: 'submitting', attempts: 1, lastError: '—', age: '3m', latency: '—' },
+  { id: 'sub_9f2a55', buyer: 'ShopRite NG', btin: '22310984-0001', invoice: 'ZP-INV-0088402', raw: 2740000, desc: 'POS settlement', state: 'pending', attempts: 2, lastError: 'Awaiting FIRS clearance', age: '11m', latency: '—' },
+  { id: 'sub_9f29d1', buyer: 'Jumia Foods', btin: '20991043-0001', invoice: 'ZP-INV-0088388', raw: 663200, desc: 'Vendor payout', state: 'rejected', attempts: 3, lastError: 'MBS-422 buyer TIN not registered', age: '24m', latency: '2.1s' },
+  { id: 'sub_9f29a8', buyer: 'MTN Nigeria', btin: '18772300-0001', invoice: 'ZP-INV-0088371', raw: 15400000, desc: 'Airtime bulk settlement', state: 'dead-letter', attempts: 5, lastError: 'FIRS 503 — gateway timeout (x5)', age: '1h 12m', latency: '—' },
+  { id: 'sub_9f2987', buyer: 'GTBank Merchant Svcs', btin: '21004552-0001', invoice: 'ZP-INV-0088355', raw: 8730000, desc: 'Card settlement', state: 'failed', attempts: 4, lastError: 'Schema: lines[2].description missing', age: '2h 03m', latency: '—' },
+  { id: 'sub_9f2961', buyer: 'Chowdeck Ltd', btin: '20554418-0001', invoice: 'ZP-INV-0088340', raw: 412700, desc: 'Delivery commission', state: 'accepted', attempts: 1, lastError: '—', age: '2h', latency: '1.5s' },
+  { id: 'sub_9f2944', buyer: 'Konga Online Ltd', btin: '20184412-0001', invoice: 'ZP-INV-0088331', raw: 1240000, desc: 'Marketplace settlement', state: 'queued', attempts: 0, lastError: '—', age: '6s', latency: '—' },
+  { id: 'sub_9f2930', buyer: 'Piggyvest', btin: '22887301-0001', invoice: 'ZP-INV-0088320', raw: 305000, desc: 'Savings payout fee', state: 'accepted', attempts: 1, lastError: '—', age: '8m', latency: '1.7s' },
+  { id: 'sub_9f2911', buyer: 'Bolt Nigeria', btin: '19847720-0001', invoice: 'ZP-INV-0088314', raw: 756000, desc: 'Ride commission', state: 'queued', attempts: 0, lastError: '—', age: '14s', latency: '—' },
 ]
 
 export const JOB_FILTER_KEYS: JobState[] = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead-letter']

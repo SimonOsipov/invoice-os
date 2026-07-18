@@ -1,5 +1,6 @@
-import { CLOSE_ICON, REDRIVE_ICON } from '../data'
-import { buildJobDrawer } from '../helpers'
+import { CHECK_ICON, CLOSE_ICON, REDRIVE_ICON } from '../data'
+import { naira } from '../charts'
+import { buildSubmissionDrawer } from '../helpers'
 import type { Env, Job } from '../types'
 
 type Props = {
@@ -16,7 +17,7 @@ type Props = {
 }
 
 export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes, onClose, onReDrive, onRePoll, onCancel }: Props) {
-  const d = buildJobDrawer(job, env)
+  const d = buildSubmissionDrawer(job, env, naira(job.raw), CHECK_ICON, CLOSE_ICON)
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(20,23,26,0.32)', animation: 'opsFade 160ms ease-out' }} />
@@ -28,7 +29,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           right: 0,
           bottom: 0,
           zIndex: 81,
-          width: 560,
+          width: 580,
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
@@ -52,7 +53,10 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
               </span>
             </div>
             <div style={{ fontSize: 13, color: 'var(--fg-2)' }}>
-              {d.tenant} · <span className="mono">{d.invoice}</span>
+              {d.buyer} · <span className="mono">{d.invoice}</span> ·{' '}
+              <span className="mono" style={{ fontWeight: 600 }}>
+                {d.amount}
+              </span>
             </div>
           </div>
           <button
@@ -75,9 +79,9 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
               </div>
             </div>
             <div style={{ background: 'var(--bg-2)', padding: '12px 14px' }}>
-              <div className="label">APP target</div>
+              <div className="label">Endpoint</div>
               <div className="mono" style={{ fontSize: 12, fontWeight: 600, marginTop: 4 }}>
-                {d.app}
+                POST /v2/invoices
               </div>
             </div>
             <div style={{ background: 'var(--bg-2)', padding: '12px 14px' }}>
@@ -92,6 +96,22 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
                 {d.age}
               </div>
             </div>
+          </div>
+
+          {/* validation result */}
+          <div className="label" style={{ marginBottom: 10 }}>
+            Validation result
+          </div>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 8, background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 22 }}>
+            {d.checks.map((c) => (
+              <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--line-1)' }}>
+                <span style={{ color: c.color, display: 'inline-flex' }}>{c.icon}</span>
+                <span style={{ flex: 1, fontSize: 12.5, color: 'var(--fg-1)' }}>{c.label}</span>
+                <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: c.color }}>
+                  {c.note}
+                </span>
+              </div>
+            ))}
           </div>
 
           {/* state timeline */}
@@ -120,43 +140,9 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             ))}
           </div>
 
-          {/* retry / poll history */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 24 }}>
-            <div style={{ border: '1px solid var(--line-1)', borderRadius: 8, background: 'var(--bg-2)', padding: '13px 14px' }}>
-              <div className="label" style={{ marginBottom: 9 }}>
-                Retry / backoff
-              </div>
-              {d.retries.map((x, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11.5 }}>
-                  <span className="mono" style={{ color: 'var(--fg-3)' }}>
-                    {x.at}
-                  </span>
-                  <span className="mono" style={{ color: 'var(--fg-2)', fontWeight: 600 }}>
-                    {x.backoff}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div style={{ border: '1px solid var(--line-1)', borderRadius: 8, background: 'var(--bg-2)', padding: '13px 14px' }}>
-              <div className="label" style={{ marginBottom: 9 }}>
-                Poll history
-              </div>
-              {d.polls.map((x, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11.5 }}>
-                  <span className="mono" style={{ color: 'var(--fg-3)' }}>
-                    {x.at}
-                  </span>
-                  <span className="mono" style={{ color: x.color, fontWeight: 600 }}>
-                    {x.result}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* payloads */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span className="label">APP request</span>
+            <span className="label">Request payload</span>
             <button type="button" onClick={onToggleReq} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--accent)' }}>
               {reqOpen ? 'COLLAPSE' : 'EXPAND'}
             </button>
@@ -167,7 +153,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             </pre>
           )}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span className="label">APP response</span>
+            <span className="label">Tax-authority exchange</span>
             <button type="button" onClick={onToggleRes} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--accent)' }}>
               {resOpen ? 'COLLAPSE' : 'EXPAND'}
             </button>
@@ -181,7 +167,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             {REDRIVE_ICON} Re-drive
           </button>
           <button type="button" onClick={onRePoll} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 1, justifyContent: 'center', height: 40 }}>
-            Re-poll
+            Re-poll status
           </button>
           <button
             type="button"

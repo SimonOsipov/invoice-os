@@ -1,0 +1,16 @@
+name: QS Probe
+# THROWAWAY — validates that `concurrency.queue: max` is accepted by GitHub's own parser.
+# actionlint 1.7.12 rejects it (schema predates the 2026-05-07 GA). If GitHub also rejects
+# it, the run appears as startup_failure and teardown would silently never run.
+on:
+  pull_request:
+    types: [opened]
+concurrency:
+  group: qs-probe-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "QUEUE_MAX_ACCEPTED=yes"

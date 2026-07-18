@@ -1,12 +1,9 @@
-// name_test.go is the QA Mode A (RED) acceptance-test stage for task-154
-// (M4-23-01, Test-first: yes): tests for Name and ParsePR (name.go),
-// transcribed from the architect's validated Test Specs table, authored
-// BEFORE the real implementation exists. Both functions are currently
-// compile-only stubs that panic unconditionally (see name.go's STUB
-// NOTICE), so every test below is RED until M4-23-01's implementation
-// lands in Stage 3 -- and RED here means "fails on the panic assertion",
-// never a build error: name.go's signatures already match what these
-// tests call.
+// name_test.go holds the acceptance tests for Name and ParsePR
+// (name.go), transcribed from the architect's validated Test Specs table
+// for task-154 (M4-23-01, Test-first: yes) and authored against
+// panicking stubs BEFORE the implementation existed. They were RED on
+// commit 0547547 and went green with M4-23-01's implementation; the
+// stubs and their STUB NOTICE are gone.
 //
 // These are pure unit tests: no network, no filesystem, no os.Getenv --
 // just in-memory strings and ints -- so they run in the existing Go CI
@@ -30,7 +27,7 @@
 // Deliberately NOT tested here (per Implementation Plan §4, "ACs with no
 // test spec"): AC-6 (purity) is a structural property of the import list,
 // enforced by review, not a test; AC-7 ("nothing references Match") is
-// enforced by the compiler once match.go is deleted -- a surviving
+// enforced by the compiler now that match.go is deleted -- a surviving
 // reference becomes a build failure, not a test failure; AC-9 is a
 // comment-only requirement. Inventing tests for these would be ceremony,
 // not coverage.

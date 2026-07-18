@@ -1,98 +1,26 @@
 name: Dev Env (deploy full fleet + verify)
 
-# The unified dev-deploy model (M2-14, task-23; reworked for per-PR
-# environments in M4-21): on a ready PR, deploy the WHOLE fleet coherently —
-# gateway first (migrator + health-gate), then the seven context services and
-# the three SPAs (app gateway-wired) in parallel — then run post-deploy
-# verification (fleet-gate + smoke + api + topology + demo). A half-deployed
-# env (SPAs without backends, or backends without an app) has no value: every
-# ready PR (re)deploys its own env whole.
+# Deploy the whole fleet to one Railway environment, then verify it.
+# A ready PR → its own ephemeral env (Railway PR Environments, forked from
+# `development`). workflow_dispatch → `development` itself, plus reset-seed.
 #
-# M4-21 (per-PR Railway environments): each PR now deploys to its OWN
-# ephemeral Railway environment (forked from `development` — task-131,
-# human-enabled Railway PR Environments), instead of every PR sharing the one
-# `development` environment. This is what makes CI parallel-safe: two PRs no
-# longer serialize behind a single shared deploy lock (see the concurrency
-# block below). `workflow_dispatch` is unchanged in spirit — it still targets
-# the persistent `development` environment directly, still runs the
-# reset-seed step (M4-21-06), and still serializes against itself.
+# Auth: PR runs use RAILWAY_API_TOKEN (account-scoped); workflow_dispatch uses
+# RAILWAY_API_DEV_TOKEN (project token, `Project-Access-Token` header). An
+# account token would cover both — collapsing them is an open cleanup.
+# Account tokens carry no implicit scope, so every call names --project /
+# --environment explicitly.
 #
-# Auth: two Railway tokens, chosen by trigger.
-#   - `pull_request` runs use the account-scoped secret RAILWAY_API_TOKEN
-#     (task-131, human-provisioned — a PROJECT token cannot reach an
-#     ephemeral PR environment: it is pinned to one environment, F6) and pass
-#     `--environment`/`--project` explicitly on every `railway`/GraphQL call,
-#     since an account token has no implicit project/environment scope.
-#   - `workflow_dispatch` runs keep using RAILWAY_API_DEV_TOKEN, a project
-#     token scoped to `development`, consumed as RAILWAY_TOKEN — unchanged
-#     from before M4-21.
-#
-# Environment resolution (resolve-env job, M4-21-09): Railway names a PR
-# environment non-deterministically (`pr-<N>` or `<repo>-pr-<N>` — Railway
-# staff confirmed both shapes; not configurable). resolve-env polls the
-# project's ephemeral environments via the Railway GraphQL API and hands the
-# candidate names to `tools/prenv`'s pure `Match` function (M4-21-08) — it
-# implements NO matching logic of its own, and fails loudly (never guesses)
-# on zero or multiple matches. It also asserts every non-Postgres service
-# still has empty Watch Paths (see PREREQUISITES #5 below) and discovers the
-# 4 public URLs fresh from Railway — never constructed, since a Railway
-# generated domain's suffix is opaque/random (F7).
-#
-# Supersedes the old split model: preview.yml (SPA-only deploy+smoke) +
-# preview-backend.yml (backend-only deploy+health-gate) are DELETED — this
-# workflow deploys both halves together so the env is never left half-up. The
-# standalone topology-e2e.yml (workflow_dispatch-only exit-criterion run) is
-# also DELETED — its bring-up + assertions + reset/seed logic is now IN this
-# workflow as steps 6-7 (fleet-gate + e2e), running on every ready PR instead
-# of on demand, since the fleet is deployed here anyway.
-#
-# ── PREREQUISITES (one-time, human-applied; see docs/topology-e2e.md) ──────
-#  1. Railway PR Environments ENABLED on the project, with Bot PR
-#     Environments ON (every PR here is agent-opened) and base environment =
-#     `development` (task-131, HUMAN-ONLY). Without this, resolve-env's poll
-#     always exhausts its ~300s budget and fails with ErrNoMatch on every PR.
-#  2. Gateway auth wiring — assumed present from M2-12/M2-13 (this workflow
-#     does NOT touch it, to avoid clobbering deployed config): AUTH_ISSUER
-#     set, and AUTH_JWKS_URL pointing at the gateway's OWN
-#     <GATEWAY_URL>/.well-known/jwks.json so the mock round trip verifies.
-#     A PR environment inherits this from `development` via Railway's own
-#     environment-fork behavior (task-129's variable topology).
-#  3. (M4-21-10) No GitHub secret is needed anymore for the superuser DSN — this workflow
-#     no longer reads the DATABASE_SUPERUSER_URL_DEV secret at all (it should be deleted
-#     from the repo once this lands on main, since main's PRE-M4-21-10 dev-env.yml still
-#     reads it until then). Every run (both the PR-environment
-#     `e2e` job and the `development`-only `reset-seed` job) discovers its OWN
-#     environment's Postgres DATABASE_PUBLIC_URL fresh via the Railway GraphQL API
-#     (RAILWAY_SVC_POSTGRES_ID above + that run's resolved environment id), masked with
-#     `::add-mask::` inside the job that uses it and passed via $GITHUB_ENV — never a job
-#     output. GitHub runners can't reach *.railway.internal, so the PUBLIC proxy DSN is
-#     still required; the superuser is still required because `tenants` is FORCE ROW
-#     LEVEL SECURITY. `make demo-reset`'s same-named LOCAL env var is a human-supplied
-#     value, unaffected by the GitHub secret's deletion.
-#  4. Secrets: RAILWAY_API_DEV_TOKEN (dev project token, pre-existing) AND
-#     RAILWAY_API_TOKEN (account-scoped, task-131 human-provisioned — the PR
-#     path FAILS LOUDLY, not silently, if this is missing).
-#  5. Service-level Railway Watch Paths cleared (empty) on all 11 non-Postgres
-#     services (gateway + 7 context services + 3 SPAs) — otherwise `railway
-#     up` SKIPs any service a PR's diff doesn't touch, and a torn-down fleet
-#     never recovers on the next PR (M3-16). This is Railway-side config, not
-#     repo state — `railway.json`'s `build.watchPatterns` is ignored by
-#     Railway entirely, so it cannot be set from the repo. If a service is
-#     ever recreated, its Watch Paths must be re-cleared. Per-PR environments
-#     promote this from a documented invariant to a MANDATORY runtime
-#     assertion — resolve-env fails the run, naming the offending service(s),
-#     if this is ever violated (Decision `[watch-paths-asserted]`). See
-#     docs/deploy-model.md "Cold-fleet recovery (M3-16)".
-#  6. The Railway resource IDs in the `env:` block below (RAILWAY_PROJECT_ID,
-#     RAILWAY_DEV_ENVIRONMENT_ID, RAILWAY_SVC_*_ID) are STABLE identifiers
-#     for the ONE Railway project this repo has ever used and its 4 public
-#     services (created once, M1-06/M2-12) — NOT the opaque, per-domain
-#     suffix strings, which are always discovered fresh by resolve-env and
-#     never hardcoded (F7). If any of these resources is ever deleted and
-#     recreated, these constants must be updated to match (re-verify via
-#     `railway status --json` or the dashboard's Cmd/Ctrl+K resource-ID copy
-#     shortcut) — the same invariant this file already documents for Watch
-#     Paths above.
+# Human-applied prerequisites (see docs/topology-e2e.md):
+#  - Railway PR Environments ON, base = `development`, Bot PR Environments OFF
+#    (PRs here are authored by a User account, not a bot).
+#  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
+#    a project token is pinned to one env and cannot reach a PR env.
+#  - Railway Watch Paths empty on all 11 non-Postgres services, or `railway up`
+#    silently skips untouched services and a torn-down fleet never recovers.
+#    resolve-env asserts this at runtime. Re-clear if a service is recreated.
+#  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
+#    ever deleted and recreated. Domain suffixes are opaque — always discovered,
+#    never hardcoded.
 
 on:
   pull_request:

@@ -302,7 +302,7 @@ git -C "$MAIN_CHECKOUT" worktree remove "$WORKTREE_PATH"
 git -C "$MAIN_CHECKOUT" branch -d "$BRANCH"
 ```
 
-Railway automatically deprovisions the PR's ephemeral environment when the PR closes (M4-21) — there is no repo-side teardown workflow (`dev-env-cleanup.yml` was deleted, M4-21-11). A `workflow_dispatch` run against the persistent `development` environment is unaffected and stays up.
+Railway is expected to automatically deprovision the PR's ephemeral environment (Postgres included) when the PR closes, merged or not (M4-21) — there is no repo-side teardown workflow (`dev-env-cleanup.yml` was deleted, M4-21-11). This is Railway's documented behavior, not yet independently confirmed for this project — see `docs/deploy-model.md`'s caveat and task-131 (M4-21-07) Part 4 step 15. A `workflow_dispatch` run against the persistent `development` environment is unaffected and stays up.
 
 ---
 

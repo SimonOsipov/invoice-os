@@ -12,10 +12,21 @@ environment.
   coherently, from the PR's code, into a **fresh ephemeral Railway environment forked from
   `development`** (Railway's own PR Environments feature, task-131) — never into
   `development` itself. (`.github/workflows/dev-env.yml`)
-- **Close a PR** → Railway automatically deprovisions that PR's ephemeral environment.
+- **Close a PR (merged or abandoned — GitHub's `closed` event fires for both)** →
+  Railway automatically deprovisions that PR's ephemeral environment, Postgres included.
   There is no repo-side teardown workflow (`dev-env-cleanup.yml` was **deleted**, M4-21-11
   — see Decision `[cleanup-workflow-deleted]`): tearing down `development` on every PR
   close would contradict Decision `[dev-env-status]` below.
+  > **⚠ Not yet empirically confirmed.** This is Railway's documented PR-Environments
+  > behavior, not something this repo has observed happen. Task-131 (M4-21-07, Part 4,
+  > step 15 — HUMAN-ONLY) requires closing a throwaway PR and recording whether Railway
+  > actually removes the environment; as of this writing that task is still **In
+  > Progress**, so the observation has not been done. If it turns out Railway does
+  > *not* auto-remove a closed PR's environment, environments would accumulate
+  > unboundedly (cost + orphaned Postgres instances) and a real teardown mechanism would
+  > need to be designed — **not** a reinstated shared-env `dev-env-cleanup.yml` sweep,
+  > per Decision `[cleanup-workflow-deleted]`, since per-PR environments have no shared
+  > target to sweep. Whoever completes task-131 must record the result here.
 - **`workflow_dispatch`** → targets the **persistent `development` environment** directly
   (never an ephemeral PR environment) — the same fleet-deploy + verify flow, plus the
   reset-seed step (M4-21-06), still serialized against itself (`dev-preview-development`-

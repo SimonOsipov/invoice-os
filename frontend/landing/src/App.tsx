@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
+import { DemoModal } from './components/DemoModal'
 import { Hero } from './components/Hero'
 import { TrustStrip } from './components/TrustStrip'
 import { HowItWorks } from './components/HowItWorks'
@@ -17,6 +18,8 @@ import { Footer } from './components/Footer'
 // .mono, .grid-bg, .dot-bg) that every section relies on.
 export default function App() {
   const [signInOpen, setSignInOpen] = useState(false)
+  const [demoOpen, setDemoOpen] = useState(false)
+  const onBookDemo = () => setDemoOpen(true)
   return (
     <div
       className="if-v2"
@@ -28,18 +31,19 @@ export default function App() {
         overflowX: 'hidden',
       }}
     >
-      <Nav onSignIn={() => setSignInOpen(true)} />
-      <Hero />
+      <Nav onSignIn={() => setSignInOpen(true)} onBookDemo={onBookDemo} />
+      <Hero onBookDemo={onBookDemo} />
       <TrustStrip />
       <HowItWorks />
       <Modules />
       <Compliance />
-      <Audience />
+      <Audience onBookDemo={onBookDemo} />
       <Developers />
-      <Pricing />
-      <DemoCta />
-      <Footer />
+      <Pricing onBookDemo={onBookDemo} />
+      <DemoCta onBookDemo={onBookDemo} />
+      <Footer onBookDemo={onBookDemo} />
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
+      {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
     </div>
   )
 }

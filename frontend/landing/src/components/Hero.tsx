@@ -1,6 +1,6 @@
 import { HERO_CHECKS } from '../data'
 
-export function Hero() {
+export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <section id="top" className="grid-bg" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
       <div
@@ -54,9 +54,9 @@ export function Hero() {
             validate, approve, archive, and transmit compliant invoices — through the dashboard or the API.
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 36 }}>
-            <a href="#demo" className="v2-btn v2-btn-primary" style={{ height: 46, padding: '0 22px', fontSize: 15 }}>
+            <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
               Book a demo →
-            </a>
+            </button>
             <a href="#" className="v2-btn v2-btn-ghost" style={{ height: 46, padding: '0 22px', fontSize: 15 }}>
               Explore the platform
             </a>

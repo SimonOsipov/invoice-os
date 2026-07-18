@@ -7,7 +7,7 @@ const seg = (active: boolean) => ({
   fg: active ? 'var(--fg-1)' : 'var(--fg-3)',
 })
 
-export function Pricing() {
+export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
   const [annual, setAnnual] = useState(false)
   const m = seg(!annual)
   const a = seg(annual)
@@ -110,13 +110,13 @@ export function Pricing() {
                 <div className="mono" style={{ fontSize: 11, color: c.subColor, marginBottom: 24 }}>
                   {meta}
                 </div>
-                <a
-                  href="#demo"
+                <button
+                  onClick={onBookDemo}
                   className="v2-btn"
-                  style={{ background: c.btnBg, color: c.btnFg, border: `1px solid ${c.btnBorder}`, width: '100%', justifyContent: 'center', marginBottom: 24 }}
+                  style={{ background: c.btnBg, color: c.btnFg, border: `1px solid ${c.btnBorder}`, width: '100%', justifyContent: 'center', marginBottom: 24, cursor: 'pointer' }}
                 >
                   {p.cta}
-                </a>
+                </button>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
                   {p.features.map((f) => (
                     <div key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>

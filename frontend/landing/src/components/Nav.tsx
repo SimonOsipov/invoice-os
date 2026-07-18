@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { label: 'Pricing', href: '#pricing' },
 ]
 
-export function Nav({ onSignIn }: { onSignIn: () => void }) {
+export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo: () => void }) {
   return (
     <header
       style={{
@@ -64,9 +64,9 @@ export function Nav({ onSignIn }: { onSignIn: () => void }) {
           <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 38, cursor: 'pointer' }}>
             Sign in
           </button>
-          <a href="#demo" className="v2-btn v2-btn-primary" style={{ height: 38 }}>
+          <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 38, cursor: 'pointer' }}>
             Book a demo
-          </a>
+          </button>
         </div>
       </div>
     </header>

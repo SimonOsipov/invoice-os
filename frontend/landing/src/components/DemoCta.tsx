@@ -1,4 +1,4 @@
-export function DemoCta() {
+export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <section id="demo" className="dot-bg" style={{ borderBottom: '1px solid var(--line-1)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '96px 32px' }}>
@@ -92,10 +92,9 @@ export function DemoCta() {
                   </div>
                 </div>
               </div>
-              {/* Stub — real lead capture is out of scope for LAND-01. */}
-              <a href="#" className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 4 }}>
+              <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 4, cursor: 'pointer' }}>
                 Book my demo →
-              </a>
+              </button>
               <p style={{ fontSize: 12, color: 'var(--fg-3)', textAlign: 'center', margin: '2px 0 0' }}>
                 No card required · SOC 2 in progress · Data resident in-region
               </p>

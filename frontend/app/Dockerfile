@@ -16,6 +16,10 @@ RUN pnpm install --frozen-lockfile
 # default showcase build and the smoke suite are unaffected.
 ARG VITE_GATEWAY_URL
 ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
+# Same mechanism, for Sign out's landing-page redirect (M4-21-10). Unset → landingBase()
+# returns null (frontend/app/src/auth.ts) rather than routing to a hardcoded deploy.
+ARG VITE_LANDING_URL
+ENV VITE_LANDING_URL=$VITE_LANDING_URL
 RUN pnpm --filter @invoice-os/app build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----

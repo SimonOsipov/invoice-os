@@ -57,14 +57,18 @@ name: Dev Env (deploy full fleet + verify)
 #     <GATEWAY_URL>/.well-known/jwks.json so the mock round trip verifies.
 #     A PR environment inherits this from `development` via Railway's own
 #     environment-fork behavior (task-129's variable topology).
-#  3. GitHub secret DATABASE_SUPERUSER_URL_DEV = the dev Postgres PUBLIC
-#     superuser DSN (GitHub runners can't reach *.railway.internal; the
-#     reset+seed needs the superuser because `tenants` is FORCE ROW LEVEL
-#     SECURITY). NOTE: this DSN always points at `development`'s own
-#     Postgres — on a PR-environment run the `test:api`/`test:demo` steps
-#     below still read/write THAT database, not the PR's own forked
-#     Postgres. Replacing this with per-environment discovery is a later
-#     subtask (M4-21-10), deliberately not done here (M4-21-06 scope).
+#  3. (M4-21-10) No GitHub secret is needed anymore for the superuser DSN — this workflow
+#     no longer reads the DATABASE_SUPERUSER_URL_DEV secret at all (it should be deleted
+#     from the repo once this lands on main, since main's PRE-M4-21-10 dev-env.yml still
+#     reads it until then). Every run (both the PR-environment
+#     `e2e` job and the `development`-only `reset-seed` job) discovers its OWN
+#     environment's Postgres DATABASE_PUBLIC_URL fresh via the Railway GraphQL API
+#     (RAILWAY_SVC_POSTGRES_ID above + that run's resolved environment id), masked with
+#     `::add-mask::` inside the job that uses it and passed via $GITHUB_ENV — never a job
+#     output. GitHub runners can't reach *.railway.internal, so the PUBLIC proxy DSN is
+#     still required; the superuser is still required because `tenants` is FORCE ROW
+#     LEVEL SECURITY. `make demo-reset`'s same-named LOCAL env var is a human-supplied
+#     value, unaffected by the GitHub secret's deletion.
 #  4. Secrets: RAILWAY_API_DEV_TOKEN (dev project token, pre-existing) AND
 #     RAILWAY_API_TOKEN (account-scoped, task-131 human-provisioned — the PR
 #     path FAILS LOUDLY, not silently, if this is missing).
@@ -143,6 +147,12 @@ env:
   RAILWAY_SVC_APP_ID: cb4a38ca-4440-4a0a-892e-c01d8013bb9a
   RAILWAY_SVC_LANDING_ID: 21e62d5d-82c9-48d8-8f6b-b2a53104c046
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
+  # M4-21-10: the Postgres service id (recorded in docs/migrations.md's provisioning
+  # Appendix), used to discover each run's superuser DSN fresh via GraphQL instead of the
+  # deleted DATABASE_SUPERUSER_URL_DEV secret — same stable-resource-id pattern as the
+  # four service ids above (never the per-environment DSN value itself, which is always
+  # discovered, F7).
+  RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
 
 jobs:
   # 0. CI gate: never deploy red code. On a PR, wait for the required `CI`
@@ -545,12 +555,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: TRUNCATE + re-seed tenant fixtures
+      - name: Discover the development Postgres superuser DSN (M4-21-10; never a job output — masked here)
         env:
-          DSN: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}
+          RAILWAY_QUERY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
         run: |
-          if [ -z "$DSN" ]; then
-            echo "::error::DATABASE_SUPERUSER_URL_DEV is not set (dev Postgres PUBLIC superuser DSN — see this workflow's header + docs/topology-e2e.md)"
+          set -euo pipefail
+          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
+          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
+                --request POST \
+                --url https://backboard.railway.com/graphql/v2 \
+                --header "Project-Access-Token: $RAILWAY_QUERY_TOKEN" \
+                --header "Content-Type: application/json" \
+                --data "$query_body"); then
+            echo "::error::Railway GraphQL request failed discovering the development Postgres superuser DSN"
+            exit 1
+          fi
+          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
+            echo "::error::Railway GraphQL error discovering the Postgres superuser DSN: $(echo "$resp" | jq -c '.errors')"
+            exit 1
+          fi
+          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
+          if [ -z "$dsn" ]; then
+            echo "::error::DATABASE_PUBLIC_URL not found on the Postgres service (id $RAILWAY_SVC_POSTGRES_ID) in the development environment"
+            exit 1
+          fi
+          echo "::add-mask::$dsn"
+          echo "DSN=$dsn" >> "$GITHUB_ENV"
+      - name: TRUNCATE + re-seed tenant fixtures
+        run: |
+          if [ -z "${DSN:-}" ]; then
+            echo "::error::DSN was not populated by the discovery step above"
             exit 1
           fi
           echo "Resetting dev tenant fixtures (data-only, schema untouched) ..."
@@ -639,6 +674,46 @@ jobs:
           done
       - name: Install Chromium
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+      - name: Discover the E2E superuser DSN (M4-21-10; never a job output — masked here)
+        # Replaces the deleted DATABASE_SUPERUSER_URL_DEV secret: discovers THIS run's own
+        # environment's Postgres DATABASE_PUBLIC_URL fresh via Railway GraphQL (never the
+        # shared development database on a PR run — that was the M4-21-06 gap this closes)
+        # and exports it for the two steps below via $GITHUB_ENV (job-local, not a job
+        # output). Same conditional auth-header pattern as the resolve-env job's own
+        # Railway GraphQL calls.
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ needs.resolve-env.outputs.environment_id }}
+        run: |
+          set -euo pipefail
+          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
+            auth_header="Project-Access-Token: $RAILWAY_QUERY_TOKEN"
+          else
+            auth_header="Authorization: Bearer $RAILWAY_QUERY_TOKEN"
+          fi
+          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
+          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
+                --request POST \
+                --url https://backboard.railway.com/graphql/v2 \
+                --header "$auth_header" \
+                --header "Content-Type: application/json" \
+                --data "$query_body"); then
+            echo "::error::Railway GraphQL request failed discovering the Postgres superuser DSN for environment $ENV_ID"
+            exit 1
+          fi
+          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
+            echo "::error::Railway GraphQL error discovering the Postgres superuser DSN: $(echo "$resp" | jq -c '.errors')"
+            exit 1
+          fi
+          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
+          if [ -z "$dsn" ]; then
+            echo "::error::DATABASE_PUBLIC_URL not found on the Postgres service (id $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID"
+            exit 1
+          fi
+          echo "::add-mask::$dsn"
+          echo "DATABASE_SUPERUSER_URL_DEV=$dsn" >> "$GITHUB_ENV"
       - name: Smoke (landing + ops-console render)
         run: pnpm --filter @invoice-os/e2e test:smoke
       - name: API E2E (typed contract suite)
@@ -648,16 +723,14 @@ jobs:
         # load-bearing, not cosmetic. GATEWAY_URL comes from this job's `env:`
         # (needs.resolve-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
-        # browser project). Needs the superuser DSN for the same reason the
-        # demo step below does — assertions with no read API: PERF-05's
-        # Day-60 stamp gate reads invoice_status_history, and PERF-03/04
-        # compare the stamped rule_set_version_id against v2's uuid queried
-        # live (api/db.ts). Without it those three degrade to a skip, which is
-        # how M4-04-08 shipped an invisible green — api/db.ts's
-        # requireDbInCI now fails the run instead of skipping if this env:
-        # block ever goes missing.
-        env:
-          DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}
+        # browser project). Needs the superuser DSN (DATABASE_SUPERUSER_URL_DEV,
+        # exported by the discovery step above) for the same reason the demo
+        # step below does — assertions with no read API: PERF-05's Day-60
+        # stamp gate reads invoice_status_history, and PERF-03/04 compare the
+        # stamped rule_set_version_id against v2's uuid queried live
+        # (api/db.ts). Without it those three degrade to a skip, which is how
+        # M4-04-08 shipped an invisible green — api/db.ts's requireDbInCI
+        # now fails the run instead of skipping if the DSN ever goes missing.
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
@@ -668,10 +741,9 @@ jobs:
         # Runs LAST (after topology): the demo kill-switches vat-standard-rate then
         # restores it, so no rule-dependent suite runs after it in the same run; the
         # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7's
-        # audit assertion needs the superuser DSN; GATEWAY_URL/APP_URL come from this
-        # job's `env:` (the seam reads them), and chromium is already installed.
-        env:
-          DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}
+        # audit assertion needs the superuser DSN (DATABASE_SUPERUSER_URL_DEV, exported
+        # by the discovery step above); GATEWAY_URL/APP_URL come from this job's `env:`
+        # (the seam reads them), and chromium is already installed.
         run: pnpm --filter @invoice-os/e2e test:demo
       - name: Upload smoke Playwright report
         if: failure()

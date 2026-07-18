@@ -16,21 +16,31 @@ environment.
   > this repo's PR events, so its PR Environments feature never created anything here —
   > see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below. M4-23
   > replaces it with self-provisioning from CI.
-- **Close a PR (merged or abandoned)** → **nothing is deprovisioned.** There is no
-  automatic teardown, and there is no repo-side teardown workflow
-  (`dev-env-cleanup.yml` was **deleted**, M4-21-11 — see Decision
-  `[cleanup-workflow-deleted]`; tearing down `development` on every PR close would
-  contradict Decision `[dev-env-status]` below).
-  > **Corrected (M4-23).** This previously claimed Railway automatically deprovisions
-  > the PR's environment, Postgres included, on close. That was Railway's *documented
-  > PR-Environments behavior* — a feature that is OFF and never applied to this project
-  > (see [Railway PR Environments are OFF](#railway-pr-environments-are-off)). It was
-  > never observed happening here: task-131 was supposed to confirm it by closing a
-  > throwaway PR and never did. Environments therefore accumulate until something removes
-  > them (cost + orphaned Postgres instances). **A teardown mechanism is still to be
-  > built — M4-23-06.** It will not be a reinstated shared-env `dev-env-cleanup.yml`
-  > sweep (per Decision `[cleanup-workflow-deleted]`, per-PR environments have no shared
-  > target to sweep).
+- **Close a PR (merged or abandoned)** → `.github/workflows/dev-env-teardown.yml`
+  (**M4-23-05**) deletes that PR's **whole ephemeral environment** via `environmentDelete`,
+  at environment granularity (Decision `[teardown-deletes-environment]`) — not the old
+  11-service `railway down` matrix. It resolves the target by exact `pr-<N>` name among
+  `isEphemeral: true` environments **only**, so it can never touch `development`, and it
+  shares `dev-env.yml`'s per-PR concurrency group (`dev-preview-<N>`) with `queue: max`, so
+  a teardown queued behind an in-flight deploy of that same PR waits rather than deleting
+  the environment mid-deploy (Decision `[teardown-shares-deploy-lock]`).
+  Teardown is **best-effort — the fast path, not the guarantee.** A `closed` event that
+  does not fire leaves an orphan; the daily sweeper (M4-23-07) reconciles ephemeral
+  environments against PR state and is the **authority**
+  (Decision `[teardown-best-effort-sweeper-authoritative]`). "Best-effort" refers to the
+  *trigger*, not to the delete: an environment that is present and could not be deleted
+  fails the run loudly (exit 1), because a red teardown run is the only notification
+  channel there is. An already-absent environment is **success** (exit 0) — nothing to
+  delete is the desired end state, and the sweeper may simply have got there first.
+  > **Corrected twice (M4-23).** This originally claimed Railway automatically
+  > deprovisions the PR's environment, Postgres included, on close. That was Railway's
+  > *documented PR-Environments behavior* — a feature that is OFF and never applied to
+  > this project (see [Railway PR Environments are OFF](#railway-pr-environments-are-off)),
+  > never observed happening here. It was then corrected to "nothing is deprovisioned, a
+  > teardown mechanism is still to be built — M4-23-06", which was right about the gap but
+  > **misattributed the subtask**: teardown is **M4-23-05**; M4-23-06 is `ShouldReap`, the
+  > sweeper's pure reap predicate. M4-23-05 closed the gap — see
+  > [Teardown](#teardown-m4-23-05) below.
 - **`workflow_dispatch`** → targets the **persistent `development` environment** directly
   (never an ephemeral PR environment) — the same fleet-deploy + verify flow, plus the
   reset-seed step (M4-21-06), still serialized against itself (`dev-preview-development`-
@@ -57,7 +67,9 @@ PR opened ──> dev-env.yml:
                 ──> verify: smoke (landing + ops-console) + api + topology (app login,
                     cross-tenant isolation, fleet /healthz/fleet gate) + demo
               ──> PR stays open: environment stays up
-PR closed  ──> Railway auto-deprovisions the PR's ephemeral environment (no repo workflow)
+PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
+               ephemeral environments ──> environmentDelete ──> confirm by re-query.
+               Best-effort; the daily sweeper (M4-23-07) is the authority.
 
 workflow_dispatch ──> targets `development` directly (persistent, never deprovisioned)
                    ──> same deploy + verify flow, PLUS reset-seed (data-only, superuser)
@@ -221,6 +233,53 @@ never in the deploy fleet.
 This empty-Watch-Paths invariant remains Railway-side dashboard config, not codified
 directly in `railway.json` (per the M3-16 decision above) — only *asserted* by CI now, not
 *set* by it.
+
+## Teardown (M4-23-05)
+
+`.github/workflows/dev-env-teardown.yml` deletes a PR's ephemeral environment when the PR
+closes. `scripts/ci/railway-env.sh delete-environment <name>` does the work.
+
+**The trigger was selected by experiment, not by argument.** The open question was whether
+`pull_request: types: [closed]` even *fires* for a workflow file that is not yet on the base
+branch — if it did not, teardown would have needed `pull_request_target` and would have been
+provable only after merge.
+
+| | |
+|---|---|
+| Method | Throwaway PR **#68** (branch `probe/teardown-trigger`, based on the feature branch), carrying a trivial probe workflow present **only on that branch** and never on the base |
+| Control | `action=opened` → run **29660556112** — fired |
+| Decisive | `action=closed`, `merged=false` → run **29660575019** — fired, 10s after an **unmerged** close |
+| Result | **`pull_request: types: [closed]` fires on unmerged close.** `pull_request_target` is not needed; there is no post-merge-only limitation |
+
+The `opened` control was load-bearing, not ceremony: without it a non-fire on close would
+have been uninterpretable — it could not distinguish "the `closed` type does not fire" from
+"this file was never discovered at all". This **supersedes** the earlier PR #52 observation,
+which was confounded: #52 touched no workflow file and the cleanup workflow was already on
+`main` throughout, so it only ever showed which ref an *already-merged* workflow was read
+from — never that a PR-branch-only workflow would be **discovered** on close.
+
+One fire is sufficient to select the trigger. GitHub community#26657 alleges **inconsistent**
+firing, not non-firing, and inconsistency is already owned by the sweeper — so this is not
+treated as a guarantee (Decision `[teardown-best-effort-sweeper-authoritative]`).
+
+Two details that are load-bearing rather than stylistic:
+
+- **Checkout is pinned to `github.event.pull_request.base.sha`.** Mandatory, not tidiness:
+  this remote carries 66 `refs/pull/*/head` and **zero** `refs/pull/*/merge`, i.e. the merge
+  ref is deleted at the moment of close, so a default checkout would race that deletion.
+  Teardown needs only trusted base-branch code (`railway-env.sh` and `tools/prenv`) anyway.
+- **The delete is proved by an independent re-query, never by `environmentDelete`'s return
+  value.** That mutation returns a bare Boolean — indistinguishable from a silent no-op, the
+  same shape this repo already distrusts for `serviceInstanceRedeploy`. Absent after the
+  mutation counts as success *even if the mutation reported an error*, which also correctly
+  absorbs the sweeper racing teardown to the same delete.
+
+There are two independent never-delete-`development` guards: the name is resolved among
+`isEphemeral: true` environments only, and the resolved id is separately refused if it
+equals `RAILWAY_DEV_ENVIRONMENT_ID`. The second catches what the first structurally cannot —
+Railway ever mislabelling `development` as ephemeral, or a human renaming it to `pr-<N>`.
+The subcommand takes a **name and never an id** for the same reason: an id argument would
+let a caller pass `development`'s id straight through and bypass the ephemeral filter.
 
 ## What a fork actually inherits (M4-23-04, measured)
 

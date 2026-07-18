@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
 #                            ensure-environment <name>|audit-sealed-variables|
-#                            reconcile-fork <environment-id>>
+#                            reconcile-fork <environment-id>|
+#                            delete-environment <name>>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -34,6 +35,11 @@
 # `ensure-environment <name>` (M4-23-03) is the create-or-reuse path that replaced the
 # ~300s poll for an environment Railway was supposed to create for us. Idempotent: it
 # looks the name up first and mutates nothing when it already exists.
+#
+# `delete-environment <name>` (M4-23-05) is the teardown path, called by
+# dev-env-teardown.yml on PR close. It takes a NAME and never an id, so the
+# never-delete-`development` guard cannot be bypassed by the caller, and it proves the
+# delete by an independent re-query rather than by environmentDelete's bare Boolean.
 #
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
@@ -98,6 +104,14 @@ ENV_LIST_QUERY='query envList($p: String!) {
 # shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
 ENV_CREATE_MUTATION='mutation createPrEnvironment($input: EnvironmentCreateInput!) {
   environmentCreate(input: $input) { id name isEphemeral }
+}'
+
+# M4-23-05. environmentDelete returns a BARE Boolean, the same shape this file already
+# distrusts for serviceInstanceRedeploy: `true` is indistinguishable from a silent no-op.
+# So the return value is NEVER the proof of a delete — an independent re-query is.
+# shellcheck disable=SC2016  # $id is a GraphQL variable — it must NOT be shell-expanded.
+ENV_DELETE_MUTATION='mutation deletePrEnvironment($id: String!) {
+  environmentDelete(id: $id)
 }'
 
 # Response of the most recent successful GraphQL call.
@@ -371,6 +385,102 @@ cmd_ensure_environment() {
   echo "::error::Failed to create or adopt the ephemeral environment '$name' after 2 rounds, each followed by an independent re-query."
   echo "  attempt 1: $err1"
   echo "  attempt 2: $err2"
+  exit 1
+}
+
+# cmd_delete_environment <name>
+# M4-23-05. Deletes one PR's ephemeral environment on PR close.
+#
+# Takes a NAME, never an id. That is deliberate and load-bearing: an id argument would let
+# a caller pass `development`'s id straight through and bypass the isEphemeral guard
+# entirely. Name-only makes the guard non-bypassable from the workflow.
+#
+# Exit-code contract — pinned, and NOT to be blurred into "best-effort":
+#   absent                              -> 0  (nothing to delete IS the desired end state)
+#   deleted + confirmed by re-query     -> 0
+#   present, delete not confirmed       -> 1  (a delete that demonstrably did not happen)
+#   non-ephemeral / ambiguous / API down-> 1  (fail loud, never guess)
+# "Best-effort" ([teardown-best-effort-sweeper-authoritative]) describes the TRIGGER not
+# firing. It does not license swallowing a failed delete: a red teardown run is the only
+# notification channel there is, so do NOT add continue-on-error to the workflow.
+cmd_delete_environment() {
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    echo "::error::usage: railway-env.sh delete-environment <name>"
+    exit 2
+  fi
+  require_env
+  # NOT require_source_env — teardown forks nothing, so it has no source environment.
+
+  echo "Looking for an ephemeral environment named '$name' in project $RAILWAY_PROJECT_ID ..."
+
+  # lookup_environment supplies every safety property this command needs, so it is reused
+  # verbatim rather than reimplemented: it exits 1 on >1 match (refusing to guess which
+  # environment to DELETE), exits 1 on a non-ephemeral match (the primary never-delete-
+  # `development` guard, whose error text at :268 already names this caller), and — most
+  # importantly — NEVER reports a transport or GraphQL failure as "absent". That last
+  # property is what stops an API blip being logged as a successful teardown.
+  if ! lookup_environment "$name"; then
+    echo "No environment named '$name' exists in project $RAILWAY_PROJECT_ID — nothing to delete. This is the desired end state: the PR was never deployed, or the sweeper reaped it first."
+    return 0
+  fi
+
+  # Second, independent guard, mirroring cmd_reconcile_fork:925-928. The isEphemeral filter
+  # above is the primary one; this catches the residual cases it structurally cannot —
+  # Railway ever mislabelling `development` as ephemeral, or a human renaming `development`
+  # to `pr-<N>`.
+  if [ "$LOOKUP_ID" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to delete the persistent development environment ($LOOKUP_ID): an environment named '$name' resolved to the id this workflow knows as RAILWAY_DEV_ENVIRONMENT_ID. The development environment is persistent ([dev-env-status]) and no teardown may ever remove it. Investigate by hand — either Railway is reporting it as ephemeral, or it has been renamed."
+    exit 1
+  fi
+
+  # Captured up front and used everywhere below. lookup_environment CLEARS LOOKUP_ID when
+  # it reports absent, so the confirming re-query destroys it moments before the success
+  # line is logged — reading LOOKUP_ID after that point silently prints an empty id and
+  # throws away the one forensic detail a teardown log needs.
+  local env_id="$LOOKUP_ID"
+
+  echo "Deleting ephemeral environment '$name' ($env_id) ..."
+
+  local body err1="" err2="" why
+  body=$(gql_body "$ENV_DELETE_MUTATION" "$(jq -n --arg id "$env_id" '{id: $id}')")
+
+  # Two rounds, each mutate-then-INDEPENDENTLY-re-query. Absent after the mutation means
+  # success EVEN IF the mutation itself reported an error — the same adopt-after-apparent-
+  # failure discipline attempt_create applies, and it also correctly absorbs the sweeper
+  # racing us to the very same delete.
+  local round wait
+  for round in 1 2; do
+    why=""
+    if ! graphql_try "$body" "deleting environment '$name' ($env_id)"; then
+      why="$GQL_ERROR"
+      echo "::warning::environmentDelete (round $round) failed: $why"
+      echo "Railway can report failure having deleted the environment anyway — re-querying instead of trusting the mutation's verdict."
+    else
+      echo "environmentDelete (round $round) returned without error; confirming with an INDEPENDENT re-query rather than trusting a bare Boolean ..."
+    fi
+
+    if [ "$round" = "1" ]; then wait=5; else wait=10; fi
+    sleep "$wait"
+
+    if ! lookup_environment "$name"; then
+      if [ -n "$why" ]; then
+        echo "Environment '$name' is gone, confirmed by an independent re-query, after a delete that reported failure."
+      else
+        echo "Deleted environment '$name' ($env_id), confirmed by an independent re-query."
+      fi
+      return 0
+    fi
+
+    if [ -z "$why" ]; then
+      why="environmentDelete (round $round) reported success but an independent re-query still finds environment '$name' ($env_id)"
+    fi
+    if [ "$round" = "1" ]; then err1="$why"; else err2="$why"; fi
+  done
+
+  echo "::error::Failed to delete the ephemeral environment '$name' ($env_id) after 2 rounds, each followed by an independent re-query. The environment is still present, so this is a real failure and not a no-op — the orphan sweeper (M4-23-07) will reap it, but investigate why teardown could not."
+  echo "  round 1: $err1"
+  echo "  round 2: $err2"
   exit 1
 }
 
@@ -943,8 +1053,9 @@ case "${1:-}" in
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
+  delete-environment)        cmd_delete_environment "${2:-}" ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>|delete-environment <name>>"
     exit 2
     ;;
 esac

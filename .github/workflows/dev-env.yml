@@ -767,12 +767,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # NOTE: there is still NO scale-down job here for a PR run — a PR
-  # environment's teardown is Railway's own automatic PR-Environment
-  # deprovisioning (task-131 Part 4) once M4-21-07 is live. A
-  # workflow_dispatch run against `development` still stays up.
-  # dev-env-cleanup.yml (the old shared-env `railway down` sweep, whose
-  # `dev-preview-shared` concurrency group no longer intersects this
-  # workflow's per-PR groups above) is DELETED (M4-21-11) — see Decision
-  # [cleanup-workflow-deleted]: tearing down `development` would contradict
-  # Decision [dev-env-status], which keeps it persistent.
+  # NOTE: there is still no scale-down job here — teardown is a separate
+  # workflow, .github/workflows/dev-env-teardown.yml (M4-23-05), which deletes
+  # the WHOLE ephemeral environment via environmentDelete on PR close. It
+  # declares the SAME per-PR concurrency group as this workflow
+  # (`dev-preview-<N>`, see :63-65) with `queue: max`, so a teardown queued
+  # behind an in-flight deploy of the same PR waits for it rather than deleting
+  # the environment mid-deploy ([teardown-shares-deploy-lock]).
+  #
+  # It replaces the deleted dev-env-cleanup.yml (M4-21-11), which scaled 11
+  # services to zero inside one SHARED environment — the wrong unit now that
+  # each PR owns an environment ([teardown-deletes-environment],
+  # [cleanup-workflow-returns] reverses [cleanup-workflow-deleted]). Railway's
+  # own PR-Environment deprovisioning is NOT the mechanism and never was: that
+  # feature is OFF here and never created anything (M4-23-02).
+  #
+  # Teardown is the FAST path, not the guarantee: a `closed` event that does
+  # not fire leaves an orphan, so dev-env-sweeper.yml (M4-23-07) reconciles
+  # ephemeral environments against PR state daily and is the authority
+  # ([teardown-best-effort-sweeper-authoritative]).
+  #
+  # A workflow_dispatch run against `development` still stays up: `development`
+  # is persistent ([dev-env-status]) and no workflow ever deletes it.

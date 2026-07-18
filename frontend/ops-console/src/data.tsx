@@ -4,9 +4,9 @@
 // stay pure layout.
 
 import type { ReactNode } from 'react'
-import { buildEvidenceBundles, type EvidenceBundle } from './charts'
+import { buildEvidenceBundles, computeBillLine, naira, nairaC, SCALE_PLAN, spendTotals, type EvidenceBundle } from './charts'
 import { Icon } from './icons'
-import type { ApiKey, ApiRequest, Delivery, Env, Job, JobState, RateLimit, Screen, Webhook } from './types'
+import type { ApiKey, ApiRequest, BillItem, Delivery, Env, InvoiceKind, InvoiceStatus, Job, JobState, PastInvoice, Quota, RateLimit, Screen, Webhook } from './types'
 
 /* ------------------------------------------------------------------ */
 /* Common icon glyphs (this.g(paths, size) in the prototype)           */
@@ -223,3 +223,50 @@ export const RATE_LIMIT: Record<Env, RateLimit> = {
 // proto:1014-1015. Two-entry lookup maps kept beside the seed they colour.
 export const METHOD_BG: Record<string, string> = { POST: 'var(--accent-tint)', GET: 'var(--status-muted-bg)' }
 export const METHOD_FG: Record<string, string> = { POST: 'var(--accent)', GET: 'var(--fg-2)' }
+
+/* ------------------------------------------------------------------ */
+/* Usage & billing (proto:1029-1041)                                   */
+/* ------------------------------------------------------------------ */
+
+// proto:468-487. Only the *amount* fields below are computed; the meter's headline,
+// legend and sub-stat figures are seed literals formatted with `fmt` at render.
+export const QUOTA: Quota = {
+  used: 48214,
+  includedWidth: '83%',
+  overWidth: '17%',
+  clearedInvoices: 46820,
+  evidenceExports: 1020,
+}
+
+// proto:1029-1034. `label`, `detail`, `qty` and `color` are display literals ported
+// verbatim (the `detail` strings use U+00D7 MULTIPLICATION SIGN and the platform-fee
+// qty is U+2014 EM DASH). Every ₦ amount routes through `computeBillLine`/`SCALE_PLAN`
+// so the unit-tested arithmetic and the rendered figure cannot drift apart. The
+// Evidence exports row has no amount at all — it renders the word `included`.
+//
+// These four rows deliberately do NOT sum to the total row: Σ = ₦3,417,788 while the
+// total renders `spendTotals().proj` = ₦5.08M. The billing line items and the seeded
+// spend series are unlinked streams in the prototype (task-138 GAP-4). Do not
+// reconcile them — porting the discrepancy is the correct behaviour.
+export const BILL_ITEMS: BillItem[] = [
+  { label: 'Scale platform fee', detail: 'Monthly base', qty: '—', amount: naira(SCALE_PLAN.baseFee), color: 'var(--fg-1)' },
+  { label: 'Cleared invoices', detail: '46,820 × ₦40', qty: '46,820', amount: naira(computeBillLine(46820, SCALE_PLAN.clearedRate)), color: 'var(--fg-1)' },
+  { label: 'Overage requests', detail: '8,214 over included × ₦42', qty: '8,214', amount: naira(computeBillLine(8214, SCALE_PLAN.overageRate)), color: 'var(--status-amber-text)' },
+  { label: 'Evidence exports', detail: '1,020 signed bundles', qty: '1,020', amount: 'included', color: 'var(--fg-3)' },
+]
+
+// proto:1036-1040. Keyed on `id` at render — never on `amount`, which mixes a computed
+// compact figure with three literals and would collide on a seed change.
+export const PAST_INVOICES: PastInvoice[] = [
+  { id: 'FB-2026-07', period: 'Jul 2026 · due Aug 5', amount: nairaC(spendTotals().proj), kind: 'open' },
+  { id: 'FB-2026-06', period: 'Jun 2026', amount: '₦3,184,200', kind: 'paid' },
+  { id: 'FB-2026-05', period: 'May 2026', amount: '₦2,940,500', kind: 'paid' },
+  { id: 'FB-2026-04', period: 'Apr 2026', amount: '₦2,712,300', kind: 'paid' },
+]
+
+// proto:1035's `invSt(kind)` — a two-entry lookup map, same shape as METHOD_BG/METHOD_FG
+// above, kept beside the seed it colours.
+export const INVOICE_STATUS: Record<InvoiceKind, InvoiceStatus> = {
+  paid: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'PAID' },
+  open: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'OPEN' },
+}

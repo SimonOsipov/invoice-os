@@ -130,7 +130,14 @@ export default function App() {
               onAddWebhook={() => showToast('New webhook endpoint added', 'WEBHOOKS')}
             />
           )}
-          {screen === 'billing' && <Billing />}
+          {screen === 'billing' && (
+            <Billing
+              /* proto:1118 — the tag is deliberately empty; Toast renders it
+                 conditionally, so no empty chip appears. */
+              onManagePlan={() => showToast('Plan management opened', '')}
+              onDownloadInvoice={(id) => showToast('Invoice ' + id + ' downloaded', 'PDF')}
+            />
+          )}
           {screen === 'status' && <Status />}
         </div>
       </main>

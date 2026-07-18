@@ -109,8 +109,8 @@ M4-21-04), so there is nothing to reset.
 
 The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
 `deploy-spas` are both green — so it depends on every service in the fleet actually coming
-up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Since
-M4-21 every environment is a **fresh, cold, from-scratch 11-service build** (a new PR fork,
+up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Every
+environment is now a **fresh, cold, from-scratch 11-service build** (a new PR fork,
 or a `workflow_dispatch` run against `development`), so this is the norm on every run, not
 an edge case: each Railway service has a service-level **Watch Paths** filter that makes
 `railway up` skip (no deployment created) when the diff misses the service's watched

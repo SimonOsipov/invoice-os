@@ -91,7 +91,7 @@ substitute `<svc>`/`<ctx>`:
 ```
 
 No `build.watchPatterns` field: Railway ignores it entirely regardless of value (§3), and
-per-PR ephemeral environments (M4-21) require every service to **always** rebuild — the
+per-PR ephemeral environments (M4-23) require every service to **always** rebuild — the
 opposite of what a populated watch-path list would suggest. Leave it out; do not add one
 "for documentation" — see §3.
 
@@ -105,12 +105,13 @@ Fixed by convention, not per-service choice:
 - **No `buildArgs`.** `SERVICE=<svc>` is set as a **service variable** instead (§4,
   and the §1 M2-12 note) — Railway config-as-code has no `buildArgs` field.
 
-## 3. Watch-path convention: always empty (M3-16, mandatory since M4-21)
+## 3. Watch-path convention: always empty (M3-16, mandatory since M4-23)
 
 **Every service's Watch Paths must be empty. Never populate them.** This inverts the
 recipe's original M1-06/M2-12 convention (a per-service path list, mirroring what changed
 on `main`) after M3-16's cold-fleet-deploy incident, and per-PR ephemeral environments
-(M4-21) make emptiness load-bearing rather than a nice-to-have:
+(designed in M4-21, actually created from M4-23) make emptiness load-bearing rather than a
+nice-to-have:
 
 - **Why empty is now required.** Every deploy target is either a *fresh ephemeral PR
   environment* (`dev-env.yml`'s `prepare-env` job forks the whole service graph from

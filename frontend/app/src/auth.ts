@@ -65,7 +65,7 @@ export const APP_PERSONAS: Record<PersonaId, Persona> = {
 // landing's own appBase()/opsBase() convention (frontend/landing/src/auth.ts) AND
 // gatewayBase()'s null-when-unset contract (@invoice-os/api-client/client, C8b/C8c): each
 // PR now deploys to its own ephemeral Railway environment with an unpredictable domain
-// suffix (M4-21), so a hardcoded dev-deploy fallback would silently point Sign out at the
+// suffix (M4-23), so a hardcoded dev-deploy fallback would silently point Sign out at the
 // wrong environment. Returns null rather than defaulting; callers must handle that.
 export const landingBase = (): string | null => {
   const v = (import.meta.env.VITE_LANDING_URL ?? '').trim().replace(/\/+$/, '')

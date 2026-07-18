@@ -159,3 +159,104 @@ describe('RATE_LIMIT', () => {
     })
   })
 })
+
+// Adversarial (QA Mode B, M4-20-07) — QUOTA/BILL_ITEMS/PAST_INVOICES/INVOICE_STATUS are
+// plain exported data.tsx constants like the blocks above, so they get the same direct
+// unit coverage. Billing.tsx keys its two `.map()` renders on `b.label` / `p.id`
+// (never `amount`, which mixes the string literal `'included'` with computed and
+// literal ₦ figures) — these pin the uniqueness that prevents a duplicate-key
+// console.error, plus the D1 (sidebar-only pct/widthPct/detail) and D2 (itemized rows
+// deliberately do not sum to the total) rulings from task-144's architecture pass as
+// regression guards.
+import { computeQuota, naira, nairaC, SCALE_PLAN, spendTotals } from './charts'
+import { BILL_ITEMS, INVOICE_STATUS, PAST_INVOICES, QUOTA } from './data'
+
+describe('BILL_ITEMS', () => {
+  it('bill_items_has_exactly_four_rows_with_unique_labels: guards key={b.label} against a duplicate-key console.error', () => {
+    expect(BILL_ITEMS.length).toBe(4)
+    const labels = BILL_ITEMS.map((b) => b.label)
+    expect(new Set(labels).size).toBe(4)
+  })
+
+  it('bill_items_amounts_are_byte_exact_and_evidence_exports_is_the_string_included_not_a_number: pins computeBillLine/naira wiring (proto:1029-1034)', () => {
+    expect(BILL_ITEMS.map((b) => b.amount)).toEqual(['₦1,200,000', '₦1,872,800', '₦344,988', 'included'])
+    const evidence = BILL_ITEMS.find((b) => b.label === 'Evidence exports')!
+    expect(evidence.amount).toBe('included')
+    expect(typeof evidence.amount).toBe('string')
+    expect(Number.isNaN(Number(evidence.amount))).toBe(true)
+  })
+
+  it('bill_items_do_not_sum_to_the_total_row_D2: Σ(baseFee, cleared, overage) is ₦3,417,788, which is NOT spendTotals().proj (₦5.08M) — the itemized rows and the seeded spend series are unlinked streams, and the total row must not be "fixed" to reconcile them', () => {
+    const numeric = BILL_ITEMS.filter((b) => b.amount !== 'included').map((b) => Number(b.amount.replace(/[₦,]/g, '')))
+    const sum = numeric.reduce((a, b) => a + b, 0)
+    expect(sum).toBe(3417788)
+    expect(naira(sum)).not.toBe(nairaC(spendTotals().proj))
+  })
+})
+
+describe('PAST_INVOICES', () => {
+  it('past_invoices_has_exactly_four_rows_with_unique_ids: guards key={p.id} against a duplicate-key console.error', () => {
+    expect(PAST_INVOICES.length).toBe(4)
+    const ids = PAST_INVOICES.map((p) => p.id)
+    expect(new Set(ids).size).toBe(4)
+  })
+
+  it('past_invoices_has_exactly_one_open_row_and_three_paid_rows', () => {
+    const kinds = PAST_INVOICES.map((p) => p.kind)
+    expect(kinds.filter((k) => k === 'open').length).toBe(1)
+    expect(kinds.filter((k) => k === 'paid').length).toBe(3)
+  })
+
+  it('past_invoices_paid_amounts_are_literal_full_digit_strings_not_compact_pins_the_intentional_formatting_mismatch: the OPEN row is compact, the three PAID rows are full-digit literals (proto:1037-1040) — do not unify', () => {
+    const paid = PAST_INVOICES.filter((p) => p.kind === 'paid')
+    expect(paid.map((p) => p.amount)).toEqual(['₦3,184,200', '₦2,940,500', '₦2,712,300'])
+  })
+
+  it('past_invoices_open_row_is_FB_2026_07_and_its_amount_is_computed_via_spendTotals_proj_not_a_literal', () => {
+    const open = PAST_INVOICES.find((p) => p.kind === 'open')!
+    expect(open.id).toBe('FB-2026-07')
+    expect(open.amount).toBe(nairaC(spendTotals().proj))
+    expect(open.amount).toBe('₦5.08M')
+  })
+})
+
+describe('INVOICE_STATUS', () => {
+  it('invoice_status_is_keyed_by_exactly_the_two_kind_values', () => {
+    expect(Object.keys(INVOICE_STATUS).sort()).toEqual(['open', 'paid'])
+  })
+
+  it('invoice_status_labels_and_text_colors_are_byte_exact: paid is green/PAID, open is amber/OPEN (proto:1035)', () => {
+    expect(INVOICE_STATUS.paid.label).toBe('PAID')
+    expect(INVOICE_STATUS.paid.text).toBe('var(--status-green-text)')
+    expect(INVOICE_STATUS.open.label).toBe('OPEN')
+    expect(INVOICE_STATUS.open.text).toBe('var(--status-amber-text)')
+  })
+})
+
+describe('QUOTA', () => {
+  it('quota_seed_is_byte_exact', () => {
+    expect(QUOTA).toEqual({
+      used: 48214,
+      includedWidth: '83%',
+      overWidth: '17%',
+      clearedInvoices: 46820,
+      evidenceExports: 1020,
+    })
+  })
+
+  it('quota_bar_segment_widths_are_literals_summing_to_100_percent_not_computeQuota_widthPct_D1: the meter is a two-segment flex track (proto:474-476), so computeQuota().widthPct (a single clamped fill, 100) is the wrong input — 83%/17% are literals consistent with the true 82.96%/17.04% share', () => {
+    const included = Number(QUOTA.includedWidth.replace('%', ''))
+    const over = Number(QUOTA.overWidth.replace('%', ''))
+    expect(included + over).toBe(100)
+    const q = computeQuota(QUOTA.used, SCALE_PLAN.includedRequests)
+    expect(q.widthPct).toBe(100)
+    expect(QUOTA.includedWidth).not.toBe(`${q.widthPct}%`)
+  })
+
+  it('quota_pct_and_detail_belong_to_the_sidebar_widget_not_this_screen_D1: computeQuota(48214, 40000).pct/.detail render nowhere in Billing.tsx — only .over (8,214) is consumed', () => {
+    const q = computeQuota(QUOTA.used, SCALE_PLAN.includedRequests)
+    expect(q.pct).toBe(120)
+    expect(q.detail).toBe('48.2K / 40K included · 8.2K over')
+    expect(q.over).toBe(8214)
+  })
+})

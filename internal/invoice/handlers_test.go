@@ -419,6 +419,31 @@ func TestCreateHandler_DuplicateNumber409(t *testing.T) {
 	}
 }
 
+// TestCreateHandler_DuplicateNumber409_ExactWireContract (PAR-04, M4-06-02):
+// tightens TestCreateHandler_DuplicateNumber409 (INV-HTTP-04, directly
+// above), which only asserts resp.Error is non-empty. This locks the EXACT
+// status code AND EXACT error string (Core AC#3, M4-06 Store-Level
+// Duplicate Rule: "Manual POST /v1/invoices continues to reject an
+// against-store duplicate with a friendly 409 'duplicate invoice
+// number'") -- byte for byte, not merely "some 4xx with some message" --
+// so a future statusForErr edit cannot silently reword or re-code the
+// manual duplicate response out from under any client parsing it.
+func TestCreateHandler_DuplicateNumber409_ExactWireContract(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		return Invoice{}, ErrDuplicateNumber
+	}
+	body := marshalCreate(t, createInvoiceRequest{EntityID: uuid.NewString(), InvoiceNumber: "INV-0001"})
+	rec, resp := doInvoiceCreate(t, create, &id, body)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body=%s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if resp.Error != "duplicate invoice number" {
+		t.Errorf("body error = %q, want exact %q (PAR-04, Core AC#3)", resp.Error, "duplicate invoice number")
+	}
+}
+
 // TestCreateHandler_201_WireShape (QA Mode B adversarial, Surface-Conflict
 // verification): a created invoice's RAW response body must be the
 // snake_case wire shape the story's System Design specifies -- entity_id,

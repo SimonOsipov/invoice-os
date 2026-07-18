@@ -463,6 +463,72 @@ func TestStoreCreate_DuplicateNumberRejectedAtomically(t *testing.T) {
 	}
 }
 
+// PAR-03 (M4-06-02): manual-path DB backstop, state-blind (Core AC#3/AC#4,
+// M4-06 Store-Level Duplicate Rule). Extends INV-STORE-06
+// (TestStoreCreate_DuplicateNumberRejectedAtomically, directly above) with
+// the state-blind half the M4-06 story adds: the unique index rejects a
+// duplicate Create regardless of the ALREADY-STORED sibling row's own
+// lifecycle state, not merely against a fresh draft.
+//
+//   - (a) mirrors INV-STORE-06 itself (a fresh draft sibling): first Create
+//     succeeds, an identical second Create -> ErrDuplicateNumber,
+//     superuser read-back exactly 1 row.
+//   - (b) the NEW case: a superuser-seeded NON-draft stored row (status
+//     'accepted', bypassing the state machine -- a fixture concern, per
+//     the story's own note) still backstops a manual Create for the same
+//     (entity, number) -> ErrDuplicateNumber, proving the index enforces
+//     uniqueness independent of the stored row's status.
+func TestStoreCreate_DuplicateRejectedRegardlessOfStoredRowState(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	store := NewStore(app)
+
+	t.Run("draft sibling backstop (PAR-03a)", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "PAR-03a tenant")
+		entityID := seedEntity(t, super, tenantID, "PAR-03a entity")
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		const number = "INV-M"
+		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); err != nil {
+			t.Fatalf("first Create: %v", err)
+		}
+		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); !errors.Is(err, ErrDuplicateNumber) {
+			t.Fatalf("second Create err = %v, want ErrDuplicateNumber", err)
+		}
+		if n := mustCount(t, super,
+			`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND entity_id = $2 AND invoice_number = $3`,
+			tenantID, entityID, number,
+		); n != 1 {
+			t.Errorf("rows for (tenant,entity,%q) = %d, want exactly 1", number, n)
+		}
+	})
+
+	t.Run("non-draft stored row backstop (PAR-03b)", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "PAR-03b tenant")
+		entityID := seedEntity(t, super, tenantID, "PAR-03b entity")
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		const number = "INV-M2"
+		invID := seedInvoice(t, super, tenantID, entityID, number)
+		if _, err := super.Exec(ctx,
+			`UPDATE invoices SET status = $1 WHERE id = $2`, string(StatusAccepted), invID,
+		); err != nil {
+			t.Fatalf("seed status=accepted: %v", err)
+		}
+
+		if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number}); !errors.Is(err, ErrDuplicateNumber) {
+			t.Fatalf("Create against an accepted stored row: err = %v, want ErrDuplicateNumber -- the index backstops regardless of the stored row's state (PAR-03b, Core AC#3/AC#4)", err)
+		}
+		if n := mustCount(t, super,
+			`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND entity_id = $2 AND invoice_number = $3`,
+			tenantID, entityID, number,
+		); n != 1 {
+			t.Errorf("rows for (tenant,entity,%q) = %d, want exactly 1 (the pre-seeded accepted row, no duplicate inserted)", number, n)
+		}
+	})
+}
+
 // INV-STORE-07: Create's atomicity — a later in-tx write failing rolls back
 // the WHOLE closure, including the earlier, already-executed writes. Two
 // crafted-actor injections hit the SAME guarantee at two different points in
@@ -789,5 +855,94 @@ func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 	}
 	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.created'`, tenantID); n != 0 {
 		t.Errorf("audit_log invoice.created rows for tenant after rejected Create = %d, want 0", n)
+	}
+}
+
+// M4-06-03 (QA Mode A, RED): closes the invoices->entity leg of the D8
+// cross-tenant dangling-reference residual for Store.Create. This is the
+// entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS
+// (import_batch_test.go), which pins the SAME shape of leak for
+// ImportBatchID and — per that test's own doc comment — is deliberately left
+// OPEN as an accepted residual (no AC requires a same-tenant check there,
+// and the only production caller always mints a fresh same-tenant batch id).
+// EntityID is different: M4-06 requires it be closed, so unlike the
+// import_batch leg, a caller-supplied EntityID belonging to a DIFFERENT
+// tenant must be rejected as ErrValidation rather than silently accepted.
+//
+// RED today: the entity_id foreign_key_violation check runs with RLS
+// bypassed (same mechanism TestRLS_InvoicesCrossTenantDanglingEntityRef,
+// internal/platform/db/invoices_rls_test.go, pins at the raw-SQL layer), and
+// Store.Create has no tenant-scoped ownership pre-check on EntityID, so this
+// Create call SUCCEEDS (err == nil) instead of returning ErrValidation. The
+// fix — a composite FK (tenant_id, entity_id) -> business_entities(tenant_id,
+// id) plus a friendly tenant-scoped pre-check in Store.Create — lands in a
+// later subtask; this test does not add it.
+func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "M4-06-03 tenant A")
+	tenantB := seedTenant(t, super, "M4-06-03 tenant B")
+	entityB := seedEntity(t, super, tenantB, "M4-06-03 B entity")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	_, err := store.Create(cA, CreateInput{EntityID: entityB, InvoiceNumber: "INV-XT-1"})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity) err = %v, want ErrValidation (M4-06 closes the invoices->entity leg of the D8 cross-tenant residual)", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {
+		t.Errorf("invoices rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.created'`, tenantA); n != 0 {
+		t.Errorf("audit_log invoice.created rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+}
+
+// TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite (QA Mode
+// B adversarial coverage, M4-06-03): closes a vacuous-assertion gap in
+// TestStoreCreate_CrossTenantEntityIDRejected directly above. That test's own
+// CreateInput carries NO LineItems, so its (pre-existing-pattern) zero-rows
+// check on line_items would pass trivially even if the pre-check/FK backstop
+// were broken -- there was never anything to write in the first place. This
+// variant supplies a non-empty LineItems slice so the zero-rows assertion is
+// actually discriminating: it proves the tenant-ownership pre-check rejects
+// BEFORE the invoices INSERT starts the write sequence, so line_items (which
+// would otherwise be written in step (2), right after the invoices row) never
+// gets a single row either.
+func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "M4-06-03 tenant A (line items)")
+	tenantB := seedTenant(t, super, "M4-06-03 tenant B (line items)")
+	entityB := seedEntity(t, super, tenantB, "M4-06-03 B entity (line items)")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	descA, descB := "Widget A", "Widget B"
+	_, err := store.Create(cA, CreateInput{
+		EntityID:      entityB,
+		InvoiceNumber: "INV-XT-LI-1",
+		LineItems: []LineItemInput{
+			{Description: &descA},
+			{Description: &descB},
+		},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity, 2 line items) err = %v, want ErrValidation", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {
+		t.Errorf("invoices rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM line_items WHERE tenant_id = $1`, tenantA); n != 0 {
+		t.Errorf("line_items rows for tenant A after rejected cross-tenant Create = %d, want 0 (no partial write -- the pre-check rejects before the invoices INSERT even starts the write sequence)", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.created'`, tenantA); n != 0 {
+		t.Errorf("audit_log invoice.created rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
 	}
 }

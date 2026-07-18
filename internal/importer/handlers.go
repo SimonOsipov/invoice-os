@@ -42,7 +42,13 @@ const maxMultipartMemory = 8 << 20 // 8 MiB
 // unchanged RowError set. The two outcomes NEVER MIX (Core AC#5): `errors`
 // means "couldn't read this row"; `invoice_violations` means "read fine, but
 // the rule failed". A rule failure is not a structural error and must never
-// appear in `errors`.
+// appear in `errors`. Since M4-06-01, a structural `errors[]` entry MAY
+// itself carry a `rule_key`/`severity` (e.g. a store-level duplicate,
+// RuleKey "no-duplicate-invoice-number") when the reason for quarantining
+// the row happens to be a NAMED rule -- this is still structural, not a
+// content violation: the row was never grouped into an evaluated invoice, so
+// it does NOT and must NOT ever appear in `invoice_violations` too. Core
+// AC#5's NEVER MIX invariant holds exactly as before.
 //
 // RuleSetVersion is a *int with NO omitempty on purpose: it must render an
 // explicit `null` when nothing was evaluated, never be absent and never be a

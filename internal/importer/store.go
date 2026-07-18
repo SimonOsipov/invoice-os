@@ -31,10 +31,12 @@ var (
 // e.g. rows that disagree with each other on a value. Exactly one of
 // Row/Rows is set per entry; row numbers are 1-based spreadsheet rows.
 type RowError struct {
-	Row     int    `json:"row,omitempty"`
-	Rows    []int  `json:"rows,omitempty"`
-	Field   string `json:"field,omitempty"`
-	Message string `json:"message"`
+	Row      int    `json:"row,omitempty"`
+	Rows     []int  `json:"rows,omitempty"`
+	Field    string `json:"field,omitempty"`
+	RuleKey  string `json:"rule_key,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	Message  string `json:"message"`
 }
 
 // Store persists import_batches rows as the invoice_app role, mirroring

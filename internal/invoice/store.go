@@ -70,25 +70,39 @@ func scanLineItem(row scanner, li *LineItem) error {
 }
 
 // Create inserts one invoice and, in the SAME db.WithinRequestTenantTx closure
-// and in this order: (1) the invoices row (tenant_id from the caller's identity,
-// status left to the column DEFAULT 'draft', MBS-content passed through
-// un-rejected incl. NULL/negative — store-invalid-faithfully, AC-6); (2) one
-// line_items row per CreateInput.LineItems entry with a system-assigned line_no
-// = 1..N by array position ([D10]); (3) the genesis invoice_status_history row
-// (from_status NULL -> to_status 'draft', actor = the caller's Subject, [D5]);
-// (4) an "invoice.created" audit.Record. Because all four writes share one
+// and in this order: (0) a tenant-scoped ownership pre-check on entity_id
+// (M4-06-03 -- mirrors the importer's EntitySupplier idiom,
+// internal/importer/store.go, and closes the direct-path gap the "22P02 does
+// not disambiguate" note below used to accept: a cross-tenant OR nonexistent
+// entity_id now returns ErrValidation HERE, before any row is written); (1)
+// the invoices row (tenant_id from the caller's identity, status left to the
+// column DEFAULT 'draft', MBS-content passed through un-rejected incl.
+// NULL/negative — store-invalid-faithfully, AC-6); (2) one line_items row per
+// CreateInput.LineItems entry with a system-assigned line_no = 1..N by array
+// position ([D10]); (3) the genesis invoice_status_history row (from_status
+// NULL -> to_status 'draft', actor = the caller's Subject, [D5]); (4) an
+// "invoice.created" audit.Record. Because all these writes share one
 // transaction, a later failure rolls the earlier ones back too (INV-STORE-07).
 //
-// Only the invoices INSERT's pg error is mapped: a unique_violation (23505) on
-// invoices_tenant_entity_number_uq -> ErrDuplicateNumber, a foreign_key_violation
-// (23503, a non-existent entity_id or import_batch_id) or an
-// invalid_text_representation (22P02, a malformed entity_id/import_batch_id
-// uuid, OR a malformed numeric MBS-content value) -> ErrValidation. 22P02 does
-// not disambiguate which input was bad; the importer avoids this ambiguity by
-// pre-validating entity_id itself and quarantining the row on ANY Create
-// error. The line_items/history/audit errors propagate raw so their SQLSTATE
-// (e.g. the actor CHECK's 23514) is not masked -- the atomicity specs assert
-// on it.
+// The pre-check is a friendly early exit, not the enforcement mechanism: the
+// composite (tenant_id, entity_id) FK (invoices_tenant_entity_fk, added
+// alongside this pre-check by M4-06-03) is the DB-authoritative backstop, so
+// a cross-tenant entity_id is rejected even for a caller that bypassed the
+// pre-check (e.g. a race against a concurrent entity delete).
+//
+// The pre-check query and the invoices INSERT are the only pg errors mapped: a
+// unique_violation (23505) on invoices_tenant_entity_number_uq -> ErrDuplicateNumber
+// (INSERT only), a foreign_key_violation (23503, a non-existent entity_id or
+// import_batch_id -- the pre-check turns the entity_id case into ErrValidation
+// earlier via the exists=false branch above, so this INSERT-time 23503 in practice
+// now only fires for import_batch_id) or an invalid_text_representation (22P02, a
+// malformed entity_id/import_batch_id uuid, OR a malformed numeric MBS-content
+// value; the pre-check maps its own 22P02 the same way for entity_id) ->
+// ErrValidation. 22P02 at the INSERT does not disambiguate which input was bad; the
+// importer avoids this ambiguity by pre-validating entity_id itself and
+// quarantining the row on ANY Create error. The line_items/history/audit errors
+// propagate raw so their SQLSTATE (e.g. the actor CHECK's 23514) is not masked --
+// the atomicity specs assert on it.
 //
 // EntityID/InvoiceNumber are required non-empty ([D10]); an empty value is
 // rejected as ErrValidation BEFORE any tx opens, mirroring Update's all-nil
@@ -109,6 +123,27 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// resolved it (as the tenant id) before this closure ran, returning
 		// db.ErrNoTenant otherwise.
 		id, _ := auth.IdentityFromContext(ctx)
+
+		// Tenant-scoped ownership pre-check: RLS scopes this SELECT to the
+		// caller's tenant (same mechanism EntitySupplier relies on,
+		// internal/importer/store.go), so a foreign OR nonexistent entity_id
+		// both come back exists=false. This rejects the cross-tenant case
+		// EARLY, as a friendly ErrValidation with NO row written and NO audit
+		// row -- the composite (tenant_id, entity_id) FK below is the
+		// DB-authoritative backstop (see this func's doc comment; M4-06-03
+		// closes the direct-path gap noted there).
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM business_entities WHERE id = $1)`, in.EntityID,
+		).Scan(&exists); err != nil {
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+		if !exists {
+			return ErrValidation
+		}
 
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices

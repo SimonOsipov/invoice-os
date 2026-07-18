@@ -23,9 +23,10 @@
 // M4-01-01 (import_batches_rls_test.go) transplant onto real tables, applied here to
 // invoices. INV-RLS-08..16 are table-specific: the unique guard, the status CHECK,
 // the store-invalid guarantee, the two FK dispositions (import_batch_id SET NULL,
-// entity_id RESTRICT), the rule_set_version_id FK, and the D8 cross-tenant
-// dangling-reference residual (documented, not defended — see the story's QA-Verify
-// disposition [2]).
+// entity_id RESTRICT), the rule_set_version_id FK, and the invoices->entity_id D8
+// cross-tenant reference — CLOSED by M4-06-03's composite (tenant_id, entity_id) FK
+// (see INV-RLS-15's doc comment); it documented an accepted, undefended residual
+// before that (story's original QA-Verify disposition [2]).
 //
 // Rows are seeded per-test (seedInvoice below, reusing seedBusinessEntity from
 // business_entities_rls_test.go and seedImportBatch from import_batches_rls_test.go
@@ -588,17 +589,26 @@ func TestRLS_InvoicesRuleSetVersionFK(t *testing.T) {
 	_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, invoiceID)
 }
 
-// INV-RLS-15 (D8 cross-tenant dangling-ref, DOCUMENTING not defending): as tenant A,
-// INSERT an invoice whose entity_id belongs to tenant B's business_entities row. The
-// FK check bypasses RLS (Postgres referential-integrity triggers run with elevated
-// internal privilege), and the row's own tenant_id = A passes the WITH CHECK — so
-// this SUCCEEDS. This pins the accepted D8 residual: tenant-owned→tenant-owned FKs
-// are plain per-column FKs, not composite same-tenant FKs (story QA-Verify
-// disposition [2]). The second half proves it is not a READ leak: a join from the
-// invoice to business_entities under A's RLS returns ZERO parent rows — B's entity
-// row stays invisible to A, so the reference dangles from A's view rather than
-// opening a window into B's data. If a future story adopts composite same-tenant
-// FKs, this spec flips to expect 23503.
+// INV-RLS-15 (D8 cross-tenant residual, CLOSED by M4-06-03): as tenant A, INSERT an
+// invoice whose entity_id belongs to tenant B's business_entities row.
+//
+// Before M4-06-03 this SUCCEEDED: the FK check bypasses RLS (Postgres
+// referential-integrity triggers run with elevated internal privilege), the row's own
+// tenant_id = A passed the WITH CHECK, and only a plain per-column entity_id FK
+// existed — the accepted D8 residual (story QA-Verify disposition [2]), with a
+// join-based check proving it was not a READ leak (B's entity stayed invisible to A
+// even though the dangling reference existed).
+//
+// M4-06-03 replaced that FK with a composite (tenant_id, entity_id) FK
+// (invoices_tenant_entity_fk) referencing business_entities' new
+// UNIQUE (tenant_id, id) — so the FK's OWN existence check is now tenant-scoped: a
+// cross-tenant entity_id 0-matches and this insert FAILS with foreign_key_violation
+// (SQLSTATE 23503). The no-read-leak join check is now moot (no cross-tenant row can
+// ever exist to read) and is removed rather than kept as dead code. (The
+// import_batch_id leg, pinned separately by
+// TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS in
+// internal/invoice/import_batch_test.go, stays an accepted residual and is NOT
+// touched by this story.)
 func TestRLS_InvoicesCrossTenantDanglingEntityRef(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -606,78 +616,13 @@ func TestRLS_InvoicesCrossTenantDanglingEntityRef(t *testing.T) {
 	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "INV-15 B Corp")
 	defer cleanupEntityB()
 
+	// Captured even though the assertion below expects err != nil: a defensive
+	// cleanup so a future regression that reopened the residual would not leak
+	// a row onto the shared harness tenant A.
 	var invoiceID string
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, 'INV-15-DANGLING') RETURNING id`,
-			h.tenantA, entityB,
-		).Scan(&invoiceID)
-	})
-	if err != nil {
-		t.Fatalf("insert invoice with cross-tenant entity_id (documenting D8 residual): want success, got: %v", err)
-	}
-	defer func() {
-		_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, invoiceID)
-	}()
-
-	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
-		n := mustCount(t, tx,
-			`SELECT count(*) FROM invoices i JOIN business_entities b ON i.entity_id = b.id WHERE i.id = $1`,
-			invoiceID,
-		)
-		if n != 0 {
-			t.Errorf("join to cross-tenant parent entity under A's RLS = %d rows, want 0 (no read leak)", n)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("WithinTenantTx (join check): %v", err)
-	}
-}
-
-// M4-06-03 (QA Mode A, RED): TestRLS_InvoicesCrossTenantDanglingEntityRef
-// directly above documents TODAY's accepted D8 residual for invoices ->
-// business_entities, and its own doc comment already anticipates this test:
-// "If a future story adopts composite same-tenant FKs, this spec flips to
-// expect 23503." M4-06 is that future story for the invoices->entity leg
-// (the import_batch_id leg, pinned separately by
-// TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS in
-// internal/invoice/import_batch_test.go, stays an accepted residual and is
-// NOT touched by this story).
-//
-// This is added as a NEW, additive test rather than an in-place edit of
-// TestRLS_InvoicesCrossTenantDanglingEntityRef, so that test keeps
-// documenting today's actual (still-permissive) behavior until the
-// composite FK ships. FLAG for whoever implements the fix: once the
-// composite (tenant_id, entity_id) FK lands, THIS test's insert starts
-// failing with 23503 (making it pass) while
-// TestRLS_InvoicesCrossTenantDanglingEntityRef's insert ALSO starts failing
-// with 23503 (making that one's "want success" assertion wrong) — that
-// test's assertion (and its join-based no-read-leak check, which becomes
-// moot once the FK rejects the row outright) must be flipped in the SAME
-// change, or the suite ships two directly contradictory specs.
-//
-// RED today: business_entities carries no UNIQUE(tenant_id, id) for a
-// composite FK to reference, so only the single-column entity_id FK exists;
-// its referential-integrity trigger checks existence with RLS bypassed
-// (same mechanism TestRLS_LineItemsCrossTenantDanglingInvoiceRef,
-// line_items_rls_test.go, pins for the line_items->invoices leg) and finds
-// tenant B's entity regardless of caller tenant. So this insert SUCCEEDS
-// today (no error), and the test fails on the 23503 assertion below.
-func TestRLS_InvoicesCrossTenantEntityRefRejected(t *testing.T) {
-	h := requireHarness(t)
-	ctx := context.Background()
-
-	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "M4-06-03 B Corp")
-	defer cleanupEntityB()
-
-	// Captured even though the assertions below expect err != nil: TODAY the
-	// insert actually SUCCEEDS (that is the RED), so this must still be
-	// cleaned up to avoid leaking a row onto the shared harness tenant A.
-	var invoiceID string
-	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx,
-			`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, 'INV-M4-06-03-XT') RETURNING id`,
 			h.tenantA, entityB,
 		).Scan(&invoiceID)
 	})
@@ -687,7 +632,7 @@ func TestRLS_InvoicesCrossTenantEntityRefRejected(t *testing.T) {
 		}()
 	}
 	if err == nil {
-		t.Fatal("insert invoice with cross-tenant entity_id succeeded, want foreign_key_violation (SQLSTATE 23503) -- the composite (tenant_id, entity_id) FK is not enforced yet [M4-06]")
+		t.Fatal("insert invoice with cross-tenant entity_id succeeded, want foreign_key_violation (SQLSTATE 23503) -- the composite (tenant_id, entity_id) FK closes the D8 residual [M4-06-03]")
 	}
 	if code := pgCode(err); code != "23503" {
 		t.Fatalf("insert invoice with cross-tenant entity_id: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)

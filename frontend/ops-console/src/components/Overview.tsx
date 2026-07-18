@@ -9,7 +9,7 @@ import {
   series,
   spendTotals,
 } from '../charts'
-import { ARROW_DOWN_ICON, ARROW_UP_ICON } from '../data'
+import { ARROW_DOWN_ICON, ARROW_UP_ICON, UPDATED_AGO } from '../data'
 import type { Range } from '../types'
 
 // Overview — ported against prototype lines 118–246 (markup) and 876–946 (derivations).
@@ -33,8 +33,8 @@ type Props = {
 
 const RANGES: Range[] = ['7d', '30d', '90d']
 
-// Prototype line 1090 — a static literal, not a live clock.
-const UPDATED_AGO = '8s ago'
+// UPDATED_AGO (prototype line 1090) moved to data.tsx in M4-20-08: the Status header
+// renders the same field, and the prototype models it as a single state value.
 const ACCEPT_RATE = '97.1%'
 
 // Prototype line 882. Kept module-local (presentational date formatting, not chart

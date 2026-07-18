@@ -124,3 +124,39 @@ export type Quota = {
   clearedInvoices: number
   evidenceExports: number
 }
+
+/* ------------------------------------------------------------------ */
+/* API status (proto:1044-1058)                                        */
+/* ------------------------------------------------------------------ */
+
+// proto:1054's `incTone(t)`. The prototype derives the component badge colours from a
+// boolean `ok` (proto:1053) and the incident chip colours from a 'amber' | 'green' tone
+// (proto:1054), but both resolve to the SAME --status-{green,amber}-{text,bg,border}
+// triplet — so one tone key serves both and the two cannot drift apart. Re-authored as
+// a lookup map to match the INVOICE_STATUS / METHOD_BG precedent rather than as a
+// function.
+export type Tone = 'green' | 'amber'
+export type ToneStyle = { text: string; bg: string; border: string }
+
+// proto:1045-1053. `strip` is the 90-cell uptime series built by `upStrip(seed, badIdx)`
+// at seed time, exactly as the prototype does — the seed and bad-index inputs do not
+// survive onto the rendered shape. `status`/`latency`/`uptime` are display literals; in
+// particular `uptime` is never derived from `strip`.
+export type StatusComponent = {
+  name: string
+  status: string
+  latency: string
+  uptime: string
+  tone: Tone
+  strip: { fill: string }[]
+}
+
+// proto:1055-1058. Every field is a literal, including `date` — which is also the render
+// key (the three dates are distinct, and unlike an index it survives a reorder).
+export type Incident = {
+  date: string
+  title: string
+  status: string
+  tone: Tone
+  detail: string
+}

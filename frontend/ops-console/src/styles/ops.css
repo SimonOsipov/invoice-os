@@ -58,15 +58,6 @@ body {
     transform: scaleY(1);
   }
 }
-@keyframes opsPulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
 
 .ops-nav {
   transition: background 120ms ease-out, color 120ms ease-out;
@@ -111,18 +102,21 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-.ops-toggle {
-  transition: background 140ms ease-out;
-  cursor: pointer;
-}
-.ops-knob {
-  transition: transform 140ms ease-out;
-}
 .mono {
   font-variant-numeric: tabular-nums;
 }
 .ops-screen-pad {
   padding: 24px 26px 56px;
+}
+/* Incident-history row on the API status screen (prototype line 569). Base rule only,
+   with no breakpoint override on purpose: the second track is `1fr` holding wrapping
+   prose, so at the narrowest breakpoint it still has ~366px and reflows by wrapping.
+   Giving it a min-width or stacking it would create the horizontal scroll the
+   responsive pass forbids. */
+.ops-incident-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 16px;
 }
 pre.ops-json {
   margin: 0;
@@ -158,8 +152,7 @@ pre.ops-json {
   }
   .ops-overview-grid,
   .ops-api-grid,
-  .ops-billing-grid,
-  .ops-status-grid {
+  .ops-billing-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
   .ops-kpi-strip {

@@ -4,9 +4,9 @@
 // stay pure layout.
 
 import type { ReactNode } from 'react'
-import { buildEvidenceBundles, computeBillLine, naira, nairaC, SCALE_PLAN, spendTotals, type EvidenceBundle } from './charts'
+import { buildEvidenceBundles, computeBillLine, naira, nairaC, SCALE_PLAN, spendTotals, upStrip, type EvidenceBundle } from './charts'
 import { Icon } from './icons'
-import type { ApiKey, ApiRequest, BillItem, Delivery, Env, InvoiceKind, InvoiceStatus, Job, JobState, PastInvoice, Quota, RateLimit, Screen, Webhook } from './types'
+import type { ApiKey, ApiRequest, BillItem, Delivery, Env, Incident, InvoiceKind, InvoiceStatus, Job, JobState, PastInvoice, Quota, RateLimit, Screen, StatusComponent, Tone, ToneStyle, Webhook } from './types'
 
 /* ------------------------------------------------------------------ */
 /* Common icon glyphs (this.g(paths, size) in the prototype)           */
@@ -270,3 +270,66 @@ export const INVOICE_STATUS: Record<InvoiceKind, InvoiceStatus> = {
   paid: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'PAID' },
   open: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'OPEN' },
 }
+
+/* ------------------------------------------------------------------ */
+/* API status (proto:1044-1058)                                        */
+/* ------------------------------------------------------------------ */
+
+// proto:1090. A static literal, not a live clock: a Date.now()-derived string would
+// render differently on every visual-gate run. Read by the Overview header
+// (proto:126, `UPDATED {ago}`) and the Status header (proto:535, `REFRESHED {ago}`) —
+// one field in the prototype's state, so one const here.
+export const UPDATED_AGO = '8s ago'
+
+// proto:1053 + 1054, collapsed into one map. The component badge (dot / pill bg /
+// pill border) and the incident chip (text / bg / border) read the identical
+// --status-{green,amber}-* triplet; the prototype writes it out twice because its two
+// call sites key off different things (a boolean vs a tone string).
+export const STATUS_TONE: Record<Tone, ToneStyle> = {
+  green: { text: 'var(--status-green-text)', bg: 'var(--status-green-bg)', border: 'var(--status-green-border)' },
+  amber: { text: 'var(--status-amber-text)', bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)' },
+}
+
+// proto:1045-1052. Order is significant — the screen renders these top to bottom.
+// `latency` and `uptime` are seed literals: `uptime` is NOT counted off `strip`, and the
+// banner's headline figure is not averaged from this list (see Status.tsx). Only
+// `strip` is computed, by the unit-tested `upStrip` (charts.ts, proto:1044), which is
+// seeded and therefore deterministic across renders and across CI runs.
+//
+// `Tax-authority connection (FIRS/MBS)` is the one DEGRADED row: bad indices 86-89 put
+// four red cells at the right-hand (most recent) end of its 90-day strip.
+export const STATUS_COMPONENTS: StatusComponent[] = [
+  { name: 'API gateway', status: 'OPERATIONAL', latency: '20ms', uptime: '100%', tone: 'green', strip: upStrip(1, []) },
+  { name: 'Validation engine', status: 'OPERATIONAL', latency: '40ms', uptime: '99.99%', tone: 'green', strip: upStrip(2, []) },
+  { name: 'Submission pipeline', status: 'OPERATIONAL', latency: '1.6s', uptime: '99.97%', tone: 'green', strip: upStrip(3, []) },
+  { name: 'Tax-authority connection (FIRS/MBS)', status: 'DEGRADED', latency: '2.1s', uptime: '99.91%', tone: 'amber', strip: upStrip(4, [86, 87, 88, 89]) },
+  { name: 'Webhook delivery', status: 'OPERATIONAL', latency: '130ms', uptime: '99.98%', tone: 'green', strip: upStrip(5, []) },
+  { name: 'Evidence store', status: 'OPERATIONAL', latency: '55ms', uptime: '100%', tone: 'green', strip: upStrip(6, []) },
+]
+
+// proto:1055-1058. Detail copy is ported verbatim, including the U+2014 EM DASH in the
+// Jul 02 title and the `~1,200` in the Jun 21 detail.
+export const INCIDENTS: Incident[] = [
+  {
+    date: 'Jul 14',
+    title: 'Elevated FIRS clearance latency',
+    status: 'MONITORING',
+    tone: 'amber',
+    detail:
+      'p95 clearance time rose to 2.1s during peak hours. Submissions are still clearing; retries and webhooks are unaffected. FIRS has acknowledged upstream load.',
+  },
+  {
+    date: 'Jul 02',
+    title: 'Scheduled maintenance — validation engine',
+    status: 'RESOLVED',
+    tone: 'green',
+    detail: 'Rolling deploy of rule-set v42 completed with no downtime. Validation latency briefly rose to 90ms.',
+  },
+  {
+    date: 'Jun 21',
+    title: 'Webhook delivery delays',
+    status: 'RESOLVED',
+    tone: 'green',
+    detail: 'A retry backlog delayed delivery of ~1,200 events by up to 8 minutes. All events were delivered; no data loss.',
+  },
+]

@@ -37,7 +37,9 @@ import (
 	"database/sql"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3"
@@ -562,5 +564,242 @@ func TestProvisionGuardOffStillMigratesAgainstRealDB(t *testing.T) {
 	}
 	if err := db.Provision(ctx, cfg); err != nil {
 		t.Fatalf("Provision with ENVIRONMENT=production against a real migration DB: %v (guard-off must still migrate cleanly; Bootstrap/Seed must be skipped, not attempted against the poison superuser DSN)", err)
+	}
+}
+
+// ---- QA adversarial coverage (task-128 verification pass) -------------------
+//
+// The tests below were added during QA verification of task-128, on top of the
+// architect's pre-authored Test Specs above. They target failure modes the
+// brief called out explicitly: an unreachable (not just unparseable) superuser
+// DSN, the OTHER allowlisted shape (a Railway PR environment) exercised through
+// the full sequence rather than BootstrapEnabled alone, a mid-sequence failure
+// (bootstrap succeeds, migrate fails) recovering cleanly on the next boot, two
+// replicas racing Provision concurrently against one DB, and the data-loss risk
+// specific to the PERSISTENT `development` environment (Decision
+// [dev-env-status]): a redeploy must never destroy data that isn't part of
+// seed.dev.sql.
+
+// TestProvisionUnreachableSuperuserDSNFailsBounded: guard on, a syntactically
+// valid superuser DSN pointing at a port nothing listens on (loopback,
+// connection REFUSED — not a slow black-hole address, so this test's runtime
+// is deterministic across machines/CI with no context timeout of its own
+// needed). Provision must fail within the bounded connect-retry budget
+// (bootstrapConnectAttempts * bootstrapConnectBackoff ~= 2s), never hang, and
+// migrate must never be reached (bootstrap fails first).
+func TestProvisionUnreachableSuperuserDSNFailsBounded(t *testing.T) {
+	cfg := db.ProvisionConfig{
+		Environment:   "development",
+		BootstrapFlag: "true",
+		SuperuserDSN:  "postgres://postgres:postgres@127.0.0.1:1/invoice_os?sslmode=disable",
+		MigrationDSN:  migrationPoisonDSN, // never reached: bootstrap's connect fails first
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
+	}
+
+	start := time.Now()
+	err := db.Provision(context.Background(), cfg)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Provision succeeded against an unreachable (connection-refused) superuser DSN — want a bounded connection error")
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("Provision took %s against an unreachable superuser DSN — want a bounded failure (retry budget ~2s), not an unbounded hang", elapsed)
+	}
+	if strings.Contains(err.Error(), migrationPoisonDSN) {
+		t.Errorf("Provision error = %q, mentions the migration DSN marker — migrate must not run after bootstrap's connect failure: elapsed=%s", err.Error(), elapsed)
+	}
+}
+
+// TestProvisionPRShapedEnvironmentEndToEnd: AC-2's OTHER allowlisted shape
+// (BootstrapEnabled's provisionableEnvironment also accepts a Railway
+// PR-environment name, e.g. "pr-42") exercised through the FULL boot sequence
+// against a real Postgres — not just the pure BootstrapEnabled unit check
+// elsewhere in this package. Runs against the shared dev/CI DB every other
+// test in this package depends on, so it also doubles as an idempotency check
+// (no duplicate roles/tenants after yet another Provision call).
+func TestProvisionPRShapedEnvironmentEndToEnd(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	ctx := context.Background()
+	pool := bootstrapSuperuserPool(t, superDSN)
+
+	cfg := db.ProvisionConfig{
+		Environment:   "pr-42",
+		BootstrapFlag: "true",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
+	}
+	if err := db.Provision(ctx, cfg); err != nil {
+		t.Fatalf("Provision with ENVIRONMENT=pr-42 (a Railway PR-environment name): %v", err)
+	}
+
+	for _, role := range bootstrapRoles {
+		count := mustCount(t, pool, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, role)
+		if count != 1 {
+			t.Errorf("role %s: found %d rows in pg_roles after a pr-42 Provision, want exactly 1", role, count)
+		}
+	}
+	for _, tc := range seedTenants {
+		count := mustCount(t, pool, `SELECT count(*) FROM tenants WHERE id = $1 AND name = $2`, tc.id, tc.name)
+		if count != 1 {
+			t.Errorf("tenant %s (%s): found %d rows after a pr-42 Provision, want exactly 1 (no duplicate seed rows)", tc.id, tc.name, count)
+		}
+	}
+}
+
+// TestProvisionMigrateFailureAfterBootstrapSuccessRecoversCleanly: the
+// "partial provisioning" adversarial case — bootstrap succeeds (real superuser
+// DSN + passwords) but migrate fails (poison migration DSN). Provision must
+// fail loudly naming the migrate step, AND a follow-up boot with a real
+// migration DSN must succeed cleanly: bootstrap.sql's create-or-converge
+// idempotency means the earlier partial success (roles created/reasserted)
+// left no half-state that blocks the next deploy from a Railway restart.
+func TestProvisionMigrateFailureAfterBootstrapSuccessRecoversCleanly(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	ctx := context.Background()
+
+	badCfg := db.ProvisionConfig{
+		Environment:   "development",
+		BootstrapFlag: "true",
+		SuperuserDSN:  superDSN,           // real: bootstrap must succeed
+		MigrationDSN:  migrationPoisonDSN, // poison: migrate fails AFTER bootstrap ran
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
+	}
+	err := db.Provision(ctx, badCfg)
+	if err == nil {
+		t.Fatal("Provision succeeded despite a poison migration DSN — want a loud error naming the migrate step")
+	}
+	if !strings.Contains(err.Error(), "migrate") {
+		t.Errorf("Provision error = %q, want it to name the migrate step", err.Error())
+	}
+	if !strings.Contains(err.Error(), migrationPoisonDSN) {
+		t.Errorf("Provision error = %q, want it to echo the poison migration DSN (proving migrate was actually attempted after bootstrap succeeded, not short-circuited earlier)", err.Error())
+	}
+
+	// Recovery: a follow-up boot with a real migration DSN must succeed cleanly.
+	goodCfg := badCfg
+	goodCfg.MigrationDSN = migDSN
+	if err := db.Provision(ctx, goodCfg); err != nil {
+		t.Fatalf("recovery Provision (real migration DSN) after the earlier partial failure: %v — the partial failure left the DB in a state that blocks the next deploy", err)
+	}
+
+	pool := bootstrapSuperuserPool(t, superDSN)
+	for _, role := range bootstrapRoles {
+		count := mustCount(t, pool, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, role)
+		if count != 1 {
+			t.Errorf("role %s: found %d rows in pg_roles after recovery, want exactly 1", role, count)
+		}
+	}
+}
+
+// TestProvisionConcurrentBootsSerializeCleanly: simulates two-or-more gateway
+// replicas racing Provision against the SAME database at boot — the realistic
+// Railway multi-replica scenario, not just db.Bootstrap in isolation (already
+// covered by TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock in
+// bootstrap_test.go). Every concurrent Provision call must succeed (the
+// advisory lock serializes bootstrap; migrate/seed are naturally idempotent),
+// and the seed rows must still appear exactly once afterward — no duplication,
+// no corruption from the race.
+func TestProvisionConcurrentBootsSerializeCleanly(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	ctx := context.Background()
+
+	const n = 4
+	cfg := db.ProvisionConfig{
+		Environment:   "development",
+		BootstrapFlag: "true",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = db.Provision(ctx, cfg)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Provision call %d failed — the advisory lock must serialize concurrent boots so every replica converges, not just one survivor: %v", i, err)
+		}
+	}
+
+	pool := bootstrapSuperuserPool(t, superDSN)
+	for _, tc := range seedTenants {
+		count := mustCount(t, pool, `SELECT count(*) FROM tenants WHERE id = $1 AND name = $2`, tc.id, tc.name)
+		if count != 1 {
+			t.Errorf("tenant %s (%s): found %d rows after %d concurrent Provision calls, want exactly 1 (no duplicate/corrupted seed rows)", tc.id, tc.name, count, n)
+		}
+	}
+	for _, tc := range seedMemberships {
+		count := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tc.tenantID, tc.userID)
+		if count != 1 {
+			t.Errorf("membership %s/%s: found %d rows after %d concurrent Provision calls, want exactly 1", tc.tenantID, tc.userID, count, n)
+		}
+	}
+}
+
+// TestProvisionRedeployDoesNotDestroyPreexistingData: the data-loss risk
+// specific to the PERSISTENT `development` environment (Decision
+// [dev-env-status]) — a tenant NOT in seed.dev.sql (simulating real
+// production/demo data accumulated between deploys) must survive a Provision
+// call untouched. A naive/destructive implementation (e.g. one that
+// reset-and-reseeded instead of idempotently upserting fixed rows) would wipe
+// it; this proves data safety directly rather than trusting "seed is
+// upsert-only" by inspection.
+func TestProvisionRedeployDoesNotDestroyPreexistingData(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	ctx := context.Background()
+	pool := bootstrapSuperuserPool(t, superDSN)
+
+	const probeID = "9c9c9c9c-9c9c-9c9c-9c9c-9c9c9c9c9c9c"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm') ON CONFLICT (id) DO NOTHING`,
+		probeID, "QA redeploy-safety probe",
+	); err != nil {
+		t.Fatalf("insert probe tenant (precondition): %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, probeID); err != nil {
+			t.Errorf("cleanup probe tenant: %v", err)
+		}
+	})
+
+	cfg := db.ProvisionConfig{
+		Environment:   "development",
+		BootstrapFlag: "true",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
+	}
+	if err := db.Provision(ctx, cfg); err != nil {
+		t.Fatalf("Provision (simulated redeploy) against a DB with pre-existing non-seed data: %v", err)
+	}
+
+	count := mustCount(t, pool, `SELECT count(*) FROM tenants WHERE id = $1`, probeID)
+	if count != 1 {
+		t.Fatalf("probe tenant: found %d row(s) after Provision, want exactly 1 — a redeploy must never destroy pre-existing data in the persistent development environment", count)
 	}
 }

@@ -2,13 +2,13 @@
 
 ## Overview
 
-Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the shared Railway dev env → reset+seed → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
+Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — provisioned fresh at gateway boot, M4-21 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
 
 **Story unit:** one **build-plan task** = one story = one branch = one PR (e.g. `M3-04` "Validation v1"). RALPH decomposes it into sub-subtasks (`M3-04-01`, …) internally. This matches exactly how M1/M2 shipped (`task-20` → `task-20.1–.4`).
 
 Stories arrive in one of two states: **basic** (intent-only — Objective, Core ACs, Out of Scope; produced by `/pm-review`; zero Backlog subtasks) or **pre-planned** (Backlog subtasks already exist, or the Obsidian story is already architect-level like the M1/M2 stories). Basic stories are planned **in-run** by Phase 0.6; pre-planned stories skip Phase 0.6.
 
-**Invocation**: `/ralph <STORY-ID>` (e.g., `/ralph M3-04`). **One story per invocation, executed serially** — the Railway dev env is a single shared, single-agent environment (`dev-env.yml` concurrency `dev-preview-shared` queues rather than races), so RALPH verifies one story to completion before the next begins. Do not advertise or run multiple stories in parallel against dev.
+**Invocation**: `/ralph <STORY-ID>` (e.g., `/ralph M3-04`). Each invocation runs one story, in its own worktree and branch. Since M4-21, every PR deploys to its **own ephemeral Railway environment** (`dev-env.yml` concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — not a shared lock), so multiple `/ralph` invocations MAY run concurrently, each verifying its own story against its own isolated environment with no cross-story interference.
 
 ## Model Selection
 
@@ -38,15 +38,18 @@ Never guess, assume, or reduce functionality. If unclear, ask the user.
 | "The CEL escape hatch is complex, drop it" | "Implement the CEL rule type properly with a golden test" |
 
 ### 3. CI Gate + Deploy Gate (BLOCKING)
-Cannot output `ALL_TASKS_COMPLETE` until BOTH (a) the aggregate **`CI`** check passes on the PR AND (b) the **`dev-env.yml`** run on the PR concludes **green** (see Phase 3.5). The deploy gate deploys the whole fleet to the shared dev env and runs smoke + topology E2E — it is required for completion.
+Cannot output `ALL_TASKS_COMPLETE` until BOTH (a) the aggregate **`CI`** check passes on the PR AND (b) the **`dev-env.yml`** run on the PR concludes **green** (see Phase 3.5). The deploy gate deploys the whole fleet to the PR's own ephemeral Railway environment and runs smoke + topology E2E — it is required for completion.
 
 ```bash
 gh pr checks [PR_NUMBER]
 # Aggregate per-push check (ci.yml): CI  — rolls up: go, frontend, clean-clone,
 #   migrations, docker-canary, rls, queue, audit (each gated on `changes`).
-# Deploy gate (dev-env.yml, fires when the PR is marked ready): await-ci →
+# Deploy gate (dev-env.yml, fires when the PR is marked ready): await-ci +
+#   resolve-env (parallel, resolves the PR's own ephemeral Railway env) →
 #   deploy-gateway (migrator) → health-gate → deploy-context ×7 + deploy-spas ×3
-#   → reset-seed → fleet-gate → e2e (smoke + topology). Required for completion.
+#   → fleet-gate → e2e (smoke + api + topology + demo). reset-seed is
+#   dispatch-path-only (targets `development`, not this PR's env). Required
+#   for completion.
 ```
 
 ### 4. ONE Branch, ONE PR per Story
@@ -115,19 +118,30 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    git -C "$MAIN_CHECKOUT" worktree add -b "$BRANCH" "$WORKTREE_PATH" origin/main
    ```
 
-4. **Bootstrap dependencies** — Go needs no per-worktree install (the module cache is shared); the SPAs and the DB-backed tests do:
+4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored (`.gitignore:38`), so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
+   ```bash
+   [ -f "$MAIN_CHECKOUT/CLAUDE.md" ] && ln -sfn "$MAIN_CHECKOUT/CLAUDE.md" "$WORKTREE_PATH/CLAUDE.md"
+   ```
+   A **symlink**, not a copy — a copy silently goes stale the moment the source is edited. A missing source file is a silent no-op, never a failure.
+
+5. **Bootstrap dependencies** — Go needs no per-worktree install (the module cache is shared); the SPAs and the DB-backed tests do:
    ```bash
    (cd "$WORKTREE_PATH" && pnpm install --frozen-lockfile) &
-   # Local dev Postgres (compose) → bootstrap roles → migrate → seed. Required for
-   # the RLS / queue / audit suites (make test-rls|test-queue|test-audit). One local DB
-   # is fine across serial stories; skip if this story touches neither Go DB code nor migrations.
-   (cd "$WORKTREE_PATH" && make dev-db) &
+   # Local dev Postgres (compose) → bootstrap roles → migrate → seed. Required for the
+   # RLS / queue / audit suites (make test-rls|test-queue|test-audit). Each worktree runs
+   # its OWN stack on a distinct host port (DEV_DB_PORT, M4-21-01) — check for an
+   # already-running stack first (`docker compose ps` / `lsof -iTCP -sTCP:LISTEN`), then
+   # pick an unused port, e.g. `DEV_DB_PORT=5433 make dev-db`. NEVER reuse or tear down
+   # another worktree's stack — teardown of THIS story's own stack is owned by
+   # `/post-merge-cleanup` (Step 3b), not here (Decision [worktree-db-isolation]). Skip
+   # entirely if this story touches neither Go DB code nor migrations.
+   (cd "$WORKTREE_PATH" && DEV_DB_PORT=<unused-port> make dev-db) &
    wait
    ```
 
-5. **All subsequent shell commands run inside `$WORKTREE_PATH`.** Pass it as CWD to subagents.
+6. **All subsequent shell commands run inside `$WORKTREE_PATH`.** Pass it as CWD to subagents.
 
-6. **Move all subtasks to "In Progress"** (skip if `PLANNING_REQUIRED` — Phase 0.6c does this after creating them):
+7. **Move all subtasks to "In Progress"** (skip if `PLANNING_REQUIRED` — Phase 0.6c does this after creating them):
    ```
    For each subtask ID: mcp__backlog__task_edit(id=task_id, status="In Progress")
    ```
@@ -205,7 +219,7 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 #### Stage 3: Execution
 - Spawn `product-executor`, CWD = `$WORKTREE_PATH`. Pass COMPLETE Backlog subtask details.
 - For `Test-first: yes` subtasks, drive the Stage 2.5 red tests to green without weakening, skipping, or deleting any (if a test itself is wrong, flag it). Author no *new* tests (QA adds those in Stage 4).
-- **Migrations:** goose is timestamp-ordered (no Alembic-style `down_revision` to hand-set). Scaffold with `make migrate-create name=<slug>` **inside the worktree** so the timestamp is fresh relative to `main`; every tenant-owned table is born with `tenant_id` + the FORCE-RLS policy template; write a working `-- +goose Down`. The gateway applies migrations on deploy — a bad migration crash-loops the shared dev backend, so verify `make migrate-up` + the reversibility round-trip locally first.
+- **Migrations:** goose is timestamp-ordered (no Alembic-style `down_revision` to hand-set). Scaffold with `make migrate-create name=<slug>` **inside the worktree** so the timestamp is fresh relative to `main`; every tenant-owned table is born with `tenant_id` + the FORCE-RLS policy template; write a working `-- +goose Down`. The gateway applies migrations on deploy — a bad migration crash-loops the PR's own environment's backend, so verify `make migrate-up` + the reversibility round-trip locally first.
 - The executor handles all reads/edits/creation inside the worktree, commits, and (per its FIRST/MIDDLE/FINAL `Order` logic) handles `git push` and the PR draft/ready transitions.
 - After the executor finishes, run the relevant suites inside the worktree:
   ```bash
@@ -252,7 +266,7 @@ After the FINAL subtask's Stage 4 completes:
 
 ### Phase 3.5: Story-Level Deploy Gate
 
-Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This is the second, story-altitude pass: it verifies the *assembled feature against the original objective*, not per-subtask diffs. It is **not** an agent-driven browsing pass with a lease/label handshake — `dev-env.yml` fires automatically when the PR is marked ready and deploys the whole coherent fleet to the shared dev env, running smoke + topology (and any milestone demo script) E2E in CI.
+Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This is the second, story-altitude pass: it verifies the *assembled feature against the original objective*, not per-subtask diffs. It is **not** an agent-driven browsing pass with a lease/label handshake — `dev-env.yml` fires automatically when the PR is marked ready and deploys the whole coherent fleet to the PR's own ephemeral Railway environment, running smoke + topology (and any milestone demo script) E2E in CI.
 
 1. **Read the original acceptance criteria** from the Obsidian parent story (the original objective — NOT the possibly-edited subtask ACs), plus the milestone's "Ships when true" bullets from the build plan.
 2. **Ensure the deploy gate fires.** Marking the PR ready (Phase 2 FINAL) triggers `dev-env.yml` (event `ready_for_review`). If it didn't fire (e.g. the PR was already ready), re-trigger by pushing a commit, or dispatch manually:
@@ -260,18 +274,18 @@ Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This i
    BRANCH="$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD)"
    gh workflow run dev-env.yml --ref "$BRANCH"
    ```
-   - **Freshness check (mandatory):** `git -C "$WORKTREE_PATH" fetch origin` — if `origin/main` has commits not in the branch, `git merge origin/main`, push, and let `CI` + the deploy gate re-run on the merged head. A base missing main's migrations crash-loops the shared dev backend (the gateway is the migrator).
-3. **Wait for the `dev-env.yml` run** on this branch and watch it to conclusion (it serializes behind the `dev-preview-shared` concurrency lock; a queued run may wait for a prior one):
+   - **Freshness check (mandatory):** `git -C "$WORKTREE_PATH" fetch origin` — if `origin/main` has commits not in the branch, `git merge origin/main`, push, and let `CI` + the deploy gate re-run on the merged head. A base missing main's migrations crash-loops the PR's own environment's backend (the gateway is the migrator).
+3. **Wait for the `dev-env.yml` run** on this branch and watch it to conclusion (concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — so this run does not queue behind any other story's deploy; only a second push to this SAME PR would supersede it):
    ```bash
    RUN_ID="$(gh run list --workflow dev-env.yml --branch "$BRANCH" --limit 1 --json databaseId -q '.[0].databaseId')"
    gh run watch "$RUN_ID" --exit-status   # or poll `gh run view "$RUN_ID" --json status,conclusion` per CI Monitoring Protocol
    ```
-   A green run means: fleet deployed, gateway migrated (health-gate), all 8 backends up (fleet-gate), dev DB reset+seeded, and the **smoke + topology E2E passed** — including cross-tenant isolation.
+   A green run means: fleet deployed to the PR's own environment, gateway migrated (health-gate) and the DB bootstrapped + seeded fresh at boot (M4-21; reset+seed is dispatch-path-only now, targeting only the persistent `development` environment — see `docs/topology-e2e.md`), all 8 backends up (fleet-gate), and the **smoke + topology E2E passed** — including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** (default critique disposition) to verify **each** original acceptance criterion against the green run:
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion (topology proves cross-tenant refusal; the milestone demo script — e.g. M3-11 — proves the wedge flow).
    - **UI ACs (rendered surfaces)** → drive the deployed dev SPA read-only with the standalone Playwright MCP, authenticated as the seeded user, and capture each touched surface (including interactive states) to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` / layout against the Claude Design **prototype** (`.dc.html`, deployed to Netlify — confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a real fail; uncited taste is advisory → escalate to the user, never bounce the executor.
    - A holistic "looks done" is not allowed — every AC needs its own evidence (a passing job/assertion, or a screenshot).
-5. **Fix loop (cap 2 cycles):** batch ALL fails (failed ACs + real fidelity deltas) into one report → spawn `product-executor` to fix inside the worktree → push (this re-fires `dev-env.yml` on `synchronize`) → **wait** for the new run → re-verify only the failed ACs / unresolved deltas. Every bounce must cite an AC id, a design-system rule, or a prototype CSS rule. After **2** cycles, stop and **escalate remaining fails to the user** — each dev-env run holds the shared env and is expensive.
+5. **Fix loop (cap 2 cycles):** batch ALL fails (failed ACs + real fidelity deltas) into one report → spawn `product-executor` to fix inside the worktree → push (this re-fires `dev-env.yml` on `synchronize`) → **wait** for the new run → re-verify only the failed ACs / unresolved deltas. Every bounce must cite an AC id, a design-system rule, or a prototype CSS rule. After **2** cycles, stop and **escalate remaining fails to the user** — each dev-env run provisions/rebuilds a full 11-service environment from scratch and is expensive.
 6. **Log** to the story's `… QA Debate Log.md` under `## Post-Deploy QA — <date>`: per-AC verdict + evidence (CI job / E2E assertion / screenshot), fidelity delta references (for UI stories), fix cycles used, the `dev-env.yml` run id(s), and any design-system citations / advisory notes.
 7. **On PASS** (all original ACs pass on a green `dev-env.yml` run, no unresolved bounces, and — for UI stories — fidelity evidence exists with no unresolved real deltas):
    - Move all subtasks to "Done": `For each subtask ID: mcp__backlog__task_edit(id=task_id, status="Done")`
@@ -288,7 +302,7 @@ git -C "$MAIN_CHECKOUT" worktree remove "$WORKTREE_PATH"
 git -C "$MAIN_CHECKOUT" branch -d "$BRANCH"
 ```
 
-`dev-env-cleanup.yml` scales all 11 dev services to 0 on PR close automatically.
+Railway is expected to automatically deprovision the PR's ephemeral environment (Postgres included) when the PR closes, merged or not (M4-21) — there is no repo-side teardown workflow (`dev-env-cleanup.yml` was deleted, M4-21-11). This is Railway's documented behavior, not yet independently confirmed for this project — see `docs/deploy-model.md`'s caveat and task-131 (M4-21-07) Part 4 step 15. A `workflow_dispatch` run against the persistent `development` environment is unaffected and stays up.
 
 ---
 
@@ -376,7 +390,7 @@ gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databas
 | Hand-setting a goose migration order or shipping an untested `Down` | `make migrate-create` in the worktree; verify `migrate-up` + reversibility round-trip locally (the gateway migrates on deploy) |
 | Querying as superuser to "get past" RLS | Run inside `WithinTenantTx` as `invoice_app`; RLS isolation is the product |
 | Working in main checkout | Always work in `$WORKTREE_PATH`; main is the user's space |
-| Running multiple stories in parallel against dev | The dev env is single-shared/single-agent — run stories serially (dev-env.yml queues, last deploy wins the env) |
+| Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-21) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
 | Mixing subtasks from different stories on one branch | One story (build-plan task) per branch, always |
 | Title-parsing Backlog tasks to find a story's subtasks | Use the `story:<slug>` label |
 | Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs (or a build-plan row) = BASIC → run Phase 0.6 |
@@ -387,5 +401,5 @@ gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databas
 | Outputting ALL_TASKS_COMPLETE before `CI` + `dev-env.yml` are green | Both gates are blocking (Completion Rules) |
 | Sleeping/polling tightly for CI | Poll every 270 s (the single poll constant) |
 | Bouncing the executor on uncited taste | UI fails must cite a design-system rule or a prototype CSS rule; pure taste is advisory → escalate |
-| Grinding the deploy-gate fix loop past 2 cycles | Cap at 2; escalate unresolved fails to the user (each redeploy holds the shared env) |
+| Grinding the deploy-gate fix loop past 2 cycles | Cap at 2; escalate unresolved fails to the user (each redeploy provisions/rebuilds the PR's full 11-service environment and is expensive) |
 | Not cleaning up the worktree after merge | Run `/post-merge-cleanup <STORY-ID>` |

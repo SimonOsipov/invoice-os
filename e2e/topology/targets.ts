@@ -1,16 +1,16 @@
 // Shared targets + fixtures for the M2-14 topology E2E (task-23.4). Unlike the smoke
 // suite (which only needs the SPA URLs), these tests drive the live gateway too: the
-// browser round trip and the cross-tenant isolation check both go through it. URLs
-// default to the live dev deployments and are overridable via env, matching the smoke
-// pattern so the same suite runs against a PR preview or any other deploy.
+// browser round trip and the cross-tenant isolation check both go through it. Each PR now
+// deploys to its own ephemeral Railway environment (M4-21), so these URLs are REQUIRED —
+// resolveTarget throws rather than falling back to a hardcoded dev deployment (Decision
+// [fail-loud-targets]).
 
 import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
+import { resolveTarget } from '../targets'
 
-const resolve = (envVar: string, fallback: string): string => process.env[envVar]?.trim() || fallback
-
-// The public gateway (mock issuer + /api/*) and the app SPA on the dev environment.
-export const GATEWAY_URL = resolve('GATEWAY_URL', 'https://gateway-development-997b.up.railway.app')
-export const APP_URL = resolve('APP_URL', 'https://app-development-3b4b.up.railway.app')
+// The public gateway (mock issuer + /api/*) and the app SPA on this run's environment.
+export const GATEWAY_URL = resolveTarget('GATEWAY_URL')
+export const APP_URL = resolveTarget('APP_URL')
 
 // The seeded isolation pair (db/seed.dev.sql), M3-02: the two real persona tenants, each
 // with an admin membership for its persona subject. Both rows exist in the tenants

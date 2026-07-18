@@ -14,20 +14,22 @@ error or uncaught page error during load. Neither app makes a backend round trip
 suite needs only the SPA deployments up.
 
 ```bash
-pnpm --filter @invoice-os/e2e test          # against the live dev URLs (defaults)
-pnpm --filter @invoice-os/e2e test:smoke    # same as above, explicit
+LANDING_URL=... OPS_CONSOLE_URL=... pnpm --filter @invoice-os/e2e test          # required — see below
+LANDING_URL=... OPS_CONSOLE_URL=... pnpm --filter @invoice-os/e2e test:smoke    # same as above, explicit
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
 ```
 
 ### Target URLs
 
-Each app's URL defaults to its live dev deployment and is overridable via an env
-var, so the same suite runs against a PR preview or any other deploy:
+Each app's URL is a **required** env var — there is no hardcoded default. Every PR now
+deploys to its own ephemeral Railway environment with an unpredictable domain suffix
+(M4-21), so a missing var throws naming itself rather than silently falling back to the
+shared `development` fleet (Decision `[fail-loud-targets]`):
 
-| App         | Env var            | Default (dev)                                    |
-| ----------- | ------------------ | ------------------------------------------------ |
-| landing     | `LANDING_URL`      | https://landing-development-92a2.up.railway.app  |
-| ops-console | `OPS_CONSOLE_URL`  | https://ops-console-development.up.railway.app   |
+| App         | Env var            |
+| ----------- | ------------------ |
+| landing     | `LANDING_URL`      |
+| ops-console | `OPS_CONSOLE_URL`  |
 
 ```bash
 LANDING_URL=https://landing-pr-123.up.railway.app pnpm --filter @invoice-os/e2e test
@@ -41,14 +43,14 @@ just an SPA in isolation. In the unified dev env the app is always gateway-wired
 must render the backend-verified tenant identity (not the mock-only shell render the old
 smoke suite used to check). It also asserts cross-tenant isolation over the live edge and
 gates on all 8 backends' health. It runs against `GATEWAY_URL` + `APP_URL` (same
-env-var/live-dev-default convention as the smoke suite) and, like the smoke suite, is run
-as post-deploy verification in `dev-env.yml` (deploy fleet → reset+seed → smoke + topology).
-See `docs/topology-e2e.md`.
+required-env-var convention as the smoke suite, no hardcoded default) and, like the smoke
+suite, is run as post-deploy verification in `dev-env.yml` (deploy fleet → boot-time
+provision → smoke + topology). See `docs/topology-e2e.md`.
 
-| Target  | Env var       | Default (dev)                                |
-| ------- | ------------- | --------------------------------------------- |
-| gateway | `GATEWAY_URL` | https://gateway-development-997b.up.railway.app |
-| app     | `APP_URL`     | https://app-development-3b4b.up.railway.app   |
+| Target  | Env var       |
+| ------- | ------------- |
+| gateway | `GATEWAY_URL` |
+| app     | `APP_URL`     |
 
 ```bash
 pnpm --filter @invoice-os/e2e test:topology   # needs the gateway-wired dev deploy up

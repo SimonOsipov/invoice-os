@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -35,15 +36,33 @@ func main() {
 		log.Fatalf("gateway: startup: %v", err)
 	}
 
-	// Migrate before serving: the gateway is the fleet's single in-network
-	// migrator (docs/migrations.md §2). It applies every pending migration as the
-	// migrator role here — before app.Run starts the listener — so the schema is
-	// fully migrated by the time /healthz first answers. That is the
-	// schema-before-fleet barrier CI relies on when it health-gates the gateway
-	// ahead of the seven context services (which never migrate). Fatal on failure:
-	// a gateway that cannot migrate must never come up healthy.
-	if err := db.MigrateUp(context.Background(), mustEnv("DATABASE_MIGRATION_URL"), migrations.FS); err != nil {
-		log.Fatalf("gateway: migrate: %v", err)
+	// Bootstrap (gated) -> migrate (unconditional) -> seed (gated), all fatal on
+	// error and all complete before app.Run opens the listener, so a green
+	// /healthz continues to mean "fully provisioned" (task-128). The gateway
+	// remains the fleet's single in-network migrator (docs/migrations.md §2):
+	// migrate is unconditional regardless of the guard below, exactly as before.
+	//
+	// The guard reads the RAW os.Getenv("ENVIRONMENT")/os.Getenv("GATEWAY_DB_BOOTSTRAP")
+	// — never app.Config.Environment. internal/platform/config.go:44 substitutes
+	// "development" for an unset ENVIRONMENT, which would silently re-open the
+	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
+	// the guard off, none of DATABASE_SUPERUSER_URL / INVOICE_*_PASSWORD are
+	// required — production boots without any of them set.
+	if err := db.Provision(context.Background(), db.ProvisionConfig{
+		Environment:   os.Getenv("ENVIRONMENT"),
+		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
+		SuperuserDSN:  os.Getenv("DATABASE_SUPERUSER_URL"),
+		MigrationDSN:  mustEnv("DATABASE_MIGRATION_URL"),
+		Passwords: db.RolePasswords{
+			Migrator: os.Getenv("INVOICE_MIGRATOR_PASSWORD"),
+			App:      os.Getenv("INVOICE_APP_PASSWORD"),
+			Reader:   os.Getenv("INVOICE_TENANT_READER_PASSWORD"),
+		},
+		BootstrapFS:  dbsql.FS,
+		MigrationsFS: migrations.FS,
+		SeedFS:       dbsql.FS,
+	}); err != nil {
+		log.Fatalf("gateway: provision: %v", err)
 	}
 
 	verifier, err := auth.NewVerifier(auth.Config{

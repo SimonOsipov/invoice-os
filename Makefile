@@ -25,14 +25,20 @@ READER_PASSWORD   ?= reader
 # Migrator URL for the local docker-compose Postgres (make dev-db). Kept separate
 # from DATABASE_MIGRATION_URL so `make dev-db` always targets the compose DB on
 # localhost regardless of .env, and the existing migrate-* guards stay untouched.
-DEV_DB_MIGRATION_URL := postgres://invoice_migrator:$(MIGRATOR_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
+#
+# Host port for the local compose Postgres. Overridable so multiple worktrees can
+# run `make dev-db` concurrently (DEV_DB_PORT=5433 make dev-db) — the container
+# side always stays 5432; see docker-compose.yml.
+DEV_DB_PORT ?= 5432
+
+DEV_DB_MIGRATION_URL := postgres://invoice_migrator:$(MIGRATOR_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 
 # The other per-role URLs against the same compose DB, for the RLS suite (make
 # test-rls). Same rationale: always target localhost so `make test-rls` works right
 # after `make dev-db` with no .env edits.
-DEV_DB_APP_URL       := postgres://invoice_app:$(APP_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
-DEV_DB_READER_URL    := postgres://invoice_tenant_reader:$(READER_PASSWORD)@localhost:5432/invoice_os?sslmode=disable
-DEV_DB_SUPERUSER_URL := postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+DEV_DB_APP_URL       := postgres://invoice_app:$(APP_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
+DEV_DB_READER_URL    := postgres://invoice_tenant_reader:$(READER_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
+DEV_DB_SUPERUSER_URL := postgres://postgres:postgres@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 
 # goose against Postgres as the migrator role.
 GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
@@ -47,10 +53,15 @@ help: ## List the available targets
 
 db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs psql)
 	@test -n "$(DATABASE_SUPERUSER_URL)" || { echo "DATABASE_SUPERUSER_URL is not set (set it in .env or the environment)"; exit 1; }
+	# NOTE: passwords land in the `-c` argv here (and below in `dev-db`), so they're
+	# visible to `ps` on this machine and to the server's statement log if
+	# log_statement=all. Fine for dev-default placeholders (real Railway/prod
+	# passwords never flow through this Makefile) — don't copy this exact pattern
+	# into a script that handles real secrets.
 	psql "$(DATABASE_SUPERUSER_URL)" -v ON_ERROR_STOP=1 \
-		-v migrator_password="$(MIGRATOR_PASSWORD)" \
-		-v app_password="$(APP_PASSWORD)" \
-		-v reader_password="$(READER_PASSWORD)" \
+		-c "SELECT set_config('fiscalbridge.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.app_password', '$(APP_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.reader_password', '$(READER_PASSWORD)', false)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -75,9 +86,13 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 	docker compose up -d --wait
 	# Bootstrap the roles INSIDE the container: its psql is always present, so
 	# no host psql client is required. -T disables the TTY so the file pipes to stdin.
+	# `-f -` is required (not bare stdin redirection): psql ignores stdin when -c
+	# options are also given unless the input is explicitly named as a file via "-".
 	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
-		-v migrator_password="$(MIGRATOR_PASSWORD)" -v app_password="$(APP_PASSWORD)" \
-		-v reader_password="$(READER_PASSWORD)" \
+		-c "SELECT set_config('fiscalbridge.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.app_password', '$(APP_PASSWORD)', false)" \
+		-c "SELECT set_config('fiscalbridge.reader_password', '$(READER_PASSWORD)', false)" \
+		-f - \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"
 	# Seed a couple of test tenants (M2-06). Runs as the in-container superuser, which
@@ -85,7 +100,7 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 	# grant. Idempotent (ON CONFLICT DO NOTHING), so re-running `make dev-db` is safe.
 	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
 		< db/seed.dev.sql
-	@echo "Local dev DB ready on localhost:5432 (db invoice_os; app role invoice_app). Seeded tenants: see db/seed.dev.sql."
+	@echo "Local dev DB ready on localhost:$(DEV_DB_PORT) (db invoice_os; app role invoice_app). Seeded tenants: see db/seed.dev.sql."
 
 dev-db-down: ## Stop and remove the local dev Postgres container (keeps the data volume)
 	docker compose down

@@ -469,7 +469,11 @@ export default function App() {
   // an invalidated session belongs back at the front door, not the in-app picker.
   const signOut = useCallback(() => {
     clearSession()
-    window.location.href = landingBase()
+    // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
+    // standalone showcase build) — never navigate to `null` (stringifies to "null").
+    // The already-cleared session still falls back to the app's own persona-picker.
+    const dest = landingBase()
+    if (dest) window.location.href = dest
   }, [])
 
   const doSignIn = useCallback(async (persona: Persona) => {

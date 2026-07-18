@@ -8,20 +8,19 @@
 // resolution proof).
 import { apiFetch, ApiError } from '@invoice-os/api-client/client'
 import { TENANTS } from '../topology/targets'
+import { resolveTarget } from '../targets'
 
 // Re-exported so specs can do `import { ApiError } from '../api/client'`
 // against this one seam, without reaching into the api-client package
 // directly — negative specs assert err.kind === 'http' / err.status.
 export { ApiError }
 
-// apiBase(): mirrors topology/targets.ts's GATEWAY_URL resolution exactly.
-// Deliberately does NOT call the api-client's own gatewayBase() — that reads
-// import.meta.env.VITE_GATEWAY_URL, which throws under Node (this package
-// has no Vite/browser runtime).
+// apiBase(): shares topology/targets.ts's GATEWAY_URL resolution exactly (both call
+// resolveTarget('GATEWAY_URL')). Deliberately does NOT call the api-client's own
+// gatewayBase() — that reads import.meta.env.VITE_GATEWAY_URL, which throws under Node
+// (this package has no Vite/browser runtime).
 export function apiBase(): string {
-  return (
-    (process.env.GATEWAY_URL ?? '').trim().replace(/\/+$/, '') || 'https://gateway-development-997b.up.railway.app'
-  )
+  return resolveTarget('GATEWAY_URL')
 }
 
 // rawFetch(): a raw HTTP seam for M3-15's malformed-request contract specs

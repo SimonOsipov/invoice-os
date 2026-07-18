@@ -173,7 +173,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
         .dm-select { appearance: none; -webkit-appearance: none; }
         .si-close { transition: background 120ms ease-out, color 120ms ease-out; }
         .si-close:hover { background: var(--bg-3); color: var(--fg-1); }
-        @media (max-width: 480px) { .dm-row { flex-direction: column !important; } .dm-overlay { padding: 14px !important; } }
+        @media (max-width: 480px) { .dm-row { flex-direction: column !important; align-items: stretch !important; } .dm-overlay { padding: 14px !important; } }
       `}</style>
 
       <div

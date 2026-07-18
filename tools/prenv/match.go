@@ -16,17 +16,16 @@
 // flakiness). A live Railway run only ever sees whatever environments
 // happen to exist and can never deliberately exercise that ambiguity --
 // purity is what makes it a unit-testable scenario instead.
-//
-// STUB NOTICE (QA Mode A / RALPH RED stage): Match below is a
-// compile-only stub. It exists solely so match_test.go compiles and
-// fails on its assertions (wrong returned name / wrong sentinel error)
-// rather than "undefined: Match". The real anchored-regexp capture +
-// strconv.Atoi numeric-compare logic is implemented by the executor in
-// Stage 3 (M4-21-08) -- see the task's Implementation Plan for the exact
-// approach.
 package main
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 // ErrNoMatch is returned when zero candidate names match prNumber.
 var ErrNoMatch = errors.New("prenv: no environment name matches the given PR number")
@@ -38,6 +37,21 @@ var ErrNoMatch = errors.New("prenv: no environment name matches the given PR num
 // string content, while still seeing which environments collided.
 var ErrAmbiguous = errors.New("prenv: ambiguous match: more than one environment name matches the given PR number")
 
+// shapePattern anchors both documented Railway PR-environment name shapes
+// -- `pr-<N>` and `<repo>-pr-<N>` -- at both ends of the string (^...$),
+// so no prefix or substring match is ever possible (AC-2). The `<repo>-`
+// portion is deliberately unconstrained (any run of characters ending in
+// a literal hyphen): Match has no way to know the "real" repo name, so
+// ANY such prefix is, by design, the second documented shape (F5) --
+// TestMatchRepoPrefixShapeIsUnconstrained_PinnedBehavior pins this.
+//
+// The digit run itself is captured with the plain [0-9]+ class (no
+// no-leading-zero restriction here); Match instead requires the captured
+// run to equal strconv.Itoa(prNumber) verbatim, which is what rejects a
+// leading-zero lookalike like pr-01 for PR 1 without special-casing the
+// character class.
+var shapePattern = regexp.MustCompile(`^(?:.+-)?pr-([0-9]+)$`)
+
 // Match resolves the single Railway ephemeral environment name in names
 // that corresponds to prNumber. Matching is exact on the two documented
 // shapes only -- `pr-<N>` and `<repo>-pr-<N>`, with <N> parsed as a whole
@@ -46,10 +60,39 @@ var ErrAmbiguous = errors.New("prenv: ambiguous match: more than one environment
 // Returns (name, nil) for exactly one match, ("", ErrNoMatch) for zero
 // matches, and ("", ErrAmbiguous) -- naming every candidate -- for more
 // than one match (AC-3). Match performs no network calls, environment
-// reads, or global state access (AC-1).
+// reads, or global state access: names is the only input (AC-1).
 //
-// TODO: implemented by executor (M4-21-08 Stage 3). Currently a
-// compile-only stub that always reports no match.
+// Match does not deduplicate names: Railway environment names are unique
+// within a project, so a duplicate entry in names would indicate a caller
+// bug (e.g. concatenating two GraphQL pages), not a legitimate ambiguity
+// -- and is reported as ErrAmbiguous like any other multi-candidate case
+// rather than silently collapsed.
 func Match(names []string, prNumber int) (string, error) {
-	return "", ErrNoMatch
+	want := strconv.Itoa(prNumber)
+
+	var matches []string
+	for _, name := range names {
+		submatch := shapePattern.FindStringSubmatch(name)
+		if submatch == nil {
+			continue
+		}
+		if submatch[1] != want {
+			continue
+		}
+		matches = append(matches, name)
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", ErrNoMatch
+	case 1:
+		return matches[0], nil
+	default:
+		// Sorted so the error message is deterministic regardless of the
+		// order names arrived in (e.g. GraphQL result ordering is not a
+		// guarantee Match should depend on for reproducible CI logs).
+		sorted := append([]string(nil), matches...)
+		sort.Strings(sorted)
+		return "", fmt.Errorf("%w: %s", ErrAmbiguous, strings.Join(sorted, ", "))
+	}
 }

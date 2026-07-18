@@ -22,6 +22,7 @@ import {
   computeBillLine,
   computeQuota,
   fmt,
+  httpCodeColor,
   lineChart,
   naira,
   nairaC,
@@ -618,5 +619,43 @@ describe('buildEvidenceBundles', () => {
     expect(row.response).toBe(
       '{\n  "status": "CLEARED",\n  "irn": "IRN-NG-88412-A91",\n  "csid": "MBS.9f2a…c7",\n  "cleared_at": "2026-07-18T09:14:00Z",\n  "net": 3832558,\n  "vat": 287442\n}',
     )
+  })
+})
+
+// RED (M4-20-06, task-143 A1 mandated carve-out) — httpCodeColor's 300 and 499/500
+// boundaries are not falsifiable by screenshot (seed codes are only 200/202/422/500), so
+// this pins the pure status->token map before the ApiWebhooks/RotateConfirm component
+// work, same shape as showDeadLetterCallout/vatSplit. Source: `Developer Console.dc.html`
+// (Claude Design project 6269a212-5677-4abd-b8a9-08aad10b1c65, read-only) line 1006,
+// independently re-derived (not trusted from prose):
+//   const codeColor = (c) => c < 300 ? 'var(--status-green-text)'
+//     : c < 500 ? 'var(--status-amber-text)' : 'var(--status-red-text)';
+// Currently fails on `not implemented` (the stub body throws) — that IS the correct RED
+// reason, not an import/compile/setup error.
+describe('httpCodeColor', () => {
+  it('http_code_color_maps_2xx_to_green: codes 200 and 202 are var(--status-green-text)', () => {
+    expect(httpCodeColor(200)).toBe('var(--status-green-text)')
+    expect(httpCodeColor(202)).toBe('var(--status-green-text)')
+  })
+
+  it('http_code_color_upper_2xx_boundary: code 299 is still var(--status-green-text)', () => {
+    expect(httpCodeColor(299)).toBe('var(--status-green-text)')
+  })
+
+  it('http_code_color_300_is_the_amber_boundary: code 300 is var(--status-amber-text), not green (c < 300 is false at exactly 300)', () => {
+    expect(httpCodeColor(300)).toBe('var(--status-amber-text)')
+  })
+
+  it('http_code_color_maps_4xx_to_amber: codes 422 and 499 are var(--status-amber-text)', () => {
+    expect(httpCodeColor(422)).toBe('var(--status-amber-text)')
+    expect(httpCodeColor(499)).toBe('var(--status-amber-text)')
+  })
+
+  it('http_code_color_500_is_the_red_boundary: code 500 is var(--status-red-text), not amber (c < 500 is false at exactly 500)', () => {
+    expect(httpCodeColor(500)).toBe('var(--status-red-text)')
+  })
+
+  it('http_code_color_maps_5xx_to_red: code 503 is var(--status-red-text)', () => {
+    expect(httpCodeColor(503)).toBe('var(--status-red-text)')
   })
 })

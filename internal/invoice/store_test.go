@@ -900,3 +900,49 @@ func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
 		t.Errorf("audit_log invoice.created rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
 	}
 }
+
+// TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite (QA Mode
+// B adversarial coverage, M4-06-03): closes a vacuous-assertion gap in
+// TestStoreCreate_CrossTenantEntityIDRejected directly above. That test's own
+// CreateInput carries NO LineItems, so its (pre-existing-pattern) zero-rows
+// check on line_items would pass trivially even if the pre-check/FK backstop
+// were broken -- there was never anything to write in the first place. This
+// variant supplies a non-empty LineItems slice so the zero-rows assertion is
+// actually discriminating: it proves the tenant-ownership pre-check rejects
+// BEFORE the invoices INSERT starts the write sequence, so line_items (which
+// would otherwise be written in step (2), right after the invoices row) never
+// gets a single row either.
+func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "M4-06-03 tenant A (line items)")
+	tenantB := seedTenant(t, super, "M4-06-03 tenant B (line items)")
+	entityB := seedEntity(t, super, tenantB, "M4-06-03 B entity (line items)")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	descA, descB := "Widget A", "Widget B"
+	_, err := store.Create(cA, CreateInput{
+		EntityID:      entityB,
+		InvoiceNumber: "INV-XT-LI-1",
+		LineItems: []LineItemInput{
+			{Description: &descA},
+			{Description: &descB},
+		},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity, 2 line items) err = %v, want ErrValidation", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {
+		t.Errorf("invoices rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM line_items WHERE tenant_id = $1`, tenantA); n != 0 {
+		t.Errorf("line_items rows for tenant A after rejected cross-tenant Create = %d, want 0 (no partial write -- the pre-check rejects before the invoices INSERT even starts the write sequence)", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.created'`, tenantA); n != 0 {
+		t.Errorf("audit_log invoice.created rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
+	}
+}

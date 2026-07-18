@@ -576,18 +576,35 @@ cmd_disable_pr_environments() {
 # EVERY behaviour below was MEASURED against a real probe fork on 2026-07-18
 # (forked from `development` with the exact payload attempt_create sends), not
 # inferred from the docs. Where a measurement contradicted the design, the
-# measurement won. Two checks the design called for are DELIBERATELY ABSENT
-# because measuring them showed they would have failed every healthy run:
+# measurement won.
 #
-#   1. NO failure on a null `targetPort`. Measured null on the gateway domain in
-#      BOTH the fork AND `development`. Null is the normal state here.
-#   2. NO failure on an absent volume. A fork gets NO volume at all
-#      (volumeInstances == []) while `development` has a 5000MB one — and
-#      Postgres still deploys, reaches SUCCESS and accepts TCP connections. A PR
-#      database is EPHEMERAL BY DESIGN and that is correct: the gateway
-#      bootstraps, migrates and seeds at boot, so it is meant to be born empty.
+# ONE check the design called for is DELIBERATELY ABSENT, because measuring it
+# showed it would have failed every healthy run: NO failure on a null
+# `targetPort`. Measured null on the gateway domain in BOTH the fork AND
+# `development`. Null is the normal state here. Do not "restore" it.
 #
-# Do not "restore" either check. Each would have converted every green run red.
+# CORRECTION 2026-07-19 — a second omission (the absent-volume check) is
+# RETRACTED. It broke the first real run. This file previously asserted that
+# "a fork gets no volume and Postgres still deploys AND ACCEPTS CONNECTIONS".
+# The second half was FALSE. Provenance of the error: a raw TCP connect to the
+# Postgres TCP proxy returned OPEN, and "Postgres is listening" was inferred
+# from that. The Postgres wire protocol was never spoken.
+#
+# What is ACTUALLY measured (dev-env.yml run 29664995923, plus a discriminator
+# probe run against that same environment ~40 minutes after its Postgres had
+# reported SUCCESS):
+#
+#   - a fork receives NO volume (volumeInstances == []) while `development`
+#     has a 5000MB one. That half stands.
+#   - WITHOUT a volume, Postgres deploys to SUCCESS but NEVER accepts a
+#     connection. `pg_isready` got "no response" on 12 attempts in CI and on 6
+#     more 40 minutes later, while raw TCP to the same proxy was OPEN
+#     throughout. The proxy routes correctly; Postgres is not answering the
+#     protocol. STRUCTURAL, not a timing race.
+#
+# So the volume MUST BE CREATED — see ensure_postgres_volume. A TCP connect to
+# a proxy is NEVER evidence that the service behind it is healthy; `pg_isready`
+# is, which is exactly why it is the authoritative gate.
 # ===========================================================================
 
 # Domains and the TCP proxy were both measured to CARRY into a fork (auto-renamed
@@ -648,8 +665,43 @@ DEPLOYMENT_STATUS_QUERY='query dep($id: String!) { deployment(id: $id) { id stat
 # shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
 VOLUMES_QUERY='query vols($e: String!) {
   environment(id: $e) {
-    volumeInstances { edges { node { id serviceId mountPath sizeMB currentSizeMB state } } }
+    volumeInstances { edges { node { id serviceId mountPath sizeMB currentSizeMB state region } } }
   }
+}'
+
+# Schema RE-INTROSPECTED 2026-07-19 against the live endpoint, not recalled:
+#   volumeCreate(input: VolumeCreateInput!): Volume!   (NOT deprecated)
+#   VolumeCreateInput: projectId String!  mountPath String!
+#                      environmentId String  serviceId String  region String
+# `projectId` is NON-NULL and is exactly what an earlier attempt omitted, which
+# is the only reason that attempt failed. There is no `sizeMB` input — Railway
+# picks the size.
+#
+# The selection set is deliberately thin because `Volume` exposes NEITHER
+# `serviceId` NOR `environmentId` — its return literally CANNOT prove the volume
+# landed on the right service in the right environment. The re-query against
+# `volumeInstances` is the only thing that can, which is the same
+# never-trust-the-mutation discipline used everywhere else in this file.
+# shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
+VOLUME_CREATE_MUTATION='mutation volCreate($input: VolumeCreateInput!) {
+  volumeCreate(input: $input) { id name createdAt }
+}'
+
+# `unmergedChangesCount` is the staged-changes indicator. Read ONLY on the
+# failure path, to tell "the mutation staged instead of applying" apart from
+# "the mutation silently did nothing" — two different bugs with two different
+# fixes, and the error message must not guess between them.
+# shellcheck disable=SC2016  # $e is a GraphQL variable — not a shell expansion.
+ENV_STAGED_QUERY='query staged($e: String!) {
+  environment(id: $e) { id name unmergedChangesCount }
+}'
+
+# `skipDeploys: true` on purpose: ensure_postgres_running owns deploying Postgres
+# and does it deterministically AFTER the volume is confirmed. Letting the commit
+# trigger its own deploy would race that one.
+# shellcheck disable=SC2016  # $e/$m are GraphQL variables — not shell expansions.
+COMMIT_STAGED_MUTATION='mutation commitStaged($e: String!, $m: String!) {
+  environmentPatchCommitStaged(environmentId: $e, commitMessage: $m, skipDeploys: true)
 }'
 
 # shellcheck disable=SC2016  # $e/$s are GraphQL variables — not shell expansions.
@@ -670,6 +722,9 @@ SETTLE_ATTEMPTS=6          # x10s = 60s. Insurance only — see settle_fork.
 SETTLE_INTERVAL=10
 PG_WAIT_ATTEMPTS=42        # x10s = 420s.
 PG_WAIT_INTERVAL=10
+VOLUME_CONFIRM_ATTEMPTS=6  # x5s = 30s. Read-after-write lag was already measured
+VOLUME_CONFIRM_INTERVAL=5  # on the environment list (M4-23-03), so confirm with a
+                           # bounded poll rather than a single racy read.
 
 # gql_body <query> <variables-json>
 gql_body() {
@@ -899,8 +954,13 @@ wait_for_postgres() {
 # 7 contexts + 3 SPAs, and the Watch-Paths assertion excludes it); it works in
 # `development` only because it has been running there since M1. So a fork needs
 # an EXPLICIT deploy, and this is where it happens.
+#
+# <volume-created> (0|1) is passed EXPLICITLY by cmd_reconcile_fork rather than
+# read from a global, because it changes this function's control flow: when a
+# volume was just created, an existing deployment predates it and is running
+# without storage, so "already SUCCESS" is NOT a valid no-op.
 ensure_postgres_running() {
-  local env_id="$1" status dep_id
+  local env_id="$1" volume_created="${2:-0}" status dep_id
 
   graphql_post "$(gql_body "$SERVICE_INSTANCE_QUERY" \
     "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
@@ -914,6 +974,29 @@ ensure_postgres_running() {
   status=$(echo "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.status // "NONE"')
   dep_id=$(echo "$GQL_RESPONSE" | jq -r '.data.serviceInstance.latestDeployment.id // empty')
   echo "postgres in $env_id: latestDeployment status=$status id=${dep_id:-<none>}"
+
+  # A volume was just created, so any EXISTING deployment predates it and has no
+  # volume mounted — the exact state pr-67 was left in by the failed first run
+  # (Postgres SUCCESS, zero volumes, pg_isready dead for 40+ minutes). Redeploy
+  # so the volume attaches. NONE falls through to the normal deploy path below,
+  # which mounts it anyway; NEEDS_APPROVAL and SKIPPED still fail loud, because
+  # redeploying past either would paper over a real finding.
+  if [ "$volume_created" = "1" ]; then
+    case "$status" in
+      NONE|NEEDS_APPROVAL|SKIPPED) : ;;
+      *)
+        echo "::warning::postgres in $env_id has a deployment (status=$status) that PREDATES the volume just created, so it is running WITHOUT storage mounted. Redeploying to attach the volume."
+        if ! graphql_try "$(gql_body "$SERVICE_REDEPLOY_MUTATION" \
+          "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
+          "redeploying postgres after volume creation in environment $env_id"; then
+          echo "::error::serviceInstanceRedeploy failed for postgres in environment $env_id after creating its volume: $GQL_ERROR. The volume exists but nothing is mounting it, so Postgres would stay unreachable."
+          exit 1
+        fi
+        wait_for_postgres "$env_id" ""
+        return 0
+        ;;
+    esac
+  fi
 
   case "$status" in
     SUCCESS)
@@ -982,38 +1065,125 @@ ensure_postgres_running() {
   wait_for_postgres "$env_id" "$dep_id"
 }
 
-# --- Reconcile E: volume (OBSERVE ONLY — never fails) ------------------------
+# --- Reconcile E: volume (CREATE — this is what makes Postgres actually serve) --
 #
-# MEASURED: a fork gets NO volume (volumeInstances == []) while `development`
-# has a 5000MB one, and Postgres deploys, reaches SUCCESS and accepts TCP
-# connections regardless. The design's "absent volume = fail loudly" check would
-# therefore have failed EVERY run. It is intentionally not implemented.
+# Runs BEFORE ensure_postgres_running, because Railway mounts volumes at deploy
+# time: creating the volume first means one deployment brings up a Postgres that
+# has its storage. Volume creation needs no prior deployment.
 #
-# A PR database is EPHEMERAL BY DESIGN, and that is the correct shape: the
-# gateway bootstraps, migrates and seeds at boot (M4-21-04), so a PR database is
-# meant to be born empty. Recorded as an observation for the run log only.
-observe_volumes() {
-  local env_id="$1" fork_count dev_count
+# Sets POSTGRES_VOLUME_CREATED (0|1), which cmd_reconcile_fork passes explicitly
+# to ensure_postgres_running. A pre-existing SUCCESS deployment predates a volume
+# created here and is therefore running WITHOUT one mounted, so it must be
+# redeployed — otherwise this reconcile creates storage that nothing uses and
+# `pg_isready` fails exactly as before.
+#
+# The empty-database consequence is UNCHANGED and still correct: a PR database is
+# EPHEMERAL BY DESIGN. Mounting a fresh volume over the image's PGDATA means
+# Postgres runs initdb into it and comes up empty, which is the intended shape —
+# the gateway bootstraps, migrates and seeds at boot (M4-21-04).
+POSTGRES_VOLUME_CREATED=0
+
+ensure_postgres_volume() {
+  local env_id="$1" fork_count mount_path region input try staged
+
+  POSTGRES_VOLUME_CREATED=0
 
   graphql_post "$(gql_body "$VOLUMES_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
     "reading volume instances in environment $env_id"
   fork_count=$(echo "$GQL_RESPONSE" | jq --arg s "$RAILWAY_SVC_POSTGRES_ID" \
     '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)] | length')
 
+  # IDEMPOTENCE. A re-run against a reused environment must never create a
+  # second volume — Railway would have two claims on one mount path, and the
+  # project-level volume cap is finite.
   if [ "$fork_count" != "0" ]; then
-    echo "postgres volume in $env_id:"
+    echo "postgres volume already present in $env_id — no mutation:"
     echo "$GQL_RESPONSE" | jq -r --arg s "$RAILWAY_SVC_POSTGRES_ID" \
       '.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)
-       | "  mountPath=\(.mountPath) sizeMB=\(.sizeMB) currentSizeMB=\(.currentSizeMB) state=\(.state // "null")"'
+       | "  id=\(.id) mountPath=\(.mountPath) sizeMB=\(.sizeMB) currentSizeMB=\(.currentSizeMB) state=\(.state // "null") region=\(.region // "null")"'
     return 0
   fi
 
+  echo "environment $env_id has NO postgres volume — reading the mount path from the source environment rather than hardcoding it ..."
+
   graphql_post "$(gql_body "$VOLUMES_QUERY" "$(jq -n --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" '{e: $e}')")" \
     "reading volume instances in the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
-  dev_count=$(echo "$GQL_RESPONSE" | jq --arg s "$RAILWAY_SVC_POSTGRES_ID" \
-    '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)] | length')
+  mount_path=$(echo "$GQL_RESPONSE" | jq -r --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+    '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)][0].mountPath // empty')
+  region=$(echo "$GQL_RESPONSE" | jq -r --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+    '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)][0].region // empty')
 
-  echo "OBSERVATION: environment $env_id received NO postgres volume (source environment has $dev_count). This is EXPECTED and is NOT a failure — measured 2026-07-18: a fork gets no volume and Postgres still deploys and accepts connections. A PR database is ephemeral by design; the gateway bootstraps, migrates and seeds it at boot."
+  # Fail loud rather than guessing a mount path. Guessing wrong yields a volume
+  # mounted somewhere Postgres does not read, i.e. exactly the symptom we are
+  # fixing, but now with a volume present to make it look reconciled.
+  if [ -z "$mount_path" ]; then
+    echo "::error::The source environment $RAILWAY_DEV_ENVIRONMENT_ID has NO postgres volume (service $RAILWAY_SVC_POSTGRES_ID), so there is no mount path to copy. Refusing to hardcode one: a volume mounted at the wrong path leaves Postgres unable to serve while APPEARING reconciled. Measured 2026-07-18, development's volume was /var/lib/postgresql/data at 5000MB — if that is gone, development itself has drifted and that is the finding."
+    exit 1
+  fi
+  echo "source postgres volume: mountPath=$mount_path region=${region:-<null — letting Railway choose>}"
+
+  input=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" \
+    --arg s "$RAILWAY_SVC_POSTGRES_ID" --arg m "$mount_path" \
+    '{projectId: $p, environmentId: $e, serviceId: $s, mountPath: $m}')
+  # region is copied when the source has one: a volume in a region the service is
+  # not in will not mount. Omitted when null so Railway applies its own default,
+  # rather than sending an explicit null the API may reject.
+  if [ -n "$region" ]; then
+    input=$(echo "$input" | jq --arg r "$region" '. + {region: $r}')
+  fi
+
+  if ! graphql_try "$(gql_body "$VOLUME_CREATE_MUTATION" \
+    "$(jq -n --argjson i "$input" '{input: $i}')")" \
+    "creating the postgres volume in environment $env_id"; then
+    echo "::error::volumeCreate failed for postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $env_id at mountPath $mount_path: $GQL_ERROR. Without a volume Postgres deploys to SUCCESS but never accepts a connection (measured 2026-07-19), so this is fatal, not cosmetic."
+    exit 1
+  fi
+  echo "volumeCreate returned volume id $(echo "$GQL_RESPONSE" | jq -r '.data.volumeCreate.id // "<none>"') — NOT proof of placement (Volume exposes neither serviceId nor environmentId). Confirming by re-query ..."
+
+  for try in $(seq 1 "$VOLUME_CONFIRM_ATTEMPTS"); do
+    if graphql_try "$(gql_body "$VOLUMES_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+      "confirming the postgres volume in environment $env_id"; then
+      fork_count=$(echo "$GQL_RESPONSE" | jq --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+        '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)] | length')
+      if [ "$fork_count" != "0" ]; then
+        echo "CONFIRMED by independent re-query (attempt $try): postgres volume now exists in $env_id:"
+        echo "$GQL_RESPONSE" | jq -r --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+          '.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)
+           | "  id=\(.id) mountPath=\(.mountPath) sizeMB=\(.sizeMB) state=\(.state // "null") region=\(.region // "null")"'
+        POSTGRES_VOLUME_CREATED=1
+        return 0
+      fi
+    fi
+    sleep "$VOLUME_CONFIRM_INTERVAL"
+  done
+
+  # Still absent. Distinguish "staged instead of applied" from "silent no-op"
+  # before failing, so the error names ONE cause rather than offering a menu.
+  if graphql_try "$(gql_body "$ENV_STAGED_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "reading staged changes in environment $env_id"; then
+    staged=$(echo "$GQL_RESPONSE" | jq -r '.data.environment.unmergedChangesCount // 0')
+    if [ "$staged" != "0" ] && [ "$staged" != "null" ]; then
+      echo "::warning::volumeCreate STAGED rather than applied ($staged unmerged change(s) in $env_id) — committing them, then re-confirming."
+      if ! graphql_try "$(gql_body "$COMMIT_STAGED_MUTATION" \
+        "$(jq -n --arg e "$env_id" --arg m "M4-23-09: apply the postgres volume created by CI" '{e: $e, m: $m}')")" \
+        "committing staged changes in environment $env_id"; then
+        echo "::error::environmentPatchCommitStaged failed in environment $env_id: $GQL_ERROR. The postgres volume was created but is STAGED, so Postgres will deploy without it and never accept a connection."
+        exit 1
+      fi
+      graphql_post "$(gql_body "$VOLUMES_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+        "re-confirming the postgres volume after committing staged changes in environment $env_id"
+      fork_count=$(echo "$GQL_RESPONSE" | jq --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+        '[.data.environment.volumeInstances.edges[]?.node | select(.serviceId == $s)] | length')
+      if [ "$fork_count" != "0" ]; then
+        echo "CONFIRMED after committing staged changes: postgres volume now exists in $env_id."
+        POSTGRES_VOLUME_CREATED=1
+        return 0
+      fi
+    fi
+  fi
+
+  echo "::error::volumeCreate reported success but an independent re-query still shows NO postgres volume (service $RAILWAY_SVC_POSTGRES_ID) in environment $env_id after $((VOLUME_CONFIRM_ATTEMPTS * VOLUME_CONFIRM_INTERVAL))s, and there were no staged changes to explain it. Treating the mutation's own return as proof is exactly the silent-no-op failure this file refuses to make. Postgres would deploy to SUCCESS and never accept a connection."
+  exit 1
 }
 
 # --- Reconcile F: TCP proxy (OBSERVE ONLY — never fails) ---------------------
@@ -1075,7 +1245,7 @@ record_environment_variable() {
 }
 
 # cmd_reconcile_fork <environment-id>
-# The five reconciles are one command on purpose: they are strictly sequential,
+# The reconciles are one command on purpose: they are strictly sequential,
 # share the fork environment id and the auth context, and produce one coherent
 # CI step.
 cmd_reconcile_fork() {
@@ -1096,8 +1266,12 @@ cmd_reconcile_fork() {
   echo "Reconciling fork fidelity for environment $env_id ..."
   settle_fork "$env_id"
   reconcile_domains "$env_id"
-  ensure_postgres_running "$env_id"
-  observe_volumes "$env_id"
+  # ORDER IS LOAD-BEARING: the volume must exist BEFORE Postgres deploys, because
+  # Railway mounts volumes at deploy time. Reversed (the order shipped before
+  # 2026-07-19) Postgres comes up with no storage, reaches SUCCESS, and never
+  # accepts a connection.
+  ensure_postgres_volume "$env_id"
+  ensure_postgres_running "$env_id" "$POSTGRES_VOLUME_CREATED"
   observe_tcp_proxy "$env_id"
   record_environment_variable "$env_id"
   echo "Fork reconciliation complete for $env_id."

@@ -322,10 +322,39 @@ contradict what the docs imply.
 | Public domains | Yes, auto-renamed `<svc>-pr-<N>.up.railway.app` | Domain reconcile is a **no-op**: one query per service, zero mutations. The create path is insurance. |
 | `targetPort` on those domains | `null` — in the fork **and** in `development` | Null is the NORMAL state (Railway magic-port detection). CI must **not** fail on it, and must not invent `8080`. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 7 contexts + 3 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
-| Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | Postgres still deploys, reaches SUCCESS and accepts TCP connections without one. A PR database is **ephemeral by design** and is meant to be born empty: the gateway bootstraps, migrates and seeds at boot. CI **records** this and must **not** fail on it. |
+| Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | No reconciliation needed. `pg_isready` against the forked DSN remains the authoritative liveness proof. |
 | Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
+
+### Correction, 2026-07-19 — "no volume is fine" was false
+
+The row above previously said a volume-less forked Postgres *"still deploys, reaches
+SUCCESS and accepts TCP connections"*, and CI was written to record the absent volume
+rather than repair it. **The "accepts connections" half was wrong**, and it cost the
+first real run of this workflow.
+
+How the error was made: a raw TCP connect (`socket.create_connection()`) to the Postgres
+**TCP proxy** succeeded, and "Postgres is listening" was inferred from it. The Postgres
+wire protocol was never spoken. A proxy accepts TCP whether or not the service behind it
+is healthy, so that observation could not distinguish the two cases and never supported
+the claim.
+
+What is now measured — `dev-env.yml` run `29664995923`, plus a discriminator probe run
+against that same environment ~40 minutes after its Postgres had reported `SUCCESS`:
+
+| Probe | Result |
+|---|---|
+| `pg_isready` via `DATABASE_PUBLIC_URL` | **no response** — 12 attempts in CI, 6 more 40 min later |
+| raw TCP to the same proxy host:port | **open**, throughout |
+
+So: **the proxy routes correctly and Postgres is not answering the protocol.** A
+volume-less forked Postgres does not serve, and no amount of waiting changes that — the
+failure is structural, not a startup race. Hence `ensure_postgres_volume`.
+
+The general lesson, which outlives this row: **a TCP connect is never evidence that the
+service behind the socket is healthy.** `pg_isready` is, which is why it — not a status
+field and not a socket — is the authoritative liveness gate in `prepare-env`.
 
 **Postgres reports `CRASHED` transiently mid-startup, then settles to `SUCCESS`.** The
 wait in `railway-env.sh` therefore has **no early exit on a bad status** — it polls until

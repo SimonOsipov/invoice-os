@@ -149,8 +149,9 @@ jobs:
       ( github.event_name == 'workflow_dispatch' ||
         github.event.pull_request.draft == false )
     runs-on: ubuntu-latest
-    # Raised 10 -> 20 by M4-23-04. The seam now brings Postgres up in a fresh
-    # fork and waits for it (<=420s) plus a <=120s pg_isready probe. At 10
+    # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume,
+    # brings Postgres up in a fresh fork and waits for it (<=420s), plus a
+    # <=180s pg_isready probe (12 x (5s timeout + 10s backoff)). At 10
     # minutes a slow-but-CORRECT fork would die as a bare job-level timeout with
     # no annotation naming a cause — the exact failure mode the seam exists to
     # prevent. A job knob, not a restructure.
@@ -216,7 +217,7 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: bash scripts/ci/railway-env.sh audit-sealed-variables
 
-      - name: Reconcile fork fidelity (domains, Postgres bring-up, volume + proxy audit)
+      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, proxy audit)
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -293,7 +294,7 @@ jobs:
             sleep 10
           done
 
-          echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID never accepted a connection via DATABASE_PUBLIC_URL within 120s. This is a POSTGRES failure, NOT a generic gateway timeout: left unaddressed it would have surfaced as health-gate burning its full 900s with no cause named."
+          echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID never accepted a connection via DATABASE_PUBLIC_URL within ~180s (12 attempts x (5s connect timeout + 10s backoff)). This is a POSTGRES failure, NOT a generic gateway timeout: left unaddressed it would have surfaced as health-gate burning its full 900s with no cause named. MEASURED CAUSE 2026-07-19: Postgres with NO VOLUME reaches SUCCESS but never speaks the wire protocol, while raw TCP to its proxy stays OPEN — so if this fires, check that reconcile-fork actually created the volume before blaming the proxy or the DSN."
           exit 1
 
       - name: Assert Watch Paths are empty on all 11 non-Postgres services (M3-16 invariant)

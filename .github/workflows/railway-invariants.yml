@@ -1,0 +1,61 @@
+name: Railway Invariants
+
+# M4-23-02: assert Railway's PR Environments stay OFF, and that no deployment trigger
+# exists in any environment (Railway must never deploy this project outside CI's
+# ordering). Assert-only — this workflow never silently repairs.
+#
+# Why a standalone workflow rather than a job in dev-env.yml: every job there is
+# draft-gated and dev-env.yml is additionally paths-filtered, so an assertion placed
+# there would not run on a draft PR at all. This one has NO draft gate and NO paths
+# filter on purpose — it must run on every PR, including drafts, from the first push.
+#
+# The repair path (projectUpdate) is reachable ONLY via
+# `gh workflow run railway-invariants.yml -f disable=true`.
+#
+# No `schedule:` cron: drift only matters while work is happening, and every PR run
+# catches it.
+#
+# Auth: account-scoped RAILWAY_API_TOKEN (a project token cannot perform projectUpdate).
+# Deliberately no event-name token ternary like dev-env.yml's — that exists for its
+# dispatch->`development` split, which this workflow does not have.
+#
+# A fork PR receives no secrets and will fail the assertion. Deliberate: fail loudly
+# rather than add a skip branch that would be a silent hole (solo repo).
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      disable:
+        description: 'Re-disable Railway PR Environments before asserting (repair path)'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: railway-invariants-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Same stable project id as dev-env.yml.
+  RAILWAY_PROJECT_ID: 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
+  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+
+jobs:
+  pr-environments-off:
+    name: Railway PR Environments are OFF
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Disable PR Environments (manual repair)
+        if: github.event_name == 'workflow_dispatch' && inputs.disable
+        run: bash scripts/ci/railway-env.sh disable-pr-environments
+
+      # No continue-on-error, no if: always() — a failure here must fail the run.
+      - name: Assert PR Environments are OFF
+        run: bash scripts/ci/railway-env.sh assert-project-settings

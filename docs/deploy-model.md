@@ -10,15 +10,22 @@ environment.
 
 - **Open / update a non-draft PR** → CI deploys and verifies the **whole fleet** together,
   coherently, from the PR's code, into a **fresh ephemeral Railway environment forked from
-  `development`** (Railway's own PR Environments feature, task-131) — never into
-  `development` itself. (`.github/workflows/dev-env.yml`)
+  `development`** — never into `development` itself. (`.github/workflows/dev-env.yml`)
+  > **Correction (M4-23).** This previously said the fork happens "via Railway's own PR
+  > Environments feature (task-131)". That was **false**. Railway is not subscribed to
+  > this repo's PR events, so its PR Environments feature never created anything here —
+  > see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below. M4-23
+  > replaces it with self-provisioning from CI.
 - **Close a PR (merged or abandoned — GitHub's `closed` event fires for both)** →
   Railway automatically deprovisions that PR's ephemeral environment, Postgres included.
   There is no repo-side teardown workflow (`dev-env-cleanup.yml` was **deleted**, M4-21-11
   — see Decision `[cleanup-workflow-deleted]`): tearing down `development` on every PR
   close would contradict Decision `[dev-env-status]` below.
-  > **⚠ Not yet empirically confirmed.** This is Railway's documented PR-Environments
-  > behavior, not something this repo has observed happen. Task-131 (M4-21-07, Part 4,
+  > **⚠ Rests on a false premise (M4-23).** This describes Railway's documented
+  > PR-Environments behavior — but that feature is OFF and never applied to this project
+  > (see [Railway PR Environments are OFF](#railway-pr-environments-are-off)), so nothing
+  > here auto-deprovisions anything. A real teardown mechanism is M4-23's to design; this
+  > paragraph is retained only until it lands. Never empirically confirmed either: Task-131 (M4-21-07, Part 4,
   > step 15 — HUMAN-ONLY) requires closing a throwaway PR and recording whether Railway
   > actually removes the environment; as of this writing that task is still **In
   > Progress**, so the observation has not been done. If it turns out Railway does
@@ -74,6 +81,56 @@ now, since dispatch is the only path left that resets/seeds shared state.
 
 A half-deployed environment (SPAs without backends, or backends without an app) still has
 no value: every ready PR (re)deploys its own environment whole, exactly as before.
+
+## Railway PR Environments are OFF
+
+Railway's built-in **PR Environments** feature is **disabled** on this project
+(`prDeploys = false`, `botPrEnvironments = false`). It was turned off by hand in the
+Railway dashboard on **2026-07-18**, so no committed command ever observed the previous
+`true` state — there is no CI-captured "before".
+
+**Why it is off.** It never worked here and never could. Railway is not subscribed to
+this repo's pull-request events: the fleet is deployed by `railway up` (a CLI push from
+CI), and the project has **zero deployment triggers**, so no service is attached to
+GitHub. With nothing subscribed, `prDeploys = true` produced exactly nothing. M4-23
+established this: the flag was on, the base environment was set correctly, and the
+feature was completely **inert**.
+
+**`prDeploys` is not the load-bearing condition — `deploymentTriggers == 0` is.**
+Asserting only that a suggestively-named flag reads `false` is what produced M4-23 in the
+first place: a green check that proves nothing. A *deployment trigger* is the thing with
+causal power — if one ever appears, Railway can deploy a service on its own, outside CI,
+in its own order, breaking the gateway-first sequencing `dev-env.yml` depends on,
+**regardless of any toggle**.
+
+So CI asserts both, and fails loudly rather than repairing:
+
+- `.github/workflows/railway-invariants.yml` — runs on **every** `pull_request`, with no
+  draft gate and no `paths:` filter (unlike `dev-env.yml`, whose jobs are all draft-gated),
+  so drift is caught from the first push of any branch.
+- `scripts/ci/railway-env.sh assert-project-settings` — reads the project back over
+  Railway's GraphQL API and exits non-zero unless it positively observes
+  `prDeploys=false`, `botPrEnvironments=false`, and zero `deploymentTriggers` across every
+  environment. A GraphQL error (including "Not Authorized") is never treated as "already
+  off". On success it prints one greppable line:
+  `Railway PR Environments OFF: prDeploys=false botPrEnvironments=false focusedPrEnvironments=… baseEnvironmentId=… deploymentTriggers=0`
+
+It uses the non-deprecated nested `project.environments[].deploymentTriggers`;
+`Project.deploymentTriggers` is `@deprecated` and would become a false positive blocking
+every PR if Railway removes it.
+
+**How to re-check, and how to repair:**
+
+```bash
+gh workflow run railway-invariants.yml                  # re-assert on demand
+gh workflow run railway-invariants.yml -f disable=true  # re-disable, then re-assert
+```
+
+The repair path is manual-only — never on the `pull_request` path — and after mutating it
+re-verifies with an **independent** read-back request rather than echoing
+`projectUpdate`'s own response back at itself. This cannot be verified from a laptop:
+`RAILWAY_API_TOKEN` (account-scoped) lives only as a repo secret, so CI is the only place
+this is ever proven.
 
 ## Auth
 

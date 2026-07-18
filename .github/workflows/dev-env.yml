@@ -231,10 +231,25 @@ jobs:
   #    schema is migrated (health-gate) and before any assertion — setup owns
   #    correctness, so every run starts from the known fixture set regardless
   #    of prior state.
+  #
+  #    CONDITIONAL ON workflow_dispatch ONLY (M4-21-06, re-scoped per QA F2):
+  #    a PR environment's database is born EMPTY (F8) and the gateway seeds
+  #    it at boot (M4-21-04) — running this here too would be redundant, not
+  #    wrong, but `development` is DIFFERENT: it is PERSISTENT (Decision
+  #    [dev-env-status]) and `db/seed.dev.sql` is upsert-only (`ON CONFLICT
+  #    DO UPDATE`/`DO NOTHING` — it only ever ADDS rows, never clears them),
+  #    so without this step `development` would accumulate rows without bound
+  #    across every dispatch-triggered E2E run: e2e/api/import.spec.ts:110,123
+  #    imports 500 invoices / 1500 rows per run; e2e/demo/day30.spec.ts:149-168
+  #    onboards a permanent business_entities row per run. `db/reset.dev.sql`
+  #    (the repo's only TRUNCATE, line 18: `TRUNCATE tenants CASCADE`) is kept
+  #    for exactly this reason — do NOT delete it. (`make demo-reset` /
+  #    db/demo-reset.sql is a separate, MANUAL, single-tenant tool — not a
+  #    substitute, deliberately not reused here.)
   reset-seed:
-    name: Reset + seed dev DB (data-only, superuser)
+    name: Reset + seed dev DB (data-only, superuser; development only)
     needs: health-gate
-    if: always() && needs.health-gate.result == 'success'
+    if: always() && needs.health-gate.result == 'success' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -283,11 +298,17 @@ jobs:
   # 7. Post-deploy verification (b): smoke (landing + ops-console render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation), and demo (Day-30 wedge journey) via Playwright,
-  #    once the fleet is green, the SPAs are deployed, and the DB is seeded.
+  #    once the fleet is green, the SPAs are deployed, and the DB is seeded
+  #    (workflow_dispatch) or self-seeded at gateway boot (PR environments —
+  #    reset-seed is SKIPPED there, not waited on: M4-21-06).
   e2e:
     name: E2E (smoke + api + topology + demo)
     needs: [fleet-gate, deploy-spas, reset-seed]
-    if: always() && needs.fleet-gate.result == 'success' && needs.deploy-spas.result == 'success' && needs.reset-seed.result == 'success'
+    if: >-
+      always() &&
+      needs.fleet-gate.result == 'success' &&
+      needs.deploy-spas.result == 'success' &&
+      ( needs.reset-seed.result == 'success' || needs.reset-seed.result == 'skipped' )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

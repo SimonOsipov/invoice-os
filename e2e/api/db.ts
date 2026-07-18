@@ -69,16 +69,20 @@ export function dbEnabled(): boolean {
 
 // requireDbInCI(): the guard that stops a missing DSN from becoming an INVISIBLE
 // GREEN. Skipping is correct LOCALLY -- the DSN is a CI secret and a dev has no
-// dev-Postgres access -- but in CI the secret is GUARANTEED present: the
-// reset-seed job (dev-env.yml:243-246) already hard-fails the whole run without
-// it, and the e2e job `needs:` reset-seed. So !dbEnabled() in CI cannot mean
-// "no secret"; it can only mean the workflow stopped PASSING it to this step.
-// That is exactly what happened: the test:api step shipped with no env: block,
-// PERF-05 -- the Day-60 draft->validated stamp gate, this story's "Ships when
-// true" clause -- skipped silently, and the job went green anyway. Fail loudly
-// instead, the same way reset-seed's own `::error::` guard does, and for the
-// same reason scripts/ci/rls-test-gate.sh exists at all: a skipped test must
-// never read as a passing one.
+// dev-Postgres access -- but in CI the secret is GUARANTEED present: it is a
+// GitHub Actions repository secret, always available to any step that
+// explicitly maps it via `env:` (M4-21-06: reset-seed is no longer an
+// unconditional dependency of the "API E2E" step -- it now runs ONLY on the
+// workflow_dispatch path that still targets the persistent `development`
+// environment, so it can no longer be cited as proof the secret exists). So
+// !dbEnabled() in CI cannot mean "no secret"; it can only mean the workflow
+// stopped PASSING it to this step. That is exactly what happened: the
+// test:api step shipped with no env: block, PERF-05 -- the Day-60
+// draft->validated stamp gate, the M4 "Ships when true" clause -- skipped
+// silently, and the job went green anyway. Fail loudly instead, the same way
+// reset-seed's own `::error::` guard does, and for the same reason
+// scripts/ci/rls-test-gate.sh exists at all: a skipped test must never read
+// as a passing one.
 export function requireDbInCI(): void {
   if (dbEnabled() || !process.env.CI) return
   throw new Error(
@@ -86,8 +90,9 @@ export function requireDbInCI(): void {
       'DATABASE_SUPERUSER_URL_DEV is not set, but this is CI (process.env.CI) -- refusing to skip.',
       'PERF-05 (the Day-60 draft->validated stamp gate, the M4 "Ships when true" clause) and',
       "PERF-03/04's live rule_set_version_id equality CANNOT be proven without it; skipping them",
-      'would make this gate an invisible green. reset-seed already requires this same secret, so',
-      'it exists -- the "API E2E" step in .github/workflows/dev-env.yml is not passing it. Add:',
+      'would make this gate an invisible green. DATABASE_SUPERUSER_URL_DEV is a GitHub Actions repo',
+      'secret, guaranteed to exist -- the "API E2E" step in .github/workflows/dev-env.yml is not',
+      'passing it. Add:',
       '  env:',
       '    DATABASE_SUPERUSER_URL_DEV: ${{ secrets.DATABASE_SUPERUSER_URL_DEV }}',
     ].join('\n'),

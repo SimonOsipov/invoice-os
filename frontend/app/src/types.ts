@@ -175,7 +175,7 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail'
 
 // 'report' added by M4-08-04 (plan B1/DRIFT-1) — one subtask ahead of story §6's
 // original assignment (M4-08-05), because wizardHeader's report->2 branch does not
-// compile against this union and CreateFlow.tsx's STAGE_OF is a total Record over it.
+// compile against this union and lib/importFlow.ts's STAGE_OF is a total Record over it.
 // -05 still owns the CreateReport render branch; this commit adds only the member.
 export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'validating' | 'results' | 'report'
 

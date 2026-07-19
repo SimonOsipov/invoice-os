@@ -5,8 +5,8 @@
 //
 // 'report' added to CreateStep here, not in M4-08-05 as story §6 originally assigned
 // (plan B1/DRIFT-1): wizardHeader's report->2 branch does not compile against the
-// pre-existing CreateStep union, and CreateFlow.tsx:16-24's STAGE_OF is the ONLY total
-// Record<CreateStep, number> in the frontend, so the union addition cascades there too.
+// pre-existing CreateStep union, and STAGE_OF below is the ONLY total
+// Record<CreateStep, number> in the frontend, so the union addition cascades to it too.
 
 import { WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'

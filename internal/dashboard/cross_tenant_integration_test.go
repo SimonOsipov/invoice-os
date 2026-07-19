@@ -79,3 +79,96 @@ func TestRLS_DashboardRollupCrossTenantIsolated(t *testing.T) {
 		t.Errorf("tenant B's Totals.Counts.Accepted = %d, want 0 (must not see A's accepted invoice)", gotB.Totals.Counts.Accepted)
 	}
 }
+
+// TestRLS_DashboardRollupCrossTenantSortPoisonRefused: tenant B's entity is
+// deliberately constructed to sort to position 0 by BOTH of Store.Rollup's
+// sort keys if isolation ever leaked -- a name that sorts alphabetically
+// before every one of A's entity names AND the highest needs_attention in
+// the whole dataset. If RLS ever failed open, this row would be
+// unmistakable: it would land as A's Clients[0]. It must not appear
+// anywhere in A's Clients at all. DASH-14 proves plain non-visibility; this
+// proves non-visibility survives the specific case an ordering bug would
+// most likely surface it.
+func TestRLS_DashboardRollupCrossTenantSortPoisonRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "DASH-adversarial poison tenant A")
+	tenantB := seedTenant(t, super, "DASH-adversarial poison tenant B")
+
+	// A's own entities -- named and counted so a leak would visibly displace
+	// them from their expected positions.
+	aEntity1 := seedEntity(t, super, tenantA, "Mno Corp")
+	aEntity2 := seedEntity(t, super, tenantA, "Zyx Corp")
+	seedInvoice(t, super, tenantA, aEntity1, "POISON-A1")
+	seedInvoice(t, super, tenantA, aEntity2, "POISON-A2")
+
+	// B's poison entity: alphabetically first AND the most exceptions of any
+	// entity in the dataset.
+	poisonEntity := seedEntity(t, super, tenantB, "AAAAA Poison Corp")
+	broken := `[{"rule_key":"x","severity":"error","message":"y"}]`
+	for i := 0; i < 10; i++ {
+		seedInvoiceWithViolations(t, super, tenantB, poisonEntity, fmt.Sprintf("POISON-B%d", i), "draft", broken)
+	}
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	got, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant A): %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("tenant A's Clients = %d rows, want 2 (its own two entities only)", len(got.Clients))
+	}
+	for _, c := range got.Clients {
+		if c.EntityID == poisonEntity {
+			t.Fatalf("tenant A's Clients contains tenant B's poison entity %s (%s) -- cross-tenant isolation leaked at the sort boundary", poisonEntity, c.EntityName)
+		}
+	}
+	if got.Clients[0].EntityID == poisonEntity || got.Clients[0].EntityName == "AAAAA Poison Corp" {
+		t.Fatalf("tenant A's Clients[0] = %+v, is tenant B's poison row", got.Clients[0])
+	}
+	if got.Totals.NeedsAttention != 0 {
+		t.Errorf("tenant A's Totals.NeedsAttention = %d, want 0 (must not fold in B's 10 broken drafts)", got.Totals.NeedsAttention)
+	}
+}
+
+// TestRLS_DashboardRollupUnknownTenantSeesNothing: an identity carrying a
+// syntactically-valid tenant id that was never seeded (no `tenants` row, no
+// business_entities, no invoices) must see a fully-empty rollup -- not an
+// error, and NOT another tenant's data -- even while a DIFFERENT, real
+// tenant in the same database has data. Proves RLS's tenant_isolation
+// policy is strict equality against app.current_tenant, not a fallback that
+// could ever expose "any known tenant" when the caller's own tenant id has
+// no matching rows. db.WithinTenantTx (internal/platform/db/db.go) only
+// requires tenantID to parse as a UUID -- it does not require a matching row
+// in `tenants` -- so this is a real, reachable code path (e.g. a stale or
+// forged JWT tenant claim), not a hypothetical.
+func TestRLS_DashboardRollupUnknownTenantSeesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	// A real tenant WITH data, to prove the empty result isn't just "the DB
+	// happens to be empty."
+	tenantWithData := seedTenant(t, super, "DASH-adversarial has-data tenant")
+	entity := seedEntity(t, super, tenantWithData, "Has Data Corp")
+	broken := `[{"rule_key":"x","severity":"error","message":"y"}]`
+	seedInvoiceWithViolations(t, super, tenantWithData, entity, "UNKNOWN-1", "draft", broken)
+
+	unknownTenantID := uuid.NewString() // never inserted into `tenants`, never referenced by any row
+
+	store := NewStore(app)
+	cUnknown := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: unknownTenantID})
+
+	got, err := store.Rollup(cUnknown)
+	if err != nil {
+		t.Fatalf("Rollup(unknown tenant id): %v", err)
+	}
+	if len(got.Clients) != 0 {
+		t.Fatalf("Clients = %d rows, want 0 (an unregistered tenant id must never surface another tenant's rows)", len(got.Clients))
+	}
+	if got.Totals.Counts != (Counts{}) || got.Totals.NeedsAttention != 0 {
+		t.Errorf("Totals = %+v, want all-zero", got.Totals)
+	}
+}

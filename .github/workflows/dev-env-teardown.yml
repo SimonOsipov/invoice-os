@@ -63,12 +63,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Pinned to the BASE commit, never the PR head and never the merge ref.
-          # MANDATORY: refs/pull/<N>/merge is being deleted at exactly the moment of close
-          # — this remote carries 66 refs/pull/*/head and ZERO refs/pull/*/merge — so a
-          # default checkout under `pull_request` would race that deletion. Teardown needs
-          # only trusted base-branch code anyway: scripts/ci/railway-env.sh and tools/prenv.
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Pinned to the PR HEAD, never the merge ref: refs/pull/<N>/merge is deleted at
+          # the moment of close (this remote carries refs/pull/*/head and ZERO
+          # refs/pull/*/merge), so a default checkout would race that deletion.
+          # refs/pull/<N>/head survives close AND branch deletion — verified on #72/#73.
+          #
+          # NOT base.sha: this workflow file comes from the PR head, so a base pin runs a
+          # NEW workflow against OLD code. Measured on #72: teardown called `prenv name 72`
+          # while base still had M4-21's `prenv <number>` CLI, which read "name" as the PR
+          # number and exited 2 — both environments leaked. Same commit for workflow and
+          # code, or they skew. Fork PRs get no secrets under `pull_request`, so this is
+          # the same trust model dev-env.yml already runs under.
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

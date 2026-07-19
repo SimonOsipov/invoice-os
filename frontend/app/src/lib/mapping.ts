@@ -46,28 +46,50 @@ export function initMapping(fileId: string): Mapping {
   return map
 }
 
-// STUB — the executor implements the body next (M4-08-04/-05); this throw-only
-// skeleton exists so the RED specs in mapping.test.ts fail on a thrown/assertion
-// mismatch, not an import or type error. Params are underscore-prefixed per this
-// app's strict noUnusedParameters tsconfig (mirrors the importApi.ts stub idiom,
-// M4-08-02).
-//
 // Replacement for initMapping(fileId) that takes server-provided headers
 // directly instead of dereferencing the FILE_DATA fixture. See M4-08-03.
-export function initMappingFromHeaders(_headers: string[]): Mapping {
-  throw new Error('not implemented')
+// The CANON loop — rather than returning recognize(headers) directly — keeps the
+// "a key for every canonical field" guarantee on this function instead of
+// leaking it from recognize's internals, and the `|| null` coercion is a second
+// line of defence against a stray '' reaching toImportMapping.
+export function initMappingFromHeaders(headers: string[]): Mapping {
+  const rec = recognize(headers)
+  const map: Mapping = {}
+  CANON.forEach((c) => {
+    map[c.key] = rec[c.key] || null
+  })
+  return map
 }
 
 // Drops null and empty-string values before the mapping goes on the wire.
-// See M4-08-03 [mapping-strips-nulls].
-export function toImportMapping(_m: Mapping): Record<string, string> {
-  throw new Error('not implemented')
+// See M4-08-03 [mapping-strips-nulls]. Both drops matter: Go unmarshals JSON
+// null into map[string]string as "", and "" is an ordinary string to the
+// server's resolveMapping — against a file with a blank-named column it MATCHES
+// that column and silently imports its contents with no error at all. Unmapped
+// fields must therefore be absent, not null and not empty.
+//
+// Deliberately does NOT filter by CANON: the server rejects an unknown key with
+// a loud 400 on purpose (service.go:146-153), because silently dropping it would
+// import that field as NULL unnoticed. A client-side allow-list would mask
+// exactly the bug the server exists to surface.
+export function toImportMapping(m: Mapping): Record<string, string> {
+  const out: Record<string, string> = {}
+  Object.keys(m).forEach((k) => {
+    const v = m[k]
+    // Both arms are deliberate: '' would MATCH a blank-named column server-side.
+    if (v !== null && v !== '') out[k] = v
+  })
+  return out
 }
 
 // Gates on invoice_number alone, matching resolveMapping's structural
-// requirement. See M4-08-03 [mapping-gate-matches-server].
-export function canSubmitMapping(_m: Mapping | null): boolean {
-  throw new Error('not implemented')
+// requirement. See M4-08-03 [mapping-gate-matches-server]. Every other field is
+// genuinely optional — unmapped means absent from colIndex, which imports as
+// NULL for the rule engine to judge. No completeness count and no uniqueness
+// rule: two fields on one header both resolve to the same index and the server
+// accepts it, so gating on that would be the browser deciding compliance.
+export function canSubmitMapping(m: Mapping | null): boolean {
+  return m != null && !!m.invoice_number
 }
 
 // Group line-item rows into invoices by the column mapped to invoice_number.

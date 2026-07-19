@@ -281,3 +281,167 @@ func TestRLS_InvoiceHistory_UnsetGUCFailsClosed(t *testing.T) {
 		t.Errorf("History(no identity in context) returned %d rows, want 0", len(got))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// task-160 / M4-22-01 -- QA Mode B adversarial DB-backed coverage, added
+// post-implementation. The Mode A specs above (#6/#7/#8) prove TENANT
+// scoping (RLS via app.current_tenant) but never exercise two invoices
+// belonging to the SAME tenant -- so none of them can catch a Store.History
+// that forgot the `WHERE invoice_id = $1` filter and instead relied on RLS
+// alone, which would silently return every invoice_status_history row
+// visible to the tenant (a same-tenant cross-invoice leak RLS cannot catch,
+// since RLS only scopes by tenant_id, not invoice_id).
+// ---------------------------------------------------------------------------
+
+// TestRLS_InvoiceHistory_ScopedByInvoiceIDWithinSameTenant (QA Mode B,
+// highest-suspected gap): two invoices under the SAME tenant must never
+// bleed history into each other. invoiceA is transitioned twice (draft->
+// validated->queued, 3 rows); invoiceB stays untouched (1 genesis row).
+// History(invoiceA) must return exactly invoiceA's 3 rows -- none of
+// invoiceB's -- and History(invoiceB) must return exactly invoiceB's 1 row.
+// RLS alone cannot distinguish this case (both invoices share tenant_id);
+// only the store's own `WHERE invoice_id = $1` filter can.
+func TestRLS_InvoiceHistory_ScopedByInvoiceIDWithinSameTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-HIST-04 tenant A")
+	entityA := seedEntity(t, super, tenantA, "INV-HIST-04 entity")
+
+	store := NewStore(app)
+	subject := uuid.NewString()
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
+
+	invA, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-04-A"})
+	if err != nil {
+		t.Fatalf("Create invoiceA: %v", err)
+	}
+	invB, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-04-B"})
+	if err != nil {
+		t.Fatalf("Create invoiceB: %v", err)
+	}
+
+	if _, err := store.Transition(cA, invA.ID, StatusValidated); err != nil {
+		t.Fatalf("Transition invoiceA draft->validated: %v", err)
+	}
+	if _, err := store.Transition(cA, invA.ID, StatusQueued); err != nil {
+		t.Fatalf("Transition invoiceA validated->queued: %v", err)
+	}
+	// invoiceB is left untouched at its genesis row.
+
+	gotA, err := store.History(cA, invA.ID)
+	if err != nil {
+		t.Fatalf("History(invoiceA): %v", err)
+	}
+	if len(gotA) != 3 {
+		t.Fatalf("History(invoiceA) returned %d rows, want 3 (genesis + 2 transitions)", len(gotA))
+	}
+
+	gotB, err := store.History(cA, invB.ID)
+	if err != nil {
+		t.Fatalf("History(invoiceB): %v", err)
+	}
+	if len(gotB) != 1 {
+		t.Fatalf("History(invoiceB) returned %d rows, want 1 (genesis only -- invoiceA's 2 extra transitions must not leak in, same tenant_id notwithstanding)", len(gotB))
+	}
+	if gotB[0].FromStatus != nil || gotB[0].ToStatus != StatusDraft {
+		t.Errorf("History(invoiceB)[0] = {from:%v to:%q}, want the genesis row {nil, draft}", gotB[0].FromStatus, gotB[0].ToStatus)
+	}
+}
+
+// TestRLS_InvoiceHistory_LongChainOrderedAndComplete (QA Mode B): a 5-state
+// chain (draft->validated->queued->submitted->accepted) must return all 5
+// rows in strict changed_at ASC order, proving ordering holds beyond the
+// 2-row case TestRLS_InvoiceHistory_ReturnsOrderedTransitions already covers.
+func TestRLS_InvoiceHistory_LongChainOrderedAndComplete(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-HIST-05 tenant A")
+	entityA := seedEntity(t, super, tenantA, "INV-HIST-05 entity")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-05"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	chain := []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted}
+	for _, target := range chain {
+		if _, err := store.Transition(cA, inv.ID, target); err != nil {
+			t.Fatalf("Transition -> %q: %v", target, err)
+		}
+	}
+
+	got, err := store.History(cA, inv.ID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("History returned %d rows, want 5 (genesis + %d transitions)", len(got), len(chain))
+	}
+
+	wantToStatus := []Status{StatusDraft, StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted}
+	for i, sc := range got {
+		if sc.ToStatus != wantToStatus[i] {
+			t.Errorf("got[%d].ToStatus = %q, want %q (chain order)", i, sc.ToStatus, wantToStatus[i])
+		}
+		if i > 0 && sc.ChangedAt.Before(got[i-1].ChangedAt) {
+			t.Errorf("got[%d].ChangedAt (%v) is before got[%d].ChangedAt (%v), want non-decreasing changed_at ASC order", i, sc.ChangedAt, i-1, got[i-1].ChangedAt)
+		}
+	}
+	if got[0].FromStatus != nil {
+		t.Errorf("got[0].FromStatus = %v, want nil (genesis row)", got[0].FromStatus)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].FromStatus == nil || *got[i].FromStatus != wantToStatus[i-1] {
+			t.Errorf("got[%d].FromStatus = %v, want a pointer to %q", i, got[i].FromStatus, wantToStatus[i-1])
+		}
+	}
+}
+
+// TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate (QA Mode B, AC
+// #2 full-stack proof): a freshly created invoice that has NEVER
+// transitioned must return exactly one entry {from_status:nil,
+// to_status:"draft"} through the REAL Store.Create + Store.History path.
+// TestHistoryHandler_GenesisOnly (handlers_test.go) already proves this at
+// the HTTP layer against a FAKE store; TestRLS_InvoiceHistory_
+// ReturnsOrderedTransitions proves the genesis row's shape but only AFTER a
+// transition has already run (len==2). Neither closes the specific gap this
+// test does: a never-transitioned invoice, through the real DB-backed
+// store, resolves to len==1.
+func TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-HIST-06 tenant A")
+	entityA := seedEntity(t, super, tenantA, "INV-HIST-06 entity")
+
+	store := NewStore(app)
+	subject := uuid.NewString()
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
+
+	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-06"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.History(cA, inv.ID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("History(freshly created invoice) returned %d rows, want exactly 1 (genesis only, AC #2)", len(got))
+	}
+	if got[0].FromStatus != nil {
+		t.Errorf("got[0].FromStatus = %q, want nil (AC #2: the genesis row has no predecessor)", *got[0].FromStatus)
+	}
+	if got[0].ToStatus != StatusDraft {
+		t.Errorf("got[0].ToStatus = %q, want %q (AC #2)", got[0].ToStatus, StatusDraft)
+	}
+	if got[0].Actor != subject {
+		t.Errorf("got[0].Actor = %q, want %q", got[0].Actor, subject)
+	}
+}

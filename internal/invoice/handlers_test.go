@@ -1820,3 +1820,36 @@ func TestHistoryHandler_MalformedIDIs400(t *testing.T) {
 		t.Error("expected a non-empty error message in the body")
 	}
 }
+
+// TestHistoryHandler_GenesisOnly_RawWireShape (QA Mode B adversarial): the
+// RAW response bytes for a genesis-only history -- not a decoded struct --
+// must (1) be a top-level JSON array (starts with '[', ends with ']'), and
+// (2) carry the from_status key with the JSON literal null, not "" and not
+// an omitted key. TestHistoryHandler_GenesisOnly (#2, above) only decodes
+// into []historyChangeWire and checks the Go pointer is nil -- that would
+// pass identically whether the wire carried `"from_status":null` or omitted
+// the key entirely (e.g. an accidental `omitempty` on StatusChange.FromStatus),
+// since a decoded *Status zero-values to nil either way. Only a raw-bytes
+// check can tell the two apart.
+func TestHistoryHandler_GenesisOnly_RawWireShape(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return []StatusChange{{FromStatus: nil, ToStatus: StatusDraft, Actor: "user-1", ChangedAt: time.Now()}}, nil
+	}
+	rec := doInvoiceHistory(t, history, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := bytes.TrimSpace(rec.Body.Bytes())
+	if len(raw) == 0 || raw[0] != '[' || raw[len(raw)-1] != ']' {
+		t.Fatalf("body = %s, want the top-level JSON to be an array (starts with '[', ends with ']')", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"from_status":null`)) {
+		t.Errorf("body = %s, want raw JSON to contain the literal \"from_status\":null (not omitted, not empty string)", raw)
+	}
+	if bytes.Contains(raw, []byte(`"from_status":""`)) {
+		t.Errorf("body = %s, from_status must never serialize as an empty string", raw)
+	}
+}

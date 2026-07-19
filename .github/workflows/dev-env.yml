@@ -766,8 +766,9 @@ jobs:
         # PERF-05's Day-60 stamp gate now reads invoice_status_history over
         # HTTP (GET .../history), and PERF-03/04 compare rule_set_version via
         # the validate/import response body, not a live DB query — api/db.ts
-        # is deleted. The DSN is still exported by the discovery step above,
-        # for the demo step below, which still needs it.
+        # is deleted. Nothing in this job consumes the discovered DSN anymore
+        # (M4-22-06 parked the demo suite's audit read too); the discovery step
+        # above is dead code until M4-22-08 removes it.
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
@@ -777,10 +778,10 @@ jobs:
       - name: Demo (Day-30 wedge journey)
         # Runs LAST (after topology): the demo kill-switches vat-standard-rate then
         # restores it, so no rule-dependent suite runs after it in the same run; the
-        # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7's
-        # audit assertion needs the superuser DSN (DATABASE_SUPERUSER_URL_DEV, exported
-        # by the discovery step above); GATEWAY_URL/APP_URL come from this job's `env:`
-        # (the seam reads them), and chromium is already installed.
+        # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7
+        # (the audit_log read) is parked, not run at all (M4-22-06 [park-shape]) — this
+        # step no longer needs the superuser DSN. GATEWAY_URL/APP_URL come from this
+        # job's `env:` (the seam reads them), and chromium is already installed.
         run: pnpm --filter @invoice-os/e2e test:demo
       - name: Upload smoke Playwright report
         if: failure()

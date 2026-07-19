@@ -60,8 +60,26 @@ describe('demo suite holds no DB plumbing', () => {
   })
 })
 
+// Strips comments before the two checks below match against source text. Without
+// this, a comment that merely QUOTES the guarded call -- e.g. day30.spec.ts's own
+// explanatory header, which contains the literal substring `test.skip(true,` inside
+// a `//` comment describing what the real call does -- satisfies a presence assertion
+// (toContain) exactly as well as the real call would, making the anti-disappearance
+// guard decorative (QA Stage 4, 2026-07-19: mutation-confirmed -- deleting the real
+// call entirely still left this test green). Handles block comments and line
+// comments; a `//` immediately preceded by `:` is treated as part of a URL (e.g.
+// `https://`), not a comment start -- the one realistic false-positive class a TS
+// source file in this repo could contain.
+function stripComments(src: string): string {
+  const noBlockComments = src.replace(/\/\*[\s\S]*?\*\//g, '')
+  return noBlockComments
+    .split('\n')
+    .map((line) => line.replace(/(^|[^:])\/\/.*$/, '$1'))
+    .join('\n')
+}
+
 describe('parked AC-7 is unconditional', () => {
-  const source = readFileSync(DAY30_SPEC, 'utf8')
+  const source = stripComments(readFileSync(DAY30_SPEC, 'utf8'))
 
   it('day30.spec.ts contains a literal test.skip(true, ...) call -- the anti-disappearance guard for Core AC 3', () => {
     expect(source).toContain('test.skip(true,')

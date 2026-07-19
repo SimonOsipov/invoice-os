@@ -93,7 +93,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
 			 WHERE jsonb_typeof(i.violations) = 'array'
 			   AND v->>'severity' = 'error'
-			   AND v->>'rule_key' IS NOT NULL
+			   AND nullif(v->>'rule_key', '') IS NOT NULL
 			 GROUP BY 1
 			 ORDER BY 2 DESC, 1 ASC`,
 		)

@@ -12,7 +12,7 @@ const WHT_RE = /servic|consult|support|warehous|leasing/i
 export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   const { active, draft, uploadFile } = ctx
   const hasUploadFile = !!uploadFile
-  const selFileName = uploadFile === 'csv' ? 'invoices-export-q2.csv' : uploadFile === 'pdf' ? 'lagos-freight-INV-0482.pdf' : uploadFile === 'img' ? 'scan-invoice-0482.jpg' : ''
+  const selFileName = uploadFile === 'pdf' ? 'lagos-freight-INV-0482.pdf' : uploadFile === 'img' ? 'scan-invoice-0482.jpg' : ''
 
   const sub = amount(draft.items)
   const vat = sub * 0.075

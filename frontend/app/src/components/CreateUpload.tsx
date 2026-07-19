@@ -130,7 +130,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 15, fontWeight: 600 }}>Import a document · {active.short}</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              CSV · PDF · IMAGE
+              PDF · IMAGE
             </span>
           </div>
           <div style={{ padding: 20 }}>

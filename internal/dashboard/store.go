@@ -24,16 +24,18 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Rollup runs the per-entity rollup query inside ONE db.WithinRequestTenantTx
-// closure (RLS scopes both invoices and business_entities to the caller's
-// tenant, so the join needs no `WHERE tenant_id`), scans the rows into
-// Clients (pre-declared as []Client{} so an empty tenant still marshals
-// "clients":[], never null — AC-1/DASH-03), then sums Clients element-wise
-// into Totals in Go (no second aggregate query). needs_attention cuts across
-// draft/rejected/failed (AC-3): rejected/failed always count, a draft counts
-// only when its violations contain an error-severity entry.
-// TopViolations is left empty here — M4-07-02 fills it in the same
-// transaction.
+// Rollup runs the per-entity rollup query AND the per-rule top-violations
+// breakdown inside ONE db.WithinRequestTenantTx closure (RLS scopes
+// invoices/business_entities to the caller's tenant, so neither query needs
+// `WHERE tenant_id`), scans the per-entity rows into Clients (pre-declared as
+// []Client{} so an empty tenant still marshals "clients":[], never null —
+// AC-1/DASH-03), then sums Clients element-wise into Totals in Go (no second
+// aggregate query). needs_attention cuts across draft/rejected/failed
+// (AC-3): rejected/failed always count, a draft counts only when its
+// violations contain an error-severity entry. TopViolations (pre-declared as
+// []RuleCount{}, same never-nil reasoning) counts, per rule_key, the distinct
+// invoices carrying a severity:"error" entry for that rule, ordered invoices
+// DESC then rule_key ASC.
 func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	clients := []Client{}
 	topViolations := []RuleCount{}
@@ -75,7 +77,38 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			}
 			clients = append(clients, c)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		// jsonb_typeof(...) = 'array' guards jsonb_array_elements below: unlike
+		// the per-entity query's `@>` predicate (which just returns false on a
+		// type mismatch), jsonb_array_elements RAISES AN ERROR on non-array
+		// input. Postgres pushes this predicate to the base-table scan (EXPLAIN-
+		// confirmed), so it costs nothing on the array-shaped rows the real
+		// write path always produces.
+		ruleRows, err := tx.Query(ctx,
+			`SELECT v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
+			 FROM invoices i
+			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
+			 WHERE jsonb_typeof(i.violations) = 'array'
+			   AND v->>'severity' = 'error'
+			   AND v->>'rule_key' IS NOT NULL
+			 GROUP BY 1
+			 ORDER BY 2 DESC, 1 ASC`,
+		)
+		if err != nil {
+			return err
+		}
+		defer ruleRows.Close()
+		for ruleRows.Next() {
+			var rc RuleCount
+			if err := ruleRows.Scan(&rc.RuleKey, &rc.Invoices); err != nil {
+				return err
+			}
+			topViolations = append(topViolations, rc)
+		}
+		return ruleRows.Err()
 	})
 	if err != nil {
 		return Rollup{}, err

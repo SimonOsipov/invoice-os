@@ -97,6 +97,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [importError, setImportError] = useState<ApiError | null>(null)
   const [report, setReport] = useState<ImportReport | null>(null)
 
+  // Re-entrancy guard for the two import round trips. A ref, not state: React batches
+  // state updates, so a fast double-click can fire the handler twice before a `disabled`
+  // prop re-renders — and for startImport that would create the SAME import twice, i.e.
+  // duplicate invoices. readColumns and startImport live on different steps and can
+  // never overlap, so one flag covers both. A ref also cannot get stuck the way a
+  // component-local flag would: CreateUpload never observes the rejection that would
+  // clear it, since errors come back through ctx.importError.
+  const reqInFlight = useRef(false)
+
   const valTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const valDone = useRef<ReturnType<typeof setTimeout> | null>(null)
   const parseTimer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -243,20 +252,28 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     // base == null is the no-gateway build: zero network, and the button is disabled
     // too — this is the second of the two guards, not the only one.
     if (base == null || !importFile || !canReadColumns(entityId, importFile)) return
+    if (reqInFlight.current) return
+    reqInFlight.current = true
     setImportError(null)
-    previewImport(importAuth, base, importFile).then(
-      (res) => {
-        setPreview(res)
-        setMapping(initMappingFromHeaders(res.columns))
-        setCreateStep('mapping')
-      },
-      (err: unknown) => setImportError(toApiError(err)),
-    )
+    previewImport(importAuth, base, importFile)
+      .then(
+        (res) => {
+          setPreview(res)
+          setMapping(initMappingFromHeaders(res.columns))
+          setCreateStep('mapping')
+        },
+        (err: unknown) => setImportError(toApiError(err)),
+      )
+      .finally(() => {
+        reqInFlight.current = false
+      })
   }
 
   function startImport() {
     const base = gatewayBase()
     if (base == null || !importFile || !entityId || !mapping || !canStartImport(preview, mapping)) return
+    if (reqInFlight.current) return
+    reqInFlight.current = true
     setImportError(null)
     setReport(null)
     // Seed 'sending' with an unknown total: uploadPercent maps total 0 to null, so the
@@ -264,15 +281,19 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     // transport actually reports a computable length. Zero progress events is legal
     // (importApi IMPAPI-08), so nothing here may assume a determinate frame ever lands.
     setUploadPhase({ kind: 'sending', loaded: 0, total: 0 })
-    createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase).then(
-      (res) => {
-        setReport(res)
-        setCreateStep('report')
-      },
-      // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
-      // report step that has no report to show.
-      (err: unknown) => setImportError(toApiError(err)),
-    )
+    createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase)
+      .then(
+        (res) => {
+          setReport(res)
+          setCreateStep('report')
+        },
+        // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
+        // report step that has no report to show.
+        (err: unknown) => setImportError(toApiError(err)),
+      )
+      .finally(() => {
+        reqInFlight.current = false
+      })
   }
 
   function parseFile() {

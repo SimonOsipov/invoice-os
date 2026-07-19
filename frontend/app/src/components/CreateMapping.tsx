@@ -272,7 +272,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             ← Back to import
           </button>
           <button
-            onClick={ctx.startImport}
+            onClick={ctx.continueMapping}
             disabled={uploading}
             className="v2-btn pf-btn"
             style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: continueBtn.bg, color: continueBtn.color, cursor: continueBtn.cursor }}

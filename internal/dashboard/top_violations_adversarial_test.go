@@ -55,16 +55,9 @@ func TestStoreRollup_TopViolationsNullRuleKeyNeverPhantom(t *testing.T) {
 // above) must not produce a phantom TopViolations entry either -- an empty
 // string is not a real rule identifier.
 //
-// DEFECT (reported, not fixed here per QA boundaries): the query's guard is
-// `v->>'rule_key' IS NOT NULL` only. In Postgres, `v->>'rule_key'` on
-// `{"rule_key": "", ...}` evaluates to an empty (but non-NULL) SQL string,
-// so it PASSES the IS NOT NULL filter. Empirically confirmed against the
-// dev DB and via this exact Go path: Store.Rollup currently returns
-// TopViolations = [{RuleKey:"", Invoices:1}] for this input -- a phantom
-// entry. This test asserts the CORRECT/intended behavior (empty
-// TopViolations) and is therefore expected to FAIL until store.go's WHERE
-// clause also treats the empty string like a missing rule_key, e.g. via a
-// nullif-based guard on the extracted rule_key text.
+// Regression guard: store.go's query nullifies an empty-string rule_key
+// before the IS NOT NULL filter, so it is excluded the same as a missing
+// key. This test pins that behavior.
 func TestStoreRollup_TopViolationsEmptyStringRuleKeyNeverPhantom(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

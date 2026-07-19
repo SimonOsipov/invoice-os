@@ -1,21 +1,18 @@
 // Specs for the Map step's pure logic (Platform.dc.html ~L1369-1441): header
-// recognition, the initial mapping, and grouping line-item rows into invoices.
+// recognition and the initial mapping.
 //
-// These pin the two behaviours the Map step exists to guarantee: that
-// invoice_number is never auto-guessed (a plausible wrong default on the fiscal
-// identifier invites rubber-stamping), and that rows of one invoice disagreeing
-// on a header field quarantine that invoice while citing its spreadsheet rows.
+// These pin the behaviour the Map step exists to guarantee: that invoice_number
+// is never auto-guessed — a plausible wrong default on the fiscal identifier
+// invites rubber-stamping, and this data is submitted under the firm's TIN.
 // Pure functions — no React, no fetch, no mocking needed.
 import { describe, expect, it } from 'vitest'
 
-import { CANON, FILE_DATA } from '../data'
-import { canSubmitMapping, groupInvoices, initMapping, initMappingFromHeaders, recognize, toImportMapping } from './mapping'
+import { CANON } from '../data'
+import { canSubmitMapping, initMappingFromHeaders, recognize, toImportMapping } from './mapping'
 import type { Mapping } from '../types'
 
-// Inlined per M4-08-03 [test-fixture-inlined]: verbatim copy of FILE_DATA.csv.headers
-// (data.tsx:192) so this file's HEADERS no longer depends on the fixture M4-08-06
-// deletes. The FILE_DATA import above STAYS — the groupInvoices block below still
-// reads FILE_DATA.csv.rows.length until M4-08-06 removes that block.
+// Inlined per M4-08-03 [test-fixture-inlined]: a verbatim copy of the sample
+// spreadsheet's header row, owned by this file rather than read from a fixture.
 const HEADERS = ['Invoice No', 'Issue Date', 'Buyer TIN', 'Customer', 'Currency', 'Net', 'VAT', 'Total', 'Item', 'Qty', 'Unit Price']
 
 describe('recognize', () => {
@@ -55,8 +52,8 @@ describe('recognize', () => {
 })
 
 describe('initMappingFromHeaders', () => {
-  // MAP-09 (AC5): ported from the old initMapping('csv') cases — same two
-  // assertions, header array instead of a fileId, no FILE_DATA dereference.
+  // MAP-09 (AC5): ported from the old fileId-keyed cases — same two assertions,
+  // taking a header array directly instead of dereferencing a fixture.
   it('returns a key for every canonical field', () => {
     const map = initMappingFromHeaders(HEADERS)
     expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
@@ -317,54 +314,5 @@ describe('round trip — initMappingFromHeaders -> toImportMapping (QA)', () => 
     expect(Object.keys(payload).every((k) => typeof k === 'string')).toBe(true)
     expect(Object.values(payload).every((v) => typeof v === 'string' && v !== '')).toBe(true)
     expect(JSON.stringify(payload)).not.toContain('null')
-  })
-})
-
-describe('groupInvoices', () => {
-  const mapped = { ...initMapping('csv'), invoice_number: 'Invoice No', buyer_name: 'Customer', subtotal: 'Net', line_description: 'Item' }
-
-  it('returns nothing until invoice_number is mapped', () => {
-    expect(groupInvoices('csv', initMapping('csv'))).toEqual([])
-  })
-
-  it('returns nothing for a null file or mapping', () => {
-    expect(groupInvoices(null, mapped)).toEqual([])
-    expect(groupInvoices('csv', null)).toEqual([])
-  })
-
-  it('groups the 9 line-item rows into 5 invoices', () => {
-    const g = groupInvoices('csv', mapped)
-    expect(g).toHaveLength(5)
-    expect(g.map((x) => x.number)).toEqual(['INV-2041', 'INV-2042', 'INV-2043', 'INV-2044', 'INV-2045'])
-    expect(g.reduce((s, x) => s + x.lineCount, 0)).toBe(FILE_DATA.csv.rows.length)
-  })
-
-  it('carries header values from the first row of each group', () => {
-    const first = groupInvoices('csv', mapped)[0]
-    expect(first).toMatchObject({ issueDate: '2026-06-03', buyer: 'Shoprite Nigeria', total: '1,058,875', lineCount: 2 })
-  })
-
-  it('quarantines only the invoice whose rows disagree on a header field', () => {
-    const g = groupInvoices('csv', mapped)
-    expect(g.filter((x) => x.quarantined).map((x) => x.number)).toEqual(['INV-2043'])
-  })
-
-  it('cites the disagreeing field, its spreadsheet rows, and both values', () => {
-    const bad = groupInvoices('csv', mapped).find((x) => x.number === 'INV-2043')
-    expect(bad?.conflicts).toEqual([{ field: 'issue_date', label: 'issue date', rows: [5, 6], values: ['2026-06-08', '2026-06-09'] }])
-  })
-
-  it('numbers sheet rows as the user sees them — 1-based, past the header row', () => {
-    expect(groupInvoices('csv', mapped)[0].sheetRows).toEqual([2, 3])
-  })
-
-  it('does not flag a conflict on a field that is not mapped', () => {
-    const withoutDate = { ...mapped, issue_date: null }
-    expect(groupInvoices('csv', withoutDate).every((x) => !x.quarantined)).toBe(true)
-  })
-
-  it('treats a single-invoice file as one group, not a review case', () => {
-    const oneOnly = { ...mapped, invoice_number: 'Currency' } // every row shares NGN
-    expect(groupInvoices('csv', oneOnly)).toHaveLength(1)
   })
 })

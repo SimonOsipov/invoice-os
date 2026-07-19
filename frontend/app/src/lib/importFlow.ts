@@ -30,7 +30,6 @@ export const STAGE_OF: Record<CreateStep, number> = {
   parsing: 0,
   mapping: 1,
   form: 2,
-  review: 2,
   validating: 3,
   results: 4,
   report: 2, // unreachable via 'document' — see wizardHeader
@@ -41,9 +40,9 @@ export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0,
 // The header-path resolver ([wizard-steps-split], debate finding J1). Exact rule:
 // path = 'document' iff createStep in {parsing, form, validating, results} OR
 // (createStep === 'upload' AND uploadFile !== null AND importFile === null);
-// otherwise 'import'. Total over CreateStep via `?? 0` — 'review' (dead from this
-// commit, deleted by -06) and any future addition fall to the import path, index 0,
-// rather than ever returning undefined/NaN (FLOW-14).
+// otherwise 'import'. Total over CreateStep via `?? 0` — a step added to the union
+// without an IMPORT_STAGE_OF entry falls to the import path at index 0 rather than
+// ever returning undefined/NaN (FLOW-14).
 const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['parsing', 'form', 'validating', 'results']
 
 export function wizardHeader(

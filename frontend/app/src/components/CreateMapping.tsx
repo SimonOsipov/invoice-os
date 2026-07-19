@@ -10,10 +10,8 @@
 // derivation lives in previewColumns (lib/importFlow.ts) so it has a node oracle under
 // the no-jsdom constraint and this component stays a dumb renderer with one call site.
 //
-// The guard below therefore requires `preview` and `importFile`, NOT the old
-// FILE_DATA/SAMPLE_FILES fixture pair. Known transient consequence: the 'csv' entry of
-// SAMPLE_FILES still routes here through parseFile with neither set, so it renders
-// nothing until M4-08-06 deletes that entry and the fixture path with it.
+// The guard below therefore requires `preview` and `importFile`: this screen is
+// reachable only from the import path, which sets both.
 
 import { CANON } from '../data'
 import { recognize } from '../lib/mapping'

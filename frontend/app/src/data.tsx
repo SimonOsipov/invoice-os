@@ -8,7 +8,7 @@
 // none is read anywhere else in the render output. They are intentionally omitted here;
 // dropping them changes nothing about what's rendered.
 
-import type { CanonField, ClientCfg, FieldMapRow, FileData, SectorDef, SectorKey } from './types'
+import type { CanonField, ClientCfg, FieldMapRow, SectorDef, SectorKey } from './types'
 
 export const SECTORS: Record<SectorKey, SectorDef> = {
   logistics: {
@@ -166,43 +166,6 @@ export const CANON: CanonField[] = [
   { key: 'line_unit_price' },
 ]
 
-// Header fields that must be consistent across every row of one invoice —
-// rows that disagree quarantine the whole invoice.
-export const HEADER_FIELDS: string[] = ['issue_date', 'buyer_tin', 'buyer_name', 'currency', 'subtotal', 'vat', 'total']
-
-export const FIELD_LABEL: Record<string, string> = {
-  issue_date: 'issue date',
-  buyer_tin: 'buyer TIN',
-  buyer_name: 'buyer name',
-  currency: 'currency',
-  subtotal: 'subtotal',
-  vat: 'VAT',
-  total: 'total',
-}
-
-// Parsed spreadsheet fixtures — one row = one invoice line item. Only the CSV
-// sample is tabular; PDF/JPG skip Map and go straight to the single-invoice form.
-// INV-2043's two rows disagree on issue date, driving the quarantine demo.
-export const FILE_DATA: Record<string, FileData> = {
-  csv: {
-    delimiter: ';',
-    encoding: 'UTF-8',
-    sizeMeta: '9 ROWS · 6 KB',
-    headers: ['Invoice No', 'Issue Date', 'Buyer TIN', 'Customer', 'Currency', 'Net', 'VAT', 'Total', 'Item', 'Qty', 'Unit Price'],
-    rows: [
-      { 'Invoice No': 'INV-2041', 'Issue Date': '2026-06-03', 'Buyer TIN': '20184412-0002', Customer: 'Shoprite Nigeria', Currency: 'NGN', Net: '985,000', VAT: '73,875', Total: '1,058,875', Item: 'Freight haulage — Lagos–Kano', Qty: '2', 'Unit Price': '450,000' },
-      { 'Invoice No': 'INV-2041', 'Issue Date': '2026-06-03', 'Buyer TIN': '20184412-0002', Customer: 'Shoprite Nigeria', Currency: 'NGN', Net: '985,000', VAT: '73,875', Total: '1,058,875', Item: 'Fuel surcharge', Qty: '1', 'Unit Price': '85,000' },
-      { 'Invoice No': 'INV-2042', 'Issue Date': '2026-06-05', 'Buyer TIN': '20733915-0001', Customer: 'SPAR Nigeria', Currency: 'NGN', Net: '320,000', VAT: '24,000', Total: '344,000', Item: 'Warehousing — June', Qty: '1', 'Unit Price': '320,000' },
-      { 'Invoice No': 'INV-2043', 'Issue Date': '2026-06-08', 'Buyer TIN': '20991043-0002', Customer: 'Chicken Republic', Currency: 'NGN', Net: '790,000', VAT: '59,250', Total: '849,250', Item: 'Cold-chain transport', Qty: '3', 'Unit Price': '210,000' },
-      { 'Invoice No': 'INV-2043', 'Issue Date': '2026-06-09', 'Buyer TIN': '20991043-0002', Customer: 'Chicken Republic', Currency: 'NGN', Net: '790,000', VAT: '59,250', Total: '849,250', Item: 'Pallet handling', Qty: '4', 'Unit Price': '40,000' },
-      { 'Invoice No': 'INV-2044', 'Issue Date': '2026-06-11', 'Buyer TIN': '22310984-0003', Customer: 'Justrite Superstores', Currency: 'NGN', Net: '960,000', VAT: '72,000', Total: '1,032,000', Item: 'Distribution — SW region', Qty: '5', 'Unit Price': '180,000' },
-      { 'Invoice No': 'INV-2044', 'Issue Date': '2026-06-11', 'Buyer TIN': '22310984-0003', Customer: 'Justrite Superstores', Currency: 'NGN', Net: '960,000', VAT: '72,000', Total: '1,032,000', Item: 'Insurance levy', Qty: '1', 'Unit Price': '60,000' },
-      { 'Invoice No': 'INV-2045', 'Issue Date': '2026-06-14', 'Buyer TIN': '20665510-0004', Customer: 'Ebeano Supermarket', Currency: 'NGN', Net: '620,000', VAT: '46,500', Total: '666,500', Item: 'Last-mile delivery', Qty: '6', 'Unit Price': '95,000' },
-      { 'Invoice No': 'INV-2045', 'Issue Date': '2026-06-14', 'Buyer TIN': '20665510-0004', Customer: 'Ebeano Supermarket', Currency: 'NGN', Net: '620,000', VAT: '46,500', Total: '666,500', Item: 'Handling fee', Qty: '2', 'Unit Price': '25,000' },
-    ],
-  },
-}
-
 export type SampleFileDef = {
   id: string
   ext: string
@@ -213,7 +176,6 @@ export type SampleFileDef = {
 }
 
 export const SAMPLE_FILES: SampleFileDef[] = [
-  { id: 'csv', ext: 'CSV', name: 'invoices-export-q2.csv', meta: '9 ROWS · 6 KB', iconBg: 'var(--status-green-bg)', iconColor: 'var(--status-green-text)' },
   { id: 'pdf', ext: 'PDF', name: 'lagos-freight-INV-0482.pdf', meta: '1 PAGE · 142 KB', iconBg: 'var(--status-red-bg)', iconColor: 'var(--status-red-text)' },
   { id: 'img', ext: 'JPG', name: 'scan-invoice-0482.jpg', meta: 'IMAGE · 2.1 MB', iconBg: 'var(--accent-tint)', iconColor: 'var(--accent)' },
 ]

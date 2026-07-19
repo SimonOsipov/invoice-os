@@ -177,40 +177,14 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail'
 // original assignment (M4-08-05), because wizardHeader's report->2 branch does not
 // compile against this union and CreateFlow.tsx's STAGE_OF is a total Record over it.
 // -05 still owns the CreateReport render branch; this commit adds only the member.
-export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'review' | 'validating' | 'results' | 'report'
+export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'validating' | 'results' | 'report'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.
 export type CanonField = { key: string; required?: boolean }
 
-// A parsed spreadsheet. One row is one invoice LINE ITEM, not one invoice —
-// rows group into invoices by the column mapped to `invoice_number`, so header
-// values (dates, buyer, totals) repeat across every row of the same invoice.
-export type FileData = {
-  delimiter: string
-  encoding: string
-  sizeMeta: string
-  headers: string[]
-  rows: Record<string, string>[]
-}
-
 // canonical field key -> source column header, or null while unplaced
 export type Mapping = Record<string, string | null>
-
-// Rows of one invoice disagreeing on a field that must be constant across it.
-// `rows` are spreadsheet row numbers so the user can find them in their file.
-export type HeaderConflict = { field: string; label: string; rows: number[]; values: string[] }
-
-export type InvoiceGroup = {
-  number: string
-  issueDate: string | null
-  buyer: string | null
-  total: string | null
-  lineCount: number
-  sheetRows: number[]
-  conflicts: HeaderConflict[]
-  quarantined: boolean
-}
 
 export type SettingsTab = 'connectors' | 'api' | 'signing'
 
@@ -309,10 +283,7 @@ export type PlatformCtx = {
   selectEntity: (id: string | null) => void
   selectImportFile: (f: File | null) => void
   readColumns: () => void
-  startImport: () => void
   backToImport: () => void
-  backToMapping: () => void
-  createDrafts: () => void
   skipUpload: () => void
   approve: () => void
   selectInvoice: (number: string) => void

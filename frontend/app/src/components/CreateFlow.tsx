@@ -1,15 +1,13 @@
 // Create / validate flow orchestrator — the wizard header + a step router keyed on
-// `ctx.createStep` (upload → parsing → mapping → form|review → validating → results).
-// Ported from Platform.dc.html ~L389-596 + the wizard slice of renderVals()
-// (~L1521-1524). `form` and `review` are two variants of the same Build stage:
-// a tabular file resolving to many invoices reviews them; anything else edits one.
+// `ctx.createStep`, serving two paths: a single document (upload → parsing → form →
+// validating → results) and a server-backed spreadsheet import (upload → mapping →
+// report). Ported from Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
 
 import { VAL_LABELS, PARSE_LABELS, SAMPLE_FILES } from '../data'
 import { wizardHeader } from '../lib/importFlow'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
-import { CreateReview } from './CreateReview'
 import { CreateResults } from './CreateResults'
 import { CreateReport } from './CreateReport'
 import { ScanlineSteps } from './ScanlineSteps'
@@ -66,8 +64,6 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
       {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
 
       {createStep === 'form' && <CreateForm ctx={ctx} />}
-
-      {createStep === 'review' && <CreateReview ctx={ctx} />}
 
       {createStep === 'validating' && (
         <ScanlineSteps

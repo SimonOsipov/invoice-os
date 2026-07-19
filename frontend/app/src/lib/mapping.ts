@@ -1,8 +1,8 @@
-// Map-step logic, ported 1:1 from the prototype's `recognize` / `initMapping` /
-// `groupInvoices` methods (Platform.dc.html ~L1369-1441).
+// Map-step logic, ported from the prototype's `recognize` method
+// (Platform.dc.html ~L1369-1441).
 
-import { CANON, FIELD_LABEL, FILE_DATA, HEADER_FIELDS } from '../data'
-import type { HeaderConflict, InvoiceGroup, Mapping } from '../types'
+import { CANON } from '../data'
+import type { Mapping } from '../types'
 
 // Header aliases that auto-place a column. `invoice_number` is deliberately
 // absent: the fiscal identifier is never guessed — a plausible wrong default
@@ -37,17 +37,7 @@ export function recognize(headers: string[]): Mapping {
   return res
 }
 
-export function initMapping(fileId: string): Mapping {
-  const rec = recognize(FILE_DATA[fileId].headers)
-  const map: Mapping = {}
-  CANON.forEach((c) => {
-    map[c.key] = rec[c.key] || null
-  })
-  return map
-}
-
-// Replacement for initMapping(fileId) that takes server-provided headers
-// directly instead of dereferencing the FILE_DATA fixture. See M4-08-03.
+// Builds the initial mapping from server-provided headers. See M4-08-03.
 // The CANON loop — rather than returning recognize(headers) directly — keeps the
 // "a key for every canonical field" guarantee on this function instead of
 // leaking it from recognize's internals, and the `|| null` coercion is a second
@@ -90,46 +80,4 @@ export function toImportMapping(m: Mapping): Record<string, string> {
 // accepts it, so gating on that would be the browser deciding compliance.
 export function canSubmitMapping(m: Mapping | null): boolean {
   return m != null && !!m.invoice_number
-}
-
-// Group line-item rows into invoices by the column mapped to invoice_number.
-// sheetRow is the row number the user sees in their spreadsheet (1-based, +1
-// for the header row), so a conflict can cite where to look in the source file.
-export function groupInvoices(fileId: string | null, mapping: Mapping | null): InvoiceGroup[] {
-  const data = fileId ? FILE_DATA[fileId] : undefined
-  if (!data || !mapping || !mapping.invoice_number) return []
-  const col = mapping.invoice_number
-  const order: string[] = []
-  const groups: Record<string, { row: Record<string, string>; sheetRow: number }[]> = {}
-  data.rows.forEach((r, i) => {
-    const k = r[col]
-    if (!groups[k]) {
-      groups[k] = []
-      order.push(k)
-    }
-    groups[k].push({ row: r, sheetRow: i + 2 })
-  })
-  return order.map((k) => {
-    const lines = groups[k]
-    const conflicts: HeaderConflict[] = []
-    HEADER_FIELDS.forEach((f) => {
-      const hc = mapping[f]
-      if (!hc) return
-      const vals = lines.map((l) => l.row[hc])
-      if (new Set(vals).size > 1) {
-        conflicts.push({ field: f, label: FIELD_LABEL[f], rows: lines.map((l) => l.sheetRow), values: Array.from(new Set(vals)) })
-      }
-    })
-    const first = lines[0].row
-    return {
-      number: k,
-      issueDate: mapping.issue_date ? first[mapping.issue_date] : null,
-      buyer: mapping.buyer_name ? first[mapping.buyer_name] : null,
-      total: mapping.total ? first[mapping.total] : null,
-      lineCount: lines.length,
-      sheetRows: lines.map((l) => l.sheetRow),
-      conflicts,
-      quarantined: conflicts.length > 0,
-    }
-  })
 }

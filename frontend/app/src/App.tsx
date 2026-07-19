@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FILE_DATA, INHOUSE_IDX, PARSE_LABELS } from './data'
+import { INHOUSE_IDX, PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
@@ -7,10 +7,7 @@ import { gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
-// groupInvoices is NOT imported here any more — backToEdit/continueMapping stopped
-// calling it. It still lives in lib/mapping.ts and CreateReview.tsx still calls it;
-// M4-08-06 owns removing both.
-import { initMapping, initMappingFromHeaders, toImportMapping } from './lib/mapping'
+import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
@@ -230,8 +227,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   // The results screen is reachable only from the single-document path now (the
   // multi-invoice path ends at the server's report, not at a locally-built draft), so
-  // leaving it always lands back on the form. The old groupInvoices(...) > 1 -> 'review'
-  // branch was the browser-side grouping verdict this story removes.
+  // leaving it always lands back on the form.
   function backToEdit() {
     clearVal()
     setCreateStep('form')
@@ -309,7 +305,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     if (!uploadFile) return
     clearVal()
     const TOTAL = PARSE_LABELS.length
-    const fileId = uploadFile
     setCreateStep('parsing')
     setParseIdx(0)
     parseTimer.current = setInterval(() => {
@@ -318,16 +313,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
         if (next >= TOTAL) {
           if (parseTimer.current) clearInterval(parseTimer.current)
           parseTimer.current = null
-          // Tabular files hand off to Map; PDF/JPG have no columns to map, so
-          // they go straight to the single-invoice form as before.
-          parseDone.current = setTimeout(() => {
-            if (FILE_DATA[fileId]) {
-              setMapping(initMapping(fileId))
-              setCreateStep('mapping')
-            } else {
-              setCreateStep('form')
-            }
-          }, 320)
+          // Sample documents have no columns to map, so they go straight to the
+          // single-invoice form. Spreadsheets take the server-backed import path
+          // (Import -> Map -> Report), which never routes through here.
+          parseDone.current = setTimeout(() => setCreateStep('form'), 320)
           return TOTAL
         }
         return next
@@ -391,15 +380,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   function backToImport() {
     clearVal()
     setCreateStep('upload')
-  }
-
-  function backToMapping() {
-    clearVal()
-    setCreateStep('mapping')
-  }
-
-  function createDrafts() {
-    runValidation()
   }
 
   function skipUpload() {
@@ -525,10 +505,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     selectEntity,
     selectImportFile,
     readColumns,
-    startImport,
     backToImport,
-    backToMapping,
-    createDrafts,
     skipUpload,
     approve,
     selectInvoice,

@@ -221,10 +221,11 @@ describe('wizardHeader (FLOW-11..14)', () => {
     expect(wizardHeader('upload', null, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
   })
 
-  // FLOW-14 — totality. Falsification: an impl with no `?? 0` fallback — 'review'/
-  // 'report' return undefined and the header renders with no active step.
+  // FLOW-14 — totality. The `?? 0` fallback guards steps added to the union without
+  // an IMPORT_STAGE_OF entry, so the header always has an active step. Falsification:
+  // an impl with no fallback returns undefined and renders with none.
   it('is total over every CreateStep literal — stageIndex is always a valid index', () => {
-    const ALL_STEPS: CreateStep[] = ['upload', 'parsing', 'mapping', 'form', 'review', 'validating', 'results', 'report']
+    const ALL_STEPS: CreateStep[] = ['upload', 'parsing', 'mapping', 'form', 'validating', 'results', 'report']
     ALL_STEPS.forEach((step) => {
       const { steps, stageIndex } = wizardHeader(step, null, null)
       expect(steps.length).toBeGreaterThanOrEqual(3)
@@ -266,10 +267,9 @@ describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
     })
   })
 
-  it('routes mapping/review/report to IMPORT_STEPS at their fixed index, regardless of file state — review has no IMPORT_STAGE_OF entry and falls back to 0', () => {
+  it('routes mapping/report to IMPORT_STEPS at their fixed index, regardless of file state', () => {
     const expected: Array<[CreateStep, number]> = [
       ['mapping', 1],
-      ['review', 0],
       ['report', 2],
     ]
     expected.forEach(([step, idx]) => {

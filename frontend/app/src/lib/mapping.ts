@@ -46,6 +46,30 @@ export function initMapping(fileId: string): Mapping {
   return map
 }
 
+// STUB — the executor implements the body next (M4-08-04/-05); this throw-only
+// skeleton exists so the RED specs in mapping.test.ts fail on a thrown/assertion
+// mismatch, not an import or type error. Params are underscore-prefixed per this
+// app's strict noUnusedParameters tsconfig (mirrors the importApi.ts stub idiom,
+// M4-08-02).
+//
+// Replacement for initMapping(fileId) that takes server-provided headers
+// directly instead of dereferencing the FILE_DATA fixture. See M4-08-03.
+export function initMappingFromHeaders(_headers: string[]): Mapping {
+  throw new Error('not implemented')
+}
+
+// Drops null and empty-string values before the mapping goes on the wire.
+// See M4-08-03 [mapping-strips-nulls].
+export function toImportMapping(_m: Mapping): Record<string, string> {
+  throw new Error('not implemented')
+}
+
+// Gates on invoice_number alone, matching resolveMapping's structural
+// requirement. See M4-08-03 [mapping-gate-matches-server].
+export function canSubmitMapping(_m: Mapping | null): boolean {
+  throw new Error('not implemented')
+}
+
 // Group line-item rows into invoices by the column mapped to invoice_number.
 // sheetRow is the row number the user sees in their spreadsheet (1-based, +1
 // for the header row), so a conflict can cite where to look in the source file.

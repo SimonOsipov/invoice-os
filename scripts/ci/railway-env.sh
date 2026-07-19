@@ -705,11 +705,6 @@ COMMIT_STAGED_MUTATION='mutation commitStaged($e: String!, $m: String!) {
   environmentPatchCommitStaged(environmentId: $e, commitMessage: $m, skipDeploys: true)
 }'
 
-# shellcheck disable=SC2016  # $e/$s are GraphQL variables — not shell expansions.
-TCP_PROXIES_QUERY='query proxies($e: String!, $s: String!) {
-  tcpProxies(environmentId: $e, serviceId: $s) { id domain proxyPort applicationPort syncStatus }
-}'
-
 # Returns the RENDERED variable map. Never logged wholesale — only the two named
 # keys are read out of it, because the same map carries live credentials.
 # shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
@@ -1284,38 +1279,6 @@ ensure_postgres_volume() {
   exit 1
 }
 
-# --- Reconcile F: TCP proxy (OBSERVE ONLY — never fails) ---------------------
-#
-# MEASURED: the TCP proxy CARRIES into a fork with its own distinct port, and
-# both DATABASE_PUBLIC_URL and DATABASE_URL resolve. No reconciliation is needed
-# in practice.
-#
-# The create path is deliberately NOT implemented: `tcpProxyCreate` is DEPRECATED
-# ("Use staged changes and apply them ... requires you to redeploy the service for
-# it to be active"), so calling it blind would both stage work this step does not
-# apply and depend on a field Railway may remove. If the proxy is ever genuinely
-# absent, the pg_isready probe in dev-env.yml fails loudly and names it — that
-# probe is the authoritative liveness gate, not this observation.
-#
-# M4-22: "Close the Public Database Door" intends to remove the
-# DATABASE_PUBLIC_URL dependency entirely. When it lands, this observation and
-# the pg_isready probe go with it.
-observe_tcp_proxy() {
-  local env_id="$1" count
-
-  graphql_post "$(gql_body "$TCP_PROXIES_QUERY" \
-    "$(jq -n --arg e "$env_id" --arg s "$RAILWAY_SVC_POSTGRES_ID" '{e: $e, s: $s}')")" \
-    "reading postgres TCP proxies in environment $env_id"
-
-  count=$(echo "$GQL_RESPONSE" | jq '[.data.tcpProxies[]?] | length')
-  if [ "$count" = "0" ]; then
-    echo "::warning::No postgres TCP proxy found in environment $env_id. Measured behaviour is that it CARRIES into a fork, so this is unexpected. NOT auto-created: tcpProxyCreate is deprecated in favour of staged changes and needs a redeploy to activate. The pg_isready probe is the authoritative gate and will fail naming DATABASE_PUBLIC_URL if this really is broken."
-    return 0
-  fi
-  echo "postgres TCP proxy in $env_id:"
-  echo "$GQL_RESPONSE" | jq -r '.data.tcpProxies[]? | "  domain=\(.domain) proxyPort=\(.proxyPort) applicationPort=\(.applicationPort) syncStatus=\(.syncStatus)"'
-}
-
 # --- ENVIRONMENT audit (RECORD ONLY — sets nothing) --------------------------
 #
 # MEASURED: `ENVIRONMENT` in a fork resolves to the literal `development`
@@ -1370,7 +1333,6 @@ cmd_reconcile_fork() {
   # accepts a connection.
   ensure_postgres_volume "$env_id"
   ensure_postgres_running "$env_id" "$POSTGRES_VOLUME_CREATED"
-  observe_tcp_proxy "$env_id"
   record_environment_variable "$env_id"
   echo "Fork reconciliation complete for $env_id."
 }

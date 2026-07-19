@@ -83,10 +83,11 @@ env:
   RAILWAY_SVC_LANDING_ID: 21e62d5d-82c9-48d8-8f6b-b2a53104c046
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
   # M4-21-10: the Postgres service id (recorded in docs/migrations.md's provisioning
-  # Appendix), used to discover each run's superuser DSN fresh via GraphQL instead of the
-  # deleted DATABASE_SUPERUSER_URL_DEV secret — same stable-resource-id pattern as the
-  # four service ids above (never the per-environment DSN value itself, which is always
-  # discovered, F7).
+  # Appendix) — same stable-resource-id pattern as the four service ids above. No CI
+  # job resolves a superuser DSN with it anymore (M4-22-08); scripts/ci/railway-env.sh
+  # still uses it to create the Postgres volume and bring Postgres up in a fork
+  # (ensure_postgres_volume, ensure_postgres_running), and the Watch Paths assertion
+  # below uses it too.
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
 
 jobs:
@@ -150,9 +151,8 @@ jobs:
       ( github.event_name == 'workflow_dispatch' ||
         github.event.pull_request.draft == false )
     runs-on: ubuntu-latest
-    # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume,
-    # brings Postgres up in a fresh fork and waits for it (<=420s), plus a
-    # <=180s pg_isready probe (12 x (5s timeout + 10s backoff)). At 10
+    # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume and
+    # brings Postgres up in a fresh fork, waiting for it (<=420s). At 10
     # minutes a slow-but-CORRECT fork would die as a bare job-level timeout with
     # no annotation naming a cause — the exact failure mode the seam exists to
     # prevent. A job knob, not a restructure.
@@ -224,79 +224,6 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
-
-      # The AUTHORITATIVE liveness proof. A SUCCESS deployment status says the
-      # container started; only this says Postgres accepts connections. It also
-      # proves DATABASE_PUBLIC_URL resolves to a live TCP proxy in a fork, which
-      # the e2e job's superuser-DSN discovery and the api + demo suites' direct DB
-      # assertions all depend on.
-      #
-      # Lives in YAML rather than railway-env.sh because it needs `pg_isready`
-      # from the runner image, which the script has no business assuming.
-      #
-      # M4-22 ("Close the Public Database Door") deletes the DATABASE_PUBLIC_URL
-      # dependency; this step and observe_tcp_proxy in railway-env.sh go with it.
-      - name: Probe Postgres liveness in the fork (pg_isready)
-        if: github.event_name != 'workflow_dispatch'
-        env:
-          RAILWAY_QUERY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
-        run: |
-          set -euo pipefail
-
-          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
-            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
-
-          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
-                --request POST \
-                --url https://backboard.railway.com/graphql/v2 \
-                --header "Authorization: Bearer $RAILWAY_QUERY_TOKEN" \
-                --header "Content-Type: application/json" \
-                --data "$query_body"); then
-            echo "::error::Railway GraphQL request failed reading the Postgres variables in environment $ENV_ID"
-            exit 1
-          fi
-          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
-            echo "::error::Railway GraphQL error reading the Postgres variables: $(echo "$resp" | jq -c '.errors')"
-            exit 1
-          fi
-
-          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
-          if [ -z "$dsn" ]; then
-            echo "::error::DATABASE_PUBLIC_URL is absent on the Postgres service ($RAILWAY_SVC_POSTGRES_ID) in the forked environment $ENV_ID. It was MEASURED to carry into a fork, so this is a real regression in fork fidelity — the e2e job's superuser-DSN discovery would fail later with less context."
-            exit 1
-          fi
-          echo "::add-mask::$dsn"
-
-          # An unrendered template here means the variable exists but its inputs
-          # (the TCP proxy) did not fork — a different failure with a different fix.
-          #
-          # The needle is ASSEMBLED AT RUNTIME and never written literally, not even
-          # in a comment. A dollar sign followed by two braces ANYWHERE in a run:
-          # block — comments included, since they are part of the same string — is
-          # consumed by GitHub as the start of an Actions expression BEFORE the shell
-          # sees it, which makes the whole workflow file unparseable: the run then
-          # fails with zero jobs and no usable annotation. Do not "simplify" this
-          # back to a literal.
-          unrendered_prefix='$'"{{"
-          case "$dsn" in
-            *"$unrendered_prefix"*)
-              echo "::error::DATABASE_PUBLIC_URL in environment $ENV_ID is still an UNRENDERED template, i.e. the variable forked but its TCP-proxy inputs did not. Postgres is unreachable over the public proxy."
-              exit 1
-              ;;
-          esac
-
-          for attempt in $(seq 1 12); do
-            if pg_isready -d "$dsn" -t 5; then
-              echo "postgres accepts connections in environment $ENV_ID (attempt $attempt)."
-              exit 0
-            fi
-            echo "  (pg_isready attempt $attempt) not ready yet — retrying in 10s ..."
-            sleep 10
-          done
-
-          echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID never accepted a connection via DATABASE_PUBLIC_URL within ~180s (12 attempts x (5s connect timeout + 10s backoff)). This is a POSTGRES failure, NOT a generic gateway timeout: left unaddressed it would have surfaced as health-gate burning its full 900s with no cause named. MEASURED CAUSE 2026-07-19: Postgres with NO VOLUME reaches SUCCESS but never speaks the wire protocol, while raw TCP to its proxy stays OPEN — so if this fires, check that reconcile-fork actually created the volume before blaming the proxy or the DSN."
-          exit 1
 
       - name: Assert Watch Paths are empty on all 11 non-Postgres services (M3-16 invariant)
         env:
@@ -472,7 +399,13 @@ jobs:
   # 2. Schema-before-fleet barrier: the gateway migrates at boot and
   #    log.Fatals on a bad migration, so a green /healthz proves the schema is
   #    fully migrated — this is what the context services, the SPAs, and the
-  #    reset/seed all wait behind.
+  #    reset/seed all wait behind. Also now the SOLE Postgres liveness proof
+  #    (M4-22-08 removed the TCP-readiness probe that used to cover this):
+  #    Provision() runs bootstrap + migrate + seed to completion, fatal-on-error,
+  #    before the gateway's listener opens (cmd/gateway/main.go ->
+  #    internal/platform/server.go), so a 200 here is only reachable after
+  #    Postgres has answered a real query — strictly stronger than a bare
+  #    socket-readiness check.
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
     needs: [deploy-gateway, prepare-env]
@@ -500,7 +433,7 @@ jobs:
             sleep 5
           done
           if [ "$ok" != "1" ]; then
-            echo "::error::$GATEWAY_URL/healthz did not return 200 within 900s (migration failed?)"
+            echo "::error::$GATEWAY_URL/healthz did not return 200 within 900s. This is now the ONLY Postgres liveness proof: most likely cause is Postgres reaching deployment SUCCESS with NO VOLUME attached — it keeps raw TCP open but never speaks the wire protocol, so the gateway's boot-time migration never completes. Verify reconcile-fork actually created the volume before assuming a generic gateway problem."
             exit 1
           fi
 
@@ -651,46 +584,6 @@ jobs:
           done
       - name: Install Chromium
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
-      - name: Discover the E2E superuser DSN (M4-21-10; never a job output — masked here)
-        # Replaces the deleted DATABASE_SUPERUSER_URL_DEV secret: discovers THIS run's own
-        # environment's Postgres DATABASE_PUBLIC_URL fresh via Railway GraphQL (never the
-        # shared development database on a PR run — that was the M4-21-06 gap this closes)
-        # and exports it for the two steps below via $GITHUB_ENV (job-local, not a job
-        # output). Same conditional auth-header pattern as the prepare-env job's own
-        # Railway GraphQL calls.
-        env:
-          GH_EVENT_NAME: ${{ github.event_name }}
-          RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
-        run: |
-          set -euo pipefail
-          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
-            auth_header="Project-Access-Token: $RAILWAY_QUERY_TOKEN"
-          else
-            auth_header="Authorization: Bearer $RAILWAY_QUERY_TOKEN"
-          fi
-          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
-            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
-          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
-                --request POST \
-                --url https://backboard.railway.com/graphql/v2 \
-                --header "$auth_header" \
-                --header "Content-Type: application/json" \
-                --data "$query_body"); then
-            echo "::error::Railway GraphQL request failed discovering the Postgres superuser DSN for environment $ENV_ID"
-            exit 1
-          fi
-          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
-            echo "::error::Railway GraphQL error discovering the Postgres superuser DSN: $(echo "$resp" | jq -c '.errors')"
-            exit 1
-          fi
-          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
-          if [ -z "$dsn" ]; then
-            echo "::error::DATABASE_PUBLIC_URL not found on the Postgres service (id $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID"
-            exit 1
-          fi
-          echo "::add-mask::$dsn"
-          echo "DATABASE_SUPERUSER_URL_DEV=$dsn" >> "$GITHUB_ENV"
       - name: Smoke (landing + ops-console render)
         run: pnpm --filter @invoice-os/e2e test:smoke
       - name: API E2E (typed contract suite)
@@ -700,13 +593,11 @@ jobs:
         # load-bearing, not cosmetic. GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
-        # browser project). Does NOT need the superuser DSN (M4-22-05):
+        # browser project). Does not touch the database directly (M4-22-05):
         # PERF-05's Day-60 stamp gate now reads invoice_status_history over
         # HTTP (GET .../history), and PERF-03/04 compare rule_set_version via
         # the validate/import response body, not a live DB query — api/db.ts
-        # is deleted. Nothing in this job consumes the discovered DSN anymore
-        # (M4-22-06 parked the demo suite's audit read too); the discovery step
-        # above is dead code until M4-22-08 removes it.
+        # is deleted.
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
@@ -718,7 +609,7 @@ jobs:
         # restores it, so no rule-dependent suite runs after it in the same run; the
         # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7
         # (the audit_log read) is parked, not run at all (M4-22-06 [park-shape]) — this
-        # step no longer needs the superuser DSN. GATEWAY_URL/APP_URL come from this
+        # step does not touch the database directly. GATEWAY_URL/APP_URL come from this
         # job's `env:` (the seam reads them), and chromium is already installed.
         run: pnpm --filter @invoice-os/e2e test:demo
       - name: Upload smoke Playwright report

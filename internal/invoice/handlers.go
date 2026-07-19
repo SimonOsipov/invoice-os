@@ -334,21 +334,16 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 	}
 }
 
-// validateResponse is the POST /v1/invoices/{id}/validate response body: the
-// existing Invoice, embedded so every field it already carries keeps its
-// exact name/type/position (TestValidateHandler_ResponseIsAdditive decodes
-// this body straight into the plain Invoice type), plus one additive sibling
-// key -- rule_set_version (task-161/M4-22-02). The field is NOT added to the
-// Invoice domain struct itself: Invoice is scanned 1:1 from the invoices
-// table and shared by Get/List, which never call the gate and would then
-// start emitting a misleading always-null key. Mirrors how
-// internal/importer/handlers.go:76 hand-rolls its own response type for the
-// identical reason rather than growing its domain struct.
+// validateResponse is the POST /v1/invoices/{id}/validate response body:
+// Invoice embedded (keeping every existing field's name/type/position),
+// plus one additive sibling key, rule_set_version. Not added to the Invoice
+// domain struct itself: Invoice is shared by Get/List, which never call the
+// gate and would start emitting a misleading always-null key.
 //
 // RuleSetVersion is a *int with NO omitempty: it must render an explicit
-// JSON null when validate() evaluated nothing (Gate.Evaluate's own
-// zero-value convention, gate.go's file header) -- never omitted, never a
-// false literal 0 (TestValidateHandler_NilVersionMarshalsNull).
+// JSON null when nothing was evaluated (Gate.Evaluate's zero-value
+// convention) -- never omitted, never a false 0
+// (TestValidateHandler_NilVersionMarshalsNull).
 type validateResponse struct {
 	Invoice
 	RuleSetVersion *int `json:"rule_set_version"`
@@ -391,10 +386,7 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 			return
 		}
 
-		// validateResponse is additive over the bare Invoice (see its doc
-		// comment): rule_set_version is nil (-> JSON null) when nothing was
-		// evaluated (validate's own zero-value convention), else the real
-		// evaluated version.
+		// nil -> JSON null when nothing was evaluated (see validateResponse's doc).
 		resp := validateResponse{Invoice: inv}
 		if version != 0 {
 			resp.RuleSetVersion = &version
@@ -454,14 +446,11 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 }
 
 // HistoryHandler returns GET /v1/invoices/{id}/history (task-160/M4-22-01).
-// Same identity-first-401 order as every other handler here, reading
-// r.PathValue("id"); ErrNotFound covers both a genuinely unknown id and a
-// cross-tenant one (RLS-scoped zero rows, Store.History's own post-check) --
-// 404, same as GetHandler. A malformed (non-uuid) id maps ErrValidation ->
-// 400 via statusForErr, mirroring Get/Update/Transition (Stage 1 GAP 1) --
-// NOT 404. The success body is a BARE JSON array of StatusChange -- no
-// pagination, no envelope ([history-endpoint-scope]) -- unlike every other
-// handler in this file, whose success body is a JSON object.
+// ErrNotFound covers both an unknown id and a cross-tenant one (RLS-scoped
+// zero rows) -- 404, same as GetHandler. Malformed id maps ErrValidation ->
+// 400, mirroring Get/Update/Transition, not 404. Success body is a BARE
+// JSON array of StatusChange -- no pagination, no envelope
+// ([history-endpoint-scope]) -- unlike every other handler here.
 func HistoryHandler(history func(ctx context.Context, id string) ([]StatusChange, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()

@@ -3,8 +3,8 @@ name: Dev Env (deploy full fleet + verify)
 # Deploy the whole fleet to one Railway environment, then verify it.
 # A ready PR → its own ephemeral env, which THIS workflow forks from
 # `development` itself (M4-23-03) — not Railway's PR Environments feature, which
-# is OFF and stays OFF. workflow_dispatch → `development` itself (deploy +
-# health-gate + fleet-gate only — M4-22-07 dropped reset-seed and E2E here).
+# is OFF and stays OFF. workflow_dispatch → `development` itself
+# (deploy + health-gate + fleet-gate only; M4-22-07 dropped reset-seed/E2E).
 #
 # Auth: PR runs use RAILWAY_API_TOKEN (account-scoped); workflow_dispatch uses
 # RAILWAY_API_DEV_TOKEN (project token, `Project-Access-Token` header). An
@@ -62,8 +62,7 @@ on:
 # back to `github.ref` — the SAME value on every dispatch run — so dispatch
 # runs against the persistent `development` environment still serialize
 # against each other: two concurrent dispatch runs would both `railway up`
-# the same services into the same shared `development` environment, a
-# deploy-corruption race that has nothing to do with DB seeding.
+# the same services into the same shared `development` environment.
 concurrency:
   group: dev-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
@@ -83,11 +82,8 @@ env:
   RAILWAY_SVC_LANDING_ID: 21e62d5d-82c9-48d8-8f6b-b2a53104c046
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
   # M4-21-10: the Postgres service id (recorded in docs/migrations.md's provisioning
-  # Appendix) — same stable-resource-id pattern as the four service ids above. No CI
-  # job resolves a superuser DSN with it anymore (M4-22-08); scripts/ci/railway-env.sh
-  # still uses it to create the Postgres volume and bring Postgres up in a fork
-  # (ensure_postgres_volume, ensure_postgres_running). The Watch Paths assertion below
-  # does NOT use it — it matches by a hardcoded 11-service name list instead.
+  # Appendix) — same stable-resource-id pattern as above. No CI job resolves
+  # a DSN with it anymore (M4-22-08); railway-env.sh still uses it for the Postgres volume.
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
 
 jobs:
@@ -400,12 +396,8 @@ jobs:
   #    log.Fatals on a bad migration, so a green /healthz proves the schema is
   #    fully migrated — this is what the context services, the SPAs, and the
   #    reset/seed all wait behind. Also now the SOLE Postgres liveness proof
-  #    (M4-22-08 removed the TCP-readiness probe that used to cover this):
-  #    Provision() runs bootstrap + migrate + seed to completion, fatal-on-error,
-  #    before the gateway's listener opens (cmd/gateway/main.go ->
-  #    internal/platform/server.go), so a 200 here is only reachable after
-  #    Postgres has answered a real query — strictly stronger than a bare
-  #    socket-readiness check.
+  #    (M4-22-08 removed the pg_isready probe) — Provision() runs to
+  #    completion, fatal-on-error, before the gateway's listener opens.
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
     needs: [deploy-gateway, prepare-env]
@@ -540,8 +532,7 @@ jobs:
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation), and demo (Day-30 wedge journey) via Playwright,
   #    once the fleet is green and the SPAs are deployed. PR environments only
-  #    (M4-22-07: gated off workflow_dispatch, which no longer runs E2E) — the
-  #    DB is self-seeded at gateway boot (M4-21-04), never separately reset.
+  #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
   e2e:
     name: E2E (smoke + api + topology + demo)
     needs: [fleet-gate, deploy-spas, prepare-env]
@@ -593,11 +584,8 @@ jobs:
         # load-bearing, not cosmetic. GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
-        # browser project). Does not touch the database directly (M4-22-05):
-        # PERF-05's Day-60 stamp gate now reads invoice_status_history over
-        # HTTP (GET .../history), and PERF-03/04 compare rule_set_version via
-        # the validate/import response body, not a live DB query — api/db.ts
-        # is deleted.
+        # browser project). Does not touch the database directly (M4-22-05) --
+        # PERF-03/04/05 now read over HTTP instead; api/db.ts is deleted.
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
@@ -608,9 +596,8 @@ jobs:
         # Runs LAST (after topology): the demo kill-switches vat-standard-rate then
         # restores it, so no rule-dependent suite runs after it in the same run; the
         # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7
-        # (the audit_log read) is parked, not run at all (M4-22-06 [park-shape]) — this
-        # step does not touch the database directly. GATEWAY_URL/APP_URL come from this
-        # job's `env:` (the seam reads them), and chromium is already installed.
+        # (audit_log read) is parked (M4-22-06 [park-shape]) — no DB access here.
+        # GATEWAY_URL/APP_URL come from this job's `env:`; chromium is installed.
         run: pnpm --filter @invoice-os/e2e test:demo
       - name: Upload smoke Playwright report
         if: failure()

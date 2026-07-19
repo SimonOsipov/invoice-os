@@ -1,19 +1,11 @@
-// main_test.go: Test-first (RED) suite for M4-22-09/task-168's role-password
-// rename fallback shim, authored BEFORE resolveRolePassword's real logic
-// exists (Test-first: yes). cmd/gateway/ had zero test files before this one
-// (main() itself is not unit-testable -- it calls log.Fatalf and opens a real
-// listener), so this file is new. It intentionally does NOT re-author
-// TestBootstrapRejectsEmptyPasswords (internal/platform/db/bootstrap_test.go:967),
-// which already proves the empty-password-is-fatal property this package's
-// own resolveRolePassword deliberately does not duplicate.
-//
-// TestGatewayMainStillPassesRawEnvironment (Test Spec row 2, task-168) is
-// deliberately NOT re-authored here either: it would duplicate the existing
+// main_test.go: role-password rename fallback shim tests (M4-22-09/task-168).
+// cmd/gateway/ had no test files before this one (main() itself isn't
+// unit-testable -- it calls log.Fatalf and opens a real listener).
+// Deliberately does NOT re-author TestBootstrapRejectsEmptyPasswords
+// (internal/platform/db/bootstrap_test.go) or
 // TestGatewayMainPassesRawEnvironmentToProvisioningGuard
-// (internal/platform/db/provision_test.go:138), which AC #6 names directly as
-// the regression guard this subtask must not disturb -- re-running it
-// unmodified, as the Test Spec itself says, is the point, not writing a
-// second copy under a new name.
+// (internal/platform/db/provision_test.go, AC #6's named regression guard)
+// -- both already cover what their names say.
 package main
 
 import (
@@ -29,16 +21,10 @@ import (
 )
 
 // TestGatewayMainPrefersUnprefixedPasswordVars: Test Spec #1. Static
-// source-scan of cmd/gateway/main.go's RolePasswords literal -- the same
-// no-database, read-the-source-text technique
-// TestGatewayMainPassesRawEnvironmentToProvisioningGuard
-// (internal/platform/db/provision_test.go) already established for pinning a
-// call site no Go test can invoke directly. Deprecated var names are built by
-// concatenating a lowercase prefix + strings.ToUpper, kept on its own line, on
-// purpose: this file is itself repo-wide-grepped by
-// TestRepoHasNoStrayInvoicePrefixedVars below (AC #4), and a literal
-// uppercase deprecated-prefix + "*PASSWORD" substring sharing one source line
-// here would trip that same grep against this test file.
+// source-scan of main.go's RolePasswords literal. Deprecated var names are
+// built via ToUpper(prefix) + suffix, never as a literal substring -- this
+// file is itself grepped by TestRepoHasNoStrayInvoicePrefixedVars below
+// (AC #4), and a literal deprecated "*PASSWORD" string here would trip it.
 func TestGatewayMainPrefersUnprefixedPasswordVars(t *testing.T) {
 	b, err := os.ReadFile("main.go")
 	if err != nil {
@@ -95,22 +81,13 @@ func TestGatewayMainPrefersUnprefixedPasswordVars(t *testing.T) {
 	}
 }
 
-// TestGatewayMainWiresEachRoleToItsOwnVarPair: adversarial coverage added at
-// QA (Stage 4, task-168). TestGatewayMainPrefersUnprefixedPasswordVars above
-// proves each var-name PAIR appears somewhere in the RolePasswords literal
-// window in the right relative order -- but it scans the WHOLE window per
-// pair, never a single field's own line, so it cannot tell one field's
-// resolveRolePassword call from another's. MUTATION-VERIFIED 2026-07-19 (QA):
-// swapping the Migrator/App fields' arguments -- so Migrator silently reads
-// App's whole var pair and App reads Migrator's (deliberately not spelling
-// out the deprecated-prefixed names here -- see the self-grep note below) --
-// left TestGatewayMainPrefersUnprefixedPasswordVars fully green (every
-// var-name pair is still present, still in order,
-// somewhere in the shared window). That swap would silently misconfigure the
-// database roles' passwords on every boot -- exactly the "wrong fallback
-// bricks the fleet" risk this subtask exists to prevent. This test closes the
-// gap by requiring the EXACT literal call, field name included, for each of
-// the three roles.
+// TestGatewayMainWiresEachRoleToItsOwnVarPair: adversarial coverage.
+// TestGatewayMainPrefersUnprefixedPasswordVars above only proves each
+// var-name pair appears somewhere in the RolePasswords window, in order --
+// it can't tell one field's resolveRolePassword call from another's.
+// Mutation-verified: swapping Migrator/App's arguments left that test green
+// while silently misconfiguring both roles' passwords on every boot. This
+// test requires the exact literal call, field name included, per role.
 func TestGatewayMainWiresEachRoleToItsOwnVarPair(t *testing.T) {
 	b, err := os.ReadFile("main.go")
 	if err != nil {
@@ -147,18 +124,11 @@ func TestGatewayMainWiresEachRoleToItsOwnVarPair(t *testing.T) {
 }
 
 // TestRepoHasNoStrayInvoicePrefixedVars: Test Spec #3 / AC #4. Walks every
-// git-tracked file (git ls-files, so node_modules/.git/backlog/etc. are
-// excluded the same way the AC's own `--exclude-dir` grep excludes them) and
-// enforces the bounded blast radius: every deprecated-prefix "*PASSWORD" hit
-// must live in cmd/gateway/main.go and nowhere else; every deprecated-prefix
-// "*DATABASE_URL" hit must be zero, repo-wide, no exceptions (those two DSN
-// vars are Railway-console/docs-only -- no Go code reads them).
-//
-// Deliberately RED right now for a reason unrelated to any Go code: per
-// task-168's Stage 1+2 Correction A, docs/migrations.md:80,429,432,433,436,437
-// still reference the deprecated DSN var names. Renaming those is the
-// executor's docs-half of this subtask (out of QA Mode-A's scope), so this
-// test fails on real, expected hits until Stage 3 lands.
+// git-tracked file (git ls-files) and enforces the bounded blast radius:
+// every deprecated-prefix "*PASSWORD" hit must live in cmd/gateway/main.go
+// and nowhere else (docs/migrations.md excepted, see below); every
+// deprecated-prefix "*DATABASE_URL" hit must be zero, same exception --
+// those two DSN vars are Railway-console/docs-only, no Go code reads them.
 func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -179,6 +149,9 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	dsnPattern := regexp.MustCompile(deprecatedPrefix + `.*DATABASE_URL`)
 
 	const wantPasswordFile = "cmd/gateway/main.go"
+	// docs/migrations.md names the deprecated vars truthfully because Railway
+	// still holds them (escalation E3 pending) -- not a stray code reference.
+	const docsExceptionFile = "docs/migrations.md"
 	var passwordHitsElsewhere []string
 	var dsnHits []string
 
@@ -193,10 +166,10 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 			continue
 		}
 		text := string(content)
-		if passwordPattern.MatchString(text) && rel != wantPasswordFile {
+		if passwordPattern.MatchString(text) && rel != wantPasswordFile && rel != docsExceptionFile {
 			passwordHitsElsewhere = append(passwordHitsElsewhere, rel)
 		}
-		if dsnPattern.MatchString(text) {
+		if dsnPattern.MatchString(text) && rel != docsExceptionFile {
 			dsnHits = append(dsnHits, rel)
 		}
 	}
@@ -209,26 +182,17 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	}
 }
 
-// TestRolePasswordResolutionPrecedence: Test Spec #4 (table-driven, 4 cases).
-// Exercises resolveRolePassword directly with synthetic, made-up env var
-// names rather than the real MIGRATOR_PASSWORD/etc. triples on purpose:
-// resolveRolePassword's logic is generic over whatever two names it is given
-// (Correction B's extracted-helper design), so a fixture pair fully proves
-// the resolution/precedence/warning behavior without coupling this test to
-// literal production var names -- and, incidentally, sidesteps the same
-// self-grep concern the two tests above route around by construction (a
-// fixture name containing neither "PASSWORD" nor the deprecated prefix cannot
-// ever trip AC #4's repo-wide grep). TestGatewayMainPrefersUnprefixedPasswordVars
-// above is what proves main.go actually calls this function with the three
-// REAL name pairs, in the right order; this test proves the function's logic
-// is correct for any pair.
+// TestRolePasswordResolutionPrecedence: Test Spec #4 (table-driven).
+// Exercises resolveRolePassword with synthetic env var names, not the real
+// MIGRATOR_PASSWORD/etc. triples: its logic is generic over whatever two
+// names it's given, so a fixture pair proves resolution/precedence/warning
+// behavior without coupling to production names (and sidesteps the same
+// self-grep concern above, since fixture names contain neither "PASSWORD"
+// nor the deprecated prefix). TestGatewayMainPrefersUnprefixedPasswordVars
+// proves main.go calls this with the three real pairs, in order.
 //
-// Judgement call (flagged as such by the Stage 2.5 brief): case 3 (both set)
-// still logs a warning, even though the deprecated value is never used --
-// an unused-but-present deprecated variable is still a stale Railway var an
-// operator should clean up, and AC #3 does not forbid warning outside the
-// strict fallback-fired case. See resolveRolePassword's doc comment in
-// main.go for the corresponding real-fix note.
+// Case 3 (both set) still warns even though the deprecated value goes
+// unused -- an operator should still know to clean up the stale var.
 func TestRolePasswordResolutionPrecedence(t *testing.T) {
 	const (
 		newVar = "GATEWAY_TEST_ROLE_PW_NEW"

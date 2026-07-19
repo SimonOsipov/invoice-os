@@ -69,12 +69,8 @@ func scanLineItem(row scanner, li *LineItem) error {
 	)
 }
 
-// historyColumns is the invoice_status_history projection scanned by
-// scanStatusChange -- deliberately EXCLUDES id/tenant_id/invoice_id (AC #7):
-// StatusChange's wire type surfaces only from_status/to_status/actor/
-// changed_at. from_status/to_status scan straight into the named Status
-// type (nullable via *Status for from_status), same idiom invoiceColumns'
-// own comment describes for Invoice.Status.
+// historyColumns deliberately excludes id/tenant_id/invoice_id (AC #7) --
+// StatusChange surfaces only from_status/to_status/actor/changed_at.
 const historyColumns = `from_status, to_status, actor, changed_at`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
@@ -256,27 +252,20 @@ func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 
 // History returns the caller's tenant's invoice_status_history rows for id,
 // ordered changed_at ASC, id ASC ([D1]/AC #1), inside one
-// db.WithinRequestTenantTx -- the invoice_app pool, never superuser, never a
-// new pool (RLS isolation is the product here, task-160 Stage 1).
+// db.WithinRequestTenantTx -- the invoice_app pool, never superuser.
 //
-// Unlike Get (a single-row tx.QueryRow, where pgx.ErrNoRows maps directly to
-// ErrNotFound), this is necessarily a MULTI-row tx.Query -- Query()/Next()
-// never yields pgx.ErrNoRows for an ordinary zero-row result (List tolerates
-// and expects exactly that, with no special-casing). So a cross-tenant or
-// genuinely unknown id is instead caught by an EXPLICIT post-query check:
-// zero rows -> ErrNotFound (Stage 1 GAP 2). This is sound ONLY because
-// Store.Create always writes the genesis invoice_status_history row in the
-// SAME transaction as the invoice insert (Create's own doc comment above) --
-// no code path in this repo creates an invoice without it -- so "zero
-// history rows for a syntactically-valid id" reliably means "not visible to
-// this caller" (nonexistent or cross-tenant), never "a real invoice with no
-// history yet."
+// Unlike Get's single-row tx.QueryRow (where pgx.ErrNoRows maps directly to
+// ErrNotFound), this is a multi-row tx.Query: Query()/Next() never yields
+// pgx.ErrNoRows for a zero-row result, so a cross-tenant or unknown id needs
+// an explicit post-query check instead. That check is sound only because
+// Store.Create always writes the genesis row in the same transaction as the
+// invoice insert -- "zero history rows" therefore always means "not visible
+// to this caller," never "a real invoice with no history yet."
 //
-// A malformed (non-uuid) id raises 22P02 (invalid_text_representation) at
-// Postgres -- surfaced via rows.Err() after the Next() loop ends (not the
-// initial tx.Query() error, which only covers client-side encoding
-// failures), mapped to ErrValidation, mirroring Get/Update/Transition
-// (Stage 1 GAP 1) -- NOT ErrNotFound.
+// A malformed (non-uuid) id raises 22P02 at Postgres, surfaced via
+// rows.Err() after the Next() loop (not tx.Query()'s own error, which only
+// covers client-side encoding) -- mapped to ErrValidation like
+// Get/Update/Transition, not ErrNotFound.
 func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) {
 	var result []StatusChange
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

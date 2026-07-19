@@ -116,17 +116,12 @@ type lineItemWire struct {
 // field for the shared {"error":"..."} envelope -- same convention as
 // portfolio_test.go's entityBody.
 //
-// Violations/RuleSetVersionID (task-113/M4-04-06, GAPI-02/03) and
-// RuleSetVersion (task-161/M4-22-02) are additive: no existing Create/Get/
-// List/Transition test above references any of the three, so decoding
-// their responses into this wider struct leaves them simply zero-valued,
-// unchanged behaviour for every test already in this file.
+// Violations/RuleSetVersionID/RuleSetVersion are additive: no pre-existing
+// test references any of the three, so they decode as zero values there.
 //
-// RuleSetVersion decodes JSON null and an ABSENT key to the identical Go
-// zero value (nil *int) -- it cannot tell them apart. Only
-// TestValidateHandler_NilVersionMarshalsNull needs that distinction, and it
-// asserts on raw response bytes instead of this struct for exactly that
-// reason.
+// RuleSetVersion can't distinguish JSON null from an absent key (both
+// decode to nil *int) -- TestValidateHandler_NilVersionMarshalsNull checks
+// raw bytes instead, for that reason.
 type invoiceBody struct {
 	ID               string          `json:"id"`
 	EntityID         string          `json:"entity_id"`
@@ -1234,28 +1229,6 @@ func TestValidateHandler_MalformedID400(t *testing.T) {
 }
 
 // --- Rule-set version on the validate response (task-161/M4-22-02) --------
-//
-// Spec-to-test map (task-161's Test Specs table):
-//
-//	#1 TestValidateHandler_ExposesRuleSetVersion
-//	#2 TestValidateHandler_ResponseIsAdditive
-//	#3 TestValidateHandler_NilVersionMarshalsNull
-//	#4 TestValidateHandler_ViolationsStillCarryVersion
-//	#5 TestValidateHandler_UpstreamErrorsUnchanged
-//
-// All five inject a `validate` closure with the NEW three-return-value
-// signature (Invoice, int, error) -- ValidateHandler's own scaffold
-// signature change, the same mechanical plumbing shared by the 9
-// pre-existing GAPI-01..09 tests above (each updated in place to add a
-// third `0` return, never altering what they assert).
-//
-// #2 and #5 are, like GAPI-16/17 above, boundary/regression coverage
-// rather than feature discriminators -- they assert properties the
-// current scaffold ValidateHandler (handlers.go, which still discards the
-// evaluated version and writes the bare Invoice) already satisfies, and
-// are expected to STAY green once the real response type lands. #1/#3/#4
-// are the RED discriminators: each fails today because no rule_set_version
-// key is emitted at all yet.
 
 // TestValidateHandler_ExposesRuleSetVersion (#1): a 200 response must
 // carry rule_set_version as the stubbed gate's evaluated version,
@@ -1287,13 +1260,9 @@ func TestValidateHandler_ExposesRuleSetVersion(t *testing.T) {
 	}
 }
 
-// TestValidateHandler_ResponseIsAdditive (#2): decoding the response body
-// into the EXISTING Invoice type must still succeed, and every field must
-// match the stub's invoice exactly -- proving the new rule_set_version
-// sibling key does not rename, move, or otherwise disturb any field
-// already on the wire. Boundary/regression coverage for the new field's
-// additivity (see this section's header comment) -- not a discriminator
-// for whether the feature itself is implemented.
+// TestValidateHandler_ResponseIsAdditive (#2): decoding into the existing
+// Invoice type must still succeed with every field matching exactly -- the
+// new rule_set_version sibling key must not rename or move anything.
 func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1327,13 +1296,10 @@ func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
 	}
 }
 
-// TestValidateHandler_NilVersionMarshalsNull (#3): when the gate stub
-// reports version 0 ("nothing evaluated" -- Gate.Evaluate's own zero-value
-// convention, gate.go's file header), the response body must carry the
-// literal JSON `"rule_set_version":null` -- checked on RAW bytes, never a
-// decoded struct: json.Unmarshal cannot distinguish an explicit null from
-// an absent key, and that distinction is the entire reason task-161's
-// plan picked *int over int.
+// TestValidateHandler_NilVersionMarshalsNull (#3): gate version 0 ("nothing
+// evaluated") must marshal to the literal `"rule_set_version":null` --
+// checked on raw bytes, since json.Unmarshal can't distinguish null from an
+// absent key.
 func TestValidateHandler_NilVersionMarshalsNull(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1350,13 +1316,8 @@ func TestValidateHandler_NilVersionMarshalsNull(t *testing.T) {
 	if !strings.Contains(body, `"rule_set_version":null`) {
 		t.Errorf("body = %s, want it to contain the literal \"rule_set_version\":null", body)
 	}
-	// Constructed at runtime (key and value joined via fmt.Sprintf) rather than
-	// as a single contiguous source literal, which would trip
-	// internal/validation's repo-wide JSON-quoted-version grep guard
-	// (TestRuleSetV2_JSONQuotedVersionPinNotPresent): its grep cannot
-	// distinguish this negative assertion (this exact byte sequence must
-	// never appear on the wire) from a pinned fixture value. Same assertion,
-	// grep-invisible source form.
+	// fmt.Sprintf, not a literal: a literal ":0" here would trip
+	// internal/validation's TestRuleSetV2_JSONQuotedVersionPinNotPresent grep guard.
 	forbiddenZeroPin := fmt.Sprintf(`"rule_set_version":%d`, 0)
 	if strings.Contains(body, forbiddenZeroPin) {
 		t.Errorf("body = %s, must NEVER stamp a run with the literal :0 for rule_set_version -- 0 means "+
@@ -1365,10 +1326,8 @@ func TestValidateHandler_NilVersionMarshalsNull(t *testing.T) {
 }
 
 // TestValidateHandler_ViolationsStillCarryVersion (#4, AC #4): a blocking
-// violation must still 200 with violations present as ordinary data AND a
-// populated rule_set_version -- [error semantics] is not weakened by this
-// story: a blocked verdict is still a real evaluated verdict, against a
-// real rule-set version, and the caller needs to know which one.
+// violation still 200s with violations AND a populated rule_set_version --
+// [error semantics] is not weakened by this story.
 func TestValidateHandler_ViolationsStillCarryVersion(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1392,12 +1351,9 @@ func TestValidateHandler_ViolationsStillCarryVersion(t *testing.T) {
 	}
 }
 
-// TestValidateHandler_UpstreamErrorsUnchanged (#5, AC #5): the 502/503
-// error paths (GAPI-07/08 above) must behave IDENTICALLY -- same status
-// codes, same non-empty {"error":...} body -- and must NEVER carry a
-// rule_set_version key on an outage response, which reached no verdict at
-// all. Boundary/regression coverage (see this section's header comment):
-// the error paths are untouched by this story's plan.
+// TestValidateHandler_UpstreamErrorsUnchanged (#5, AC #5): 502/503 error
+// paths behave identically to before and must never carry a
+// rule_set_version key -- no verdict was reached.
 func TestValidateHandler_UpstreamErrorsUnchanged(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 
@@ -1432,26 +1388,12 @@ func TestValidateHandler_UpstreamErrorsUnchanged(t *testing.T) {
 	}
 }
 
-// --- QA Mode B adversarial coverage (task-161/M4-22-02) --------------------
-//
-// The RED-then-green suite above (#1-#6, authored Stage 1) proves the
-// feature works via DECODED structs. None of it asserts on RAW JSON keys,
-// and none of it checks whether GET/List -- which share the domain Invoice
-// type with validateResponse -- stayed unpolluted. These four tests close
-// exactly those gaps, per QA's mandate to extend coverage the AC-derived
-// specs did not include, not to re-author them.
+// --- QA Mode B adversarial coverage: raw JSON keys, GET/List pollution ----
 
-// TestValidateHandler_TopLevelKeysNotNested (QA Mode B adversarial):
-// validateResponse embeds Invoice (handlers.go), which Go's encoding/json
-// flattens onto the SAME top-level object as its RuleSetVersion sibling.
-// #2/TestValidateHandler_ResponseIsAdditive proves this INDIRECTLY (decoding
-// into the bare Invoice type would leave every field zeroed if the wire
-// nested them under a wrapper key, and reflect.DeepEqual would then fail) --
-// this test proves it DIRECTLY, on raw JSON keys: every Invoice field name
-// is a literal top-level key, no "invoice"/"result"/"data" wrapper exists,
-// and the key set is EXACTLY the known Invoice fields plus one sibling (an
-// extra or missing key fails loudly rather than silently decoding as a zero
-// value).
+// TestValidateHandler_TopLevelKeysNotNested: validateResponse embeds
+// Invoice, which encoding/json flattens onto one top-level object -- checks
+// raw keys directly: no "invoice"/"result"/"data" wrapper, and the key set
+// is exactly the known Invoice fields plus one sibling.
 func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1506,19 +1448,10 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 	}
 }
 
-// TestGetHandler_NoRuleSetVersionKey (QA Mode B adversarial): GET
-// /v1/invoices/{id} shares the domain Invoice type with validateResponse
-// but must NOT gain rule_set_version -- Invoice is scanned 1:1 from the
-// invoices table (validateResponse's own doc comment in handlers.go) and is
-// shared by Get/List, neither of which calls the gate. This is the AC #2
-// boundary most at risk of silent drift: a future change that moved
-// RuleSetVersion onto the Invoice struct itself, instead of keeping it on
-// the validateResponse wrapper, would leak an always-null/stale key here
-// with every existing Get test still green (none of them inspect raw
-// bytes). Checked on raw bytes for the EXACT key `"rule_set_version":`
-// (colon immediately after the closing quote) -- a naive substring check
-// for "rule_set_version" would also match the legitimately-present
-// "rule_set_version_id".
+// TestGetHandler_NoRuleSetVersionKey: GET shares the domain Invoice type
+// with validateResponse but must NOT gain rule_set_version -- that field
+// belongs only to the validate wrapper. Checked on raw bytes for the exact
+// key `"rule_set_version":` so it can't false-match rule_set_version_id.
 func TestGetHandler_NoRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1542,10 +1475,8 @@ func TestGetHandler_NoRuleSetVersionKey(t *testing.T) {
 	}
 }
 
-// TestListHandler_NoRuleSetVersionKey (QA Mode B adversarial): same
-// pollution check as TestGetHandler_NoRuleSetVersionKey immediately above,
-// for List -- each invoices[] item is the same shared domain Invoice type
-// and must stay just as unpolluted.
+// TestListHandler_NoRuleSetVersionKey: same pollution check as
+// TestGetHandler_NoRuleSetVersionKey, for List.
 func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invID := uuid.NewString()
@@ -1569,15 +1500,9 @@ func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
 	}
 }
 
-// TestValidateHandler_ErrorBodiesCarryNoRuleSetVersionKey (QA Mode B
-// adversarial, AC #5): #5/TestValidateHandler_UpstreamErrorsUnchanged above
-// already raw-byte-checks the 502/503 paths; this closes the same check for
-// the other four error paths AC #5 also declares untouched
-// (401/404/409x2/400) -- none of GAPI-01/04/05/06/09's own assertions
-// inspect the raw body for this new key. writeError's {"error": msg} body
-// carries no Invoice fields at all, so this is expected to be trivially
-// true -- but "expected" is not "proven": assert it on raw bytes across
-// every remaining error status this story's plan leaves untouched.
+// TestValidateHandler_ErrorBodiesCarryNoRuleSetVersionKey (AC #5): raw-byte
+// check that the remaining error paths (401/404/409x2/400) carry no
+// rule_set_version key either.
 func TestValidateHandler_ErrorBodiesCarryNoRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -2036,32 +1961,14 @@ func TestEditHandler_UnknownFieldIgnored200(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// task-160 / M4-22-01 -- Mode A RED specs for GET /v1/invoices/{id}/history
-// (HistoryHandler), corrected Test Specs table (Stage 1 architecture
-// validation, 2026-07-19). Runs against history_qa_scaffold.go's blanket-501
-// HistoryHandler stub -- every test below fails on the status-code/body
-// assertion it names, not a compile error.
+// --- GET /v1/invoices/{id}/history (HistoryHandler, task-160/M4-22-01) ----
 //
-// Spec-to-test map (corrected Test Specs table, task-160):
+// A malformed id maps to 400 (ErrValidation), not 404 -- matching
+// Get/Update/Transition. Store.History's own 22P02 mapping is pinned
+// separately by malformed_id_test.go's "History" subtest.
 //
-//	#1 TestHistoryHandler_Unauthenticated401
-//	#2 TestHistoryHandler_GenesisOnly
-//	#3 TestHistoryHandler_OmitsInternalColumns
-//	#4 TestHistoryHandler_NotFoundMapsTo404
-//	#5 TestHistoryHandler_MalformedIDIs400 (CORRECTED by Stage 1 GAP 1:
-//	   renamed from "...Is404"; a malformed id is a 400/ErrValidation
-//	   mapping, not 404 -- exercised here via a fake store returning
-//	   ErrValidation, mirroring TestCreateHandler_StoreValidationError400.
-//	   The store's OWN 22P02->ErrValidation mapping is pinned separately, at
-//	   the DB layer, by malformed_id_test.go's new "History" subtest inside
-//	   TestStore_MalformedIDIsValidationError.)
-//
-// #6/#7/#8 (DB-backed, ordering / cross-tenant / unset-GUC) live in
-// cross_tenant_integration_test.go as TestRLS_InvoiceHistory_*, following
-// this file's own precedent (TestRLS_InvoicesStoreChildWritesTenantScoped
-// etc. live there, not here).
-// ---------------------------------------------------------------------------
+// DB-backed ordering/cross-tenant/unset-GUC coverage lives in
+// cross_tenant_integration_test.go as TestRLS_InvoiceHistory_*.
 
 // historyChangeWire mirrors the GET /v1/invoices/{id}/history response
 // element shape (task-160) -- json tags identical to the (future)
@@ -2073,13 +1980,9 @@ type historyChangeWire struct {
 	ChangedAt  time.Time `json:"changed_at"`
 }
 
-// doInvoiceHistory drives GET /v1/invoices/{id}/history -- cloned from
-// doInvoiceGet's identity-injection/path-value shape. Returns the raw
-// recorder (not a decoded body): unlike every other route in this file,
-// History's SUCCESS body is a bare JSON ARRAY while its ERROR body is the
-// shared {"error":"..."} OBJECT -- two different top-level JSON kinds that
-// cannot share one decode target, so each test decodes for the shape it
-// expects only AFTER checking the status code.
+// doInvoiceHistory drives GET /v1/invoices/{id}/history. Returns the raw
+// recorder, not a decoded body: success is a bare JSON array, error is the
+// {"error":...} object -- two shapes that can't share one decode target.
 func doInvoiceHistory(t *testing.T, history func(ctx context.Context, id string) ([]StatusChange, error), id *auth.Identity, invoiceID string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID+"/history", nil)
@@ -2093,9 +1996,8 @@ func doInvoiceHistory(t *testing.T, history func(ctx context.Context, id string)
 }
 
 // decodeInvoiceErrorBody decodes rec's body as the shared {"error":"..."}
-// envelope -- used by the History tests below instead of doInvoiceGet's
-// invoiceBody-returning helpers, since History's success shape is a bare
-// array, not an object.
+// envelope -- History's success shape is a bare array, not an object, so
+// it can't reuse doInvoiceGet's decoder.
 func decodeInvoiceErrorBody(t *testing.T, rec *httptest.ResponseRecorder) invoiceBody {
 	t.Helper()
 	var resp invoiceBody
@@ -2199,11 +2101,8 @@ func TestHistoryHandler_NotFoundMapsTo404(t *testing.T) {
 	}
 }
 
-// TestHistoryHandler_MalformedIDIs400 (#5, CORRECTED by Stage 1 GAP 1): the
-// store returning ErrValidation must map to 400, NOT 404 -- matching
-// Get/Update/Transition's existing 22P02->ErrValidation->400 behaviour.
-// Store.History's OWN 22P02 mapping is pinned separately at the DB layer by
-// malformed_id_test.go's "History" subtest.
+// TestHistoryHandler_MalformedIDIs400 (#5): ErrValidation maps to 400, not
+// 404 -- matching Get/Update/Transition.
 func TestHistoryHandler_MalformedIDIs400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
@@ -2219,16 +2118,10 @@ func TestHistoryHandler_MalformedIDIs400(t *testing.T) {
 	}
 }
 
-// TestHistoryHandler_GenesisOnly_RawWireShape (QA Mode B adversarial): the
-// RAW response bytes for a genesis-only history -- not a decoded struct --
-// must (1) be a top-level JSON array (starts with '[', ends with ']'), and
-// (2) carry the from_status key with the JSON literal null, not "" and not
-// an omitted key. TestHistoryHandler_GenesisOnly (#2, above) only decodes
-// into []historyChangeWire and checks the Go pointer is nil -- that would
-// pass identically whether the wire carried `"from_status":null` or omitted
-// the key entirely (e.g. an accidental `omitempty` on StatusChange.FromStatus),
-// since a decoded *Status zero-values to nil either way. Only a raw-bytes
-// check can tell the two apart.
+// TestHistoryHandler_GenesisOnly_RawWireShape: raw bytes, not a decoded
+// struct -- checks the top-level shape is a JSON array and from_status
+// carries literal null, not "" or an omitted key (an accidental omitempty
+// on StatusChange.FromStatus would decode identically to #2 above).
 func TestHistoryHandler_GenesisOnly_RawWireShape(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()

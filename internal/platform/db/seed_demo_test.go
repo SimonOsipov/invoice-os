@@ -1,36 +1,17 @@
-// [M4-22-03] Test-first (RED) suite for the demo-curation + rule-re-enable half of
-// db.Seed (task-162): folding the former standalone reset script's global rule
-// re-enable and the 27 curated business_entities rows into db/seed.dev.sql as an
-// idempotent UPSERT, per binding decision [demo-seed-shape]. Pre-authored BEFORE
-// that SQL exists — the
-// checked-in db/seed.dev.sql only seeds tenants/memberships, so every case below is
-// RED against it on an assertion (wrong row count, rule still disabled), never on a
-// missing symbol or connection error; each test's doc comment says exactly which
-// assertion fails today.
+// [M4-22-03] Suite for the demo-curation + rule-re-enable half of db.Seed
+// (task-162): the boot-time UPSERT of 27 curated business_entities rows into
+// the demo tenant, plus the global rule re-enable, per binding decision
+// [demo-seed-shape].
 //
-// Design mirrors this package's established conventions:
-//   - Env-gated skip on DATABASE_SUPERUSER_URL only (db.Seed runs exclusively as the
-//     superuser — tenants/business_entities are FORCE RLS), reusing seed_test.go's
-//     requireSuperuserDSN/bootstrapSuperuserPool rather than duplicating them.
-//   - Deliberately does NOT use the package's shared RLS harness (rls_harness_test.go,
-//     requireHarness/h) — that harness additionally gates on DATABASE_URL/
-//     DATABASE_MIGRATION_URL/DATABASE_READER_URL, all four required simultaneously,
-//     which is a heavier precondition than this suite (and seed_test.go/
-//     provision_test.go) needs. It owns the package-level entityRow type and
-//     demoTenantID/honeywellTenantID constants below (relocated here by M4-22-04
-//     from the deleted demo_reset_test.go, this file being their principal
-//     consumer now that that file is gone — provision_test.go also depends on
-//     demoTenantID), and defines its own pool-parameterized fetch/reset helpers
-//     rather than h.super-bound ones, since this suite's pool comes from
-//     bootstrapSuperuserPool(t, superDSN), not h.super.
-//   - "against a migrated, empty database" (Test Spec row 1) is realized against the
-//     shared dev/CI Postgres every other test in this package depends on by
-//     explicitly clearing the demo tenant's own business_entities rows first
-//     (resetDemoBusinessEntities) rather than requiring a literal empty schema — the
-//     same practical interpretation TestSeedCreatesCuratedDemoEntities below relies
-//     on for its own "empty portfolio" precondition.
-//   - No t.Parallel(): every test shares the same demo-tenant business_entities rows
-//     and the same global `rules` table.
+// Design notes:
+//   - Env-gated on DATABASE_SUPERUSER_URL only (db.Seed runs as the
+//     superuser; tenants/business_entities are FORCE RLS), reusing
+//     seed_test.go's requireSuperuserDSN/bootstrapSuperuserPool.
+//   - Does not use the package's shared RLS harness (rls_harness_test.go) —
+//     that harness requires all four DB DSNs; this suite only needs the
+//     superuser one.
+//   - No t.Parallel(): every test shares the demo tenant's business_entities
+//     rows and the global rules table.
 package db_test
 
 import (
@@ -48,34 +29,27 @@ import (
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// ---- Package-level fixtures owned by this file (relocated here by M4-22-04 from
-// the deleted internal/platform/db/demo_reset_test.go, whose behavior was
-// re-specified test-first in this suite by M4-22-03). provision_test.go also
-// depends on demoTenantID. ----
-
-// demoTenantID is the hardcoded demo-tenant fixture id (db/seed.dev.sql) — Okafor
-// & Partners, kind='firm'.
+// demoTenantID is the demo-tenant fixture id (db/seed.dev.sql) — Okafor &
+// Partners, kind='firm'.
 const demoTenantID = "11111111-1111-1111-1111-111111111111"
 
 // honeywellTenantID is the second seeded tenant fixture (db/seed.dev.sql) —
 // Honeywell Group, kind='in_house'.
 const honeywellTenantID = "22222222-2222-2222-2222-222222222222"
 
-// entityRow captures a business_entities row's presentable identity — name, TIN, and
-// status — the three columns the curated dataset (story § Curated dataset) fixes.
-// Deliberately excludes id: entity ids use the table default (gen_random_uuid()) and
-// are explicitly not part of the presentable state (System Design, "Clear + curate").
+// entityRow is a business_entities row's presentable identity. id is
+// excluded: entity ids use gen_random_uuid() and aren't part of the fixed
+// curated state.
 type entityRow struct {
 	name   string
 	tin    string
 	status string
 }
 
-// curatedDemoEntities is the 27 curated business_entities rows (name, tin, status)
-// db/seed.dev.sql's UPSERT converges the demo tenant to, transcribed verbatim from
-// that file — the exact set task-162 requires. 21 active + 6 archived. Order here
-// matches db/seed.dev.sql's INSERT order; comparisons below sort before asserting
-// so this literal's ordering is not itself a hidden assumption.
+// curatedDemoEntities is the 27 curated business_entities rows (21 active,
+// 6 archived) db/seed.dev.sql's UPSERT converges the demo tenant to.
+// Comparisons below sort both sides first, so this literal's declaration
+// order isn't a hidden assumption.
 var curatedDemoEntities = []entityRow{
 	{name: "Adeyemi & Sons Trading Ltd", tin: "10012345-0001", status: "active"},
 	{name: "Chukwu Global Ventures Ltd", tin: "10023456-0002", status: "active"},
@@ -106,10 +80,8 @@ var curatedDemoEntities = []entityRow{
 	{name: "Ekene Auto Parts Ltd", tin: "10278901-0027", status: "archived"},
 }
 
-// resetDemoBusinessEntities clears every business_entities row for the demo tenant
-// (11111111-…), giving each test a known, empty-for-that-tenant starting point —
-// this suite's stand-in for "against a migrated, empty database" against a shared
-// DB. Scoped strictly by tenant_id, so it never touches any other tenant's rows.
+// resetDemoBusinessEntities clears the demo tenant's business_entities rows
+// so each test starts from empty, without touching other tenants.
 func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(),
@@ -119,11 +91,8 @@ func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
-// fetchDemoBusinessEntities returns every business_entities row for tenantID as
-// (name, tin, status) tuples, ordered by name, queried via pool — the
-// pool-parameterized counterpart to demo_reset_test.go's h.super-bound
-// fetchEntities, needed because this suite's pool comes from
-// bootstrapSuperuserPool(t, superDSN), not the shared RLS harness.
+// fetchDemoBusinessEntities returns tenantID's business_entities rows as
+// (name, tin, status), ordered by name.
 func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string) []entityRow {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
@@ -149,10 +118,8 @@ func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string
 	return got
 }
 
-// sortedEntityRows returns a copy of rows sorted by name, matching
-// fetchDemoBusinessEntities's ORDER BY name — so curatedDemoEntities (transcribed in
-// db/seed.dev.sql's own INSERT order) can be compared directly against a fetched,
-// name-ordered result with reflect.DeepEqual.
+// sortedEntityRows sorts a copy of rows by name, matching
+// fetchDemoBusinessEntities's ORDER BY.
 func sortedEntityRows(rows []entityRow) []entityRow {
 	out := make([]entityRow, len(rows))
 	copy(out, rows)
@@ -160,15 +127,9 @@ func sortedEntityRows(rows []entityRow) []entityRow {
 	return out
 }
 
-// TestSeedCreatesCuratedDemoEntities: Test Spec row 1 / Core AC 4 (task-162 AC-1).
-// After db.Seed runs against an empty demo-tenant portfolio, the demo tenant must
-// have exactly the 27 curated business_entities rows — 21 active / 6 archived — and
-// the (name, tin, status) set must equal the curated list (curatedDemoEntities) exactly.
-//
-// RED against the checked-in db/seed.dev.sql (tenants/memberships only, no
-// business_entities logic): Seed leaves the demo tenant's portfolio untouched, so
-// fetchDemoBusinessEntities returns 0 rows — this fails the "got equals the 27-row
-// curated set" reflect.DeepEqual assertion, not a compile/connection error.
+// TestSeedCreatesCuratedDemoEntities: Test Spec row 1 (task-162 AC-1). After
+// Seed runs against an empty demo-tenant portfolio, the demo tenant has
+// exactly the 27 curated rows (21 active / 6 archived).
 func TestSeedCreatesCuratedDemoEntities(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -203,15 +164,9 @@ func TestSeedCreatesCuratedDemoEntities(t *testing.T) {
 	}
 }
 
-// TestSeedDemoEntitiesIsIdempotent: Test Spec row 2 (task-162 AC-2). Running db.Seed
-// twice must leave exactly 27 rows for the demo tenant — no duplication, no
-// duplicate TIN — and the (name, tin, status) set must be byte-identical across both
-// runs (the upsert conflict target is business_entities_tenant_tin_uq, so a second
-// run with unchanged curated data must be a true no-op on top of the first).
-//
-// RED against the checked-in db/seed.dev.sql: business_entities stays untouched by
-// either call, so len(first) = 0, failing the "want 27 after the FIRST Seed"
-// assertion, not a compile/connection error.
+// TestSeedDemoEntitiesIsIdempotent: Test Spec row 2 (task-162 AC-2). Running
+// Seed twice leaves exactly 27 rows, no duplicate TIN, and byte-identical
+// results across both runs.
 func TestSeedDemoEntitiesIsIdempotent(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -250,19 +205,9 @@ func TestSeedDemoEntitiesIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestSeedRepairsMutatedDemoEntity: Test Spec row 3 (task-162 AC-3) — the test that
-// distinguishes a real `DO UPDATE` upsert from a no-op `DO NOTHING`. Seeds the
-// curated baseline, mutates one curated row's name and status in place (same tenant,
-// same TIN — the conflict target), then re-runs Seed: the row must be restored to
-// its curated (name, status), not left at the mutated values.
-//
-// RED against the checked-in db/seed.dev.sql: Seed never establishes the curated
-// baseline in the first place (business_entities stays empty), so the "read back the
-// repaired row" query at the end finds no row at all — this fails on the readback
-// error/assertion, not a compile/connection error. (Once db/seed.dev.sql exists but
-// uses ON CONFLICT ... DO NOTHING instead of DO UPDATE, this test is exactly what
-// would catch that: the mutated name/status would survive the second Seed
-// unchanged.)
+// TestSeedRepairsMutatedDemoEntity: Test Spec row 3 (task-162 AC-3). Mutates
+// a curated row's name/status in place, then re-runs Seed: the row must be
+// restored — proves the upsert is DO UPDATE, not DO NOTHING.
 func TestSeedRepairsMutatedDemoEntity(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -313,25 +258,11 @@ func TestSeedRepairsMutatedDemoEntity(t *testing.T) {
 	}
 }
 
-// TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) — the regression
-// guard for the dropped `DELETE FROM business_entities WHERE tenant_id = <demo>`
-// (the former standalone reset script's DELETE, deliberately NOT ported per binding decision
-// [demo-seed-shape]: a per-PR env never accumulates rows, so there is nothing to
-// clear, and porting the DELETE risks it one day being mis-scoped). Seeds a
-// foreign-tenant (Honeywell, 2222…) business_entities probe row first, runs Seed,
-// and asserts the probe survives byte-identical and no curated demo rows leak into
-// Honeywell's portfolio.
-//
-// Also asserts the demo tenant itself reaches 27 curated rows in the SAME test, so
-// this is a meaningful isolation check (the write reaches its own tenant) rather than
-// a vacuous "Seed touches business_entities nowhere at all" pass.
-//
-// RED against the checked-in db/seed.dev.sql: business_entities logic doesn't exist
-// yet, so the demo-tenant curated-count assertion fails first (0 != 27) — a genuine
-// assertion failure, not a compile/connection error. (The foreign-tenant-untouched
-// assertion alone would trivially — and misleadingly — pass today, since Seed
-// currently writes to business_entities nowhere at all; the paired curated-count
-// assertion is what keeps this test meaningfully RED.)
+// TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) —
+// regression guard for the dropped cross-tenant DELETE ([demo-seed-shape]).
+// Seeds a foreign-tenant probe row, runs Seed, and asserts the probe is
+// untouched while the demo tenant reaches its 27 curated rows (the paired
+// assertion, so this isn't a vacuous "touches nothing" pass).
 func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -363,8 +294,7 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 		t.Fatalf("Seed: %v", err)
 	}
 
-	// Precondition for the isolation check below to be meaningful: Seed must
-	// actually write the curated rows for its own tenant.
+	// Meaningful only if Seed actually wrote its own tenant's rows first.
 	demoAfter := fetchDemoBusinessEntities(t, pool, demoTenantID)
 	if len(demoAfter) != 27 {
 		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 27", len(demoAfter))
@@ -379,20 +309,11 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	}
 }
 
-// TestSeedReenablesDisabledRules: Test Spec row 5 (task-162 AC-5), folding in the
-// idempotence half of the same row (RALPH coverage items 4+5): disables
-// 'vat-standard-rate', runs Seed, asserts it (and every rule sharing that key across
-// rule_set_versions, via the WHERE key = $1 predicate — key is unique only per
-// (rule_set_version_id, key)) is re-enabled and the global disabled count is 0; runs
-// Seed a SECOND time and asserts it is still 0 (idempotent) with no error — proving
-// the UPDATE rules SET enabled = true WHERE enabled = false does not trip the M4-17
-// rules_content_lock trigger (rules_content_lock's carve-out is enabled-only; ANY
-// error from either Seed call here means either the repair failed or the lock fired).
-//
-// RED against the checked-in db/seed.dev.sql (no rules logic at all): the rule stays
-// disabled after the first Seed, failing the "count(rules WHERE key=... AND
-// enabled=false) == 0" assertion — a genuine assertion failure, not a
-// compile/connection error.
+// TestSeedReenablesDisabledRules: Test Spec row 5 (task-162 AC-5). Disables
+// a rule, runs Seed, and asserts it (and every rule sharing that key across
+// rule_set_versions) is re-enabled; a second Seed stays idempotent. The
+// enabled-only UPDATE must not trip the M4-17 rules_content_lock trigger —
+// its carve-out only allows toggling `enabled`, which is exactly this repair.
 func TestSeedReenablesDisabledRules(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -421,8 +342,8 @@ func TestSeedReenablesDisabledRules(t *testing.T) {
 		t.Errorf("count(rules WHERE enabled=true) = %d after Seed, want %d (the full rule count — no rule left disabled)", enabledRules, totalRules)
 	}
 
-	// Second Seed: idempotent, and must not trip the immutability lock either
-	// (the active rule set is sealed — see M4-17/M4-18).
+	// Idempotent, and must not trip the same immutability lock either
+	// (sealed rule set — see M4-17/M4-18).
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("second Seed (idempotency): %v", err)
 	}
@@ -432,25 +353,17 @@ func TestSeedReenablesDisabledRules(t *testing.T) {
 	}
 }
 
-// destructiveStatementPattern matches DELETE, TRUNCATE, or DROP as whole SQL
-// keywords (word-bounded, case-insensitive) — TestSeedFileHasNoDestructiveStatements
-// below strips `--` comments first so a comment merely mentioning one of these words
-// (e.g. explaining why the file must not contain one) cannot trip a false positive.
+// destructiveStatementPattern matches DELETE, TRUNCATE, or DROP as whole
+// keywords; TestSeedFileHasNoDestructiveStatements strips `--` comments
+// first so a comment mentioning one of these words can't false-positive.
 var destructiveStatementPattern = regexp.MustCompile(`(?i)\b(DELETE|TRUNCATE|DROP)\b`)
 
-// TestSeedFileHasNoDestructiveStatements: Test Spec row 6 (task-162 AC-7). A
-// source-level, no-database assertion that the embedded db/seed.dev.sql bytes
-// contain no DELETE, TRUNCATE, or DROP statement — mechanically pinning binding
-// decision [demo-seed-shape] ("do NOT port the DELETE") structurally, so a future
-// edit can't silently reintroduce a destructive statement into the boot-time seed.
-//
-// NOT RED by design (a regression-pinning guard, not new-behavior coverage,
-// matching TestRLS_DemoResetLeavesOtherTenantUntouched's precedent in
-// demo_reset_test.go): the checked-in db/seed.dev.sql already contains no
-// DELETE/TRUNCATE/DROP today (it only INSERTs tenants/memberships), so this test
-// already passes before task-162's SQL is added — it stays green through
-// implementation specifically because the executor's additions must not introduce
-// one.
+// TestSeedFileHasNoDestructiveStatements: Test Spec row 6 (task-162 AC-7).
+// Pins binding decision [demo-seed-shape] structurally: the embedded
+// db/seed.dev.sql must never contain DELETE, TRUNCATE, or DROP — a per-PR
+// env never accumulates rows, so the boot-time seed has nothing to clear,
+// and seed.dev.sql only UPSERTs the curated rows deliberately (never
+// deletes) so it can't clobber a tenant's own data.
 func TestSeedFileHasNoDestructiveStatements(t *testing.T) {
 	b, err := fs.ReadFile(dbsql.FS, "seed.dev.sql")
 	if err != nil {
@@ -471,27 +384,10 @@ func TestSeedFileHasNoDestructiveStatements(t *testing.T) {
 	}
 }
 
-// ---- QA adversarial coverage (task-162 verification pass) -------------------
-//
-// The tests below were added during QA verification of task-162, on top of the
-// architect's pre-authored Test Specs above. They target failure modes the
-// verification brief called out explicitly: a curated row DELETED entirely
-// (not just mutated, the case TestSeedRepairsMutatedDemoEntity already covers)
-// must self-heal on the next Seed; a non-curated junk row's ACTUAL survival
-// behavior under the deliberately-dropped DELETE (binding decision
-// [demo-seed-shape]) must be pinned rather than assumed; and the UPSERT's
-// partial-unique conflict target (tenant_id, tin) must never collide across
-// tenants sharing the same TIN value.
-
-// TestSeedRecreatesDeletedDemoEntity: adversarial coverage for AC-1/AC-3 — the
-// "self-healing after a failed E2E test cleanup" scenario binding decision
-// [demo-seed] exists for. TestSeedRepairsMutatedDemoEntity only proves a
-// mutated-in-place row is restored; it says nothing about a row an errant
-// DELETE (e.g. a failed E2E test's incomplete cleanup) removed entirely. Seeds
-// the curated baseline, deletes one curated row outright, then re-Seeds: the
-// row must reappear with its curated name/status — an UPSERT with no
-// corresponding DELETE is only a complete self-healing story if a MISSING row
-// is recreated, not just a mutated one repaired.
+// TestSeedRecreatesDeletedDemoEntity: adversarial coverage for AC-1/AC-3 —
+// TestSeedRepairsMutatedDemoEntity only proves a mutated row is restored;
+// this proves a fully DELETEd curated row is recreated too (e.g. after a
+// failed E2E test's incomplete cleanup).
 func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -531,15 +427,10 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 	}
 }
 
-// TestSeedLeavesJunkRowsInPlace: adversarial coverage pinning the ACTUAL (not
-// assumed) behavior of binding decision [demo-seed-shape]'s deliberately-dropped
-// DELETE: an extra, non-curated business_entities row for the demo tenant (e.g.
-// a "Demo Client" row a prior E2E test run left behind) SURVIVES Seed
-// untouched, because seed.dev.sql only UPSERTs the 27 curated TINs and never
-// deletes anything. This documents the accepted tradeoff — per
-// [demo-seed-shape], a freshly-provisioned per-PR env never accumulates rows,
-// so there is nothing to clear — rather than asserting a cleanup Seed was never
-// designed to perform.
+// TestSeedLeavesJunkRowsInPlace: pins the actual behavior of the dropped
+// DELETE ([demo-seed-shape]) — a non-curated row (e.g. an E2E leftover)
+// survives Seed untouched, since seed.dev.sql only upserts the 27 curated
+// TINs.
 func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -580,15 +471,10 @@ func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
 }
 
 // TestSeedSameTINUnderDifferentTenantIsSafe: adversarial coverage for the
-// UPSERT's conflict target, business_entities_tenant_tin_uq
-// (migrations/20260709155011_business_entities.sql:55-56) — a PARTIAL UNIQUE
-// index scoped to (tenant_id, tin), not a global unique-tin constraint. Seeds
-// Honeywell (2222…) with a row carrying one of the demo tenant's curated TIN
-// values, then runs Seed, and asserts: (a) Seed succeeds with no
-// unique-constraint error, (b) Honeywell's row is completely untouched, and (c)
-// the demo tenant still ends up with its own correctly curated row under that
-// same TIN — proving the index's per-tenant scoping actually holds under Seed,
-// not just in the schema definition.
+// UPSERT's conflict target, business_entities_tenant_tin_uq — a partial
+// unique index scoped to (tenant_id, tin), not global. Seeds Honeywell with
+// a row sharing one of the demo tenant's curated TINs, then asserts Seed
+// succeeds and neither tenant's row bleeds into the other.
 func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -643,19 +529,6 @@ func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
 	}
 }
 
-// ---- Test Spec row 7 (task-162 AC-6): "the guard still gates seeding" -------------
-//
-// Deliberately NOT authored as a new test here. TestProvisionSkippedWhenGuardOff
-// (provision_test.go:172) already covers this exact case: guard off
-// (ENVIRONMENT="production"), SuperuserDSN set to a deliberately-unparseable poison
-// value, MigrationDSN pointing at a real reachable migration DB. Because
-// db.Provision's boot order is bootstrap -> migrate -> seed, and Bootstrap/Seed both
-// share the SAME SuperuserDSN, if the guard failed to skip Seed (or Bootstrap) that
-// call would attempt to dial the poison DSN and Provision would return a non-nil
-// error containing its marker — which the test explicitly asserts does NOT appear.
-// So "Provision succeeds with the guard off and a poison superuser DSN" already
-// proves Seed (this subtask's new business_entities/rules writes included, once
-// implemented — Seed has no code path that inspects *what* seed.dev.sql contains
-// before deciding whether to run) was never invoked; a near-duplicate test asserting
-// the same thing again would add no new coverage. See task-162's Test Spec row 7 /
-// AC-6, and the M4-22-03 RALPH brief's explicit instruction not to re-author it.
+// Test Spec row 7 (task-162 AC-6, "the guard still gates seeding") is
+// covered by TestProvisionSkippedWhenGuardOff in provision_test.go — not
+// duplicated here.

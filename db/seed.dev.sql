@@ -36,36 +36,25 @@ INSERT INTO memberships (tenant_id, user_id, role) VALUES
     ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin')      -- Ngozi Balogun
 ON CONFLICT (tenant_id, user_id) DO NOTHING;
 
--- task-162 / M4-22-03: fold the former standalone reset script's rule re-enable +
--- curated demo portfolio into the boot-time seed, per binding decision
--- [demo-seed-shape]. A per-PR env is provisioned once from an empty DB, so there is
--- nothing to CLEAR here (unlike that script, which also cleared business_entities
--- first to converge a long-lived, hand-poked demo DB back to the curated set) — only
--- to CREATE and, on a re-run of `make dev-db` against an already-seeded DB, REPAIR.
--- Binding decision [demo-seed-shape] deliberately drops that script's
--- `DELETE FROM business_entities WHERE tenant_id = ...` rather than porting it:
--- a boot-time seed must stay destructive-statement-free (enforced by
--- TestSeedFileHasNoDestructiveStatements), and there is no accumulation to clear
--- in a freshly-provisioned env for a DELETE to be needed against.
+-- task-162/M4-22-03: fold the former reset script's rule re-enable + curated
+-- demo portfolio into the boot-time seed ([demo-seed-shape]). No DELETE is
+-- ported here: a boot-time seed must stay destructive-statement-free
+-- (TestSeedFileHasNoDestructiveStatements), and a fresh per-PR env has
+-- nothing to clear anyway -- only CREATE, or REPAIR on a re-seed.
 --
--- Rules are GLOBAL (no tenant_id, no RLS) — restore any rule a prior demo
--- kill-switched (e.g. vat-standard-rate) to the seeded default. Idempotent, and
--- safe under the M4-17 rules_content_lock / M4-18 active-implies-sealed lock:
--- the trigger's UPDATE branch treats an enabled-only change as the sanctioned
--- M3-06 kill-switch carve-out (rules of a sealed rule-set version stay
--- immutable for every OTHER column, but toggling enabled never touches those).
+-- Rules are GLOBAL (no tenant_id, no RLS): restores any rule a prior demo
+-- kill-switched (e.g. vat-standard-rate). Safe under the M4-17
+-- rules_content_lock / M4-18 active-implies-sealed lock -- an enabled-only
+-- UPDATE is the sanctioned M3-06 kill-switch carve-out; every other column
+-- of a sealed rule set stays immutable.
 UPDATE rules SET enabled = true WHERE enabled = false;
 
--- The 27 curated business_entities rows for the demo tenant (Okafor & Partners,
--- 11111111-…, created above) — the curated set fixed by binding decision
--- [demo-seed-shape] (21 active + 6 archived). Converted from the former standalone
--- reset script's DELETE-then-INSERT to
--- an idempotent UPSERT: DO UPDATE (not DO NOTHING) so a re-run REPAIRS a row a
--- prior demo hand-edited back to its curated name/status, rather than leaving the
--- edit in place. Conflict target is the partial unique index
--- business_entities_tenant_tin_uq (migrations/20260709155011_business_entities.sql:55-56)
--- — every row below carries a distinct, non-null TIN, so this always resolves to
--- that index rather than falling through to a plain insert.
+-- The 27 curated business_entities rows for the demo tenant (Okafor &
+-- Partners, 21 active + 6 archived, [demo-seed-shape]). DO UPDATE, not DO
+-- NOTHING, so a re-run REPAIRS a row a prior demo hand-edited back to its
+-- curated name/status. Conflict target is the partial unique index
+-- business_entities_tenant_tin_uq -- every row below has a distinct,
+-- non-null TIN, so this always resolves to that index.
 INSERT INTO business_entities (tenant_id, name, tin, status) VALUES
   ('11111111-1111-1111-1111-111111111111', 'Adeyemi & Sons Trading Ltd',       '10012345-0001', 'active'),
   ('11111111-1111-1111-1111-111111111111', 'Chukwu Global Ventures Ltd',       '10023456-0002', 'active'),

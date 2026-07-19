@@ -145,14 +145,11 @@ func TestRLS_InvoicesTransitionCrossTenantRefused(t *testing.T) {
 	}
 }
 
-// TestRLS_InvoiceHistory_ReturnsOrderedTransitions (Test Specs #6, task-160/
-// M4-22-01, Core AC #1/#2/#3): Store.History returns every
-// invoice_status_history row for the caller's own invoice, ordered
-// changed_at ASC, id ASC -- the genesis (NULL->draft) row first, then each
-// subsequent transition in the order it happened. Builds the fixture
-// through the REAL Store.Create/Store.Transition (both already shipped),
-// not a superuser seed, so the genesis row's own actor/timestamp are the
-// real ones a caller would see.
+// TestRLS_InvoiceHistory_ReturnsOrderedTransitions (Test Specs #6, AC
+// #1/#2/#3): Store.History returns every row for the caller's own invoice,
+// ordered changed_at ASC, id ASC -- genesis first, then each transition.
+// Builds the fixture via real Store.Create/Transition, not a superuser
+// seed, so genesis actor/timestamp are what a caller would actually see.
 func TestRLS_InvoiceHistory_ReturnsOrderedTransitions(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -205,17 +202,11 @@ func TestRLS_InvoiceHistory_ReturnsOrderedTransitions(t *testing.T) {
 	}
 }
 
-// TestRLS_InvoiceHistory_CrossTenantReturnsNothing (Test Specs #7 as
-// corrected by Stage 1 GAP 2, AC #5): an id belonging to another tenant
-// must resolve to ErrNotFound, exactly like a genuinely nonexistent id --
-// indistinguishable, zero rows leaked. This is the highest-value spec in
-// the set: Store.History is necessarily a MULTI-row tx.Query (unlike Get's
-// single-row tx.QueryRow), so Query()/Next() never yields pgx.ErrNoRows on
-// an RLS-filtered zero-row result -- a naive implementation that only
-// checks errors.Is(err, pgx.ErrNoRows) would silently return (nil, nil) ->
-// HTTP 200 [] here instead of ErrNotFound. The superuser read-back proves
-// real history rows exist for invoiceA (so this is not vacuously "nothing
-// to leak in the first place").
+// TestRLS_InvoiceHistory_CrossTenantReturnsNothing (Test Specs #7, AC #5):
+// another tenant's id must resolve to ErrNotFound, indistinguishable from a
+// genuinely nonexistent one -- see Store.History's doc comment (store.go)
+// for why that needs an explicit check. The superuser read-back proves real
+// rows exist for invoiceA, so this isn't vacuously "nothing to leak."
 func TestRLS_InvoiceHistory_CrossTenantReturnsNothing(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -247,14 +238,10 @@ func TestRLS_InvoiceHistory_CrossTenantReturnsNothing(t *testing.T) {
 }
 
 // TestRLS_InvoiceHistory_UnsetGUCFailsClosed (Test Specs #8, defense in
-// depth): Store.History wraps db.WithinRequestTenantTx like every other
-// Store method (store.go's package doc), which resolves app.current_tenant
-// from the caller's Identity in ctx and returns db.ErrNoTenant -- issuing
-// no SQL at all -- when no identity is present. Proven non-vacuous the same
-// way as TestRLS_InvoiceHistory_CrossTenantReturnsNothing above: a
-// superuser read-back confirms real history rows exist for the invoice
-// before the no-identity call, so "zero rows returned" is a genuine
-// fail-closed refusal, never an unscoped all-tenants query.
+// depth): no identity in ctx means db.WithinRequestTenantTx returns
+// db.ErrNoTenant before issuing any SQL. The superuser read-back confirms
+// real rows exist first, so this is a genuine fail-closed refusal, not a
+// vacuous "nothing to leak."
 func TestRLS_InvoiceHistory_UnsetGUCFailsClosed(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -282,25 +269,14 @@ func TestRLS_InvoiceHistory_UnsetGUCFailsClosed(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// task-160 / M4-22-01 -- QA Mode B adversarial DB-backed coverage, added
-// post-implementation. The Mode A specs above (#6/#7/#8) prove TENANT
-// scoping (RLS via app.current_tenant) but never exercise two invoices
-// belonging to the SAME tenant -- so none of them can catch a Store.History
-// that forgot the `WHERE invoice_id = $1` filter and instead relied on RLS
-// alone, which would silently return every invoice_status_history row
-// visible to the tenant (a same-tenant cross-invoice leak RLS cannot catch,
-// since RLS only scopes by tenant_id, not invoice_id).
-// ---------------------------------------------------------------------------
+// --- QA Mode B: DB-backed same-tenant, cross-invoice scoping ---------------
+// RLS only scopes by tenant_id, not invoice_id -- these catch a
+// Store.History that dropped its own `WHERE invoice_id = $1` filter.
 
-// TestRLS_InvoiceHistory_ScopedByInvoiceIDWithinSameTenant (QA Mode B,
-// highest-suspected gap): two invoices under the SAME tenant must never
-// bleed history into each other. invoiceA is transitioned twice (draft->
-// validated->queued, 3 rows); invoiceB stays untouched (1 genesis row).
-// History(invoiceA) must return exactly invoiceA's 3 rows -- none of
-// invoiceB's -- and History(invoiceB) must return exactly invoiceB's 1 row.
-// RLS alone cannot distinguish this case (both invoices share tenant_id);
-// only the store's own `WHERE invoice_id = $1` filter can.
+// TestRLS_InvoiceHistory_ScopedByInvoiceIDWithinSameTenant: two invoices
+// under the SAME tenant must never bleed history into each other. invoiceA
+// gets 2 transitions (3 rows); invoiceB stays at genesis (1 row). Each
+// History call must return only its own invoice's rows.
 func TestRLS_InvoiceHistory_ScopedByInvoiceIDWithinSameTenant(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -402,16 +378,12 @@ func TestRLS_InvoiceHistory_LongChainOrderedAndComplete(t *testing.T) {
 	}
 }
 
-// TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate (QA Mode B, AC
-// #2 full-stack proof): a freshly created invoice that has NEVER
-// transitioned must return exactly one entry {from_status:nil,
-// to_status:"draft"} through the REAL Store.Create + Store.History path.
-// TestHistoryHandler_GenesisOnly (handlers_test.go) already proves this at
-// the HTTP layer against a FAKE store; TestRLS_InvoiceHistory_
-// ReturnsOrderedTransitions proves the genesis row's shape but only AFTER a
-// transition has already run (len==2). Neither closes the specific gap this
-// test does: a never-transitioned invoice, through the real DB-backed
-// store, resolves to len==1.
+// TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate (AC #2): a
+// never-transitioned invoice must resolve to exactly one genesis row
+// through the real Store.Create + Store.History path -- neither
+// TestHistoryHandler_GenesisOnly (fake store) nor
+// TestRLS_InvoiceHistory_ReturnsOrderedTransitions (only checked
+// post-transition) covers this specific case.
 func TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

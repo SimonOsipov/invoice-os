@@ -48,8 +48,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 
+import { APP_PERSONAS, type Session } from '../auth'
 import {
   createImport,
+  makeImportAuth,
   normalizeReport,
   previewImport,
   rowErrorRows,
@@ -491,6 +493,13 @@ describe('createImport / previewImport: non-2xx / transport failures reject with
     expect((err as ApiError).kind).toBe('network')
   })
 
+  // QA Stage 4 note (task-171 orchestrator ruling, importApi.ts's xhrJson ontimeout
+  // comment): this pins the ERROR-MAPPING CONTRACT only (ontimeout -> ApiError{kind:
+  // network}), not live coverage. FakeXhr.fireTimeout() invokes the handler directly;
+  // xhrJson never sets `xhr.timeout`, so a real browser defaults it to 0 (infinite) and
+  // this handler cannot fire in production today. No AC in this subtask specifies a
+  // timeout duration; M4-08-07's deploy-gate e2e (60s/500-invoice perf budget) is the
+  // evidence base a future duration would come from.
   it('IMPAPI-17b: ontimeout rejects ApiError{kind:"network"}', async () => {
     const promise = createImport(fakeAuth(), base, makeReq(), () => {}, FakeXhrCtor)
     FakeXhr.last()?.fireTimeout()
@@ -549,5 +558,195 @@ describe('createImport / previewImport: non-2xx / transport failures reject with
     expect(apiErr.status).toBe(401)
     expect(apiErr.message).toBe('token expired')
     expect(apiErr.body).toEqual(UNAUTHORIZED_BODY)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// QA Stage 4 (Mode B) additions — adversarial / edge / negative coverage. These
+// are NOT part of the architect-pinned IMPAPI-01..20 spec map above (task-171
+// plan §C) and do not renumber into that series; they extend coverage into code
+// paths and boundary conditions the pinned specs do not exercise, found while
+// mutation-testing D1/uploadPercent/channel-separation for Stage 4 verification.
+
+function buildSession(token: string | null): Session {
+  return { persona: APP_PERSONAS.firm, token, me: null, verified: false }
+}
+
+describe('makeImportAuth: token-read semantics + onUnauthorized wiring (QA)', () => {
+  // No IMPAPI-01..20 spec ever imports or calls makeImportAuth — every one of them
+  // builds an ImportAuth by hand via the fakeAuth() helper. That leaves makeImportAuth's
+  // own lazy-token-read contract (D3, mirroring makeAuthedFetch's A5/A6 in
+  // portfolio.authedfetch.test.ts) completely unexercised. These three close that gap.
+
+  it('QA-01: reads session.token at CALL time, not construction time — mutating session.token after makeImportAuth() still picks up the new value on the next request', async () => {
+    const session = buildSession('old')
+    const auth = makeImportAuth(session, vi.fn())
+    session.token = 'new'
+
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+    await promise
+
+    const authHeader = FakeXhr.last()!.headers.find(([k]) => k.toLowerCase() === 'authorization')
+    expect(authHeader?.[1]).toBe('Bearer new')
+  })
+
+  it('QA-02: a null session.token issues the request with no Authorization header at all', async () => {
+    const auth = makeImportAuth(buildSession(null), vi.fn())
+
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+    await promise
+
+    const headers = FakeXhr.last()!.headers
+    expect(headers.some(([k]) => k.toLowerCase() === 'authorization')).toBe(false)
+  })
+
+  it('QA-03: onUnauthorized forwards to the caller-supplied onSignOut on a real 401, exactly once', async () => {
+    const onSignOut = vi.fn()
+    const auth = makeImportAuth(buildSession('tok'), onSignOut)
+
+    const promise = createImport(auth, base, makeReq(), () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(401, JSON.stringify(UNAUTHORIZED_BODY), 'Unauthorized')
+    await captureRejection(() => promise)
+
+    expect(onSignOut).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('normalizeReport: malformed/edge raw inputs (QA)', () => {
+  it('QA-04: undefined resolves with empty arrays and a null rule_set_version, never throws', () => {
+    expect(() => normalizeReport(undefined)).not.toThrow()
+    const result = normalizeReport(undefined)
+    expect(result.errors).toEqual([])
+    expect(result.invoice_violations).toEqual([])
+    expect(result.rule_set_version).toBeNull()
+  })
+
+  it('QA-05: null resolves identically to undefined', () => {
+    const result = normalizeReport(null)
+    expect(result.errors).toEqual([])
+    expect(result.invoice_violations).toEqual([])
+    expect(result.rule_set_version).toBeNull()
+  })
+
+  it('QA-06: an empty object resolves with empty arrays and a null rule_set_version', () => {
+    const result = normalizeReport({})
+    expect(result.errors).toEqual([])
+    expect(result.invoice_violations).toEqual([])
+    expect(result.rule_set_version).toBeNull()
+  })
+
+  it('QA-07: a bare array raw value never throws — documents current behavior (normalizeReport is not a validator per its own SCOPE comment); both channels still come out array-shaped', () => {
+    expect(() => normalizeReport(['a', 'b'])).not.toThrow()
+    const result = normalizeReport(['a', 'b'])
+    expect(result.errors).toEqual([])
+    expect(result.invoice_violations).toEqual([])
+    expect(result.rule_set_version).toBeNull()
+  })
+})
+
+describe('transport edge cases beyond IMPAPI-15..20 (QA)', () => {
+  it('QA-08: previewImport also rejects malformed on an unparseable 200 body — IMPAPI-18 only exercises this via createImport; same xhrJson code path, verified independently for the other caller', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, '{not valid json', 'OK')
+
+    const err = await captureRejection(() => promise)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('malformed')
+    expect((err as ApiError).status).toBe(200)
+  })
+
+  it('QA-09: a 200 with well-formed JSON of the wrong shape resolves without crashing — xhrJson only checks that the body PARSES, it does not validate shape', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, JSON.stringify({ unexpected: 'shape' }))
+
+    const result = await promise
+
+    expect(result).toEqual({ unexpected: 'shape' })
+  })
+
+  it('QA-10: a non-2xx with an HTML proxy error page (embedded quotes/braces that could confuse a naive parser) still surfaces as a usable ApiError, message falling back to statusText, body undefined', async () => {
+    const promise = createImport(fakeAuth(), base, makeReq(), () => {}, FakeXhrCtor)
+    const html = '<html><body><h1>502 Bad Gateway</h1><p>nginx says: "upstream {timed out}"</p></body></html>'
+    FakeXhr.last()?.respond(502, html, 'Bad Gateway')
+
+    const err = await captureRejection(() => promise)
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('http')
+    expect(apiErr.status).toBe(502)
+    expect(apiErr.message).toBe('Bad Gateway')
+    expect(apiErr.body).toBeUndefined()
+  })
+})
+
+describe('progress event ordering — edge cases (QA)', () => {
+  it('QA-11: previewImport surfaces no phase to any observer — firing progress/upload-load events on its underlying XHR before responding does not throw, and preview still resolves normally afterward', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    const xhr = FakeXhr.last()!
+
+    expect(() => xhr.fireProgress(10, 100)).not.toThrow()
+    expect(() => xhr.fireUploadLoad()).not.toThrow()
+    xhr.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+
+    const result = await promise
+    expect(result).toEqual(PREVIEW_BODY_CSV)
+  })
+
+  // DEFECT (documented, not fixed — QA does not fix implementation code): xhrJson's
+  // xhr.upload.onprogress handler has no post-settle guard, unlike xhr.onload (which
+  // checks `if (settled) return`). A progress event fired after the response already
+  // resolved the promise is still forwarded to onPhase, breaking the documented
+  // `sending* -> processing -> done` terminal-phase contract. NOT reachable via a
+  // spec-compliant real browser XHR — the platform's event ordering guarantees
+  // upload.onprogress/upload.onload complete before the main onload fires for a given
+  // request — so this is a latent robustness gap (e.g. against a buggy XHR polyfill),
+  // not a live production defect. Reported to the executor for a possible `settled`
+  // guard on upload.onprogress; QA does not add that guard itself.
+  it('QA-12: a stray progress event fired after the response already settled the promise is still forwarded to onPhase — no post-settle guard on upload.onprogress (documents current behavior; not reachable via a real, spec-compliant browser XHR)', async () => {
+    const phases: UploadPhase[] = []
+    const promise = createImport(fakeAuth(), base, makeReq(), (p) => phases.push(p), FakeXhrCtor)
+    const xhr = FakeXhr.last()!
+    xhr.fireUploadLoad()
+    xhr.respond(201, JSON.stringify(REPORT_BODY))
+    await promise
+
+    xhr.fireProgress(1, 1) // a real XHR would never emit this after its onload fired
+
+    expect(phases.map((p) => p.kind)).toEqual(['processing', 'done', 'sending'])
+  })
+})
+
+describe('concurrency (QA)', () => {
+  it('QA-13: previewImport and createImport in flight simultaneously, sharing one ImportAuth, do not cross-talk — each gets its own XHR instance, resolves its own body, and (for createImport) its own phase stream', async () => {
+    const auth = fakeAuth()
+    const createPhases: UploadPhase[] = []
+
+    const previewPromise = previewImport(auth, base, makeFile('a.csv'), FakeXhrCtor)
+    const previewXhr = FakeXhr.last()!
+    const createPromise = createImport(auth, base, makeReq(), (p) => createPhases.push(p), FakeXhrCtor)
+    const createXhr = FakeXhr.last()!
+
+    expect(previewXhr).not.toBe(createXhr)
+
+    // Resolve out of start order (create responds first) to prove no shared/ordered state.
+    createXhr.fireUploadLoad()
+    createXhr.respond(201, JSON.stringify(REPORT_BODY))
+    previewXhr.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+
+    const [previewResult, createResult] = await Promise.all([previewPromise, createPromise])
+
+    expect(previewResult).toEqual(PREVIEW_BODY_CSV)
+    expect(createResult).toEqual(REPORT_BODY)
+    expect(createPhases.map((p) => p.kind)).toEqual(['processing', 'done'])
+  })
+})
+
+describe('rowErrorRows: boundary case (QA)', () => {
+  it('QA-14: row 0 is read via a strict `!== undefined` check, not truthiness — {row:0} resolves [0], not [] (guards against a future truthy-check regression; row 0 cannot occur today since sheet rows are 1-based, but the reader must not silently rely on that)', () => {
+    expect(rowErrorRows({ row: 0, message: 'x' })).toEqual([0])
   })
 })

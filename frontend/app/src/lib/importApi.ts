@@ -219,6 +219,16 @@ function xhrJson(
     }
 
     xhr.onerror = () => fail(new ApiError('network', 'network error', null))
+    // NOTE (QA Stage 4, task-171 orchestrator ruling): `xhr.timeout` is never set below,
+    // so in a real browser it defaults to 0 (infinite) and this handler is DEAD CODE in
+    // production today — IMPAPI-17b only exercises it because FakeXhr's fireTimeout()
+    // invokes the handler directly, bypassing the browser's timeout mechanism entirely.
+    // This is a deliberate scope decision, not an oversight: no AC in this subtask
+    // specifies a duration, and the only evidence-based value comes from measuring a
+    // real large import (M4-08-07's deploy-gate e2e/api/import.spec.ts already carries a
+    // 60s/500-invoice perf budget as that evidence base). This transport error-mapping
+    // contract is verified and correctly shaped; wiring a real `xhr.timeout` — and
+    // choosing its value from live measurement — is out of scope here.
     xhr.ontimeout = () => fail(new ApiError('network', 'request timed out', null))
 
     xhr.open(method, url)

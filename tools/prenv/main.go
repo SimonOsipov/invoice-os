@@ -38,7 +38,10 @@ const usage = `usage:
   prenv parse <env-name>       print the PR number encoded in an environment name
   prenv sweep-decide <env-name> <is-ephemeral> <gh-exit-code> <gh-json>
                                decide whether to reap a PR environment
-                               (exit 0 = reap, 1 = skip; reason on stdout)`
+                               (exit 0 = reap, 1 = skip; reason on stdout)
+  prenv dsn-check              report every DB DSN defect in the rendered
+                               {service:{variable:value}} JSON map read on STDIN
+                               (exit 0 = clean, 1 = defects or unreadable input)`
 
 // main dispatches the subcommands. Exit codes are a contract, not an
 // afterthought: 2 means "you called me wrong" (unknown subcommand, wrong
@@ -115,6 +118,20 @@ func main() {
 		if !reap {
 			os.Exit(1)
 		}
+
+	case "dsn-check":
+		// The rendered map arrives on STDIN, never argv: it carries live
+		// credentials and argv is visible in `ps`.
+		//
+		// TWO-WAY here, unlike every other subcommand above: 0 = clean,
+		// 1 = fail, and BOTH failure modes (offenders found, unreadable
+		// input) share the 1. Exit 2 stays reserved for a malformed CALL,
+		// which is a different thing from malformed INPUT. See RunDSNCheck.
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(2)
+		}
+		os.Exit(RunDSNCheck(os.Stdin, os.Stdout))
 
 	default:
 		fmt.Fprintf(os.Stderr, "prenv: unknown subcommand %q\n%s\n", os.Args[1], usage)

@@ -228,3 +228,54 @@ func TestRLS_DashboardTopViolationsCrossTenantIsolated(t *testing.T) {
 		t.Fatalf("tenant B's TopViolations = %+v, want exactly [{X,2}]", gotB.TopViolations)
 	}
 }
+
+// TestRLS_DashboardTopViolationsCrossTenantSharedRuleKeyNotInflated: goes
+// beyond DASH-27 (which uses a rule name, "X", unique to tenant B) by using
+// the SAME rule_key in both tenants, with tenant B's count (50) far
+// exceeding tenant A's (2) for that shared key. Store.Rollup(ctxA)'s
+// TopViolations for "shared-rule" must be exactly 2 -- not 52, not any
+// value influenced by B's rows -- and B's far larger count must not let its
+// row displace or merge with A's at any position in A's result. A also
+// carries a second, tenant-A-only rule so the ordering itself (not just
+// presence/absence) is exercised: an inflated shared-rule count would flip
+// the expected order.
+func TestRLS_DashboardTopViolationsCrossTenantSharedRuleKeyNotInflated(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "adversarial shared rule_key tenant A")
+	tenantB := seedTenant(t, super, "adversarial shared rule_key tenant B")
+	entityA := seedEntity(t, super, tenantA, "shared rule_key A Corp")
+	entityB := seedEntity(t, super, tenantB, "shared rule_key B Corp")
+
+	shared := `[{"rule_key":"shared-rule","severity":"error","message":"z"}]`
+	aOnly := `[{"rule_key":"a-only-rule","severity":"error","message":"z"}]`
+	for i := 0; i < 2; i++ {
+		seedInvoiceWithViolations(t, super, tenantA, entityA, fmt.Sprintf("SHARED-A-%d", i), "draft", shared)
+	}
+	seedInvoiceWithViolations(t, super, tenantA, entityA, "SHARED-A-only", "draft", aOnly)
+	for i := 0; i < 50; i++ {
+		seedInvoiceWithViolations(t, super, tenantB, entityB, fmt.Sprintf("SHARED-B-%d", i), "draft", shared)
+	}
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+
+	gotA, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant A): %v", err)
+	}
+	assertTopViolations(t, gotA.TopViolations, []RuleCount{
+		{RuleKey: "shared-rule", Invoices: 2},
+		{RuleKey: "a-only-rule", Invoices: 1},
+	})
+
+	gotB, err := store.Rollup(cB)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant B): %v", err)
+	}
+	assertTopViolations(t, gotB.TopViolations, []RuleCount{
+		{RuleKey: "shared-rule", Invoices: 50},
+	})
+}

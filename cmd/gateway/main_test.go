@@ -95,6 +95,57 @@ func TestGatewayMainPrefersUnprefixedPasswordVars(t *testing.T) {
 	}
 }
 
+// TestGatewayMainWiresEachRoleToItsOwnVarPair: adversarial coverage added at
+// QA (Stage 4, task-168). TestGatewayMainPrefersUnprefixedPasswordVars above
+// proves each var-name PAIR appears somewhere in the RolePasswords literal
+// window in the right relative order -- but it scans the WHOLE window per
+// pair, never a single field's own line, so it cannot tell one field's
+// resolveRolePassword call from another's. MUTATION-VERIFIED 2026-07-19 (QA):
+// swapping the Migrator/App fields' arguments -- so Migrator silently reads
+// App's whole var pair and App reads Migrator's (deliberately not spelling
+// out the deprecated-prefixed names here -- see the self-grep note below) --
+// left TestGatewayMainPrefersUnprefixedPasswordVars fully green (every
+// var-name pair is still present, still in order,
+// somewhere in the shared window). That swap would silently misconfigure the
+// database roles' passwords on every boot -- exactly the "wrong fallback
+// bricks the fleet" risk this subtask exists to prevent. This test closes the
+// gap by requiring the EXACT literal call, field name included, for each of
+// the three roles.
+func TestGatewayMainWiresEachRoleToItsOwnVarPair(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read cmd/gateway/main.go: %v", err)
+	}
+	src := string(b)
+
+	// Built by concatenation, not as a literal, for the same self-grep reason
+	// documented on TestGatewayMainPrefersUnprefixedPasswordVars above.
+	deprecatedPrefix := strings.ToUpper("invoice_")
+
+	for _, tc := range []struct {
+		field     string
+		newName   string
+		oldSuffix string
+	}{
+		{"Migrator", "MIGRATOR_PASSWORD", "MIGRATOR_PASSWORD"},
+		{"App", "APP_PASSWORD", "APP_PASSWORD"},
+		{"Reader", "READER_PASSWORD", "TENANT_READER_PASSWORD"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			oldName := deprecatedPrefix + tc.oldSuffix
+			// \s+ (not a literal single space) because gofmt column-aligns
+			// these three struct-literal lines, padding the shorter field
+			// names ("App:", "Reader:") with extra spaces to match
+			// "Migrator:"'s width.
+			pattern := regexp.QuoteMeta(tc.field+":") + `\s*` + regexp.QuoteMeta(`resolveRolePassword("`+tc.newName+`", "`+oldName+`", app.Logger),`)
+			re := regexp.MustCompile(pattern)
+			if !re.MatchString(src) {
+				t.Errorf("cmd/gateway/main.go does not contain the exact wiring %q -- the %s field must resolve from its own (%s, %s) var pair, not a swapped or mismatched one", pattern, tc.field, tc.newName, oldName)
+			}
+		})
+	}
+}
+
 // TestRepoHasNoStrayInvoicePrefixedVars: Test Spec #3 / AC #4. Walks every
 // git-tracked file (git ls-files, so node_modules/.git/backlog/etc. are
 // excluded the same way the AC's own `--exclude-dir` grep excludes them) and

@@ -417,4 +417,6 @@ gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databas
 | Sleeping/polling tightly for CI | Poll every 270 s (the single poll constant) |
 | Bouncing the executor on uncited taste | UI fails must cite a design-system rule or a prototype CSS rule; pure taste is advisory → escalate |
 | Grinding the deploy-gate fix loop past 2 cycles | Cap at 2; escalate unresolved fails to the user (each redeploy provisions/rebuilds the PR's full 11-service environment and is expensive) |
+| Renaming a variable and checking only that the rename landed | Grep every OTHER variable's rendered value for the OLD name before merge — M4-22's DSNs still interpolated the deleted names and rendered empty |
+| Re-running the deploy gate only BEFORE applying a variable deletion | Re-run it AFTER the deletion is applied — M4-22's own gates passed because they ran before, which is why this went unnoticed until M4-08 |
 | Not cleaning up the worktree after merge | Run `/post-merge-cleanup <STORY-ID>` |

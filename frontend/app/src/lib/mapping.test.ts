@@ -112,6 +112,55 @@ describe('initMappingFromHeaders', () => {
   })
 })
 
+// QA (M4-08-03): adversarial/edge coverage beyond the architect's MAP-01..14
+// specs. New describe blocks only — nothing above this point is modified.
+describe('initMappingFromHeaders — adversarial edge cases (QA)', () => {
+  it('returns exactly the 11 CANON keys, every value null, when every header is blank', () => {
+    const map = initMappingFromHeaders(['', '', ''])
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+    expect(Object.values(map).every((v) => v === null)).toBe(true)
+  })
+
+  it('recognizes a header regardless of case and surrounding whitespace', () => {
+    const map = initMappingFromHeaders([' ISSUE DATE ', 'total', '  Qty  '])
+    expect(map.issue_date).toBe(' ISSUE DATE ')
+    expect(map.total).toBe('total')
+    expect(map.line_quantity).toBe('  Qty  ')
+  })
+
+  // Real spreadsheets can leak a BOM into a header even after upstream stripping
+  // (PRV-15 strips columns[0]'s BOM at the preview layer). norm()'s
+  // [^a-z0-9] filter strips U+FEFF too, so recognition is defensive in depth.
+  it('recognizes a header even if a UTF-8 BOM character leaked through', () => {
+    const map = initMappingFromHeaders(['﻿Total', 'VAT'])
+    expect(map.total).toBe('﻿Total')
+    expect(map.vat).toBe('VAT')
+  })
+
+  it('treats headers literally named "null" or "undefined" as ordinary strings, not as unmapped', () => {
+    const map = initMappingFromHeaders(['null', 'undefined', 'Total'])
+    expect(map.total).toBe('Total')
+    expect(Object.values(map)).not.toContain(undefined)
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+  })
+
+  it('does not mutate the input headers array', () => {
+    const headers = ['Total', 'Invoice No', 'Qty']
+    const snapshot = [...headers]
+    initMappingFromHeaders(headers)
+    expect(headers).toEqual(snapshot)
+  })
+
+  it('handles a very large number of headers, including a very long header string', () => {
+    const longHeader = 'X'.repeat(5000)
+    const many = Array.from({ length: 2000 }, (_, i) => `Column ${i}`)
+    many.push('Total', longHeader)
+    const map = initMappingFromHeaders(many)
+    expect(map.total).toBe('Total')
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+  })
+})
+
 describe('toImportMapping', () => {
   // MAP-04: only placed fields survive, asserted by value AND key count so an
   // undefined-valued key (hidden by JSON.stringify/toEqual on its own) can't pass.
@@ -171,6 +220,46 @@ describe('toImportMapping', () => {
   })
 })
 
+describe('toImportMapping — adversarial edge cases (QA)', () => {
+  it('returns an empty object for an empty mapping', () => {
+    expect(toImportMapping({})).toEqual({})
+  })
+
+  it('returns an empty object when every value is null or empty string, and that mapping cannot be submitted', () => {
+    const allEmpty: Mapping = {
+      invoice_number: null,
+      issue_date: '',
+      buyer_tin: null,
+      buyer_name: '',
+      currency: null,
+      subtotal: '',
+      vat: null,
+      total: '',
+      line_description: null,
+      line_quantity: '',
+      line_unit_price: null,
+    }
+    expect(toImportMapping(allEmpty)).toEqual({})
+    expect(canSubmitMapping(allEmpty)).toBe(false)
+  })
+
+  // Makes MAP-05 airtight: a header value that is literally the string "null"
+  // (a real CSV column can be named that) must survive — it is a placed field,
+  // not the JS null sentinel toImportMapping strips.
+  it('treats a header value literally named "null" or "undefined" as an ordinary string, not as JS null', () => {
+    const result = toImportMapping({ invoice_number: 'null', total: 'undefined' })
+    expect(result).toEqual({ invoice_number: 'null', total: 'undefined' })
+  })
+
+  // Guards against a `return m as Record<string,string>` fast-path optimization
+  // that would alias the output to the caller's live mapping state.
+  it('returns a new object, never the same reference as the input mapping', () => {
+    const input: Mapping = { invoice_number: 'A', total: 'B' }
+    const result = toImportMapping(input)
+    expect(result).not.toBe(input)
+  })
+})
+
 describe('canSubmitMapping', () => {
   // MAP-08
   it('gates on invoice_number alone', () => {
@@ -211,6 +300,23 @@ describe('canSubmitMapping', () => {
   // not add a uniqueness rule stricter than resolveMapping (Core AC3).
   it('allows three fields pointing at the same header', () => {
     expect(canSubmitMapping({ invoice_number: 'Amount', total: 'Amount', subtotal: 'Amount' })).toBe(true)
+  })
+})
+
+// QA (M4-08-03): the three functions chained end-to-end, checked against the
+// server's documented resolveMapping contract (service.go:168-194) — invoice_number
+// present, no null/empty values, string keys and values.
+describe('round trip — initMappingFromHeaders -> toImportMapping (QA)', () => {
+  it('produces a wire payload satisfying the server contract', () => {
+    const initial = initMappingFromHeaders(HEADERS)
+    const withInvoiceNumber: Mapping = { ...initial, invoice_number: 'Invoice No' }
+    expect(canSubmitMapping(withInvoiceNumber)).toBe(true)
+
+    const payload = toImportMapping(withInvoiceNumber)
+    expect(payload.invoice_number).toBe('Invoice No')
+    expect(Object.keys(payload).every((k) => typeof k === 'string')).toBe(true)
+    expect(Object.values(payload).every((v) => typeof v === 'string' && v !== '')).toBe(true)
+    expect(JSON.stringify(payload)).not.toContain('null')
   })
 })
 

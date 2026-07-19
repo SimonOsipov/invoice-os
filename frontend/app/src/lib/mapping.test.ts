@@ -1,17 +1,19 @@
 // Specs for the Map step's pure logic (Platform.dc.html ~L1369-1441): header
-// recognition, the initial mapping, and grouping line-item rows into invoices.
+// recognition and the initial mapping.
 //
-// These pin the two behaviours the Map step exists to guarantee: that
-// invoice_number is never auto-guessed (a plausible wrong default on the fiscal
-// identifier invites rubber-stamping), and that rows of one invoice disagreeing
-// on a header field quarantine that invoice while citing its spreadsheet rows.
+// These pin the behaviour the Map step exists to guarantee: that invoice_number
+// is never auto-guessed — a plausible wrong default on the fiscal identifier
+// invites rubber-stamping, and this data is submitted under the firm's TIN.
 // Pure functions — no React, no fetch, no mocking needed.
 import { describe, expect, it } from 'vitest'
 
-import { CANON, FILE_DATA } from '../data'
-import { groupInvoices, initMapping, recognize } from './mapping'
+import { CANON } from '../data'
+import { canSubmitMapping, initMappingFromHeaders, recognize, toImportMapping } from './mapping'
+import type { Mapping } from '../types'
 
-const HEADERS = FILE_DATA.csv.headers
+// Inlined per M4-08-03 [test-fixture-inlined]: a verbatim copy of the sample
+// spreadsheet's header row, owned by this file rather than read from a fixture.
+const HEADERS = ['Invoice No', 'Issue Date', 'Buyer TIN', 'Customer', 'Currency', 'Net', 'VAT', 'Total', 'Item', 'Qty', 'Unit Price']
 
 describe('recognize', () => {
   it('auto-places the seven columns whose headers clearly match', () => {
@@ -49,63 +51,268 @@ describe('recognize', () => {
   })
 })
 
-describe('initMapping', () => {
+describe('initMappingFromHeaders', () => {
+  // MAP-09 (AC5): ported from the old fileId-keyed cases — same two assertions,
+  // taking a header array directly instead of dereferencing a fixture.
   it('returns a key for every canonical field', () => {
-    const map = initMapping('csv')
+    const map = initMappingFromHeaders(HEADERS)
     expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
   })
 
   it('leaves exactly the four unrecognised fields to be placed by hand', () => {
-    const unplaced = Object.keys(initMapping('csv')).filter((k) => !initMapping('csv')[k])
+    const unplaced = Object.keys(initMappingFromHeaders(HEADERS)).filter((k) => !initMappingFromHeaders(HEADERS)[k])
     expect(unplaced.sort()).toEqual(['buyer_name', 'invoice_number', 'line_description', 'subtotal'])
+  })
+
+  // MAP-01
+  it('auto-places the seven alias fields on their exact header strings', () => {
+    expect(initMappingFromHeaders(HEADERS)).toMatchObject({
+      issue_date: 'Issue Date',
+      buyer_tin: 'Buyer TIN',
+      currency: 'Currency',
+      vat: 'VAT',
+      total: 'Total',
+      line_quantity: 'Qty',
+      line_unit_price: 'Unit Price',
+    })
+  })
+
+  // MAP-02: invoice_number is never auto-placed, even though 'Invoice No' is present.
+  it('never guesses invoice_number, even though a plausible column exists', () => {
+    expect(HEADERS).toContain('Invoice No')
+    expect(initMappingFromHeaders(HEADERS).invoice_number).toBeNull()
+  })
+
+  // MAP-03: an empty header array still returns all 11 CANON keys, all null.
+  it('returns exactly the 11 CANON keys, every value null, for an empty header array', () => {
+    const map = initMappingFromHeaders([])
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+    expect(Object.values(map).every((v) => v === null)).toBe(true)
+  })
+
+  // MAP-11: a blank header can never auto-place (norm('') matches no ALIAS entry),
+  // and must not corrupt placement of a real header alongside it.
+  it('never places a field on a blank header', () => {
+    const map = initMappingFromHeaders(['', 'Total', ''])
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+    expect(map.total).toBe('Total')
+    expect(Object.values(map)).not.toContain('')
+  })
+
+  // MAP-12: duplicate headers resolve to the first occurrence, matching the
+  // server's first-match resolveMapping behaviour; still exactly 11 keys back.
+  it('resolves duplicate headers to the first occurrence', () => {
+    const map = initMappingFromHeaders(['VAT', 'VAT', 'Total'])
+    expect(map.vat).toBe('VAT')
+    expect(map.total).toBe('Total')
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
   })
 })
 
-describe('groupInvoices', () => {
-  const mapped = { ...initMapping('csv'), invoice_number: 'Invoice No', buyer_name: 'Customer', subtotal: 'Net', line_description: 'Item' }
-
-  it('returns nothing until invoice_number is mapped', () => {
-    expect(groupInvoices('csv', initMapping('csv'))).toEqual([])
+// QA (M4-08-03): adversarial/edge coverage beyond the architect's MAP-01..14
+// specs. New describe blocks only — nothing above this point is modified.
+describe('initMappingFromHeaders — adversarial edge cases (QA)', () => {
+  it('returns exactly the 11 CANON keys, every value null, when every header is blank', () => {
+    const map = initMappingFromHeaders(['', '', ''])
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+    expect(Object.values(map).every((v) => v === null)).toBe(true)
   })
 
-  it('returns nothing for a null file or mapping', () => {
-    expect(groupInvoices(null, mapped)).toEqual([])
-    expect(groupInvoices('csv', null)).toEqual([])
+  it('recognizes a header regardless of case and surrounding whitespace', () => {
+    const map = initMappingFromHeaders([' ISSUE DATE ', 'total', '  Qty  '])
+    expect(map.issue_date).toBe(' ISSUE DATE ')
+    expect(map.total).toBe('total')
+    expect(map.line_quantity).toBe('  Qty  ')
   })
 
-  it('groups the 9 line-item rows into 5 invoices', () => {
-    const g = groupInvoices('csv', mapped)
-    expect(g).toHaveLength(5)
-    expect(g.map((x) => x.number)).toEqual(['INV-2041', 'INV-2042', 'INV-2043', 'INV-2044', 'INV-2045'])
-    expect(g.reduce((s, x) => s + x.lineCount, 0)).toBe(FILE_DATA.csv.rows.length)
+  // Real spreadsheets can leak a BOM into a header even after upstream stripping
+  // (PRV-15 strips columns[0]'s BOM at the preview layer). norm()'s
+  // [^a-z0-9] filter strips U+FEFF too, so recognition is defensive in depth.
+  it('recognizes a header even if a UTF-8 BOM character leaked through', () => {
+    const map = initMappingFromHeaders(['﻿Total', 'VAT'])
+    expect(map.total).toBe('﻿Total')
+    expect(map.vat).toBe('VAT')
   })
 
-  it('carries header values from the first row of each group', () => {
-    const first = groupInvoices('csv', mapped)[0]
-    expect(first).toMatchObject({ issueDate: '2026-06-03', buyer: 'Shoprite Nigeria', total: '1,058,875', lineCount: 2 })
+  it('treats headers literally named "null" or "undefined" as ordinary strings, not as unmapped', () => {
+    const map = initMappingFromHeaders(['null', 'undefined', 'Total'])
+    expect(map.total).toBe('Total')
+    expect(Object.values(map)).not.toContain(undefined)
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
   })
 
-  it('quarantines only the invoice whose rows disagree on a header field', () => {
-    const g = groupInvoices('csv', mapped)
-    expect(g.filter((x) => x.quarantined).map((x) => x.number)).toEqual(['INV-2043'])
+  it('does not mutate the input headers array', () => {
+    const headers = ['Total', 'Invoice No', 'Qty']
+    const snapshot = [...headers]
+    initMappingFromHeaders(headers)
+    expect(headers).toEqual(snapshot)
   })
 
-  it('cites the disagreeing field, its spreadsheet rows, and both values', () => {
-    const bad = groupInvoices('csv', mapped).find((x) => x.number === 'INV-2043')
-    expect(bad?.conflicts).toEqual([{ field: 'issue_date', label: 'issue date', rows: [5, 6], values: ['2026-06-08', '2026-06-09'] }])
+  it('handles a very large number of headers, including a very long header string', () => {
+    const longHeader = 'X'.repeat(5000)
+    const many = Array.from({ length: 2000 }, (_, i) => `Column ${i}`)
+    many.push('Total', longHeader)
+    const map = initMappingFromHeaders(many)
+    expect(map.total).toBe('Total')
+    expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+  })
+})
+
+describe('toImportMapping', () => {
+  // MAP-04: only placed fields survive, asserted by value AND key count so an
+  // undefined-valued key (hidden by JSON.stringify/toEqual on its own) can't pass.
+  it('emits only placed fields', () => {
+    const result = toImportMapping({ invoice_number: 'A', total: 'B', buyer_name: null, vat: null })
+    expect(result).toEqual({ invoice_number: 'A', total: 'B' })
+    expect(Object.keys(result)).toHaveLength(2)
   })
 
-  it('numbers sheet rows as the user sees them — 1-based, past the header row', () => {
-    expect(groupInvoices('csv', mapped)[0].sheetRows).toEqual([2, 3])
+  // MAP-05: the exact map[string]string coercion trap — Go unmarshals JSON null
+  // into a string map as "", so the literal substring must never appear.
+  it('never serializes to JSON containing the substring null', () => {
+    const result = toImportMapping({ invoice_number: 'A', total: null, buyer_name: null })
+    expect(JSON.stringify(result)).not.toContain('null')
   })
 
-  it('does not flag a conflict on a field that is not mapped', () => {
-    const withoutDate = { ...mapped, issue_date: null }
-    expect(groupInvoices('csv', withoutDate).every((x) => !x.quarantined)).toBe(true)
+  // MAP-06: the load-bearing spec. A `v !== null` impl passes MAP-04 and MAP-05
+  // but ships '', which can silently match a blank-named column (§B, PRV-15).
+  it('drops empty-string values, not just null', () => {
+    const result = toImportMapping({ invoice_number: 'A', buyer_name: '' })
+    expect(result).toEqual({ invoice_number: 'A' })
   })
 
-  it('treats a single-invoice file as one group, not a review case', () => {
-    const oneOnly = { ...mapped, invoice_number: 'Currency' } // every row shares NGN
-    expect(groupInvoices('csv', oneOnly)).toHaveLength(1)
+  // MAP-07: a fully-placed mapping round-trips unchanged, and the input is not mutated.
+  it('passes through a fully-placed mapping unchanged, without mutating the input', () => {
+    const full: Mapping = {
+      invoice_number: 'Invoice No',
+      issue_date: 'Issue Date',
+      buyer_tin: 'Buyer TIN',
+      buyer_name: 'Customer',
+      currency: 'Currency',
+      subtotal: 'Net',
+      vat: 'VAT',
+      total: 'Total',
+      line_description: 'Item',
+      line_quantity: 'Qty',
+      line_unit_price: 'Unit Price',
+    }
+    const snapshot = { ...full }
+    const result = toImportMapping(full)
+    expect(Object.keys(result).sort()).toEqual(CANON.map((c) => c.key).sort())
+    expect(result).toEqual(full)
+    expect(full).toEqual(snapshot)
+  })
+
+  // MAP-13: two fields sharing one header value both survive — no dedupe-by-value.
+  it('keeps two keys that share the same header value', () => {
+    const result = toImportMapping({ invoice_number: 'A', subtotal: 'Amount', total: 'Amount' })
+    expect(result).toEqual({ invoice_number: 'A', subtotal: 'Amount', total: 'Amount' })
+  })
+
+  // MAP-14: no CANON allow-list — an unrecognized key survives so the server's
+  // deliberate unknown-key 400 (service.go:146-153) still fires, loudly, server-side.
+  it('does not filter unrecognized keys', () => {
+    const result = toImportMapping({ invoice_number: 'A', totla: 'B' } as Mapping)
+    expect(result).toEqual({ invoice_number: 'A', totla: 'B' })
+  })
+})
+
+describe('toImportMapping — adversarial edge cases (QA)', () => {
+  it('returns an empty object for an empty mapping', () => {
+    expect(toImportMapping({})).toEqual({})
+  })
+
+  it('returns an empty object when every value is null or empty string, and that mapping cannot be submitted', () => {
+    const allEmpty: Mapping = {
+      invoice_number: null,
+      issue_date: '',
+      buyer_tin: null,
+      buyer_name: '',
+      currency: null,
+      subtotal: '',
+      vat: null,
+      total: '',
+      line_description: null,
+      line_quantity: '',
+      line_unit_price: null,
+    }
+    expect(toImportMapping(allEmpty)).toEqual({})
+    expect(canSubmitMapping(allEmpty)).toBe(false)
+  })
+
+  // Makes MAP-05 airtight: a header value that is literally the string "null"
+  // (a real CSV column can be named that) must survive — it is a placed field,
+  // not the JS null sentinel toImportMapping strips.
+  it('treats a header value literally named "null" or "undefined" as an ordinary string, not as JS null', () => {
+    const result = toImportMapping({ invoice_number: 'null', total: 'undefined' })
+    expect(result).toEqual({ invoice_number: 'null', total: 'undefined' })
+  })
+
+  // Guards against a `return m as Record<string,string>` fast-path optimization
+  // that would alias the output to the caller's live mapping state.
+  it('returns a new object, never the same reference as the input mapping', () => {
+    const input: Mapping = { invoice_number: 'A', total: 'B' }
+    const result = toImportMapping(input)
+    expect(result).not.toBe(input)
+  })
+})
+
+describe('canSubmitMapping', () => {
+  // MAP-08
+  it('gates on invoice_number alone', () => {
+    expect(canSubmitMapping(null)).toBe(false)
+
+    const allButInvoiceNumber: Mapping = {
+      invoice_number: null,
+      issue_date: 'Issue Date',
+      buyer_tin: 'Buyer TIN',
+      buyer_name: 'Customer',
+      currency: 'Currency',
+      subtotal: 'Net',
+      vat: 'VAT',
+      total: 'Total',
+      line_description: 'Item',
+      line_quantity: 'Qty',
+      line_unit_price: 'Unit Price',
+    }
+    expect(canSubmitMapping(allButInvoiceNumber)).toBe(false)
+
+    const onlyInvoiceNumber: Mapping = {
+      invoice_number: 'Invoice No',
+      issue_date: null,
+      buyer_tin: null,
+      buyer_name: null,
+      currency: null,
+      subtotal: null,
+      vat: null,
+      total: null,
+      line_description: null,
+      line_quantity: null,
+      line_unit_price: null,
+    }
+    expect(canSubmitMapping(onlyInvoiceNumber)).toBe(true)
+  })
+
+  // MAP-10: duplicate-target mappings are legal server-side; canSubmitMapping must
+  // not add a uniqueness rule stricter than resolveMapping (Core AC3).
+  it('allows three fields pointing at the same header', () => {
+    expect(canSubmitMapping({ invoice_number: 'Amount', total: 'Amount', subtotal: 'Amount' })).toBe(true)
+  })
+})
+
+// QA (M4-08-03): the three functions chained end-to-end, checked against the
+// server's documented resolveMapping contract (service.go:168-194) — invoice_number
+// present, no null/empty values, string keys and values.
+describe('round trip — initMappingFromHeaders -> toImportMapping (QA)', () => {
+  it('produces a wire payload satisfying the server contract', () => {
+    const initial = initMappingFromHeaders(HEADERS)
+    const withInvoiceNumber: Mapping = { ...initial, invoice_number: 'Invoice No' }
+    expect(canSubmitMapping(withInvoiceNumber)).toBe(true)
+
+    const payload = toImportMapping(withInvoiceNumber)
+    expect(payload.invoice_number).toBe('Invoice No')
+    expect(Object.keys(payload).every((k) => typeof k === 'string')).toBe(true)
+    expect(Object.values(payload).every((v) => typeof v === 'string' && v !== '')).toBe(true)
+    expect(JSON.stringify(payload)).not.toContain('null')
   })
 })

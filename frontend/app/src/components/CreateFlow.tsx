@@ -1,35 +1,26 @@
 // Create / validate flow orchestrator — the wizard header + a step router keyed on
-// `ctx.createStep` (upload → parsing → mapping → form|review → validating → results).
-// Ported from Platform.dc.html ~L389-596 + the wizard slice of renderVals()
-// (~L1521-1524). `form` and `review` are two variants of the same Build stage:
-// a tabular file resolving to many invoices reviews them; anything else edits one.
+// `ctx.createStep`, serving two paths: a single document (upload → parsing → form →
+// validating → results) and a server-backed spreadsheet import (upload → mapping →
+// report). Ported from Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
 
-import { VAL_LABELS, PARSE_LABELS, WIZARD_STEPS, SAMPLE_FILES } from '../data'
+import { VAL_LABELS, PARSE_LABELS, SAMPLE_FILES } from '../data'
+import { wizardHeader } from '../lib/importFlow'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
-import { CreateReview } from './CreateReview'
 import { CreateResults } from './CreateResults'
+import { CreateReport } from './CreateReport'
 import { ScanlineSteps } from './ScanlineSteps'
-import type { CreateStep, PlatformCtx } from '../types'
+import type { PlatformCtx } from '../types'
 
-const STAGE_OF: Record<CreateStep, number> = {
-  upload: 0,
-  parsing: 0,
-  mapping: 1,
-  form: 2,
-  review: 2,
-  validating: 3,
-  results: 4,
-}
-
-function wizardStage(step: CreateStep): number {
-  return STAGE_OF[step] ?? 0
-}
-
+// The wizard now serves TWO paths with different step lists — the 5-step single-document
+// wizard and the 3-step Import/Map/Report import — so the header is resolved by
+// wizardHeader (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which
+// has no concept of which path the user is on. STAGE_OF moved there with it: one table,
+// one owner, no second copy to drift.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
-  const { createStep, draft, uploadFile, valIdx, parseIdx } = ctx
-  const stage = wizardStage(createStep)
+  const { createStep, draft, uploadFile, importFile, valIdx, parseIdx } = ctx
+  const { steps, stageIndex } = wizardHeader(createStep, uploadFile, importFile)
   const selFileName = uploadFile ? SAMPLE_FILES.find((f) => f.id === uploadFile)?.name || '' : ''
   const valCount = Math.min(valIdx, VAL_LABELS.length)
 
@@ -40,9 +31,9 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
           ← Cancel
         </button>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0 }}>
-          {WIZARD_STEPS.map(([n, label], idx) => {
-            const done = idx < stage
-            const a = idx === stage
+          {steps.map(([n, label], idx) => {
+            const done = idx < stageIndex
+            const a = idx === stageIndex
             return (
               <div key={n} style={{ display: 'flex', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -74,8 +65,6 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
 
       {createStep === 'form' && <CreateForm ctx={ctx} />}
 
-      {createStep === 'review' && <CreateReview ctx={ctx} />}
-
       {createStep === 'validating' && (
         <ScanlineSteps
           title="Validating against MBS rules…"
@@ -89,6 +78,8 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {createStep === 'results' && <CreateResults ctx={ctx} />}
+
+      {createStep === 'report' && <CreateReport ctx={ctx} />}
     </div>
   )
 }

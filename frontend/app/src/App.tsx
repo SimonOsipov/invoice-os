@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FILE_DATA, INHOUSE_IDX, PARSE_LABELS } from './data'
+import { INHOUSE_IDX, PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
-import { groupInvoices, initMapping } from './lib/mapping'
+import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
+import { canReadColumns, canStartImport } from './lib/importFlow'
+import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
+import {
+  createImport,
+  makeImportAuth,
+  previewImport,
+  type ImportPreview,
+  type ImportReport,
+  type UploadPhase,
+} from './lib/importApi'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -61,7 +72,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [mapping, setMapping] = useState<Mapping | null>(null)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // ONE atom for what the detail view renders, never two loose fields
+  // ([detail-target-exclusive], debate F6). Written ONLY through the three total
+  // constructors below, so every write sets both members and "forgot to clear the
+  // counterpart" is a type error rather than a discipline. Two independent fields would
+  // mean one click-through hijacks the detail view for the rest of the session: every
+  // later InvoicesList click would set selectedId while a stale importedInvoiceId kept
+  // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
+  // this state with an inline object literal — go through a constructor.
+  const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
   const [filter, setFilter] = useState('all')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [sandbox, setSandbox] = useState(false)
@@ -73,6 +92,25 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [valIdx, setValIdx] = useState(0)
   const [parseIdx, setParseIdx] = useState(0)
+  // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id
+  // chosen by the user — never derived from `active`, which comes from buildClients()
+  // and carries no server id at all, so guessing from it would file invoices under the
+  // wrong supplier TIN ([entity-picker]).
+  const [entityId, setEntityId] = useState<string | null>(null)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<ImportPreview | null>(null)
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
+  const [importError, setImportError] = useState<ApiError | null>(null)
+  const [report, setReport] = useState<ImportReport | null>(null)
+
+  // Re-entrancy guard for the two import round trips. A ref, not state: React batches
+  // state updates, so a fast double-click can fire the handler twice before a `disabled`
+  // prop re-renders — and for startImport that would create the SAME import twice, i.e.
+  // duplicate invoices. readColumns and startImport live on different steps and can
+  // never overlap, so one flag covers both. A ref also cannot get stuck the way a
+  // component-local flag would: CreateUpload never observes the rejection that would
+  // clear it, since errors come back through ctx.importError.
+  const reqInFlight = useRef(false)
 
   const valTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const valDone = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -89,6 +127,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   useEffect(() => clearVal, [])
 
   const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut), [session, onSignOut])
+  // Same (session, onSignOut) pair, one construction site — the multipart XHR transport
+  // cannot drift from the fetch path on auth or the 401 sign-out (importApi.ts D3).
+  const importAuth = useMemo(() => makeImportAuth(session, onSignOut), [session, onSignOut])
 
   const active = clients[activeIdx]
 
@@ -106,7 +147,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   function switchClient(i: number) {
     setActiveIdx(i)
     setView('dashboard')
-    setSelectedId(null)
+    setDetailSel(clearSelection())
     setFilter('all')
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients[i]))
@@ -123,6 +164,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setUploadFile(null)
     setMapping(null)
     setSwitcherOpen(false)
+    resetImport()
+  }
+
+  // Every piece of import state is per-run: a second import must not inherit the first
+  // one's preview, progress, error or report. `entityId` is deliberately included —
+  // re-picking the entity is one click, and silently carrying the previous choice into
+  // a fresh run is the [entity-picker] hazard in a slower form.
+  function resetImport() {
+    setEntityId(null)
+    setImportFile(null)
+    setPreview(null)
+    setUploadPhase({ kind: 'idle' })
+    setImportError(null)
+    setReport(null)
   }
 
   function closeCreate() {
@@ -170,22 +225,86 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setValidation(validate(nd))
   }
 
-  // Leaving the results screen lands back on whichever step built the draft:
-  // the review table when the file resolved to many invoices, else the form.
+  // The results screen is reachable only from the single-document path now (the
+  // multi-invoice path ends at the server's report, not at a locally-built draft), so
+  // leaving it always lands back on the form.
   function backToEdit() {
     clearVal()
-    setCreateStep(groupInvoices(uploadFile, mapping).length > 1 ? 'review' : 'form')
+    setCreateStep('form')
   }
 
   function selectFile(id: string) {
     setUploadFile(id)
   }
 
+  function selectEntity(id: string | null) {
+    setEntityId(id)
+    setImportError(null)
+  }
+
+  // Stores whatever the input yielded — the extension rule lives in canReadColumns
+  // alone, so there is exactly one gate that can be right or wrong, not two that can
+  // disagree. A rejected file still lands here and the Import panel explains why.
+  // Choosing a different file invalidates any preview already read from the old one.
+  function selectImportFile(f: File | null) {
+    setImportFile(f)
+    setPreview(null)
+    setImportError(null)
+  }
+
+  function readColumns() {
+    const base = gatewayBase()
+    // base == null is the no-gateway build: zero network, and the button is disabled
+    // too — this is the second of the two guards, not the only one.
+    if (base == null || !importFile || !canReadColumns(entityId, importFile)) return
+    if (reqInFlight.current) return
+    reqInFlight.current = true
+    setImportError(null)
+    previewImport(importAuth, base, importFile)
+      .then(
+        (res) => {
+          setPreview(res)
+          setMapping(initMappingFromHeaders(res.columns))
+          setCreateStep('mapping')
+        },
+        (err: unknown) => setImportError(toApiError(err)),
+      )
+      .finally(() => {
+        reqInFlight.current = false
+      })
+  }
+
+  function startImport() {
+    const base = gatewayBase()
+    if (base == null || !importFile || !entityId || !mapping || !canStartImport(preview, mapping)) return
+    if (reqInFlight.current) return
+    reqInFlight.current = true
+    setImportError(null)
+    setReport(null)
+    // Seed 'sending' with an unknown total: uploadPercent maps total 0 to null, so the
+    // UI opens on the indeterminate spinner and only flips to a determinate bar if the
+    // transport actually reports a computable length. Zero progress events is legal
+    // (importApi IMPAPI-08), so nothing here may assume a determinate frame ever lands.
+    setUploadPhase({ kind: 'sending', loaded: 0, total: 0 })
+    createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase)
+      .then(
+        (res) => {
+          setReport(res)
+          setCreateStep('report')
+        },
+        // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
+        // report step that has no report to show.
+        (err: unknown) => setImportError(toApiError(err)),
+      )
+      .finally(() => {
+        reqInFlight.current = false
+      })
+  }
+
   function parseFile() {
     if (!uploadFile) return
     clearVal()
     const TOTAL = PARSE_LABELS.length
-    const fileId = uploadFile
     setCreateStep('parsing')
     setParseIdx(0)
     parseTimer.current = setInterval(() => {
@@ -194,16 +313,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
         if (next >= TOTAL) {
           if (parseTimer.current) clearInterval(parseTimer.current)
           parseTimer.current = null
-          // Tabular files hand off to Map; PDF/JPG have no columns to map, so
-          // they go straight to the single-invoice form as before.
-          parseDone.current = setTimeout(() => {
-            if (FILE_DATA[fileId]) {
-              setMapping(initMapping(fileId))
-              setCreateStep('mapping')
-            } else {
-              setCreateStep('form')
-            }
-          }, 320)
+          // Sample documents have no columns to map, so they go straight to the
+          // single-invoice form. Spreadsheets take the server-backed import path
+          // (Import -> Map -> Report), which never routes through here.
+          parseDone.current = setTimeout(() => setCreateStep('form'), 320)
           return TOTAL
         }
         return next
@@ -261,21 +374,12 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   function continueMapping() {
     if (!mapping || !mapping.invoice_number) return
-    setCreateStep(groupInvoices(uploadFile, mapping).length > 1 ? 'review' : 'form')
+    startImport()
   }
 
   function backToImport() {
     clearVal()
     setCreateStep('upload')
-  }
-
-  function backToMapping() {
-    clearVal()
-    setCreateStep('mapping')
-  }
-
-  function createDrafts() {
-    runValidation()
   }
 
   function skipUpload() {
@@ -291,12 +395,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     const inv = { number: d.number, buyer: d.buyer, buyerTin: d.buyerTin, buyerAddress: d.buyerAddress, date: d.date, items: d.items, status: 'Approved' as const, wht: d.wht, docType: d.docType || 'B2B' }
     setClients((cs) => cs.map((c, idx) => (idx === activeIdx ? { ...c, invoices: [inv, ...c.invoices] } : c)))
     setView('detail')
-    setSelectedId(inv.number)
+    setDetailSel(selectMock(inv.number))
   }
 
   function selectInvoice(number: string) {
     setView('detail')
-    setSelectedId(number)
+    setDetailSel(selectMock(number))
+  }
+
+  // Click-through from a rule-violation row in the import report (Core AC4). `id` is a
+  // real invoice UUID (invoice_violations[].invoice_id), NOT a mock invoice number — so
+  // InvoiceDetail renders its placeholder rather than resolving it against active.invoices.
+  function openImportedInvoice(id: string) {
+    setView('detail')
+    setDetailSel(selectImported(id))
   }
 
   function toggleSandbox() {
@@ -325,7 +437,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   function transmit() {
     const idx = activeIdx
-    const sel = selectedId
+    const sel = detailSel.selectedId
     setClients((cs) =>
       cs.map((c, i) => (i === idx ? { ...c, invoices: c.invoices.map((inv) => (inv.number === sel ? { ...inv, status: 'Transmitted' as const } : inv)) } : c)),
     )
@@ -353,7 +465,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     mapping,
     armedField,
     dragField,
-    selectedId,
+    selectedId: detailSel.selectedId,
     filter,
     switcherOpen,
     sandbox,
@@ -363,6 +475,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     connectorMappings,
     valIdx,
     parseIdx,
+    entityId,
+    importFile,
+    preview,
+    uploadPhase,
+    importError,
+    report,
+    importedInvoiceId: detailSel.importedInvoiceId,
     nav,
     setFilter,
     toggleSwitcher,
@@ -383,12 +502,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clickCol,
     unmap,
     continueMapping,
+    selectEntity,
+    selectImportFile,
+    readColumns,
     backToImport,
-    backToMapping,
-    createDrafts,
     skipUpload,
     approve,
     selectInvoice,
+    openImportedInvoice,
     toggleSandbox,
     setSettingsTab,
     toggleConnector,

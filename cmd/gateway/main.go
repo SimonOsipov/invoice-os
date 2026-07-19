@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
@@ -64,8 +65,10 @@ func main() {
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,
 		SeedFS:       dbsql.FS,
+		ConnectWait:  dbConnectWait,
+		Logger:       app.Logger,
 	}); err != nil {
-		log.Fatalf("gateway: provision: %v", err)
+		fatal(app.Logger, "gateway: provision: %v", err)
 	}
 
 	verifier, err := auth.NewVerifier(auth.Config{
@@ -74,12 +77,12 @@ func main() {
 		Logger:  app.Logger,
 	})
 	if err != nil {
-		log.Fatalf("gateway: verifier: %v", err)
+		fatal(app.Logger, "gateway: verifier: %v", err)
 	}
 
 	upstreams, err := loadUpstreams()
 	if err != nil {
-		log.Fatalf("gateway: upstreams: %v", err)
+		fatal(app.Logger, "gateway: upstreams: %v", err)
 	}
 
 	// CORS layer, composed OUTSIDE the JWT verifier: the app SPA and the gateway are
@@ -105,7 +108,7 @@ func main() {
 	if gateway.MockIssuerEnabled(app.Config.Environment, os.Getenv("GATEWAY_MOCK_ISSUER")) {
 		issuer, err := auth.NewMockIssuer(mustEnv("AUTH_ISSUER"))
 		if err != nil {
-			log.Fatalf("gateway: mock issuer: %v", err)
+			fatal(app.Logger, "gateway: mock issuer: %v", err)
 		}
 		app.Mux.Handle("GET /.well-known/jwks.json", issuer.JWKSHandler())
 		// /auth/login is called cross-origin by the browser, so wrap it in the same CORS
@@ -119,12 +122,29 @@ func main() {
 	}
 
 	if err := app.Run(context.Background()); err != nil {
-		log.Fatalf("gateway: %v", err)
+		fatal(app.Logger, "gateway: %v", err)
 	}
 }
 
 // routePrefix must match the gateway package's mount point.
 const routePrefix = "/api/"
+
+// dbConnectWait is how long boot-time provisioning waits for Postgres to accept
+// its first connection before giving up (db.ProvisionConfig.ConnectWait).
+//
+// The gateway is the ONE binary that boots against a Postgres which may not be
+// serving yet: in a freshly forked PR environment its database container has
+// only just been deployed onto a brand-new volume and is still running initdb.
+// Before this, provisioning gave that container 2.5s (db/bootstrap.go's 5
+// attempts x 500ms) and MigrateUp gave it none at all, then log.Fatal'd — a
+// crash before the listener opens, which Railway can only report as "service
+// unavailable" for the whole healthcheck window.
+//
+// 120s is chosen to sit comfortably INSIDE Railway's 300s healthcheck window, so
+// a Postgres that is genuinely broken (rather than merely slow) still produces a
+// named, readable failure with time to spare instead of being reported as a
+// healthcheck timeout with no cause attached.
+const dbConnectWait = 120 * time.Second
 
 // loadUpstreams reads each routed service's base URL from <NAME>_URL. A missing
 // or invalid URL fails startup: a gateway that cannot reach a service it fronts
@@ -149,9 +169,30 @@ func loadUpstreams() (map[string]*url.URL, error) {
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("gateway: %s is required", key)
+		// slog.Default(), not app.Logger: mustEnv is called while building the
+		// db.ProvisionConfig / auth.Config literals, i.e. inside argument lists
+		// where app.Logger is not in scope. platform.New has already run
+		// slog.SetDefault by then, so this is the same process logger — and
+		// going through fatal keeps this failure at ERROR like every other boot
+		// failure. See fatal's doc comment for why that matters.
+		fatal(slog.Default(), "gateway: %s is required", key)
 	}
 	return v
+}
+
+// fatal logs a boot failure at ERROR and exits non-zero.
+//
+// It exists because log.Fatalf does NOT do that here. platform.New calls
+// slog.SetDefault (internal/platform/server.go), which routes the standard log
+// package through slog at INFO — so every boot failure this binary reported was
+// emitted as {"level":"INFO"}, and would have been emitted NOWHERE AT ALL under
+// LOG_LEVEL=warn or error. A gateway that crash-loops before its listener opens
+// is invisible to Railway except as "service unavailable", so the boot log is
+// the only diagnostic there is; it must not be filterable by log level or
+// mislabelled as routine.
+func fatal(logger *slog.Logger, format string, args ...any) {
+	logger.Error(fmt.Sprintf(format, args...))
+	os.Exit(1)
 }
 
 // resolveRolePassword resolves one role's password, preferring newName

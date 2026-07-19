@@ -88,9 +88,14 @@ func main() {
 	// exactly) -- no second gate, no adapter type, one gate driving both the
 	// manual validate endpoint and the importer's batch pre-check
 	// ([import-validates]/[dry-run-evaluates]).
+	// /v1/imports/preview sits on the same mux and middleware chain but is
+	// deliberately STATELESS ([preview-stateless]): it echoes back the header
+	// and first few rows of the bytes just uploaded, touching no store, no
+	// service and no entity, so it takes neither impSvc nor a logger.
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler())
 
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("invoice: %v", err)

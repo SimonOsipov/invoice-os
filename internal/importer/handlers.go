@@ -88,6 +88,26 @@ func nilIfEmpty(s string) *string {
 	return &s
 }
 
+// maxSampleRows caps the number of data rows previewResponse.SampleRows
+// echoes back to the caller (M4-08-01, task-170 Implementation Plan §B).
+const maxSampleRows = 5
+
+// previewResponse is the POST /v1/imports/preview success body: DecodeFacts
+// merged with Decode's header/rows, capped and reshaped for a preview (no
+// persistence, no BatchResult -- see PreviewHandler's doc comment). Field
+// order = JSON key order = the story's example. Delimiter/Encoding mirror
+// importResponse exactly (nilIfEmpty, JSON null for an xlsx upload).
+// Columns/SampleRows must always render as a JSON array, never null -- see
+// PreviewHandler's nil-slice guard.
+type previewResponse struct {
+	Format     string     `json:"format"`
+	Delimiter  *string    `json:"delimiter"`
+	Encoding   *string    `json:"encoding"`
+	Columns    []string   `json:"columns"`
+	SampleRows [][]string `json:"sample_rows"`
+	RowsTotal  int        `json:"rows_total"`
+}
+
 // detectFormat resolves the uploaded file's format ("csv" | "xlsx") from its
 // filename extension first, falling back to its declared Content-Type when
 // the extension is missing or unrecognized ([mapping-transport] leaves both
@@ -229,6 +249,98 @@ func CreateHandler(imp func(ctx context.Context, entityID string, mapping map[st
 			InvoicesClean:          res.InvoicesClean,
 			InvoicesWithViolations: res.InvoicesWithViolations,
 			InvoiceViolations:      res.InvoiceViolations,
+		})
+	}
+}
+
+// PreviewHandler returns POST /v1/imports/preview: a stateless preview over
+// an uploaded file's bytes (no entity_id, no mapping, no persistence --
+// [preview-stateless]/[preview-auth]). Flow mirrors CreateHandler's exactly,
+// minus everything that touches state: identity-first-401 -> upload-cap via
+// http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (MaxBytesError ->
+// 413, any other parse error -> 400) -> the "file" part -> format detection
+// (unrecognized -> 400) -> Decode (undecodable -> 400) -> a 200
+// previewResponse. See handlers_preview_test.go for the PRV-01..PRV-16 map.
+//
+// Takes NO logger, unlike its sibling factories: CreateHandler needs one only
+// for its 500 branch, and preview has no 500 path -- every failure here is
+// 401/413/400 -- so a logger parameter would be dead weight.
+//
+// It reuses detectFormat/Decode/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
+// writeJSON/writeError and adds NO second parsing path on purpose
+// ([preview-reuses-decode]): the columns this endpoint shows the user must be
+// the same bytes the import path will later read, or client and server
+// disagree about where the header is -- the exact failure [column-source]
+// exists to prevent. PRV-16 pins that by comparing against a direct Decode.
+func PreviewHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Ordering is load-bearing: the identity check precedes the upload
+		// cap, so an oversized body from an unauthenticated caller is 401,
+		// not 413 -- we never read a stranger's bytes (PRV-01).
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+		if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the upload size limit")
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid multipart form")
+			return
+		}
+
+		file, fh, err := r.FormFile("file")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "file is required")
+			return
+		}
+		defer file.Close()
+
+		format := detectFormat(fh.Filename, fh.Header.Get("Content-Type"))
+		if format == "" {
+			writeError(w, http.StatusBadRequest, "unrecognized file format")
+			return
+		}
+
+		header, rows, facts, err := Decode(file, format)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			return
+		}
+
+		// Decode returns nil (not an empty slice) for both header and rows on
+		// an empty file (decode.go:102-104), and re-slicing a nil slice keeps
+		// it nil -- encoding/json renders that as `null`. Columns/SampleRows
+		// are contracted to ALWAYS be arrays (PRV-08), so coerce explicitly
+		// rather than slicing.
+		columns := header
+		if columns == nil {
+			columns = []string{}
+		}
+		sample := make([][]string, 0, maxSampleRows)
+		for i, row := range rows {
+			if i == maxSampleRows {
+				break
+			}
+			// Verbatim: no copy, no padding, no trimming. Decode tolerates
+			// ragged rows (FieldsPerRecord = -1) and the import path reads
+			// cells by bounds-checked index, so padding here would show the
+			// user data the importer will never see ([preview-samples]).
+			sample = append(sample, row)
+		}
+
+		writeJSON(w, http.StatusOK, previewResponse{
+			Format:     facts.Format,
+			Delimiter:  nilIfEmpty(facts.Delimiter),
+			Encoding:   nilIfEmpty(facts.Encoding),
+			Columns:    columns,
+			SampleRows: sample,
+			// Every data row, not just the previewed ones.
+			RowsTotal: len(rows),
 		})
 	}
 }

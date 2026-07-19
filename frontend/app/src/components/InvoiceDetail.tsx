@@ -7,6 +7,7 @@ import { amount, fmt, fmtPlain } from '../lib/format'
 import { statusStyle, defaultDraft } from '../lib/clients'
 import { validate } from '../lib/validation'
 import { fiscalRecord, Qr } from '../lib/qr'
+import { detailTarget } from '../lib/importReport'
 import { crossGlyph, docGlyph2, downloadGlyph, sendGlyph, shieldGlyph, tickGlyph13, warnGlyph } from '../glyphs'
 import type { ReactNode } from 'react'
 import type { Invoice, PlatformCtx } from '../types'
@@ -19,6 +20,34 @@ const DOC_FULL: Record<string, string> = {
 
 export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
   const { active, selectedId } = ctx
+
+  // Click-through from the import report (M4-08-05, AC7). This MUST return before the
+  // `invList.find(...) || invList[0] || fallback` chain below: an imported invoice is a
+  // real server UUID that matches no mock invoice number, so falling through would render
+  // an UNRELATED mock invoice — someone else's buyer, items and totals — under a real
+  // invoice's id. That is worse than showing nothing ([click-through-honest-placeholder]).
+  // M4-09 replaces this branch with a real fetch; nothing else about the wiring changes.
+  const target = detailTarget({ selectedId, importedInvoiceId: ctx.importedInvoiceId })
+  if (target.kind === 'imported') {
+    return (
+      <div style={{ padding: '24px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
+        <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
+          ← All invoices
+        </button>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: '28px 24px' }}>
+          <h1 style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.01em', margin: '0 0 8px' }}>Imported invoice</h1>
+          <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6, maxWidth: 560 }}>
+            This invoice was created by the import and lives on the server. The detail view does not read live invoice data yet, so there is nothing to show here — it will not fall back to another invoice.
+          </p>
+          <div className="label" style={{ marginBottom: 4 }}>
+            Invoice id
+          </div>
+          <div className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-all' }}>{target.invoiceId}</div>
+        </div>
+      </div>
+    )
+  }
+
   const invList = active.invoices
   // Fall back to a synthesized draft-shaped invoice, mirroring the prototype's guard.
   const fallback = defaultDraft(active)

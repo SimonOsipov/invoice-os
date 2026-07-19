@@ -4,6 +4,8 @@
 // Type-only import: `portfolio.ts` imports `StatusStyle` from this file, so a runtime
 // import here would form a cycle. `AuthedFetch` is only ever used as a type below.
 import type { AuthedFetch } from './lib/portfolio'
+import type { ApiError } from '@invoice-os/api-client'
+import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
@@ -171,40 +173,18 @@ export type Mode = 'firm' | 'inhouse'
 
 export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
-export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'review' | 'validating' | 'results'
+// 'report' added by M4-08-04 (plan B1/DRIFT-1) — one subtask ahead of story §6's
+// original assignment (M4-08-05), because wizardHeader's report->2 branch does not
+// compile against this union and CreateFlow.tsx's STAGE_OF is a total Record over it.
+// -05 still owns the CreateReport render branch; this commit adds only the member.
+export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'validating' | 'results' | 'report'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.
 export type CanonField = { key: string; required?: boolean }
 
-// A parsed spreadsheet. One row is one invoice LINE ITEM, not one invoice —
-// rows group into invoices by the column mapped to `invoice_number`, so header
-// values (dates, buyer, totals) repeat across every row of the same invoice.
-export type FileData = {
-  delimiter: string
-  encoding: string
-  sizeMeta: string
-  headers: string[]
-  rows: Record<string, string>[]
-}
-
 // canonical field key -> source column header, or null while unplaced
 export type Mapping = Record<string, string | null>
-
-// Rows of one invoice disagreeing on a field that must be constant across it.
-// `rows` are spreadsheet row numbers so the user can find them in their file.
-export type HeaderConflict = { field: string; label: string; rows: number[]; values: string[] }
-
-export type InvoiceGroup = {
-  number: string
-  issueDate: string | null
-  buyer: string | null
-  total: string | null
-  lineCount: number
-  sheetRows: number[]
-  conflicts: HeaderConflict[]
-  quarantined: boolean
-}
 
 export type SettingsTab = 'connectors' | 'api' | 'signing'
 
@@ -262,6 +242,24 @@ export type PlatformCtx = {
   valIdx: number
   parseIdx: number
 
+  // --- Multi-invoice import path (M4-08-04) ---------------------------------
+  // These live on ctx rather than in CreateUpload's local state because the two
+  // halves of the flow are two components: the entity + file are chosen in
+  // CreateUpload, which UNMOUNTS when createStep leaves 'upload', while
+  // createImport fires from CreateMapping. Local state would lose both in between.
+  entityId: string | null
+  importFile: File | null
+  preview: ImportPreview | null
+  uploadPhase: UploadPhase
+  importError: ApiError | null
+  report: ImportReport | null
+  // Set by openImportedInvoice (M4-08-05) when the user clicks a rule-violation row in
+  // the report. Mutually exclusive with `selectedId` by construction — both are members
+  // of one DetailSelection atom in App.tsx (lib/importReport.ts), so neither can be left
+  // stale when the other is written. Non-null makes InvoiceDetail render its honest
+  // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
+  importedInvoiceId: string | null
+
   nav: (id: NavId) => void
   setFilter: (f: string) => void
   toggleSwitcher: () => void
@@ -282,12 +280,14 @@ export type PlatformCtx = {
   clickCol: (header: string) => void
   unmap: (header: string) => void
   continueMapping: () => void
+  selectEntity: (id: string | null) => void
+  selectImportFile: (f: File | null) => void
+  readColumns: () => void
   backToImport: () => void
-  backToMapping: () => void
-  createDrafts: () => void
   skipUpload: () => void
   approve: () => void
   selectInvoice: (number: string) => void
+  openImportedInvoice: (id: string) => void
   toggleSandbox: () => void
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void

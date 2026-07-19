@@ -100,7 +100,7 @@ separate migration job holds its own inbound DB access.
 > connects through a public DB proxy for anything — `health-gate` (the gateway's own
 > `/healthz`) replaces liveness probing, HTTP against the gateway replaces the E2E suites'
 > old direct DB access, and the boot-time seed replaces the deleted reset/seed job (see
-> §2 below and [topology-e2e.md](./topology-e2e.md)). The underlying Railway TCP proxy
+> §7 below and [topology-e2e.md](./topology-e2e.md)). The underlying Railway TCP proxy
 > resource on `development`'s Postgres is deleted via a separate, human Railway-console
 > step (M4-22 Escalation E2) — until that completes, the resource itself may still exist,
 > unused by anything in this repo.

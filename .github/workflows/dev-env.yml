@@ -413,14 +413,35 @@ jobs:
 
           echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url"
 
+      # A fork inherits `development`'s URL variables, so without this the PR's app
+      # SPA is BUILT pointing at the development gateway (measured in pr-67, run
+      # 29666129933) and the development gateway refuses its origin. Must run after
+      # `urls` (it consumes the discovered values, never constructs them — F7) and
+      # before any service that bakes or reads them deploys. PR path only: the
+      # dispatch path targets `development` itself, whose variables are the source
+      # of truth and are never rewritten from here.
+      - name: Point the fork's URL variables at the fork (never at development)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+          GATEWAY_URL: ${{ steps.urls.outputs.gateway_url }}
+          APP_URL: ${{ steps.urls.outputs.app_url }}
+          LANDING_URL: ${{ steps.urls.outputs.landing_url }}
+          OPS_CONSOLE_URL: ${{ steps.urls.outputs.ops_console_url }}
+        run: |
+          bash scripts/ci/railway-env.sh reconcile-urls \
+            "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The
-  #    two `railway variables --set` calls this job used to make at deploy
-  #    time (GATEWAY_MOCK_ISSUER, CORS_ALLOWED_ORIGINS) are GONE — both are
-  #    now durable Railway reference variables (M4-21-05, task-129), which
-  #    Railway forks into every PR environment along with the rest of
-  #    `development`'s variable topology.
+  #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine.
+  #    CORS_ALLOWED_ORIGINS is a URL list and does NOT survive a fork usefully:
+  #    M4-21-05 recorded it as a durable reference variable, but measured in
+  #    pr-67 the fork's effective value was development's origin list. The
+  #    prepare-env `reconcile-urls` step now sets it from the discovered URLs
+  #    before this job runs.
   deploy-gateway:
     name: Deploy gateway → ${{ needs.prepare-env.outputs.environment }}
     needs: [await-ci, prepare-env]
@@ -523,11 +544,12 @@ jobs:
         timeout-minutes: 15
 
   # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
-  #    The app SPA's VITE_GATEWAY_URL is now a durable Railway reference
-  #    variable (M4-21-05, task-129: app.VITE_GATEWAY_URL =
-  #    https://${{gateway.RAILWAY_PUBLIC_DOMAIN}}), forked per-environment
-  #    along with the rest of the variable topology — the per-run `railway
-  #    variables --set` this job used to do is GONE.
+  #    Vite bakes VITE_* at BUILD time (frontend/*/Dockerfile), so the values
+  #    these images ship are whatever the service variables hold right now —
+  #    which prepare-env's `reconcile-urls` step has already pointed at THIS
+  #    environment. Measured in pr-67 before that step existed: the app bundle
+  #    shipped development's gateway URL, so a PR's SPA drove the shared
+  #    development fleet.
   deploy-spas:
     name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment }}
     needs: [health-gate, prepare-env]

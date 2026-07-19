@@ -2,6 +2,7 @@
 # scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
 #                            ensure-environment <name>|audit-sealed-variables|
 #                            reconcile-fork <environment-id>|
+#                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            delete-environment <name>|list-environments>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
@@ -895,6 +896,106 @@ reconcile_domains() {
   reconcile_domain "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console
 }
 
+# --- Reconcile C2: per-environment URL variables ------------------------------
+#
+# MEASURED 2026-07-19 on the first PR run that ever reached E2E (run 29666129933,
+# environment pr-67): the app SPA served from app-pr-67.up.railway.app had
+# `https://gateway-development-997b.up.railway.app` baked into its JS bundle — the
+# DEVELOPMENT gateway, not its own. Topology's two verified-login specs failed
+# because the cross-origin GET /v1/me was refused: the development gateway's
+# CORS_ALLOWED_ORIGINS does not list a pr-<N> origin, and a preflight from
+# app-pr-67 against gateway-pr-67 returned 204 with NO Access-Control-Allow-Origin.
+#
+# dev-env.yml's deploy-gateway comment asserts these are "durable Railway reference
+# variables (M4-21-05) which Railway forks into every PR environment". Whatever the
+# stored form, the EFFECTIVE value in the fork resolved to development's URL — so a
+# PR environment's frontend talked to the shared development fleet. That is not a
+# cosmetic drift: it is precisely the cross-PR interference e2e/targets.ts refuses
+# to risk, and it makes an "isolated" PR environment a lie.
+#
+# So these five are reconciled EXPLICITLY from the URLs the `urls` step DISCOVERED
+# (never constructed — F7 holds: this command is passed URLs, it never derives them).
+# Correct whether the inherited value was a literal or a mis-resolving reference.
+#
+# skipDeploys is set: every service that consumes these deploys AFTER this step
+# (gateway next, SPAs after the health gate), and the VITE_* pair is baked at build
+# time by frontend/*/Dockerfile — so the deploy that matters is the one that follows.
+# shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
+VARIABLE_UPSERT_MUTATION='mutation varUpsert($input: VariableUpsertInput!) {
+  variableUpsert(input: $input)
+}'
+
+# shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
+VARIABLES_QUERY='query vars($p: String!, $e: String!, $s: String!) {
+  variables(projectId: $p, environmentId: $e, serviceId: $s)
+}'
+
+upsert_variable() {
+  local env_id="$1" svc_id="$2" label="$3" name="$4" value="$5" input
+
+  input=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" \
+    --arg n "$name" --arg v "$value" \
+    '{input: {projectId: $p, environmentId: $e, serviceId: $s, name: $n, value: $v, skipDeploys: true}}')
+
+  graphql_post "$(gql_body "$VARIABLE_UPSERT_MUTATION" "$input")" \
+    "setting $label.$name in environment $env_id"
+  echo "  $label.$name = $value"
+}
+
+# Re-read every reconciled variable from Railway and fail if any did not stick.
+# Same discipline as reconcile_domain: the mutation's own response is never the
+# evidence. Without this the step would report success while the fork still
+# pointed at development — the exact silently-green failure this story is about.
+verify_variable() {
+  local env_id="$1" svc_id="$2" label="$3" name="$4" want="$5" got
+
+  graphql_post "$(gql_body "$VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading $label variables in environment $env_id"
+
+  got=$(echo "$GQL_RESPONSE" | jq -r --arg n "$name" '.data.variables[$n] // empty')
+  if [ "$got" != "$want" ]; then
+    echo "::error::$label.$name in environment $env_id is '$got' after upsert, expected '$want'. The fork would deploy pointing at the wrong environment."
+    exit 1
+  fi
+}
+
+reconcile_url_variables() {
+  local env_id="$1" gateway_url="$2" app_url="$3" landing_url="$4" ops_url="$5"
+  local origins="$app_url,$landing_url,$ops_url"
+
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to rewrite URL variables in the persistent development environment ($env_id)."
+    exit 1
+  fi
+
+  echo "Reconciling per-environment URL variables in $env_id ..."
+  upsert_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
+  upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
+
+  verify_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
+  verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
+  verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
+  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
+  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
+  echo "All 5 URL variables confirmed by independent re-query."
+}
+
+# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url>
+cmd_reconcile_urls() {
+  if [ "$#" -ne 5 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ]; then
+    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url>"
+    exit 2
+  fi
+  require_env
+  require_source_env
+  require_fork_ids
+  reconcile_url_variables "$1" "$2" "$3" "$4" "$5"
+}
+
 # --- Reconcile D: Postgres bring-up ------------------------------------------
 #
 # wait_for_postgres <env-id> <deployment-id|"">
@@ -1300,10 +1401,11 @@ case "${1:-}" in
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
+  reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

@@ -50,18 +50,11 @@ import {
   listInvoices,
   getInvoice,
   validateInvoice,
-  type Invoice,
+  editInvoice,
+  getInvoiceHistory,
 } from './client'
 import { freshTin } from './fixtures'
 import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
-import {
-  dbEnabled,
-  requireDbInCI,
-  activeRuleSetVersionId,
-  statusHistoryHasTransition,
-  correctInvoiceVAT,
-  dbNow,
-} from './db'
 
 const TOTAL_INVOICES = 500
 // The designed split PERF-02 asserts against: the first 50 invoice numbers
@@ -162,16 +155,6 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     // GET/list/DB round trips against a possibly-cold shared dev fleet.
     test.setTimeout(150_000)
 
-    // In CI a missing DSN is a HARD failure, never a skip: without it PERF-03/04
-    // silently narrow to a self-consistency check and PERF-05 -- the Day-60
-    // stamp gate this whole story "Ships when true" on -- vanishes entirely,
-    // while the job still reports green. That invisible green is precisely the
-    // bug this call closes; see api/db.ts's requireDbInCI. Asserted HERE, at the
-    // top, so a mis-wired workflow fails in milliseconds rather than after the
-    // ~40s 500-invoice import below. Locally it is a no-op and the env-gated
-    // branches further down skip as designed.
-    requireDbInCI()
-
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: 'M4-04 Perf Co', tin: freshTin() })
 
@@ -244,60 +227,66 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     expect(cleanInvoice.status).toBe('validated')
     expect(cleanInvoice.violations).toEqual([])
 
-    // PERF-03/04: rule_set_version_id equals v2's ACTUAL uuid, queried LIVE
-    // (api/db.ts's activeRuleSetVersionId) -- never a hardcoded literal, per
-    // the task's Stage-1 addendum (both this story's pin detectors watch for
-    // exactly that). Locally, with no DATABASE_SUPERUSER_URL_DEV, there is no
-    // way to query it live, so this narrows to a non-empty + cross-invoice
-    // self-consistency check; in CI (where the secret is wired) it is the
-    // full live-uuid-equality assertion.
+    // PERF-03/04: rule_set_version is the ONE shared stamp the whole
+    // 500-invoice batch was evaluated against ([batch-of-one]) -- already
+    // parsed into `body` and already asserted === ACTIVE_RULE_SET_VERSION by
+    // PERF-02 above, so no fresh call is needed here to reuse it. A fresh
+    // POST .../validate is not an option for PERF-03 either way: cleanInvoice
+    // is ALREADY `validated` (the importer promotes a clean invoice DURING
+    // import, [import-validates]), and Gate.Validate is draft-only (409 on a
+    // non-draft invoice). What IS new here is rule_set_version_id, the
+    // live-stamped uuid on each invoice: asserted non-empty on both and
+    // equal to each other, proving the clean and violating invoices were
+    // stamped by the SAME rule-set-version row with no DB oracle needed to
+    // compare against.
     expect(cleanInvoice.rule_set_version_id, 'a validated invoice must carry a stamped rule_set_version_id').toBeTruthy()
     expect(
       violatingInvoice.rule_set_version_id,
       'a gate-evaluated invoice must carry a stamped rule_set_version_id even when blocked ([error semantics])',
     ).toBeTruthy()
-    if (dbEnabled()) {
-      const liveV2Id = await activeRuleSetVersionId()
-      expect(cleanInvoice.rule_set_version_id).toBe(liveV2Id)
-      expect(violatingInvoice.rule_set_version_id).toBe(liveV2Id)
-    } else {
-      test.info().annotations.push({
-        type: 'skip',
-        description:
-          'PERF-03/04 live-uuid-equality: DATABASE_SUPERUSER_URL_DEV not set (local run) -- asserted non-empty + self-consistent only',
-      })
-      // Same batch, same active rule-set -- the two stamps must agree with
-      // EACH OTHER even without a live DB oracle to compare both against.
-      expect(cleanInvoice.rule_set_version_id).toBe(violatingInvoice.rule_set_version_id)
-    }
+    expect(cleanInvoice.rule_set_version_id).toBe(violatingInvoice.rule_set_version_id)
 
     // ---- PERF-05: the Day-60 stamp gate -- the M4 "Ships when true" clause.
-    // Correct the PERF-04 invoice, re-validate, confirm invoice_status_history
-    // shows draft->validated with the version stamped. The "correct" step has
-    // NO HTTP path (api/db.ts's file header: Store.Update is not wired to any
-    // route) -- only a direct superuser DB write reaches it, so this whole
-    // step (not just one assertion within it) skips locally.
-    if (!dbEnabled()) {
-      test.info().annotations.push({
-        type: 'skip',
-        description:
-          'PERF-05 skipped: DATABASE_SUPERUSER_URL_DEV not set (local run) -- correcting the invoice has no HTTP path (see api/db.ts header), only a direct DB write.',
-      })
-      console.warn('[perf] PERF-05 skipped locally: no DATABASE_SUPERUSER_URL_DEV')
-    } else {
-      const t0 = await dbNow()
-      await correctInvoiceVAT(violatingEntry.invoice_id, '75.00', '1075.00')
+    // Correct the PERF-04 invoice over HTTP (PATCH /v1/invoices/{id},
+    // M4-05-03), re-validate over HTTP (POST .../validate), then read
+    // invoice_status_history over HTTP (GET .../history, M4-22-01) and
+    // assert the FULL expected sequence, not "contains a draft->validated
+    // entry" -- there is no DB-clock `since` baseline any more to scope the
+    // match to a fresh transition, so exactness (exact length, exact order,
+    // exact from/to on every row) is the replacement guard against a stale
+    // transition false-positiving this assertion.
+    const corrected = await editInvoice(token, violatingEntry.invoice_id, { vat: '75.00', total: '1075.00' })
+    expect(corrected.status).toBe('draft')
 
-      const revalidated: Invoice = await validateInvoice(token, violatingEntry.invoice_id)
-      expect(revalidated.status).toBe('validated')
-      expect(revalidated.violations).toEqual([])
+    const revalidated = await validateInvoice(token, violatingEntry.invoice_id)
+    expect(revalidated.status).toBe('validated')
+    expect(revalidated.violations).toEqual([])
+    expect(revalidated.rule_set_version).toBe(ACTIVE_RULE_SET_VERSION)
 
-      const stamped = await statusHistoryHasTransition(violatingEntry.invoice_id, 'draft', 'validated', t0)
-      expect(stamped, 'expected an invoice_status_history row draft->validated for the corrected invoice').toBe(true)
+    // actor is deterministic on both rows: every call in this test -- the
+    // import that wrote the genesis row, and the validate call just above
+    // that wrote the second -- authenticates as the same PERSONAS.A token.
+    const history = await getInvoiceHistory(token, violatingEntry.invoice_id)
+    expect(history).toEqual([
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, changed_at: expect.any(String) },
+      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, changed_at: expect.any(String) },
+    ])
 
-      const liveV2Id = await activeRuleSetVersionId()
-      expect(revalidated.rule_set_version_id).toBe(liveV2Id)
-    }
+    // ---- PERF-05 negative: history is a real transition, not an echo ----
+    // A spare violating invoice from the SAME batch (invoice_violations[1],
+    // never [0] -- that one is the invoice corrected and promoted above) that
+    // was never validated: proves the exact-sequence assertion above isn't
+    // vacuously true. Must be a VIOLATING invoice, not a clean one -- all 450
+    // clean invoices in this batch were already promoted draft->validated
+    // DURING import ([import-validates]), so a clean invoice's history would
+    // already contain that transition and prove nothing. Only a still-draft
+    // violating invoice (a blocked verdict writes no promotion row) genuinely
+    // has ONLY its genesis row.
+    const neverValidatedEntry = body.invoice_violations[1]
+    const neverValidatedHistory = await getInvoiceHistory(token, neverValidatedEntry.invoice_id)
+    expect(neverValidatedHistory).toEqual([
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, changed_at: expect.any(String) },
+    ])
   })
 
   // PERF-06: the fleet is healthy after deploy -- 04 booted with S2S_TOKEN set

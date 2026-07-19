@@ -310,11 +310,61 @@ export function getInvoice(token: string, id: string): Promise<Invoice> {
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { token })
 }
 
+// InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9
+// optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03) --
+// identity/lifecycle are not the edit's job ([D9]). issue_date is a plain string on
+// the wire (Go *time.Time unmarshals from/marshals to an RFC3339 string).
+export interface InvoiceEditInput {
+  issue_date?: string
+  supplier_tin?: string
+  supplier_name?: string
+  buyer_tin?: string
+  buyer_name?: string
+  currency?: string
+  subtotal?: string
+  vat?: string
+  total?: string
+}
+
+// editInvoice(): PATCH /v1/invoices/{id} (M4-05-03). Precondition: the invoice must be
+// draft OR validated (fixable-state guard) -- editing a validated invoice demotes it to
+// draft in the same tx (the fix-loop's demotion edge).
+export function editInvoice(token: string, id: string, body: InvoiceEditInput): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { method: 'PATCH', body, token })
+}
+
+// StatusChange mirrors internal/invoice/invoice.go's StatusChange exactly: one
+// invoice_status_history row (task-160/M4-22-01). from_status is nullable -- the
+// genesis row has no predecessor state.
+export interface StatusChange {
+  from_status: Invoice['status'] | null
+  to_status: Invoice['status']
+  actor: string
+  changed_at: string
+}
+
+// getInvoiceHistory(): GET /v1/invoices/{id}/history (task-160/M4-22-01). The success
+// body is a BARE JSON array, no pagination/envelope ([history-endpoint-scope]) --
+// unlike every other wrapper in this file, whose body is a JSON object. Ordered
+// changed_at ASC, id ASC.
+export function getInvoiceHistory(token: string, id: string): Promise<StatusChange[]> {
+  return apiFetch<StatusChange[]>(`${apiBase()}/api/invoice/v1/invoices/${id}/history`, { token })
+}
+
 // validateInvoice(): POST /v1/invoices/{id}/validate -- THE gate ([gate-endpoint]), the
 // only route to `validated` and the on-demand re-validate endpoint. A blocking verdict
 // is still a 200 carrying violations as data (internal/invoice/handlers.go's
 // ValidateHandler doc), never an HTTP error -- ApiError from this call means 04 was
 // unreachable (502) or has no published rule-set (503), never "the invoice has errors".
-export function validateInvoice(token: string, id: string): Promise<Invoice> {
-  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
+//
+// ValidateInvoiceResult is the real wire shape (handlers.go's validateResponse): the
+// Invoice fields plus one additive sibling key, rule_set_version -- the plain evaluated
+// int (or null when nothing was evaluated), distinct from Invoice.rule_set_version_id's
+// live-stamped uuid above; no route returns both names for the same concept.
+export interface ValidateInvoiceResult extends Invoice {
+  rule_set_version: number | null
+}
+
+export function validateInvoice(token: string, id: string): Promise<ValidateInvoiceResult> {
+  return apiFetch<ValidateInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
 }

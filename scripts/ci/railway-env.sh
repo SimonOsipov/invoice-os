@@ -898,28 +898,10 @@ reconcile_domains() {
 
 # --- Reconcile C2: per-environment URL variables ------------------------------
 #
-# MEASURED 2026-07-19 on the first PR run that ever reached E2E (run 29666129933,
-# environment pr-67): the app SPA served from app-pr-67.up.railway.app had
-# `https://gateway-development-997b.up.railway.app` baked into its JS bundle — the
-# DEVELOPMENT gateway, not its own. Topology's two verified-login specs failed
-# because the cross-origin GET /v1/me was refused: the development gateway's
-# CORS_ALLOWED_ORIGINS does not list a pr-<N> origin, and a preflight from
-# app-pr-67 against gateway-pr-67 returned 204 with NO Access-Control-Allow-Origin.
-#
-# dev-env.yml's deploy-gateway comment asserts these are "durable Railway reference
-# variables (M4-21-05) which Railway forks into every PR environment". Whatever the
-# stored form, the EFFECTIVE value in the fork resolved to development's URL — so a
-# PR environment's frontend talked to the shared development fleet. That is not a
-# cosmetic drift: it is precisely the cross-PR interference e2e/targets.ts refuses
-# to risk, and it makes an "isolated" PR environment a lie.
-#
-# So these five are reconciled EXPLICITLY from the URLs the `urls` step DISCOVERED
-# (never constructed — F7 holds: this command is passed URLs, it never derives them).
-# Correct whether the inherited value was a literal or a mis-resolving reference.
-#
-# skipDeploys is set: every service that consumes these deploys AFTER this step
-# (gateway next, SPAs after the health gate), and the VITE_* pair is baked at build
-# time by frontend/*/Dockerfile — so the deploy that matters is the one that follows.
+# A fork inherits development's URL variables, so without this the PR's app SPA is
+# built pointing at the development gateway (measured in pr-67, run 29666129933).
+# URLs are passed in from the `urls` step, never constructed (F7). skipDeploys:
+# every consumer deploys after this, and VITE_* are baked at image build time.
 # shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
 VARIABLE_UPSERT_MUTATION='mutation varUpsert($input: VariableUpsertInput!) {
   variableUpsert(input: $input)
@@ -942,10 +924,8 @@ upsert_variable() {
   echo "  $label.$name = $value"
 }
 
-# Re-read every reconciled variable from Railway and fail if any did not stick.
-# Same discipline as reconcile_domain: the mutation's own response is never the
-# evidence. Without this the step would report success while the fork still
-# pointed at development — the exact silently-green failure this story is about.
+# Re-read independently: the mutation's own response is never the evidence
+# (same discipline as reconcile_domain).
 verify_variable() {
   local env_id="$1" svc_id="$2" label="$3" name="$4" want="$5" got
 

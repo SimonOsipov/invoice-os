@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
 #                            ensure-environment <name>|audit-sealed-variables|
+#                            assert-db-dsns <environment-id|--source-only|--self-test>|
 #                            reconcile-fork <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            delete-environment <name>|list-environments>
@@ -44,6 +45,11 @@
 #
 # `list-environments` (M4-23-07) is the sweeper's enumeration: one TSV row per environment
 # on stdout, diagnostics on stderr. Deliberately UNFILTERED — see cmd_list_environments.
+#
+# `assert-db-dsns` (M4-22-FU) asserts that every service that needs a DB DSN has one,
+# rendered, with a non-empty password. It reads the RENDERED variable map, which is the
+# only place a dangling `${{...}}` reference is visible. `--self-test` runs the identical
+# code path against a map on stdin with no token and no network.
 #
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
@@ -780,6 +786,99 @@ cmd_audit_sealed_variables() {
   echo "Sealed-variable audit clean: 0 of $total variables in the source environment are sealed."
 }
 
+# --- DB DSN invariant (M4-22-FU) ---------------------------------------------
+#
+# M4-22: a variable RENAME left the DSNs interpolating the deleted names, so
+# they rendered with an EMPTY password. Every service booted and then failed to
+# authenticate. Only the RENDERED map shows that.
+#
+# The severity table -- which service must carry which variable, and whether
+# absent is fatal -- lives in tools/prenv/dsn.go and NOWHERE else. This command
+# ships it the whole environment and lets it decide.
+#
+# CONSTRAINT: every variable named in that table must start with $DSN_VAR_PREFIX.
+# The filter below drops everything else before it leaves this script (the
+# rendered map is the most credential-dense object here), so a table row naming
+# anything else would be silently dropped and never checked.
+DSN_VAR_PREFIX="DATABASE"
+
+# run_dsn_check <rendered-map-json> <context-label>
+# The map goes to prenv on STDIN -- argv is visible in `ps` -- and is never
+# echoed, never written to GITHUB_OUTPUT or GITHUB_ENV. Only prenv's report,
+# which carries names and no values, is printed.
+run_dsn_check() {
+  local map="$1" ctx="$2" root tmp report rc=0
+
+  root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  tmp=$(mktemp -d)
+  # BUILT, not `go run`: under `go run` a COMPILE failure also exits 1 with
+  # empty stdout, which is indistinguishable from "defects found".
+  if ! (cd "$root" && go build -o "$tmp/prenv" ./tools/prenv); then
+    rm -rf "$tmp"
+    echo "::error::Could not build tools/prenv, so the DB DSN check did NOT run for $ctx. This is NOT evidence that the DSNs are healthy."
+    exit 1
+  fi
+
+  report=$(printf '%s' "$map" | "$tmp/prenv" dsn-check) || rc=$?
+  rm -rf "$tmp"
+
+  if [ "$rc" != "0" ]; then
+    echo "::error::DB DSN check FAILED for $ctx. A DSN that is unset, empty-passworded, or still holding an unrendered \${{...}} reference boots the service and then fails to authenticate (M4-22)."
+    echo "$report"
+    exit 1
+  fi
+  echo "$report"
+}
+
+# cmd_assert_db_dsns <environment-id|--source-only|--self-test>
+cmd_assert_db_dsns() {
+  local target="${1:-}"
+
+  # --self-test MUST stay ahead of require_env: it needs no token and no
+  # network, so it runs on a fork PR too, which receives no secrets by design.
+  # It feeds a synthetic map through the IDENTICAL code path.
+  if [ "$target" = "--self-test" ]; then
+    run_dsn_check "$(cat)" "the self-test map on stdin"
+    return
+  fi
+
+  require_env
+
+  local env_id
+  case "$target" in
+    --source-only) require_source_env; env_id="$RAILWAY_DEV_ENVIRONMENT_ID" ;;
+    "") echo "::error::usage: railway-env.sh assert-db-dsns <environment-id|--source-only|--self-test>"; exit 2 ;;
+    *) env_id="$target" ;;
+  esac
+
+  # Services are resolved by NAME, from the environment itself. A hardcoded
+  # service UUID is environment-scoped: it would make this check silently inert
+  # in every per-PR environment, which is where it is needed most.
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+
+  local instances map='{}' sid sname vars
+  instances=$(echo "$GQL_RESPONSE" | jq -r \
+    '.data.environment.serviceInstances.edges[]?.node | "\(.serviceId)\t\(.serviceName)"')
+  if [ -z "$instances" ]; then
+    echo "::error::Railway returned no service instances for environment $env_id, so the DB DSN check could not run. This is NOT evidence that the DSNs are healthy."
+    exit 1
+  fi
+
+  # A here-string, not a pipe: the loop must run in THIS shell or $map is lost.
+  while IFS=$'\t' read -r sid sname; do
+    [ -n "$sid" ] || continue
+    graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+      "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$sid" '{p: $p, e: $e, s: $s}')")" \
+      "reading the $sname variables in environment $env_id"
+    vars=$(echo "$GQL_RESPONSE" | jq -c --arg pre "$DSN_VAR_PREFIX" \
+      '(.data.variables // {}) | with_entries(select(.key | startswith($pre)))')
+    map=$(jq -cn --argjson m "$map" --arg n "$sname" --argjson v "$vars" '$m + {($n): $v}')
+  done <<< "$instances"
+
+  run_dsn_check "$map" "environment $env_id"
+}
+
 # --- Reconcile B: settle -----------------------------------------------------
 #
 # MEASURED: all 12 service instances materialise IMMEDIATELY after
@@ -1342,12 +1441,13 @@ case "${1:-}" in
   disable-pr-environments)   cmd_disable_pr_environments ;;
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
+  assert-db-dsns)            cmd_assert_db_dsns "${2:-}" ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

@@ -425,6 +425,39 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 	}
 }
 
+// HistoryHandler returns GET /v1/invoices/{id}/history (task-160/M4-22-01).
+// Same identity-first-401 order as every other handler here, reading
+// r.PathValue("id"); ErrNotFound covers both a genuinely unknown id and a
+// cross-tenant one (RLS-scoped zero rows, Store.History's own post-check) --
+// 404, same as GetHandler. A malformed (non-uuid) id maps ErrValidation ->
+// 400 via statusForErr, mirroring Get/Update/Transition (Stage 1 GAP 1) --
+// NOT 404. The success body is a BARE JSON array of StatusChange -- no
+// pagination, no envelope ([history-endpoint-scope]) -- unlike every other
+// handler in this file, whose success body is a JSON object.
+func HistoryHandler(history func(ctx context.Context, id string) ([]StatusChange, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		changes, err := history(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: history", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, changes)
+	}
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in

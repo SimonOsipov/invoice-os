@@ -214,6 +214,18 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: bash scripts/ci/railway-env.sh audit-sealed-variables
 
+      # M4-22-FU. THIS is the load-bearing half: M4-22 was a rename in
+      # `development`, so `development` is where it was visible. Placed BEFORE
+      # reconcile-fork on purpose — `development` is persistent so there is no
+      # materialisation race (the same reason the sealed-variable audit above is
+      # safe), and this fails in ~10s rather than behind reconcile-fork's 420s
+      # Postgres wait.
+      - name: Assert DB DSNs in development (M4-22 invariant)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: bash scripts/ci/railway-env.sh assert-db-dsns --source-only
+
       - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, environment record)
         if: github.event_name != 'workflow_dispatch'
         env:
@@ -279,6 +291,26 @@ jobs:
             exit 1
           fi
           echo "All 11 non-Postgres service instances report empty Watch Paths."
+
+      # M4-22-FU, the LOWER-VALUE half: the fork inherits development's
+      # variables, which the step above the seam already checked, so this only
+      # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
+      # earlier: that step queries all 11 service names and hard-fails if any is
+      # missing, which is what proves the 7 context services have materialised.
+      # settle_fork is NOT a sufficient barrier — it checks only the 5 service
+      # ids reconcile-fork acts on (railway-env.sh:~788-792), which excludes the
+      # 7 contexts.
+      #
+      # Skipped on workflow_dispatch like the seam steps, and for the same
+      # reason (dev-env.yml:204-208): railway-env.sh authenticates
+      # `Authorization: Bearer` only, which the dispatch path's Railway PROJECT
+      # token cannot satisfy. Consequence: a dispatch run gets NO DSN check.
+      - name: Assert DB DSNs in the fork environment (M4-22 invariant)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh assert-db-dsns "$ENV_ID"
 
       - name: Discover the 4 public URLs (never construct — F7)
         id: urls

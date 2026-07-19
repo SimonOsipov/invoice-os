@@ -234,3 +234,133 @@ describe('wizardHeader (FLOW-11..14)', () => {
     })
   })
 })
+
+// QA (M4-08-04): adversarial/edge coverage beyond the architect's FLOW-01..14
+// specs. New describe blocks only — nothing above this point is modified.
+describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
+  const anImportFile = new File([], 'sheet.xlsx')
+
+  // Literal expected values, not re-derived from STAGE_OF/IMPORT_STAGE_OF — a
+  // table that mirrors the implementation's own table would pass against a
+  // wrong implementation as long as both drifted the same way. 'upload' is the
+  // only step whose result depends on the file args (wizardHeader's own rule);
+  // every other step must be FILE-STATE INDEPENDENT, asserted explicitly below.
+  const fileStates: Array<[string | null, File | null, string]> = [
+    [null, null, 'no files'],
+    ['pdf', null, 'sample selected only'],
+    [null, anImportFile, 'import file only'],
+    ['pdf', anImportFile, 'both — import file wins'],
+  ]
+
+  it('routes document-only steps to WIZARD_STEPS at their fixed index, regardless of file state', () => {
+    const expected: Array<[CreateStep, number]> = [
+      ['parsing', 0],
+      ['form', 2],
+      ['validating', 3],
+      ['results', 4],
+    ]
+    expected.forEach(([step, idx]) => {
+      fileStates.forEach(([uploadFile, importFile]) => {
+        expect(wizardHeader(step, uploadFile, importFile)).toEqual({ steps: WIZARD_STEPS, stageIndex: idx })
+      })
+    })
+  })
+
+  it('routes mapping/review/report to IMPORT_STEPS at their fixed index, regardless of file state — review has no IMPORT_STAGE_OF entry and falls back to 0', () => {
+    const expected: Array<[CreateStep, number]> = [
+      ['mapping', 1],
+      ['review', 0],
+      ['report', 2],
+    ]
+    expected.forEach(([step, idx]) => {
+      fileStates.forEach(([uploadFile, importFile]) => {
+        expect(wizardHeader(step, uploadFile, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: idx })
+      })
+    })
+  })
+
+  it("'upload' is the sole step whose path depends on file state, at the exact literal values", () => {
+    expect(wizardHeader('upload', null, null)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+    expect(wizardHeader('upload', 'pdf', null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
+    expect(wizardHeader('upload', null, anImportFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+    expect(wizardHeader('upload', 'pdf', anImportFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+  })
+})
+
+describe('previewColumns — adversarial edge cases (QA)', () => {
+  it('returns an empty array for a zero-column preview', () => {
+    const preview = mkPreview({ columns: [], sample_rows: [['a', 'b']] })
+    expect(previewColumns(preview, 3)).toEqual([])
+  })
+
+  it('returns one entry per blank-named column, all unmappable, letters still assigned by index', () => {
+    const preview = mkPreview({ columns: ['', '', ''], sample_rows: [['a', 'b', 'c']] })
+    const cols = previewColumns(preview, 3)
+    expect(cols).toHaveLength(3)
+    expect(cols.every((c) => c.mappable === false)).toBe(true)
+    expect(cols.map((c) => c.letter)).toEqual(['A', 'B', 'C'])
+  })
+
+  it('ignores extra cells on a row longer than the column count — reads only preview.columns.length entries', () => {
+    const preview = mkPreview({ columns: ['A'], sample_rows: [['1', '2', '3']] })
+    const cols = previewColumns(preview, 3)
+    expect(cols).toHaveLength(1)
+    expect(cols[0].samples).toEqual(['1'])
+  })
+
+  it('returns an empty samples array (not undefined, not a padded row) when sample_rows is empty', () => {
+    const preview = mkPreview({ columns: ['A', 'B'], sample_rows: [] })
+    const cols = previewColumns(preview, 3)
+    expect(cols[0].samples).toEqual([])
+    expect(cols[1].samples).toEqual([])
+  })
+})
+
+describe('columnLetter — three-letter boundary (QA)', () => {
+  // FLOW-10 pins 0/25/26/27/51/52 (the one/two-letter boundaries). This extends
+  // to the two/three-letter boundary: 676 two-letter combos (AA..ZZ) occupy
+  // indices 26..701, so 701 is the last two-letter value and 702 the first
+  // three-letter one.
+  it('rolls over from the two-letter to the three-letter form at the ZZ/AAA boundary', () => {
+    expect(columnLetter(701)).toBe('ZZ')
+    expect(columnLetter(702)).toBe('AAA')
+  })
+})
+
+describe('canReadColumns / canStartImport — truth tables (QA)', () => {
+  const preview = mkPreview()
+
+  it('canReadColumns: rejects a non-csv/xlsx file even with an entity, and rejects every file when no entity is chosen', () => {
+    expect(canReadColumns(null, pdfFile)).toBe(false)
+    expect(canReadColumns('e1', pdfFile)).toBe(false)
+    expect(canReadColumns(null, csvFile)).toBe(false)
+  })
+
+  it('canReadColumns: an empty-string entity id is falsy, not a real selection — gate stays closed', () => {
+    expect(canReadColumns('', csvFile)).toBe(false)
+  })
+
+  it('canStartImport: false when mapping is null outright, and false when invoice_number is an empty string (falsy, not "placed")', () => {
+    expect(canStartImport(preview, null)).toBe(false)
+    expect(canStartImport(preview, { invoice_number: '' })).toBe(false)
+  })
+
+  it('canStartImport: false when a mapping is otherwise complete but preview has not been read yet', () => {
+    expect(canStartImport(null, { invoice_number: 'A', total: 'T', vat: 'V' })).toBe(false)
+  })
+})
+
+describe('hasImportableExtension — adversarial edge cases (QA)', () => {
+  it('matches an uppercase .XLSX extension', () => {
+    expect(hasImportableExtension('REPORT.XLSX')).toBe(true)
+  })
+
+  it('rejects a filename with no extension at all', () => {
+    expect(hasImportableExtension('invoices_export')).toBe(false)
+  })
+
+  it('matches a dotfile whose entire name is the extension — endsWith has no basename requirement', () => {
+    expect(hasImportableExtension('.csv')).toBe(true)
+    expect(hasImportableExtension('.xlsx')).toBe(true)
+  })
+})

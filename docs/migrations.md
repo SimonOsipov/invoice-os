@@ -77,7 +77,8 @@ passwords live only in Railway.
 > `20260707122459_tenants_rls.sql` failed with `role "invoice_tenant_reader" does not
 > exist`. Re-run `bootstrap.sql` against every live DB after adding a role. To create
 > just the new role without rotating the existing roles' passwords (step 3 rotates all
-> three — it would invalidate the live `INVOICE_*_DATABASE_URL` vars), run only its
+> three — it would invalidate the live `DATABASE_APP_URL`/`DATABASE_MIGRATION_URL_SOURCE`
+> vars), run only its
 > `CREATE ROLE` + `ALTER ROLE … NOSUPERUSER NOBYPASSRLS` + schema `GRANT USAGE` lines.
 >
 > **Since M4-21-04** this specific failure mode is structurally mitigated for any
@@ -92,8 +93,17 @@ passwords live only in Railway.
 ## 2. On-deploy mechanism — gateway-as-migrator, CI-ordered
 
 Migrations are applied **at deploy time, in-network, as `invoice_migrator`, from a single
-designated service: the gateway.** There is **no public DB proxy** and no separate
-migration job with its own inbound DB access.
+designated service: the gateway.** They run **never through a public proxy**, and no
+separate migration job holds its own inbound DB access.
+
+> **Since M4-22**, no CI job or code path anywhere in this repo discovers, holds, or
+> connects through a public DB proxy for anything — `health-gate` (the gateway's own
+> `/healthz`) replaces liveness probing, HTTP against the gateway replaces the E2E suites'
+> old direct DB access, and the boot-time seed replaces the deleted reset/seed job (see
+> §7 below and [topology-e2e.md](./topology-e2e.md)). The underlying Railway TCP proxy
+> resource on `development`'s Postgres is deleted via a separate, human Railway-console
+> step (M4-22 Escalation E2) — until that completes, the resource itself may still exist,
+> unused by anything in this repo.
 
 How the ordering works (wired at **M2-12**, when the gateway exists):
 
@@ -289,7 +299,7 @@ state costs nothing; nothing else depends on it once the PR is gone.
 
 The **`development` environment's own Postgres is different: it is stateful, persistent,
 and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
-environment is created from, and the target of `make demo-reset` / live demo calls.
+environment is created from, and the target of live demo calls.
 Migrations against it are therefore forward-only/additive; the reversibility guarantee is
 enforced against the *ephemeral CI* Postgres (§6) instead, never against `development`'s.
 
@@ -399,24 +409,29 @@ real passwords live **only** in Railway.
 1. **Add Postgres** to the dev environment: `railway add -d postgres` (dashboard **New →
    Database → PostgreSQL** works too). Railway's `postgres-ssl` template currently
    provisions **PG18** — keep the CI Postgres major matched to it (§6). The service
-   exposes `DATABASE_URL`/`DATABASE_PUBLIC_URL` (both **superuser**) and `PG*` vars;
-   default database name is `railway`, private host `postgres.railway.internal:5432`.
+   exposes `DATABASE_URL` (superuser) plus its own public-proxy variant, and `PG*` vars —
+   step 2 below never touches either public form; default database name is `railway`,
+   private host `postgres.railway.internal:5432`.
 
-2. **Bootstrap the two roles** once, as the superuser (idempotent — re-running rotates the
-   passwords). Pick strong passwords, then from a machine with the repo (the public proxy
-   URL is reachable off-network; `psql` via Docker if you don't have it locally):
-   ```bash
-   docker run --rm -v "$PWD/db:/db:ro" postgres:18 \
-     psql "<Postgres.DATABASE_PUBLIC_URL>" -v ON_ERROR_STOP=1 \
-       -c "SELECT set_config('fiscalbridge.migrator_password', '<MIGRATOR_PW>', false)" \
-       -c "SELECT set_config('fiscalbridge.app_password', '<APP_PW>', false)" \
-       -c "SELECT set_config('fiscalbridge.reader_password', '<READER_PW>', false)" \
-       -f /db/bootstrap.sql
-   ```
-   Note: these `-c` arguments carry the plaintext passwords on argv, visible to `ps`
-   and to shell history on whatever machine runs this — use a throwaway/trusted
-   machine and clear scrollback/history after, same care as any other place a
-   secret briefly touches a command line.
+2. **Bootstrap the three roles**: choose strong passwords, then set them on the
+   **gateway** service as `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD`,
+   alongside `DATABASE_SUPERUSER_URL=${{Postgres.DATABASE_URL}}` and
+   `GATEWAY_DB_BOOTSTRAP=true`. No psql, no public proxy, no manual SQL against Postgres
+   at all — on its next boot the gateway bootstraps the roles itself, in-network
+   (`internal/platform/db.Provision` → `Bootstrap`, gated by `BootstrapEnabled`'s
+   allowlist — `[superuser-dsn-on-gateway]`, §1). This has been the real mechanism since
+   M4-21-03/04; the psql-through-the-public-proxy sequence this section used to describe
+   is obsolete, and the public proxy plays no role in it.
+
+   > **Gateway-side role password variable names (M4-22-09).** The gateway prefers the
+   > unprefixed `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD` variables
+   > (matching `Makefile`/CI), falling back to their deprecated, legacy-prefixed
+   > `INVOICE_*_PASSWORD` equivalents (see `cmd/gateway/main.go`'s `resolveRolePassword`)
+   > and logging a warning when it does. `development`'s live `gateway` service still
+   > needs the new names added (M4-22 Escalation E1, carrying the existing values across
+   > — never regenerated) before the fallback stops firing there. Once every Railway
+   > environment is confirmed on the new names (Escalations E1/E3/E4), the fallback
+   > becomes dead code and should be deleted along with the deprecated Railway variables.
 
 3. **Store the app + migrator URLs**, built from the **private** host — never the public
    proxy, per §2:
@@ -426,16 +441,23 @@ real passwords live **only** in Railway.
    ```
    Railway variables are **service-scoped** (no CLI shared-variable path), and there is no
    DB consumer yet (the gateway is M2-12), so these are stored **on the `Postgres` service**
-   under non-colliding names — `INVOICE_APP_DATABASE_URL` and `INVOICE_MIGRATOR_DATABASE_URL`
+   under non-colliding names — `DATABASE_APP_URL` and `DATABASE_MIGRATION_URL_SOURCE`
    (plain `DATABASE_URL` on that service is Railway's superuser URL — do not overwrite it):
    ```bash
-   printf '%s' "<migrator-url>" | railway variables set INVOICE_MIGRATOR_DATABASE_URL --stdin -s Postgres --skip-deploys
-   printf '%s' "<app-url>"      | railway variables set INVOICE_APP_DATABASE_URL      --stdin -s Postgres --skip-deploys
+   printf '%s' "<migrator-url>" | railway variables set DATABASE_MIGRATION_URL_SOURCE --stdin -s Postgres --skip-deploys
+   printf '%s' "<app-url>"      | railway variables set DATABASE_APP_URL              --stdin -s Postgres --skip-deploys
    ```
    **M2-12 wires the consumers** by reference: each service sets
-   `DATABASE_URL=${{Postgres.INVOICE_APP_DATABASE_URL}}` and the gateway's migration step
-   sets `DATABASE_MIGRATION_URL=${{Postgres.INVOICE_MIGRATOR_DATABASE_URL}}`. **Never** hand
+   `DATABASE_URL=${{Postgres.DATABASE_APP_URL}}` and the gateway's migration step
+   sets `DATABASE_MIGRATION_URL=${{Postgres.DATABASE_MIGRATION_URL_SOURCE}}`. **Never** hand
    any service `${{Postgres.DATABASE_URL}}` (superuser — disables RLS).
+
+   > **As of this merge**, `development`'s live Postgres service still exposes these
+   > under the deprecated `INVOICE_APP_DATABASE_URL` / `INVOICE_MIGRATOR_DATABASE_URL`
+   > names (M4-22 Escalation E3, pending) — unlike the passwords, no code fallback exists
+   > for these two names, since nothing in the repo reads them directly
+   > (Railway-reference-only). This runbook shows the target names any fresh
+   > provisioning should use.
 
 4. **Stays always-on:** `development`, Postgres included, is never torn down by CI (§7).
    The teardown workflows act only on ephemeral `pr-<N>` environments and refuse

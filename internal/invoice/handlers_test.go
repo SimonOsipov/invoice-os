@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -115,11 +116,12 @@ type lineItemWire struct {
 // field for the shared {"error":"..."} envelope -- same convention as
 // portfolio_test.go's entityBody.
 //
-// Violations/RuleSetVersionID (task-113/M4-04-06, GAPI-02/03) are additive:
-// no existing Create/Get/List/Transition test above references either
-// field, so decoding their responses into this wider struct leaves those
-// two simply zero-valued, unchanged behaviour for every test already in
-// this file.
+// Violations/RuleSetVersionID/RuleSetVersion are additive: no pre-existing
+// test references any of the three, so they decode as zero values there.
+//
+// RuleSetVersion can't distinguish JSON null from an absent key (both
+// decode to nil *int) -- TestValidateHandler_NilVersionMarshalsNull checks
+// raw bytes instead, for that reason.
 type invoiceBody struct {
 	ID               string          `json:"id"`
 	EntityID         string          `json:"entity_id"`
@@ -127,6 +129,7 @@ type invoiceBody struct {
 	Status           string          `json:"status"`
 	Violations       json.RawMessage `json:"violations"`
 	RuleSetVersionID *string         `json:"rule_set_version_id"`
+	RuleSetVersion   *int            `json:"rule_set_version"`
 	LineItems        []lineItemWire  `json:"line_items"`
 	Error            string          `json:"error"`
 }
@@ -258,7 +261,7 @@ func doInvoiceEdit(t *testing.T, edit func(ctx context.Context, id string, in Up
 // doInvoiceValidate drives POST /v1/invoices/{id}/validate (task-113/
 // M4-04-06's ValidateHandler) -- no request body (unlike Transition), same
 // identity-injection/path-value/decode shape as doInvoiceGet.
-func doInvoiceValidate(t *testing.T, validate func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
+func doInvoiceValidate(t *testing.T, validate func(ctx context.Context, id string) (Invoice, int, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/invoices/"+invoiceID+"/validate", nil)
 	r.SetPathValue("id", invoiceID)
@@ -1036,9 +1039,9 @@ func TestTransitionHandler_NoIdentity401(t *testing.T) {
 // order as every other handler in this file.
 func TestValidateHandler_NoIdentity401(t *testing.T) {
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, id string) (Invoice, error) {
+	validate := func(ctx context.Context, id string) (Invoice, int, error) {
 		t.Fatal("validate must not run without an identity")
-		return Invoice{}, nil
+		return Invoice{}, 0, nil
 	}
 	rec, resp := doInvoiceValidate(t, validate, nil, invoiceID)
 
@@ -1064,11 +1067,11 @@ func TestValidateHandler_CleanDraft200(t *testing.T) {
 		Violations:       json.RawMessage(`[]`),
 		RuleSetVersionID: &versionID,
 	}
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
 		if gotID != invoiceID {
 			t.Fatalf("validate called with id=%q, want %q", gotID, invoiceID)
 		}
-		return want, nil
+		return want, 0, nil
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1095,8 +1098,8 @@ func TestValidateHandler_BlockingViolation200StaysDraft(t *testing.T) {
 	invoiceID := uuid.NewString()
 	violations := json.RawMessage(`[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]`)
 	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: violations}
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return want, nil
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 0, nil
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1117,8 +1120,8 @@ func TestValidateHandler_BlockingViolation200StaysDraft(t *testing.T) {
 func TestValidateHandler_NotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrNotFound
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNotFound
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1135,8 +1138,8 @@ func TestValidateHandler_NotFound404(t *testing.T) {
 func TestValidateHandler_NotDraft409(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrNotDraft
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNotDraft
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1153,8 +1156,8 @@ func TestValidateHandler_NotDraft409(t *testing.T) {
 func TestValidateHandler_StaleValidation409(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrStaleValidation
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrStaleValidation
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1172,8 +1175,8 @@ func TestValidateHandler_StaleValidation409(t *testing.T) {
 func TestValidateHandler_Upstream502(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrUpstream
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrUpstream
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1192,8 +1195,8 @@ func TestValidateHandler_Upstream502(t *testing.T) {
 func TestValidateHandler_NoActiveRuleSet503(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrNoActiveRuleSet
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNoActiveRuleSet
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1212,8 +1215,8 @@ func TestValidateHandler_NoActiveRuleSet503(t *testing.T) {
 // same as every other error-map row above.
 func TestValidateHandler_MalformedID400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, fmt.Errorf("%w: malformed invoice id", ErrValidation)
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, fmt.Errorf("%w: malformed invoice id", ErrValidation)
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, "not-a-uuid")
 
@@ -1222,6 +1225,326 @@ func TestValidateHandler_MalformedID400(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// --- Rule-set version on the validate response (task-161/M4-22-02) --------
+
+// TestValidateHandler_ExposesRuleSetVersion (#1): a 200 response must
+// carry rule_set_version as the stubbed gate's evaluated version,
+// alongside an unchanged rule_set_version_id.
+func TestValidateHandler_ExposesRuleSetVersion(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	want := Invoice{
+		ID:               invoiceID,
+		Status:           StatusValidated,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &versionID,
+	}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.RuleSetVersion == nil || *resp.RuleSetVersion != 2 {
+		t.Errorf("rule_set_version = %v, want 2 (body=%s)", resp.RuleSetVersion, rec.Body.String())
+	}
+	if resp.RuleSetVersionID == nil || *resp.RuleSetVersionID != versionID {
+		t.Errorf("rule_set_version_id = %v, want %q -- unchanged by this story (body=%s)",
+			resp.RuleSetVersionID, versionID, rec.Body.String())
+	}
+}
+
+// TestValidateHandler_ResponseIsAdditive (#2): decoding into the existing
+// Invoice type must still succeed with every field matching exactly -- the
+// new rule_set_version sibling key must not rename or move anything.
+func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	entityID := uuid.NewString()
+	desc := "widget"
+	want := Invoice{
+		ID:               invoiceID,
+		EntityID:         entityID,
+		InvoiceNumber:    "INV-RSV-01",
+		Status:           StatusValidated,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &versionID,
+		LineItems:        []LineItem{{ID: uuid.NewString(), LineNo: 1, Description: &desc}},
+	}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, _ := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var got Invoice
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response into the existing Invoice type: %v (body=%s)", err, rec.Body.String())
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("decoded Invoice = %+v, want %+v -- every pre-existing field must match the stub's invoice "+
+			"exactly, unaffected by the new rule_set_version sibling key", got, want)
+	}
+}
+
+// TestValidateHandler_NilVersionMarshalsNull (#3): gate version 0 ("nothing
+// evaluated") must marshal to the literal `"rule_set_version":null` --
+// checked on raw bytes, since json.Unmarshal can't distinguish null from an
+// absent key.
+func TestValidateHandler_NilVersionMarshalsNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`)}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 0, nil
+	}
+	rec, _ := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"rule_set_version":null`) {
+		t.Errorf("body = %s, want it to contain the literal \"rule_set_version\":null", body)
+	}
+	// fmt.Sprintf, not a literal: a literal ":0" here would trip
+	// internal/validation's TestRuleSetV2_JSONQuotedVersionPinNotPresent grep guard.
+	forbiddenZeroPin := fmt.Sprintf(`"rule_set_version":%d`, 0)
+	if strings.Contains(body, forbiddenZeroPin) {
+		t.Errorf("body = %s, must NEVER stamp a run with the literal :0 for rule_set_version -- 0 means "+
+			"\"nothing evaluated\", never a real version", body)
+	}
+}
+
+// TestValidateHandler_ViolationsStillCarryVersion (#4, AC #4): a blocking
+// violation still 200s with violations AND a populated rule_set_version --
+// [error semantics] is not weakened by this story.
+func TestValidateHandler_ViolationsStillCarryVersion(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	violations := json.RawMessage(`[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]`)
+	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: violations}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- a blocking violation is normal success-payload data, never an HTTP "+
+			"error [error semantics] (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(resp.Violations) == 0 || string(resp.Violations) == "[]" || string(resp.Violations) == "null" {
+		t.Errorf("violations = %s, want a non-empty violation set carried in the body", resp.Violations)
+	}
+	if resp.RuleSetVersion == nil || *resp.RuleSetVersion != 2 {
+		t.Errorf("rule_set_version = %v, want 2 -- a blocked verdict is still a real evaluated verdict against a "+
+			"real rule-set version (AC #4) (body=%s)", resp.RuleSetVersion, rec.Body.String())
+	}
+}
+
+// TestValidateHandler_UpstreamErrorsUnchanged (#5, AC #5): 502/503 error
+// paths behave identically to before and must never carry a
+// rule_set_version key -- no verdict was reached.
+func TestValidateHandler_UpstreamErrorsUnchanged(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	upstream := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrUpstream
+	}
+	rec, resp := doInvoiceValidate(t, upstream, &id, uuid.NewString())
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+	if strings.Contains(rec.Body.String(), "rule_set_version") {
+		t.Errorf("body = %s, an outage response must carry NO rule_set_version key at all -- no verdict was "+
+			"reached", rec.Body.String())
+	}
+
+	noActive := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNoActiveRuleSet
+	}
+	rec2, resp2 := doInvoiceValidate(t, noActive, &id, uuid.NewString())
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+	if resp2.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+	if strings.Contains(rec2.Body.String(), "rule_set_version") {
+		t.Errorf("body = %s, an outage response must carry NO rule_set_version key at all -- no verdict was "+
+			"reached", rec2.Body.String())
+	}
+}
+
+// --- QA Mode B adversarial coverage: raw JSON keys, GET/List pollution ----
+
+// TestValidateHandler_TopLevelKeysNotNested: validateResponse embeds
+// Invoice, which encoding/json flattens onto one top-level object -- checks
+// raw keys directly: no "invoice"/"result"/"data" wrapper, and the key set
+// is exactly the known Invoice fields plus one sibling.
+func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	entityID := uuid.NewString()
+	desc := "widget"
+	want := Invoice{
+		ID:               invoiceID,
+		EntityID:         entityID,
+		InvoiceNumber:    "INV-RSV-KEYS",
+		Status:           StatusValidated,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &versionID,
+		LineItems:        []LineItem{{ID: uuid.NewString(), LineNo: 1, Description: &desc}},
+	}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, _ := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode response into a raw top-level key map: %v (body=%s)", err, rec.Body.String())
+	}
+
+	wantKeys := []string{
+		"id", "entity_id", "import_batch_id", "invoice_number", "status", "issue_date",
+		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
+		"vat", "total", "violations", "rule_set_version_id", "created_at", "line_items",
+		"rule_set_version",
+	}
+	for _, k := range wantKeys {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("raw JSON keys missing %q (body=%s) -- every Invoice field must stay a direct top-level "+
+				"sibling of rule_set_version; embedding must flatten, not nest", k, rec.Body.String())
+		}
+	}
+	if len(raw) != len(wantKeys) {
+		t.Errorf("raw JSON has %d top-level keys, want exactly %d %v (body=%s) -- an extra key (e.g. a wrapper "+
+			"like \"invoice\") would mean the embedding nested Invoice instead of flattening it",
+			len(raw), len(wantKeys), wantKeys, rec.Body.String())
+	}
+	for _, wrapper := range []string{"invoice", "result", "data"} {
+		if _, ok := raw[wrapper]; ok {
+			t.Errorf("raw JSON has a %q wrapper key (body=%s) -- Invoice must be embedded flat, never nested "+
+				"under a sub-object", wrapper, rec.Body.String())
+		}
+	}
+}
+
+// TestGetHandler_NoRuleSetVersionKey: GET shares the domain Invoice type
+// with validateResponse but must NOT gain rule_set_version -- that field
+// belongs only to the validate wrapper. Checked on raw bytes for the exact
+// key `"rule_set_version":` so it can't false-match rule_set_version_id.
+func TestGetHandler_NoRuleSetVersionKey(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated, RuleSetVersionID: &versionID}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"rule_set_version_id":`) {
+		t.Errorf("body = %s, want rule_set_version_id to stay present (unaffected by this story)", body)
+	}
+	if strings.Contains(body, `"rule_set_version":`) {
+		t.Errorf("body = %s, GET must NOT gain a rule_set_version key -- that field belongs only to the "+
+			"validate response wrapper, never the domain Invoice struct shared by Get/List", body)
+	}
+}
+
+// TestListHandler_NoRuleSetVersionKey: same pollution check as
+// TestGetHandler_NoRuleSetVersionKey, for List.
+func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invID := uuid.NewString()
+	versionID := uuid.NewString()
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{{ID: invID, Status: StatusDraft, RuleSetVersionID: &versionID}}, 1, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"rule_set_version_id":`) {
+		t.Errorf("body = %s, want rule_set_version_id to stay present on each list item (unaffected by this "+
+			"story)", body)
+	}
+	if strings.Contains(body, `"rule_set_version":`) {
+		t.Errorf("body = %s, List must NOT gain a rule_set_version key on any item -- that field belongs only "+
+			"to the validate response wrapper, never the domain Invoice struct shared by Get/List", body)
+	}
+}
+
+// TestValidateHandler_ErrorBodiesCarryNoRuleSetVersionKey (AC #5): raw-byte
+// check that the remaining error paths (401/404/409x2/400) carry no
+// rule_set_version key either.
+func TestValidateHandler_ErrorBodiesCarryNoRuleSetVersionKey(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+
+	cases := []struct {
+		name       string
+		identity   *auth.Identity
+		validate   func(ctx context.Context, gotID string) (Invoice, int, error)
+		wantStatus int
+	}{
+		{"401-no-identity", nil, func(ctx context.Context, gotID string) (Invoice, int, error) {
+			t.Fatal("validate must not run without an identity")
+			return Invoice{}, 0, nil
+		}, http.StatusUnauthorized},
+		{"404-not-found", &id, func(ctx context.Context, gotID string) (Invoice, int, error) {
+			return Invoice{}, 0, ErrNotFound
+		}, http.StatusNotFound},
+		{"409-not-draft", &id, func(ctx context.Context, gotID string) (Invoice, int, error) {
+			return Invoice{}, 0, ErrNotDraft
+		}, http.StatusConflict},
+		{"409-stale-validation", &id, func(ctx context.Context, gotID string) (Invoice, int, error) {
+			return Invoice{}, 0, ErrStaleValidation
+		}, http.StatusConflict},
+		{"400-malformed-id", &id, func(ctx context.Context, gotID string) (Invoice, int, error) {
+			return Invoice{}, 0, fmt.Errorf("%w: malformed invoice id", ErrValidation)
+		}, http.StatusBadRequest},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, resp := doInvoiceValidate(t, tc.validate, tc.identity, invoiceID)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if resp.Error == "" {
+				t.Error("expected a non-empty error message in the body")
+			}
+			if strings.Contains(rec.Body.String(), "rule_set_version") {
+				t.Errorf("body = %s, an error response must carry NO rule_set_version key at all -- no verdict "+
+					"was reached", rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -1635,5 +1958,189 @@ func TestEditHandler_UnknownFieldIgnored200(t *testing.T) {
 	if gotIn.VAT == nil || *gotIn.VAT != "7.50" {
 		t.Errorf("UpdateInput.VAT = %v, want a non-nil pointer to %q -- the unknown fields must not have "+
 			"interfered with decoding the known one", gotIn.VAT, "7.50")
+	}
+}
+
+// --- GET /v1/invoices/{id}/history (HistoryHandler, task-160/M4-22-01) ----
+//
+// A malformed id maps to 400 (ErrValidation), not 404 -- matching
+// Get/Update/Transition. Store.History's own 22P02 mapping is pinned
+// separately by malformed_id_test.go's "History" subtest.
+//
+// DB-backed ordering/cross-tenant/unset-GUC coverage lives in
+// cross_tenant_integration_test.go as TestRLS_InvoiceHistory_*.
+
+// historyChangeWire mirrors the GET /v1/invoices/{id}/history response
+// element shape (task-160) -- json tags identical to the (future)
+// production StatusChange type.
+type historyChangeWire struct {
+	FromStatus *string   `json:"from_status"`
+	ToStatus   string    `json:"to_status"`
+	Actor      string    `json:"actor"`
+	ChangedAt  time.Time `json:"changed_at"`
+}
+
+// doInvoiceHistory drives GET /v1/invoices/{id}/history. Returns the raw
+// recorder, not a decoded body: success is a bare JSON array, error is the
+// {"error":...} object -- two shapes that can't share one decode target.
+func doInvoiceHistory(t *testing.T, history func(ctx context.Context, id string) ([]StatusChange, error), id *auth.Identity, invoiceID string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID+"/history", nil)
+	r.SetPathValue("id", invoiceID)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	HistoryHandler(history, nil).ServeHTTP(rec, r)
+	return rec
+}
+
+// decodeInvoiceErrorBody decodes rec's body as the shared {"error":"..."}
+// envelope -- History's success shape is a bare array, not an object, so
+// it can't reuse doInvoiceGet's decoder.
+func decodeInvoiceErrorBody(t *testing.T, rec *httptest.ResponseRecorder) invoiceBody {
+	t.Helper()
+	var resp invoiceBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode error response %q: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+// TestHistoryHandler_Unauthenticated401 (#1): no identity in the request
+// context must 401 before history ever runs -- same identity-first-401
+// order as every other handler in this file.
+func TestHistoryHandler_Unauthenticated401(t *testing.T) {
+	invoiceID := uuid.NewString()
+	history := func(ctx context.Context, id string) ([]StatusChange, error) {
+		t.Fatal("history must not run without an identity")
+		return nil, nil
+	}
+	rec := doInvoiceHistory(t, history, nil, invoiceID)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp := decodeInvoiceErrorBody(t, rec); resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestHistoryHandler_GenesisOnly (#2): a store returning exactly one
+// genesis StatusChange (from_status null, to_status "draft") must produce
+// 200 with a 1-element JSON array; from_status renders JSON null, to_status
+// "draft" -- AND history must be called with the exact path id.
+func TestHistoryHandler_GenesisOnly(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		if gotID != invoiceID {
+			t.Fatalf("history called with id = %q, want %q", gotID, invoiceID)
+		}
+		return []StatusChange{{FromStatus: nil, ToStatus: StatusDraft, Actor: "user-1", ChangedAt: time.Now()}}, nil
+	}
+	rec := doInvoiceHistory(t, history, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var resp []historyChangeWire
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if len(resp) != 1 {
+		t.Fatalf("body array length = %d, want 1", len(resp))
+	}
+	if resp[0].FromStatus != nil {
+		t.Errorf("resp[0].from_status = %q, want JSON null", *resp[0].FromStatus)
+	}
+	if resp[0].ToStatus != string(StatusDraft) {
+		t.Errorf("resp[0].to_status = %q, want %q", resp[0].ToStatus, StatusDraft)
+	}
+}
+
+// TestHistoryHandler_OmitsInternalColumns (#3, AC #7): the RAW response
+// body for a populated change must contain no tenant_id, invoice_id, or
+// (row) id key -- StatusChange deliberately surfaces only
+// from_status/to_status/actor/changed_at.
+func TestHistoryHandler_OmitsInternalColumns(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	from := StatusDraft
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return []StatusChange{{FromStatus: &from, ToStatus: StatusValidated, Actor: "user-1", ChangedAt: time.Now()}}, nil
+	}
+	rec := doInvoiceHistory(t, history, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.Bytes()
+	for _, forbidden := range []string{`"id":`, `"tenant_id":`, `"invoice_id":`} {
+		if bytes.Contains(raw, []byte(forbidden)) {
+			t.Errorf("body = %s, must NOT contain %s (AC #7)", raw, forbidden)
+		}
+	}
+}
+
+// TestHistoryHandler_NotFoundMapsTo404 (#4): the store returning ErrNotFound
+// must map to 404 with a non-empty error message -- the shape both a
+// genuinely unknown id and a cross-tenant one resolve to (AC #5).
+func TestHistoryHandler_NotFoundMapsTo404(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return nil, ErrNotFound
+	}
+	rec := doInvoiceHistory(t, history, &id, uuid.NewString())
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp := decodeInvoiceErrorBody(t, rec); resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestHistoryHandler_MalformedIDIs400 (#5): ErrValidation maps to 400, not
+// 404 -- matching Get/Update/Transition.
+func TestHistoryHandler_MalformedIDIs400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return nil, fmt.Errorf("%w: malformed id", ErrValidation)
+	}
+	rec := doInvoiceHistory(t, history, &id, "not-a-uuid")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp := decodeInvoiceErrorBody(t, rec); resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestHistoryHandler_GenesisOnly_RawWireShape: raw bytes, not a decoded
+// struct -- checks the top-level shape is a JSON array and from_status
+// carries literal null, not "" or an omitted key (an accidental omitempty
+// on StatusChange.FromStatus would decode identically to #2 above).
+func TestHistoryHandler_GenesisOnly_RawWireShape(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return []StatusChange{{FromStatus: nil, ToStatus: StatusDraft, Actor: "user-1", ChangedAt: time.Now()}}, nil
+	}
+	rec := doInvoiceHistory(t, history, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := bytes.TrimSpace(rec.Body.Bytes())
+	if len(raw) == 0 || raw[0] != '[' || raw[len(raw)-1] != ']' {
+		t.Fatalf("body = %s, want the top-level JSON to be an array (starts with '[', ends with ']')", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"from_status":null`)) {
+		t.Errorf("body = %s, want raw JSON to contain the literal \"from_status\":null (not omitted, not empty string)", raw)
+	}
+	if bytes.Contains(raw, []byte(`"from_status":""`)) {
+		t.Errorf("body = %s, from_status must never serialize as an empty string", raw)
 	}
 }

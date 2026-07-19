@@ -69,6 +69,14 @@ func scanLineItem(row scanner, li *LineItem) error {
 	)
 }
 
+// historyColumns deliberately excludes id/tenant_id/invoice_id (AC #7) --
+// StatusChange surfaces only from_status/to_status/actor/changed_at.
+const historyColumns = `from_status, to_status, actor, changed_at`
+
+func scanStatusChange(row scanner, sc *StatusChange) error {
+	return row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt)
+}
+
 // Create inserts one invoice and, in the SAME db.WithinRequestTenantTx closure
 // and in this order: (0) a tenant-scoped ownership pre-check on entity_id
 // (M4-06-03 -- mirrors the importer's EntitySupplier idiom,
@@ -240,6 +248,60 @@ func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 		return Invoice{}, err
 	}
 	return inv, nil
+}
+
+// History returns the caller's tenant's invoice_status_history rows for id,
+// ordered changed_at ASC, id ASC ([D1]/AC #1), inside one
+// db.WithinRequestTenantTx -- the invoice_app pool, never superuser.
+//
+// Unlike Get's single-row tx.QueryRow (where pgx.ErrNoRows maps directly to
+// ErrNotFound), this is a multi-row tx.Query: Query()/Next() never yields
+// pgx.ErrNoRows for a zero-row result, so a cross-tenant or unknown id needs
+// an explicit post-query check instead. That check is sound only because
+// Store.Create always writes the genesis row in the same transaction as the
+// invoice insert -- "zero history rows" therefore always means "not visible
+// to this caller," never "a real invoice with no history yet."
+//
+// A malformed (non-uuid) id raises 22P02 at Postgres, surfaced via
+// rows.Err() after the Next() loop (not tx.Query()'s own error, which only
+// covers client-side encoding) -- mapped to ErrValidation like
+// Get/Update/Transition, not ErrNotFound.
+func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) {
+	var result []StatusChange
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT `+historyColumns+`
+			 FROM invoice_status_history
+			 WHERE invoice_id = $1
+			 ORDER BY changed_at ASC, id ASC`, id,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var sc StatusChange
+			if err := scanStatusChange(rows, &sc); err != nil {
+				return err
+			}
+			result = append(result, sc)
+		}
+		if err := rows.Err(); err != nil {
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if len(result) == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // List returns the caller's tenant's invoice HEADERS (LineItems left nil, [D7]),

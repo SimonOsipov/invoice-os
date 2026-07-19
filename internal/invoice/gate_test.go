@@ -197,7 +197,7 @@ func TestGate_ValidateOnNonDraftReturnsErrNotDraftWithoutCalling04(t *testing.T)
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(store, validator)
 
-	_, err = gate.Validate(c, inv.ID)
+	_, _, err = gate.Validate(c, inv.ID)
 	if !errors.Is(err, ErrNotDraft) {
 		t.Errorf("err = %v, want ErrNotDraft -- Gate.Validate's advisory pre-check must reject a non-draft "+
 			"invoice before ever calling 04", err)
@@ -271,7 +271,7 @@ func TestGate_ValidateRealDraftFailsVATStandardRate(t *testing.T) {
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(store, validator)
 
-	got, err := gate.Validate(c, inv.ID)
+	got, _, err := gate.Validate(c, inv.ID)
 	if err != nil {
 		t.Fatalf("Validate: want a normal (nil-error) BLOCKED outcome (a validation failure is a legitimate "+
 			"outcome, not a store error), got err: %v", err)
@@ -317,7 +317,7 @@ func TestGate_ValidateAfterUpdateFixToGreenRevalidatesToValidated(t *testing.T) 
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(store, validator)
 
-	if _, err := gate.Validate(c, inv.ID); err != nil {
+	if _, _, err := gate.Validate(c, inv.ID); err != nil {
 		t.Fatalf("first Validate (expected a blocked-but-successful outcome, setting up the re-validate case): %v", err)
 	}
 
@@ -325,7 +325,7 @@ func TestGate_ValidateAfterUpdateFixToGreenRevalidatesToValidated(t *testing.T) 
 		t.Fatalf("Update to fix VAT: %v", err)
 	}
 
-	got, err := gate.Validate(c, inv.ID)
+	got, _, err := gate.Validate(c, inv.ID)
 	if err != nil {
 		t.Fatalf("second Validate (want a clean promoted outcome), got err: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestGate_ValidateZeroLineItemsStaysDraftWithLineItemsRequired(t *testing.T)
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(store, validator)
 
-	got, err := gate.Validate(c, inv.ID)
+	got, _, err := gate.Validate(c, inv.ID)
 	if err != nil {
 		t.Fatalf("Validate: want a normal (nil-error) BLOCKED outcome, got err: %v", err)
 	}
@@ -402,5 +402,61 @@ func TestGate_ValidateZeroLineItemsStaysDraftWithLineItemsRequired(t *testing.T)
 	}
 	if !hasViolation(vs, "line-items-required") {
 		t.Errorf("violations = %+v, want one naming line-items-required", vs)
+	}
+}
+
+// --- Rule-set version threaded out of Gate.Validate (task-161/M4-22-02) ----
+
+// TestGateValidate_PropagatesEvaluatedVersion (task-161's Test Specs #6): a
+// real validate against the real seeded active v2 rule set must hand the
+// evaluated version back to the CALLER as Gate.Validate's own return value
+// -- not merely stamp it into RuleSetVersionID via ApplyValidation and
+// discard it, which is exactly what gate.go's Validate does today (see its
+// QA MODE-A SCAFFOLD comment). This is what lets ValidateHandler
+// (task-161) put the version on the wire. Asserts it equals both 2 (the
+// seeded active version, migrations/20260716185106_rule_set_v2.sql) AND
+// the version the stamped rule_set_version_id itself resolves to, so a
+// future rule-set republish that moved the active version could not leave
+// this test's hardcoded 2 silently wrong on only one side.
+func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "RSV tenant")
+	entityID := seedEntity(t, super, tenantID, "RSV entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	in := gapiValidInvoiceInput(entityID, "RSV-01")
+	inv, err := store.Create(c, in)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	srv := startInProcess04(t, app)
+	validator := NewValidator(srv.URL, gapiS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	got, version, err := gate.Validate(c, inv.ID)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if version != 2 {
+		t.Errorf("version = %d, want 2 -- the real seeded active version, threaded out of Gate.Validate's own "+
+			"return value, not merely stamped into rule_set_version_id and discarded", version)
+	}
+	if got.RuleSetVersionID == nil {
+		t.Fatal("rule_set_version_id = nil, want stamped")
+	}
+
+	var stampedVersion int
+	if err := super.QueryRow(ctx,
+		`SELECT version FROM rule_set_versions WHERE id = $1`, *got.RuleSetVersionID,
+	).Scan(&stampedVersion); err != nil {
+		t.Fatalf("read stamped rule_set_versions row: %v", err)
+	}
+	if version != stampedVersion {
+		t.Errorf("Gate.Validate returned version %d, but the stamped rule_set_version_id resolves to version %d "+
+			"-- the two must describe the SAME rule set", version, stampedVersion)
 	}
 }

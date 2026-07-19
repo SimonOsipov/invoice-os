@@ -1,11 +1,13 @@
 // M3-11-02 (task-86): the Day-30 wedge demo — ONE serial journey that walks the
 // accounting-firm story against the DEPLOYED dev fleet exactly as a firm sees it.
-// Steps 1–5 drive the app SPA in a real browser (a single continuous `page`); steps
-// 6–7 run headless over the reused api seam (Bearer token) + the superuser DB (there
-// is no UI kill-switch and no audit-read surface — Decisions D2/D5). The browser
-// persona "Chinedu Okafor" and the headless login(PERSONAS.A) both resolve to the
-// same firm tenant 1111…, so the onboarded entity, the toggle, and the audit row all
-// belong to one tenant (Decision "demo tenant").
+// Steps 1–5 drive the app SPA in a real browser (a single continuous `page`); step 6
+// runs headless over the reused api seam (Bearer token) — there is no UI kill-switch
+// (Decision D2). Step 7 (the audit_log row the toggle writes) is PARKED, not run at
+// all: audit is write-only with no read surface (Decision D5) and this suite no
+// longer has direct DB access (M4-22 [db-op-resolution]) — see the standalone
+// skipped test below (M4-22-06 [park-shape]). The browser persona "Chinedu Okafor"
+// and the headless login(PERSONAS.A) both resolve to the same firm tenant 1111…, so
+// the onboarded entity and the toggle belong to one tenant (Decision "demo tenant").
 //
 // Rule-state safety (Decision D6): the journey kill-switches the shared, un-tenanted
 // `vat-standard-rate` rule, so it self-heals it to enabled on entry (re-throwing a
@@ -16,7 +18,7 @@
 // re-derived compactly here.
 //
 // Oracle: `test:demo` green in the M2-14 dev-env.yml deploy gate (there is no local
-// fleet to run it against; AC-7 is env-gate-skipped when the superuser DSN is absent).
+// fleet to run it against; AC-7 is unconditionally parked — M4-22-06 [park-shape]).
 import { test, expect } from '@playwright/test'
 import { login, validate, toggleRule, PERSONAS, ApiError, type ValidateResult } from '../api/client'
 import { badInvoice, BAD_INVOICE_KEYS, freshTin } from '../api/fixtures'
@@ -25,11 +27,9 @@ import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 import {
   ensurePortfolioSeeded,
   DISABLED_RULE_KEY,
-  DEMO_TENANT_ID,
   CLIENTS_NAV,
   VALIDATION_NAV,
 } from './fixtures'
-import { dbEnabled, requireDbInCI, auditRowExists, dbNow } from './db'
 
 // keysOf(): the sorted rule_key set of a ValidateResult. Engine.Evaluate already
 // sorts its output (Decision N16); we sort again so the AC-6 exact-set assertion
@@ -79,6 +79,25 @@ async function disableRule(token: string): Promise<void> {
     throw err
   }
 }
+
+// AC-7 (parked until M7): the kill-switch writes a real audit_log row (event
+// validation.rule.disabled, payload.key = vat-standard-rate) but audit has no HTTP
+// read surface (write-only — internal/audit/audit.go — no gateway route reads it), so
+// this can't be asserted without direct DB access, which M4-22 [db-op-resolution]
+// removes from this suite. This is its own bare `test(...)` — NOT a describe-scope
+// `test.skip(true, ...)`, which would skip the entire journey below instead of just
+// this AC (M4-22 [loud-park]) — declared BEFORE the journey test so it always runs to
+// completion and reports Playwright's "skipped" bucket, never the declared-after-a-
+// failure "did not run" bucket, regardless of whether the journey passes or fails.
+test('AC-7 (parked until M7): the kill-switch audit_log row', () => {
+  const reason =
+    'Parked until M7: requires a queryable audit_log read (auditRowExists). See M4-22 decision [park-shape].'
+  // test.skip() throws synchronously, so any console output must precede it
+  // (Playwright's list reporter dumps a test's own console output to stdout, unlike
+  // the skip() reason string itself, which only the (unused) JUnit reporter reads).
+  console.warn(`[day30] ${reason}`)
+  test.skip(true, reason)
+})
 
 test.describe.configure({ mode: 'serial' })
 
@@ -206,19 +225,10 @@ test.describe('Day-30 wedge demo (browser journey + API kill-switch + DB audit, 
     // The browser journey (AC-1…AC-5) must have run clean — same convention as topology.
     expect(errors, `console errors during the browser journey:\n${errors.join('\n')}`).toEqual([])
 
-    // ---- AC-6 (API) + AC-7 (DB): one coherent block. Capture t0 from the DB clock
-    // BEFORE the toggle (D7), then toggle → re-validate assertion → audit-row assertion,
-    // then restore. Keeping AC-7 inside the same try as AC-6 asserts the row the toggle
-    // wrote in-tx (store.go:170-181) from the exact t0 that preceded that toggle.
-    // In CI, D8's skip below is a HARD failure instead: a missing DSN there means
-    // the workflow stopped passing it, and AC-7 skipping quietly would leave this
-    // demo green with its audit assertion never run (api/db.ts's requireDbInCI
-    // exists because that exact invisible green shipped once). No-op locally.
-    requireDbInCI()
-
-    const dbOn = dbEnabled()
-    const t0 = dbOn ? await dbNow() : null
-
+    // ---- AC-6 (API): toggle the rule off, then assert the re-run over the API omits
+    // ONLY the disabled key. AC-7 (the audit_log row the toggle writes) is parked — see
+    // the standalone skipped test above this describe (M4-22-06 [park-shape]) — this
+    // suite no longer touches the DB, so there is no DSN/t0 gate here anymore.
     try {
       await disableRule(tokenA)
 
@@ -228,24 +238,6 @@ test.describe('Day-30 wedge demo (browser journey + API kill-switch + DB audit, 
       // exactly one rule, not that it went dark (D5, validation.spec.ts:169-186).
       const disabled = await validate(tokenA, badInvoice)
       expect(keysOf(disabled)).toEqual(BAD_INVOICE_KEYS.filter((k) => k !== DISABLED_RULE_KEY))
-
-      // AC-7 — the toggle wrote a real audit_log row (event validation.rule.disabled,
-      // payload.key = vat-standard-rate, tenant 1111…). Assert it exists with
-      // created_at >= t0. Env-gate-skipped locally (no superuser DSN, D8) — AC-1…AC-6
-      // still run; the assertion runs in CI where M3-11-03 wires the secret in.
-      if (dbOn && t0) {
-        const audited = await auditRowExists({
-          event: 'validation.rule.disabled',
-          key: DISABLED_RULE_KEY,
-          tenantId: DEMO_TENANT_ID,
-          since: t0,
-        })
-        expect(audited, 'expected an audit_log row for the vat-standard-rate kill-switch').toBe(true)
-      } else {
-        const msg = 'AC-7 audit assertion skipped: DATABASE_SUPERUSER_URL_DEV not set (local run)'
-        test.info().annotations.push({ type: 'skip', description: msg })
-        console.warn(`[day30] ${msg}`)
-      }
     } finally {
       // Belt-and-braces restore over afterAll — never throws (D6).
       await ensureRuleEnabled(tokenA, false)

@@ -351,6 +351,54 @@ func TestProvisionFromEmptyDatabase(t *testing.T) {
 			t.Errorf("tenant %s (%s): kind = %q, want %q", tc.id, tc.name, kind, tc.kind)
 		}
 	}
+
+	// [M4-22-03 QA] The central claim task-162 exists to satisfy: a freshly
+	// spawned PR environment (an empty schema, exactly what this test starts
+	// from) is demo-ready at boot with NO post-boot command -- the curated
+	// business_entities portfolio and the all-rules-enabled state must hold
+	// after Provision, exercised through the REAL boot entry point (Provision,
+	// which drives Bootstrap -> MigrateUp -> Seed) rather than calling db.Seed
+	// directly the way seed_demo_test.go's suite does. Reuses
+	// fetchDemoBusinessEntities/demoTenantID (seed_demo_test.go /
+	// demo_reset_test.go, same package) rather than duplicating the query.
+	assertDemoReady := func(step string) {
+		t.Helper()
+		entities := fetchDemoBusinessEntities(t, pool, demoTenantID)
+		if len(entities) != 27 {
+			t.Fatalf("%s: count(business_entities) for the demo tenant = %d, want 27", step, len(entities))
+		}
+		var active, archived int
+		for _, r := range entities {
+			switch r.status {
+			case "active":
+				active++
+			case "archived":
+				archived++
+			}
+		}
+		if active != 21 {
+			t.Errorf("%s: count(active business_entities) = %d, want 21", step, active)
+		}
+		if archived != 6 {
+			t.Errorf("%s: count(archived business_entities) = %d, want 6", step, archived)
+		}
+		if disabled := mustCount(t, pool, `SELECT count(*) FROM rules WHERE enabled = false`); disabled != 0 {
+			t.Errorf("%s: count(rules WHERE enabled=false) = %d, want 0", step, disabled)
+		}
+	}
+	assertDemoReady("after the FIRST Provision (from an empty schema)")
+
+	// Re-run Provision a second time against the now-provisioned schema
+	// (simulating a redeploy or a second replica booting against the same
+	// freshly-provisioned env) and assert the demo-ready state still holds,
+	// unduplicated and unregressed -- not just that db.Seed alone is
+	// idempotent (TestSeedDemoEntitiesIsIdempotent/TestSeedReenablesDisabledRules),
+	// but that the FULL Provision sequence run twice from a cold boot lands in
+	// the same demo-ready state both times.
+	if err := db.Provision(ctx, cfg); err != nil {
+		t.Fatalf("second Provision (idempotency, from the now-provisioned schema): %v", err)
+	}
+	assertDemoReady("after the SECOND Provision")
 }
 
 // TestProvisionSeedFailsIfRunBeforeMigrate: Test Spec row / AC-1. Bootstrapped

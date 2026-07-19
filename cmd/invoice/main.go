@@ -52,6 +52,7 @@ func main() {
 	store := invoice.NewStore(pool)
 	app.Mux.HandleFunc("POST /v1/invoices", invoice.CreateHandler(store.Create, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/transitions", invoice.TransitionHandler(store.Transition, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/invoices/{id}", invoice.EditHandler(store.Edit, app.Logger))

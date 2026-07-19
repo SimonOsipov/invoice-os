@@ -1,0 +1,218 @@
+name: Dev Env Sweeper (reap orphaned per-PR environments)
+
+# M4-23-07. The correctness guarantee behind dev-env-teardown.yml's fast path
+# ([teardown-best-effort-sweeper-authoritative]): GitHub community#26657 says
+# `pull_request: closed` "will not consistently be triggered", and merge conflicts
+# suppress pull_request events entirely. Teardown reaps in seconds in the normal case;
+# THIS is what guarantees no environment leaks indefinitely.
+#
+# Reaps ONLY on positive evidence of a closed or merged PR ([sweeper-closed-pr-only]).
+# NEVER on age: an age TTL can kill an environment someone is actively using.
+#
+# `schedule:` runs only from the DEFAULT BRANCH, so the cron cannot be proven before this
+# merges. `workflow_dispatch` is how M4-23-09 exercises it — measured 2026-07-19 that
+# dispatch DOES fire for a workflow absent from the default branch when given --ref
+# (railway-invariants.yml, run 29661851443, event=workflow_dispatch, success).
+on:
+  schedule:
+    # 04:17 not 04:00: GitHub warns on-the-hour crons are oversubscribed and get delayed
+    # or dropped. [sweeper-daily] says 04:00; 17 past is the same daily slot with better
+    # odds of firing, which for a once-daily backstop matters more than the round number.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+# Single-flight against ITSELF (a manual dispatch racing the cron). It deliberately does
+# NOT join dev-env.yml/teardown's `dev-preview-<N>` lock: one sweep spans many PRs and has
+# no single N. Residual race, accepted not engineered around — the sweeper could delete
+# pr-<N> while dev-env.yml deploys it, but only if PR N is CLOSED (positive evidence is
+# required), in which case deleting is the correct outcome anyway and the deploy is
+# already pointless. At 04:17 daily this is near-unreachable.
+concurrency:
+  group: dev-env-sweeper
+  cancel-in-progress: false
+
+permissions:
+  contents: read        # checkout only; the sweeper writes nothing to the repo
+  pull-requests: read   # gh pr view
+
+env:
+  RAILWAY_PROJECT_ID: 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
+  # The never-delete guard: delete-environment refuses outright if the resolved id equals
+  # this, independently of Railway's own isEphemeral flag.
+  RAILWAY_DEV_ENVIRONMENT_ID: 6c864094-6a06-452f-8495-be77d8a94fe7
+
+jobs:
+  sweep:
+    name: Reap ephemeral environments whose PR is closed
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # No `ref:` pin, unlike dev-env-teardown.yml. That pin exists because a
+      # `pull_request: closed` checkout races the deletion of refs/pull/<N>/merge; there
+      # is no PR and no merge ref here, so the default (the ref the run started from) is
+      # correct.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # MANDATORY: build once, exec the binary. `go run` collapses EVERY non-zero exit to
+      # 1 (measured, Go 1.26) — destroying the exit-2 ("prenv is broken / called wrong")
+      # vs exit-1 ("this PR is open") distinction the whole sweep-decide contract exists
+      # for, and emitting `exit status 1` on stderr for every routine skip, burying real
+      # failures. Safety is unaffected either way (2 collapsing to 1 is still a skip);
+      # OBSERVABILITY is the point. Do NOT replace this with `go run`.
+      - name: Build prenv
+        run: go build -o "$RUNNER_TEMP/prenv" ./tools/prenv
+
+      - name: Sweep
+        env:
+          # Account-scoped token — a Railway PROJECT token is pinned to one environment and
+          # cannot reach an ephemeral PR environment. Same posture as teardown.
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # `set +e` is EXPLICIT and load-bearing, not redundant: Actions runs `run:` blocks
+          # as `bash -e {0}`, and `set -uo pipefail` does NOT clear an inherited -e. Without
+          # this line one environment's failure would abort the whole sweep, breaking AC-5.
+          # Every fallible call below is in an `if`/`|| rc=$?` position instead.
+          set +e
+          set -uo pipefail
+
+          envs_file="$RUNNER_TEMP/envs.tsv"
+          gh_err="$RUNNER_TEMP/gh.err"
+
+          # UNFILTERED enumeration. isEphemeral is a DISCRIMINATOR passed through to
+          # sweep-decide, never a server-side filter: filtering would make ShouldReap's
+          # `!isEphemeral -> skip` guard structurally unreachable in production (the exact
+          # "fail-safe its caller can never reach" defect M4-23-06 AC-8 exists against),
+          # and would hide a PERSISTENT environment wearing a pr-<N> name — the leak
+          # lookup_environment:282 already warns about. Exits non-zero rather than
+          # emitting an empty list: unreadable must never read as "nothing to reap".
+          if ! bash scripts/ci/railway-env.sh list-environments > "$envs_file"; then
+            echo "::error::Could not enumerate environments in project $RAILWAY_PROJECT_ID. The sweep did NOT run — refusing to exit green, which would assert a sweep that never happened."
+            exit 1
+          fi
+
+          # `grep -c ''` not `wc -l`: wc counts NEWLINES, so a final row without a trailing
+          # newline is invisible to it AND dropped by `read` — the two errors cancel and
+          # the examined-vs-total check below passes on an incomplete sweep. grep counts
+          # that row, so the mismatch is caught and the run fails loudly instead.
+          total=$(grep -c '' "$envs_file")
+          echo "Enumerated $total environment(s) in project $RAILWAY_PROJECT_ID."
+          if [ "${total:-0}" -lt 1 ]; then
+            echo "::error::Enumeration produced ZERO rows. 'development' is persistent and always exists, so this is a broken enumeration — not an empty project. Refusing to exit green having reaped nothing on the strength of an empty list."
+            exit 1
+          fi
+          if [ "$total" -gt 25 ]; then
+            echo "::warning::$total environments — far above this project's steady state (~2). Every one is still examined below; NOTHING is truncated. Investigate why so many exist."
+          fi
+
+          examined=0; reaped=0; skipped=0; failures=0
+          rows=""
+
+          # Read on FD 3, not stdin. `gh` and the Railway script run inside this loop and
+          # would otherwise be free to consume the environment list from stdin, silently
+          # eating rows. Redirect (not a pipe) so the loop runs in the current shell and
+          # the counters survive — a pipe would zero every one of them.
+          while IFS=$'\t' read -r -u 3 name is_ephemeral env_id; do
+            [ -n "$name" ] || continue
+            examined=$((examined + 1))
+
+            # prenv is the ONLY place this repo parses an environment name (M4-23-01) —
+            # do NOT sed it here. Non-PR names (development, hand-made scratch) get no gh
+            # call, but ARE still put through sweep-decide so the log carries an explicit
+            # decision for EVERY environment (AC-7).
+            pr=$("$RUNNER_TEMP/prenv" parse "$name" 2>/dev/null) || pr=""
+
+            gh_out=""; gh_rc=0; gh_msg=""
+            if [ -n "$pr" ]; then
+              gh_out=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state 2>"$gh_err") || gh_rc=$?
+              # Flattened to one line and stripped of `|` so it cannot break the summary
+              # table. DIAGNOSTICS ONLY — nothing below branches on this text.
+              gh_msg=$(head -c 200 "$gh_err" | tr '\n\t|' '   ')
+            else
+              # Nothing to ask GitHub. rc=1 + empty stdout is exactly the shape
+              # ParsePRState maps to Unknown; ShouldReap also rejects the name at its own
+              # parse guard. Two independent reasons to skip.
+              gh_rc=1
+            fi
+
+            # THE decision point. The delete lives ONLY in the `then` branch of a
+            # zero-exit test, so every failure of the mechanism — gh non-zero, gh absent,
+            # malformed JSON, prenv exit 2, a missing binary (127) — lands in `else`.
+            # Structural, not enumerated.
+            if reason=$("$RUNNER_TEMP/prenv" sweep-decide "$name" "$is_ephemeral" "$gh_rc" "$gh_out"); then
+              echo "REAP  $name (ephemeral=$is_ephemeral id=$env_id) — $reason"
+              # By NAME, never by id: cmd_delete_environment re-looks-up the name, which
+              # re-applies BOTH never-delete-development guards and narrows the window
+              # between decision and delete. Passing an id would bypass them.
+              if bash scripts/ci/railway-env.sh delete-environment "$name"; then
+                reaped=$((reaped + 1))
+                rows="${rows}| \`$name\` | **REAPED** | $reason | \`$env_id\` |"$'\n'
+              else
+                failures=$((failures + 1))
+                echo "::error::delete-environment FAILED for '$name' — a delete was ordered and the environment is still present. Continuing with the remaining environments."
+                rows="${rows}| \`$name\` | **DELETE FAILED** | $reason | \`$env_id\` |"$'\n'
+              fi
+            else
+              rc=$?
+              # EXIT 1 IS THE ONLY SKIP. Bucketing on `rc == 2` instead would classify
+              # every OTHER non-zero code as a benign skip — and 127 (binary missing or
+              # unbuilt) is exactly that: the run would examine every environment, reap
+              # nothing, and end GREEN. Measured on this branch before the fix. prenv's
+              # contract is 0/1/2 and nothing else, so anything that is not 1 is a broken
+              # mechanism, whether or not we anticipated the code.
+              if [ "$rc" = "1" ]; then
+                skipped=$((skipped + 1))
+                detail="$reason"
+                if [ "$reason" = "pr-state-unknown" ]; then
+                  # Warning, not error: making this fatal would turn the sweeper red every
+                  # day forever for one hand-created environment, and an alert that always
+                  # fires gets ignored or disabled — the failure this sweeper exists to
+                  # prevent. gh's stderr is quoted verbatim as DIAGNOSTICS ONLY; no
+                  # decision branches on it (decisions come from the unit-tested Go).
+                  echo "::warning::'$name' -> PR #$pr state is UNKNOWN (gh exit $gh_rc): ${gh_msg:-<no stderr>}. Skipped, never deleted. If this repeats daily the environment is an orphan that can never be reaped — investigate by hand."
+                  detail="$reason (gh rc=$gh_rc: ${gh_msg:-<no stderr>})"
+                fi
+                echo "SKIP  $name (ephemeral=$is_ephemeral id=$env_id) — $detail"
+                rows="${rows}| \`$name\` | skipped | $detail | \`$env_id\` |"$'\n'
+              else
+                # rc=2 is "called wrong / broken"; any other code is a broken mechanism we
+                # did not anticipate. Both are failures. NOT a skip verdict — no delete was
+                # attempted, and no environment was assessed.
+                failures=$((failures + 1))
+                echo "::error::sweep-decide exited $rc for '$name' — prenv was called wrong, is broken, or is missing (127). This is NOT a skip verdict; that is exit 1 only. No delete attempted."
+                rows="${rows}| \`$name\` | **ERROR (sweep-decide exit $rc)** | called wrong / broken / missing | \`$env_id\` |"$'\n'
+              fi
+            fi
+          done 3< "$envs_file"
+
+          # Anti-silent-truncation. The run cannot end green having examined fewer
+          # environments than it enumerated.
+          if [ "$examined" != "$total" ]; then
+            failures=$((failures + 1))
+            echo "::error::Examined $examined of $total enumerated environments — the loop dropped rows. The sweep is INCOMPLETE."
+          fi
+
+          {
+            echo "## Dev Env Sweeper — $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "Trigger: \`$GITHUB_EVENT_NAME\` · Project: \`$RAILWAY_PROJECT_ID\`"
+            echo
+            echo "**Examined $examined · reaped $reaped · skipped $skipped · errored $failures**"
+            echo
+            echo "| Environment | Decision | Reason | Id |"
+            echo "|---|---|---|---|"
+            printf '%s' "$rows"
+            echo
+            echo "Enumeration is unfiltered: \`development\` and any non-ephemeral environment appear above and are skipped explicitly, so a no-op run is still evidence that the sweeper looked."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failures" -gt 0 ]; then
+            echo "::error::Sweep finished with $failures failure(s). A skip is NOT a failure — these are broken-mechanism cases."
+            exit 1
+          fi
+          echo "Sweep complete: examined $examined, reaped $reaped, skipped $skipped."

@@ -1,7 +1,7 @@
 // Shared targets + fixtures for the M2-14 topology E2E (task-23.4). Unlike the smoke
 // suite (which only needs the SPA URLs), these tests drive the live gateway too: the
 // browser round trip and the cross-tenant isolation check both go through it. Each PR now
-// deploys to its own ephemeral Railway environment (M4-21), so these URLs are REQUIRED —
+// deploys to its own ephemeral Railway environment (M4-23), so these URLs are REQUIRED —
 // resolveTarget throws rather than falling back to a hardcoded dev deployment (Decision
 // [fail-loud-targets]).
 

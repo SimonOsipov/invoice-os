@@ -9,7 +9,7 @@ import (
 
 // allowedOrigin is a pure unit-test fixture, not a discoverable per-environment target:
 // CORS() takes its allow-list as a plain []string argument, wired from config at the
-// gateway's call site, not read from this test. Since M4-21 every PR deploys to its own
+// gateway's call site, not read from this test. Since M4-23 every PR deploys to its own
 // ephemeral Railway environment with an unpredictable domain suffix, so this constant is
 // deliberately a non-Railway literal — coupling it to a real (and inevitably stale) origin
 // would give it environment meaning it doesn't have (Decision [cors-test-neutralized]).

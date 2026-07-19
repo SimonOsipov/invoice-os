@@ -26,7 +26,7 @@
 set -u
 
 svc="${1:?usage: railway-up-ci.sh <service>}"
-: "${RAILWAY_ENVIRONMENT:?RAILWAY_ENVIRONMENT is not set — expected the Railway environment name resolved by dev-env.yml resolve-env job (M4-21-09)}"
+: "${RAILWAY_ENVIRONMENT:?RAILWAY_ENVIRONMENT is not set — expected the Railway environment name resolved by the prepare-env job in dev-env.yml (M4-23-03)}"
 : "${RAILWAY_PROJECT_ID:?RAILWAY_PROJECT_ID is not set — expected the workflow-level constant from dev-env.yml}"
 
 rc=0

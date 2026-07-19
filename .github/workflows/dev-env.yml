@@ -1,8 +1,9 @@
 name: Dev Env (deploy full fleet + verify)
 
 # Deploy the whole fleet to one Railway environment, then verify it.
-# A ready PR → its own ephemeral env (Railway PR Environments, forked from
-# `development`). workflow_dispatch → `development` itself, plus reset-seed.
+# A ready PR → its own ephemeral env, which THIS workflow forks from
+# `development` itself (M4-23-03) — not Railway's PR Environments feature, which
+# is OFF and stays OFF. workflow_dispatch → `development` itself, plus reset-seed.
 #
 # Auth: PR runs use RAILWAY_API_TOKEN (account-scoped); workflow_dispatch uses
 # RAILWAY_API_DEV_TOKEN (project token, `Project-Access-Token` header). An
@@ -11,13 +12,15 @@ name: Dev Env (deploy full fleet + verify)
 # --environment explicitly.
 #
 # Human-applied prerequisites (see docs/topology-e2e.md):
-#  - Railway PR Environments ON, base = `development`, Bot PR Environments OFF
-#    (PRs here are authored by a User account, not a bot).
+#  - Railway PR Environments are OFF and MUST STAY OFF (M4-23-02) — do NOT turn
+#    them on. They never worked here (Railway is not subscribed to this repo's PR
+#    events), and railway-invariants.yml now fails every PR if they are re-enabled
+#    or if any deployment trigger appears. See docs/deploy-model.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
 #  - Railway Watch Paths empty on all 11 non-Postgres services, or `railway up`
 #    silently skips untouched services and a torn-down fleet never recovers.
-#    resolve-env asserts this at runtime. Re-clear if a service is recreated.
+#    prepare-env asserts this at runtime. Re-clear if a service is recreated.
 #  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
 #    ever deleted and recreated. Domain suffixes are opaque — always discovered,
 #    never hardcoded.
@@ -34,6 +37,9 @@ on:
       - 'migrations/**'
       - 'db/**'
       - 'tools/prenv/**'
+      # M4-23-08: the create/reconcile/teardown/sweep logic lives here now, so a PR
+      # touching it must fire the gate that validates it.
+      - 'scripts/ci/**'
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'
@@ -68,7 +74,7 @@ permissions:
 env:
   # Stable Railway resource identifiers — see PREREQUISITES #6 above. NOT the
   # opaque generated domain strings (those are discovered fresh by
-  # resolve-env below, never hardcoded — F7).
+  # prepare-env below, never hardcoded — F7).
   RAILWAY_PROJECT_ID: 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
   RAILWAY_DEV_ENVIRONMENT_ID: 6c864094-6a06-452f-8495-be77d8a94fe7
   RAILWAY_SVC_GATEWAY_ID: 951fff95-e881-4838-878f-0626a4c44693
@@ -89,8 +95,9 @@ jobs:
   #    debugging); draft PRs skip it (and everything below). Every deploy job
   #    is transitively downstream of deploy-gateway, so gating deploy-gateway
   #    on this one job gates the whole pipeline. Runs in PARALLEL with
-  #    resolve-env below (neither needs the other) to keep wall-clock time
-  #    down — CI can take up to ~20m, environment resolution up to ~5m.
+  #    prepare-env below (neither needs the other) to keep wall-clock time
+  #    down — CI can take up to ~20m, environment preparation far less now
+  #    that it creates the environment instead of waiting for one to appear.
   await-ci:
     name: Await green CI (PR only; dispatch bypasses)
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
@@ -119,24 +126,36 @@ jobs:
           echo "::error::Timed out after ~20m waiting for the CI check on $SHA."
           exit 1
 
-  # 0.5. Resolve the target Railway environment (M4-21-09). On a PR, poll for
-  #      this PR's ephemeral environment and resolve its name via the pure
-  #      `Match` function (M4-21-08, tools/prenv) — never guessed or
-  #      constructed (F5). On workflow_dispatch, the target is always the
-  #      persistent `development` environment (its id is a stable, hardcoded
-  #      constant — PREREQUISITES #6). Either way, this job also asserts
-  #      every non-Postgres service instance still has empty Watch Paths
+  # 0.5. Prepare the target Railway environment (M4-23-03). On a PR we now
+  #      CREATE the environment ourselves rather than waiting for Railway to
+  #      make one for us: `prenv name <pr>` derives `pr-<N>` (the single name
+  #      constructor in this repo, M4-23-01), and `railway-env.sh
+  #      ensure-environment` reuses it if it already exists or forks it from
+  #      `development` otherwise. Idempotent, so a re-run of the same PR
+  #      mutates nothing. There is no polling here and no dependence on
+  #      Railway's PR Environments feature, which never worked in this project
+  #      (M4-23-02) and must stay OFF. On workflow_dispatch, the target is
+  #      always the persistent `development` environment (its id is a stable,
+  #      hardcoded constant — PREREQUISITES #6) and the create path is
+  #      structurally unreachable. Either way, this job also asserts every
+  #      non-Postgres service instance still has empty Watch Paths
   #      (PREREQUISITES #5) and discovers the 4 public URLs fresh (F7) — the
   #      hardcoded workflow-level `env:` URLs this superseded are GONE; every
-  #      consumer below reads `needs.resolve-env.outputs.*` instead.
-  resolve-env:
-    name: Resolve Railway environment (+ assert Watch Paths + discover URLs)
+  #      consumer below reads `needs.prepare-env.outputs.*` instead.
+  prepare-env:
+    name: Prepare Railway environment (create-or-reuse + assert Watch Paths + discover URLs)
     if: >-
       always() &&
       ( github.event_name == 'workflow_dispatch' ||
         github.event.pull_request.draft == false )
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume,
+    # brings Postgres up in a fresh fork and waits for it (<=420s), plus a
+    # <=180s pg_isready probe (12 x (5s timeout + 10s backoff)). At 10
+    # minutes a slow-but-CORRECT fork would die as a bare job-level timeout with
+    # no annotation naming a cause — the exact failure mode the seam exists to
+    # prevent. A job knob, not a restructure.
+    timeout-minutes: 20
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
       environment_id: ${{ steps.resolve.outputs.environment_id }}
@@ -146,91 +165,137 @@ jobs:
       ops_console_url: ${{ steps.urls.outputs.ops_console_url }}
     steps:
       - uses: actions/checkout@v4
+      # Still required: `prenv name` is the ONLY environment-name constructor in
+      # this repo (M4-23-01) and this step is a shell, so it must shell out to Go.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: false
 
-      - name: Resolve environment name + id
+      - name: Resolve target environment (create-or-reuse)
         id: resolve
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: |
           set -euo pipefail
 
+          # The workflow_dispatch short-circuit lives HERE, in the YAML, and not in
+          # railway-env.sh, because it is a POLICY statement — `development` is
+          # persistent and must never be created, forked over, or made ephemeral
+          # ([development-not-ephemeral]) — and it belongs at the point a reader
+          # looks for it. On this path the script is never invoked at all, so
+          # environmentCreate is not merely guarded, it is unreachable.
           if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "workflow_dispatch — targeting the persistent development environment."
+            echo "workflow_dispatch — targeting the persistent development environment; environmentCreate is unreachable on this path."
             echo "environment=development" >> "$GITHUB_OUTPUT"
             echo "environment_id=$RAILWAY_DEV_ENVIRONMENT_ID" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ -z "${PR_TOKEN:-}" ]; then
-            echo "::error::secrets.RAILWAY_API_TOKEN is not set. This is the account-scoped Railway token every PR-environment deploy authenticates with (M4-21-07/task-131, human-provisioned — a project token cannot reach an ephemeral PR environment, F6). Add it as a GitHub Actions secret named RAILWAY_API_TOKEN before this can succeed."
+          name=$(go run ./tools/prenv name "$PR_NUMBER")
+          echo "PR #$PR_NUMBER -> environment name '$name'"
+          bash scripts/ci/railway-env.sh ensure-environment "$name"
+
+      # --- STEP SEAM (M4-23-04) ---------------------------------------------
+      # Fork reconciliation is inserted HERE, between `resolve` and `urls`, as a
+      # pure insertion: `urls` DISCOVERS the 4 public domains and fails if any is
+      # missing, so anything that has to make them exist must run before it and
+      # after the environment exists. Do not merge these into either neighbour.
+      #
+      # Every step in the seam is skipped on workflow_dispatch. Load-bearing, not
+      # cosmetic: on dispatch the target is `development` (nothing to reconcile —
+      # it is not a fork) AND railway-env.sh authenticates with
+      # `Authorization: Bearer`, which the dispatch path's Railway PROJECT token
+      # cannot satisfy. Drop the guard and every dispatch run breaks.
+      # ----------------------------------------------------------------------
+
+      - name: Audit sealed variables in development (they do not fork)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: bash scripts/ci/railway-env.sh audit-sealed-variables
+
+      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, proxy audit)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
+
+      # The AUTHORITATIVE liveness proof. A SUCCESS deployment status says the
+      # container started; only this says Postgres accepts connections. It also
+      # proves DATABASE_PUBLIC_URL resolves to a live TCP proxy in a fork, which
+      # the e2e job's superuser-DSN discovery and the api + demo suites' direct DB
+      # assertions all depend on.
+      #
+      # Lives in YAML rather than railway-env.sh because it needs `pg_isready`
+      # from the runner image, which the script has no business assuming.
+      #
+      # M4-22 ("Close the Public Database Door") deletes the DATABASE_PUBLIC_URL
+      # dependency; this step and observe_tcp_proxy in railway-env.sh go with it.
+      - name: Probe Postgres liveness in the fork (pg_isready)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_QUERY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: |
+          set -euo pipefail
+
+          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
+            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
+
+          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
+                --request POST \
+                --url https://backboard.railway.com/graphql/v2 \
+                --header "Authorization: Bearer $RAILWAY_QUERY_TOKEN" \
+                --header "Content-Type: application/json" \
+                --data "$query_body"); then
+            echo "::error::Railway GraphQL request failed reading the Postgres variables in environment $ENV_ID"
+            exit 1
+          fi
+          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
+            echo "::error::Railway GraphQL error reading the Postgres variables: $(echo "$resp" | jq -c '.errors')"
             exit 1
           fi
 
-          query_body=$(jq -n --arg pid "$RAILWAY_PROJECT_ID" \
-            '{query: "query($p:String!,$e:Boolean){environments(projectId:$p,isEphemeral:$e){edges{node{id name}}}}", variables: {p: $pid, e: true}}')
+          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
+          if [ -z "$dsn" ]; then
+            echo "::error::DATABASE_PUBLIC_URL is absent on the Postgres service ($RAILWAY_SVC_POSTGRES_ID) in the forked environment $ENV_ID. It was MEASURED to carry into a fork, so this is a real regression in fork fidelity — the e2e job's superuser-DSN discovery would fail later with less context."
+            exit 1
+          fi
+          echo "::add-mask::$dsn"
 
-          echo "Polling Railway for PR #$PR_NUMBER's ephemeral environment (bounded ~300s) ..."
-          resolved=""
-          resolved_id=""
-          last_names=""
-          for i in $(seq 1 30); do
-            if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
-                  --request POST \
-                  --url https://backboard.railway.com/graphql/v2 \
-                  --header "Authorization: Bearer $PR_TOKEN" \
-                  --header "Content-Type: application/json" \
-                  --data "$query_body"); then
-              echo "  (attempt $i) Railway GraphQL request failed transiently, retrying ..."
-              sleep 10
-              continue
-            fi
-
-            if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
-              echo "::error::Railway GraphQL error while listing ephemeral environments: $(echo "$resp" | jq -c '.errors')"
+          # An unrendered template here means the variable exists but its inputs
+          # (the TCP proxy) did not fork — a different failure with a different fix.
+          #
+          # The needle is ASSEMBLED AT RUNTIME and never written literally, not even
+          # in a comment. A dollar sign followed by two braces ANYWHERE in a run:
+          # block — comments included, since they are part of the same string — is
+          # consumed by GitHub as the start of an Actions expression BEFORE the shell
+          # sees it, which makes the whole workflow file unparseable: the run then
+          # fails with zero jobs and no usable annotation. Do not "simplify" this
+          # back to a literal.
+          unrendered_prefix='$'"{{"
+          case "$dsn" in
+            *"$unrendered_prefix"*)
+              echo "::error::DATABASE_PUBLIC_URL in environment $ENV_ID is still an UNRENDERED template, i.e. the variable forked but its TCP-proxy inputs did not. Postgres is unreachable over the public proxy."
               exit 1
-            fi
+              ;;
+          esac
 
-            names=$(echo "$resp" | jq -r '.data.environments.edges[]?.node.name')
-            last_names="$names"
-            if [ -z "$names" ]; then
-              echo "  (attempt $i) no ephemeral environments visible yet, retrying ..."
-              sleep 10
-              continue
+          for attempt in $(seq 1 12); do
+            if pg_isready -d "$dsn" -t 5; then
+              echo "postgres accepts connections in environment $ENV_ID (attempt $attempt)."
+              exit 0
             fi
-
-            names_arr=()
-            while IFS= read -r line; do
-              [ -n "$line" ] && names_arr+=("$line")
-            done <<< "$names"
-            if match_out=$(go run ./tools/prenv "$PR_NUMBER" "${names_arr[@]}" 2>&1); then
-              resolved="$match_out"
-              resolved_id=$(echo "$resp" | jq -r --arg n "$resolved" '.data.environments.edges[] | select(.node.name == $n) | .node.id')
-              break
-            fi
-
-            if echo "$match_out" | grep -qi "ambiguous"; then
-              echo "::error::tools/prenv reported an AMBIGUOUS match — refusing to guess which environment is PR #$PR_NUMBER's: $match_out"
-              exit 1
-            fi
-
-            echo "  (attempt $i) no match yet ($match_out), retrying ..."
+            echo "  (pg_isready attempt $attempt) not ready yet — retrying in 10s ..."
             sleep 10
           done
 
-          if [ -z "$resolved" ]; then
-            echo "::error::No Railway ephemeral environment resolved for PR #$PR_NUMBER within ~300s. Candidate names last seen: ${last_names:-<none>}. Confirm Railway PR Environments + Bot PR Environments are enabled (M4-21-07/task-131)."
-            exit 1
-          fi
-
-          echo "Resolved environment: $resolved ($resolved_id)"
-          echo "environment=$resolved" >> "$GITHUB_OUTPUT"
-          echo "environment_id=$resolved_id" >> "$GITHUB_OUTPUT"
+          echo "::error::postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $ENV_ID never accepted a connection via DATABASE_PUBLIC_URL within ~180s (12 attempts x (5s connect timeout + 10s backoff)). This is a POSTGRES failure, NOT a generic gateway timeout: left unaddressed it would have surfaced as health-gate burning its full 900s with no cause named. MEASURED CAUSE 2026-07-19: Postgres with NO VOLUME reaches SUCCESS but never speaks the wire protocol, while raw TCP to its proxy stays OPEN — so if this fires, check that reconcile-fork actually created the volume before blaming the proxy or the DSN."
+          exit 1
 
       - name: Assert Watch Paths are empty on all 11 non-Postgres services (M3-16 invariant)
         env:
@@ -348,30 +413,58 @@ jobs:
 
           echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url"
 
+      # Must run after `urls` (consumes the discovered values) and before any
+      # service that bakes or reads them deploys. PR path only — the dispatch path
+      # targets `development`, whose variables are the source of truth.
+      - name: Point the fork's URL variables at the fork (never at development)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+          GATEWAY_URL: ${{ steps.urls.outputs.gateway_url }}
+          APP_URL: ${{ steps.urls.outputs.app_url }}
+          LANDING_URL: ${{ steps.urls.outputs.landing_url }}
+          OPS_CONSOLE_URL: ${{ steps.urls.outputs.ops_console_url }}
+        run: |
+          bash scripts/ci/railway-env.sh reconcile-urls \
+            "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The
-  #    two `railway variables --set` calls this job used to make at deploy
-  #    time (GATEWAY_MOCK_ISSUER, CORS_ALLOWED_ORIGINS) are GONE — both are
-  #    now durable Railway reference variables (M4-21-05, task-129), which
-  #    Railway forks into every PR environment along with the rest of
-  #    `development`'s variable topology.
+  #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine.
+  #    CORS_ALLOWED_ORIGINS is set per-environment by prepare-env's
+  #    `reconcile-urls`: measured in pr-67, a fork inherits development's list.
   deploy-gateway:
-    name: Deploy gateway → ${{ needs.resolve-env.outputs.environment }}
-    needs: [await-ci, resolve-env]
+    name: Deploy gateway → ${{ needs.prepare-env.outputs.environment }}
+    needs: [await-ci, prepare-env]
     if: >-
       always() &&
-      needs.resolve-env.result == 'success' &&
+      needs.prepare-env.result == 'success' &&
       ( github.event_name == 'workflow_dispatch' ||
         ( github.event.pull_request.draft == false && needs.await-ci.result == 'success' ) )
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     steps:
       - uses: actions/checkout@v4
-      - name: railway up gateway
+      # PR path — account-scoped token. RAILWAY_TOKEN must be ABSENT, not empty:
+      # measured 2026-07-19 in ghcr.io/railwayapp/cli:4.66.0, RAILWAY_TOKEN='' alongside a
+      # valid RAILWAY_API_TOKEN still fails "Unauthorized", and a ternary cannot omit an
+      # env key. Hence two steps rather than one.
+      - name: railway up gateway (PR — account token)
+        if: github.event_name != 'workflow_dispatch'
         env:
-          RAILWAY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
-          RAILWAY_ENVIRONMENT: ${{ needs.resolve-env.outputs.environment }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh gateway
+        timeout-minutes: 15
+      # Dispatch path — project token scoped to `development`. Proven working by real
+      # deploys (runs 29508626447, 29317896755 on main). Unchanged deliberately.
+      - name: railway up gateway (dispatch — project token)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
         run: sh scripts/ci/railway-up-ci.sh gateway
         timeout-minutes: 15
 
@@ -381,7 +474,7 @@ jobs:
   #    reset/seed all wait behind.
   health-gate:
     name: Gate on gateway /healthz (schema migrated)
-    needs: [deploy-gateway, resolve-env]
+    needs: [deploy-gateway, prepare-env]
     # always() breaks the transitive skip-cascade so a workflow_dispatch run (where
     # await-ci is skipped) still verifies the fleet — without it, this job and every
     # job downstream inherit await-ci's skip even though deploy-gateway ran via its
@@ -389,14 +482,14 @@ jobs:
     if: always() && needs.deploy-gateway.result == 'success'
     runs-on: ubuntu-latest
     env:
-      GATEWAY_URL: ${{ needs.resolve-env.outputs.gateway_url }}
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
       - name: Wait for gateway /healthz 200
         run: |
           echo "Waiting for $GATEWAY_URL/healthz ..."
           ok=0
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
-          # services (M4-21 per-PR environments, Decision
+          # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
           # exception the old 360s window assumed. Widen further if the
           # first green cold run needs it.
@@ -414,8 +507,8 @@ jobs:
   #    They boot against the already-migrated schema and never run
   #    migrations. Skipped for draft PRs.
   deploy-context:
-    name: Deploy ${{ matrix.service }} → ${{ needs.resolve-env.outputs.environment }}
-    needs: [health-gate, resolve-env]
+    name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment }}
+    needs: [health-gate, prepare-env]
     if: always() && needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
@@ -425,22 +518,31 @@ jobs:
         service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications]
     steps:
       - uses: actions/checkout@v4
-      - name: railway up ${{ matrix.service }}
+      # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
+      # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
+      # fails too, so the PR path needs the key genuinely absent.
+      - name: railway up ${{ matrix.service }} (PR — account token)
+        if: github.event_name != 'workflow_dispatch'
         env:
-          RAILWAY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
-          RAILWAY_ENVIRONMENT: ${{ needs.resolve-env.outputs.environment }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
+        timeout-minutes: 15
+      - name: railway up ${{ matrix.service }} (dispatch — project token)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
   # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
-  #    The app SPA's VITE_GATEWAY_URL is now a durable Railway reference
-  #    variable (M4-21-05, task-129: app.VITE_GATEWAY_URL =
-  #    https://${{gateway.RAILWAY_PUBLIC_DOMAIN}}), forked per-environment
-  #    along with the rest of the variable topology — the per-run `railway
-  #    variables --set` this job used to do is GONE.
+  #    Vite bakes VITE_* at BUILD time (frontend/*/Dockerfile), so these images
+  #    ship whatever the service variables hold now — pointed at THIS environment
+  #    by prepare-env's `reconcile-urls`.
   deploy-spas:
-    name: Deploy ${{ matrix.service }} → ${{ needs.resolve-env.outputs.environment }}
-    needs: [health-gate, resolve-env]
+    name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment }}
+    needs: [health-gate, prepare-env]
     if: always() && needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
@@ -450,10 +552,21 @@ jobs:
         service: [landing, app, ops-console]
     steps:
       - uses: actions/checkout@v4
-      - name: railway up ${{ matrix.service }}
+      # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
+      # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
+      # fails too, so the PR path needs the key genuinely absent.
+      - name: railway up ${{ matrix.service }} (PR — account token)
+        if: github.event_name != 'workflow_dispatch'
         env:
-          RAILWAY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
-          RAILWAY_ENVIRONMENT: ${{ needs.resolve-env.outputs.environment }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
+        timeout-minutes: 15
+      - name: railway up ${{ matrix.service }} (dispatch — project token)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
@@ -528,17 +641,17 @@ jobs:
   #    down.
   fleet-gate:
     name: Fleet /healthz gate (all 8 backends green)
-    needs: [deploy-context, resolve-env]
+    needs: [deploy-context, prepare-env]
     if: always() && needs.deploy-context.result == 'success'
     runs-on: ubuntu-latest
     env:
-      GATEWAY_URL: ${{ needs.resolve-env.outputs.gateway_url }}
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
       - name: Poll gateway /healthz/fleet until all up
         run: |
           echo "Polling $GATEWAY_URL/healthz/fleet ..."
           code=000
-          # 600s (120 x 5s): every environment is now a cold build (M4-21 per-PR
+          # 600s (120 x 5s): every environment is now a cold build (M4-23 per-PR
           # environments, Decision [gate-windows-provisional]) — widened from 200s.
           for _ in $(seq 1 120); do
             code=$(curl -sS --connect-timeout 5 --max-time 10 -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
@@ -562,7 +675,7 @@ jobs:
   #    reset-seed is SKIPPED there, not waited on: M4-21-06).
   e2e:
     name: E2E (smoke + api + topology + demo)
-    needs: [fleet-gate, deploy-spas, reset-seed, resolve-env]
+    needs: [fleet-gate, deploy-spas, reset-seed, prepare-env]
     if: >-
       always() &&
       needs.fleet-gate.result == 'success' &&
@@ -570,10 +683,10 @@ jobs:
       ( needs.reset-seed.result == 'success' || needs.reset-seed.result == 'skipped' )
     runs-on: ubuntu-latest
     env:
-      GATEWAY_URL: ${{ needs.resolve-env.outputs.gateway_url }}
-      APP_URL: ${{ needs.resolve-env.outputs.app_url }}
-      LANDING_URL: ${{ needs.resolve-env.outputs.landing_url }}
-      OPS_CONSOLE_URL: ${{ needs.resolve-env.outputs.ops_console_url }}
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
+      APP_URL: ${{ needs.prepare-env.outputs.app_url }}
+      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
+      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -588,7 +701,7 @@ jobs:
           for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL"; do
             echo "Waiting for $url/health ..."
             ok=0
-            # 600s (120 x 5s): every environment is now a cold build (M4-21
+            # 600s (120 x 5s): every environment is now a cold build (M4-23
             # per-PR environments, Decision [gate-windows-provisional]) —
             # widened from 200s.
             for _ in $(seq 1 120); do
@@ -607,12 +720,12 @@ jobs:
         # environment's Postgres DATABASE_PUBLIC_URL fresh via Railway GraphQL (never the
         # shared development database on a PR run — that was the M4-21-06 gap this closes)
         # and exports it for the two steps below via $GITHUB_ENV (job-local, not a job
-        # output). Same conditional auth-header pattern as the resolve-env job's own
+        # output). Same conditional auth-header pattern as the prepare-env job's own
         # Railway GraphQL calls.
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
-          ENV_ID: ${{ needs.resolve-env.outputs.environment_id }}
+          ENV_ID: ${{ needs.prepare-env.outputs.environment_id }}
         run: |
           set -euo pipefail
           if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -649,7 +762,7 @@ jobs:
         # must complete before topology's rule-dependent assertions run (D4).
         # Shares the global `rules` fixture with topology, so ordering here is
         # load-bearing, not cosmetic. GATEWAY_URL comes from this job's `env:`
-        # (needs.resolve-env.outputs.gateway_url — the seam reads it
+        # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
         # browser project). Needs the superuser DSN (DATABASE_SUPERUSER_URL_DEV,
         # exported by the discovery step above) for the same reason the demo
@@ -662,7 +775,7 @@ jobs:
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
-        # job's `env:` (needs.resolve-env.outputs.* — topology/targets.ts
+        # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).
         run: pnpm --filter @invoice-os/e2e test:topology
       - name: Demo (Day-30 wedge journey)
@@ -706,12 +819,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # NOTE: there is still NO scale-down job here for a PR run — a PR
-  # environment's teardown is Railway's own automatic PR-Environment
-  # deprovisioning (task-131 Part 4) once M4-21-07 is live. A
-  # workflow_dispatch run against `development` still stays up.
-  # dev-env-cleanup.yml (the old shared-env `railway down` sweep, whose
-  # `dev-preview-shared` concurrency group no longer intersects this
-  # workflow's per-PR groups above) is DELETED (M4-21-11) — see Decision
-  # [cleanup-workflow-deleted]: tearing down `development` would contradict
-  # Decision [dev-env-status], which keeps it persistent.
+  # NOTE: there is still no scale-down job here — teardown is a separate
+  # workflow, .github/workflows/dev-env-teardown.yml (M4-23-05), which deletes
+  # the WHOLE ephemeral environment via environmentDelete on PR close. It
+  # declares the SAME per-PR concurrency group as this workflow
+  # (`dev-preview-<N>`, see :63-65) with `queue: max`, so a teardown queued
+  # behind an in-flight deploy of the same PR waits for it rather than deleting
+  # the environment mid-deploy ([teardown-shares-deploy-lock]).
+  #
+  # It replaces the deleted dev-env-cleanup.yml (M4-21-11), which scaled 11
+  # services to zero inside one SHARED environment — the wrong unit now that
+  # each PR owns an environment ([teardown-deletes-environment],
+  # [cleanup-workflow-returns] reverses [cleanup-workflow-deleted]). Railway's
+  # own PR-Environment deprovisioning is NOT the mechanism and never was: that
+  # feature is OFF here and never created anything (M4-23-02).
+  #
+  # Teardown is the FAST path, not the guarantee: a `closed` event that does
+  # not fire leaves an orphan, so dev-env-sweeper.yml (M4-23-07) reconciles
+  # ephemeral environments against PR state daily and is the authority
+  # ([teardown-best-effort-sweeper-authoritative]).
+  #
+  # A workflow_dispatch run against `development` still stays up: `development`
+  # is persistent ([dev-env-status]) and no workflow ever deletes it.

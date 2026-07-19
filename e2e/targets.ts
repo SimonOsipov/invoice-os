@@ -1,5 +1,5 @@
 // Shared per-environment target resolution (M4-21-10). Each PR now deploys to its OWN
-// ephemeral Railway environment (M4-21-09) with a Railway-generated domain suffix that
+// ephemeral Railway environment (M4-23) with a Railway-generated domain suffix that
 // cannot be predicted or constructed ahead of time (F7) — so a hardcoded dev-URL fallback
 // is actively dangerous: a missing env var would silently point a PR's E2E run at the
 // shared `development` fleet instead of failing loudly, producing cross-PR interference
@@ -14,7 +14,7 @@ export function resolveTarget(envVar: string): string {
   if (!raw) {
     throw new Error(
       `${envVar} is not set. Per-PR E2E targets are discovered fresh per Railway environment ` +
-        `(M4-21) and must never fall back to a hardcoded default — a missing value would ` +
+        `(M4-23) and must never fall back to a hardcoded default — a missing value would ` +
         `silently point this run at the wrong environment. Set ${envVar} explicitly.`,
     )
   }

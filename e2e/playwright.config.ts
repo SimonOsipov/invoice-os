@@ -6,6 +6,8 @@ import { defineConfig, devices } from '@playwright/test'
 // defaults, which is why `baseURL` is intentionally left unset.
 export default defineConfig({
   testDir: './smoke',
+  // Playwright suites are *.spec.ts; *.test.ts are vitest (see playwright.api.config.ts).
+  testMatch: '**/*.spec.ts',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,

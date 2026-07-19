@@ -23,7 +23,7 @@ pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run onl
 
 Each app's URL is a **required** env var — there is no hardcoded default. Every PR now
 deploys to its own ephemeral Railway environment with an unpredictable domain suffix
-(M4-21), so a missing var throws naming itself rather than silently falling back to the
+(M4-23), so a missing var throws naming itself rather than silently falling back to the
 shared `development` fleet (Decision `[fail-loud-targets]`):
 
 | App         | Env var            |

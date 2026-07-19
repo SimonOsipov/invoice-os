@@ -4,7 +4,7 @@ import { resolveTarget } from '../targets'
 // The two pure SPAs under smoke test (landing, ops-console) — no backend round trip, so a
 // render check is sufficient. The app SPA is always gateway-wired in the deployed env, so
 // its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
-// Each PR now deploys to its own ephemeral Railway environment (M4-21), so each URL is
+// Each PR now deploys to its own ephemeral Railway environment (M4-23), so each URL is
 // REQUIRED — resolveTarget throws rather than falling back to a hardcoded dev deployment
 // (Decision [fail-loud-targets]).
 export interface AppTarget {

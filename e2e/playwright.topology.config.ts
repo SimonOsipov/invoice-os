@@ -9,6 +9,8 @@ import { defineConfig, devices } from '@playwright/test'
 // brings the fleet up from zero, so a cold-started backend can be slow on first contact.
 export default defineConfig({
   testDir: './topology',
+  // Playwright suites are *.spec.ts; *.test.ts are vitest (see playwright.api.config.ts).
+  testMatch: '**/*.spec.ts',
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: true,

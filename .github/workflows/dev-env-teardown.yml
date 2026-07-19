@@ -1,0 +1,104 @@
+name: Dev Env Teardown (delete this PR's ephemeral environment)
+
+# M4-23-05. Deletes the WHOLE ephemeral environment on PR close, at environment
+# granularity ([teardown-deletes-environment]) — NOT the old 11-service `railway down`
+# matrix, which was the right unit only while every PR shared one `development`.
+#
+# TRIGGER SELECTED BY EXPERIMENT, NOT BY ARGUMENT (2026-07-18). A throwaway workflow
+# present ONLY on a probe branch (PR #68, based on the feature branch) fired on that PR's
+# UNMERGED close: control run 29660556112 (action=opened, proving the file was discovered
+# at all), decisive run 29660575019 (action=closed, merged=false), 10s after the close.
+# The control was load-bearing — without it a non-fire would have been uninterpretable,
+# unable to separate "the closed type does not fire" from "this file was never discovered".
+# So `pull_request: types: [closed]` fires on merged-close AND unmerged-close, and
+# `pull_request_target` is NOT needed here. This supersedes the confounded PR #52
+# observation, which only ever showed which ref a workflow ALREADY ON MAIN was read from.
+#
+# One fire is sufficient to select the trigger: GitHub community#26657 alleges
+# INCONSISTENT firing, not non-firing, and the daily sweeper (M4-23-07) already owns the
+# inconsistency case and is the authority ([teardown-best-effort-sweeper-authoritative]).
+# This workflow is the FAST path, not the guarantee.
+on:
+  pull_request:
+    types: [closed]
+
+# [teardown-shares-deploy-lock]. Byte-identical to the string dev-env.yml:64 evaluates on
+# a PR run (`dev-preview-<N>`). Its `|| github.ref` fallback is unreachable here — a closed
+# event always carries a PR number — so it is omitted rather than copied as dead code.
+# Concurrency groups are repo-scoped and keyed only by the string, so this is a GENUINE
+# shared lock across the two files: a teardown queued behind an in-flight deploy of the
+# SAME PR waits for it instead of deleting the environment out from under it.
+#
+# cancel-in-progress: false — a teardown must never be cancelled, and must never cancel a
+# deploy. queue: max (GA 2026-05-07) stops a pending teardown being evicted by a later
+# entrant to the group. NARROWED, not closed: which run's `queue` setting governs eviction
+# is undocumented, so a dev-env.yml run (default `queue: single`) entering this group could
+# still evict a pending teardown. The only path that does that is `reopened`, where
+# evicting the teardown is the CORRECT outcome — so no change is needed, and `queue: max`
+# is deliberately NOT added to dev-env.yml (that is M4-23-03's file and its reopen
+# behaviour is already right).
+concurrency:
+  group: dev-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+  queue: max
+
+# No `paths:` filter, deliberately. dev-env.yml HAS one, so the environment may exist from
+# an earlier commit whose paths matched even when the closing state's do not. The
+# absent-environment path is a cheap exit-0 no-op, so always running costs nothing.
+
+permissions:
+  contents: read   # teardown writes nothing to the repo
+
+env:
+  RAILWAY_PROJECT_ID: 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
+  # The never-delete guard: delete-environment refuses outright if the resolved id equals
+  # this, independently of Railway's own isEphemeral flag.
+  RAILWAY_DEV_ENVIRONMENT_ID: 6c864094-6a06-452f-8495-be77d8a94fe7
+
+jobs:
+  teardown:
+    name: Delete pr-${{ github.event.pull_request.number }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Pinned to the PR HEAD, never the merge ref: refs/pull/<N>/merge is deleted at
+          # the moment of close (this remote carries refs/pull/*/head and ZERO
+          # refs/pull/*/merge), so a default checkout would race that deletion.
+          # refs/pull/<N>/head survives close AND branch deletion — verified on #72/#73.
+          #
+          # NOT base.sha: this workflow file comes from the PR head, so a base pin runs a
+          # NEW workflow against OLD code. Measured on #72: teardown called `prenv name 72`
+          # while base still had M4-21's `prenv <number>` CLI, which read "name" as the PR
+          # number and exited 2 — both environments leaked. Same commit for workflow and
+          # code, or they skew. Fork PRs get no secrets under `pull_request`, so this is
+          # the same trust model dev-env.yml already runs under.
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Delete this PR's ephemeral environment
+        env:
+          # Passed as env, never interpolated into the shell body — dev-env.yml:173-176's
+          # idiom. The only PR-derived input is the GitHub-generated integer, and
+          # `prenv name` rejects anything non-numeric or < 1 with exit 2.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Account-scoped token. A Railway PROJECT token is pinned to one environment and
+          # could not reach an ephemeral PR environment at all. A fork PR receives no
+          # secrets and fails at require_env with a message that says exactly that — the
+          # same deliberate posture as railway-invariants.yml.
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # prenv is the ONLY environment-name constructor in this repo (M4-23-01) — do
+          # NOT inline "pr-$PR_NUMBER" here.
+          name=$(go run ./tools/prenv name "$PR_NUMBER")
+          echo "PR #$PR_NUMBER -> environment name '$name'"
+          # Exit contract: absent -> 0 (nothing to delete is the goal); deleted and
+          # confirmed by re-query -> 0; still present, or non-ephemeral, or ambiguous, or
+          # the API unreadable -> 1. NO continue-on-error: a red run here is the only
+          # notification channel, and "best-effort" refers to the trigger not firing, not
+          # to swallowing a delete that demonstrably did not happen.
+          bash scripts/ci/railway-env.sh delete-environment "$name"

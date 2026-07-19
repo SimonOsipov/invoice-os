@@ -172,3 +172,59 @@ func TestRLS_DashboardRollupUnknownTenantSeesNothing(t *testing.T) {
 		t.Errorf("Totals = %+v, want all-zero", got.Totals)
 	}
 }
+
+// TestRLS_DashboardTopViolationsCrossTenantIsolated (DASH-27, Test Specs
+// table, M4-07-02 story / task-156): tenants A and B; only B has invoices
+// carrying severity:"error" violations on rule "X". Store.Rollup(ctxA)'s
+// TopViolations must be empty and contain no trace of rule X; symmetrically,
+// Store.Rollup(ctxB) DOES report rule X -- both directions asserted in one
+// test, same shape as TestRLS_DashboardRollupCrossTenantIsolated (DASH-14)
+// above. TopViolations relies on the SAME bare `FROM invoices i` RLS scoping
+// as the per-entity query (no `WHERE tenant_id` anywhere in this package,
+// AC-6/story AC-7) -- this proves that holds for the per-rule query too, not
+// just the per-entity one DASH-14 already covers.
+func TestRLS_DashboardTopViolationsCrossTenantIsolated(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "DASH-27 tenant A")
+	tenantB := seedTenant(t, super, "DASH-27 tenant B")
+	entityA := seedEntity(t, super, tenantA, "DASH-27 A Corp")
+	entityB := seedEntity(t, super, tenantB, "DASH-27 B Corp")
+
+	// A has an invoice, but none carrying an error-severity violation on
+	// rule X (or any rule at all) -- proves A's empty TopViolations isn't
+	// just "A has no invoices."
+	seedInvoiceAtStatus(t, super, tenantA, entityA, "DASH-27-A1", "accepted")
+
+	ruleX := `[{"rule_key":"X","severity":"error","message":"z"}]`
+	seedInvoiceWithViolations(t, super, tenantB, entityB, "DASH-27-B1", "draft", ruleX)
+	seedInvoiceWithViolations(t, super, tenantB, entityB, "DASH-27-B2", "draft", ruleX)
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+
+	// Direction 1: tenant A must see no trace of rule X.
+	gotA, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant A): %v", err)
+	}
+	if len(gotA.TopViolations) != 0 {
+		t.Errorf("tenant A's TopViolations = %+v, want empty (must not see B's rule X violations)", gotA.TopViolations)
+	}
+	for _, rc := range gotA.TopViolations {
+		if rc.RuleKey == "X" {
+			t.Errorf("tenant A's TopViolations contains rule X: %+v", gotA.TopViolations)
+		}
+	}
+
+	// Direction 2: tenant B must see its own rule X, correctly counted.
+	gotB, err := store.Rollup(cB)
+	if err != nil {
+		t.Fatalf("Rollup(as tenant B): %v", err)
+	}
+	if len(gotB.TopViolations) != 1 || gotB.TopViolations[0].RuleKey != "X" || gotB.TopViolations[0].Invoices != 2 {
+		t.Fatalf("tenant B's TopViolations = %+v, want exactly [{X,2}]", gotB.TopViolations)
+	}
+}

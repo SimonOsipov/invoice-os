@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -46,17 +47,19 @@ func main() {
 	// — never app.Config.Environment. internal/platform/config.go:44 substitutes
 	// "development" for an unset ENVIRONMENT, which would silently re-open the
 	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
-	// the guard off, none of DATABASE_SUPERUSER_URL / INVOICE_*_PASSWORD are
-	// required — production boots without any of them set.
+	// the guard off, none of DATABASE_SUPERUSER_URL / MIGRATOR_PASSWORD /
+	// APP_PASSWORD / READER_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
+	// fallbacks, see resolveRolePassword below) are required — production boots
+	// without any of them set.
 	if err := db.Provision(context.Background(), db.ProvisionConfig{
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
 		SuperuserDSN:  os.Getenv("DATABASE_SUPERUSER_URL"),
 		MigrationDSN:  mustEnv("DATABASE_MIGRATION_URL"),
 		Passwords: db.RolePasswords{
-			Migrator: os.Getenv("INVOICE_MIGRATOR_PASSWORD"),
-			App:      os.Getenv("INVOICE_APP_PASSWORD"),
-			Reader:   os.Getenv("INVOICE_TENANT_READER_PASSWORD"),
+			Migrator: resolveRolePassword("MIGRATOR_PASSWORD", "INVOICE_MIGRATOR_PASSWORD", app.Logger),
+			App:      resolveRolePassword("APP_PASSWORD", "INVOICE_APP_PASSWORD", app.Logger),
+			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
 		},
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,
@@ -149,4 +152,33 @@ func mustEnv(key string) string {
 		log.Fatalf("gateway: %s is required", key)
 	}
 	return v
+}
+
+// resolveRolePassword resolves one role's password, preferring newName
+// (the unprefixed variable Makefile/CI already set) and falling back to
+// oldName (the deprecated INVOICE_-prefixed variable) when newName is unset
+// or empty (M4-22-09/task-168). When the fallback fires -- or the deprecated
+// name is merely present alongside the new one, even though unused -- it
+// logs a warning naming both variables, so a stale Railway variable is
+// observable in gateway logs and gets cleaned up (escalation E3/E4). Empty
+// input from both leaves the value empty: validateRolePasswords
+// (internal/platform/db/bootstrap.go) is the single source of fail-fast on
+// an empty password and is intentionally NOT duplicated here.
+//
+// This fallback is temporary. Once escalations E3/E4 confirm every Railway
+// environment sets the new unprefixed name and no longer sets the deprecated
+// INVOICE_-prefixed one, delete the oldName argument and this function's
+// fallback branch from each of the three call sites above.
+func resolveRolePassword(newName, oldName string, logger *slog.Logger) string {
+	newVal := os.Getenv(newName)
+	oldVal := os.Getenv(oldName)
+
+	if oldVal != "" {
+		logger.Warn(oldName + " is deprecated; set " + newName + " instead")
+	}
+
+	if newVal != "" {
+		return newVal
+	}
+	return oldVal
 }

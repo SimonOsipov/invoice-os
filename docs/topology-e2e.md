@@ -43,15 +43,17 @@ gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
                 topology (fleet gate, browser login, isolation) + demo (Day-30 journey)
 ```
 
-reset-seed (`db/reset.dev.sql` + `db/seed.dev.sql`, superuser) is **dispatch-path-only**
-now (M4-21-06) — it runs only on a `workflow_dispatch` run against the persistent
-`development` environment, never on a PR run, whose own Postgres is born empty and
-self-seeds at gateway boot instead (see "The data-only reset" below). The PR's environment
-then stays up while the PR is open — `dev-env-teardown.yml` deletes it when the PR closes,
-merged or not, and the daily `dev-env-sweeper.yml` reaps any that the close event missed
-(see [deploy-model.md](./deploy-model.md)); `development` is never torn down. `dev-env.yml`
-remains dispatchable by hand (`workflow_dispatch`) to re-run the deploy + verify flow
-against `development` on demand.
+Every environment's Postgres — a PR's own ephemeral fork or `development` itself —
+self-seeds at gateway boot (`internal/platform/db.Provision`, M4-21-04) rather than
+through any separate reset/seed step; M4-22-07 deleted the last one (it had been
+`workflow_dispatch`-only against `development`; see "Boot-time seed" below for what the
+seed itself does). The PR's environment then stays up while the PR is open —
+`dev-env-teardown.yml` deletes it when the PR closes, merged or not, and the daily
+`dev-env-sweeper.yml` reaps any that the close event missed (see
+[deploy-model.md](./deploy-model.md)); `development` is never torn down. `dev-env.yml`
+remains dispatchable by hand (`workflow_dispatch`) to re-run the deploy + health-gate +
+fleet-gate flow against `development` on demand — without the E2E suites, which run only
+on PR pushes.
 
 ## Prerequisites
 
@@ -85,25 +87,29 @@ environment, this is the first thing to check.
 
 | Secret | Value |
 |---|---|
-| `RAILWAY_API_DEV_TOKEN` | The `development` project token — used by `workflow_dispatch` runs and by every run's Watch-Paths/URL/DSN discovery queries when the trigger is `workflow_dispatch`. |
+| `RAILWAY_API_DEV_TOKEN` | The `development` project token — used by `workflow_dispatch` runs and by every run's Watch-Paths/URL discovery queries when the trigger is `workflow_dispatch`. |
 | `RAILWAY_API_TOKEN` | The account-scoped token (task-131) every PR-triggered run authenticates with — a project token cannot reach an ephemeral PR environment (F6). |
 
-No workflow reads a `DATABASE_SUPERUSER_URL_DEV` GitHub secret anymore (M4-21-10) — the
-Postgres superuser DSN is discovered fresh per run via the Railway GraphQL API
-(`variables(projectId, environmentId, serviceId)` → `DATABASE_PUBLIC_URL`), masked with
-`::add-mask::` inside the job that uses it, never a job output. `make demo-reset`'s
-same-named **local** environment variable is unrelated and unaffected.
+No workflow discovers, stores, or resolves a Postgres superuser DSN anymore, for any
+reason — M4-22-08 deleted the last two CI paths that did (the `e2e` job's per-run
+public-DSN lookup, and `prepare-env`'s liveness probe against it; see
+[deploy-model.md](./deploy-model.md)). The old GitHub-secret name survives in the repo
+only as a literal string inside `e2e/api/no-db-access.test.ts` and
+`e2e/demo/no-db-access.test.ts` — RED-guard source scanners that assert the name appears
+nowhere else in the codebase, not a variable anything reads.
 
-## The data-only reset (`development` / `workflow_dispatch` only)
+## Boot-time seed (every environment, not a separate step)
 
-`db/reset.dev.sql` (`TRUNCATE tenants CASCADE`) then `db/seed.dev.sql` re-applies the
-canonical fixtures — the isolation pair (`aaaa…`/`bbbb…`) plus the persona tenants (`1111…`
-Okafor & Partners / `2222…` Honeywell Group) — against `development`'s Postgres. It is
-**data-only**: schema and migration history are untouched and persist. Idempotent — safe to
-re-run. Setup owns correctness, not teardown, so the fixtures are deterministic regardless
-of prior state. A PR's own ephemeral environment never runs this step — its Postgres is
-born empty and the gateway seeds it once, at boot (`internal/platform/db.Provision`,
-M4-21-04), so there is nothing to reset.
+`db/seed.dev.sql` inserts the canonical fixtures — the isolation pair (`aaaa…`/`bbbb…`)
+plus the persona tenants (`1111…` Okafor & Partners / `2222…` Honeywell Group) — and
+re-enables every validation rule. It runs as part of `internal/platform/db.Provision`
+(bootstrap → migrate → seed) on every gateway boot in an allow-listed environment
+(`development` or a Railway PR-environment name), gated behind `BootstrapEnabled`,
+idempotent (upserts, not a table wipe) so re-running never loses data mid-test. A PR's own
+ephemeral Postgres is born empty and is seeded once its gateway first comes up;
+`development`'s Postgres is re-seeded the same way on every redeploy. There is no separate
+reset step anywhere in the repo anymore — M4-22-07 deleted the last one, along with the
+only unconditional table wipe this repo ever ran.
 
 ## Cold-fleet recovery (M3-16)
 

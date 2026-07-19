@@ -101,6 +101,30 @@ type Invoice struct {
 	LineItems        []LineItem      `json:"line_items,omitempty"`
 }
 
+// StatusChange is one invoice_status_history row (task-160/M4-22-01,
+// migrations/20260714111246_invoice_status_history.sql): an immutable,
+// append-only record of a single invoice lifecycle transition, written
+// exactly twice over in store.go -- the genesis row (Store.Create,
+// NULL->'draft') and every subsequent transition (transitionTx). Store.History
+// returns them ordered changed_at ASC, id ASC ([D1]/AC #1).
+//
+// FromStatus/ToStatus are typed Status, the SAME CHECK-constrained domain as
+// Invoice.Status (the migration's from_status/to_status CHECK is drawn from
+// the identical 7-state set) -- both marshal as a plain JSON string, so this
+// is a Go-side type-safety choice only, not a wire-shape change. FromStatus
+// is nullable: the genesis row has no predecessor state.
+//
+// id/tenant_id/invoice_id are DELIBERATELY absent -- Store.History's caller
+// already knows the invoice_id (it is the request path parameter), and the
+// row id/tenant_id are internal columns that never belong on the wire
+// (AC #7).
+type StatusChange struct {
+	FromStatus *Status   `json:"from_status"`
+	ToStatus   Status    `json:"to_status"`
+	Actor      string    `json:"actor"`
+	ChangedAt  time.Time `json:"changed_at"`
+}
+
 // LineItemInput is one line of Store.Create's CreateInput.LineItems. LineNo
 // is deliberately NOT part of this input — it is system-assigned 1..N by the
 // slice's array position ([D10]), never caller-supplied.

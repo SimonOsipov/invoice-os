@@ -93,4 +93,16 @@ func TestStore_MalformedIDIsValidationError(t *testing.T) {
 			t.Errorf("baseline invoice status after malformed-id Transition = %q, want unchanged %q", status, StatusDraft)
 		}
 	})
+
+	// History (task-160/M4-22-01, Stage 1 GAP 1): Store.History must map a
+	// malformed (non-uuid) id to ErrValidation exactly like Get/Update/
+	// Transition above -- NOT ErrNotFound. Read-only, so there is no
+	// write-side effect to assert unchanged (mirrors the "Get" subtest's own
+	// shape, the other read-only method in this table).
+	t.Run("History", func(t *testing.T) {
+		_, err := store.History(c, malformed)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("History(malformed id) err = %v, want ErrValidation (22P02 invalid_text_representation)", err)
+		}
+	})
 }

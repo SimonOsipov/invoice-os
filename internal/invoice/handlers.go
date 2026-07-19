@@ -334,6 +334,21 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 	}
 }
 
+// validateResponse is the POST /v1/invoices/{id}/validate response body:
+// Invoice embedded (keeping every existing field's name/type/position),
+// plus one additive sibling key, rule_set_version. Not added to the Invoice
+// domain struct itself: Invoice is shared by Get/List, which never call the
+// gate and would start emitting a misleading always-null key.
+//
+// RuleSetVersion is a *int with NO omitempty: it must render an explicit
+// JSON null when nothing was evaluated (Gate.Evaluate's zero-value
+// convention) -- never omitted, never a false 0
+// (TestValidateHandler_NilVersionMarshalsNull).
+type validateResponse struct {
+	Invoice
+	RuleSetVersion *int `json:"rule_set_version"`
+}
+
 // ValidateHandler returns POST /v1/invoices/{id}/validate -- THE gate
 // ([gate-endpoint]): the only route by which an invoice reaches validated, and
 // therefore also the on-demand re-validate endpoint (Core AC #6). It is
@@ -351,7 +366,7 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 // read it as data. The HTTP error codes are reserved for the cases where no
 // verdict was reached at all -- 502 (04 unreachable/broken) and 503 (04 healthy
 // but with no published rule-set), never laundered into a clean 200.
-func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -361,7 +376,7 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, err
 			return
 		}
 
-		inv, err := validate(r.Context(), r.PathValue("id"))
+		inv, version, err := validate(r.Context(), r.PathValue("id"))
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -371,7 +386,12 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, err
 			return
 		}
 
-		writeJSON(w, http.StatusOK, inv)
+		// nil -> JSON null when nothing was evaluated (see validateResponse's doc).
+		resp := validateResponse{Invoice: inv}
+		if version != 0 {
+			resp.RuleSetVersion = &version
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -422,6 +442,36 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 		}
 
 		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// HistoryHandler returns GET /v1/invoices/{id}/history (task-160/M4-22-01).
+// ErrNotFound covers both an unknown id and a cross-tenant one (RLS-scoped
+// zero rows) -- 404, same as GetHandler. Malformed id maps ErrValidation ->
+// 400, mirroring Get/Update/Transition, not 404. Success body is a BARE
+// JSON array of StatusChange -- no pagination, no envelope
+// ([history-endpoint-scope]) -- unlike every other handler here.
+func HistoryHandler(history func(ctx context.Context, id string) ([]StatusChange, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		changes, err := history(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: history", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, changes)
 	}
 }
 

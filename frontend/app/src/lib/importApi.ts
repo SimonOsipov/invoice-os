@@ -1,7 +1,6 @@
-// SPA import API module (M4-08-02, task-171). STUB — the executor implements the
-// bodies next; every export below throws so the RED specs in importApi.test.ts
-// (IMPAPI-01..20) fail on a thrown/assertion mismatch, not an import or type error.
-// Mirrors the portfolio.ts / validationApi.ts stub idiom (M3-08-01 / M3-09-01).
+// SPA import API module (M4-08-02, task-171) — previewImport + createImport over a
+// single private XHR transport, the two-phase upload progress contract, and the
+// report normalization D1 requires. Pinned by importApi.test.ts (IMPAPI-01..20).
 //
 // Types mirror the wire shapes emitted by internal/importer/handlers.go's
 // importResponse (:63-80) / previewResponse (:96-109), internal/importer/store.go's
@@ -48,11 +47,24 @@
 // swaps the Session object under React state, so a captured token snapshot would go
 // stale (authedFetch.ts:38-45's rationale).
 //
-// `ApiError`/`Session` are referenced only as TYPES by this stub's signatures — no
-// runtime import needed (mirrors the authedFetch.ts stub's rationale under this app's
-// strict noUnusedLocals/noUnusedParameters tsconfig). All parameters below are
-// underscore-prefixed for the same reason: a throw-only body never reads them.
-import type { ApiError } from '@invoice-os/api-client'
+// Progress contract ([progress-two-phase], AC4/AC6): xhrJson reports RAW loaded/total
+// BYTES, never a fraction — the arithmetic lives in the pure `uploadPercent` so it has a
+// node oracle and the UI holds none. `lengthComputable === false` forces `total: 0`,
+// which `uploadPercent` maps to null (indeterminate); there is deliberately NO fallback
+// to `file.size`, which would invent a denominator the transport never confirmed. The
+// flip to indeterminate is `upload.onload` (last byte handed to the socket): everything
+// after it — server parse, decode, DB writes, rule evaluation, response travel — is
+// unobservable, because the endpoint is synchronous with no job to poll, so any stage
+// label there would be invented. ZERO `sending` events is legal (a ~100 KB CSV on a fast
+// link may fire none, IMPAPI-08), so nothing may require a determinate phase to have
+// occurred. `idle` is never emitted — it is the caller's initial state only. The
+// terminal phase (done/error) is emitted BEFORE the promise settles, so a caller
+// rendering from onPhase and one awaiting observe the same order. previewImport emits no
+// phases at all — it is a header read, not the upload AC6 is about.
+//
+// `ApiError` is imported as a VALUE (xhrJson constructs it); `Session` stays a type-only
+// import under this app's `verbatimModuleSyntax`.
+import { ApiError } from '@invoice-os/api-client'
 import type { Session } from '../auth'
 
 export interface ImportPreview {
@@ -127,38 +139,162 @@ export type UploadPhase =
   | { kind: 'done' }
   | { kind: 'error'; error: ApiError }
 
-export function makeImportAuth(_session: Session, _onSignOut: () => void): ImportAuth {
-  throw new Error('not implemented')
+// Mirrors makeAuthedFetch (authedFetch.ts:46) parameter for parameter so M4-08-06 can
+// instantiate both from the SAME pair in the SAME useMemo (App.tsx:91) — identical
+// inputs at one construction site make divergence structurally impossible (D3).
+// `() => session.token` is read at CALL time, never captured (authedFetch.ts:38-45).
+export function makeImportAuth(session: Session, onSignOut: () => void): ImportAuth {
+  return {
+    getToken: () => session.token,
+    onUnauthorized: onSignOut,
+  }
+}
+
+// The ONE transport (D2). Private on purpose: previewImport and createImport are thin
+// wrappers over it rather than two peers, which is what makes them incapable of drifting
+// apart on the Authorization header or the ApiError shaping (IMPAPI-20 is the guard).
+// Error kinds/messages/body mirror apiFetch (client.ts:60-73) field for field so callers
+// cannot tell the two transports apart.
+function xhrJson(
+  auth: ImportAuth,
+  method: string,
+  url: string,
+  form: FormData,
+  onPhase: ((p: UploadPhase) => void) | null,
+  xhrCtor: XhrCtor,
+): Promise<unknown> {
+  return new Promise<unknown>((resolve, reject) => {
+    const xhr = new xhrCtor()
+    let settled = false
+
+    const fail = (error: ApiError): void => {
+      if (settled) return
+      settled = true
+      onPhase?.({ kind: 'error', error })
+      reject(error)
+    }
+
+    xhr.upload.onprogress = (e) => {
+      // Raw bytes, not a fraction. lengthComputable:false => total 0 => indeterminate.
+      onPhase?.({ kind: 'sending', loaded: e.loaded, total: e.lengthComputable ? e.total : 0 })
+    }
+
+    // Last byte handed to the socket — everything after this point is unobservable.
+    xhr.upload.onload = () => {
+      onPhase?.({ kind: 'processing' })
+    }
+
+    xhr.onload = () => {
+      if (settled) return
+      const status = xhr.status
+
+      let body: unknown
+      let parsed = false
+      try {
+        body = JSON.parse(xhr.responseText)
+        parsed = true
+      } catch {
+        // best-effort — a non-JSON body is normal on 4xx/5xx (e.g. a 413 from the proxy).
+      }
+
+      if (status >= 200 && status < 300) {
+        if (!parsed) {
+          fail(new ApiError('malformed', 'malformed response body', status))
+          return
+        }
+        settled = true
+        onPhase?.({ kind: 'done' }) // terminal phase precedes the settle, always
+        resolve(body)
+        return
+      }
+
+      // A dead session signs out identically to the apiFetch path (authedFetch.ts:28).
+      if (status === 401) auth.onUnauthorized()
+
+      let msg = xhr.statusText
+      if (parsed && body && typeof body === 'object' && 'error' in body) {
+        msg = String((body as { error: unknown }).error)
+      }
+      fail(new ApiError('http', msg, status, parsed ? body : undefined))
+    }
+
+    xhr.onerror = () => fail(new ApiError('network', 'network error', null))
+    xhr.ontimeout = () => fail(new ApiError('network', 'request timed out', null))
+
+    xhr.open(method, url)
+    const token = auth.getToken()
+    if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token)
+    // Content-Type is deliberately NEVER set: the browser writes the multipart boundary
+    // itself, and Go's ParseMultipartForm rejects a hand-set header that omits it.
+    xhr.send(form)
+  })
 }
 
 // seam first, base second — repo convention (portfolio.ts:72, validationApi.ts:46)
 export async function previewImport(
-  _auth: ImportAuth,
-  _base: string,
-  _file: File,
-  _xhrCtor: XhrCtor = globalThis.XMLHttpRequest,
+  auth: ImportAuth,
+  base: string,
+  file: File,
+  xhrCtor: XhrCtor = globalThis.XMLHttpRequest,
 ): Promise<ImportPreview> {
-  throw new Error('not implemented')
+  const form = new FormData()
+  form.append('file', file)
+  // Preview emits no phases and needs no normalization — PRV-08 guarantees its
+  // columns/sample_rows are arrays, and delimiter/encoding are genuinely nullable.
+  return (await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports/preview', form, null, xhrCtor)) as ImportPreview
 }
 
 export async function createImport(
-  _auth: ImportAuth,
-  _base: string,
-  _req: CreateImportRequest,
-  _onPhase: (p: UploadPhase) => void,
-  _xhrCtor: XhrCtor = globalThis.XMLHttpRequest,
+  auth: ImportAuth,
+  base: string,
+  req: CreateImportRequest,
+  onPhase: (p: UploadPhase) => void,
+  xhrCtor: XhrCtor = globalThis.XMLHttpRequest,
 ): Promise<ImportReport> {
-  throw new Error('not implemented')
+  const form = new FormData()
+  form.append('entity_id', req.entityId)
+  form.append('mapping', JSON.stringify(req.mapping))
+  form.append('file', req.file)
+  // No query string is ever appended — dry_run is never sent ([no-dry-run]).
+  const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
+  return normalizeReport(raw)
 }
 
-export function uploadPercent(_p: UploadPhase): number | null {
-  throw new Error('not implemented')
+export function uploadPercent(p: UploadPhase): number | null {
+  if (p.kind === 'done') return 100
+  // total === 0 is the lengthComputable:false case — guarding it is also what keeps this
+  // free of NaN/Infinity.
+  if (p.kind === 'sending') return p.total > 0 ? Math.round((p.loaded / p.total) * 100) : null
+  return null
 }
 
-export function rowErrorRows(_e: RowError): number[] {
-  throw new Error('not implemented')
+// Union reader for the two RowError shapes (plural `rows` for a quarantined invoice
+// group, scalar `row` for an ungroupable single row). Exported so M4-08-04 and -05 read
+// the union one way instead of hand-rolling it two ways.
+export function rowErrorRows(e: RowError): number[] {
+  if (e.rows) return e.rows
+  if (e.row !== undefined) return [e.row]
+  return []
 }
 
-export function normalizeReport(_raw: unknown): ImportReport {
-  throw new Error('not implemented')
+// Coerces the two nil-slice fields the import endpoint leaves as JSON null (D1 — see the
+// module doc comment for why this is load-bearing, not defensive noise). Never throws: a
+// body that will not parse at all is xhrJson's `malformed` branch, not this function's
+// problem, and spreading a non-object raw (string/number/null) yields {} rather than an
+// error. rule_set_version is passed through as null on purpose — "nothing was evaluated"
+// must never read as a rule set numbered 0.
+//
+// SCOPE: this normalizes the three fields D1 identified and nothing else. It is NOT a
+// validator — a structurally wrong 200 still yields an undefined `id`/`status`/count,
+// deliberately. Defaulting those to 0/'' would fabricate data and reintroduce the exact
+// false-zero hazard D1 flags for rule_set_version; a body that breaches the server
+// contract should surface as an obvious undefined, not as a plausible-looking zero.
+export function normalizeReport(raw: unknown): ImportReport {
+  const r = (raw ?? {}) as ImportReport
+  return {
+    ...r,
+    errors: Array.isArray(r.errors) ? r.errors : [],
+    invoice_violations: Array.isArray(r.invoice_violations) ? r.invoice_violations : [],
+    rule_set_version: r.rule_set_version ?? null,
+  }
 }

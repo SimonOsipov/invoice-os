@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -149,4 +150,31 @@ func mustEnv(key string) string {
 		log.Fatalf("gateway: %s is required", key)
 	}
 	return v
+}
+
+// resolveRolePassword resolves one role's password, preferring newName
+// (the unprefixed variable Makefile/CI already set) and falling back to
+// oldName (the deprecated INVOICE_-prefixed variable) when newName is unset
+// or empty (M4-22-09/task-168). When the fallback fires -- or the deprecated
+// name is merely present alongside the new one, even though unused -- it
+// logs a warning naming both variables, so a stale Railway variable is
+// observable in gateway logs and gets cleaned up (escalation E3/E4). Empty
+// input from both leaves the value empty: validateRolePasswords
+// (internal/platform/db/bootstrap.go) is the single source of fail-fast on
+// an empty password and is intentionally NOT duplicated here.
+//
+// QA MODE-A SCAFFOLD [M4-22-09] (task-168, RALPH Stage 2.5): this stub always
+// returns "" so cmd/gateway/main_test.go's TestRolePasswordResolutionPrecedence
+// is RED on assertions, not a compile error, before the real logic exists, and
+// is not yet called from the Passwords: db.RolePasswords{} literal above (the
+// executor wires that in Stage 3). The executor's real fix: read newName via
+// os.Getenv; if non-empty return it. Otherwise read oldName via os.Getenv; if
+// it is set (non-empty), log a warning naming both oldName and newName (e.g.
+// "<oldName> is deprecated; set <newName> instead") -- the same warning fires
+// whenever oldName is non-empty, whether or not newName is also set, since an
+// unused-but-present deprecated variable is still worth flagging for cleanup
+// -- then return oldName's value (or "" if it, too, is empty). DELETE this
+// comment when done.
+func resolveRolePassword(newName, oldName string, logger *slog.Logger) string {
+	return ""
 }

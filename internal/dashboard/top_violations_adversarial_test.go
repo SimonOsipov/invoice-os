@@ -249,3 +249,68 @@ func TestStoreRollup_TopViolationsLargeFanoutOrderingStaysExactAndStable(t *test
 	}
 	assertTopViolations(t, got.TopViolations, wantOrder)
 }
+
+// TestStoreRollup_TopViolationsSameRuleTwiceOnOneInvoiceCountsOnce: ONE
+// invoice whose violations array carries the SAME rule_key TWICE (both
+// severity:"error") must still count as 1 for that rule, not 2 -- this is
+// what `count(DISTINCT i.id)` in store.go actually protects against.
+// DASH-23 (multiple errors on one invoice) does NOT cover this: it uses two
+// DIFFERENT rules on one invoice, each getting its own GROUP BY group, so a
+// plain `count(*)` would pass DASH-23 identically to `count(DISTINCT i.id)`
+// -- confirmed by mutation testing (dropping DISTINCT left every shipped
+// spec green). Here, jsonb_array_elements emits TWO rows for the SAME
+// (invoice, rule_key) pair, so `count(*)` would wrongly return 2 while
+// `count(DISTINCT i.id)` correctly returns 1.
+func TestStoreRollup_TopViolationsSameRuleTwiceOnOneInvoiceCountsOnce(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "adversarial same-rule-twice tenant")
+	entityID := seedEntity(t, super, tenantID, "same-rule-twice entity")
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "SAMERULE-1", "draft",
+		`[{"rule_key":"supplier-tin-required","severity":"error","message":"a"},`+
+			`{"rule_key":"supplier-tin-required","severity":"error","message":"b"}]`)
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	assertTopViolations(t, got.TopViolations, []RuleCount{
+		{RuleKey: "supplier-tin-required", Invoices: 1},
+	})
+}
+
+// TestStoreRollup_TopViolationsSameRuleTwiceOnEachOfTwoInvoicesCountsTwo:
+// the same same-rule-twice-per-invoice shape as above, but on TWO separate
+// invoices, pins that DISTINCT is keyed on invoice id, not on occurrence
+// count: each invoice contributes exactly 1 (not 2) to the rule's total, so
+// two such invoices must total 2 (not 4). This rules out an implementation
+// that merely deduplicates per-invoice element pairs without actually
+// counting distinct invoices (e.g. a bug that divided the raw element count
+// by a fixed factor would coincidentally pass the single-invoice test above
+// but fail here).
+func TestStoreRollup_TopViolationsSameRuleTwiceOnEachOfTwoInvoicesCountsTwo(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "adversarial same-rule-twice x2 tenant")
+	entityID := seedEntity(t, super, tenantID, "same-rule-twice x2 entity")
+	twice := `[{"rule_key":"supplier-tin-required","severity":"error","message":"a"},` +
+		`{"rule_key":"supplier-tin-required","severity":"error","message":"b"}]`
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "SAMERULE-X2-1", "draft", twice)
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "SAMERULE-X2-2", "draft", twice)
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	assertTopViolations(t, got.TopViolations, []RuleCount{
+		{RuleKey: "supplier-tin-required", Invoices: 2},
+	})
+}

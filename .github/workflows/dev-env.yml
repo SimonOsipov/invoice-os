@@ -762,14 +762,12 @@ jobs:
         # load-bearing, not cosmetic. GATEWAY_URL comes from this job's `env:`
         # (needs.prepare-env.outputs.gateway_url — the seam reads it
         # directly) — no chromium needed (A6: the api config declares no
-        # browser project). Needs the superuser DSN (DATABASE_SUPERUSER_URL_DEV,
-        # exported by the discovery step above) for the same reason the demo
-        # step below does — assertions with no read API: PERF-05's Day-60
-        # stamp gate reads invoice_status_history, and PERF-03/04 compare the
-        # stamped rule_set_version_id against v2's uuid queried live
-        # (api/db.ts). Without it those three degrade to a skip, which is how
-        # M4-04-08 shipped an invisible green — api/db.ts's requireDbInCI
-        # now fails the run instead of skipping if the DSN ever goes missing.
+        # browser project). Does NOT need the superuser DSN (M4-22-05):
+        # PERF-05's Day-60 stamp gate now reads invoice_status_history over
+        # HTTP (GET .../history), and PERF-03/04 compare rule_set_version via
+        # the validate/import response body, not a live DB query — api/db.ts
+        # is deleted. The DSN is still exported by the discovery step above,
+        # for the demo step below, which still needs it.
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Topology (app verified-login + cross-tenant isolation)
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this

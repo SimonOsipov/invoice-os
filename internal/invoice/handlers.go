@@ -334,6 +334,26 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 	}
 }
 
+// validateResponse is the POST /v1/invoices/{id}/validate response body: the
+// existing Invoice, embedded so every field it already carries keeps its
+// exact name/type/position (TestValidateHandler_ResponseIsAdditive decodes
+// this body straight into the plain Invoice type), plus one additive sibling
+// key -- rule_set_version (task-161/M4-22-02). The field is NOT added to the
+// Invoice domain struct itself: Invoice is scanned 1:1 from the invoices
+// table and shared by Get/List, which never call the gate and would then
+// start emitting a misleading always-null key. Mirrors how
+// internal/importer/handlers.go:76 hand-rolls its own response type for the
+// identical reason rather than growing its domain struct.
+//
+// RuleSetVersion is a *int with NO omitempty: it must render an explicit
+// JSON null when validate() evaluated nothing (Gate.Evaluate's own
+// zero-value convention, gate.go's file header) -- never omitted, never a
+// false literal 0 (TestValidateHandler_NilVersionMarshalsNull).
+type validateResponse struct {
+	Invoice
+	RuleSetVersion *int `json:"rule_set_version"`
+}
+
 // ValidateHandler returns POST /v1/invoices/{id}/validate -- THE gate
 // ([gate-endpoint]): the only route by which an invoice reaches validated, and
 // therefore also the on-demand re-validate endpoint (Core AC #6). It is
@@ -361,7 +381,7 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 			return
 		}
 
-		inv, _, err := validate(r.Context(), r.PathValue("id"))
+		inv, version, err := validate(r.Context(), r.PathValue("id"))
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -371,16 +391,15 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 			return
 		}
 
-		// QA MODE-A SCAFFOLD [M4-22-02] (task-161): the evaluated rule-set
-		// version returned by validate() above is deliberately DISCARDED (blank
-		// identifier) -- the response stays the bare Invoice, exactly as before
-		// this story. This is what keeps TestValidateHandler_ExposesRuleSetVersion/
-		// _NilVersionMarshalsNull/_ViolationsStillCarryVersion RED: no
-		// rule_set_version key is emitted yet. The executor's real fix wraps this
-		// in validateResponse{Invoice: inv, RuleSetVersion: ...} per task-161's
-		// plan (nil when the discarded value above is 0, else &value) and writes
-		// THAT instead of inv; DELETE this comment when done.
-		writeJSON(w, http.StatusOK, inv)
+		// validateResponse is additive over the bare Invoice (see its doc
+		// comment): rule_set_version is nil (-> JSON null) when nothing was
+		// evaluated (validate's own zero-value convention), else the real
+		// evaluated version.
+		resp := validateResponse{Invoice: inv}
+		if version != 0 {
+			resp.RuleSetVersion = &version
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

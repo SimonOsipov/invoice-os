@@ -180,13 +180,13 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// verdict masquerading as a clean one.
 	outInv, err := g.store.ApplyValidation(ctx, inv.ID, res.ByRef[inv.ID], res.RuleSetVersionID, fingerprint)
 
-	// QA MODE-A SCAFFOLD [M4-22-02] (task-161, RALPH Stage 2.5): res.RuleSetVersion
-	// above IS the real evaluated version -- Evaluate already computed it -- but
-	// it is deliberately NOT threaded through this return yet. Returning a stub
-	// 0 keeps TestGateValidate_PropagatesEvaluatedVersion (gate_test.go) RED on
-	// its assertion rather than green by accident. The executor's real fix is
-	// `return outInv, res.RuleSetVersion, err`; DELETE this comment when done.
-	return outInv, 0, err
+	// res.RuleSetVersion is the real evaluated version -- Evaluate already
+	// computed it above -- threaded straight through so ValidateHandler can
+	// put it on the wire as rule_set_version (task-161/M4-22-02). On an
+	// ApplyValidation error outInv is the zero Invoice, but res.RuleSetVersion
+	// still reports the version 04 actually evaluated against rather than
+	// papering over it with a stub 0.
+	return outInv, res.RuleSetVersion, err
 }
 
 // BatchOutcome is ValidateBatch's report: the one rule-set the whole batch was

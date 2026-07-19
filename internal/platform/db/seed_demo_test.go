@@ -446,6 +446,178 @@ func TestSeedFileHasNoDestructiveStatements(t *testing.T) {
 	}
 }
 
+// ---- QA adversarial coverage (task-162 verification pass) -------------------
+//
+// The tests below were added during QA verification of task-162, on top of the
+// architect's pre-authored Test Specs above. They target failure modes the
+// verification brief called out explicitly: a curated row DELETED entirely
+// (not just mutated, the case TestSeedRepairsMutatedDemoEntity already covers)
+// must self-heal on the next Seed; a non-curated junk row's ACTUAL survival
+// behavior under the deliberately-dropped DELETE (binding decision
+// [demo-seed-shape]) must be pinned rather than assumed; and the UPSERT's
+// partial-unique conflict target (tenant_id, tin) must never collide across
+// tenants sharing the same TIN value.
+
+// TestSeedRecreatesDeletedDemoEntity: adversarial coverage for AC-1/AC-3 — the
+// "self-healing after a failed E2E test cleanup" scenario binding decision
+// [demo-seed] exists for. TestSeedRepairsMutatedDemoEntity only proves a
+// mutated-in-place row is restored; it says nothing about a row an errant
+// DELETE (e.g. a failed E2E test's incomplete cleanup) removed entirely. Seeds
+// the curated baseline, deletes one curated row outright, then re-Seeds: the
+// row must reappear with its curated name/status — an UPSERT with no
+// corresponding DELETE is only a complete self-healing story if a MISSING row
+// is recreated, not just a mutated one repaired.
+func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated baseline): %v", err)
+	}
+
+	const deletedTIN = "10278901-0027" // curated row #27: Ekene Auto Parts Ltd, archived
+	res, err := pool.Exec(ctx,
+		`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, deletedTIN,
+	)
+	if err != nil {
+		t.Fatalf("delete curated row (precondition): %v", err)
+	}
+	if res.RowsAffected() != 1 {
+		t.Fatalf("precondition: delete affected %d row(s), want exactly 1", res.RowsAffected())
+	}
+
+	afterDelete := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	if len(afterDelete) != 26 {
+		t.Fatalf("precondition: count(business_entities) after deleting one curated row = %d, want 26", len(afterDelete))
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (recreate the deleted row): %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	want := sortedEntityRows(curatedDemoEntities)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("business_entities for the demo tenant after Seed recreates a fully-deleted curated row does not match the curated set exactly (an UPSERT alone must recreate a MISSING row, not just repair a mutated one)\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestSeedLeavesJunkRowsInPlace: adversarial coverage pinning the ACTUAL (not
+// assumed) behavior of binding decision [demo-seed-shape]'s deliberately-dropped
+// DELETE: an extra, non-curated business_entities row for the demo tenant (e.g.
+// a "Demo Client" row a prior E2E test run left behind) SURVIVES Seed
+// untouched, because seed.dev.sql only UPSERTs the 27 curated TINs and never
+// deletes anything. This documents the accepted tradeoff — per
+// [demo-seed-shape], a freshly-provisioned per-PR env never accumulates rows,
+// so there is nothing to clear — rather than asserting a cleanup Seed was never
+// designed to perform.
+func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	const junkTIN = "55555555-9999"
+	const junkName = "Demo Client (E2E leftover)"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, $2, $3, 'active')`,
+		demoTenantID, junkName, junkTIN,
+	); err != nil {
+		t.Fatalf("seed junk row (precondition): %v", err)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	if len(got) != 28 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed with one pre-existing junk row = %d, want 28 (27 curated + 1 surviving junk row — [demo-seed-shape] deliberately drops the DELETE, so junk is NOT cleaned by the boot-time seed)", len(got))
+	}
+
+	var found bool
+	for _, r := range got {
+		if r.tin == junkTIN {
+			found = true
+			if r.name != junkName || r.status != "active" {
+				t.Errorf("junk row after Seed = %+v, want unchanged (name=%q, status=active)", r, junkName)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("junk row (tin=%q) not found after Seed, want it to survive untouched — Seed must never delete a row it did not itself curate", junkTIN)
+	}
+}
+
+// TestSeedSameTINUnderDifferentTenantIsSafe: adversarial coverage for the
+// UPSERT's conflict target, business_entities_tenant_tin_uq
+// (migrations/20260709155011_business_entities.sql:55-56) — a PARTIAL UNIQUE
+// index scoped to (tenant_id, tin), not a global unique-tin constraint. Seeds
+// Honeywell (2222…) with a row carrying one of the demo tenant's curated TIN
+// values, then runs Seed, and asserts: (a) Seed succeeds with no
+// unique-constraint error, (b) Honeywell's row is completely untouched, and (c)
+// the demo tenant still ends up with its own correctly curated row under that
+// same TIN — proving the index's per-tenant scoping actually holds under Seed,
+// not just in the schema definition.
+func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	const sharedTIN = "10012345-0001" // curated row #1's TIN (Adeyemi & Sons Trading Ltd)
+	const honeywellName = "Honeywell Cross-Tenant TIN Probe"
+
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, sharedTIN,
+	); err != nil {
+		t.Fatalf("clear stale probe row (precondition): %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, $2, $3, 'active')`,
+		honeywellTenantID, honeywellName, sharedTIN,
+	); err != nil {
+		t.Fatalf("seed Honeywell same-TIN row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`, honeywellTenantID, sharedTIN)
+	})
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed with a same-TIN row pre-existing under a different tenant: %v — the partial unique index is scoped to (tenant_id, tin), so this must never collide", err)
+	}
+
+	var name, status string
+	if err := pool.QueryRow(ctx,
+		`SELECT name, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, sharedTIN,
+	).Scan(&name, &status); err != nil {
+		t.Fatalf("read back Honeywell's row: %v", err)
+	}
+	if name != honeywellName || status != "active" {
+		t.Errorf("Honeywell's row after Seed = (%q, %q), want unchanged (%q, \"active\") — the demo tenant's UPSERT must not bleed across tenants", name, status, honeywellName)
+	}
+
+	var demoName, demoStatus string
+	if err := pool.QueryRow(ctx,
+		`SELECT name, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, sharedTIN,
+	).Scan(&demoName, &demoStatus); err != nil {
+		t.Fatalf("read back demo tenant's curated row: %v", err)
+	}
+	if demoName != "Adeyemi & Sons Trading Ltd" || demoStatus != "active" {
+		t.Errorf("demo tenant's row for TIN %q = (%q, %q), want (\"Adeyemi & Sons Trading Ltd\", \"active\")", sharedTIN, demoName, demoStatus)
+	}
+}
+
 // ---- Test Spec row 7 (task-162 AC-6): "the guard still gates seeding" -------------
 //
 // Deliberately NOT authored as a new test here. TestProvisionSkippedWhenGuardOff

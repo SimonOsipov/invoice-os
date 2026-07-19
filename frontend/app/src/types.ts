@@ -184,6 +184,11 @@ export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'validating
 export type CanonField = { key: string; required?: boolean }
 
 // canonical field key -> source column header, or null while unplaced
+//
+// Duplicate source headers are AMBIGUOUS BY DESIGN — the server takes the first
+// match (resolveMapping, internal/importer/service.go). Do NOT re-key this by
+// column index: the wire payload is Record<field, header>, so "the second column
+// named VAT" is untransmittable. See task-177.
 export type Mapping = Record<string, string | null>
 
 export type SettingsTab = 'connectors' | 'api' | 'signing'

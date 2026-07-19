@@ -147,7 +147,17 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
 
   // Map invoice_number by click-to-place (D3 -- no <select>, drag is flaky under
   // Playwright): arm the chip, then click the target column.
-  await page.getByRole('button', { name: 'invoice_number*', exact: true }).click()
+  //
+  // Do NOT add `exact: true` to the chip locators. CreateMapping's palette button
+  // carries textTransform:'uppercase', and Chromium APPLIES CSS text-transform when
+  // computing the accessible name -- so the real name is "INVOICE_NUMBER*", not
+  // "invoice_number*". Playwright's `name` match is case-insensitive substring by
+  // default, which is what makes this work; `exact: true` makes it case-sensitive
+  // AND whole-string, and it can then never match (proven on deployed dev: the
+  // 240s timeout at this line was exactly this). The trailing `*` comes from a
+  // separate <span> for `required`, so a substring match also sidesteps any
+  // accessible-name concatenation question.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
 
   const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
@@ -227,9 +237,9 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   // be mapped for this fixture's clean/violating split to be real rather than a
   // uniform tax_math data-fault on every invoice (see importFixtures.ts's
   // buildMixedCsv doc comment for the verified reasoning).
-  await page.getByRole('button', { name: 'invoice_number*', exact: true }).click()
+  await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal', exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
   await page.getByText('Subtotal', { exact: true }).click()
 
   const importResp = page.waitForResponse(

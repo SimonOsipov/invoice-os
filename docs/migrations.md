@@ -77,7 +77,8 @@ passwords live only in Railway.
 > `20260707122459_tenants_rls.sql` failed with `role "invoice_tenant_reader" does not
 > exist`. Re-run `bootstrap.sql` against every live DB after adding a role. To create
 > just the new role without rotating the existing roles' passwords (step 3 rotates all
-> three — it would invalidate the live `INVOICE_*_DATABASE_URL` vars), run only its
+> three — it would invalidate the live `DATABASE_APP_URL`/`DATABASE_MIGRATION_URL_SOURCE`
+> vars), run only its
 > `CREATE ROLE` + `ALTER ROLE … NOSUPERUSER NOBYPASSRLS` + schema `GRANT USAGE` lines.
 >
 > **Since M4-21-04** this specific failure mode is structurally mitigated for any
@@ -418,6 +419,16 @@ real passwords live **only** in Railway.
    machine and clear scrollback/history after, same care as any other place a
    secret briefly touches a command line.
 
+   > **Gateway-side role password variables (M4-22-09, in progress).** The same three
+   > passwords chosen above are also stored on the gateway service, which reads them at
+   > boot to re-run `bootstrap.sql` (`[superuser-dsn-on-gateway]`, §1). The gateway now
+   > prefers the unprefixed `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD`
+   > variables (matching `Makefile`/CI), falling back to their deprecated, legacy-prefixed
+   > equivalents (see `cmd/gateway/main.go`'s `resolveRolePassword`) and logging a warning
+   > when it does. Once every Railway environment is confirmed on the new names
+   > (escalations E3/E4), the fallback becomes dead code and should be deleted along with
+   > the deprecated Railway variables.
+
 3. **Store the app + migrator URLs**, built from the **private** host — never the public
    proxy, per §2:
    ```
@@ -426,15 +437,15 @@ real passwords live **only** in Railway.
    ```
    Railway variables are **service-scoped** (no CLI shared-variable path), and there is no
    DB consumer yet (the gateway is M2-12), so these are stored **on the `Postgres` service**
-   under non-colliding names — `INVOICE_APP_DATABASE_URL` and `INVOICE_MIGRATOR_DATABASE_URL`
+   under non-colliding names — `DATABASE_APP_URL` and `DATABASE_MIGRATION_URL_SOURCE`
    (plain `DATABASE_URL` on that service is Railway's superuser URL — do not overwrite it):
    ```bash
-   printf '%s' "<migrator-url>" | railway variables set INVOICE_MIGRATOR_DATABASE_URL --stdin -s Postgres --skip-deploys
-   printf '%s' "<app-url>"      | railway variables set INVOICE_APP_DATABASE_URL      --stdin -s Postgres --skip-deploys
+   printf '%s' "<migrator-url>" | railway variables set DATABASE_MIGRATION_URL_SOURCE --stdin -s Postgres --skip-deploys
+   printf '%s' "<app-url>"      | railway variables set DATABASE_APP_URL              --stdin -s Postgres --skip-deploys
    ```
    **M2-12 wires the consumers** by reference: each service sets
-   `DATABASE_URL=${{Postgres.INVOICE_APP_DATABASE_URL}}` and the gateway's migration step
-   sets `DATABASE_MIGRATION_URL=${{Postgres.INVOICE_MIGRATOR_DATABASE_URL}}`. **Never** hand
+   `DATABASE_URL=${{Postgres.DATABASE_APP_URL}}` and the gateway's migration step
+   sets `DATABASE_MIGRATION_URL=${{Postgres.DATABASE_MIGRATION_URL_SOURCE}}`. **Never** hand
    any service `${{Postgres.DATABASE_URL}}` (superuser — disables RLS).
 
 4. **Stays always-on:** `development`, Postgres included, is never torn down by CI (§7).

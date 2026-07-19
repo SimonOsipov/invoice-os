@@ -86,8 +86,8 @@ env:
   # Appendix) — same stable-resource-id pattern as the four service ids above. No CI
   # job resolves a superuser DSN with it anymore (M4-22-08); scripts/ci/railway-env.sh
   # still uses it to create the Postgres volume and bring Postgres up in a fork
-  # (ensure_postgres_volume, ensure_postgres_running), and the Watch Paths assertion
-  # below uses it too.
+  # (ensure_postgres_volume, ensure_postgres_running). The Watch Paths assertion below
+  # does NOT use it — it matches by a hardcoded 11-service name list instead.
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
 
 jobs:
@@ -218,7 +218,7 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: bash scripts/ci/railway-env.sh audit-sealed-variables
 
-      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, proxy audit)
+      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, environment record)
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}

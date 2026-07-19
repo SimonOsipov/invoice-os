@@ -47,17 +47,19 @@ func main() {
 	// — never app.Config.Environment. internal/platform/config.go:44 substitutes
 	// "development" for an unset ENVIRONMENT, which would silently re-open the
 	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
-	// the guard off, none of DATABASE_SUPERUSER_URL / INVOICE_*_PASSWORD are
-	// required — production boots without any of them set.
+	// the guard off, none of DATABASE_SUPERUSER_URL / MIGRATOR_PASSWORD /
+	// APP_PASSWORD / READER_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
+	// fallbacks, see resolveRolePassword below) are required — production boots
+	// without any of them set.
 	if err := db.Provision(context.Background(), db.ProvisionConfig{
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
 		SuperuserDSN:  os.Getenv("DATABASE_SUPERUSER_URL"),
 		MigrationDSN:  mustEnv("DATABASE_MIGRATION_URL"),
 		Passwords: db.RolePasswords{
-			Migrator: os.Getenv("INVOICE_MIGRATOR_PASSWORD"),
-			App:      os.Getenv("INVOICE_APP_PASSWORD"),
-			Reader:   os.Getenv("INVOICE_TENANT_READER_PASSWORD"),
+			Migrator: resolveRolePassword("MIGRATOR_PASSWORD", "INVOICE_MIGRATOR_PASSWORD", app.Logger),
+			App:      resolveRolePassword("APP_PASSWORD", "INVOICE_APP_PASSWORD", app.Logger),
+			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
 		},
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,
@@ -163,18 +165,20 @@ func mustEnv(key string) string {
 // (internal/platform/db/bootstrap.go) is the single source of fail-fast on
 // an empty password and is intentionally NOT duplicated here.
 //
-// QA MODE-A SCAFFOLD [M4-22-09] (task-168, RALPH Stage 2.5): this stub always
-// returns "" so cmd/gateway/main_test.go's TestRolePasswordResolutionPrecedence
-// is RED on assertions, not a compile error, before the real logic exists, and
-// is not yet called from the Passwords: db.RolePasswords{} literal above (the
-// executor wires that in Stage 3). The executor's real fix: read newName via
-// os.Getenv; if non-empty return it. Otherwise read oldName via os.Getenv; if
-// it is set (non-empty), log a warning naming both oldName and newName (e.g.
-// "<oldName> is deprecated; set <newName> instead") -- the same warning fires
-// whenever oldName is non-empty, whether or not newName is also set, since an
-// unused-but-present deprecated variable is still worth flagging for cleanup
-// -- then return oldName's value (or "" if it, too, is empty). DELETE this
-// comment when done.
+// This fallback is temporary. Once escalations E3/E4 confirm every Railway
+// environment sets the new unprefixed name and no longer sets the deprecated
+// INVOICE_-prefixed one, delete the oldName argument and this function's
+// fallback branch from each of the three call sites above.
 func resolveRolePassword(newName, oldName string, logger *slog.Logger) string {
-	return ""
+	newVal := os.Getenv(newName)
+	oldVal := os.Getenv(oldName)
+
+	if oldVal != "" {
+		logger.Warn(oldName + " is deprecated; set " + newName + " instead")
+	}
+
+	if newVal != "" {
+		return newVal
+	}
+	return oldVal
 }

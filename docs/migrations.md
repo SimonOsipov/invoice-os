@@ -289,7 +289,7 @@ state costs nothing; nothing else depends on it once the PR is gone.
 
 The **`development` environment's own Postgres is different: it is stateful, persistent,
 and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
-environment is created from, and the target of `make demo-reset` / live demo calls.
+environment is created from, and the target of live demo calls.
 Migrations against it are therefore forward-only/additive; the reversibility guarantee is
 enforced against the *ephemeral CI* Postgres (§6) instead, never against `development`'s.
 

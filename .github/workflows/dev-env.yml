@@ -586,9 +586,7 @@ jobs:
   #    imports 500 invoices / 1500 rows per run; e2e/demo/day30.spec.ts:149-168
   #    onboards a permanent business_entities row per run. `db/reset.dev.sql`
   #    (the repo's only TRUNCATE, line 18: `TRUNCATE tenants CASCADE`) is kept
-  #    for exactly this reason — do NOT delete it. (`make demo-reset` /
-  #    db/demo-reset.sql is a separate, MANUAL, single-tenant tool — not a
-  #    substitute, deliberately not reused here.)
+  #    for exactly this reason — do NOT delete it.
   reset-seed:
     name: Reset + seed dev DB (data-only, superuser; development only)
     needs: health-gate

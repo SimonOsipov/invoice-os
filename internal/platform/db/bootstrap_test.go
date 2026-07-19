@@ -136,8 +136,7 @@ func readBootstrapSQL(t *testing.T) string {
 // fiscalbridge.* GUCs set (session-scoped, is_local=false — matching the Makefile's
 // `-c "SELECT set_config(..., false)" -f` precedent) on that connection first, then the
 // file executed as a single zero-arg Exec so pgx uses the simple query protocol its
-// multi-statement DO $$ … $$ body requires (same requirement as db/demo-reset.sql, see
-// demo_reset_test.go's applyDemoReset). Using one acquired connection (not the pool
+// multi-statement DO $$ … $$ body requires. Using one acquired connection (not the pool
 // directly) is load-bearing: two separate pool.Exec calls could land on two different
 // physical connections, and a GUC set on one would never be visible to the other.
 func applyBootstrap(t *testing.T, pool *pgxpool.Pool, guc bootstrapGUCs, sql string) error {

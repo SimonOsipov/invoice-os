@@ -42,7 +42,7 @@ actually existing: CI now creates, tears down and sweeps them itself.
   runs from the same ref**, not across refs.
 - **`development` itself** is a stable, always-up base + demo environment (Decision
   `[dev-env-status]`) — it is the fork base every PR environment is created from, and it is
-  what `make demo-reset` / live demo calls point at. It is **not** torn down by any
+  what live demo calls point at. It is **not** torn down by any
   automated workflow.
 - **Production** → nothing. The `production` environment stays dormant.
 

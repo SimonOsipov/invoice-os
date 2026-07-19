@@ -36,13 +36,13 @@ INSERT INTO memberships (tenant_id, user_id, role) VALUES
     ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin')      -- Ngozi Balogun
 ON CONFLICT (tenant_id, user_id) DO NOTHING;
 
--- task-162 / M4-22-03: fold db/demo-reset.sql's rule re-enable + curated demo
--- portfolio into the boot-time seed, per binding decision [demo-seed-shape]. A
--- per-PR env is provisioned once from an empty DB, so there is nothing to CLEAR
--- here (unlike demo-reset.sql, which also DELETEs first to converge a
--- long-lived, hand-poked demo DB back to the curated set) — only to CREATE and,
--- on a re-run of `make dev-db` against an already-seeded DB, REPAIR. Binding
--- decision [demo-seed-shape] deliberately drops demo-reset.sql's
+-- task-162 / M4-22-03: fold the former standalone reset script's rule re-enable +
+-- curated demo portfolio into the boot-time seed, per binding decision
+-- [demo-seed-shape]. A per-PR env is provisioned once from an empty DB, so there is
+-- nothing to CLEAR here (unlike that script, which also cleared business_entities
+-- first to converge a long-lived, hand-poked demo DB back to the curated set) — only
+-- to CREATE and, on a re-run of `make dev-db` against an already-seeded DB, REPAIR.
+-- Binding decision [demo-seed-shape] deliberately drops that script's
 -- `DELETE FROM business_entities WHERE tenant_id = ...` rather than porting it:
 -- a boot-time seed must stay destructive-statement-free (enforced by
 -- TestSeedFileHasNoDestructiveStatements), and there is no accumulation to clear
@@ -57,8 +57,9 @@ ON CONFLICT (tenant_id, user_id) DO NOTHING;
 UPDATE rules SET enabled = true WHERE enabled = false;
 
 -- The 27 curated business_entities rows for the demo tenant (Okafor & Partners,
--- 11111111-…, created above), transcribed verbatim from db/demo-reset.sql:31-57
--- (21 active + 6 archived). Converted from demo-reset.sql's DELETE-then-INSERT to
+-- 11111111-…, created above) — the curated set fixed by binding decision
+-- [demo-seed-shape] (21 active + 6 archived). Converted from the former standalone
+-- reset script's DELETE-then-INSERT to
 -- an idempotent UPSERT: DO UPDATE (not DO NOTHING) so a re-run REPAIRS a row a
 -- prior demo hand-edited back to its curated name/status, rather than leaving the
 -- edit in place. Conflict target is the partial unique index

@@ -4,8 +4,8 @@
 //
 // WHY THIS FILE EXISTS -- the test gap is the real defect. EVERY pre-existing
 // fixture creates its entity by RAW SQL INSERT of an already-hyphenated
-// literal: seedEntityWithTIN (service_gate_test.go), db/demo-reset.sql,
-// e2e/api/contract-validation.spec.ts's hand-built JSON. NOTHING exercised
+// literal: seedEntityWithTIN (service_gate_test.go), db/seed.dev.sql's curated
+// rows, e2e/api/contract-validation.spec.ts's hand-built JSON. NOTHING exercised
 // portfolio.Store.Create, the ONLY thing that actually writes an entity TIN in
 // production -- and which CANONICALIZES it (hyphen-stripped) via ValidateTIN.
 // So the whole Go suite was structurally blind to the fact that an
@@ -238,7 +238,7 @@ func TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN(t *testing.T) {
 
 // TestMBSSupplierTIN_LeavesUncanonicalizedValuesAlone pins that the helper
 // only ever restores what WE stripped. An already-hyphenated row (every
-// raw-seeded fixture, db/demo-reset.sql's literals) and a nil TIN must pass
+// raw-seeded fixture, db/seed.dev.sql's curated literals) and a nil TIN must pass
 // through untouched -- store-invalid-faithfully: we do not rewrite values we
 // did not canonicalize.
 func TestMBSSupplierTIN_LeavesUncanonicalizedValuesAlone(t *testing.T) {
@@ -246,7 +246,7 @@ func TestMBSSupplierTIN_LeavesUncanonicalizedValuesAlone(t *testing.T) {
 		t.Errorf("mbsSupplierTIN(nil) = %v, want nil (a TIN-less entity must still fire supplier-tin-required)", *got)
 	}
 	for _, raw := range []string{
-		"10223456-0022", // db/demo-reset.sql's already-hyphenated literal
+		"10223456-0022", // db/seed.dev.sql's already-hyphenated curated literal (row #22)
 		"12345678-0001", // seedEntityWithTIN's raw-seeded literal
 		"",              // an empty string is not canonical -- never rewritten
 		"BADTIN",        // stored-invalid content must keep violating, faithfully

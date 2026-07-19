@@ -1,7 +1,8 @@
 // [M4-22-03] Test-first (RED) suite for the demo-curation + rule-re-enable half of
-// db.Seed (task-162): folding db/demo-reset.sql's global rule re-enable and the 27
-// curated business_entities rows into db/seed.dev.sql as an idempotent UPSERT, per
-// binding decision [demo-seed-shape]. Pre-authored BEFORE that SQL exists — the
+// db.Seed (task-162): folding the former standalone reset script's global rule
+// re-enable and the 27 curated business_entities rows into db/seed.dev.sql as an
+// idempotent UPSERT, per binding decision [demo-seed-shape]. Pre-authored BEFORE
+// that SQL exists — the
 // checked-in db/seed.dev.sql only seeds tenants/memberships, so every case below is
 // RED against it on an assertion (wrong row count, rule still disabled), never on a
 // missing symbol or connection error; each test's doc comment says exactly which
@@ -15,20 +16,21 @@
 //     requireHarness/h) — that harness additionally gates on DATABASE_URL/
 //     DATABASE_MIGRATION_URL/DATABASE_READER_URL, all four required simultaneously,
 //     which is a heavier precondition than this suite (and seed_test.go/
-//     provision_test.go) needs. It reuses demo_reset_test.go's package-level
-//     entityRow type and demoTenantID/honeywellTenantID constants (pure
-//     data/types, no dependency on h), but defines its own pool-parameterized
-//     fetch/reset helpers below rather than demo_reset_test.go's h.super-bound
-//     fetchEntities/disableRule/ruleEnabled/disabledRuleCount, since this suite's
-//     pool comes from bootstrapSuperuserPool(t, superDSN), not h.super.
+//     provision_test.go) needs. It owns the package-level entityRow type and
+//     demoTenantID/honeywellTenantID constants below (relocated here by M4-22-04
+//     from the deleted demo_reset_test.go, this file being their principal
+//     consumer now that that file is gone — provision_test.go also depends on
+//     demoTenantID), and defines its own pool-parameterized fetch/reset helpers
+//     rather than h.super-bound ones, since this suite's pool comes from
+//     bootstrapSuperuserPool(t, superDSN), not h.super.
 //   - "against a migrated, empty database" (Test Spec row 1) is realized against the
 //     shared dev/CI Postgres every other test in this package depends on by
 //     explicitly clearing the demo tenant's own business_entities rows first
 //     (resetDemoBusinessEntities) rather than requiring a literal empty schema — the
-//     same practical interpretation TestRLS_DemoResetCuratesExactSet
-//     (demo_reset_test.go) relies on for its own "empty portfolio" precondition.
+//     same practical interpretation TestSeedCreatesCuratedDemoEntities below relies
+//     on for its own "empty portfolio" precondition.
 //   - No t.Parallel(): every test shares the same demo-tenant business_entities rows
-//     and the same global `rules` table (matches demo_reset_test.go's rationale).
+//     and the same global `rules` table.
 package db_test
 
 import (
@@ -46,11 +48,34 @@ import (
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// curatedDemoEntities is db/demo-reset.sql's 27 curated business_entities rows
-// (name, tin, status), transcribed verbatim (demo-reset.sql:31-57) — the exact set
-// task-162 requires db/seed.dev.sql to converge to via UPSERT. 21 active + 6
-// archived. Order here matches the source file; comparisons below sort before
-// asserting so this literal's ordering is not itself a hidden assumption.
+// ---- Package-level fixtures owned by this file (relocated here by M4-22-04 from
+// the deleted internal/platform/db/demo_reset_test.go, whose behavior was
+// re-specified test-first in this suite by M4-22-03). provision_test.go also
+// depends on demoTenantID. ----
+
+// demoTenantID is the hardcoded demo-tenant fixture id (db/seed.dev.sql) — Okafor
+// & Partners, kind='firm'.
+const demoTenantID = "11111111-1111-1111-1111-111111111111"
+
+// honeywellTenantID is the second seeded tenant fixture (db/seed.dev.sql) —
+// Honeywell Group, kind='in_house'.
+const honeywellTenantID = "22222222-2222-2222-2222-222222222222"
+
+// entityRow captures a business_entities row's presentable identity — name, TIN, and
+// status — the three columns the curated dataset (story § Curated dataset) fixes.
+// Deliberately excludes id: entity ids use the table default (gen_random_uuid()) and
+// are explicitly not part of the presentable state (System Design, "Clear + curate").
+type entityRow struct {
+	name   string
+	tin    string
+	status string
+}
+
+// curatedDemoEntities is the 27 curated business_entities rows (name, tin, status)
+// db/seed.dev.sql's UPSERT converges the demo tenant to, transcribed verbatim from
+// that file — the exact set task-162 requires. 21 active + 6 archived. Order here
+// matches db/seed.dev.sql's INSERT order; comparisons below sort before asserting
+// so this literal's ordering is not itself a hidden assumption.
 var curatedDemoEntities = []entityRow{
 	{name: "Adeyemi & Sons Trading Ltd", tin: "10012345-0001", status: "active"},
 	{name: "Chukwu Global Ventures Ltd", tin: "10023456-0002", status: "active"},
@@ -126,7 +151,7 @@ func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string
 
 // sortedEntityRows returns a copy of rows sorted by name, matching
 // fetchDemoBusinessEntities's ORDER BY name — so curatedDemoEntities (transcribed in
-// db/demo-reset.sql's own row order) can be compared directly against a fetched,
+// db/seed.dev.sql's own INSERT order) can be compared directly against a fetched,
 // name-ordered result with reflect.DeepEqual.
 func sortedEntityRows(rows []entityRow) []entityRow {
 	out := make([]entityRow, len(rows))
@@ -138,7 +163,7 @@ func sortedEntityRows(rows []entityRow) []entityRow {
 // TestSeedCreatesCuratedDemoEntities: Test Spec row 1 / Core AC 4 (task-162 AC-1).
 // After db.Seed runs against an empty demo-tenant portfolio, the demo tenant must
 // have exactly the 27 curated business_entities rows — 21 active / 6 archived — and
-// the (name, tin, status) set must equal db/demo-reset.sql's curated list exactly.
+// the (name, tin, status) set must equal the curated list (curatedDemoEntities) exactly.
 //
 // RED against the checked-in db/seed.dev.sql (tenants/memberships only, no
 // business_entities logic): Seed leaves the demo tenant's portfolio untouched, so
@@ -290,7 +315,7 @@ func TestSeedRepairsMutatedDemoEntity(t *testing.T) {
 
 // TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) — the regression
 // guard for the dropped `DELETE FROM business_entities WHERE tenant_id = <demo>`
-// (db/demo-reset.sql:31, deliberately NOT ported per binding decision
+// (the former standalone reset script's DELETE, deliberately NOT ported per binding decision
 // [demo-seed-shape]: a per-PR env never accumulates rows, so there is nothing to
 // clear, and porting the DELETE risks it one day being mis-scoped). Seeds a
 // foreign-tenant (Honeywell, 2222…) business_entities probe row first, runs Seed,

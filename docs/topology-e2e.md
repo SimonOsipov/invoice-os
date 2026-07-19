@@ -91,8 +91,9 @@ environment, this is the first thing to check.
 No workflow reads a `DATABASE_SUPERUSER_URL_DEV` GitHub secret anymore (M4-21-10) — the
 Postgres superuser DSN is discovered fresh per run via the Railway GraphQL API
 (`variables(projectId, environmentId, serviceId)` → `DATABASE_PUBLIC_URL`), masked with
-`::add-mask::` inside the job that uses it, never a job output. `make demo-reset`'s
-same-named **local** environment variable is unrelated and unaffected.
+`::add-mask::` inside the job that uses it, never a job output. The equivalent
+same-named **local** environment variable used for manual demo-DB work is unrelated and
+unaffected.
 
 ## The data-only reset (`development` / `workflow_dispatch` only)
 

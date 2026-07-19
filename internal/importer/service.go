@@ -409,7 +409,7 @@ var canonicalFIRSTIN = regexp.MustCompile(`^\d{12}$`)
 //     cannot satisfy supplier-tin-format: that is a REAL violation to report
 //     (flagged by M4-04-08), not a formatting bug to paper over here.
 //   - anything else -- an already-hyphenated row we never canonicalized
-//     (db/demo-reset.sql's literals, raw-seeded fixtures) -> UNCHANGED.
+//     (db/seed.dev.sql's curated literals, raw-seeded fixtures) -> UNCHANGED.
 //
 // nil (an entity with no TIN) stays nil: supplier-tin-required fires, which is
 // the correct pre-existing signal (IMPV-12).

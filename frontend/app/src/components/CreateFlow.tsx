@@ -21,6 +21,13 @@ const STAGE_OF: Record<CreateStep, number> = {
   review: 2,
   validating: 3,
   results: 4,
+  // 'report' added to CreateStep by M4-08-04 (plan B1); this Record is total, so the
+  // union addition forces an entry here (TS2739). Unreachable via this component today
+  // — CreateFlow has no 'report' render branch until M4-08-05 adds CreateReport, and
+  // M4-08-04's own wizardHeader (lib/importFlow.ts) is what actually routes 'report'
+  // (to the import path). This copy of STAGE_OF is deleted in favor of that one when
+  // -04's feature commit wires CreateFlow to wizardHeader (plan step 4) — untouched here.
+  report: 2,
 }
 
 function wizardStage(step: CreateStep): number {

@@ -171,7 +171,11 @@ export type Mode = 'firm' | 'inhouse'
 
 export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
-export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'review' | 'validating' | 'results'
+// 'report' added by M4-08-04 (plan B1/DRIFT-1) — one subtask ahead of story §6's
+// original assignment (M4-08-05), because wizardHeader's report->2 branch does not
+// compile against this union and CreateFlow.tsx's STAGE_OF is a total Record over it.
+// -05 still owns the CreateReport render branch; this commit adds only the member.
+export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'review' | 'validating' | 'results' | 'report'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.

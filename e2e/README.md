@@ -56,3 +56,5 @@ provision → smoke + topology). See `docs/topology-e2e.md`.
 pnpm --filter @invoice-os/e2e test:topology   # needs the gateway-wired dev deploy up
 ```
 
+
+<!-- M4-23 parallelism probe t1 — throwaway, deleted after the run -->

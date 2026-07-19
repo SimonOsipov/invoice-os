@@ -367,3 +367,100 @@ describe('detailTarget / DetailSelection constructors ([detail-target-exclusive]
     expect(detailTarget(illegal)).toEqual({ kind: 'imported', invoiceId: 'uuid-real' })
   })
 })
+
+// --- QA (task-174, Stage 4 Mode B) — adversarial / edge coverage, node-testable only.
+// Everything below is genuinely new falsification surface, not a restatement of
+// RPT-01..13: Playwright-only gaps (AC#9 end-to-end, RPT-09's two-section rendering, row
+// clickability, the failure panel's rendering) belong to M4-08-07 and are NOT
+// manufactured here. Judged-and-skipped as already covered, not duplicated: invoice_id
+// absent -> null (RPT-08 already pins toBeNull, not toBeFalsy) and the detailTarget
+// truth table (RPT-10 covers the three legal states, RPT-13 the illegal one).
+
+describe('reportSummary: an unrecognised non-"failed" status also fails safe (QA adversarial)', () => {
+  it('a future/unknown status string (e.g. "processing") is NOT the same as testing only "failed" and undefined — status !== "completed" must reject it too', () => {
+    // Falsifies an impl that special-cases exactly the two states RPT-07 exercises
+    // (`status === 'failed' || status === undefined`) instead of the pinned
+    // `status !== 'completed'`. A third, wholly unrecognised status is the case that
+    // distinguishes the two implementations.
+    const processingReport: ImportReport = { ...BASE_REPORT, id: 'batch-processing', status: 'processing' as ImportReport['status'] }
+
+    const s = reportSummary(processingReport)
+
+    expect(s).toEqual({ kind: 'failed', id: 'batch-processing' })
+  })
+})
+
+describe('structuralErrorRows / violationRows: empty-array inputs (QA adversarial)', () => {
+  it('both channels return [] on an empty errors[]/invoice_violations[] — no crash on the boundary RPT-01..13 never exercises directly', () => {
+    const report: ImportReport = { ...BASE_REPORT, errors: [], invoice_violations: [] }
+
+    expect(structuralErrorRows(report)).toEqual([])
+    expect(violationRows(report)).toEqual([])
+  })
+
+  it('a RowError carrying neither row nor rows produces a full StructuralRow: rowLabel "", and field/rule_key/severity all null (not undefined)', () => {
+    const report: ImportReport = { ...BASE_REPORT, errors: [{ message: 'unparseable issue date' }] }
+
+    // toEqual, not toMatchObject: an impl that leaves field/rule_key/severity undefined
+    // (`e.field` instead of `e.field ?? null`) must go RED here, not just on rowLabel.
+    expect(structuralErrorRows(report)).toEqual([{ rowLabel: '', field: null, rule_key: null, severity: null, message: 'unparseable issue date' }])
+  })
+
+  it('a RowError carrying row: 0 produces a full StructuralRow with rowLabel "row 0" (row 0 not dropped as falsy) and its field carried', () => {
+    const report: ImportReport = { ...BASE_REPORT, errors: [{ row: 0, field: 'invoice_number', message: 'blank invoice number' }] }
+
+    expect(structuralErrorRows(report)).toEqual([{ rowLabel: 'row 0', field: 'invoice_number', rule_key: null, severity: null, message: 'blank invoice number' }])
+  })
+})
+
+describe('violationRows: severity outside error/warning renders verbatim, never bucketed (QA adversarial, Trap A)', () => {
+  it('an unrecognised severity string (neither "error" nor "warning") passes through unchanged', () => {
+    // Falsifies an impl that collapses severity to a two-value enum, e.g.
+    // `severity: v.severity === 'error' ? 'error' : 'warning'` — RPT-05's 'warning' input
+    // would pass that broken impl by coincidence (warning -> warning); an unrecognised
+    // third value is the case that actually distinguishes verbatim passthrough from
+    // bucketing.
+    const report: ImportReport = {
+      ...BASE_REPORT,
+      invoice_violations: [
+        {
+          invoice_number: 'INV-7',
+          invoice_id: 'uuid-7',
+          rows: [3],
+          violations: [{ rule_key: 'future-rule', severity: 'info', message: 'a severity level the browser has never seen' }],
+        },
+      ],
+    }
+
+    const rows = violationRows(report)
+
+    expect(rows[0].severity).toBe('info')
+  })
+})
+
+describe('violationRows: large volume does not misalign the flatten (QA adversarial)', () => {
+  it('50 invoices x 3 violations each -> 150 rows, each still paired with its own parent invoice_number/invoice_id/rule_key', () => {
+    const invoice_violations = Array.from({ length: 50 }, (_, i) => ({
+      invoice_number: `INV-${i}`,
+      invoice_id: `uuid-${i}`,
+      rows: [i],
+      violations: Array.from({ length: 3 }, (_, j) => ({
+        rule_key: `rule-${j}`,
+        severity: j === 0 ? 'error' : 'warning',
+        message: `violation ${j} on invoice ${i}`,
+      })),
+    }))
+    const report: ImportReport = { ...BASE_REPORT, invoice_violations }
+
+    const rows = violationRows(report)
+
+    expect(rows).toHaveLength(150)
+    expect(rows[0]).toMatchObject({ invoice_number: 'INV-0', invoice_id: 'uuid-0', rule_key: 'rule-0' })
+    expect(rows[149]).toMatchObject({ invoice_number: 'INV-49', invoice_id: 'uuid-49', rule_key: 'rule-2' })
+    // Every row belongs to the invoice its index-range implies (3 rows per invoice) — an
+    // off-by-one in the flatMap would misalign a row with the wrong parent's fields.
+    rows.forEach((row, idx) => {
+      expect(row.invoice_number).toBe(`INV-${Math.floor(idx / 3)}`)
+    })
+  })
+})

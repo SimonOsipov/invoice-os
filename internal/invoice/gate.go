@@ -143,7 +143,12 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 // 04 round trip on an invoice the write would refuse anyway (GAPI-11), and it
 // is inherently racy -- the invoice can change status between here and there.
 // That is fine precisely because it is not the check anything relies on.
-func (g *Gate) Validate(ctx context.Context, id string) (Invoice, error) {
+// The int return is the evaluated rule-set version (task-161/M4-22-02):
+// EvalResult.RuleSetVersion, handed back to the caller so ValidateHandler can
+// put it on the wire as rule_set_version, alongside the existing
+// RuleSetVersionID stamp. 0 means "nothing was evaluated" (Evaluate's own
+// zero-value convention, this file's header) -- never a real version.
+func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// Get, not List: this is the ONLY call that hydrates line items. See the
 	// file header.
 	inv, err := g.store.Get(ctx, id)
@@ -151,10 +156,10 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, error) {
 		// ErrNotFound (unknown OR cross-tenant, RLS-scoped) -> 404 and
 		// ErrValidation (a malformed non-uuid id, 22P02) -> 400 both propagate
 		// through the EXISTING statusForErr cases, and 04 is never called.
-		return Invoice{}, err
+		return Invoice{}, 0, err
 	}
 	if inv.Status != StatusDraft {
-		return Invoice{}, fmt.Errorf("%w: invoice is %s, the gate is draft-only", ErrNotDraft, inv.Status)
+		return Invoice{}, 0, fmt.Errorf("%w: invoice is %s, the gate is draft-only", ErrNotDraft, inv.Status)
 	}
 
 	// Taken BEFORE the network call, against the same Invoice value the payload
@@ -167,13 +172,21 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, error) {
 	// uses ([batch-of-one]). No second endpoint to keep in sync.
 	res, err := g.Evaluate(ctx, []EvalItem{{Ref: inv.ID, Invoice: inv}})
 	if err != nil {
-		return Invoice{}, err
+		return Invoice{}, 0, err
 	}
 
 	// ByRef is total over the sent refs (Validator.Validate enforces it), so
 	// this key is present by construction -- a nil here would be an absent
 	// verdict masquerading as a clean one.
-	return g.store.ApplyValidation(ctx, inv.ID, res.ByRef[inv.ID], res.RuleSetVersionID, fingerprint)
+	outInv, err := g.store.ApplyValidation(ctx, inv.ID, res.ByRef[inv.ID], res.RuleSetVersionID, fingerprint)
+
+	// QA MODE-A SCAFFOLD [M4-22-02] (task-161, RALPH Stage 2.5): res.RuleSetVersion
+	// above IS the real evaluated version -- Evaluate already computed it -- but
+	// it is deliberately NOT threaded through this return yet. Returning a stub
+	// 0 keeps TestGateValidate_PropagatesEvaluatedVersion (gate_test.go) RED on
+	// its assertion rather than green by accident. The executor's real fix is
+	// `return outInv, res.RuleSetVersion, err`; DELETE this comment when done.
+	return outInv, 0, err
 }
 
 // BatchOutcome is ValidateBatch's report: the one rule-set the whole batch was

@@ -351,7 +351,7 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 // read it as data. The HTTP error codes are reserved for the cases where no
 // verdict was reached at all -- 502 (04 unreachable/broken) and 503 (04 healthy
 // but with no published rule-set), never laundered into a clean 200.
-func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -361,7 +361,7 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, err
 			return
 		}
 
-		inv, err := validate(r.Context(), r.PathValue("id"))
+		inv, _, err := validate(r.Context(), r.PathValue("id"))
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -371,6 +371,15 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, err
 			return
 		}
 
+		// QA MODE-A SCAFFOLD [M4-22-02] (task-161): the evaluated rule-set
+		// version returned by validate() above is deliberately DISCARDED (blank
+		// identifier) -- the response stays the bare Invoice, exactly as before
+		// this story. This is what keeps TestValidateHandler_ExposesRuleSetVersion/
+		// _NilVersionMarshalsNull/_ViolationsStillCarryVersion RED: no
+		// rule_set_version key is emitted yet. The executor's real fix wraps this
+		// in validateResponse{Invoice: inv, RuleSetVersion: ...} per task-161's
+		// plan (nil when the discarded value above is 0, else &value) and writes
+		// THAT instead of inv; DELETE this comment when done.
 		writeJSON(w, http.StatusOK, inv)
 	}
 }

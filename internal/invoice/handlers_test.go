@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -115,11 +116,17 @@ type lineItemWire struct {
 // field for the shared {"error":"..."} envelope -- same convention as
 // portfolio_test.go's entityBody.
 //
-// Violations/RuleSetVersionID (task-113/M4-04-06, GAPI-02/03) are additive:
-// no existing Create/Get/List/Transition test above references either
-// field, so decoding their responses into this wider struct leaves those
-// two simply zero-valued, unchanged behaviour for every test already in
-// this file.
+// Violations/RuleSetVersionID (task-113/M4-04-06, GAPI-02/03) and
+// RuleSetVersion (task-161/M4-22-02) are additive: no existing Create/Get/
+// List/Transition test above references any of the three, so decoding
+// their responses into this wider struct leaves them simply zero-valued,
+// unchanged behaviour for every test already in this file.
+//
+// RuleSetVersion decodes JSON null and an ABSENT key to the identical Go
+// zero value (nil *int) -- it cannot tell them apart. Only
+// TestValidateHandler_NilVersionMarshalsNull needs that distinction, and it
+// asserts on raw response bytes instead of this struct for exactly that
+// reason.
 type invoiceBody struct {
 	ID               string          `json:"id"`
 	EntityID         string          `json:"entity_id"`
@@ -127,6 +134,7 @@ type invoiceBody struct {
 	Status           string          `json:"status"`
 	Violations       json.RawMessage `json:"violations"`
 	RuleSetVersionID *string         `json:"rule_set_version_id"`
+	RuleSetVersion   *int            `json:"rule_set_version"`
 	LineItems        []lineItemWire  `json:"line_items"`
 	Error            string          `json:"error"`
 }
@@ -258,7 +266,7 @@ func doInvoiceEdit(t *testing.T, edit func(ctx context.Context, id string, in Up
 // doInvoiceValidate drives POST /v1/invoices/{id}/validate (task-113/
 // M4-04-06's ValidateHandler) -- no request body (unlike Transition), same
 // identity-injection/path-value/decode shape as doInvoiceGet.
-func doInvoiceValidate(t *testing.T, validate func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
+func doInvoiceValidate(t *testing.T, validate func(ctx context.Context, id string) (Invoice, int, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/invoices/"+invoiceID+"/validate", nil)
 	r.SetPathValue("id", invoiceID)
@@ -1036,9 +1044,9 @@ func TestTransitionHandler_NoIdentity401(t *testing.T) {
 // order as every other handler in this file.
 func TestValidateHandler_NoIdentity401(t *testing.T) {
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, id string) (Invoice, error) {
+	validate := func(ctx context.Context, id string) (Invoice, int, error) {
 		t.Fatal("validate must not run without an identity")
-		return Invoice{}, nil
+		return Invoice{}, 0, nil
 	}
 	rec, resp := doInvoiceValidate(t, validate, nil, invoiceID)
 
@@ -1064,11 +1072,11 @@ func TestValidateHandler_CleanDraft200(t *testing.T) {
 		Violations:       json.RawMessage(`[]`),
 		RuleSetVersionID: &versionID,
 	}
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
 		if gotID != invoiceID {
 			t.Fatalf("validate called with id=%q, want %q", gotID, invoiceID)
 		}
-		return want, nil
+		return want, 0, nil
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1095,8 +1103,8 @@ func TestValidateHandler_BlockingViolation200StaysDraft(t *testing.T) {
 	invoiceID := uuid.NewString()
 	violations := json.RawMessage(`[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]`)
 	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: violations}
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return want, nil
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 0, nil
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1117,8 +1125,8 @@ func TestValidateHandler_BlockingViolation200StaysDraft(t *testing.T) {
 func TestValidateHandler_NotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrNotFound
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNotFound
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1135,8 +1143,8 @@ func TestValidateHandler_NotFound404(t *testing.T) {
 func TestValidateHandler_NotDraft409(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrNotDraft
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNotDraft
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1153,8 +1161,8 @@ func TestValidateHandler_NotDraft409(t *testing.T) {
 func TestValidateHandler_StaleValidation409(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrStaleValidation
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrStaleValidation
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1172,8 +1180,8 @@ func TestValidateHandler_StaleValidation409(t *testing.T) {
 func TestValidateHandler_Upstream502(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrUpstream
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrUpstream
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1192,8 +1200,8 @@ func TestValidateHandler_Upstream502(t *testing.T) {
 func TestValidateHandler_NoActiveRuleSet503(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, ErrNoActiveRuleSet
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNoActiveRuleSet
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
 
@@ -1212,8 +1220,8 @@ func TestValidateHandler_NoActiveRuleSet503(t *testing.T) {
 // same as every other error-map row above.
 func TestValidateHandler_MalformedID400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	validate := func(ctx context.Context, gotID string) (Invoice, error) {
-		return Invoice{}, fmt.Errorf("%w: malformed invoice id", ErrValidation)
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, fmt.Errorf("%w: malformed invoice id", ErrValidation)
 	}
 	rec, resp := doInvoiceValidate(t, validate, &id, "not-a-uuid")
 
@@ -1222,6 +1230,197 @@ func TestValidateHandler_MalformedID400(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// --- Rule-set version on the validate response (task-161/M4-22-02) --------
+//
+// Spec-to-test map (task-161's Test Specs table):
+//
+//	#1 TestValidateHandler_ExposesRuleSetVersion
+//	#2 TestValidateHandler_ResponseIsAdditive
+//	#3 TestValidateHandler_NilVersionMarshalsNull
+//	#4 TestValidateHandler_ViolationsStillCarryVersion
+//	#5 TestValidateHandler_UpstreamErrorsUnchanged
+//
+// All five inject a `validate` closure with the NEW three-return-value
+// signature (Invoice, int, error) -- ValidateHandler's own scaffold
+// signature change, the same mechanical plumbing shared by the 9
+// pre-existing GAPI-01..09 tests above (each updated in place to add a
+// third `0` return, never altering what they assert).
+//
+// #2 and #5 are, like GAPI-16/17 above, boundary/regression coverage
+// rather than feature discriminators -- they assert properties the
+// current scaffold ValidateHandler (handlers.go, which still discards the
+// evaluated version and writes the bare Invoice) already satisfies, and
+// are expected to STAY green once the real response type lands. #1/#3/#4
+// are the RED discriminators: each fails today because no rule_set_version
+// key is emitted at all yet.
+
+// TestValidateHandler_ExposesRuleSetVersion (#1): a 200 response must
+// carry rule_set_version as the stubbed gate's evaluated version,
+// alongside an unchanged rule_set_version_id.
+func TestValidateHandler_ExposesRuleSetVersion(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	want := Invoice{
+		ID:               invoiceID,
+		Status:           StatusValidated,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &versionID,
+	}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.RuleSetVersion == nil || *resp.RuleSetVersion != 2 {
+		t.Errorf("rule_set_version = %v, want 2 (body=%s)", resp.RuleSetVersion, rec.Body.String())
+	}
+	if resp.RuleSetVersionID == nil || *resp.RuleSetVersionID != versionID {
+		t.Errorf("rule_set_version_id = %v, want %q -- unchanged by this story (body=%s)",
+			resp.RuleSetVersionID, versionID, rec.Body.String())
+	}
+}
+
+// TestValidateHandler_ResponseIsAdditive (#2): decoding the response body
+// into the EXISTING Invoice type must still succeed, and every field must
+// match the stub's invoice exactly -- proving the new rule_set_version
+// sibling key does not rename, move, or otherwise disturb any field
+// already on the wire. Boundary/regression coverage for the new field's
+// additivity (see this section's header comment) -- not a discriminator
+// for whether the feature itself is implemented.
+func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	entityID := uuid.NewString()
+	desc := "widget"
+	want := Invoice{
+		ID:               invoiceID,
+		EntityID:         entityID,
+		InvoiceNumber:    "INV-RSV-01",
+		Status:           StatusValidated,
+		Violations:       json.RawMessage(`[]`),
+		RuleSetVersionID: &versionID,
+		LineItems:        []LineItem{{ID: uuid.NewString(), LineNo: 1, Description: &desc}},
+	}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, _ := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var got Invoice
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response into the existing Invoice type: %v (body=%s)", err, rec.Body.String())
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("decoded Invoice = %+v, want %+v -- every pre-existing field must match the stub's invoice "+
+			"exactly, unaffected by the new rule_set_version sibling key", got, want)
+	}
+}
+
+// TestValidateHandler_NilVersionMarshalsNull (#3): when the gate stub
+// reports version 0 ("nothing evaluated" -- Gate.Evaluate's own zero-value
+// convention, gate.go's file header), the response body must carry the
+// literal JSON `"rule_set_version":null` -- checked on RAW bytes, never a
+// decoded struct: json.Unmarshal cannot distinguish an explicit null from
+// an absent key, and that distinction is the entire reason task-161's
+// plan picked *int over int.
+func TestValidateHandler_NilVersionMarshalsNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`)}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 0, nil
+	}
+	rec, _ := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"rule_set_version":null`) {
+		t.Errorf("body = %s, want it to contain the literal \"rule_set_version\":null", body)
+	}
+	if strings.Contains(body, `"rule_set_version":0`) {
+		t.Errorf("body = %s, must NEVER stamp a run with the literal :0 for rule_set_version -- 0 means "+
+			"\"nothing evaluated\", never a real version", body)
+	}
+}
+
+// TestValidateHandler_ViolationsStillCarryVersion (#4, AC #4): a blocking
+// violation must still 200 with violations present as ordinary data AND a
+// populated rule_set_version -- [error semantics] is not weakened by this
+// story: a blocked verdict is still a real evaluated verdict, against a
+// real rule-set version, and the caller needs to know which one.
+func TestValidateHandler_ViolationsStillCarryVersion(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	violations := json.RawMessage(`[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]`)
+	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: violations}
+	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return want, 2, nil
+	}
+	rec, resp := doInvoiceValidate(t, validate, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- a blocking violation is normal success-payload data, never an HTTP "+
+			"error [error semantics] (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(resp.Violations) == 0 || string(resp.Violations) == "[]" || string(resp.Violations) == "null" {
+		t.Errorf("violations = %s, want a non-empty violation set carried in the body", resp.Violations)
+	}
+	if resp.RuleSetVersion == nil || *resp.RuleSetVersion != 2 {
+		t.Errorf("rule_set_version = %v, want 2 -- a blocked verdict is still a real evaluated verdict against a "+
+			"real rule-set version (AC #4) (body=%s)", resp.RuleSetVersion, rec.Body.String())
+	}
+}
+
+// TestValidateHandler_UpstreamErrorsUnchanged (#5, AC #5): the 502/503
+// error paths (GAPI-07/08 above) must behave IDENTICALLY -- same status
+// codes, same non-empty {"error":...} body -- and must NEVER carry a
+// rule_set_version key on an outage response, which reached no verdict at
+// all. Boundary/regression coverage (see this section's header comment):
+// the error paths are untouched by this story's plan.
+func TestValidateHandler_UpstreamErrorsUnchanged(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	upstream := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrUpstream
+	}
+	rec, resp := doInvoiceValidate(t, upstream, &id, uuid.NewString())
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+	if strings.Contains(rec.Body.String(), "rule_set_version") {
+		t.Errorf("body = %s, an outage response must carry NO rule_set_version key at all -- no verdict was "+
+			"reached", rec.Body.String())
+	}
+
+	noActive := func(ctx context.Context, gotID string) (Invoice, int, error) {
+		return Invoice{}, 0, ErrNoActiveRuleSet
+	}
+	rec2, resp2 := doInvoiceValidate(t, noActive, &id, uuid.NewString())
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+	if resp2.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+	if strings.Contains(rec2.Body.String(), "rule_set_version") {
+		t.Errorf("body = %s, an outage response must carry NO rule_set_version key at all -- no verdict was "+
+			"reached", rec2.Body.String())
 	}
 }
 

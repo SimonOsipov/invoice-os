@@ -35,15 +35,16 @@ actually existing: CI now creates, tears down and sweeps them itself.
   > [Railway PR Environments are OFF](#railway-pr-environments-are-off)). Teardown is
   > **M4-23-05**, below; M4-23-06 is `ShouldReap`, the sweeper's pure reap predicate.
 - **`workflow_dispatch`** → targets the **persistent `development` environment** directly
-  (never an ephemeral PR environment) — the same fleet-deploy + verify flow, plus the
-  reset-seed step (M4-21-06). Its concurrency group is
+  (never an ephemeral PR environment) — the same fleet-deploy + health-gate + fleet-gate
+  flow, without the E2E suites (M4-22-07 dropped the reset/seed job and the
+  dispatch-path E2E run). Its concurrency group is
   `dev-preview-${{ github.event.pull_request.number || github.ref }}`, so a dispatch run's
   group is `dev-preview-refs/heads/<branch>` — it serializes only against **other dispatch
   runs from the same ref**, not across refs.
 - **`development` itself** is a stable, always-up base + demo environment (Decision
-  `[dev-env-status]`) — it is the fork base every PR environment is created from, and it is
-  what live demo calls point at. It is **not** torn down by any
-  automated workflow.
+  `[dev-env-status]`) — purely the fork base every PR environment is created from (Decision
+  `[development-role]`), and it is what live demo calls point at. It is **not** torn down
+  by any automated workflow.
 - **Production** → nothing. The `production` environment stays dormant.
 
 Each PR's ephemeral environment and its four public URLs (gateway, app, landing,
@@ -69,7 +70,8 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
                Best-effort; the daily sweeper (M4-23-07) is the authority.
 
 workflow_dispatch ──> targets `development` directly (persistent, never torn down)
-                   ──> same deploy + verify flow, PLUS reset-seed (data-only, superuser)
+                   ──> same deploy + health-gate + fleet-gate flow, no E2E (M4-22-07
+                       dropped the reset/seed job and dispatch-path E2E run)
 ```
 
 ### Why per-PR environments, not one shared env
@@ -323,7 +325,7 @@ contradict what the docs imply.
 | `targetPort` on those domains | `null` — in the fork **and** in `development` | Null is the NORMAL state (Railway magic-port detection). CI must **not** fail on it, and must not invent `8080`. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 7 contexts + 3 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates and seeds at boot. |
-| TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | No reconciliation needed. `pg_isready` against the forked DSN remains the authoritative liveness proof. |
+| TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
 | Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
@@ -353,8 +355,11 @@ volume-less forked Postgres does not serve, and no amount of waiting changes tha
 failure is structural, not a startup race. Hence `ensure_postgres_volume`.
 
 The general lesson, which outlives this row: **a TCP connect is never evidence that the
-service behind the socket is healthy.** `pg_isready` is, which is why it — not a status
-field and not a socket — is the authoritative liveness gate in `prepare-env`.
+service behind the socket is healthy.** `pg_isready` was, which is why it — not a status
+field and not a socket — served as the authoritative liveness gate in `prepare-env` at the
+time. Since M4-22-08, `prepare-env` no longer probes Postgres at all; `health-gate`'s
+`/healthz` 200 is the current authoritative liveness proof (see the fork-fidelity table
+above, and `docs/migrations.md` §2).
 
 **Postgres reports `CRASHED` transiently mid-startup, then settles to `SUCCESS`.** The
 wait in `railway-env.sh` therefore has **no early exit on a bad status** — it polls until

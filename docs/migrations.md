@@ -93,8 +93,17 @@ passwords live only in Railway.
 ## 2. On-deploy mechanism — gateway-as-migrator, CI-ordered
 
 Migrations are applied **at deploy time, in-network, as `invoice_migrator`, from a single
-designated service: the gateway.** There is **no public DB proxy** and no separate
-migration job with its own inbound DB access.
+designated service: the gateway.** They run **never through a public proxy**, and no
+separate migration job holds its own inbound DB access.
+
+> **Since M4-22**, no CI job or code path anywhere in this repo discovers, holds, or
+> connects through a public DB proxy for anything — `health-gate` (the gateway's own
+> `/healthz`) replaces liveness probing, HTTP against the gateway replaces the E2E suites'
+> old direct DB access, and the boot-time seed replaces the deleted reset/seed job (see
+> §2 below and [topology-e2e.md](./topology-e2e.md)). The underlying Railway TCP proxy
+> resource on `development`'s Postgres is deleted via a separate, human Railway-console
+> step (M4-22 Escalation E2) — until that completes, the resource itself may still exist,
+> unused by anything in this repo.
 
 How the ordering works (wired at **M2-12**, when the gateway exists):
 
@@ -400,34 +409,29 @@ real passwords live **only** in Railway.
 1. **Add Postgres** to the dev environment: `railway add -d postgres` (dashboard **New →
    Database → PostgreSQL** works too). Railway's `postgres-ssl` template currently
    provisions **PG18** — keep the CI Postgres major matched to it (§6). The service
-   exposes `DATABASE_URL`/`DATABASE_PUBLIC_URL` (both **superuser**) and `PG*` vars;
-   default database name is `railway`, private host `postgres.railway.internal:5432`.
+   exposes `DATABASE_URL` (superuser) plus its own public-proxy variant, and `PG*` vars —
+   step 2 below never touches either public form; default database name is `railway`,
+   private host `postgres.railway.internal:5432`.
 
-2. **Bootstrap the two roles** once, as the superuser (idempotent — re-running rotates the
-   passwords). Pick strong passwords, then from a machine with the repo (the public proxy
-   URL is reachable off-network; `psql` via Docker if you don't have it locally):
-   ```bash
-   docker run --rm -v "$PWD/db:/db:ro" postgres:18 \
-     psql "<Postgres.DATABASE_PUBLIC_URL>" -v ON_ERROR_STOP=1 \
-       -c "SELECT set_config('fiscalbridge.migrator_password', '<MIGRATOR_PW>', false)" \
-       -c "SELECT set_config('fiscalbridge.app_password', '<APP_PW>', false)" \
-       -c "SELECT set_config('fiscalbridge.reader_password', '<READER_PW>', false)" \
-       -f /db/bootstrap.sql
-   ```
-   Note: these `-c` arguments carry the plaintext passwords on argv, visible to `ps`
-   and to shell history on whatever machine runs this — use a throwaway/trusted
-   machine and clear scrollback/history after, same care as any other place a
-   secret briefly touches a command line.
+2. **Bootstrap the three roles**: choose strong passwords, then set them on the
+   **gateway** service as `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD`,
+   alongside `DATABASE_SUPERUSER_URL=${{Postgres.DATABASE_URL}}` and
+   `GATEWAY_DB_BOOTSTRAP=true`. No psql, no public proxy, no manual SQL against Postgres
+   at all — on its next boot the gateway bootstraps the roles itself, in-network
+   (`internal/platform/db.Provision` → `Bootstrap`, gated by `BootstrapEnabled`'s
+   allowlist — `[superuser-dsn-on-gateway]`, §1). This has been the real mechanism since
+   M4-21-03/04; the psql-through-the-public-proxy sequence this section used to describe
+   is obsolete, and the public proxy plays no role in it.
 
-   > **Gateway-side role password variables (M4-22-09, in progress).** The same three
-   > passwords chosen above are also stored on the gateway service, which reads them at
-   > boot to re-run `bootstrap.sql` (`[superuser-dsn-on-gateway]`, §1). The gateway now
-   > prefers the unprefixed `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD`
-   > variables (matching `Makefile`/CI), falling back to their deprecated, legacy-prefixed
-   > equivalents (see `cmd/gateway/main.go`'s `resolveRolePassword`) and logging a warning
-   > when it does. Once every Railway environment is confirmed on the new names
-   > (escalations E3/E4), the fallback becomes dead code and should be deleted along with
-   > the deprecated Railway variables.
+   > **Gateway-side role password variable names (M4-22-09).** The gateway prefers the
+   > unprefixed `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD` variables
+   > (matching `Makefile`/CI), falling back to their deprecated, legacy-prefixed
+   > `INVOICE_*_PASSWORD` equivalents (see `cmd/gateway/main.go`'s `resolveRolePassword`)
+   > and logging a warning when it does. `development`'s live `gateway` service still
+   > needs the new names added (M4-22 Escalation E1, carrying the existing values across
+   > — never regenerated) before the fallback stops firing there. Once every Railway
+   > environment is confirmed on the new names (Escalations E1/E3/E4), the fallback
+   > becomes dead code and should be deleted along with the deprecated Railway variables.
 
 3. **Store the app + migrator URLs**, built from the **private** host — never the public
    proxy, per §2:
@@ -447,6 +451,13 @@ real passwords live **only** in Railway.
    `DATABASE_URL=${{Postgres.DATABASE_APP_URL}}` and the gateway's migration step
    sets `DATABASE_MIGRATION_URL=${{Postgres.DATABASE_MIGRATION_URL_SOURCE}}`. **Never** hand
    any service `${{Postgres.DATABASE_URL}}` (superuser — disables RLS).
+
+   > **As of this merge**, `development`'s live Postgres service still exposes these
+   > under the deprecated `INVOICE_APP_DATABASE_URL` / `INVOICE_MIGRATOR_DATABASE_URL`
+   > names (M4-22 Escalation E3, pending) — unlike the passwords, no code fallback exists
+   > for these two names, since nothing in the repo reads them directly
+   > (Railway-reference-only). This runbook shows the target names any fresh
+   > provisioning should use.
 
 4. **Stays always-on:** `development`, Postgres included, is never torn down by CI (§7).
    The teardown workflows act only on ephemeral `pr-<N>` environments and refuse

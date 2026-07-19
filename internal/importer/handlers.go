@@ -88,6 +88,26 @@ func nilIfEmpty(s string) *string {
 	return &s
 }
 
+// maxSampleRows caps the number of data rows previewResponse.SampleRows
+// echoes back to the caller (M4-08-01, task-170 Implementation Plan §B).
+const maxSampleRows = 5
+
+// previewResponse is the POST /v1/imports/preview success body: DecodeFacts
+// merged with Decode's header/rows, capped and reshaped for a preview (no
+// persistence, no BatchResult -- see PreviewHandler's doc comment). Field
+// order = JSON key order = the story's example. Delimiter/Encoding mirror
+// importResponse exactly (nilIfEmpty, JSON null for an xlsx upload).
+// Columns/SampleRows must always render as a JSON array, never null -- see
+// PreviewHandler's nil-slice guard.
+type previewResponse struct {
+	Format     string     `json:"format"`
+	Delimiter  *string    `json:"delimiter"`
+	Encoding   *string    `json:"encoding"`
+	Columns    []string   `json:"columns"`
+	SampleRows [][]string `json:"sample_rows"`
+	RowsTotal  int        `json:"rows_total"`
+}
+
 // detectFormat resolves the uploaded file's format ("csv" | "xlsx") from its
 // filename extension first, falling back to its declared Content-Type when
 // the extension is missing or unrecognized ([mapping-transport] leaves both
@@ -230,6 +250,23 @@ func CreateHandler(imp func(ctx context.Context, entityID string, mapping map[st
 			InvoicesWithViolations: res.InvoicesWithViolations,
 			InvoiceViolations:      res.InvoiceViolations,
 		})
+	}
+}
+
+// PreviewHandler returns POST /v1/imports/preview: a stateless preview over
+// an uploaded file's bytes (no entity_id, no mapping, no persistence --
+// [preview-stateless]/[preview-auth]). STUB (M4-08-01, task-170): this is a
+// not-implemented placeholder so the package compiles and
+// handlers_preview_test.go's PRV-01..PRV-16 specs can run RED against it
+// (every assertion fails on status/body value, not on a compile error). The
+// real identity-first-401 -> upload-cap -> ParseMultipartForm -> FormFile ->
+// detectFormat -> Decode -> previewResponse flow (mirroring CreateHandler,
+// reusing detectFormat/Decode/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
+// writeJSON/writeError -- no new parsing code, no second helper) lands in
+// Stage 3.
+func PreviewHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

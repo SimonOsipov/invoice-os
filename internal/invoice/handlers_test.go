@@ -1637,3 +1637,186 @@ func TestEditHandler_UnknownFieldIgnored200(t *testing.T) {
 			"interfered with decoding the known one", gotIn.VAT, "7.50")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// task-160 / M4-22-01 -- Mode A RED specs for GET /v1/invoices/{id}/history
+// (HistoryHandler), corrected Test Specs table (Stage 1 architecture
+// validation, 2026-07-19). Runs against history_qa_scaffold.go's blanket-501
+// HistoryHandler stub -- every test below fails on the status-code/body
+// assertion it names, not a compile error.
+//
+// Spec-to-test map (corrected Test Specs table, task-160):
+//
+//	#1 TestHistoryHandler_Unauthenticated401
+//	#2 TestHistoryHandler_GenesisOnly
+//	#3 TestHistoryHandler_OmitsInternalColumns
+//	#4 TestHistoryHandler_NotFoundMapsTo404
+//	#5 TestHistoryHandler_MalformedIDIs400 (CORRECTED by Stage 1 GAP 1:
+//	   renamed from "...Is404"; a malformed id is a 400/ErrValidation
+//	   mapping, not 404 -- exercised here via a fake store returning
+//	   ErrValidation, mirroring TestCreateHandler_StoreValidationError400.
+//	   The store's OWN 22P02->ErrValidation mapping is pinned separately, at
+//	   the DB layer, by malformed_id_test.go's new "History" subtest inside
+//	   TestStore_MalformedIDIsValidationError.)
+//
+// #6/#7/#8 (DB-backed, ordering / cross-tenant / unset-GUC) live in
+// cross_tenant_integration_test.go as TestRLS_InvoiceHistory_*, following
+// this file's own precedent (TestRLS_InvoicesStoreChildWritesTenantScoped
+// etc. live there, not here).
+// ---------------------------------------------------------------------------
+
+// historyChangeWire mirrors the GET /v1/invoices/{id}/history response
+// element shape (task-160) -- json tags identical to the (future)
+// production StatusChange type.
+type historyChangeWire struct {
+	FromStatus *string   `json:"from_status"`
+	ToStatus   string    `json:"to_status"`
+	Actor      string    `json:"actor"`
+	ChangedAt  time.Time `json:"changed_at"`
+}
+
+// doInvoiceHistory drives GET /v1/invoices/{id}/history -- cloned from
+// doInvoiceGet's identity-injection/path-value shape. Returns the raw
+// recorder (not a decoded body): unlike every other route in this file,
+// History's SUCCESS body is a bare JSON ARRAY while its ERROR body is the
+// shared {"error":"..."} OBJECT -- two different top-level JSON kinds that
+// cannot share one decode target, so each test decodes for the shape it
+// expects only AFTER checking the status code.
+func doInvoiceHistory(t *testing.T, history func(ctx context.Context, id string) ([]StatusChange, error), id *auth.Identity, invoiceID string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID+"/history", nil)
+	r.SetPathValue("id", invoiceID)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	HistoryHandler(history, nil).ServeHTTP(rec, r)
+	return rec
+}
+
+// decodeInvoiceErrorBody decodes rec's body as the shared {"error":"..."}
+// envelope -- used by the History tests below instead of doInvoiceGet's
+// invoiceBody-returning helpers, since History's success shape is a bare
+// array, not an object.
+func decodeInvoiceErrorBody(t *testing.T, rec *httptest.ResponseRecorder) invoiceBody {
+	t.Helper()
+	var resp invoiceBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode error response %q: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+// TestHistoryHandler_Unauthenticated401 (#1): no identity in the request
+// context must 401 before history ever runs -- same identity-first-401
+// order as every other handler in this file.
+func TestHistoryHandler_Unauthenticated401(t *testing.T) {
+	invoiceID := uuid.NewString()
+	history := func(ctx context.Context, id string) ([]StatusChange, error) {
+		t.Fatal("history must not run without an identity")
+		return nil, nil
+	}
+	rec := doInvoiceHistory(t, history, nil, invoiceID)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp := decodeInvoiceErrorBody(t, rec); resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestHistoryHandler_GenesisOnly (#2): a store returning exactly one
+// genesis StatusChange (from_status null, to_status "draft") must produce
+// 200 with a 1-element JSON array; from_status renders JSON null, to_status
+// "draft" -- AND history must be called with the exact path id.
+func TestHistoryHandler_GenesisOnly(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		if gotID != invoiceID {
+			t.Fatalf("history called with id = %q, want %q", gotID, invoiceID)
+		}
+		return []StatusChange{{FromStatus: nil, ToStatus: StatusDraft, Actor: "user-1", ChangedAt: time.Now()}}, nil
+	}
+	rec := doInvoiceHistory(t, history, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var resp []historyChangeWire
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if len(resp) != 1 {
+		t.Fatalf("body array length = %d, want 1", len(resp))
+	}
+	if resp[0].FromStatus != nil {
+		t.Errorf("resp[0].from_status = %q, want JSON null", *resp[0].FromStatus)
+	}
+	if resp[0].ToStatus != string(StatusDraft) {
+		t.Errorf("resp[0].to_status = %q, want %q", resp[0].ToStatus, StatusDraft)
+	}
+}
+
+// TestHistoryHandler_OmitsInternalColumns (#3, AC #7): the RAW response
+// body for a populated change must contain no tenant_id, invoice_id, or
+// (row) id key -- StatusChange deliberately surfaces only
+// from_status/to_status/actor/changed_at.
+func TestHistoryHandler_OmitsInternalColumns(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	from := StatusDraft
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return []StatusChange{{FromStatus: &from, ToStatus: StatusValidated, Actor: "user-1", ChangedAt: time.Now()}}, nil
+	}
+	rec := doInvoiceHistory(t, history, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.Bytes()
+	for _, forbidden := range []string{`"id":`, `"tenant_id":`, `"invoice_id":`} {
+		if bytes.Contains(raw, []byte(forbidden)) {
+			t.Errorf("body = %s, must NOT contain %s (AC #7)", raw, forbidden)
+		}
+	}
+}
+
+// TestHistoryHandler_NotFoundMapsTo404 (#4): the store returning ErrNotFound
+// must map to 404 with a non-empty error message -- the shape both a
+// genuinely unknown id and a cross-tenant one resolve to (AC #5).
+func TestHistoryHandler_NotFoundMapsTo404(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return nil, ErrNotFound
+	}
+	rec := doInvoiceHistory(t, history, &id, uuid.NewString())
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp := decodeInvoiceErrorBody(t, rec); resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestHistoryHandler_MalformedIDIs400 (#5, CORRECTED by Stage 1 GAP 1): the
+// store returning ErrValidation must map to 400, NOT 404 -- matching
+// Get/Update/Transition's existing 22P02->ErrValidation->400 behaviour.
+// Store.History's OWN 22P02 mapping is pinned separately at the DB layer by
+// malformed_id_test.go's "History" subtest.
+func TestHistoryHandler_MalformedIDIs400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	history := func(ctx context.Context, gotID string) ([]StatusChange, error) {
+		return nil, fmt.Errorf("%w: malformed id", ErrValidation)
+	}
+	rec := doInvoiceHistory(t, history, &id, "not-a-uuid")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp := decodeInvoiceErrorBody(t, rec); resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}

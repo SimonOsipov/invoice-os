@@ -144,3 +144,140 @@ func TestRLS_InvoicesTransitionCrossTenantRefused(t *testing.T) {
 		t.Fatalf("WithinTenantTx (tenant B visibility check): %v", err)
 	}
 }
+
+// TestRLS_InvoiceHistory_ReturnsOrderedTransitions (Test Specs #6, task-160/
+// M4-22-01, Core AC #1/#2/#3): Store.History returns every
+// invoice_status_history row for the caller's own invoice, ordered
+// changed_at ASC, id ASC -- the genesis (NULL->draft) row first, then each
+// subsequent transition in the order it happened. Builds the fixture
+// through the REAL Store.Create/Store.Transition (both already shipped),
+// not a superuser seed, so the genesis row's own actor/timestamp are the
+// real ones a caller would see.
+func TestRLS_InvoiceHistory_ReturnsOrderedTransitions(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-HIST-01 tenant A")
+	entityA := seedEntity(t, super, tenantA, "INV-HIST-01 entity")
+
+	store := NewStore(app)
+	subject := uuid.NewString()
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
+
+	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-01"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(cA, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("Transition(draft->validated): %v", err)
+	}
+
+	got, err := store.History(cA, inv.ID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("History returned %d rows, want 2 (genesis + one transition)", len(got))
+	}
+
+	if got[0].FromStatus != nil {
+		t.Errorf("got[0].FromStatus = %q, want nil (the genesis row has no predecessor)", *got[0].FromStatus)
+	}
+	if got[0].ToStatus != StatusDraft {
+		t.Errorf("got[0].ToStatus = %q, want %q", got[0].ToStatus, StatusDraft)
+	}
+	if got[0].Actor != subject {
+		t.Errorf("got[0].Actor = %q, want %q", got[0].Actor, subject)
+	}
+
+	if got[1].FromStatus == nil || *got[1].FromStatus != StatusDraft {
+		t.Errorf("got[1].FromStatus = %v, want a pointer to %q", got[1].FromStatus, StatusDraft)
+	}
+	if got[1].ToStatus != StatusValidated {
+		t.Errorf("got[1].ToStatus = %q, want %q", got[1].ToStatus, StatusValidated)
+	}
+	if got[1].Actor != subject {
+		t.Errorf("got[1].Actor = %q, want %q", got[1].Actor, subject)
+	}
+
+	if got[1].ChangedAt.Before(got[0].ChangedAt) {
+		t.Errorf("got[1].ChangedAt (%v) is before got[0].ChangedAt (%v), want non-decreasing changed_at ASC order", got[1].ChangedAt, got[0].ChangedAt)
+	}
+}
+
+// TestRLS_InvoiceHistory_CrossTenantReturnsNothing (Test Specs #7 as
+// corrected by Stage 1 GAP 2, AC #5): an id belonging to another tenant
+// must resolve to ErrNotFound, exactly like a genuinely nonexistent id --
+// indistinguishable, zero rows leaked. This is the highest-value spec in
+// the set: Store.History is necessarily a MULTI-row tx.Query (unlike Get's
+// single-row tx.QueryRow), so Query()/Next() never yields pgx.ErrNoRows on
+// an RLS-filtered zero-row result -- a naive implementation that only
+// checks errors.Is(err, pgx.ErrNoRows) would silently return (nil, nil) ->
+// HTTP 200 [] here instead of ErrNotFound. The superuser read-back proves
+// real history rows exist for invoiceA (so this is not vacuously "nothing
+// to leak in the first place").
+func TestRLS_InvoiceHistory_CrossTenantReturnsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-HIST-02 tenant A")
+	tenantB := seedTenant(t, super, "INV-HIST-02 tenant B")
+	entityA := seedEntity(t, super, tenantA, "INV-HIST-02 A entity")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	invA, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-02-A"})
+	if err != nil {
+		t.Fatalf("Create (as tenant A): %v", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invA.ID); n == 0 {
+		t.Fatal("setup: no invoice_status_history rows exist for tenant A's invoice -- the cross-tenant refusal below would be vacuous")
+	}
+
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	got, err := store.History(cB, invA.ID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("History(tenant A's invoice) as tenant B err = %v, want ErrNotFound (not a 200 empty array)", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("History(tenant A's invoice) as tenant B returned %d rows, want 0", len(got))
+	}
+}
+
+// TestRLS_InvoiceHistory_UnsetGUCFailsClosed (Test Specs #8, defense in
+// depth): Store.History wraps db.WithinRequestTenantTx like every other
+// Store method (store.go's package doc), which resolves app.current_tenant
+// from the caller's Identity in ctx and returns db.ErrNoTenant -- issuing
+// no SQL at all -- when no identity is present. Proven non-vacuous the same
+// way as TestRLS_InvoiceHistory_CrossTenantReturnsNothing above: a
+// superuser read-back confirms real history rows exist for the invoice
+// before the no-identity call, so "zero rows returned" is a genuine
+// fail-closed refusal, never an unscoped all-tenants query.
+func TestRLS_InvoiceHistory_UnsetGUCFailsClosed(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INV-HIST-03 tenant A")
+	entityA := seedEntity(t, super, tenantA, "INV-HIST-03 entity")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	inv, err := store.Create(cA, CreateInput{EntityID: entityA, InvoiceNumber: "INV-HIST-03"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID); n == 0 {
+		t.Fatal("setup: no invoice_status_history rows exist for the invoice -- the fail-closed assertion below would be vacuous")
+	}
+
+	got, err := store.History(ctx, inv.ID) // bare ctx: no identity, so app.current_tenant is never set
+	if !errors.Is(err, db.ErrNoTenant) {
+		t.Fatalf("History(no identity in context) err = %v, want db.ErrNoTenant (fail-closed, never an unscoped all-tenants query)", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("History(no identity in context) returned %d rows, want 0", len(got))
+	}
+}

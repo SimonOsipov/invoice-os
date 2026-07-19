@@ -3,7 +3,8 @@ name: Dev Env (deploy full fleet + verify)
 # Deploy the whole fleet to one Railway environment, then verify it.
 # A ready PR → its own ephemeral env, which THIS workflow forks from
 # `development` itself (M4-23-03) — not Railway's PR Environments feature, which
-# is OFF and stays OFF. workflow_dispatch → `development` itself, plus reset-seed.
+# is OFF and stays OFF. workflow_dispatch → `development` itself (deploy +
+# health-gate + fleet-gate only — M4-22-07 dropped reset-seed and E2E here).
 #
 # Auth: PR runs use RAILWAY_API_TOKEN (account-scoped); workflow_dispatch uses
 # RAILWAY_API_DEV_TOKEN (project token, `Project-Access-Token` header). An
@@ -60,9 +61,9 @@ on:
 # deploy of that SAME PR. A workflow_dispatch run has no PR number and falls
 # back to `github.ref` — the SAME value on every dispatch run — so dispatch
 # runs against the persistent `development` environment still serialize
-# against each other, which matters MORE now: that is the only path that
-# still runs the reset-seed job (M4-21-06), and two concurrent resets would
-# corrupt each other's fixtures.
+# against each other: two concurrent dispatch runs would both `railway up`
+# the same services into the same shared `development` environment, a
+# deploy-corruption race that has nothing to do with DB seeding.
 concurrency:
   group: dev-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
@@ -570,69 +571,6 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
-  # 5. Reset + seed the dev DB (data-only) as the Postgres SUPERUSER, after the
-  #    schema is migrated (health-gate) and before any assertion — setup owns
-  #    correctness, so every run starts from the known fixture set regardless
-  #    of prior state.
-  #
-  #    CONDITIONAL ON workflow_dispatch ONLY (M4-21-06, re-scoped per QA F2):
-  #    a PR environment's database is born EMPTY (F8) and the gateway seeds
-  #    it at boot (M4-21-04) — running this here too would be redundant, not
-  #    wrong, but `development` is DIFFERENT: it is PERSISTENT (Decision
-  #    [dev-env-status]) and `db/seed.dev.sql` is upsert-only (`ON CONFLICT
-  #    DO UPDATE`/`DO NOTHING` — it only ever ADDS rows, never clears them),
-  #    so without this step `development` would accumulate rows without bound
-  #    across every dispatch-triggered E2E run: e2e/api/import.spec.ts:110,123
-  #    imports 500 invoices / 1500 rows per run; e2e/demo/day30.spec.ts:149-168
-  #    onboards a permanent business_entities row per run. `db/reset.dev.sql`
-  #    (the repo's only TRUNCATE, line 18: `TRUNCATE tenants CASCADE`) is kept
-  #    for exactly this reason — do NOT delete it.
-  reset-seed:
-    name: Reset + seed dev DB (data-only, superuser; development only)
-    needs: health-gate
-    if: always() && needs.health-gate.result == 'success' && github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Discover the development Postgres superuser DSN (M4-21-10; never a job output — masked here)
-        env:
-          RAILWAY_QUERY_TOKEN: ${{ secrets.RAILWAY_API_DEV_TOKEN }}
-        run: |
-          set -euo pipefail
-          query_body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" --arg s "$RAILWAY_SVC_POSTGRES_ID" \
-            '{query: "query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}", variables: {p: $p, e: $e, s: $s}}')
-          if ! resp=$(curl -fsS --connect-timeout 5 --max-time 15 \
-                --request POST \
-                --url https://backboard.railway.com/graphql/v2 \
-                --header "Project-Access-Token: $RAILWAY_QUERY_TOKEN" \
-                --header "Content-Type: application/json" \
-                --data "$query_body"); then
-            echo "::error::Railway GraphQL request failed discovering the development Postgres superuser DSN"
-            exit 1
-          fi
-          if echo "$resp" | jq -e '.errors' >/dev/null 2>&1; then
-            echo "::error::Railway GraphQL error discovering the Postgres superuser DSN: $(echo "$resp" | jq -c '.errors')"
-            exit 1
-          fi
-          dsn=$(echo "$resp" | jq -r '.data.variables.DATABASE_PUBLIC_URL // empty')
-          if [ -z "$dsn" ]; then
-            echo "::error::DATABASE_PUBLIC_URL not found on the Postgres service (id $RAILWAY_SVC_POSTGRES_ID) in the development environment"
-            exit 1
-          fi
-          echo "::add-mask::$dsn"
-          echo "DSN=$dsn" >> "$GITHUB_ENV"
-      - name: TRUNCATE + re-seed tenant fixtures
-        run: |
-          if [ -z "${DSN:-}" ]; then
-            echo "::error::DSN was not populated by the discovery step above"
-            exit 1
-          fi
-          echo "Resetting dev tenant fixtures (data-only, schema untouched) ..."
-          psql "$DSN" -v ON_ERROR_STOP=1 -f db/reset.dev.sql
-          psql "$DSN" -v ON_ERROR_STOP=1 -f db/seed.dev.sql
-          echo "Seeded tenants:"
-          psql "$DSN" -v ON_ERROR_STOP=1 -c "select id, name from tenants order by name;"
-
   # 6. Post-deploy verification (a): the fleet /healthz gate. Poll the
   #    gateway's fleet-health roll-up until all 8 backends are green (they may
   #    cold-start after `up`); fail the run naming the culprit if any stays
@@ -668,17 +606,17 @@ jobs:
   # 7. Post-deploy verification (b): smoke (landing + ops-console render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation), and demo (Day-30 wedge journey) via Playwright,
-  #    once the fleet is green, the SPAs are deployed, and the DB is seeded
-  #    (workflow_dispatch) or self-seeded at gateway boot (PR environments —
-  #    reset-seed is SKIPPED there, not waited on: M4-21-06).
+  #    once the fleet is green and the SPAs are deployed. PR environments only
+  #    (M4-22-07: gated off workflow_dispatch, which no longer runs E2E) — the
+  #    DB is self-seeded at gateway boot (M4-21-04), never separately reset.
   e2e:
     name: E2E (smoke + api + topology + demo)
-    needs: [fleet-gate, deploy-spas, reset-seed, prepare-env]
+    needs: [fleet-gate, deploy-spas, prepare-env]
     if: >-
       always() &&
       needs.fleet-gate.result == 'success' &&
       needs.deploy-spas.result == 'success' &&
-      ( needs.reset-seed.result == 'success' || needs.reset-seed.result == 'skipped' )
+      github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}

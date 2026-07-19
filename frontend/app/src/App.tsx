@@ -3,10 +3,23 @@ import { FILE_DATA, INHOUSE_IDX, PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
 import { validate } from './lib/validation'
-import { groupInvoices, initMapping } from './lib/mapping'
+// groupInvoices is NOT imported here any more — backToEdit/continueMapping stopped
+// calling it. It still lives in lib/mapping.ts and CreateReview.tsx still calls it;
+// M4-08-06 owns removing both.
+import { initMapping, initMappingFromHeaders, toImportMapping } from './lib/mapping'
+import { canReadColumns, canStartImport } from './lib/importFlow'
+import {
+  createImport,
+  makeImportAuth,
+  previewImport,
+  type ImportPreview,
+  type ImportReport,
+  type UploadPhase,
+} from './lib/importApi'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -73,6 +86,16 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [valIdx, setValIdx] = useState(0)
   const [parseIdx, setParseIdx] = useState(0)
+  // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id
+  // chosen by the user — never derived from `active`, which comes from buildClients()
+  // and carries no server id at all, so guessing from it would file invoices under the
+  // wrong supplier TIN ([entity-picker]).
+  const [entityId, setEntityId] = useState<string | null>(null)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<ImportPreview | null>(null)
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
+  const [importError, setImportError] = useState<ApiError | null>(null)
+  const [report, setReport] = useState<ImportReport | null>(null)
 
   const valTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const valDone = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -89,6 +112,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   useEffect(() => clearVal, [])
 
   const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut), [session, onSignOut])
+  // Same (session, onSignOut) pair, one construction site — the multipart XHR transport
+  // cannot drift from the fetch path on auth or the 401 sign-out (importApi.ts D3).
+  const importAuth = useMemo(() => makeImportAuth(session, onSignOut), [session, onSignOut])
 
   const active = clients[activeIdx]
 
@@ -123,6 +149,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setUploadFile(null)
     setMapping(null)
     setSwitcherOpen(false)
+    resetImport()
+  }
+
+  // Every piece of import state is per-run: a second import must not inherit the first
+  // one's preview, progress, error or report. `entityId` is deliberately included —
+  // re-picking the entity is one click, and silently carrying the previous choice into
+  // a fresh run is the [entity-picker] hazard in a slower form.
+  function resetImport() {
+    setEntityId(null)
+    setImportFile(null)
+    setPreview(null)
+    setUploadPhase({ kind: 'idle' })
+    setImportError(null)
+    setReport(null)
   }
 
   function closeCreate() {
@@ -170,15 +210,69 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setValidation(validate(nd))
   }
 
-  // Leaving the results screen lands back on whichever step built the draft:
-  // the review table when the file resolved to many invoices, else the form.
+  // The results screen is reachable only from the single-document path now (the
+  // multi-invoice path ends at the server's report, not at a locally-built draft), so
+  // leaving it always lands back on the form. The old groupInvoices(...) > 1 -> 'review'
+  // branch was the browser-side grouping verdict this story removes.
   function backToEdit() {
     clearVal()
-    setCreateStep(groupInvoices(uploadFile, mapping).length > 1 ? 'review' : 'form')
+    setCreateStep('form')
   }
 
   function selectFile(id: string) {
     setUploadFile(id)
+  }
+
+  function selectEntity(id: string | null) {
+    setEntityId(id)
+    setImportError(null)
+  }
+
+  // Stores whatever the input yielded — the extension rule lives in canReadColumns
+  // alone, so there is exactly one gate that can be right or wrong, not two that can
+  // disagree. A rejected file still lands here and the Import panel explains why.
+  // Choosing a different file invalidates any preview already read from the old one.
+  function selectImportFile(f: File | null) {
+    setImportFile(f)
+    setPreview(null)
+    setImportError(null)
+  }
+
+  function readColumns() {
+    const base = gatewayBase()
+    // base == null is the no-gateway build: zero network, and the button is disabled
+    // too — this is the second of the two guards, not the only one.
+    if (base == null || !importFile || !canReadColumns(entityId, importFile)) return
+    setImportError(null)
+    previewImport(importAuth, base, importFile).then(
+      (res) => {
+        setPreview(res)
+        setMapping(initMappingFromHeaders(res.columns))
+        setCreateStep('mapping')
+      },
+      (err: unknown) => setImportError(toApiError(err)),
+    )
+  }
+
+  function startImport() {
+    const base = gatewayBase()
+    if (base == null || !importFile || !entityId || !mapping || !canStartImport(preview, mapping)) return
+    setImportError(null)
+    setReport(null)
+    // Seed 'sending' with an unknown total: uploadPercent maps total 0 to null, so the
+    // UI opens on the indeterminate spinner and only flips to a determinate bar if the
+    // transport actually reports a computable length. Zero progress events is legal
+    // (importApi IMPAPI-08), so nothing here may assume a determinate frame ever lands.
+    setUploadPhase({ kind: 'sending', loaded: 0, total: 0 })
+    createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase).then(
+      (res) => {
+        setReport(res)
+        setCreateStep('report')
+      },
+      // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
+      // report step that has no report to show.
+      (err: unknown) => setImportError(toApiError(err)),
+    )
   }
 
   function parseFile() {
@@ -261,7 +355,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   function continueMapping() {
     if (!mapping || !mapping.invoice_number) return
-    setCreateStep(groupInvoices(uploadFile, mapping).length > 1 ? 'review' : 'form')
+    startImport()
   }
 
   function backToImport() {
@@ -363,6 +457,12 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     connectorMappings,
     valIdx,
     parseIdx,
+    entityId,
+    importFile,
+    preview,
+    uploadPhase,
+    importError,
+    report,
     nav,
     setFilter,
     toggleSwitcher,
@@ -383,6 +483,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clickCol,
     unmap,
     continueMapping,
+    selectEntity,
+    selectImportFile,
+    readColumns,
+    startImport,
     backToImport,
     backToMapping,
     createDrafts,

@@ -4,6 +4,8 @@
 // Type-only import: `portfolio.ts` imports `StatusStyle` from this file, so a runtime
 // import here would form a cycle. `AuthedFetch` is only ever used as a type below.
 import type { AuthedFetch } from './lib/portfolio'
+import type { ApiError } from '@invoice-os/api-client'
+import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
@@ -266,6 +268,18 @@ export type PlatformCtx = {
   valIdx: number
   parseIdx: number
 
+  // --- Multi-invoice import path (M4-08-04) ---------------------------------
+  // These live on ctx rather than in CreateUpload's local state because the two
+  // halves of the flow are two components: the entity + file are chosen in
+  // CreateUpload, which UNMOUNTS when createStep leaves 'upload', while
+  // createImport fires from CreateMapping. Local state would lose both in between.
+  entityId: string | null
+  importFile: File | null
+  preview: ImportPreview | null
+  uploadPhase: UploadPhase
+  importError: ApiError | null
+  report: ImportReport | null
+
   nav: (id: NavId) => void
   setFilter: (f: string) => void
   toggleSwitcher: () => void
@@ -286,6 +300,10 @@ export type PlatformCtx = {
   clickCol: (header: string) => void
   unmap: (header: string) => void
   continueMapping: () => void
+  selectEntity: (id: string | null) => void
+  selectImportFile: (f: File | null) => void
+  readColumns: () => void
+  startImport: () => void
   backToImport: () => void
   backToMapping: () => void
   createDrafts: () => void

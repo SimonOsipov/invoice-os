@@ -11,6 +11,7 @@ import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
 import { CreateReview } from './CreateReview'
 import { CreateResults } from './CreateResults'
+import { CreateReport } from './CreateReport'
 import { ScanlineSteps } from './ScanlineSteps'
 import type { PlatformCtx } from '../types'
 
@@ -81,6 +82,8 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {createStep === 'results' && <CreateResults ctx={ctx} />}
+
+      {createStep === 'report' && <CreateReport ctx={ctx} />}
     </div>
   )
 }

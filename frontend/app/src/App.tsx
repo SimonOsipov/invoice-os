@@ -12,6 +12,7 @@ import { validate } from './lib/validation'
 // M4-08-06 owns removing both.
 import { initMapping, initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
+import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
   createImport,
   makeImportAuth,
@@ -74,7 +75,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [mapping, setMapping] = useState<Mapping | null>(null)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // ONE atom for what the detail view renders, never two loose fields
+  // ([detail-target-exclusive], debate F6). Written ONLY through the three total
+  // constructors below, so every write sets both members and "forgot to clear the
+  // counterpart" is a type error rather than a discipline. Two independent fields would
+  // mean one click-through hijacks the detail view for the rest of the session: every
+  // later InvoicesList click would set selectedId while a stale importedInvoiceId kept
+  // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
+  // this state with an inline object literal — go through a constructor.
+  const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
   const [filter, setFilter] = useState('all')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [sandbox, setSandbox] = useState(false)
@@ -141,7 +150,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   function switchClient(i: number) {
     setActiveIdx(i)
     setView('dashboard')
-    setSelectedId(null)
+    setDetailSel(clearSelection())
     setFilter('all')
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients[i]))
@@ -406,12 +415,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     const inv = { number: d.number, buyer: d.buyer, buyerTin: d.buyerTin, buyerAddress: d.buyerAddress, date: d.date, items: d.items, status: 'Approved' as const, wht: d.wht, docType: d.docType || 'B2B' }
     setClients((cs) => cs.map((c, idx) => (idx === activeIdx ? { ...c, invoices: [inv, ...c.invoices] } : c)))
     setView('detail')
-    setSelectedId(inv.number)
+    setDetailSel(selectMock(inv.number))
   }
 
   function selectInvoice(number: string) {
     setView('detail')
-    setSelectedId(number)
+    setDetailSel(selectMock(number))
+  }
+
+  // Click-through from a rule-violation row in the import report (Core AC4). `id` is a
+  // real invoice UUID (invoice_violations[].invoice_id), NOT a mock invoice number — so
+  // InvoiceDetail renders its placeholder rather than resolving it against active.invoices.
+  function openImportedInvoice(id: string) {
+    setView('detail')
+    setDetailSel(selectImported(id))
   }
 
   function toggleSandbox() {
@@ -440,7 +457,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   function transmit() {
     const idx = activeIdx
-    const sel = selectedId
+    const sel = detailSel.selectedId
     setClients((cs) =>
       cs.map((c, i) => (i === idx ? { ...c, invoices: c.invoices.map((inv) => (inv.number === sel ? { ...inv, status: 'Transmitted' as const } : inv)) } : c)),
     )
@@ -468,7 +485,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     mapping,
     armedField,
     dragField,
-    selectedId,
+    selectedId: detailSel.selectedId,
     filter,
     switcherOpen,
     sandbox,
@@ -484,6 +501,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     uploadPhase,
     importError,
     report,
+    importedInvoiceId: detailSel.importedInvoiceId,
     nav,
     setFilter,
     toggleSwitcher,
@@ -514,6 +532,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     skipUpload,
     approve,
     selectInvoice,
+    openImportedInvoice,
     toggleSandbox,
     setSettingsTab,
     toggleConnector,

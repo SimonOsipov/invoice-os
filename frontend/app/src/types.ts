@@ -279,6 +279,12 @@ export type PlatformCtx = {
   uploadPhase: UploadPhase
   importError: ApiError | null
   report: ImportReport | null
+  // Set by openImportedInvoice (M4-08-05) when the user clicks a rule-violation row in
+  // the report. Mutually exclusive with `selectedId` by construction — both are members
+  // of one DetailSelection atom in App.tsx (lib/importReport.ts), so neither can be left
+  // stale when the other is written. Non-null makes InvoiceDetail render its honest
+  // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
+  importedInvoiceId: string | null
 
   nav: (id: NavId) => void
   setFilter: (f: string) => void
@@ -310,6 +316,7 @@ export type PlatformCtx = {
   skipUpload: () => void
   approve: () => void
   selectInvoice: (number: string) => void
+  openImportedInvoice: (id: string) => void
   toggleSandbox: () => void
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void

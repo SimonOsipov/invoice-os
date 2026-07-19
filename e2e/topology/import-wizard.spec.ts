@@ -18,9 +18,18 @@
 // level oracle for AC1/AC2's literal wall-clock budget). Same firm-persona sign-in
 // idiom as topology.spec.ts (same file, same verified-tenant discriminator), extended
 // with an entity created via e2e/api/client.ts's createEntity + freshTin() BEFORE
-// page.goto -- db/seed.dev.sql seeds ZERO business_entities, and CreateUpload loads
-// entities on mount, so an entity created after load would not appear without a
-// reload.
+// page.goto -- CreateUpload loads entities on mount, so an entity created after load
+// would not appear without a reload. Each test still needs its OWN entity rather than
+// reusing a seeded one: no-duplicate-invoice-number is scoped per entity, so a shared
+// target would make a retry (or the second test) collide on fixed invoice numbers.
+//
+// NOTE (merged from main, M4-22-03): db/seed.dev.sql now seeds 27 curated
+// business_entities into THIS persona's tenant (1111...), where it previously seeded
+// zero. Harmless here and deliberately not compensated for: selectOption matches our
+// own uniquely-named entity by label, freshTin()'s pid-seeded range cannot collide
+// with the curated 10012345-0001..10278901-0027 literals, and listEntities requests
+// ?limit=200 (frontend/app/src/lib/portfolio.ts:73) against 27+1 rows, so our entity
+// cannot fall off the picker's page.
 //
 // URLs are gateway-prefixed: the SPA calls POST {base}/api/invoice/v1/imports and
 // .../imports/preview, NOT /v1/imports -- every waitForResponse predicate below

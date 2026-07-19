@@ -310,6 +310,12 @@ jobs:
         # + ToggleRule audit) and the HTTP handlers over the migrated rules tables. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/validation/...
+      - name: Dashboard /v1/rollup suite (RLS-scoped rollup + top-violations reads as invoice_app) + per-test visibility & skip gate
+        # M4-07: proves the dashboard store's per-entity rollup and per-rule
+        # top-violations queries resolve to exactly the caller's tenant under RLS
+        # (DASH-14 / DASH-27 cross-tenant refusal). Needs DATABASE_URL (app) +
+        # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/dashboard/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

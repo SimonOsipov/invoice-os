@@ -368,3 +368,79 @@ export interface ValidateInvoiceResult extends Invoice {
 export function validateInvoice(token: string, id: string): Promise<ValidateInvoiceResult> {
   return apiFetch<ValidateInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
 }
+
+// CreateInvoiceInput mirrors internal/invoice/handlers.go's createRequest wire body
+// (M4-07-05, task-159): entity_id/invoice_number are the only required fields
+// (handlers.go's pre-tx-guard non-blank check, handlers.go:118-124) -- everything
+// else is optional, so omitting all of it is exactly "missing required MBS content"
+// (the dashboard.spec.ts broken-draft fixture).
+export interface CreateInvoiceInput {
+  entity_id: string
+  invoice_number: string
+  issue_date?: string
+  supplier_tin?: string
+  supplier_name?: string
+  buyer_tin?: string
+  buyer_name?: string
+  currency?: string
+  subtotal?: string
+  vat?: string
+  total?: string
+  line_items?: Array<{
+    description?: string
+    quantity?: string
+    unit_price?: string
+    line_total?: string
+    line_tax?: string
+  }>
+}
+
+// createInvoice(): POST /v1/invoices. Reuses the Invoice interface above -- same
+// domain type on read and on create.
+export function createInvoice(token: string, body: CreateInvoiceInput): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices`, { method: 'POST', body, token })
+}
+
+// ---- Dashboard rollup wire types, mirrored EXACTLY from internal/dashboard/
+// dashboard.go's Counts/Bucket/Client/RuleCount/Rollup (M4-07-05, task-159).
+// dashboard.go's Client embeds Bucket ANONYMOUSLY so encoding/json promotes
+// counts/needs_attention to the row's top level -- DashboardClient below
+// models that promotion directly (extends DashboardBucket) rather than
+// nesting a "bucket" key. No `omitempty` on any Counts field on the Go side,
+// so every key is always present, zeros included. ----
+
+export interface Counts {
+  draft: number
+  validated: number
+  queued: number
+  submitted: number
+  accepted: number
+  rejected: number
+  failed: number
+}
+
+export interface DashboardBucket {
+  counts: Counts
+  needs_attention: number
+}
+
+export interface DashboardClient extends DashboardBucket {
+  entity_id: string
+  entity_name: string
+}
+
+export interface RuleCount {
+  rule_key: string
+  invoices: number
+}
+
+export interface Rollup {
+  totals: DashboardBucket
+  clients: DashboardClient[]
+  top_violations: RuleCount[]
+}
+
+// rollup(): GET /v1/rollup -- the per-tenant dashboard payload.
+export function rollup(token: string): Promise<Rollup> {
+  return apiFetch<Rollup>(`${apiBase()}/api/dashboard/v1/rollup`, { token })
+}

@@ -112,9 +112,9 @@ export function donutSegments(counts: Counts): DonutSeg[] {
 
 export function deslug(ruleKey: string): string {
   return ruleKey
-    .replace(/[-_]/g, ' ')
-    .split(' ')
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ')
 }
 

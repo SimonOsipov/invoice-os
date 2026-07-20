@@ -269,8 +269,8 @@ describe('deslug — QA adversarial', () => {
     // rather than intended behavior — the split(' ') step produces an empty '' word
     // between the two separators, and '' is passed through unchanged by the
     // `word ? ... : word` guard, so it survives the join as a second space.
-    expect(deslug('a--b')).toBe('A  B')
-    expect(deslug('a__b')).toBe('A  B')
+    expect(deslug('a--b')).toBe('A B')
+    expect(deslug('a__b')).toBe('A B')
   })
 
   it('QA-D2: mixed hyphen/underscore in the same key deslugs to single-spaced Title Case, same as either alone', () => {
@@ -280,7 +280,7 @@ describe('deslug — QA adversarial', () => {
   it('QA-D3: a leading or trailing separator is NOT trimmed — current behavior leaves a leading/trailing space', () => {
     // FLAGGED: same root cause as QA-D1 (a leading/trailing '' word survives the join),
     // and equally a visible cosmetic surprise if rendered directly in a UI label.
-    expect(deslug('-abc-')).toBe(' Abc ')
+    expect(deslug('-abc-')).toBe('Abc')
   })
 
   it('QA-D4: a numeric segment is left untouched (no crash on a digit-only "word")', () => {

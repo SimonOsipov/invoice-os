@@ -1,0 +1,13 @@
+# testdata/invoices/ holds the M4-11 synthetic invoice fixture set, emitted
+# byte-for-byte by tools/fixturegen and byte-compared against regeneration
+# by tools/fixturegen's TestCommittedFixtures_MatchRegeneration guard (see
+# tools/fixturegen/committed_test.go). One fixture (edge_bad_encoding.csv)
+# is intentionally UTF-16LE and several use bare \n line endings to
+# exercise parser edge cases -- any git-side EOL or encoding normalization
+# on commit/checkout would silently corrupt those bytes and make CI's
+# checked-out copy diverge from what the guard regenerates in-memory,
+# failing the guard for a reason that has nothing to do with the code
+# under test. -text opts the whole directory out of git's text handling
+# (no EOL conversion, no encoding reinterpretation) so every checkout,
+# on every OS, gets the exact bytes that were committed.
+testdata/invoices/** -text

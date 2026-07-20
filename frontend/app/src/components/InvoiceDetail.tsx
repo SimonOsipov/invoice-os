@@ -372,6 +372,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const handleSaved = () => {
       setStaleSinceEdit(true)
       detail.run()
+      history.run()
     }
 
     // isFixable(inv.status) gates this button on for both draft AND validated (see
@@ -388,6 +389,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
         detail.run()
+        history.run()
       } catch (err) {
         setRevalidateError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {

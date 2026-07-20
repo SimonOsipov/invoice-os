@@ -242,19 +242,19 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('stale-verdict')).toBeVisible()
   await expect(form).not.toContainText('Something went wrong')
 
-  // 4. Remount the detail surface (back to the list, then reopen) -- neither
-  //    handleSaved nor handleRevalidate re-fetch invoice_status_history in
-  //    place (InvoiceDetail.tsx calls detail.run() only, never history.run()),
-  //    so a fresh mount is this suite's own oracle for what the SERVER
-  //    actually recorded, rather than what the currently-mounted panel
-  //    happens to still show.
-  await page.getByRole('button', { name: '← All invoices' }).click()
-  await expect(page.getByTestId('invoices-list')).toBeVisible()
-  await openInvoiceRow(page, invoiceNumber)
-  await expect(page.getByTestId('status-history-row')).toHaveCount(1) // editing a DRAFT invoice never demotes -- nothing to add yet.
+  // 4. handleSaved now refreshes the status-history timeline IN PLACE
+  //    (history.run() alongside detail.run(), InvoiceDetail.tsx) -- no
+  //    navigation is needed to observe what the server recorded. Editing a
+  //    DRAFT invoice never demotes it, so the timeline stays at 1 row.
+  await expect(page.getByTestId('status-history-row')).toHaveCount(1)
 
   // 5. Second Re-validate: now clean -- promotes draft -> validated (a new
   //    history row) and the violations panel flips to the clean-pass message.
+  //    handleRevalidate also refreshes the timeline in place (history.run()),
+  //    so the promotion is asserted on this SAME mounted detail view -- no
+  //    remount required (the earlier list->row remount workaround here was
+  //    both unnecessary once the timeline is live and itself flaky, causing a
+  //    click-timeout on the invoice-number text match).
   await page.getByTestId('revalidate').click()
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(violationsTable).toContainText(`rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)

@@ -264,11 +264,9 @@ describe('entityHealth', () => {
 // corresponding behavior regresses (verified manually during QA, not committed).
 
 describe('deslug — QA adversarial', () => {
-  it('QA-D1: consecutive separators (double hyphen or double underscore) do NOT collapse to a single space — current behavior yields a double space', () => {
-    // FLAGGED: this reads as a cosmetic bug (a visible double space in rendered labels)
-    // rather than intended behavior — the split(' ') step produces an empty '' word
-    // between the two separators, and '' is passed through unchanged by the
-    // `word ? ... : word` guard, so it survives the join as a second space.
+  it('QA-D1: consecutive separators (double hyphen or double underscore) collapse to a single space', () => {
+    // deslug splits on a run of separators (/[-_\s]+/) and drops empty tokens, so a
+    // doubled separator does not leak a second space into the rendered label.
     expect(deslug('a--b')).toBe('A B')
     expect(deslug('a__b')).toBe('A B')
   })
@@ -277,9 +275,8 @@ describe('deslug — QA adversarial', () => {
     expect(deslug('a-b_c')).toBe('A B C')
   })
 
-  it('QA-D3: a leading or trailing separator is NOT trimmed — current behavior leaves a leading/trailing space', () => {
-    // FLAGGED: same root cause as QA-D1 (a leading/trailing '' word survives the join),
-    // and equally a visible cosmetic surprise if rendered directly in a UI label.
+  it('QA-D3: a leading or trailing separator is trimmed away (no edge space)', () => {
+    // the empty leading/trailing tokens produced by the split are dropped by filter(Boolean).
     expect(deslug('-abc-')).toBe('Abc')
   })
 

@@ -1,8 +1,13 @@
 // committed_test.go is M4-11-02's (task-193) regeneration guard, authored
-// RED before the fixture files are committed. It asserts three things about
+// RED before the fixture files are committed. It asserts four things about
 // the committed set under repo-root testdata/invoices/ (reached from this
 // package as ../../testdata/invoices/):
 //
+//  0. TestCommittedDir_ContainsOnlyManifestFiles -- the directory's file set
+//     is exactly manifest(...)'s name set, no more, no less. Added post-hoc
+//     during M4-11-02 QA to close a gap the other three tests share: they
+//     all iterate manifest(...) and look up specific filenames, so a stray
+//     extra committed file is invisible to (and unbounded by) all of them.
 //  1. TestCommittedFixtures_MatchRegeneration -- every committed file is the
 //     verbatim byte output of manifest(defaultSeed, defaultInvoices)'s
 //     corresponding entry. This is the no-hand-edit / no-drift guard: any
@@ -15,9 +20,9 @@
 //  3. TestNoOversizedBlobCommitted -- no committed file exceeds 1 MiB.
 //
 // Until M4-11-02's emit step runs `go run ./tools/fixturegen` and commits
-// its output, testdata/invoices/ does not exist, so all three tests fail on
-// an explicit os.ReadFile/os.Stat error via t.Fatalf naming the missing
-// file -- an assertion-style RED, not a panic or compile error.
+// its output, testdata/invoices/ does not exist, so all three original
+// tests fail on an explicit os.ReadFile/os.Stat error via t.Fatalf naming
+// the missing file -- an assertion-style RED, not a panic or compile error.
 package main
 
 import (
@@ -30,6 +35,51 @@ import (
 // committedDir is the path from this package (tools/fixturegen/) to the
 // repo-root directory the committed fixture set lives under.
 var committedDir = filepath.Join("..", "..", "testdata", "invoices")
+
+// --- 0: TestCommittedDir_ContainsOnlyManifestFiles ---------------------------
+
+// TestCommittedDir_ContainsOnlyManifestFiles closes a gap the other three
+// tests below all share: each of them iterates manifest(...) and looks up
+// one specific committed filename, so a file present in committedDir but
+// NOT listed in manifest(...) is invisible to every one of them --
+// including TestNoOversizedBlobCommitted, whose 1 MiB bound only ever
+// applies to the seven manifest entries. A stray extra file (leftover
+// generator output from a different --seed/--invoices run, a hand-created
+// scratch file, an editor backup) would sit in testdata/invoices/ silently
+// uncompared and unbounded. This test lists committedDir directly and
+// asserts its file set is exactly the manifest's name set, catching that
+// case regardless of the stray file's content or size.
+func TestCommittedDir_ContainsOnlyManifestFiles(t *testing.T) {
+	entries, err := os.ReadDir(committedDir)
+	if err != nil {
+		t.Fatalf("reading committed dir %s: %v", committedDir, err)
+	}
+
+	want := make(map[string]bool)
+	for _, f := range manifest(defaultSeed, defaultInvoices) {
+		want[f.name] = true
+	}
+
+	got := make(map[string]bool)
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Errorf("committed dir %s contains unexpected subdirectory %q, want only the manifest's files", committedDir, e.Name())
+			continue
+		}
+		got[e.Name()] = true
+	}
+
+	for name := range got {
+		if !want[name] {
+			t.Errorf("committed dir %s contains %q, which is not in manifest(defaultSeed, defaultInvoices) -- a stray file here is invisible to TestCommittedFixtures_MatchRegeneration and TestNoOversizedBlobCommitted, both of which only iterate the manifest", committedDir, name)
+		}
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("committed dir %s is missing manifest file %q", committedDir, name)
+		}
+	}
+}
 
 // --- 1: TestCommittedFixtures_MatchRegeneration -----------------------------
 

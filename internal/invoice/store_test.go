@@ -147,6 +147,27 @@ func seedInvoice(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number s
 	return id
 }
 
+// seedInvoiceWithViolations seeds a draft invoice (via seedInvoice) then
+// force-writes BOTH status and violations directly as the superuser --
+// mirrors internal/dashboard/store_test.go's own helper of the same name
+// (M4-09-02, needs_attention drift-guard tests below): no Store write path
+// drives status+violations together outside Store.ApplyValidation/
+// Store.Transition, neither of which this suite wants to depend on for
+// seeding. violationsJSON must be a well-formed jsonb array literal, e.g.
+// `[]` or `[{"rule_key":"x","severity":"error","message":"y"}]` (shape per
+// validator.go's Violation: rule_key, severity, message, path).
+func seedInvoiceWithViolations(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, status, violationsJSON string) string {
+	t.Helper()
+	id := seedInvoice(t, super, tenantID, entityID, number)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = $1, violations = $2::jsonb WHERE id = $3`,
+		status, violationsJSON, id,
+	); err != nil {
+		t.Fatalf("force-seed invoice status/violations: %v", err)
+	}
+	return id
+}
+
 // mustCount runs a `SELECT count(*) ...` query as the superuser (bypasses
 // RLS) and fails the test if the query itself errors.
 func mustCount(t *testing.T, super *pgxpool.Pool, query string, args ...any) int {

@@ -186,13 +186,21 @@ type UpdateInput struct {
 	Total        *string
 }
 
-// ListFilter is the Store.List query ([D8]): no filters, just pagination —
-// Limit/Offset. (Unlike internal/portfolio's ListFilter, there is no
-// Status/Q — List's only job here is a paginated, tenant-scoped header
-// feed, ordered created_at DESC, id DESC.)
+// ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
+// one predicate filter, NeedsAttention (M4-09-02). No entity_id
+// ([entity-id-cut] — the drift invariant is proven tenant-wide instead, not
+// per-entity). NeedsAttention is a plain bool: true applies the verbatim
+// dashboard predicate (below); false/omitted applies no predicate
+// ([needs-attention-bool-true-only] — no "not-needs-attention" branch).
+//
+// RED (M4-09-02, Stage 2.5): this field exists so ListFilter{NeedsAttention:
+// true} compiles, but Store.List does not filter on it yet — see store.go's
+// List doc comment.
 type ListFilter struct {
 	Limit  int
 	Offset int
+
+	NeedsAttention bool
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/

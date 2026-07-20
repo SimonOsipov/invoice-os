@@ -77,26 +77,6 @@ export type ClientCfg = {
   onboarding?: boolean
 }
 
-export type ReadinessMetric = { label: string; pct: string; color: string }
-
-export type KpiCard = {
-  label: string
-  value: string
-  delta: string
-  deltaColor: string
-  stroke: string
-  spark: string
-}
-
-export type ChartScore = {
-  line: string
-  area: string
-  grid: string[]
-  months: string[]
-  now: number
-  deltaLabel: string
-}
-
 export type DonutSeg = {
   label: string
   color: string
@@ -114,33 +94,10 @@ export type FailureRow = {
   bar: string
 }
 
-export type ActivityRow = {
-  who: string
-  action: string
-  target: string
-  time: string
-  dot: string
-  line: string
-}
-
 export type StatusStyle = { bg: string; border: string; text: string; label: string }
 
 export type DashboardData = {
-  score: number
-  ring: { circ: string; offset: string; color: string }
-  readinessNote: string
-  readinessMetrics: ReadinessMetric[]
-  failing: number
-  resolveLabel: string
-  kpis: KpiCard[]
-  chart: ChartScore
-  donut: DonutSeg[]
-  donutMeta: { r: number; total: string }
   failures: FailureRow[]
-  hasFailures: boolean
-  noFailures: boolean
-  activity: ActivityRow[]
-  pill: StatusStyle
 }
 
 // Fully-built client: seed config + generated invoices + precomputed dashboard.

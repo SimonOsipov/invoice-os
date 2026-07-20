@@ -99,6 +99,24 @@ type Invoice struct {
 	RuleSetVersionID *string         `json:"rule_set_version_id"`
 	CreatedAt        time.Time       `json:"created_at"`
 	LineItems        []LineItem      `json:"line_items,omitempty"`
+
+	// RuleSetVersion is the human-facing integer resolved from
+	// RuleSetVersionID (rule_set_versions.version) -- populated by
+	// Store.Get only (a Get-local correlated subselect, M4-09-01), and
+	// inert on the wire (json:"-"): this domain Invoice type is shared by
+	// List, which must NOT gain this key. GetHandler's own getResponse
+	// wrapper (handlers.go) re-surfaces it as a sibling rule_set_version
+	// key, mirroring the M4-22 validateResponse precedent
+	// ([read-shape-getresponse-wrapper]). Nil when RuleSetVersionID is nil
+	// (never validated); every other Store method (Create/List/Update/
+	// Edit/Transition/ApplyValidation) leaves it unset.
+	//
+	// QA MODE-A SCAFFOLD (M4-09-01, task-182): this is a bare field
+	// declaration only -- Store.Get does not populate it yet, and no
+	// caller reads it. It exists so the Mode-A RED tests compile and fail
+	// on ASSERTION (a nil field / an absent wire key), not on a Go compile
+	// error. Stage 3 wires Store.Get's subselect and GetHandler's wrapper.
+	RuleSetVersion *int `json:"-"`
 }
 
 // StatusChange is one invoice_status_history row (task-160/M4-22-01,

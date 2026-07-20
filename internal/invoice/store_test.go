@@ -652,6 +652,72 @@ func TestStoreGet_HydratesLineItemsOrdered(t *testing.T) {
 	}
 }
 
+// TestStoreGet_PopulatesRuleSetVersion (M4-09-01, task-182, Core AC #1/#2):
+// Store.Get must resolve the human-facing rule_set_versions.version integer
+// onto the transient Invoice.RuleSetVersion field -- a real row's
+// rule_set_version_id when stamped, nil when it is NULL (never validated).
+// Stamps rule_set_version_id directly via the superuser pool (any real
+// rule_set_versions row satisfies the FK, mirrors gate_test.go's
+// seedRuleSetVersionID -- this test does not need to run the real gate,
+// only a stamped-vs-unstamped invoices row).
+//
+// RED today (Mode A, task-182): Store.Get does not populate RuleSetVersion
+// at all yet -- both assertions below fail (got.RuleSetVersion stays nil
+// for the stamped case; the nil check for the never-validated case passes
+// vacuously today, but ONLY because nothing populates it, not because the
+// code path was exercised -- the stamped-case assertion is the one that
+// proves the test is RED for the right reason). Stage 3 adds the
+// correlated scalar subselect.
+func TestStoreGet_PopulatesRuleSetVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "M4-09-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "M4-09-01 entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	// Case 1: a stamped rule_set_version_id -> Get must resolve the
+	// rule_set_versions row's own `version` int.
+	stampedID := seedInvoice(t, super, tenantID, entityID, "M4-09-01-A")
+	rsvID := seedRuleSetVersionID(t, super)
+	var wantVersion int
+	if err := super.QueryRow(ctx,
+		`SELECT version FROM rule_set_versions WHERE id = $1`, rsvID,
+	).Scan(&wantVersion); err != nil {
+		t.Fatalf("read rule_set_versions.version: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, stampedID,
+	); err != nil {
+		t.Fatalf("stamp rule_set_version_id: %v", err)
+	}
+
+	got, err := store.Get(c, stampedID)
+	if err != nil {
+		t.Fatalf("Get(stamped): %v", err)
+	}
+	if got.RuleSetVersion == nil {
+		t.Fatalf("Get(stamped).RuleSetVersion = nil, want %d (the stamped row's rule_set_versions.version)",
+			wantVersion)
+	}
+	if *got.RuleSetVersion != wantVersion {
+		t.Errorf("Get(stamped).RuleSetVersion = %d, want %d", *got.RuleSetVersion, wantVersion)
+	}
+
+	// Case 2: rule_set_version_id IS NULL (never validated) -> nil, not 0.
+	unstampedID := seedInvoice(t, super, tenantID, entityID, "M4-09-01-B")
+
+	got2, err := store.Get(c, unstampedID)
+	if err != nil {
+		t.Fatalf("Get(never-validated): %v", err)
+	}
+	if got2.RuleSetVersion != nil {
+		t.Errorf("Get(never-validated).RuleSetVersion = %d, want nil (rule_set_version_id is NULL)",
+			*got2.RuleSetVersion)
+	}
+}
+
 // INV-STORE-09: Get on a cross-tenant id resolves to ErrNotFound (AC-6) — no
 // leak.
 func TestStoreGet_CrossTenantNotFound(t *testing.T) {

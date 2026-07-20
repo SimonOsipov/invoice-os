@@ -257,3 +257,111 @@ describe('entityHealth', () => {
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'clear' })
   })
 })
+
+// QA adversarial coverage (Mode B, task-189) — appended post-implementation. These are NOT
+// from the architect's Test Specs table (DASH-T1..T23 above); they target gaps the
+// happy-path table doesn't reach. Every test here is mutation-verified to fail if the
+// corresponding behavior regresses (verified manually during QA, not committed).
+
+describe('deslug — QA adversarial', () => {
+  it('QA-D1: consecutive separators (double hyphen or double underscore) do NOT collapse to a single space — current behavior yields a double space', () => {
+    // FLAGGED: this reads as a cosmetic bug (a visible double space in rendered labels)
+    // rather than intended behavior — the split(' ') step produces an empty '' word
+    // between the two separators, and '' is passed through unchanged by the
+    // `word ? ... : word` guard, so it survives the join as a second space.
+    expect(deslug('a--b')).toBe('A  B')
+    expect(deslug('a__b')).toBe('A  B')
+  })
+
+  it('QA-D2: mixed hyphen/underscore in the same key deslugs to single-spaced Title Case, same as either alone', () => {
+    expect(deslug('a-b_c')).toBe('A B C')
+  })
+
+  it('QA-D3: a leading or trailing separator is NOT trimmed — current behavior leaves a leading/trailing space', () => {
+    // FLAGGED: same root cause as QA-D1 (a leading/trailing '' word survives the join),
+    // and equally a visible cosmetic surprise if rendered directly in a UI label.
+    expect(deslug('-abc-')).toBe(' Abc ')
+  })
+
+  it('QA-D4: a numeric segment is left untouched (no crash on a digit-only "word")', () => {
+    expect(deslug('rule-2-check')).toBe('Rule 2 Check')
+  })
+})
+
+describe('donutSegments — QA adversarial', () => {
+  it('QA-DS1: with 3 nonzero states, each offset equals the negative running sum of PRIOR segments\' own arc lengths (not just per-segment pct); order and 7-segment presence hold', () => {
+    const segs = donutSegments(counts({ draft: 1, accepted: 3, failed: 2 }))
+
+    expect(segs).toHaveLength(7)
+    expect(segs.map((s) => s.label)).toEqual(CANONICAL_LABELS)
+
+    const dashLen = (seg: (typeof segs)[number]) => parseFloat(seg.dash.split(' ')[0])
+    let expectedOffset = 0
+    for (const seg of segs) {
+      expect(parseFloat(seg.offset)).toBeCloseTo(-expectedOffset, 0)
+      expectedOffset += dashLen(seg)
+    }
+  })
+})
+
+describe('topFailures — QA adversarial', () => {
+  it('QA-TF1: two rules tied on invoices both bar at 100% and keep server (input) order', () => {
+    const result = topFailures([
+      { rule_key: 'rule-a', invoices: 2 },
+      { rule_key: 'rule-b', invoices: 2 },
+    ])
+
+    expect(result).toEqual([
+      { label: 'Rule A', ruleKey: 'rule-a', count: 2, bar: '100%' },
+      { label: 'Rule B', ruleKey: 'rule-b', count: 2, bar: '100%' },
+    ])
+  })
+
+  it('QA-TF2: a single-element list bars its only rule at 100%', () => {
+    const result = topFailures([{ rule_key: 'only-rule', invoices: 7 }])
+
+    expect(result).toEqual([{ label: 'Only Rule', ruleKey: 'only-rule', count: 7, bar: '100%' }])
+  })
+})
+
+describe('resolveCtaLabel — QA adversarial', () => {
+  it('QA-RC1: n=2 is the plural boundary just past singular: "Resolve 2 issues →"', () => {
+    expect(resolveCtaLabel(2)).toBe('Resolve 2 issues →')
+  })
+})
+
+describe('entityHealth — QA adversarial', () => {
+  it('QA-EH1: an empty clients array reads no-invoices for any entityId', () => {
+    expect(entityHealth([], 'Z')).toEqual({ kind: 'no-invoices' })
+  })
+
+  it('QA-EH2: a present client with a large needs_attention count round-trips that exact count, uncapped/untruncated', () => {
+    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137 }
+
+    expect(entityHealth([clientBig], 'BIG')).toEqual({ kind: 'needs-attention', count: 137 })
+  })
+})
+
+describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero', () => {
+  const stateKeys: (keyof Counts)[] = [
+    'draft',
+    'validated',
+    'queued',
+    'submitted',
+    'accepted',
+    'rejected',
+    'failed',
+  ]
+
+  for (const key of stateKeys) {
+    it(`QA-IE-${key}: only "${key}" nonzero is not empty (guards a helper checking a subset of the 7 keys)`, () => {
+      const r: Rollup = {
+        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0 },
+        clients: [],
+        top_violations: [],
+      }
+
+      expect(isEmptyRollup(r)).toBe(false)
+    })
+  }
+})

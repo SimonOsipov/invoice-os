@@ -272,8 +272,12 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   // section, proving "Rule violations" is not just echoing the whole report.
   await expect(page.getByText('INV-UI-MIX-CLEAN')).toHaveCount(0)
 
-  // E2E-05: click the violation row and land on the placeholder carrying the REAL
-  // invoice id -- read from the import response body, independent of the DOM.
+  // E2E-05: click the violation row and land on the LIVE detail (M4-09-05) for the
+  // REAL invoice id -- read from the import response body, independent of the DOM.
+  // [click-through-honest-placeholder]'s inert M4-08 placeholder is GONE
+  // (InvoiceDetail.tsx's `target.kind === 'imported'` branch now mounts
+  // LiveInvoiceDetail instead); the early-branch ordering that decision guarded
+  // still applies to whichever component sits behind it.
   const violateEntry = body.invoice_violations.find((iv) => iv.invoice_number === 'INV-UI-MIX-VIOLATE')
   expect(
     violateEntry,
@@ -283,26 +287,34 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   const violateId = violateEntry!.invoice_id
   expect(violateId, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
 
+  // Proves the click targets the REAL invoice id, not a client-side guess -- a
+  // network-level replacement for the retired placeholder's raw-UUID text render:
+  // the live detail's own GET request carries violateId in its path.
+  const detailResp = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateId}`),
+  )
   await page.getByText('INV-UI-MIX-VIOLATE', { exact: true }).click()
+  await detailResp
 
-  await expect(page.getByRole('heading', { name: 'Imported invoice', level: 1 })).toBeVisible()
-  // [click-through-honest-placeholder] -- the ONLY guard on InvoiceDetail's
-  // early-branch ordering (QA proved by mutation that no node spec observes it: all
-  // 263 node specs stayed green when the branch was moved below the invList
-  // fallback). main div.mono is the ONLY <div class="mono"> on this placeholder
-  // (the sidebar's own div.mono is excluded by the `main` scope).
-  await expect(page.locator('main div.mono')).toHaveText(violateId!)
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
+  await expect(page.getByTestId('violations-table')).toContainText('vat-standard-rate')
 
   // E2E-09 (the F6 regression guard, [detail-target-exclusive]): click back through
-  // to Invoices and open a NORMAL invoice -- the real detail view must render, not
-  // the placeholder. Proves importedInvoiceId is cleared at selectInvoice, not just
-  // set once and left to hijack the detail view for the rest of the session.
+  // to Invoices and open a DIFFERENT invoice -- the live detail must refresh to
+  // THAT invoice's own content, not keep rendering INV-UI-MIX-VIOLATE's. Proves
+  // importedInvoiceId tracks the LATEST clicked row rather than hijacking the
+  // detail view for the rest of the session. "Audit trail" was the retired mock
+  // detail's panel title; M4-09-05's live detail names the equivalent panel
+  // "Status history" instead, so its absence here is also proof this is the live
+  // surface, never the old mock fallback.
   await page.getByRole('button', { name: '← All invoices' }).click()
   await page.locator('.pf-list-row').first().click()
 
-  await expect(page.getByRole('heading', { name: 'Imported invoice', level: 1 })).toHaveCount(0)
-  await expect(page.getByText('This invoice was created by the import', { exact: false })).toHaveCount(0)
-  await expect(page.getByText('Audit trail', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).not.toHaveText('INV-UI-MIX-VIOLATE')
+  await expect(page.getByTestId('status-history')).toBeVisible()
+  await expect(page.getByText('Audit trail', { exact: true })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

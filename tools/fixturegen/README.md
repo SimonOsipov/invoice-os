@@ -53,11 +53,14 @@ verification suites" below to run them yourself against a dev DB.
 | `edge_bad_encoding.csv` | Green base (first buyer name forced non-ASCII) re-encoded as UTF-16LE **without a BOM** | Rejected **before any write** (`ErrValidation`) — the tolerant windows-1252 fallback decode mangles the header row past recognition. |
 | `edge_bad_tin.csv` | One invoice's Buyer TIN mutated to 7 digits before the dash (fails `^[0-9]{8}-[0-9]{4}$`) | Imports clean (zero quarantine); validation flags exactly that one invoice with `buyer-tin-format`. |
 | `edge_vat_math_wrong.csv` | One invoice's VAT forced to 0.00 (Total recomputed to `Subtotal`; lines still reconcile) | Imports clean (zero quarantine); validation flags exactly that one invoice with `vat-standard-rate` and **only** that rule across the whole batch. |
-| *(oversized)* | Not committed — `buildOversized` in [`gen.go`](gen.go) synthesizes >11 MiB of green content in memory at test time | Exceeds the importer's 10 MiB upload cap → `CreateHandler` returns 413, before `Service.Import` is ever reached. |
+| *(oversized)* | Not committed — `buildOversized` in [`gen.go`](gen.go) synthesizes >11 MiB of green content, but only as an in-memory byte-length sanity check in the generator's own tests (`gen_test.go`'s `TestGen_OversizedInflator_ExceedsMaxUploadBytes`, no DB/HTTP). The pipeline-level test below inflates the *committed* `green_500.csv` bytes directly instead — it never calls `buildOversized`. | `fixtures_edge_test.go`'s `TestFixtures_OversizedRejected413` repeats `green_500.csv` past the importer's 10 MiB upload cap → `CreateHandler` returns 413, before `Service.Import` is ever reached (no DB required — the cap fires in `ParseMultipartForm`). |
 
-Every edge file is a mutation of exactly one invoice; every other invoice in
-that file stays clean, so quarantine/violation counts pin the mutation, not
-collateral damage.
+`edge_bad_tin.csv`, `edge_vat_math_wrong.csv`, and `edge_in_file_dupes.csv`
+each mutate exactly one invoice — every other invoice in that file stays
+clean, so their quarantine/violation counts pin the mutation, not collateral
+damage. `edge_missing_columns.csv` and `edge_bad_encoding.csv` are whole-file
+structural defects (a dropped column, a broken encoding) rejected before any
+single invoice is evaluated, so no per-invoice count applies to them.
 
 ## Canonical header and field mapping
 

@@ -5,6 +5,11 @@
 // ~L695-732; the KPI grid and the Readiness/VAT/Failing columns have no live source
 // and are removed ([A-d]). Rows are display-only in this subtask — the add/edit
 // modal + its open-state land in M3-08-05 ([A-l]).
+//
+// M4-10-03: a second, independent rollup fetch drives a per-row needs-attention health
+// pill, joined to the entity by id — restoring a client-health column now that a live
+// source (the 06 rollup) exists. The pill is computed ONLY when the rollup fetch is
+// 'ready'; loading/error/idle renders a neutral cell, never a false "no invoices yet".
 
 import { useState } from 'react'
 
@@ -12,6 +17,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { plusGlyph } from '../glyphs'
 import { clientsViewState, entityStatusStyle, listEntities, shouldFetchEntities, type Entity } from '../lib/portfolio'
+import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
 
@@ -29,6 +35,44 @@ function initials(name: string): string {
     .toUpperCase()
 }
 
+// Maps rollup-derived entity health to the shared status-pill vocabulary ({bg,border,
+// text,label}, same shape as portfolio.ts entityStatusStyle), reusing the existing
+// --status-* token families so the health pill sits beside the lifecycle pill without
+// forking the palette. Only called on a non-null (ready) health value.
+function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: string; label: string } {
+  switch (h.kind) {
+    case 'no-invoices':
+      return { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'no invoices yet' }
+    case 'needs-attention':
+      return {
+        bg: 'var(--status-red-bg)',
+        border: 'var(--status-red-border)',
+        text: 'var(--status-red-text)',
+        label: h.count === 1 ? '1 NEEDS ATTENTION' : `${h.count} NEED ATTENTION`,
+      }
+    case 'clear':
+      return { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'ALL CLEAR' }
+  }
+}
+
+// One portfolio-row health cell. `health === null` is the not-ready window (rollup still
+// loading/error/idle) → a neutral em-dash, NOT "no invoices yet" (QA finding #1). Renders
+// a single element either way, so the row grid still sees exactly one Health cell.
+function HealthCell({ health }: { health: EntityHealth | null }) {
+  if (health === null) {
+    return <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>—</span>
+  }
+  const hs = healthPillStyle(health)
+  return (
+    <span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: hs.bg, border: `1px solid ${hs.border}`, borderRadius: 999, padding: '3px 9px' }}>
+        <span style={{ width: 6, height: 6, borderRadius: 99, background: hs.text }} />
+        <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: hs.text }}>{hs.label}</span>
+      </span>
+    </span>
+  )
+}
+
 export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   // The `base ? … : …` narrowing (rather than a `base!` assertion) means the producer
@@ -40,6 +84,19 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
     { immediate: shouldFetchEntities(base) },
   )
   const state = clientsViewState(base, list)
+
+  // Second, independent rollup fetch (Decision [fetch-per-surface]) driving the per-row
+  // health pill — separate from the entity `list`, which alone gates row visibility. A
+  // slow/failed rollup must NOT block the table; it just leaves the neutral health cell.
+  const rollup = useAsync<Rollup>(
+    () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null },
+  )
+  // QA finding #1: read clients ONLY when the rollup fetch is 'ready'. On every other
+  // status asyncReducer clears data to null (async-state.ts:51), so `rollupData` stays
+  // null and each row falls back to the neutral cell — NOT a false "no invoices yet"
+  // (which an unconditional `rollup.data?.clients ?? []` would produce during the fetch).
+  const rollupData = rollup.status === 'ready' ? rollup.data : null
 
   const count = list.data?.length ?? 0
   const orgSegment = ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''
@@ -80,20 +137,24 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
         <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
           <div
             className="pf-list-head"
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
           >
             <span className="label">Company</span>
             <span className="label">Sector</span>
             <span className="label">Status</span>
+            <span className="label">Health</span>
           </div>
           {(list.data ?? []).map((e) => {
             const st = entityStatusStyle(e.status)
+            // Join by id (Entity.id === RollupClient.entity_id). null while the rollup is
+            // not 'ready' → HealthCell renders a neutral cell (QA finding #1).
+            const health = rollupData ? entityHealth(rollupData.clients, e.id) : null
             return (
               <div
                 key={e.id}
                 onClick={() => setModal({ mode: 'edit', entity: e })}
                 className="pf-row pf-list-row"
-                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                   <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 6, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
@@ -111,6 +172,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                     <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
                   </span>
                 </span>
+                <HealthCell health={health} />
               </div>
             )
           })}

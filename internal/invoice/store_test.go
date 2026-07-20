@@ -147,6 +147,27 @@ func seedInvoice(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number s
 	return id
 }
 
+// seedInvoiceWithViolations seeds a draft invoice (via seedInvoice) then
+// force-writes BOTH status and violations directly as the superuser --
+// mirrors internal/dashboard/store_test.go's own helper of the same name
+// (M4-09-02, needs_attention drift-guard tests below): no Store write path
+// drives status+violations together outside Store.ApplyValidation/
+// Store.Transition, neither of which this suite wants to depend on for
+// seeding. violationsJSON must be a well-formed jsonb array literal, e.g.
+// `[]` or `[{"rule_key":"x","severity":"error","message":"y"}]` (shape per
+// validator.go's Violation: rule_key, severity, message, path).
+func seedInvoiceWithViolations(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, status, violationsJSON string) string {
+	t.Helper()
+	id := seedInvoice(t, super, tenantID, entityID, number)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = $1, violations = $2::jsonb WHERE id = $3`,
+		status, violationsJSON, id,
+	); err != nil {
+		t.Fatalf("force-seed invoice status/violations: %v", err)
+	}
+	return id
+}
+
 // mustCount runs a `SELECT count(*) ...` query as the superuser (bypasses
 // RLS) and fails the test if the query itself errors.
 func mustCount(t *testing.T, super *pgxpool.Pool, query string, args ...any) int {
@@ -649,6 +670,69 @@ func TestStoreGet_HydratesLineItemsOrdered(t *testing.T) {
 		if got.LineItems[i].LineNo != want {
 			t.Errorf("Get: LineItems[%d].LineNo = %d, want %d (ordered by line_no)", i, got.LineItems[i].LineNo, want)
 		}
+	}
+}
+
+// TestStoreGet_PopulatesRuleSetVersion (M4-09-01, task-182, Core AC #1/#2):
+// Store.Get must resolve the human-facing rule_set_versions.version integer
+// onto the transient Invoice.RuleSetVersion field -- a real row's
+// rule_set_version_id when stamped, nil when it is NULL (never validated).
+// Stamps rule_set_version_id directly via the superuser pool (any real
+// rule_set_versions row satisfies the FK, mirrors gate_test.go's
+// seedRuleSetVersionID -- this test does not need to run the real gate,
+// only a stamped-vs-unstamped invoices row). wantVersion is read back from
+// the DB itself (not hardcoded), so the assertion pins Get's resolved int
+// to the actual rule_set_versions row's version, whatever seedRuleSetVersionID
+// happened to pick -- see TestStoreGet_RuleSetVersionResolvesByID below for
+// the stronger, multi-row proof that the subselect keys on the FK id and not
+// merely "the only/first row".
+func TestStoreGet_PopulatesRuleSetVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "M4-09-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "M4-09-01 entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	// Case 1: a stamped rule_set_version_id -> Get must resolve the
+	// rule_set_versions row's own `version` int.
+	stampedID := seedInvoice(t, super, tenantID, entityID, "M4-09-01-A")
+	rsvID := seedRuleSetVersionID(t, super)
+	var wantVersion int
+	if err := super.QueryRow(ctx,
+		`SELECT version FROM rule_set_versions WHERE id = $1`, rsvID,
+	).Scan(&wantVersion); err != nil {
+		t.Fatalf("read rule_set_versions.version: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, stampedID,
+	); err != nil {
+		t.Fatalf("stamp rule_set_version_id: %v", err)
+	}
+
+	got, err := store.Get(c, stampedID)
+	if err != nil {
+		t.Fatalf("Get(stamped): %v", err)
+	}
+	if got.RuleSetVersion == nil {
+		t.Fatalf("Get(stamped).RuleSetVersion = nil, want %d (the stamped row's rule_set_versions.version)",
+			wantVersion)
+	}
+	if *got.RuleSetVersion != wantVersion {
+		t.Errorf("Get(stamped).RuleSetVersion = %d, want %d", *got.RuleSetVersion, wantVersion)
+	}
+
+	// Case 2: rule_set_version_id IS NULL (never validated) -> nil, not 0.
+	unstampedID := seedInvoice(t, super, tenantID, entityID, "M4-09-01-B")
+
+	got2, err := store.Get(c, unstampedID)
+	if err != nil {
+		t.Fatalf("Get(never-validated): %v", err)
+	}
+	if got2.RuleSetVersion != nil {
+		t.Errorf("Get(never-validated).RuleSetVersion = %d, want nil (rule_set_version_id is NULL)",
+			*got2.RuleSetVersion)
 	}
 }
 

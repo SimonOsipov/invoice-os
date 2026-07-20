@@ -99,6 +99,18 @@ type Invoice struct {
 	RuleSetVersionID *string         `json:"rule_set_version_id"`
 	CreatedAt        time.Time       `json:"created_at"`
 	LineItems        []LineItem      `json:"line_items,omitempty"`
+
+	// RuleSetVersion is the human-facing integer resolved from
+	// RuleSetVersionID (rule_set_versions.version) -- populated by
+	// Store.Get only (a Get-local correlated subselect, M4-09-01), and
+	// inert on the wire (json:"-"): this domain Invoice type is shared by
+	// List, which must NOT gain this key. GetHandler's own getResponse
+	// wrapper (handlers.go) re-surfaces it as a sibling rule_set_version
+	// key, mirroring the M4-22 validateResponse precedent
+	// ([read-shape-getresponse-wrapper]). Nil when RuleSetVersionID is nil
+	// (never validated); every other Store method (Create/List/Update/
+	// Edit/Transition/ApplyValidation) leaves it unset.
+	RuleSetVersion *int `json:"-"`
 }
 
 // StatusChange is one invoice_status_history row (task-160/M4-22-01,
@@ -174,13 +186,18 @@ type UpdateInput struct {
 	Total        *string
 }
 
-// ListFilter is the Store.List query ([D8]): no filters, just pagination —
-// Limit/Offset. (Unlike internal/portfolio's ListFilter, there is no
-// Status/Q — List's only job here is a paginated, tenant-scoped header
-// feed, ordered created_at DESC, id DESC.)
+// ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
+// one predicate filter, NeedsAttention (M4-09-02). No entity_id
+// ([entity-id-cut] — the drift invariant is proven tenant-wide instead, not
+// per-entity). NeedsAttention is a plain bool: true applies the verbatim
+// dashboard predicate (Store.List's doc comment); false/omitted applies no
+// predicate ([needs-attention-bool-true-only] — no "not-needs-attention"
+// branch).
 type ListFilter struct {
 	Limit  int
 	Offset int
+
+	NeedsAttention bool
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/

@@ -24,6 +24,7 @@
 //	INV-HTTP-06 TestListHandler_LimitLessThan1_400
 //	INV-HTTP-06 TestListHandler_OffsetNegative400
 //	INV-HTTP-06 TestListHandler_NonIntegerLimit400
+//	M4-09-02 AC#5 TestListHandler_NeedsAttentionParse
 //	INV-HTTP-07 TestTransitionHandler_200
 //	INV-HTTP-08 TestTransitionHandler_Illegal409
 //	INV-HTTP-09 TestTransitionHandler_Redundant409
@@ -694,6 +695,73 @@ func TestListHandler_NonIntegerLimit400(t *testing.T) {
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
 	}
+}
+
+// TestListHandler_NeedsAttentionParse (M4-09-02, AC #5,
+// [needs-attention-param-strictness]): ListHandler parses ?needs_attention
+// via strconv.ParseBool -- absent defaults the captured ListFilter.
+// NeedsAttention to false (the zero value, unchanged/unfiltered list);
+// "true" sets it true; an unparseable value ("maybe") 400s BEFORE the store
+// is ever called, mirroring TestListHandler_NonIntegerLimit400's shape
+// exactly, just for a different query param.
+//
+// RED today: ListHandler does not parse needs_attention at all -- the
+// "true" sub-test fails because captured.NeedsAttention stays false (the
+// param is silently ignored, not applied), and the "malformed" sub-test
+// fails because there is no 400 (t.Fatal fires because store.List runs
+// anyway, the guard that would refuse it doesn't exist yet).
+func TestListHandler_NeedsAttentionParse(t *testing.T) {
+	t.Run("absent defaults to false", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.NeedsAttention {
+			t.Errorf("captured ListFilter.NeedsAttention = true, want false when ?needs_attention is absent")
+		}
+	})
+
+	t.Run("true sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?needs_attention=true")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if !captured.NeedsAttention {
+			t.Errorf("captured ListFilter.NeedsAttention = false, want true for ?needs_attention=true")
+		}
+	})
+
+	t.Run("unparseable value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when needs_attention is not a bool")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?needs_attention=maybe")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
 }
 
 // TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues (QA Mode B
@@ -1448,11 +1516,14 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 	}
 }
 
-// TestGetHandler_NoRuleSetVersionKey: GET shares the domain Invoice type
-// with validateResponse but must NOT gain rule_set_version -- that field
-// belongs only to the validate wrapper. Checked on raw bytes for the exact
-// key `"rule_set_version":` so it can't false-match rule_set_version_id.
-func TestGetHandler_NoRuleSetVersionKey(t *testing.T) {
+// TestGetHandler_CarriesRuleSetVersionKey (M4-09-01, task-182): inverted
+// from the former TestGetHandler_NoRuleSetVersionKey -- that guard asserted
+// the literal INVERSE of this story's Core AC #1. GET must now CARRY
+// "rule_set_version": (a getResponse sibling mirroring validateResponse,
+// [read-shape-getresponse-wrapper]); rule_set_version_id stays present,
+// unaffected. Checked on raw bytes for the exact key `"rule_set_version":`
+// so it can't false-match rule_set_version_id.
+func TestGetHandler_CarriesRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	versionID := uuid.NewString()
@@ -1469,14 +1540,42 @@ func TestGetHandler_NoRuleSetVersionKey(t *testing.T) {
 	if !strings.Contains(body, `"rule_set_version_id":`) {
 		t.Errorf("body = %s, want rule_set_version_id to stay present (unaffected by this story)", body)
 	}
-	if strings.Contains(body, `"rule_set_version":`) {
-		t.Errorf("body = %s, GET must NOT gain a rule_set_version key -- that field belongs only to the "+
-			"validate response wrapper, never the domain Invoice struct shared by Get/List", body)
+	if !strings.Contains(body, `"rule_set_version":`) {
+		t.Errorf("body = %s, GET must now CARRY a rule_set_version key -- M4-09-01's read-shape addition mirrors "+
+			"the validate response wrapper ([read-shape-getresponse-wrapper]), Core AC #1", body)
 	}
 }
 
-// TestListHandler_NoRuleSetVersionKey: same pollution check as
-// TestGetHandler_NoRuleSetVersionKey, for List.
+// TestGetHandler_RuleSetVersionMarshalsNull (M4-09-01, task-182, Core AC #2):
+// mirrors TestValidateHandler_NilVersionMarshalsNull's explicit-null check
+// on the GET path -- a never-validated invoice (the stub's transient
+// RuleSetVersion left nil) must render "rule_set_version":null, present and
+// explicit, never omitted and never a false 0.
+func TestGetHandler_RuleSetVersionMarshalsNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft, RuleSetVersion: nil}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"rule_set_version":null`) {
+		t.Errorf("body = %s, want it to contain the literal \"rule_set_version\":null (explicit null, not "+
+			"omitted, not a false 0) -- GetHandler must wrap the result in a getResponse sibling like "+
+			"validateResponse", body)
+	}
+}
+
+// TestListHandler_NoRuleSetVersionKey: List must stay clean of
+// rule_set_version, unlike GET (TestGetHandler_CarriesRuleSetVersionKey,
+// M4-09-01) -- the domain Invoice's new RuleSetVersion field is json:"-",
+// so List (which marshals the domain type directly, no wrapper) never gains
+// the key. Unaffected by M4-09-01; kept GREEN, unchanged.
 func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invID := uuid.NewString()

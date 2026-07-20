@@ -18,6 +18,12 @@ export function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
 
+export function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-NG')
+}
+
 export function amount(items: LineItem[]): number {
   return items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0)
 }

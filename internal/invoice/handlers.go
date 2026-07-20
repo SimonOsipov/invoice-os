@@ -167,6 +167,21 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 	}
 }
 
+// getResponse is the GET /v1/invoices/{id} response body: Invoice embedded
+// (keeping every existing field's name/type/position), plus one additive
+// sibling key, rule_set_version -- mirrors validateResponse below (M4-09-01,
+// [read-shape-getresponse-wrapper]). Not added to the Invoice domain struct
+// itself: Invoice is shared by List, which must NOT gain this key.
+//
+// RuleSetVersion is a *int with NO omitempty: it must render an explicit
+// JSON null when the invoice was never validated (Store.Get's zero-value
+// convention) -- never omitted, never a false 0
+// (TestGetHandler_RuleSetVersionMarshalsNull).
+type getResponse struct {
+	Invoice
+	RuleSetVersion *int `json:"rule_set_version"`
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
@@ -191,16 +206,20 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			return
 		}
 
-		writeJSON(w, http.StatusOK, inv)
+		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion})
 	}
 }
 
 // ListHandler returns GET /v1/invoices. Same identity-first-401 order as
 // Create/GetHandler. Query params (portfolio's exact defaulting/clamping
 // rules, [D8]): limit (default 50, non-integer -> 400, <1 -> 400, >200
-// clamps down to 200), offset (default 0, non-integer or negative -> 400).
-// No status/entity filters ([D8]) -- unlike portfolio's ListHandler, there is
-// no q/status parsing here.
+// clamps down to 200), offset (default 0, non-integer or negative -> 400),
+// needs_attention (M4-09-02, AC #5, [needs-attention-param-strictness]:
+// absent defaults to false/unfiltered; parsed via strconv.ParseBool, so
+// "true"/"false"/"1"/"0"/etc. all work; an unparseable value 400s BEFORE the
+// store is ever called, mirroring the limit/offset 400 contract). No
+// status/entity filters beyond that ([D8], [entity-id-cut]) -- unlike
+// portfolio's ListHandler, there is no q/status parsing here.
 func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -243,7 +262,17 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			return
 		}
 
-		filter := ListFilter{Limit: limit, Offset: offset}
+		needsAttention := false
+		if raw := query.Get("needs_attention"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "needs_attention must be a boolean")
+				return
+			}
+			needsAttention = b
+		}
+
+		filter := ListFilter{Limit: limit, Offset: offset, NeedsAttention: needsAttention}
 
 		items, total, err := list(r.Context(), filter)
 		if err != nil {

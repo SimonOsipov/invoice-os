@@ -242,7 +242,31 @@ func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 			}
 			inv.LineItems = append(inv.LineItems, item)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		// Resolve the human-facing rule_set_versions.version int onto the
+		// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
+		// a correlated scalar SELECT, not a join (a join would make the bare
+		// `id` column ambiguous against invoiceColumns/scanInvoice, shared by
+		// six other writers). Nil when rule_set_version_id IS NULL (never
+		// validated); rule_set_versions is a global table with GRANT SELECT
+		// TO invoice_app, so this is RLS-safe inside the app-pool tx.
+		if inv.RuleSetVersionID != nil {
+			var v int
+			if err := tx.QueryRow(ctx,
+				`SELECT version FROM rule_set_versions WHERE id = $1`, *inv.RuleSetVersionID,
+			).Scan(&v); err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return err
+				}
+			} else {
+				inv.RuleSetVersion = &v
+			}
+		}
+
+		return nil
 	})
 	if err != nil {
 		return Invoice{}, err
@@ -306,20 +330,35 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 
 // List returns the caller's tenant's invoice HEADERS (LineItems left nil, [D7]),
 // ordered created_at DESC, id DESC (deterministic), paginated by f.Limit/f.Offset,
-// plus the total tenant-scoped count for the pagination envelope. No filters
-// ([D8]). RLS (not a manual WHERE tenant_id) scopes both the COUNT and the page.
-// An empty result is []Invoice{}, never a nil slice.
+// plus the total tenant-scoped count for the pagination envelope. RLS (not a
+// manual WHERE tenant_id) scopes both the COUNT and the page. An empty result
+// is []Invoice{}, never a nil slice.
+//
+// f.NeedsAttention (M4-09-02) is the one predicate filter ([D8]): when true, a
+// WHERE clause is applied to BOTH the COUNT and the page query, copied
+// VERBATIM from the dashboard rollup's own count(*) FILTER predicate
+// (internal/dashboard/store.go Rollup, alias dropped -- List has no join) so
+// the two surfaces can never drift apart ([needs-attention-drift-guard],
+// TestStoreList_NeedsAttentionMatchesDashboardRollup). The predicate carries
+// NO bind params of its own, so it does not disturb LIMIT/OFFSET's $1/$2.
+// When false (the zero value / omitted), `where` is empty and both queries
+// are byte-identical to before this filter existed.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM invoices`).Scan(&total); err != nil {
+		where := ""
+		if f.NeedsAttention {
+			where = ` WHERE (status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`
+		}
+
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM invoices`+where).Scan(&total); err != nil {
 			return err
 		}
 
 		rows, err := tx.Query(ctx,
 			`SELECT `+invoiceColumns+`
-			 FROM invoices
+			 FROM invoices`+where+`
 			 ORDER BY created_at DESC, id DESC
 			 LIMIT $1 OFFSET $2`, f.Limit, f.Offset,
 		)

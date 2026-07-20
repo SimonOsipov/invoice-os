@@ -275,5 +275,13 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
-  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  // Chromium unconditionally logs "Failed to load resource … 409" to the
+  // console for step 6's deliberate not-a-draft fetch, regardless of how
+  // gracefully the app handles the response -- unsuppressable from app JS.
+  // The 409 itself is already positively verified above (the inline "invoice
+  // is not a draft" error rendering, history staying at 2 rows, status
+  // staying VALIDATED), so this filters out ONLY that one expected resource-
+  // load message; any other console error still fails the gate below.
+  const unexpectedErrors = errors.filter((e) => !/Failed to load resource.*\b409\b/.test(e))
+  expect(unexpectedErrors, `console errors on the app:\n${unexpectedErrors.join('\n')}`).toEqual([])
 })

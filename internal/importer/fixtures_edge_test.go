@@ -212,6 +212,15 @@ func TestFixtures_BadTinImportsCleanValidateRejects(t *testing.T) {
 	if !containsKey(keys, "buyer-tin-format") {
 		t.Errorf("violationKeys(res) = %v, want it to contain %q", keys, "buyer-tin-format")
 	}
+
+	// QA (M4-11-04 verify): InvoicesWithViolations==1 alone would also pass
+	// if the WRONG invoice carried the violation (e.g. a rule-key regression
+	// that misattributes buyer-tin-format to a clean row's group instead of
+	// buildEdgeBadTin's actual mutated INV-SYN-00001) -- pin the attribution,
+	// not just the count.
+	if len(res.InvoiceViolations) != 1 || res.InvoiceViolations[0].InvoiceNumber != "INV-SYN-00001" {
+		t.Errorf("InvoiceViolations = %+v, want exactly one entry for invoice_number %q", res.InvoiceViolations, "INV-SYN-00001")
+	}
 }
 
 // --- AC#5: edge_vat_math_wrong -----------------------------------------------
@@ -264,6 +273,14 @@ func TestFixtures_VatMathWrongImportsCleanValidateRejects(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	// QA (M4-11-04 verify): the single-rule-key check above is batch-wide and
+	// would also pass if the vat-standard-rate violation landed on the WRONG
+	// invoice -- pin the attribution to buildEdgeVatMathWrong's actual
+	// mutated INV-SYN-00001, not just the rule-key set.
+	if len(res.InvoiceViolations) != 1 || res.InvoiceViolations[0].InvoiceNumber != "INV-SYN-00001" {
+		t.Errorf("InvoiceViolations = %+v, want exactly one entry for invoice_number %q", res.InvoiceViolations, "INV-SYN-00001")
 	}
 }
 

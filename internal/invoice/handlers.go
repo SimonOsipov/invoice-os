@@ -167,6 +167,21 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 	}
 }
 
+// getResponse is the GET /v1/invoices/{id} response body: Invoice embedded
+// (keeping every existing field's name/type/position), plus one additive
+// sibling key, rule_set_version -- mirrors validateResponse below (M4-09-01,
+// [read-shape-getresponse-wrapper]). Not added to the Invoice domain struct
+// itself: Invoice is shared by List, which must NOT gain this key.
+//
+// RuleSetVersion is a *int with NO omitempty: it must render an explicit
+// JSON null when the invoice was never validated (Store.Get's zero-value
+// convention) -- never omitted, never a false 0
+// (TestGetHandler_RuleSetVersionMarshalsNull).
+type getResponse struct {
+	Invoice
+	RuleSetVersion *int `json:"rule_set_version"`
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
@@ -191,7 +206,7 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			return
 		}
 
-		writeJSON(w, http.StatusOK, inv)
+		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion})
 	}
 }
 

@@ -242,7 +242,31 @@ func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 			}
 			inv.LineItems = append(inv.LineItems, item)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		// Resolve the human-facing rule_set_versions.version int onto the
+		// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
+		// a correlated scalar SELECT, not a join (a join would make the bare
+		// `id` column ambiguous against invoiceColumns/scanInvoice, shared by
+		// six other writers). Nil when rule_set_version_id IS NULL (never
+		// validated); rule_set_versions is a global table with GRANT SELECT
+		// TO invoice_app, so this is RLS-safe inside the app-pool tx.
+		if inv.RuleSetVersionID != nil {
+			var v int
+			if err := tx.QueryRow(ctx,
+				`SELECT version FROM rule_set_versions WHERE id = $1`, *inv.RuleSetVersionID,
+			).Scan(&v); err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return err
+				}
+			} else {
+				inv.RuleSetVersion = &v
+			}
+		}
+
+		return nil
 	})
 	if err != nil {
 		return Invoice{}, err

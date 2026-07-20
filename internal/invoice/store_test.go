@@ -659,15 +659,12 @@ func TestStoreGet_HydratesLineItemsOrdered(t *testing.T) {
 // Stamps rule_set_version_id directly via the superuser pool (any real
 // rule_set_versions row satisfies the FK, mirrors gate_test.go's
 // seedRuleSetVersionID -- this test does not need to run the real gate,
-// only a stamped-vs-unstamped invoices row).
-//
-// RED today (Mode A, task-182): Store.Get does not populate RuleSetVersion
-// at all yet -- both assertions below fail (got.RuleSetVersion stays nil
-// for the stamped case; the nil check for the never-validated case passes
-// vacuously today, but ONLY because nothing populates it, not because the
-// code path was exercised -- the stamped-case assertion is the one that
-// proves the test is RED for the right reason). Stage 3 adds the
-// correlated scalar subselect.
+// only a stamped-vs-unstamped invoices row). wantVersion is read back from
+// the DB itself (not hardcoded), so the assertion pins Get's resolved int
+// to the actual rule_set_versions row's version, whatever seedRuleSetVersionID
+// happened to pick -- see TestStoreGet_RuleSetVersionResolvesByID below for
+// the stronger, multi-row proof that the subselect keys on the FK id and not
+// merely "the only/first row".
 func TestStoreGet_PopulatesRuleSetVersion(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

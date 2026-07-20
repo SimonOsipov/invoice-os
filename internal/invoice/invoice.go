@@ -110,12 +110,6 @@ type Invoice struct {
 	// ([read-shape-getresponse-wrapper]). Nil when RuleSetVersionID is nil
 	// (never validated); every other Store method (Create/List/Update/
 	// Edit/Transition/ApplyValidation) leaves it unset.
-	//
-	// QA MODE-A SCAFFOLD (M4-09-01, task-182): this is a bare field
-	// declaration only -- Store.Get does not populate it yet, and no
-	// caller reads it. It exists so the Mode-A RED tests compile and fail
-	// on ASSERTION (a nil field / an absent wire key), not on a Go compile
-	// error. Stage 3 wires Store.Get's subselect and GetHandler's wrapper.
 	RuleSetVersion *int `json:"-"`
 }
 

@@ -1455,11 +1455,6 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 // [read-shape-getresponse-wrapper]); rule_set_version_id stays present,
 // unaffected. Checked on raw bytes for the exact key `"rule_set_version":`
 // so it can't false-match rule_set_version_id.
-//
-// RED today (Mode A, task-182): GetHandler still writeJSON(w, inv) -- the
-// bare domain Invoice, whose new RuleSetVersion field is tagged json:"-" --
-// so the raw body carries no rule_set_version key at all and the second
-// assertion below fails. Stage 3 wires GetHandler's getResponse wrapper.
 func TestGetHandler_CarriesRuleSetVersionKey(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1488,11 +1483,6 @@ func TestGetHandler_CarriesRuleSetVersionKey(t *testing.T) {
 // on the GET path -- a never-validated invoice (the stub's transient
 // RuleSetVersion left nil) must render "rule_set_version":null, present and
 // explicit, never omitted and never a false 0.
-//
-// RED today (Mode A, task-182): GetHandler still writeJSON(w, inv) with no
-// getResponse wrapper, so the raw body carries no rule_set_version key at
-// all (neither the int form nor an explicit null) and the assertion below
-// fails. Stage 3 wires GetHandler's getResponse wrapper.
 func TestGetHandler_RuleSetVersionMarshalsNull(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()

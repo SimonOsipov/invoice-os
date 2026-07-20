@@ -16,7 +16,7 @@ import { useState } from 'react'
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
-import { fmt } from '../lib/format'
+import { fmt, fmtDate } from '../lib/format'
 import { invoiceStatusStyle, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 
@@ -104,7 +104,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                   <span className="mono" style={{ fontSize: 11, color: r.buyer_tin ? 'var(--fg-3)' : 'var(--status-red-text)' }}>{r.buyer_tin ?? 'TIN MISSING'}</span>
                 </span>
                 <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
-                <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.issue_date ?? r.created_at}</span>
+                <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>
                 <span>
                   <span
                     data-testid="invoice-status-badge"

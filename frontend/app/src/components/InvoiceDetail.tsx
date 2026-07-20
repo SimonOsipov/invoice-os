@@ -7,7 +7,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { amount, fmt, fmtPlain } from '../lib/format'
+import { amount, fmt, fmtDate, fmtPlain } from '../lib/format'
 import { statusStyle, defaultDraft } from '../lib/clients'
 import { validate } from '../lib/validation'
 import { fiscalRecord, Qr } from '../lib/qr'
@@ -48,7 +48,12 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
   // untouched — [mock-detail-branch-left], removal is M4-10.
   const target = detailTarget({ selectedId, importedInvoiceId: ctx.importedInvoiceId })
   if (target.kind === 'imported') {
-    return <LiveInvoiceDetail ctx={ctx} invoiceId={target.invoiceId} />
+    // key={invoiceId}: forces a full remount on invoice SWITCH so the previous invoice's
+    // local state (edit-form field values, staleSinceEdit, revalidateError) doesn't leak
+    // into the next one. The key stays stable while invoiceId is unchanged, so the
+    // in-place history/detail refresh after edit/re-validate within one invoice is
+    // unaffected — only switching invoices remounts.
+    return <LiveInvoiceDetail key={target.invoiceId} ctx={ctx} invoiceId={target.invoiceId} />
   }
 
   const invList = active.invoices
@@ -408,7 +413,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
               </span>
             </div>
-            <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {inv.issue_date ?? inv.created_at}</p>
+            <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
           </div>
         </div>
 

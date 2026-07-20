@@ -190,12 +190,9 @@ type UpdateInput struct {
 // one predicate filter, NeedsAttention (M4-09-02). No entity_id
 // ([entity-id-cut] — the drift invariant is proven tenant-wide instead, not
 // per-entity). NeedsAttention is a plain bool: true applies the verbatim
-// dashboard predicate (below); false/omitted applies no predicate
-// ([needs-attention-bool-true-only] — no "not-needs-attention" branch).
-//
-// RED (M4-09-02, Stage 2.5): this field exists so ListFilter{NeedsAttention:
-// true} compiles, but Store.List does not filter on it yet — see store.go's
-// List doc comment.
+// dashboard predicate (Store.List's doc comment); false/omitted applies no
+// predicate ([needs-attention-bool-true-only] — no "not-needs-attention"
+// branch).
 type ListFilter struct {
 	Limit  int
 	Offset int

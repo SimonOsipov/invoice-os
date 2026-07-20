@@ -9,7 +9,7 @@ fails `TestCommittedFixtures_MatchRegeneration` in
 
 ## Regenerating
 
-```
+```bash
 go run ./tools/fixturegen --seed 42 --invoices 500 --out testdata/invoices
 ```
 
@@ -64,7 +64,7 @@ single invoice is evaluated, so no per-invoice count applies to them.
 
 ## Canonical header and field mapping
 
-```
+```text
 Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price
 ```
 
@@ -93,7 +93,7 @@ canonical-field → header-column mapping (`stdMapping`,
 directly (determinism, shapes, canonical header, the committed set matching
 regeneration):
 
-```
+```bash
 go test ./tools/fixturegen/
 ```
 
@@ -104,7 +104,7 @@ and
 [`fixtures_edge_test.go`](../../internal/importer/fixtures_edge_test.go)).
 Requires a local dev DB:
 
-```
+```bash
 make dev-db
 # or, for a second worktree stack on a distinct port:
 DEV_DB_PORT=5433 make dev-db
@@ -112,7 +112,7 @@ DEV_DB_PORT=5433 make dev-db
 
 then, with the app and superuser DSNs set:
 
-```
+```bash
 DATABASE_URL="postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable" \
 DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable" \
 go test ./internal/importer/ -run 'TestFixtures'

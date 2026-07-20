@@ -95,6 +95,25 @@ func assertNothingWrittenForEntity(t *testing.T, super *pgxpool.Pool, entityID, 
 	}
 }
 
+// assertPreWriteRejected is importEdgeFixture's twin for AC#1/#3's shared
+// "rejected before any write" shape: err must be ErrValidation, res must be
+// the zero-value BatchResult, and nothing may have been written for the
+// seeded entity. reason names WHY this particular fixture is expected to
+// fail (appended to the errors.Is failure message); label is the short
+// fixture name used in every failure message, including
+// assertNothingWrittenForEntity's own label parameter.
+func assertPreWriteRejected(t *testing.T, path, tenantLabel, entityName, label, reason string) {
+	t.Helper()
+	res, err, entityID, super := importEdgeFixture(t, path, tenantLabel, entityName)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Import %s: err = %v, want errors.Is(err, ErrValidation) -- %s", label, err, reason)
+	}
+	if res.ID != "" || res.Status != "" {
+		t.Errorf("Import %s: res = %+v, want the zero-value BatchResult on a pre-write validation error", label, res)
+	}
+	assertNothingWrittenForEntity(t, super, entityID, label)
+}
+
 // --- AC#1: edge_missing_columns ---------------------------------------------
 
 // TestFixtures_MissingColumnsRejectedPreWrite is task-196 AC#1: the committed
@@ -105,17 +124,10 @@ func assertNothingWrittenForEntity(t *testing.T, super *pgxpool.Pool, entityID, 
 // write: the mapped header string "Total" is absent from the file's header
 // row.
 func TestFixtures_MissingColumnsRejectedPreWrite(t *testing.T) {
-	res, err, entityID, super := importEdgeFixture(t, "../../testdata/invoices/edge_missing_columns.csv",
-		"M4-11-04 missing-columns tenant", "M4-11-04 missing-columns entity")
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Import edge_missing_columns.csv: err = %v, want errors.Is(err, ErrValidation) -- "+
-			"the file's header has no \"Total\" column, but stdMapping maps field \"total\" to header "+
-			"\"Total\"", err)
-	}
-	if res.ID != "" || res.Status != "" {
-		t.Errorf("Import edge_missing_columns.csv: res = %+v, want the zero-value BatchResult on a pre-write validation error", res)
-	}
-	assertNothingWrittenForEntity(t, super, entityID, "edge_missing_columns.csv")
+	assertPreWriteRejected(t, "../../testdata/invoices/edge_missing_columns.csv",
+		"M4-11-04 missing-columns tenant", "M4-11-04 missing-columns entity",
+		"edge_missing_columns.csv",
+		"the file's header has no \"Total\" column, but stdMapping maps field \"total\" to header \"Total\"")
 }
 
 // --- AC#2: edge_in_file_dupes -----------------------------------------------
@@ -169,17 +181,10 @@ func TestFixtures_InFileDupesQuarantined(t *testing.T) {
 // stdMapping header string is found. resolveMapping must reject that BEFORE
 // any write, exactly like AC#1.
 func TestFixtures_BadEncodingRejected(t *testing.T) {
-	res, err, entityID, super := importEdgeFixture(t, "../../testdata/invoices/edge_bad_encoding.csv",
-		"M4-11-04 bad-encoding tenant", "M4-11-04 bad-encoding entity")
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Import edge_bad_encoding.csv: err = %v, want errors.Is(err, ErrValidation) -- "+
-			"UTF-16LE-without-BOM content tolerantly decoded as windows-1252 must mangle the header row "+
-			"past recognition", err)
-	}
-	if res.ID != "" || res.Status != "" {
-		t.Errorf("Import edge_bad_encoding.csv: res = %+v, want the zero-value BatchResult on a pre-write validation error", res)
-	}
-	assertNothingWrittenForEntity(t, super, entityID, "edge_bad_encoding.csv")
+	assertPreWriteRejected(t, "../../testdata/invoices/edge_bad_encoding.csv",
+		"M4-11-04 bad-encoding tenant", "M4-11-04 bad-encoding entity",
+		"edge_bad_encoding.csv",
+		"UTF-16LE-without-BOM content tolerantly decoded as windows-1252 must mangle the header row past recognition")
 }
 
 // --- AC#4: edge_bad_tin ------------------------------------------------------
@@ -218,9 +223,7 @@ func TestFixtures_BadTinImportsCleanValidateRejects(t *testing.T) {
 	// that misattributes buyer-tin-format to a clean row's group instead of
 	// buildEdgeBadTin's actual mutated INV-SYN-00001) -- pin the attribution,
 	// not just the count.
-	if len(res.InvoiceViolations) != 1 || res.InvoiceViolations[0].InvoiceNumber != "INV-SYN-00001" {
-		t.Errorf("InvoiceViolations = %+v, want exactly one entry for invoice_number %q", res.InvoiceViolations, "INV-SYN-00001")
-	}
+	assertViolationsPinnedTo(t, res, "INV-SYN-00001")
 }
 
 // --- AC#5: edge_vat_math_wrong -----------------------------------------------
@@ -279,8 +282,16 @@ func TestFixtures_VatMathWrongImportsCleanValidateRejects(t *testing.T) {
 	// would also pass if the vat-standard-rate violation landed on the WRONG
 	// invoice -- pin the attribution to buildEdgeVatMathWrong's actual
 	// mutated INV-SYN-00001, not just the rule-key set.
-	if len(res.InvoiceViolations) != 1 || res.InvoiceViolations[0].InvoiceNumber != "INV-SYN-00001" {
-		t.Errorf("InvoiceViolations = %+v, want exactly one entry for invoice_number %q", res.InvoiceViolations, "INV-SYN-00001")
+	assertViolationsPinnedTo(t, res, "INV-SYN-00001")
+}
+
+// assertViolationsPinnedTo pins the AC#4/AC#5 "attribution, not just count"
+// invariant: exactly one InvoiceViolations entry, and it names
+// invoiceNumber -- not just any invoice carrying a violation.
+func assertViolationsPinnedTo(t *testing.T, res BatchResult, invoiceNumber string) {
+	t.Helper()
+	if len(res.InvoiceViolations) != 1 || res.InvoiceViolations[0].InvoiceNumber != invoiceNumber {
+		t.Errorf("InvoiceViolations = %+v, want exactly one entry for invoice_number %q", res.InvoiceViolations, invoiceNumber)
 	}
 }
 
@@ -319,6 +330,9 @@ func TestFixtures_OversizedRejected413(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/invoices/green_500.csv")
 	if err != nil {
 		t.Fatalf("read green_500.csv: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("green_500.csv is empty, cannot inflate to exceed maxUploadBytes")
 	}
 
 	var big bytes.Buffer

@@ -296,12 +296,28 @@ function formFromInvoice(inv: InvoiceRecord): EditFormState {
 // silently blank out the 8 the user didn't touch; diffing against the invoice this form
 // was seeded from keeps the PATCH to only what actually changed (mirrors
 // EntityFormModal's toEntityUpdateInput diff-then-skip-if-empty convention).
+//
+// issue_date is special-cased: editReq.IssueDate decodes into a *time.Time
+// (handlers.go:71/invoice.go:89), which json.Unmarshal only accepts as a full RFC3339
+// string — a bare "YYYY-MM-DD" (the field's own placeholder) or "" fails to decode and
+// 400s BEFORE Store.Edit ever runs (verified against Go's actual time.Time
+// UnmarshalJSON). Normalize a bare date to midnight UTC so the field the placeholder
+// invites the user to type actually round-trips. A cleared ("") date is skipped rather
+// than sent: json "null" and an absent key both decode to a nil pointer ("leave
+// unchanged", [D9]), so an explicit clear-to-blank cannot be represented over this PATCH
+// at all — sending "" would just surface a confusing decode-failure for an operation the
+// backend has no way to honor.
 function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
   const patch: InvoiceEditInput = {}
   for (const key of EDIT_FIELD_KEYS) {
-    if (form[key] !== (original[key] ?? '')) {
-      patch[key] = form[key]
+    if (form[key] === (original[key] ?? '')) continue
+    if (key === 'issue_date') {
+      const value = form.issue_date.trim()
+      if (!value) continue
+      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
+      continue
     }
+    patch[key] = form[key]
   }
   return patch
 }
@@ -324,6 +340,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // — the on-load honesty derivation is [stale-on-load-followup], deferred.
   const [staleSinceEdit, setStaleSinceEdit] = useState(false)
   const [revalidating, setRevalidating] = useState(false)
+  const [revalidateError, setRevalidateError] = useState<string | null>(null)
 
   let content: ReactNode
 
@@ -357,13 +374,22 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       detail.run()
     }
 
+    // isFixable(inv.status) gates this button on for both draft AND validated (see
+    // below) so it stays visible when nothing has been edited yet -- clicking it on an
+    // untouched 'validated' invoice hits Store.ApplyValidation's draft-only gate
+    // ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught + surfaced here (mirrors
+    // InvoiceEditForm's formError) rather than left as an unhandled rejection with no
+    // user feedback.
     const handleRevalidate = async () => {
       if (revalidating) return
       setRevalidating(true)
+      setRevalidateError(null)
       try {
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
         detail.run()
+      } catch (err) {
+        setRevalidateError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         setRevalidating(false)
       }
@@ -477,6 +503,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     {revalidating ? 'Revalidating…' : 'Re-validate'}
                   </button>
                 </div>
+                {revalidateError && (
+                  <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 6, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+                    {revalidateError}
+                  </div>
+                )}
                 <InvoiceEditForm ctx={ctx} base={base} invoiceId={invoiceId} inv={inv} onSaved={handleSaved} />
               </div>
             )}

@@ -147,58 +147,81 @@ export type InvoiceEditInput = Partial<
 >
 
 export async function listInvoices(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _opts: ListInvoicesOptions = {},
+  authedFetch: AuthedFetch,
+  base: string,
+  opts: ListInvoicesOptions = {},
 ): Promise<InvoiceRecord[]> {
-  throw new Error('not implemented')
+  const query = opts.needsAttention === true ? '?needs_attention=true' : ''
+  const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+  return res.invoices
 }
 
-export async function getInvoice(_authedFetch: AuthedFetch, _base: string, _id: string): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceRecord> {
+  const res = await authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}`)
+  return { ...res, rule_set_version: res.rule_set_version ?? null }
 }
 
 export async function getInvoiceHistory(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
 ): Promise<StatusChange[]> {
-  throw new Error('not implemented')
+  return authedFetch<StatusChange[]>(`${base}/api/invoice/v1/invoices/${id}/history`)
 }
 
 export async function editInvoice(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
-  _patch: InvoiceEditInput,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  patch: InvoiceEditInput,
 ): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}`, { method: 'PATCH', body: patch })
 }
 
 export async function revalidateInvoice(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
 ): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST' })
 }
 
-export function invoiceStatusStyle(_status: InvoiceStatus): StatusStyle {
-  throw new Error('not implemented')
+// Total-in-practice mapping over the 7 canonical states (typed Partial, mirroring
+// severityStyle/SEVERITY_STYLE in validationApi.ts): draft -> muted, validated/accepted
+// -> green, queued/submitted -> amber, rejected/failed -> red. Labels are uppercased
+// per the entityStatusStyle/statusStyle convention (portfolio.ts / lib/clients.ts).
+const MUTED_STYLE: StatusStyle = { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'UNKNOWN' }
+
+const INVOICE_STATUS_STYLE: Partial<Record<InvoiceStatus, StatusStyle>> = {
+  draft: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'DRAFT' },
+  validated: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'VALIDATED' },
+  queued: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'QUEUED' },
+  submitted: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'SUBMITTED' },
+  accepted: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'ACCEPTED' },
+  rejected: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'REJECTED' },
+  failed: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'FAILED' },
 }
 
-export function isFixable(_status: InvoiceStatus): boolean {
-  throw new Error('not implemented')
+// Out-of-enum values reach this at runtime (JSON.parse'd server data, no enum
+// validation) despite the InvoiceStatus type -> fall back to MUTED_STYLE rather than
+// returning undefined (mirrors severityStyle's `?? MUTED_STYLE`, validationApi.ts:67).
+export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
+  return INVOICE_STATUS_STYLE[status] ?? MUTED_STYLE
 }
 
-export function verdictStatus(_staleSinceEdit: boolean): 'stale' | 'current' {
-  throw new Error('not implemented')
+export function isFixable(status: InvoiceStatus): boolean {
+  return status === 'draft' || status === 'validated'
 }
 
-export function shouldFetchInvoices(_base: string | null): boolean {
-  throw new Error('not implemented')
+export function verdictStatus(staleSinceEdit: boolean): 'stale' | 'current' {
+  return staleSinceEdit ? 'stale' : 'current'
 }
 
-export function invoicesViewState(_base: string | null, _s: AsyncState<InvoiceRecord[]>): AsyncStatus {
-  throw new Error('not implemented')
+export function shouldFetchInvoices(base: string | null): boolean {
+  return base != null
+}
+
+export function invoicesViewState(base: string | null, s: AsyncState<InvoiceRecord[]>): AsyncStatus {
+  if (base == null) return 'idle'
+  return s.status
 }

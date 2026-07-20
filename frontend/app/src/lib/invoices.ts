@@ -1,7 +1,6 @@
-// App-side invoice list/detail data-access helpers (M4-09-03, task-184). STUB — the
-// executor implements the bodies next; every export below throws (or would return an
-// obviously-wrong sentinel) so the RED specs in invoices.test.ts (I1-I14) fail on a
-// thrown/assertion mismatch, not an import or type error.
+// App-side invoice list/detail data-access helpers (M4-09-03, task-184): fetch
+// wrappers + pure helpers over the injected authedFetch, covered by invoices.test.ts
+// (I1-I21).
 //
 // Types mirror the wire shapes in internal/invoice/invoice.go and handlers.go on THIS
 // branch: Status is the 7-state CHECK-constrained lifecycle (invoice.go:28-36); Invoice

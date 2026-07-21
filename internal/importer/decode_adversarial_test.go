@@ -262,3 +262,81 @@ func TestDecode_DelimiterSniffPicksSemicolonDespiteMoreCommasInsideQuotedFields(
 	}
 	assertHeader(t, rows[0], []string{"Acme, Global, Corp", "1 Main, St, Suite 2", "100.00"})
 }
+
+// --- M4-15-01: control-byte encoding gate (RED, gate not yet implemented) --
+//
+// decodeCSV will gain a guardrail, placed after the BOM/charset sniff switch
+// and before sniffDelimiter, that rejects the resolved `decoded []byte` if
+// it contains a NUL (0x00) or any other C0 control byte < 0x20 EXCEPT the
+// three whitelisted ones a real CSV legitimately carries: \t (0x09, a
+// delimiter candidate), \n (0x0A) and \r (0x0D) (line endings). The three
+// tests below are RED today (decodeCSV has no such gate, so it silently
+// decodes garbage-encoded uploads); the fourth pins the whitelist so the
+// future gate doesn't regress tab/CRLF-delimited CSVs once it lands.
+
+// A clean ASCII header with a raw C0 control byte (0x01, not on the
+// whitelist) inside a DATA cell. 0x01 is valid single-byte UTF-8, so this
+// takes the utf8.Valid fast path in decodeCSV and, with no gate, decodes
+// without error today.
+func TestDecode_CleanHeaderGarbageDataRejected(t *testing.T) {
+	fixture := []byte("a,b\nfoo,\x01bar\n")
+
+	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	if err == nil {
+		t.Fatalf("Decode: err = nil, want a decode error for a data cell containing raw control byte 0x01 (header=%#v rows=%#v)", header, rows)
+	}
+	if rows != nil {
+		t.Errorf("rows = %#v, want nil when Decode rejects the input", rows)
+	}
+}
+
+// A NUL byte (0x00) embedded in a data cell. Like 0x01, NUL is valid
+// single-byte UTF-8, so decodeCSV's utf8.Valid branch accepts it and
+// encoding/csv treats it as an ordinary field byte -- no error today.
+func TestDecode_NULByteRejected(t *testing.T) {
+	fixture := []byte("a,b\nfoo,\x00bar\n")
+
+	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	if err == nil {
+		t.Fatalf("Decode: err = nil, want a decode error for a data cell containing a NUL byte (header=%#v rows=%#v)", header, rows)
+	}
+}
+
+// Pure-ASCII content encoded as UTF-16LE WITHOUT a BOM (each ASCII byte
+// followed by 0x00, built explicitly -- no golang.org/x/text encoder,
+// since that always emits a BOM). Every individual byte is < 0x80, so the
+// whole thing is trivially valid UTF-8 (a sequence of single-byte runes) --
+// decodeCSV's utf8.Valid branch takes it as-is, embedded 0x00 bytes and
+// all, with no error today. Only the post-switch control-byte gate can
+// catch this: there is no BOM to sniff, and it never reaches the
+// Windows-1252 fallback because it IS valid UTF-8.
+func TestDecode_UTF16LENoBOMRejectedViaGate(t *testing.T) {
+	content := []byte("a,b\n1,2\n")
+	raw := make([]byte, 0, len(content)*2)
+	for _, b := range content {
+		raw = append(raw, b, 0x00)
+	}
+
+	header, rows, _, err := Decode(bytes.NewReader(raw), "csv")
+	if err == nil {
+		t.Fatalf("Decode: err = nil, want a decode error for BOM-less UTF-16LE content (embedded NUL bytes) (header=%#v rows=%#v)", header, rows)
+	}
+}
+
+// Whitelist regression guard: a tab-delimited, CRLF-terminated, otherwise
+// clean-ASCII CSV must NOT be rejected once the control-byte gate lands --
+// \t, \r and \n are all on the whitelist. Already GREEN today (no gate
+// exists yet to regress).
+func TestDecode_TabDelimitedCRLFNotRejected(t *testing.T) {
+	fixture := []byte("a\tb\r\n1\t2\r\n")
+
+	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	if err != nil {
+		t.Fatalf("Decode: %v, want no error -- tab delimiter and CRLF line endings must never be rejected by the control-byte gate", err)
+	}
+	if facts.Delimiter != "\t" {
+		t.Fatalf("facts.Delimiter = %q, want %q (test fixture setup)", facts.Delimiter, "\t")
+	}
+	assertHeader(t, header, []string{"a", "b"})
+	assertRows(t, rows, [][]string{{"1", "2"}})
+}

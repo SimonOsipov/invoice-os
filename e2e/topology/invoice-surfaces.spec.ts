@@ -311,7 +311,8 @@ interface MixedImportResponse {
 // Dashboard/Clients carry no data-testid ([no-testids-on-portfolio-dashboard],
 // grep-verified) -- selected below by role/exact-text/CSS class, the same idiom
 // day30.spec.ts/topology.spec.ts already used for those surfaces before this story split
-// them into auth.spec.ts/validation.spec.ts/portfolio.spec.ts.
+// them into auth.spec.ts/validation.spec.ts (Dashboard/Clients coverage stayed here, in
+// this file's Day-60 arc).
 test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-inline -> re-validate-to-green -> dashboard rollup updates', async ({
   page,
 }) => {

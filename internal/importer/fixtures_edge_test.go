@@ -1,24 +1,11 @@
-// M4-11-04 (task-196): DB-backed edge-case fixture verification. M4-11-01/02
-// generated and committed testdata/invoices/edge_*.csv as fixtures that are
-// each SUPPOSED to trip exactly one intended failure -- one structural
-// (pre-write) rejection, or one clean-import-but-VALIDATE-rejects rule
-// violation, or (for oversized) the HTTP upload cap -- with the OTHER 19 (or
-// 4) invoices in the same file staying unaffected. Nothing before this file
-// ever ran a committed edge CSV through the real pipeline: closest is
-// tools/fixturegen's own gen_test.go/gen_adversarial_test.go, which only
-// check the BYTES the generator produced (header shape, mutated cell values),
-// never Service.Import or CreateHandler. These tests are that missing proof,
-// mirroring fixtures_green_test.go's (M4-11-03) real-pipeline pattern: read
-// the committed bytes -> Decode -> seed a tenant+entity via the REAL
-// portfolio.Store.Create path (createEntityViaRealPortfolioStore,
-// service_tin_test.go) -> Service.Import wired to a REAL in-process rule-set
-// 04 (startInProcess04ForImporter, service_gate_test.go) on the ACTIVE v2
-// rule set.
+// M4-11-04: DB-backed edge-case fixture verification -- runs each
+// committed edge_*.csv through the real import->validate pipeline (mirrors
+// fixtures_green_test.go's pattern) and asserts it trips exactly its one
+// intended failure, leaving the other invoices unaffected.
 //
-// If a fixture does NOT trip its intended failure -- or trips an EXTRA one --
-// that is a fixturegen bug (M4-11-01), not a test bug: these tests must not
-// be weakened to make a fixture pass, and the committed CSVs must not be
-// hand-edited (M4-11-02's no-hand-edit guard).
+// A fixture that doesn't trip its intended failure (or trips an extra one)
+// is a fixturegen bug, not a test bug: these tests must not be weakened,
+// and the committed CSVs must not be hand-edited.
 package importer
 
 import (
@@ -39,12 +26,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// importEdgeFixture is importGreenFixture's (fixtures_green_test.go) twin for
-// an edge fixture: read path -> Decode -> a fresh tenant + entity through the
-// REAL portfolio.Store path -> Service.Import (dryRun=false) through a REAL
-// in-process rule-set 04. Unlike importGreenFixture, it RETURNS err instead
-// of t.Fatal-ing on it: AC#1/#3 below expect Import to fail (ErrValidation),
-// and the caller needs that error value to assert on.
+// importEdgeFixture is importGreenFixture's twin for an edge fixture, but
+// returns err instead of t.Fatal-ing on it -- AC#1/#3 expect Import to fail
+// (ErrValidation) and need the error value.
 func importEdgeFixture(t *testing.T, path, tenantLabel, entityName string) (res BatchResult, err error, entityID string, super *pgxpool.Pool) {
 	t.Helper()
 	super, app := dbTestPools(t)
@@ -73,10 +57,8 @@ func importEdgeFixture(t *testing.T, path, tenantLabel, entityName string) (res 
 	return res, err, entityID, super
 }
 
-// assertNothingWrittenForEntity pins AC#1/#3's "nothing written" invariant --
-// zero import_batches/invoices rows for entityID, read back via the
-// superuser pool exactly like TestCreateHandler_DryRun200NothingPersisted
-// (handlers_test.go) checks a dry run's non-write.
+// assertNothingWrittenForEntity asserts zero import_batches/invoices rows
+// for entityID, read back via the superuser pool.
 func assertNothingWrittenForEntity(t *testing.T, super *pgxpool.Pool, entityID, label string) {
 	t.Helper()
 	ctx := context.Background()
@@ -95,13 +77,9 @@ func assertNothingWrittenForEntity(t *testing.T, super *pgxpool.Pool, entityID, 
 	}
 }
 
-// assertPreWriteRejected is importEdgeFixture's twin for AC#1/#3's shared
-// "rejected before any write" shape: err must be ErrValidation, res must be
-// the zero-value BatchResult, and nothing may have been written for the
-// seeded entity. reason names WHY this particular fixture is expected to
-// fail (appended to the errors.Is failure message); label is the short
-// fixture name used in every failure message, including
-// assertNothingWrittenForEntity's own label parameter.
+// assertPreWriteRejected asserts the shared "rejected before any write"
+// shape: err is ErrValidation, res is zero-value, and nothing was written.
+// reason/label name the fixture and why, for failure messages.
 func assertPreWriteRejected(t *testing.T, path, tenantLabel, entityName, label, reason string) {
 	t.Helper()
 	res, err, entityID, super := importEdgeFixture(t, path, tenantLabel, entityName)
@@ -116,13 +94,9 @@ func assertPreWriteRejected(t *testing.T, path, tenantLabel, entityName, label, 
 
 // --- AC#1: edge_missing_columns ---------------------------------------------
 
-// TestFixtures_MissingColumnsRejectedPreWrite is task-196 AC#1: the committed
-// edge_missing_columns.csv (tools/fixturegen's buildEdgeMissingColumns) drops
-// the "Total" column entirely, but stdMapping -- the full 11-key canonical
-// mapping every other test in this package imports against -- still maps
-// total -> "Total". resolveMapping (service.go) must reject that BEFORE any
-// write: the mapped header string "Total" is absent from the file's header
-// row.
+// TestFixtures_MissingColumnsRejectedPreWrite: edge_missing_columns.csv
+// drops the Total column, but stdMapping still maps total -> "Total";
+// resolveMapping must reject that before any write.
 func TestFixtures_MissingColumnsRejectedPreWrite(t *testing.T) {
 	assertPreWriteRejected(t, "../../testdata/invoices/edge_missing_columns.csv",
 		"M4-11-04 missing-columns tenant", "M4-11-04 missing-columns entity",
@@ -132,14 +106,10 @@ func TestFixtures_MissingColumnsRejectedPreWrite(t *testing.T) {
 
 // --- AC#2: edge_in_file_dupes -----------------------------------------------
 
-// TestFixtures_InFileDupesQuarantined is task-196 AC#2: the committed
-// edge_in_file_dupes.csv (tools/fixturegen's buildEdgeInFileDupes) has 5
-// invoice_number groups, one of which (INV-SYN-00001) carries a 4th row that
-// repeats every header field verbatim EXCEPT Issue Date -- an in-file header
-// conflict ([dedup]). Import must complete (this is not a pre-write
-// rejection: 4 of the 5 groups are perfectly ready), quarantine exactly that
-// one group, and report a RowError whose message names the conflicting
-// field.
+// TestFixtures_InFileDupesQuarantined: edge_in_file_dupes.csv has one
+// invoice (INV-SYN-00001) with a 4th row differing only on Issue Date;
+// import must complete, quarantine exactly that group, and report a
+// RowError naming the conflicting field.
 func TestFixtures_InFileDupesQuarantined(t *testing.T) {
 	res, err, _, _ := importEdgeFixture(t, "../../testdata/invoices/edge_in_file_dupes.csv",
 		"M4-11-04 in-file-dupes tenant", "M4-11-04 in-file-dupes entity")
@@ -170,16 +140,10 @@ func TestFixtures_InFileDupesQuarantined(t *testing.T) {
 
 // --- AC#3: edge_bad_encoding -------------------------------------------------
 
-// TestFixtures_BadEncodingRejected is task-196 AC#3: the committed
-// edge_bad_encoding.csv (tools/fixturegen's buildEdgeBadEncoding) is UTF-16LE
-// WITHOUT a byte-order-mark, with its first buyer name forced non-ASCII so
-// the raw bytes are provably not valid UTF-8 (gen.go's own doc comment).
-// Decode's BOM/charset sniff therefore falls past both the UTF-16LE-BOM
-// branch (no BOM present) and the utf8.Valid branch (fails), landing on the
-// windows-1252 tolerant fallback -- which decodes UTF-16LE's embedded NUL
-// bytes as literal control characters, mangling the header row so no
-// stdMapping header string is found. resolveMapping must reject that BEFORE
-// any write, exactly like AC#1.
+// TestFixtures_BadEncodingRejected: edge_bad_encoding.csv is UTF-16LE
+// without a BOM, so Decode's sniff falls through to the windows-1252
+// tolerant fallback, which mangles the header row past recognition --
+// resolveMapping must reject that before any write, like AC#1.
 func TestFixtures_BadEncodingRejected(t *testing.T) {
 	assertPreWriteRejected(t, "../../testdata/invoices/edge_bad_encoding.csv",
 		"M4-11-04 bad-encoding tenant", "M4-11-04 bad-encoding entity",
@@ -189,16 +153,11 @@ func TestFixtures_BadEncodingRejected(t *testing.T) {
 
 // --- AC#4: edge_bad_tin ------------------------------------------------------
 
-// TestFixtures_BadTinImportsCleanValidateRejects is task-196 AC#4: the
-// committed edge_bad_tin.csv (tools/fixturegen's buildEdgeBadTin) mutates
-// exactly INV-SYN-00001's Buyer TIN to "1234567-8901" (7 digits before the
-// dash, failing the seeded buyer-tin-format rule's ^[0-9]{8}-[0-9]{4}$
-// shape); the other 19 invoices keep well-formed TINs. A buyer TIN is never
-// import-time-checked (it is not one of the 5 numeric header fields, nor
-// does classify parse it) -- it can only be caught by the REAL 04 gate at
-// validate time. So Import must complete with ZERO quarantine (this is not a
-// structural defect) and report buyer-tin-format as a violation on exactly
-// that one invoice.
+// TestFixtures_BadTinImportsCleanValidateRejects: edge_bad_tin.csv mutates
+// INV-SYN-00001's TIN to fail ^[0-9]{8}-[0-9]{4}$; a buyer TIN is never
+// import-time-checked, only caught by the 04 gate at validate time, so
+// Import must complete with zero quarantine and report buyer-tin-format on
+// exactly that invoice.
 func TestFixtures_BadTinImportsCleanValidateRejects(t *testing.T) {
 	res, err, _, _ := importEdgeFixture(t, "../../testdata/invoices/edge_bad_tin.csv",
 		"M4-11-04 bad-tin tenant", "M4-11-04 bad-tin entity")
@@ -218,32 +177,19 @@ func TestFixtures_BadTinImportsCleanValidateRejects(t *testing.T) {
 		t.Errorf("violationKeys(res) = %v, want it to contain %q", keys, "buyer-tin-format")
 	}
 
-	// QA (M4-11-04 verify): InvoicesWithViolations==1 alone would also pass
-	// if the WRONG invoice carried the violation (e.g. a rule-key regression
-	// that misattributes buyer-tin-format to a clean row's group instead of
-	// buildEdgeBadTin's actual mutated INV-SYN-00001) -- pin the attribution,
-	// not just the count.
+	// Pin attribution, not just count: InvoicesWithViolations==1 alone
+	// would also pass if the violation landed on the wrong invoice.
 	assertViolationsPinnedTo(t, res, "INV-SYN-00001")
 }
 
 // --- AC#5: edge_vat_math_wrong -----------------------------------------------
 
-// TestFixtures_VatMathWrongImportsCleanValidateRejects is task-196 AC#5: the
-// committed edge_vat_math_wrong.csv (tools/fixturegen's buildEdgeVatMathWrong)
-// mutates exactly INV-SYN-00001's VAT to 0.00 while its subtotal/line items
-// still reconcile normally -- failing the seeded vat-standard-rate rule
-// (rate=0.075, tolerance=0.005) -- and recomputes Total = Subtotal (v2 has no
-// separate total=subtotal+vat rule, so that is not a SECOND intended defect);
-// the other 19 invoices keep normal reconciled VAT. Like AC#4, this is a
-// VALIDATE-time-only defect: Import must complete with zero quarantine.
-//
-// This is the LOAD-BEARING single-rule oracle: the violated rule-key set
-// across the WHOLE batch must be EXACTLY {"vat-standard-rate"} -- not merely
-// "contains" it. If any other invoice or any other rule also fires (e.g. the
-// generator's Total=Subtotal recompute accidentally tripping a rule this AC
-// does not expect), that is a real fixturegen/rule-engine defect, and the
-// failure message below names the offending invoice + rule precisely so it
-// is diagnosable without re-running anything.
+// TestFixtures_VatMathWrongImportsCleanValidateRejects: edge_vat_math_wrong.csv
+// mutates INV-SYN-00001's VAT to 0.00 (subtotal/lines still reconcile);
+// Import must complete with zero quarantine. The violated rule-key set
+// across the whole batch must be EXACTLY {"vat-standard-rate"}, not merely
+// contain it -- any extra key or invoice means a real fixturegen/rule-engine
+// defect.
 func TestFixtures_VatMathWrongImportsCleanValidateRejects(t *testing.T) {
 	res, err, _, _ := importEdgeFixture(t, "../../testdata/invoices/edge_vat_math_wrong.csv",
 		"M4-11-04 vat-math-wrong tenant", "M4-11-04 vat-math-wrong entity")
@@ -278,16 +224,12 @@ func TestFixtures_VatMathWrongImportsCleanValidateRejects(t *testing.T) {
 		}
 	}
 
-	// QA (M4-11-04 verify): the single-rule-key check above is batch-wide and
-	// would also pass if the vat-standard-rate violation landed on the WRONG
-	// invoice -- pin the attribution to buildEdgeVatMathWrong's actual
-	// mutated INV-SYN-00001, not just the rule-key set.
+	// Pin attribution, not just the rule-key set -- see AC#4's note above.
 	assertViolationsPinnedTo(t, res, "INV-SYN-00001")
 }
 
-// assertViolationsPinnedTo pins the AC#4/AC#5 "attribution, not just count"
-// invariant: exactly one InvoiceViolations entry, and it names
-// invoiceNumber -- not just any invoice carrying a violation.
+// assertViolationsPinnedTo asserts exactly one InvoiceViolations entry,
+// naming invoiceNumber.
 func assertViolationsPinnedTo(t *testing.T, res BatchResult, invoiceNumber string) {
 	t.Helper()
 	if len(res.InvoiceViolations) != 1 || res.InvoiceViolations[0].InvoiceNumber != invoiceNumber {
@@ -305,8 +247,8 @@ func containsKey(keys []string, want string) bool {
 	return false
 }
 
-// sortedKeySet renders a rule-key set as a sorted slice, for a stable and
-// readable failure message.
+// sortedKeySet renders a rule-key set as a sorted slice for stable failure
+// messages.
 func sortedKeySet(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -318,14 +260,10 @@ func sortedKeySet(m map[string]bool) []string {
 
 // --- AC#6: oversized ----------------------------------------------------------
 
-// TestFixtures_OversizedRejected413 is task-196 AC#6: a multipart body whose
-// "file" part alone exceeds maxUploadBytes (10 MiB, [upload-cap]) must 413
-// before CreateHandler ever calls the injected imp closure -- proved here
-// with REAL invoice CSV content (green_500.csv, repeated until the body
-// clears the cap) rather than junk bytes, so this exercises exactly the
-// shape a firm uploading a genuinely oversized spreadsheet would hit. No DB
-// needed: the cap fires in ParseMultipartForm, before Decode or Service.Import
-// are ever reached.
+// TestFixtures_OversizedRejected413: a multipart body over maxUploadBytes
+// (built from real green_500.csv content, repeated) must 413 before
+// CreateHandler calls the injected imp closure. No DB needed -- the cap
+// fires in ParseMultipartForm.
 func TestFixtures_OversizedRejected413(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/invoices/green_500.csv")
 	if err != nil {

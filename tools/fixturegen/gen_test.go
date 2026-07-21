@@ -1,43 +1,6 @@
-// gen_test.go pins the contract of the not-yet-implemented fixturegen
-// builders (gen.go), transcribed from task-194's (M4-11-01) validated Test
-// Specs table. Written RED, before the implementation, per Test-first: yes
-// -- every builder in gen.go is a panic("not implemented") stub, so every
-// test below currently fails with that panic, never a compile error and
-// never a vacuous pass.
-//
-// These are pure, DB-free `package main` tests: no network, no filesystem,
-// no database -- just in-memory byte slices -- so they run in the existing
-// Go CI job unconditionally, with no new test runner, container, or config
-// (task-194 AC-4).
-//
-// WHY A PANIC CRASHES THE WHOLE go test RUN, AND WHY THAT IS STILL VALID
-// RED. Go's testing package recovers a panic inside a test just long
-// enough to mark that test failed and print its stack trace, then
-// re-panics -- which crashes the entire test binary and stops any tests
-// after it in run order. Run `go test ./tools/fixturegen/` and you will
-// therefore see exactly ONE failing test (whichever runs first), not all
-// 16. Each test is independently confirmed RED (not vacuous, not a compile
-// error) by running it in isolation: `go test -run '^<Name>$' -v
-// ./tools/fixturegen/` for each of the 16 names below -- see the QA report
-// for that per-test output.
-//
-// Coverage -- task-194's Test Specs table, all 16 rows:
-//  1. TestGen_SameSeedByteIdentical                                  -- AC-1.
-//  2. TestGen_DifferentSeedDiffers                                   -- AC-1.
-//  3. TestGen_InvoiceCountFollowsFlag                                -- AC-1.
-//  4. TestGen_HeaderIsCanonical                                      -- AC-2.
-//  5. TestGen_HeaderFieldsRepeatWithinInvoice                        -- AC-2.
-//  6. TestGen_DatesAreISO                                            -- AC-2.
-//  7. TestGen_GreenMoneyReconciles                                   -- AC-2.
-//  8. TestGen_BuyerTinFormat                                         -- AC-2.
-//  9. TestGen_CurrencyNGN                                            -- AC-2.
-//  10. TestGen_InvoiceNumbersUnique                                  -- AC-2.
-//  11. TestGen_EdgeMissingColumns_LacksTotalColumn                   -- AC-3/AC-4.
-//  12. TestGen_EdgeInFileDupes_DifferOnlyOnIssueDate                 -- AC-3/AC-4.
-//  13. TestGen_EdgeBadEncoding_IsUTF16LEWithoutBOM                   -- AC-3/AC-4.
-//  14. TestGen_EdgeBadTin_ShapeFailsRegex                            -- AC-3/AC-4.
-//  15. TestGen_EdgeVatMathWrong_VATZeroSubtotalPositiveLinesReconcile -- AC-3/AC-4.
-//  16. TestGen_OversizedInflator_ExceedsMaxUploadBytes                -- AC-3/AC-4.
+// gen_test.go pins the contract of the fixturegen builders (gen.go),
+// transcribed from task-194's Test Specs. Pure, DB-free package main
+// tests: no network, filesystem, or database.
 package main
 
 import (
@@ -56,30 +19,22 @@ import (
 )
 
 // canonicalUploadCap mirrors internal/importer/handlers.go's maxUploadBytes
-// (10 << 20, 10 MiB). Not imported directly -- fixturegen has no dependency
-// on internal/importer -- so the value is pinned here as a literal,
-// matching handlers.go's own literal.
+// (10 MiB); pinned as a literal since fixturegen doesn't import
+// internal/importer.
 const canonicalUploadCap = 10 << 20
 
-// isoDateRE / tinRE are the two regex oracles task-194 names explicitly.
+// isoDateRE / tinRE are the ISO-date and buyer-TIN shape oracles.
 var isoDateRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 var tinRE = regexp.MustCompile(`^[0-9]{8}-[0-9]{4}$`)
 
-// vatTolerance is task-194's 0.005 VAT tolerance (mirrors vat-standard-rate,
-// migrations/20260711121327_seed_mbs_v1.sql:29), widened by a float64
-// epsilon. A subtotal whose true 0.075x product lands exactly on a
-// half-cent (e.g. 7262.60 * 0.075 = 544.695 exactly, rounding to 544.70)
-// round-trips through decimal-string CSV parsing with ~1e-13 float64
-// representation noise, which can push |vat-0.075*subtotal| a few
-// femto-units past a bare 0.005 -- verified empirically: a correct
-// generator over seed 42/30 invoices produced exactly this case and a bare
-// `diff > 0.005` check flagged it as a false violation. The epsilon is far
-// smaller than any real one-cent-or-larger VAT defect, so it cannot mask
-// one.
+// vatTolerance widens the 0.005 spec tolerance (vat-standard-rate) by a
+// float64 epsilon -- decimal-string round-trip noise can otherwise push a
+// correct VAT a few femto-units over 0.005 (verified empirically at seed
+// 42/30 invoices).
 const vatTolerance = 0.005 + 1e-9
 
-// canonicalHeaderCols is canonicalHeader split into its 11 field names, for
-// error messages that name a column rather than an index.
+// canonicalHeaderCols is canonicalHeader split into field names, for
+// column-named error messages.
 var canonicalHeaderCols = strings.Split(canonicalHeader, ",")
 
 // Column indices into a canonical 11-field row.
@@ -102,9 +57,8 @@ const (
 // columns and Invoice No itself, which is the group key).
 var headerFieldCols = []int{colIssueDate, colBuyerTIN, colBuyer, colCurrency, colSubtotal, colVAT, colTotal}
 
-// mustParseCSV parses data as RFC 4180 CSV and returns the header row and
-// the data rows separately. Using encoding/csv (not string splitting) means
-// these tests read real columns, not brittle byte offsets.
+// mustParseCSV parses data as CSV and returns the header row and data rows
+// separately.
 func mustParseCSV(t *testing.T, data []byte) (header []string, rows [][]string) {
 	t.Helper()
 	r := csv.NewReader(bytes.NewReader(data))
@@ -128,11 +82,9 @@ func groupByInvoice(rows [][]string) map[string][][]string {
 	return groups
 }
 
-// invoiceOrder returns the Invoice No column's group boundaries in the
-// order they appear in rows: one entry per contiguous run of a given
-// Invoice No. If a number's rows are NOT contiguous (i.e. it appears in two
-// separate groups), that number appears twice here -- which is exactly the
-// signal TestGen_InvoiceNumbersUnique checks for.
+// invoiceOrder returns one entry per contiguous run of Invoice No; a
+// non-contiguous repeat means the number appears twice here -- the signal
+// TestGen_InvoiceNumbersUnique checks.
 func invoiceOrder(rows [][]string) []string {
 	var order []string
 	for _, r := range rows {
@@ -161,9 +113,7 @@ func round2(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
-// lineSum sums qty*unit_price across an invoice's rows, rounded to 2dp --
-// the same "reconciles" computation task-194 specifies for both the green
-// suite (spec 7) and the VAT-math-wrong edge (spec 15).
+// lineSum sums qty*unit_price across an invoice's rows, rounded to 2dp.
 func lineSum(t *testing.T, grp [][]string) float64 {
 	t.Helper()
 	var sum float64

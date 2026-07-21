@@ -1,28 +1,8 @@
-// committed_test.go is M4-11-02's (task-193) regeneration guard, authored
-// RED before the fixture files are committed. It asserts four things about
-// the committed set under repo-root testdata/invoices/ (reached from this
-// package as ../../testdata/invoices/):
-//
-//  0. TestCommittedDir_ContainsOnlyManifestFiles -- the directory's file set
-//     is exactly manifest(...)'s name set, no more, no less. Added post-hoc
-//     during M4-11-02 QA to close a gap the other three tests share: they
-//     all iterate manifest(...) and look up specific filenames, so a stray
-//     extra committed file is invisible to (and unbounded by) all of them.
-//  1. TestCommittedFixtures_MatchRegeneration -- every committed file is the
-//     verbatim byte output of manifest(defaultSeed, defaultInvoices)'s
-//     corresponding entry. This is the no-hand-edit / no-drift guard: any
-//     future hand-edit to a committed CSV, or any change to gen.go/main.go
-//     that shifts what defaultSeed/defaultInvoices produce without
-//     re-running the generator, fails this test.
-//  2. TestCommittedGreen500_Dimensions -- green_500.csv has the canonical
-//     header and exactly 500 invoices x 3 line rows = 1,500 data rows
-//     (genInvoices always emits 3 lines per invoice; see gen.go).
-//  3. TestNoOversizedBlobCommitted -- no committed file exceeds 1 MiB.
-//
-// Until M4-11-02's emit step runs `go run ./tools/fixturegen` and commits
-// its output, testdata/invoices/ does not exist, so all three original
-// tests fail on an explicit os.ReadFile/os.Stat error via t.Fatalf naming
-// the missing file -- an assertion-style RED, not a panic or compile error.
+// committed_test.go verifies the fixture set committed under
+// testdata/invoices/ (../../testdata/invoices/ from this package): the
+// directory has exactly manifest's files, each matches a fresh
+// regeneration byte-for-byte (the no-hand-edit guard), green_500.csv has
+// the right shape, and nothing committed exceeds 1 MiB.
 package main
 
 import (
@@ -38,17 +18,9 @@ var committedDir = filepath.Join("..", "..", "testdata", "invoices")
 
 // --- 0: TestCommittedDir_ContainsOnlyManifestFiles ---------------------------
 
-// TestCommittedDir_ContainsOnlyManifestFiles closes a gap the other three
-// tests below all share: each of them iterates manifest(...) and looks up
-// one specific committed filename, so a file present in committedDir but
-// NOT listed in manifest(...) is invisible to every one of them --
-// including TestNoOversizedBlobCommitted, whose 1 MiB bound only ever
-// applies to the seven manifest entries. A stray extra file (leftover
-// generator output from a different --seed/--invoices run, a hand-created
-// scratch file, an editor backup) would sit in testdata/invoices/ silently
-// uncompared and unbounded. This test lists committedDir directly and
-// asserts its file set is exactly the manifest's name set, catching that
-// case regardless of the stray file's content or size.
+// TestCommittedDir_ContainsOnlyManifestFiles asserts the committed dir's
+// file set is exactly manifest(...)'s name set -- catches a stray extra
+// file the other tests below (which only iterate manifest) would miss.
 func TestCommittedDir_ContainsOnlyManifestFiles(t *testing.T) {
 	entries, err := os.ReadDir(committedDir)
 	if err != nil {
@@ -120,10 +92,8 @@ func TestCommittedGreen500_Dimensions(t *testing.T) {
 		}
 	}
 
-	// defaultInvoices (500) invoices x 3 line rows/invoice (genInvoices
-	// always emits exactly 3 lines -- see gen.go's invoiceRec.lines [3]lineRec
-	// and TestGen_InvoiceCountFollowsFlag) = 1,500 data rows, exactly, since
-	// generateGreen(defaultSeed, defaultInvoices) is deterministic.
+	// 500 invoices x 3 line rows (genInvoices always emits 3 lines; see
+	// gen.go's invoiceRec.lines) = 1,500 data rows.
 	const wantInvoices = defaultInvoices
 	const wantRows = wantInvoices * 3
 	if len(rows) != wantRows {

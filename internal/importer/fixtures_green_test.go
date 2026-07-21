@@ -1,20 +1,11 @@
-// M4-11-03 (task-195): DB-backed green-clean verification. The import->
-// validate pipeline (M4-03/04/06) already ships, and M4-11-01/02 already
-// generated and committed testdata/invoices/green_500.csv and
-// green_second.csv as SUPPOSEDLY clean fixtures. Nothing before this file
-// ever actually ran either committed CSV through the real pipeline: closest
-// is tools/fixturegen/committed_test.go, which only checks header/row-count
-// shape, not Service.Import. These tests are that missing proof: read the
-// committed bytes -> Decode -> seed a tenant+entity via the REAL
-// portfolio.Store.Create path (createEntityViaRealPortfolioStore,
-// service_tin_test.go) -> Service.Import wired to a REAL in-process rule-set
-// 04 (startInProcess04ForImporter, service_gate_test.go) on the ACTIVE v2
-// rule set -> assert zero quarantine and zero violations end to end.
+// M4-11-03: DB-backed green-clean verification -- runs the committed
+// green_500.csv/green_second.csv through the real import->validate
+// pipeline (Decode -> a real portfolio-store entity -> Service.Import
+// against the real in-process rule-set 04) and asserts zero quarantine and
+// zero violations end to end.
 //
-// If a file is NOT clean on this real path, that is a fixturegen bug
-// (M4-11-01), not a test bug -- these tests must not be weakened to make a
-// dirty fixture pass, and the committed CSVs must not be hand-edited
-// (M4-11-02's no-hand-edit guard).
+// A dirty fixture here is a fixturegen bug, not a test bug: these tests
+// must not be weakened, and the committed CSVs must not be hand-edited.
 package importer
 
 import (
@@ -30,21 +21,12 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// importGreenFixture reads path (relative to this package dir), decodes it
-// as CSV, seeds a FRESH tenant + entity through the real portfolio.Store
-// path (createEntityViaRealPortfolioStore, service_tin_test.go -- a
-// Luhn-valid canonical FIRS TIN, exactly what production writes on
-// POST /v1/entities), and imports it for real (dryRun=false) through a
-// Service wired to a REAL in-process rule-set 04 on the active v2 rule set
-// (startInProcess04ForImporter, service_gate_test.go). One fresh
-// tenant+entity per call, so green_500 and green_second (and repeat calls
-// for the no-store-duplicate check) never share state.
-//
-// Also returns entityID and the superuser pool so callers can read back
-// the actually-persisted invoices/line_items rows out-of-band (M4-11-03
-// QA adversarial addition, fixtures_green_adversarial_test.go) -- proof
-// that BatchResult's self-reported counters correspond to real writes,
-// not merely a self-consistent but silently no-op'd import.
+// importGreenFixture reads path, decodes it as CSV, seeds a fresh tenant +
+// entity via the real portfolio.Store path, and imports it (dryRun=false)
+// through a Service wired to a real in-process rule-set 04. One fresh
+// tenant+entity per call, so callers never share state. Also returns
+// entityID and the superuser pool so callers can read back persisted rows
+// out-of-band.
 func importGreenFixture(t *testing.T, path, tenantLabel, entityName string) (res BatchResult, entityID string, super *pgxpool.Pool) {
 	t.Helper()
 	super, app := dbTestPools(t)
@@ -79,9 +61,8 @@ func importGreenFixture(t *testing.T, path, tenantLabel, entityName string) (res
 	return res, entityID, super
 }
 
-// assertCleanImport pins the AC-1/AC-2 clean invariant: nothing quarantined,
-// nothing invalid, nothing violates, and the file's invoice-group count came
-// through as ReadyInvoices.
+// assertCleanImport asserts nothing quarantined, nothing invalid, nothing
+// violates, and ReadyInvoices matches the file's invoice-group count.
 func assertCleanImport(t *testing.T, label string, res BatchResult, wantReadyInvoices int) {
 	t.Helper()
 	if res.RowsInvalid != 0 {
@@ -104,46 +85,30 @@ func assertCleanImport(t *testing.T, label string, res BatchResult, wantReadyInv
 	}
 }
 
-// TestFixtures_Green500ImportsAndValidatesClean is task-195 AC-1: the
-// committed green_500.csv (500 distinct invoice_number groups, 3 line items
-// each -- tools/fixturegen generateGreen(seed,500)) must import and validate
-// fully clean through the real pipeline.
+// TestFixtures_Green500ImportsAndValidatesClean: green_500.csv (500
+// invoices, 3 lines each) must import and validate fully clean.
 func TestFixtures_Green500ImportsAndValidatesClean(t *testing.T) {
 	res, _, _ := importGreenFixture(t, "../../testdata/invoices/green_500.csv",
 		"M4-11-03 green_500 tenant", "M4-11-03 green_500 entity")
 	assertCleanImport(t, "green_500.csv", res, 500)
 }
 
-// TestFixtures_GreenSecondImportsAndValidatesClean is task-195 AC-2: the
-// committed green_second.csv (generateGreen(43,250): 250 distinct
-// invoice_number groups under a DIFFERENT seed, so its content genuinely
-// differs from green_500.csv rather than being a truncation of it) must
-// import and validate fully clean under its own, distinct fresh entity.
+// TestFixtures_GreenSecondImportsAndValidatesClean: green_second.csv (250
+// invoices, distinct seed from green_500) must import and validate fully
+// clean.
 func TestFixtures_GreenSecondImportsAndValidatesClean(t *testing.T) {
 	res, _, _ := importGreenFixture(t, "../../testdata/invoices/green_second.csv",
 		"M4-11-03 green_second tenant", "M4-11-03 green_second entity")
 	assertCleanImport(t, "green_second.csv", res, 250)
 }
 
-// TestFixtures_GreenNoStoreDuplicateOnFreshEntity is task-195 AC-3: the
-// M4-06 against-store duplicate check (ruleKeyDuplicateInvoiceNumber,
-// service.go) must not false-fire against a FRESH, empty per-entity store on
-// a file's first import -- every one of green_500.csv's invoice numbers is
-// new to this entity, so ExistingNumbers must report none of them as
-// already-imported. Checked in both places the rule can surface: the
-// rule-shaped RowError in res.Errors (the store-duplicate path) and
-// violationKeys(res) (the 04 rule-engine path).
-//
-// The two loops below are absence-only (no key/RuleKey matches
-// ruleKeyDuplicateInvoiceNumber), which on their own would PASS just as
-// happily on a totally broken import (0 groups ever created, nothing ever
-// evaluated) as on a genuine "checked 500 opportunities and none false-
-// fired" run (QA Mode-B mutation-verified, M4-11-03: a hand-built
-// zero-ReadyInvoices BatchResult clears both loops trivially). The
-// assertCleanImport call below closes that gap by pinning
-// ReadyInvoices==500 (so the duplicate check demonstrably had 500 fresh
-// numbers to evaluate, not zero) alongside the rest of the clean invariant,
-// before the two loops name the specific rule this AC is about.
+// TestFixtures_GreenNoStoreDuplicateOnFreshEntity: the against-store
+// duplicate check (ruleKeyDuplicateInvoiceNumber) must not false-fire
+// against a fresh, empty entity store -- checked both via res.Errors and
+// violationKeys(res). The absence-only loops below would also pass on a
+// totally broken (zero-group) import, so assertCleanImport's
+// ReadyInvoices==500 check guards that the duplicate check actually had
+// 500 numbers to evaluate.
 func TestFixtures_GreenNoStoreDuplicateOnFreshEntity(t *testing.T) {
 	res, _, _ := importGreenFixture(t, "../../testdata/invoices/green_500.csv",
 		"M4-11-03 no-dup tenant", "M4-11-03 no-dup entity")

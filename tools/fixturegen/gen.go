@@ -1,34 +1,18 @@
 // gen.go implements the builder API for the synthetic invoice-import
-// fixture generator (M4-11-01, task-194): deterministic CSV generation for
-// the green (canonical, all-valid) shape and six edge-case mutations, plus
-// an in-memory oversized-body inflator. Every builder is seeded ONLY from
-// its seed parameter (math/rand, no wall-clock, no map iteration in output
-// order) so identical (seed, invoices) always produces identical bytes --
-// see gen_test.go's TestGen_SameSeedByteIdentical.
+// fixtures: deterministic CSV generation for the green (canonical) shape
+// and edge-case mutations, plus an in-memory oversized-body inflator.
+// Every builder is seeded only from its seed parameter (math/rand, no
+// wall-clock), so identical (seed, invoices) always produces identical
+// bytes.
 //
-// Canonical header, money math (subtotal/vat/total), and buyer-TIN shape
-// mirror internal/importer/service_test.go's stdHeader/stdMapping and
+// Canonical header and money math mirror
+// internal/importer/service_test.go's stdHeader/stdMapping and
 // e2e/importFixtures.ts's PERF_HEADER/PERF_MAPPING byte-for-byte, and the
-// seeded vat-standard-rate rule (migrations/20260711121327_seed_mbs_v1.sql:29,
-// rate=0.075, tolerance=0.005).
+// seeded vat-standard-rate rule (rate=0.075, tolerance=0.005).
 //
-// Money is computed in integer cents throughout (never accumulated as
-// float64) so subtotal/vat/total round-trip through decimal-string CSV
-// cells exactly: subtotal is an exact sum of integer qty*unit_price
-// cents, and vat is round(subtotal_cents*0.075) cents -- both formatted
-// to 2dp only at render time. This is what makes
-// TestGen_GreenMoneyReconciles's exact-equality check on subtotal (as
-// opposed to VAT's tolerance-based check) hold reliably.
-//
-// NON-OBVIOUS CONSTRAINT ON buildEdgeBadEncoding: gen_test.go's
-// TestGen_EdgeBadEncoding_IsUTF16LEWithoutBOM asserts the UTF-16LE bytes
-// are NOT utf8.Valid. A pure-ASCII green base re-encoded as UTF-16LE (each
-// char -> low byte, 0x00 high byte) IS still valid UTF-8 -- 0x00 and
-// 0x20-0x7E are each valid single-byte UTF-8 sequences on their own -- so
-// buildEdgeBadEncoding forces its first invoice's buyer name to a fixed
-// non-ASCII string (nonASCIIBuyer) regardless of what the seed would have
-// randomly picked from buyerNames, guaranteeing the encoded content always
-// contains a multi-byte UTF-8 rune.
+// Money is computed in integer cents throughout, never float64, so
+// subtotal/vat/total round-trip exactly through decimal-string CSV cells.
+
 package main
 
 import (
@@ -45,15 +29,13 @@ import (
 	"golang.org/x/text/transform"
 )
 
-// canonicalHeader is the byte-for-byte CSV header line (no trailing
-// newline). Matches internal/importer/service_test.go's stdHeader and
-// e2e/importFixtures.ts's PERF_HEADER exactly, column for column.
+// canonicalHeader mirrors internal/importer/service_test.go's stdHeader
+// and e2e/importFixtures.ts's PERF_HEADER byte-for-byte.
 const canonicalHeader = "Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price"
 
-// Column indices into a canonical 11-field row. Kept private to gen.go
-// (not shared with gen_test.go's own colXxx constants, which live in the
-// test binary only) since production code cannot depend on _test.go
-// declarations.
+// Column indices into the canonical 11-field row (kept separate from
+// gen_test.go's own colXxx; production code can't depend on _test.go
+// declarations).
 const (
 	idxInvoiceNo = iota
 	idxIssueDate
@@ -68,11 +50,8 @@ const (
 	idxUnitPrice
 )
 
-// buyerNames is a fixed, index-selected pool of Nigerian buyer names drawn
-// from for every green and edge-case invoice. At least one entry carries a
-// non-ASCII rune (a diacritic) -- see the file doc comment above --
-// though buildEdgeBadEncoding does not rely on chance here, it forces
-// nonASCIIBuyer explicitly to guarantee the constraint regardless of seed.
+// buyerNames is the fixed pool of Nigerian buyer names drawn from for
+// every invoice.
 var buyerNames = []string{
 	"Adeyemi Trading Company Ltd",
 	"Chukwuemeka Okafor Ltd",
@@ -101,15 +80,14 @@ var lineItemNames = []string{
 	"Maintenance Services",
 }
 
-// nonASCIIBuyer is the buyer name buildEdgeBadEncoding forces onto its
-// first invoice to guarantee non-ASCII content -- see the file doc
-// comment's NON-OBVIOUS CONSTRAINT section.
+// nonASCIIBuyer is forced onto buildEdgeBadEncoding's first invoice: a
+// pure-ASCII UTF-16LE re-encoding is still valid UTF-8, so this guarantees
+// non-ASCII content regardless of seed.
 const nonASCIIBuyer = "Chukwuemeka Okàfor Ltd"
 
-// invoiceRec is one green invoice's header-repeating fields plus its 3
-// line rows, held in integer cents so subtotal/vat/total math never
-// accumulates float error -- only formatted to 2dp decimal strings at
-// render time (see moneyStr).
+// invoiceRec is one invoice's header-repeating fields plus its 3 line
+// rows, held in integer cents (formatted to 2dp only at render time; see
+// moneyStr).
 type invoiceRec struct {
 	no        string
 	issueDate string
@@ -129,11 +107,10 @@ type lineRec struct {
 	unitPriceC int64 // cents
 }
 
-// genInvoices builds n deterministic invoices from rng, each with 3 line
-// rows and reconciled money: subtotal = sum(qty*unit_price) (exact, in
-// cents), vat = round(0.075*subtotal, 2), total = subtotal+vat.
-// Invoice numbers are assigned sequentially (INV-SYN-00001, 00002, ...),
-// which is file-unique by construction regardless of seed.
+// genInvoices builds n deterministic invoices from rng: subtotal =
+// sum(qty*unit_price) cents, vat = round(0.075*subtotal), total =
+// subtotal+vat; invoice numbers are sequential (INV-SYN-00001, ...), so
+// unique by construction.
 func genInvoices(rng *rand.Rand, n int) []invoiceRec {
 	baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	invs := make([]invoiceRec, n)
@@ -168,10 +145,9 @@ func genInvoices(rng *rand.Rand, n int) []invoiceRec {
 	return invs
 }
 
-// genBuyerTIN generates a Luhn-valid NNNNNNNN-NNNN buyer TIN. Luhn
-// validity is a realism touch, not a hard requirement -- the importer's
-// buyer-tin rules only check the ^[0-9]{8}-[0-9]{4}$ shape (gen_test.go's
-// tinRE) -- but costs nothing to include.
+// genBuyerTIN generates a Luhn-valid NNNNNNNN-NNNN TIN; Luhn validity is
+// decorative only -- the shipped rule just checks the ^[0-9]{8}-[0-9]{4}$
+// shape (tinRE).
 func genBuyerTIN(rng *rand.Rand) string {
 	payload := make([]int, 11)
 	for i := range payload {
@@ -187,12 +163,9 @@ func genBuyerTIN(rng *rand.Rand) string {
 	return string(digits[:8]) + "-" + string(digits[8:])
 }
 
-// luhnCheckDigit computes the standard Luhn check digit for payload
-// (most-significant digit first): every second digit, counting from the
-// payload's rightmost digit (the one adjacent to where the check digit is
-// appended), is doubled and reduced by 9 if it exceeds 9, then all digits
-// are summed and the check digit is chosen to bring that sum to a
-// multiple of 10.
+// luhnCheckDigit computes the standard Luhn check digit for payload (MSB
+// first): every second digit from the right is doubled (minus 9 if >9),
+// then the check digit brings the sum to a multiple of 10.
 func luhnCheckDigit(payload []int) int {
 	sum := 0
 	for i, d := range payload {
@@ -244,13 +217,9 @@ func dropCol(fields []string, idx int) []string {
 	return out
 }
 
-// renderCSV writes header + rows as RFC 4180 CSV ('\n'-terminated --
-// encoding/csv.Writer's default; UseCRLF is left false). A write or flush
-// error here means an invoice/header field itself is malformed CSV input
-// (e.g. contains an unescapable byte sequence), which is a generator bug,
-// not a runtime condition callers should handle -- hence panic rather
-// than a returned error, consistent with gen.go's stub signatures (none
-// of which return an error).
+// renderCSV writes header + rows as RFC 4180 CSV ('\n'-terminated). A
+// write/flush error means malformed input -- a generator bug -- so it
+// panics rather than returning an error.
 func renderCSV(header []string, rows [][]string) []byte {
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
@@ -269,9 +238,8 @@ func renderCSV(header []string, rows [][]string) []byte {
 	return buf.Bytes()
 }
 
-// generateGreen builds the canonical green CSV: `invoices` invoices, 3 line
-// rows each, deterministic for a given seed. Header + data rows,
-// '\n'-terminated, no trailing timestamp.
+// generateGreen builds the canonical green CSV: invoices invoices, 3 line
+// rows each, deterministic for seed.
 func generateGreen(seed int64, invoices int) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	invs := genInvoices(rng, invoices)
@@ -292,20 +260,16 @@ func buildEdgeMissingColumns(seed int64, invoices int) []byte {
 	return renderCSV(header, rows)
 }
 
-// buildEdgeInFileDupes derives from a green base then mutates it so that
-// at least one invoice has two rows sharing the same Invoice No but
-// differing on exactly Issue Date (every other header field identical).
-// A small, fixed invoice count keeps the file small, per task-194.
+// buildEdgeInFileDupes derives from a green base then adds a duplicate row
+// for one invoice, differing only on Issue Date. Uses a small, fixed
+// invoice count to keep the file small.
 func buildEdgeInFileDupes(seed int64) []byte {
 	const n = 5
 	rng := rand.New(rand.NewSource(seed))
 	invs := genInvoices(rng, n)
 	rows := allRows(invs)
 
-	// Duplicate the first invoice's first line row, changing only Issue
-	// Date, so exactly one invoice ends up with two distinct header-field
-	// tuples that differ on nothing else -- the shape
-	// TestGen_EdgeInFileDupes_DifferOnlyOnIssueDate asserts.
+	// Duplicate the first invoice's first row, changing only Issue Date.
 	dupe := csvRow(invs[0], 0)
 	origDate, err := time.Parse("2006-01-02", invs[0].issueDate)
 	if err != nil {
@@ -317,9 +281,9 @@ func buildEdgeInFileDupes(seed int64) []byte {
 	return renderCSV(strings.Split(canonicalHeader, ","), rows)
 }
 
-// buildEdgeBadEncoding derives from a green base then re-encodes it as
-// UTF-16LE WITHOUT a byte-order-mark. See the file doc comment above for
-// the non-ASCII-content constraint this builder must satisfy.
+// buildEdgeBadEncoding derives from a green base, forces the first buyer
+// name non-ASCII (see nonASCIIBuyer), then re-encodes as UTF-16LE without
+// a BOM.
 func buildEdgeBadEncoding(seed int64, invoices int) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	invs := genInvoices(rng, invoices)
@@ -344,8 +308,7 @@ func buildEdgeBadTin(seed int64, invoices int) []byte {
 	invs := genInvoices(rng, invoices)
 	if len(invs) > 0 {
 		// 7 digits before the dash (canonical requires 8) -- fails the
-		// regex shape while every other invoice's genBuyerTIN output stays
-		// well-formed by construction.
+		// regex shape.
 		invs[0].buyerTIN = "1234567-8901"
 	}
 	return renderCSV(strings.Split(canonicalHeader, ","), allRows(invs))
@@ -358,13 +321,9 @@ func buildEdgeVatMathWrong(seed int64, invoices int) []byte {
 	rng := rand.New(rand.NewSource(seed))
 	invs := genInvoices(rng, invoices)
 	if len(invs) > 0 {
-		// subtotal/lines are left untouched (so they still reconcile);
-		// genInvoices' minimum possible subtotal is 3 lines x 1 qty x
-		// NGN 1.00 = NGN 3.00, always >= the NGN 1.00 floor. Total is
-		// recomputed to subtotal+0 to stay internally consistent -- v2 has
-		// no separate total=subtotal+vat rule, so the only intended
-		// defect is vat-standard-rate; leaving Total stale would introduce
-		// a second, unintended inconsistency.
+		// subtotal/lines stay untouched so they still reconcile (min
+		// possible subtotal is NGN 3.00, above the NGN 1.00 floor); Total
+		// is recomputed to subtotal+0 so VAT is the only intended defect.
 		invs[0].vatC = 0
 		invs[0].totalC = invs[0].subtotalC
 	}
@@ -372,10 +331,8 @@ func buildEdgeVatMathWrong(seed int64, invoices int) []byte {
 }
 
 // oversizedSeed / oversizedTargetBytes drive buildOversized: a pinned
-// seed (deterministic, though byte-identity is not asserted by any test)
-// and a target comfortably past internal/importer/handlers.go's
-// maxUploadBytes (10<<20, 10 MiB) so the result reliably exceeds the cap
-// regardless of per-invoice row-length variance.
+// seed and a target comfortably past maxUploadBytes
+// (internal/importer/handlers.go, 10 MiB).
 const oversizedSeed = 999003
 const oversizedTargetBytes = 10<<20 + 1<<20 // cap + 1 MiB margin
 

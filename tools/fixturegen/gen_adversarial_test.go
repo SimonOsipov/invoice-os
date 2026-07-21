@@ -1,34 +1,10 @@
-// gen_adversarial_test.go adds QA-authored adversarial coverage on top of
-// gen_test.go's RED-authored, task-194-transcribed acceptance tests
-// (M4-11-01 QA verification pass). It locks in invariants the AC tests
-// don't fully cover:
-//
-//   - The "otherwise green" property each edge builder must have: M4-11-04's
-//     rule-engine parity check depends on every edge file tripping EXACTLY
-//     ONE rule, which only holds if the rest of that file's content is fully
-//     green (money reconciles, currency/dates/TIN/header-repeat all correct)
-//     everywhere except the one intended defect.
-//   - green_second is genuinely distinct demo content, not just a shorter
-//     green_500 (a coincidental byte-length match or an accidentally
-//     seed-insensitive builder would not be caught by a plain bytes.Equal
-//     length check).
-//   - Determinism and seed-sensitivity hold across the WHOLE manifest (every
-//     committed file), not just generateGreen in isolation.
-//   - buildOversized clears the upload cap without ballooning into an
-//     expensive in-memory allocation.
-//   - An independent, hand-transcribed literal for the canonical header,
-//     closing a real gap found during QA mutation testing: gen_test.go's
-//     TestGen_HeaderIsCanonical compares generateGreen's output against
-//     gen.go's OWN canonicalHeader constant -- the very constant
-//     generateGreen renders from -- so a mutation that changes
-//     canonicalHeader's VALUE (e.g. "VAT" -> "Tax") is invisible to it; only
-//     a rendering-pipeline bug that diverges from the constant would trip
-//     it. Verified by mutation: changing gen.go's canonicalHeader literal
-//     left TestGen_HeaderIsCanonical green. TestAdversarial_
-//     HeaderMatchesIndependentLiteral below uses a hardcoded copy
-//     (independently transcribed from internal/importer/service_test.go's
-//     stdHeader and e2e/importFixtures.ts's PERF_HEADER) as the oracle
-//     instead, so it actually catches that class of regression.
+// gen_adversarial_test.go adds adversarial coverage beyond gen_test.go's
+// AC-transcribed tests: the "otherwise green" property each edge builder
+// must have (every column outside its one intended defect stays clean),
+// determinism/seed-sensitivity across the whole manifest, and an
+// independent literal for the canonical header -- gen_test.go's own check
+// compares generateGreen's output against gen.go's OWN canonicalHeader
+// constant, so it can't catch a mutation to that constant's value.
 package main
 
 import (
@@ -37,11 +13,9 @@ import (
 	"testing"
 )
 
-// distinctLines dedupes grp's rows by (Item, Qty, Unit Price) -- the three
-// line-varying columns -- so an invoice group that includes an in-file
-// duplicate row (same line content, different Issue Date, as
-// buildEdgeInFileDupes produces) doesn't get its duplicated line
-// double-counted when reconciling subtotal against sum(qty*unit_price).
+// distinctLines dedupes grp's rows by (Item, Qty, Unit Price) so an
+// in-file duplicate row (buildEdgeInFileDupes) doesn't get double-counted
+// when reconciling subtotal.
 func distinctLines(grp [][]string) [][]string {
 	seen := map[[3]string]bool{}
 	var out [][]string
@@ -56,12 +30,10 @@ func distinctLines(grp [][]string) [][]string {
 	return out
 }
 
-// assertGroupWellFormed checks the green invariants (3 (or nLines) rows,
-// header fields repeat except any columns in skipRepeat, currency NGN, ISO
-// dates, TIN shape) for one invoice's row group. It does NOT check money
-// reconciliation -- callers do that themselves since the tolerance/skip
-// rules differ per edge case (e.g. VAT==0 is expected for exactly one
-// invoice in edge_vat_math_wrong).
+// assertGroupWellFormed checks the green invariants (row count, header-field
+// repeat except skipRepeat, currency, ISO dates, TIN shape) for one invoice
+// group. Money reconciliation is checked separately by callers since
+// tolerance/skip rules differ per edge case.
 func assertGroupWellFormed(t *testing.T, inv string, grp [][]string, wantRows int, skipRepeat map[int]bool) {
 	t.Helper()
 	if len(grp) != wantRows {
@@ -399,11 +371,9 @@ func TestAdversarial_BuildOversized_StaysCheap(t *testing.T) {
 
 // --- header value pinned against an INDEPENDENT oracle ----------------------
 
-// canonicalHeaderIndependentLiteral is a hand-transcribed copy of the
-// canonical header -- copied from internal/importer/service_test.go's
-// stdHeader and e2e/importFixtures.ts's PERF_HEADER, NOT a reference to
-// gen.go's own canonicalHeader constant. See the file doc comment above for
-// why this closes a real gap in TestGen_HeaderIsCanonical.
+// canonicalHeaderIndependentLiteral is a hand-transcribed copy (from
+// internal/importer/service_test.go's stdHeader / e2e's PERF_HEADER), not
+// a reference to gen.go's own canonicalHeader constant.
 const canonicalHeaderIndependentLiteral = "Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price"
 
 func TestAdversarial_HeaderMatchesIndependentLiteral(t *testing.T) {

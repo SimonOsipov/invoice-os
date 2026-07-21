@@ -27,6 +27,8 @@
 //	SPINE-05 every audit row's actor == the one known subject
 //	SPINE-06 the 4 transitioned edges == the expected edge set
 //	SPINE-07 tenant scoping: same query under a second tenant -> 0 rows
+//	SPINE-08 (QA-added) a non-sampled invoice stays 'validated' with the exact
+//	         2-row history + 3-row audit import-only trail (walk blast-radius)
 //
 // Run (dev DB on 5433):
 //
@@ -307,6 +309,68 @@ func TestSpineIntegration(t *testing.T) {
 			t.Errorf("tenant A saw %d audit rows for its own invoice %s, want 6 (non-vacuous guard)", got, probeID)
 		}
 	})
+
+	// SPINE-08 (adversarial, added by QA M4-13-01): bound the walk's blast radius
+	// AND pin the import-only lifecycle shape. A deterministic NON-sampled invoice
+	// (highest invoice_number, outside the first-10-ASC sample) must still sit at
+	// 'validated' -- the walk advanced ONLY the 10 it targeted -- carrying EXACTLY
+	// the import->validate trail: a 2-row history (NULL->draft, draft->validated)
+	// and a 3-row audit_log (created + transitioned + validated). No SPINE-01..07
+	// spec observes a non-walked invoice's POST-walk state (SPINE-01 counts
+	// validated BEFORE the walk), nor the 2/3-row shape of the dominant 490/500
+	// import-only path (SPINE-03/04 read only walked invoices, whose chains are
+	// 5/6 rows). Actor and edge VALUES are deliberately NOT re-checked here: the
+	// import-time draft->validated promotion is the SAME transitionTx and SAME
+	// subject that SPINE-03/05/06 already pin via the walked samples -- re-asserting
+	// them would be padding.
+	t.Run("SPINE-08_nonSampledInvoiceUntouchedAtValidated", func(t *testing.T) {
+		id := selectLastInvoiceID(t, app, tenantID, entityID)
+		for _, s := range sampleIDs {
+			if s == id {
+				t.Fatalf("non-sampled id %s is in the walked sample -- picked the wrong row", id)
+			}
+		}
+
+		got, err := invStore.Get(idCtx, id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Status != invoice.StatusValidated {
+			t.Errorf("non-sampled invoice %s status = %q, want %q (walk leaked past its sample)", id, got.Status, invoice.StatusValidated)
+		}
+
+		hist, err := invStore.History(idCtx, id)
+		if err != nil {
+			t.Fatalf("History(%s): %v", id, err)
+		}
+		if len(hist) != 2 {
+			t.Fatalf("non-sampled invoice %s: History len = %d, want 2 (genesis + import promotion only)", id, len(hist))
+		}
+		if hist[0].FromStatus != nil || hist[0].ToStatus != invoice.StatusDraft {
+			t.Errorf("non-sampled invoice %s: hist[0] = (%v -> %q), want (nil -> draft)", id, hist[0].FromStatus, hist[0].ToStatus)
+		}
+		if hist[1].FromStatus == nil || *hist[1].FromStatus != invoice.StatusDraft || hist[1].ToStatus != invoice.StatusValidated {
+			t.Errorf("non-sampled invoice %s: hist[1] = (%v -> %q), want (draft -> validated)", id, hist[1].FromStatus, hist[1].ToStatus)
+		}
+
+		auditRows := readAuditForInvoice(t, app, tenantID, id)
+		if len(auditRows) != 3 {
+			t.Errorf("non-sampled invoice %s: audit rows = %d, want 3 (created+transitioned+validated)", id, len(auditRows))
+		}
+		counts := map[string]int{}
+		for _, a := range auditRows {
+			counts[a.event]++
+		}
+		want := map[string]int{"invoice.created": 1, "invoice.transitioned": 1, "invoice.validated": 1}
+		for event, n := range want {
+			if counts[event] != n {
+				t.Errorf("non-sampled invoice %s: audit event %q count = %d, want %d (all: %v)", id, event, counts[event], n, counts)
+			}
+		}
+		if len(counts) != len(want) {
+			t.Errorf("non-sampled invoice %s: audit events = %v, want exactly %v", id, counts, want)
+		}
+	})
 }
 
 // statusPtr returns a pointer to s -- for building the expected history chain's
@@ -353,6 +417,23 @@ func selectSampleInvoiceIDs(t *testing.T, app *pgxpool.Pool, tenantID, entityID 
 		t.Fatalf("select sample invoice ids: %v", err)
 	}
 	return ids
+}
+
+// selectLastInvoiceID returns the id of entityID's HIGHEST invoice_number
+// (INV-SYN-00500 for green_500) under tenantID's RLS -- a deterministic pick
+// GUARANTEED outside the first-10-ASC sample, used by SPINE-08 to prove the walk
+// advanced ONLY the invoices it targeted.
+func selectLastInvoiceID(t *testing.T, app *pgxpool.Pool, tenantID, entityID string) string {
+	t.Helper()
+	var id string
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT id FROM invoices WHERE entity_id = $1 ORDER BY invoice_number DESC LIMIT 1`, entityID,
+		).Scan(&id)
+	}); err != nil {
+		t.Fatalf("select last invoice id: %v", err)
+	}
+	return id
 }
 
 // readAuditForInvoice reads every audit_log row whose payload->>'id' == id,

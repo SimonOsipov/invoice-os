@@ -22,6 +22,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
+import { buildMixedCsv } from '../importFixtures'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // collectErrors()/signInFirm(): the same console/pageerror + firm-persona
@@ -284,4 +285,159 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // load message; any other console error still fails the gate below.
   const unexpectedErrors = errors.filter((e) => !/Failed to load resource.*\b409\b/.test(e))
   expect(unexpectedErrors, `console errors on the app:\n${unexpectedErrors.join('\n')}`).toEqual([])
+})
+
+// MixedImportResponse: the subset of POST /v1/imports's success body this test reads to
+// get a real invoice_id, mirroring import-wizard.spec.ts's own local (non-exported) type
+// of the same name byte-for-byte. NOT imported from that file -- both are *.spec.ts,
+// and importing one spec's module graph into another would register its tests twice
+// (the same discipline importFixtures.ts's header documents for why buildMixedCsv is a
+// plain .ts module outside every testDir).
+interface MixedImportResponse {
+  invoice_violations: {
+    invoice_number: string
+    invoice_id?: string
+    violations: { rule_key: string }[]
+  }[]
+}
+
+// M4-14-02 (task-209): the Day-60 moment-of-value, folded into this capability flow
+// instead of a new dated demo ([capability-not-date], docs/e2e-convention.md) -- import a
+// batch, open one of THOSE failing invoices, fix it inline, re-validate to green, and see
+// the dashboard rollup update. Reuses this file's own goToInvoices/openInvoiceRow/
+// signInFirm/collectErrors and import-wizard.spec.ts's proven mixed-CSV upload recipe
+// (buildMixedCsv/E2E-04) rather than re-deriving either.
+//
+// Dashboard/Clients carry no data-testid ([no-testids-on-portfolio-dashboard],
+// grep-verified) -- selected below by role/exact-text/CSS class, the same idiom
+// day30.spec.ts/topology.spec.ts already used for those surfaces before this story split
+// them into auth.spec.ts/validation.spec.ts/portfolio.spec.ts.
+test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-inline -> re-validate-to-green -> dashboard rollup updates', async ({
+  page,
+}) => {
+  // Multiple live round trips on a possibly cold fleet -- the import wizard's own
+  // preview+import, the detail fix loop's edit+revalidate, and TWO Dashboard/Clients
+  // navigations each triggering their own live rollup fetch. Mirrors this file's own
+  // "detail surface" test's 90s bump, with extra headroom for the two extra nav round
+  // trips this arc adds on top of that flow.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M4-14 arc ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+
+  // 1. Import the mixed batch for the fresh entity -- import-wizard.spec.ts's own proven
+  // E2E-04 recipe (select the fresh entity, Read columns, click-map invoice_number +
+  // subtotal, Import), reused verbatim rather than re-derived.
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  const select = page.locator('select')
+  await expect(select, 'entity picker <select> not found -- check VITE_GATEWAY_URL is configured for this deployed build').toBeVisible({
+    timeout: 30_000,
+  })
+  await select.selectOption({ label: entity.name })
+
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'm4-14-arc.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  const resp = await importResp
+  const body = (await resp.json()) as MixedImportResponse
+
+  // 2. The real invoice_id of INV-UI-MIX-VIOLATE, which fires ONLY vat-standard-rate
+  // (buildMixedCsv's doc comment; re-verified live at import-wizard.spec.ts:286).
+  const violateEntry = body.invoice_violations.find((iv) => iv.invoice_number === 'INV-UI-MIX-VIOLATE')
+  expect(violateEntry, 'expected an invoice_violations entry for INV-UI-MIX-VIOLATE').toBeTruthy()
+  expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
+  expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a real import').toBeTruthy()
+
+  // 3. Pre-fix Clients health pill. The import already ran every created row through the
+  // validation engine as part of ITS OWN transaction (internal/importer/service.go's
+  // ValidateBatch -> Store.ApplyValidation, unlike an API-created draft, which stays
+  // unvalidated until an explicit POST .../validate) -- so by now INV-UI-MIX-VIOLATE is
+  // already `draft` with one error-severity violation (needs_attention: true,
+  // internal/dashboard/store.go's predicate) and INV-UI-MIX-CLEAN is already
+  // auto-promoted to `validated` (zero violations always earns the promote-iff-earned
+  // step, internal/invoice/store.go) -- never needs_attention regardless of status. This
+  // fresh entity therefore has EXACTLY one needs_attention invoice before any fix, so the
+  // pre-fix pill is asserted to an exact value, not just captured for a later diff.
+  await page.getByRole('button', { name: /Clients/ }).click()
+  const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
+  await expect(clientRow, 'fresh entity row must render on Clients before the fix').toContainText('1 NEEDS ATTENTION')
+
+  // 4. Open the violating invoice's live detail, navigating via Invoices (not the import
+  // report's own click-through row) -- but still tying the click to the id CAPTURED above,
+  // not just the invoice_number text, by asserting the resulting GET targets that exact
+  // id. This is a cheap one-response wait, not a re-derivation of import-wizard.spec.ts's
+  // E2E-05 (which additionally proves the click-through-honest-placeholder invariant --
+  // out of scope for this arc's own moment of value, the business flow + dashboard
+  // rollup). Inlined rather than openInvoiceRow() because that helper has no captured id
+  // to tie its click to.
+  await goToInvoices(page)
+  const detailResp = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateEntry!.invoice_id}`),
+  )
+  await page.getByText('INV-UI-MIX-VIOLATE', { exact: true }).click()
+  await detailResp
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
+  const violationsTable = page.getByTestId('violations-table')
+  await expect(violationsTable).toContainText('vat-standard-rate')
+
+  // 5. Fix VAT inline (the only broken field here -- vat-standard-rate is the sole
+  // violation) and save. Scoped to the edit-invoice form via xpath sibling lookup (the
+  // form carries no per-field test ids -- same idiom as the "detail surface" test above).
+  const form = page.getByTestId('edit-invoice')
+  await form.locator('xpath=.//div[normalize-space(text())="VAT"]/following-sibling::input').fill('75')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('stale-verdict')).toBeVisible()
+  await expect(form).not.toContainText('Something went wrong')
+
+  // 6. Re-validate to green. handleRevalidate also refreshes the status-history timeline
+  // in place (history.run(), alongside detail.run()) -- asserting its settled row count
+  // (1 genesis row from import + 1 draft->validated promotion row from this revalidate)
+  // proves BOTH in-flight fetches this click kicked off have resolved before the next
+  // step navigates away and unmounts this view.
+  await page.getByTestId('revalidate').click()
+  await expect(violationsTable).toContainText('Passes all rules')
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+  await expect(page.getByTestId('status-history-row')).toHaveCount(2)
+
+  // 7a. Dashboard rollup ready state (Gap 1) -- existence/ready only, never a tenant-wide
+  // count ([dashboard-ready-not-counted]): the shared dev DB accumulates invoices across
+  // every run, so only the overview label + a rendered "<N> TOTAL" donut total are
+  // asserted, never a specific N.
+  await page.getByRole('button', { name: /Overview/ }).click()
+  await expect(page.getByText('/ COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+  await expect(page.getByText(/^\d+ TOTAL$/)).toBeVisible()
+
+  // 7b. Post-fix Clients health pill -- the deterministic per-entity rollup-updated
+  // oracle ([rollup-oracle-per-entity]): both of this fresh entity's invoices are now
+  // validated with zero violations, so needs_attention must have dropped to 0. Reusing
+  // the SAME `clientRow` locator (Playwright locators re-resolve against the live DOM,
+  // not a stale snapshot) -- `toContainText` retries while the fresh ClientsView mount's
+  // rollup refetch settles.
+  await page.getByRole('button', { name: /Clients/ }).click()
+  await expect(clientRow, 'fresh entity health pill must flip to ALL CLEAR once its only violation is fixed').toContainText('ALL CLEAR')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

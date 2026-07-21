@@ -18,11 +18,11 @@ demo date. There are **no `dayN.spec.ts` files**.
   are extended in place instead.
 
 Target capability flows: `auth`, `portfolio`, `validation`, `import`,
-`invoice-lifecycle`, `dashboard`. Today these live mostly in `e2e/topology/` (the
-de-facto capability layer — `import-wizard.spec.ts`, `invoice-surfaces.spec.ts`,
-`topology.spec.ts`); the one legacy dated file, `e2e/demo/day30.spec.ts`, is pending
-conversion (M4-14). Exact file/directory layout is the implementation's choice — the
-rule is the *organizing axis* (capability, not date), not a fixed tree.
+`invoice-lifecycle`, `dashboard`. These live in `e2e/topology/` (the de-facto capability
+layer — `auth.spec.ts`, `validation.spec.ts`, `import-wizard.spec.ts`,
+`invoice-surfaces.spec.ts`, `portfolio.spec.ts`, `isolation.spec.ts`); no dated file
+remains (M4-14). Exact file/directory layout is the implementation's choice — the rule
+is the *organizing axis* (capability, not date), not a fixed tree.
 
 ## Keep the browser layer thin (the pyramid)
 

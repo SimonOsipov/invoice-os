@@ -93,12 +93,15 @@ test.describe('import contract (API E2E, over the deployed gateway)', () => {
     token = await login(PERSONAS.A)
   })
 
-  test('real import -> 201 {errors: [], numeric counters, format: "csv"}', async () => {
+  test('real import -> 201 {errors: null|[], numeric counters, format: "csv"}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
     const res = await importFetch(token, buildForm(entity.id, `INV-${freshTin()}`))
     expect(res.status, 'a real clean-CSV import should return 201').toBe(201)
     const body = res.body as Record<string, unknown>
-    expect(Array.isArray(body.errors), 'errors should be an array').toBe(true)
+    expect(
+      body.errors === null || Array.isArray(body.errors),
+      'errors is the []RowError batch-report field: null when there are no row errors, an array otherwise',
+    ).toBe(true)
     expect(typeof body.rows_total, 'rows_total should be numeric').toBe('number')
     expect(typeof body.rows_valid, 'rows_valid should be numeric').toBe('number')
     expect(typeof body.rows_invalid, 'rows_invalid should be numeric').toBe('number')
@@ -107,12 +110,15 @@ test.describe('import contract (API E2E, over the deployed gateway)', () => {
     expect(body.format, 'format should echo csv').toBe('csv')
   })
 
-  test('dry-run import -> 200 {errors: [], id omitted}', async () => {
+  test('dry-run import -> 200 {errors: null|[], id omitted}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
     const res = await importFetch(token, buildForm(entity.id, `INV-${freshTin()}`), '?dry_run=true')
     expect(res.status, 'a dry-run clean-CSV import should return 200').toBe(200)
     const body = res.body as Record<string, unknown>
-    expect(Array.isArray(body.errors), 'errors should be an array').toBe(true)
+    expect(
+      body.errors === null || Array.isArray(body.errors),
+      'errors is the []RowError batch-report field: null when there are no row errors, an array otherwise',
+    ).toBe(true)
     expect(body.id, 'a dry-run import writes nothing, so id is omitted').toBeUndefined()
   })
 

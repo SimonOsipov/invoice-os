@@ -87,6 +87,10 @@ func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 		encodingName = "windows-1252"
 	}
 
+	if off, found := firstDisallowedControlByte(decoded); found {
+		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: decode: input contains disallowed control byte 0x%02x at offset %d (unreadable/corrupted or unsupported encoding)", decoded[off], off)
+	}
+
 	delimiter := sniffDelimiter(headerLine(decoded))
 
 	cr := csv.NewReader(bytes.NewReader(decoded))
@@ -103,6 +107,23 @@ func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 		return nil, nil, facts, nil
 	}
 	return records[0], records[1:], facts, nil
+}
+
+// firstDisallowedControlByte scans decoded for a NUL byte or any other C0
+// control byte (< 0x20) not on the whitelist a real CSV legitimately
+// carries -- \t (0x09, a delimiter candidate), \n (0x0A) and \r (0x0D) (line
+// endings) -- returning the offset of the first one found. decodeCSV calls
+// this on the resolved decoded bytes, after the BOM/charset sniff and
+// before delimiter sniffing, to reject undecodable/corrupted input (raw
+// binary, a mis-sniffed encoding, BOM-less UTF-16) that would otherwise
+// decode "successfully" into mojibake or embedded NULs.
+func firstDisallowedControlByte(decoded []byte) (offset int, found bool) {
+	for i, b := range decoded {
+		if b == 0x00 || (b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0D) {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // headerLine returns the first line of decoded (up to but excluding the

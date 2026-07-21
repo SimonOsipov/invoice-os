@@ -18,9 +18,10 @@
 // internal/dashboard/store.go's TopViolations query has no LIMIT, so a containment
 // assertion can't be pushed out by other specs' concurrent fixture data.
 //
-// Six tests (DASH-40..45), one test.describe, no helper framework beyond the
-// assertErrorEnvelope() local helper every api/ contract spec duplicates
-// (contract-portfolio.spec.ts, contract-validation.spec.ts, auth-contract.spec.ts).
+// Six tests (DASH-40..45), one test.describe, no helper framework beyond
+// assertErrorEnvelope(), imported from ./contract-helpers, shared across the
+// api/ contract specs (contract-portfolio.spec.ts, contract-validation.spec.ts,
+// auth-contract.spec.ts).
 import { test, expect } from '@playwright/test'
 import {
   login,

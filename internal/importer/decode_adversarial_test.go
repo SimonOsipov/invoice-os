@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/encoding/unicode"
@@ -339,4 +340,193 @@ func TestDecode_TabDelimitedCRLFNotRejected(t *testing.T) {
 	}
 	assertHeader(t, header, []string{"a", "b"})
 	assertRows(t, rows, [][]string{{"1", "2"}})
+}
+
+// --- M4-15-01 QA (Mode B): adversarial C0-boundary + per-branch gate --------
+//
+// The three tests above (TestDecode_CleanHeaderGarbageDataRejected,
+// TestDecode_NULByteRejected, TestDecode_UTF16LENoBOMRejectedViaGate) prove
+// the gate exists; the tests below pin its EXACT scope decision
+// ([reject-byte-scope]: NUL + C0 controls < 0x20 except \t/\n/\r) and prove
+// it actually runs on every branch that produces a `decoded []byte` --
+// UTF-8-BOM-stripped and Windows-1252-fallback, not just the utf8.Valid fast
+// path the three tests above happen to exercise.
+
+// TestDecode_C0BoundaryPrecise pins the gate's byte-set boundary exactly:
+// 0x0B/0x0C (C0 controls adjacent to the whitelist but NOT on it) and 0x1F
+// (the last byte below the 0x20 cutoff) are rejected; 0x20 (the first byte
+// NOT covered by "< 0x20") and the three whitelisted controls are accepted.
+func TestDecode_C0BoundaryPrecise(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture []byte
+		wantErr bool
+		wantRow []string // only checked when wantErr is false
+	}{
+		{
+			name:    "0x0B vertical tab rejected",
+			fixture: []byte("a,b\nfoo,\x0bbar\n"),
+			wantErr: true,
+		},
+		{
+			name:    "0x0C form feed rejected",
+			fixture: []byte("a,b\nfoo,\x0cbar\n"),
+			wantErr: true,
+		},
+		{
+			name:    "0x1F unit separator rejected",
+			fixture: []byte("a,b\nfoo,\x1fbar\n"),
+			wantErr: true,
+		},
+		{
+			name:    "0x20 space accepted",
+			fixture: []byte("a,b\nfoo, bar\n"),
+			wantErr: false,
+			wantRow: []string{"foo", " bar"},
+		},
+		{
+			name:    "0x09 tab accepted (embedded in a comma-delimited data cell)",
+			fixture: []byte("a,b\nfoo,x\x09y\n"),
+			wantErr: false,
+			wantRow: []string{"foo", "x\ty"},
+		},
+		{
+			name:    "0x0A LF accepted (the row separator itself)",
+			fixture: []byte("a,b\nfoo,bar\n"),
+			wantErr: false,
+			wantRow: []string{"foo", "bar"},
+		},
+		{
+			name:    "0x0D CR accepted (bare, embedded mid-field)",
+			fixture: []byte("a,b\nfoo,x\rY\n"),
+			wantErr: false,
+			wantRow: []string{"foo", "x\rY"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header, rows, _, err := Decode(bytes.NewReader(tt.fixture), "csv")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Decode: err = nil, want a decode error (header=%#v rows=%#v)", header, rows)
+				}
+				if rows != nil {
+					t.Errorf("rows = %#v, want nil when Decode rejects the input", rows)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Decode: %v, want no error", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("len(rows) = %d, want 1", len(rows))
+			}
+			assertHeader(t, rows[0], tt.wantRow)
+		})
+	}
+}
+
+// TestDecode_DELByteNotRejected proves the gate's scope stops at 0x20: DEL
+// (0x7F) is a control character by the wider ASCII-control definition, but
+// [reject-byte-scope] only covers "NUL or < 0x20", so a data cell containing
+// a raw 0x7F must decode WITHOUT error. This guards against someone
+// "helpfully" widening firstDisallowedControlByte's condition to `b < 0x20 ||
+// b == 0x7F` later without revisiting the decision.
+func TestDecode_DELByteNotRejected(t *testing.T) {
+	fixture := []byte("a,b\nfoo,\x7fbar\n")
+
+	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	if err != nil {
+		t.Fatalf("Decode: %v, want no error -- DEL (0x7F) is out of [reject-byte-scope] (below 0x20 only)", err)
+	}
+	assertHeader(t, header, []string{"a", "b"})
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	assertHeader(t, rows[0], []string{"foo", "\x7fbar"})
+}
+
+// TestDecode_GateFiresOnUTF8BOMBranch proves the gate runs on the
+// BOM-stripped `decoded` bytes, not just the plain utf8.Valid fast path the
+// three RED-authored gate tests happen to exercise: a UTF-8-BOM-prefixed
+// input whose body carries a disallowed NUL byte must still be rejected.
+func TestDecode_GateFiresOnUTF8BOMBranch(t *testing.T) {
+	fixture := append([]byte{0xEF, 0xBB, 0xBF}, []byte("a,b\nfoo,\x00bar\n")...)
+
+	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	if err == nil {
+		t.Fatalf("Decode: err = nil, want a decode error -- a NUL byte after a stripped UTF-8 BOM must still be rejected (header=%#v rows=%#v)", header, rows)
+	}
+	if rows != nil {
+		t.Errorf("rows = %#v, want nil when Decode rejects the input", rows)
+	}
+}
+
+// TestDecode_GateFiresOnWindows1252FallbackBranch proves the gate also runs
+// on the Windows-1252-decoded `decoded` bytes, i.e. AFTER the fallback
+// decode, not only before it. The fixture is invalid UTF-8 (confirmed below
+// via utf8.Valid, matching decodeCSV's own routing condition) and carries no
+// BOM, so it takes the `default:` charmap.Windows1252 branch; it also
+// carries a disallowed control byte (0x01) that charmap.Windows1252 passes
+// through unchanged (Windows-1252's C0 range is identical to Latin-1/ASCII),
+// so the gate must still catch it post-fallback.
+func TestDecode_GateFiresOnWindows1252FallbackBranch(t *testing.T) {
+	fixture := []byte("a,b\nfoo,\x81\x01bar\n")
+	if utf8.Valid(fixture) {
+		t.Fatalf("test fixture setup: fixture is valid UTF-8, want invalid so Decode routes to the Windows-1252 fallback branch")
+	}
+
+	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	if err == nil {
+		t.Fatalf("Decode: err = nil, want a decode error -- 0x01 survives the Windows-1252 fallback decode unchanged and must still be rejected (header=%#v rows=%#v)", header, rows)
+	}
+	if rows != nil {
+		t.Errorf("rows = %#v, want nil when Decode rejects the input", rows)
+	}
+}
+
+// TestDecode_EmptyInputNotRejectedByGate guards specifically that the gate
+// itself doesn't break the empty-file path (TestDecode_EmptyInputNoPanic
+// above already pins the same return shape for a different reason --
+// panic-safety in general; this one pins it as a regression guard for
+// firstDisallowedControlByte specifically, since a zero-length scan finding
+// nothing is the one input shape most likely to be broken by an off-by-one
+// in a hand-rolled byte-scan loop).
+func TestDecode_EmptyInputNotRejectedByGate(t *testing.T) {
+	header, rows, facts, err := Decode(bytes.NewReader(nil), "csv")
+	if err != nil {
+		t.Fatalf("Decode(empty input): %v, want no error -- the gate must not fire on an empty byte slice", err)
+	}
+	if len(header) != 0 {
+		t.Errorf("header = %#v, want empty for 0-byte input", header)
+	}
+	if len(rows) != 0 {
+		t.Errorf("rows = %#v, want empty for 0-byte input", rows)
+	}
+	if facts.Format != "csv" {
+		t.Errorf("facts.Format = %q, want %q", facts.Format, "csv")
+	}
+}
+
+// TestDecode_AllWhitelistedControlsAccepted covers a case
+// TestDecode_TabDelimitedCRLFNotRejected doesn't: a QUOTED field with an
+// embedded raw LF (RFC4180-legal multiline CSV cell). encoding/csv only
+// permits an unquoted \n to terminate a row; a quoted cell can carry one
+// literally. The gate scans raw bytes with no notion of quoting, so this
+// also proves it does not mistake a legitimately-embedded 0x0A for a
+// disallowed byte just because it sits inside a cell rather than at a row
+// boundary.
+func TestDecode_AllWhitelistedControlsAccepted(t *testing.T) {
+	fixture := []byte("a,b\n\"foo\nbar\",baz\n")
+
+	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	if err != nil {
+		t.Fatalf("Decode: %v, want no error -- an embedded LF inside a quoted field must not be rejected", err)
+	}
+	assertHeader(t, header, []string{"a", "b"})
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	assertHeader(t, rows[0], []string{"foo\nbar", "baz"})
 }

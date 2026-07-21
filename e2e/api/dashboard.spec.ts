@@ -34,19 +34,7 @@ import {
   type Entity,
 } from './client'
 import { freshTin } from './fixtures'
-
-type RawResult = { status: number; body: unknown }
-
-// assertErrorEnvelope(): the shared error-path assertion -- a rejected request must
-// carry the EXPECTED status and a body that is EXACTLY the shared envelope shape
-// {error: <string>}. Mirrors contract-portfolio.spec.ts / auth-contract.spec.ts.
-function assertErrorEnvelope(result: RawResult, expectedStatus: number, label: string): void {
-  expect(result.status, `${label}: expected HTTP ${expectedStatus}`).toBe(expectedStatus)
-  expect(result.body, `${label}: expected a parsed JSON object body`).toBeInstanceOf(Object)
-  const body = result.body as Record<string, unknown>
-  expect(Object.keys(body), `${label}: expected exactly one key, 'error'`).toEqual(['error'])
-  expect(typeof body.error, `${label}: expected body.error to be a string`).toBe('string')
-}
+import { assertErrorEnvelope } from './contract-helpers'
 
 // brokenInvoice(): create one invoice on `entity` with only entity_id/invoice_number
 // set, then validate it -- stays draft, stamped with severity:"error" violations

@@ -27,21 +27,7 @@
 // Read-only: no login, no token minting, no writes, no rules-table mutation.
 import { test, expect } from '@playwright/test'
 import { rawFetch } from './client'
-
-type RawResult = { status: number; body: unknown }
-
-// assertUnauthorizedEnvelope(): the AC1 core assertion — a rejected request
-// must be HTTP 401 with a body that is EXACTLY the shared envelope shape
-// { error: <string> }: a plain object with one key, `error`, whose value is
-// a string. Deliberately does not assert the string's content (see the file
-// header) so this stays a shape contract, not a copy contract.
-function assertUnauthorizedEnvelope(result: RawResult, label: string): void {
-  expect(result.status, `${label}: expected HTTP 401`).toBe(401)
-  expect(result.body, `${label}: expected a parsed JSON object body`).toBeInstanceOf(Object)
-  const body = result.body as Record<string, unknown>
-  expect(Object.keys(body), `${label}: expected exactly one key, 'error'`).toEqual(['error'])
-  expect(typeof body.error, `${label}: expected body.error to be a string`).toBe('string')
-}
+import { assertUnauthorizedEnvelope } from './contract-helpers'
 
 test.describe('auth-header contract (API E2E, over the deployed gateway)', () => {
   test.describe('AC1: three distinct auth-failure variants each reject 401 with the shared envelope', () => {

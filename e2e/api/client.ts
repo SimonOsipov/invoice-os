@@ -401,6 +401,13 @@ export function createInvoice(token: string, body: CreateInvoiceInput): Promise<
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices`, { method: 'POST', body, token })
 }
 
+// transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
+// The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
+// earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.
+export function transitionInvoice(token: string, id: string, target: Invoice['status']): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', body: { target }, token })
+}
+
 // ---- Dashboard rollup wire types, mirrored EXACTLY from internal/dashboard/
 // dashboard.go's Counts/Bucket/Client/RuleCount/Rollup (M4-07-05, task-159).
 // dashboard.go's Client embeds Bucket ANONYMOUSLY so encoding/json promotes

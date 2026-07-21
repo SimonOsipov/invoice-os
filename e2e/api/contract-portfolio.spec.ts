@@ -32,21 +32,7 @@
 import { test, expect } from '@playwright/test'
 import { login, createEntity, offboardEntity, listEntities, rawFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'
-
-type RawResult = { status: number; body: unknown }
-
-// assertErrorEnvelope(): the shared error-path assertion — a rejected
-// request must carry the EXPECTED status and a body that is EXACTLY the
-// shared envelope shape {error: <string>}: a plain object with one key,
-// `error`, whose value is a string. Mirrors auth-contract.spec.ts's
-// assertUnauthorizedEnvelope, generalized to an arbitrary status.
-function assertErrorEnvelope(result: RawResult, expectedStatus: number, label: string): void {
-  expect(result.status, `${label}: expected HTTP ${expectedStatus}`).toBe(expectedStatus)
-  expect(result.body, `${label}: expected a parsed JSON object body`).toBeInstanceOf(Object)
-  const body = result.body as Record<string, unknown>
-  expect(Object.keys(body), `${label}: expected exactly one key, 'error'`).toEqual(['error'])
-  expect(typeof body.error, `${label}: expected body.error to be a string`).toBe('string')
-}
+import { assertErrorEnvelope } from './contract-helpers'
 
 test.describe('portfolio contract (API E2E, over the deployed gateway)', () => {
   let token: string

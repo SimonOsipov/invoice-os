@@ -101,3 +101,79 @@ func TestServiceImport_ColumnCountAnomaliesDegradeGracefully(t *testing.T) {
 		t.Errorf("INV-WIDE persisted subtotal = %v, want %q (mapped cells persisted intact; the 2 extra trailing cells are ignored)", got, want)
 	}
 }
+
+// TestServiceImport_DrasticallyShortRowNoPanic pushes the bounds-checking
+// argument above to its breaking point: a row containing ONLY the
+// invoice_number cell -- every OTHER mapped field (10 of 11) is out of
+// range, not just one. This still must not panic: fieldValue/cellAt guard
+// every read, regardless of how many fields are out of range at once.
+//
+// This is NOT a "wrong column count -> reject" assertion (out of scope, per
+// the story) -- it characterizes whatever the ACTUAL outcome is. Reasoned
+// ahead of running: the invoices/line_items schema keeps every MBS-content
+// column NULLABLE with no CHECK (store-invalid-faithfully,
+// migrations/20260714103137_invoices.sql), classify's three quarantine
+// checks (headerConflictField, issueDateParseError,
+// bestEffortBadNumericField) all skip a blank/out-of-range cell rather than
+// flagging it, and newTestService wires an INERT fakeGate (zero violations,
+// no rejection) -- so the tiny row is expected to COMMIT with every
+// MBS-content column NULL/empty, exactly like INV-SHORT's single missing
+// field above, just with more fields affected at once. Asserted, not
+// assumed: if the real outcome differs (a panic, a wholesale error, or a
+// quarantine), that is a genuine finding, not something to paper over.
+func TestServiceImport_DrasticallyShortRowNoPanic(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "M4-15-03 tenant (short-row)")
+	entityID := seedEntity(t, super, tenantID, "M4-15-03 entity (short-row)")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	// INV-TINY: ONE cell -- invoice_number only. Every other mapped field
+	// (issue_date, buyer_tin, buyer_name, currency, vat, total,
+	// line_description, line_quantity, line_unit_price, subtotal -- 10 of
+	// anomalyHeader's 11 fields) is out of range.
+	tinyRow := []string{"INV-TINY"}
+
+	// INV-FULL: a complete, valid invoice -- proves the tiny row's anomaly
+	// doesn't take the whole batch down with it.
+	fullRow := []string{
+		"INV-FULL", "2026-01-12", "T3", "B3", "NGN",
+		"1.00", "11.00", "Item1", "1", "10.00", "10.00",
+	}
+
+	res, err := svc.Import(c, entityID, stdMapping, anomalyHeader, [][]string{tinyRow, fullRow}, false)
+	if err != nil {
+		t.Fatalf("Import: %v (a drastically out-of-range row must never panic or wholesale-reject the batch)", err)
+	}
+
+	if res.Status != "completed" {
+		t.Errorf("Status = %q, want %q", res.Status, "completed")
+	}
+	if res.RowsTotal != 2 {
+		t.Errorf("RowsTotal = %d, want 2", res.RowsTotal)
+	}
+
+	// Characterized outcome: both rows commit. classify has no "field
+	// missing" check (only conflict/bad-format/duplicate), Create rejects
+	// nothing but empty entity_id/invoice_number, and the inert fakeGate
+	// reports zero violations -- so INV-TINY is READY, not quarantined.
+	if res.ReadyInvoices != 2 || res.QuarantinedInvoices != 0 {
+		t.Fatalf("(ReadyInvoices=%d QuarantinedInvoices=%d), want (2,0) -- characterized: even an almost-entirely-out-of-range row degrades to NULLs and commits, it does not quarantine or panic", res.ReadyInvoices, res.QuarantinedInvoices)
+	}
+	if len(res.Errors) != 0 {
+		t.Errorf("Errors = %+v, want none", res.Errors)
+	}
+
+	tinyID := invoiceIDByNumber(t, super, entityID, "INV-TINY")
+	fullID := invoiceIDByNumber(t, super, entityID, "INV-FULL")
+
+	if got := invoiceSubtotal(t, super, tinyID); got != nil {
+		t.Errorf("INV-TINY persisted subtotal = %q, want nil (out-of-range mapped read -> NULL)", *got)
+	}
+	if got, want := invoiceSubtotal(t, super, fullID), "10.00"; got == nil || *got != want {
+		t.Errorf("INV-FULL persisted subtotal = %v, want %q (the companion valid row is unaffected)", got, want)
+	}
+}

@@ -30,7 +30,7 @@ There is no standalone topology workflow. These assertions run automatically as 
 post-deploy verification steps of `.github/workflows/dev-env.yml`, on every ready
 (non-draft) PR — after the fleet is deployed to that PR's own ephemeral Railway
 environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway boot
-(M4-21-04), alongside the smoke, api, and demo suites. `dev-env.yml` flow:
+(M4-21-04), alongside the smoke and api suites. `dev-env.yml` flow:
 
 ```
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
@@ -40,7 +40,7 @@ gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
             ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
             ──> verify: smoke (landing + ops-console) + api (typed contract suite) +
-                topology (fleet gate, browser login, isolation) + demo (Day-30 journey)
+                topology (fleet gate, browser login, isolation)
 ```
 
 Every environment's Postgres — a PR's own ephemeral fork or `development` itself —
@@ -94,9 +94,9 @@ No workflow discovers, stores, or resolves a Postgres superuser DSN anymore, for
 reason — M4-22-08 deleted the last two CI paths that did (the `e2e` job's per-run
 public-DSN lookup, and `prepare-env`'s liveness probe against it; see
 [deploy-model.md](./deploy-model.md)). The old GitHub-secret name survives in the repo
-only as a literal string inside `e2e/api/no-db-access.test.ts` and
-`e2e/demo/no-db-access.test.ts` — RED-guard source scanners that assert the name appears
-nowhere else in the codebase, not a variable anything reads.
+only as a literal string inside `e2e/api/no-db-access.test.ts` — a RED-guard source
+scanner that asserts the name appears nowhere else in the codebase, not a variable
+anything reads.
 
 ## Boot-time seed (every environment, not a separate step)
 

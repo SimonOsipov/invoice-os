@@ -13,7 +13,13 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   timeout: 60_000,
   expect: { timeout: 15_000 },
-  fullyParallel: true,
+  // M4-14-01: conformed to the convention's "one browser, serial" rule (matching
+  // playwright.api.config.ts) — the browser suite shares the same non-reset deployed
+  // dev DB as api/demo, so workers:1/fullyParallel:false removes cross-spec races at
+  // the root (Decision [topology-config-conforms-workers-1]). Previously
+  // fullyParallel:true with no workers key (default multi-worker).
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',

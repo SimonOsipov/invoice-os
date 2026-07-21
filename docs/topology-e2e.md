@@ -95,8 +95,8 @@ reason — M4-22-08 deleted the last two CI paths that did (the `e2e` job's per-
 public-DSN lookup, and `prepare-env`'s liveness probe against it; see
 [deploy-model.md](./deploy-model.md)). The old GitHub-secret name survives in the repo
 only as a literal string inside `e2e/api/no-db-access.test.ts` — a RED-guard source
-scanner that asserts the name appears nowhere else in the codebase, not a variable
-anything reads.
+scanner that asserts the name appears nowhere else in the codebase; it is not a runtime
+variable that anything reads.
 
 ## Boot-time seed (every environment, not a separate step)
 

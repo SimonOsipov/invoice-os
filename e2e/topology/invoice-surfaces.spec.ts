@@ -304,9 +304,11 @@ interface MixedImportResponse {
 // M4-14-02 (task-209): the Day-60 moment-of-value, folded into this capability flow
 // instead of a new dated demo ([capability-not-date], docs/e2e-convention.md) -- import a
 // batch, open one of THOSE failing invoices, fix it inline, re-validate to green, and see
-// the dashboard rollup update. Reuses this file's own goToInvoices/openInvoiceRow/
-// signInFirm/collectErrors and import-wizard.spec.ts's proven mixed-CSV upload recipe
-// (buildMixedCsv/E2E-04) rather than re-deriving either.
+// the dashboard rollup update. Reuses this file's own signInFirm/collectErrors and
+// import-wizard.spec.ts's proven mixed-CSV upload recipe (buildMixedCsv/E2E-04) rather
+// than re-deriving either. Does NOT reuse goToInvoices()/openInvoiceRow() -- opening the
+// invoice here needs a captured invoice_id tied to its row (see step 4 below), which
+// those two helpers have no hook for.
 //
 // Dashboard/Clients carry no data-testid ([no-testids-on-portfolio-dashboard],
 // grep-verified) -- selected below by role/exact-text/CSS class, the same idiom
@@ -370,6 +372,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   expect(violateEntry, 'expected an invoice_violations entry for INV-UI-MIX-VIOLATE').toBeTruthy()
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
   expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a real import').toBeTruthy()
+  const violateId = violateEntry!.invoice_id!
 
   // 3. Pre-fix Clients health pill. The import already ran every created row through the
   // validation engine as part of ITS OWN transaction (internal/importer/service.go's
@@ -385,19 +388,39 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
   await expect(clientRow, 'fresh entity row must render on Clients before the fix').toContainText('1 NEEDS ATTENTION')
 
-  // 4. Open the violating invoice's live detail, navigating via Invoices (not the import
-  // report's own click-through row) -- but still tying the click to the id CAPTURED above,
-  // not just the invoice_number text, by asserting the resulting GET targets that exact
-  // id. This is a cheap one-response wait, not a re-derivation of import-wizard.spec.ts's
-  // E2E-05 (which additionally proves the click-through-honest-placeholder invariant --
-  // out of scope for this arc's own moment of value, the business flow + dashboard
-  // rollup). Inlined rather than openInvoiceRow() because that helper has no captured id
-  // to tie its click to.
-  await goToInvoices(page)
-  const detailResp = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateEntry!.invoice_id}`),
+  // 4. Open the violating invoice's live detail. The Invoices list is TENANT-GLOBAL with
+  // no entity filter ([D8], internal/invoice/handlers.go), and "INV-UI-MIX-VIOLATE" is a
+  // FIXED invoice_number buildMixedCsv() recreates on every run -- including
+  // import-wizard.spec.ts's own E2E-04/05/09, against this SAME shared never-reset dev
+  // DB -- so by the time this arc reaches Invoices, MULTIPLE rows can carry that exact
+  // text. A plain `getByText('INV-UI-MIX-VIOLATE', {exact:true}).click()` hits
+  // Playwright's strict-mode "more than one element" error the moment a second row with
+  // that text exists (guaranteed once this suite has run more than once against the
+  // shared DB). InvoicesList.tsx's List query orders `created_at DESC, id DESC`
+  // (internal/invoice/store.go) and the component maps the fetched array in DOM order
+  // with no client-side re-sort/filter/dedupe -- so row N in the DOM is exactly element N
+  // of the list response's JSON array. Disambiguate by capturing THAT response, finding
+  // the CAPTURED violateId's array index, and clicking the row at that exact index --
+  // deterministic regardless of how many older same-numbered rows exist, rather than by
+  // non-unique visible text. (Not a re-derivation of import-wizard.spec.ts's E2E-05,
+  // which additionally proves the click-through-honest-placeholder invariant -- out of
+  // scope for this arc's own moment of value, the business flow + dashboard rollup.)
+  const listResp = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
   )
-  await page.getByText('INV-UI-MIX-VIOLATE', { exact: true }).click()
+  await page.getByRole('button', { name: /Invoices/ }).click()
+  const listBody = (await (await listResp).json()) as { invoices: { id: string }[] }
+  const rowIndex = listBody.invoices.findIndex((inv) => inv.id === violateId)
+  expect(
+    rowIndex,
+    'the freshly-imported INV-UI-MIX-VIOLATE invoice must appear in the default (most-recent-first, limit-50) invoices page',
+  ).toBeGreaterThanOrEqual(0)
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  const detailResp = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateId}`),
+  )
+  await page.getByTestId('invoice-row').nth(rowIndex).click()
   await detailResp
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')

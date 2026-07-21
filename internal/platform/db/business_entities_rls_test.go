@@ -442,8 +442,8 @@ func TestRLS_BusinessEntitiesEntityDeleteRestrictedForApp(t *testing.T) {
 	ctx := context.Background()
 
 	entity, cleanupE := seedBusinessEntity(t, h.tenantA, "BE-12 Corp")
-	inv, cleanupI := seedInvoice(t, h.tenantA, entity, "BE-12-INV")
 	defer cleanupE()
+	inv, cleanupI := seedInvoice(t, h.tenantA, entity, "BE-12-INV")
 	defer cleanupI()
 	_ = inv
 

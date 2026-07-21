@@ -357,3 +357,108 @@ func TestRLS_BusinessEntitiesStatusCheck(t *testing.T) {
 		t.Errorf("status read back = %q, want %q", status, "archived")
 	}
 }
+
+// BE-RLS-10 (M4-13-02, least-privilege proof): invoice_tenant_reader has NO grant on
+// business_entities at all (the migration header: "Deliberately NO
+// tenant_enumerate/invoice_tenant_reader policy"; GRANT line names only invoice_app).
+// A bare SELECT as that role must fail at the GRANT level (SQLSTATE 42501
+// insufficient_privilege) before RLS is even evaluated — proving the table was never
+// exposed to the one cross-tenant enumeration identity. None of BE-RLS-01..09 connect
+// as h.reader, so a future migration that widened the GRANT to include this role would
+// slip through unnoticed without this case (same guarantee TestRLS_InvoicesReaderHasNoGrant
+// and TestRLS_ImportBatchesReaderHasNoGrant prove for their tables). The reader pool
+// carries no tenant GUC/tx — the grant check fires first, so no context is needed.
+func TestRLS_BusinessEntitiesReaderHasNoGrant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var n int
+	err := h.reader.QueryRow(ctx, `SELECT count(*) FROM business_entities`).Scan(&n)
+	if err == nil {
+		t.Fatal("invoice_tenant_reader SELECT on business_entities succeeded, want permission denied (SQLSTATE 42501)")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("invoice_tenant_reader SELECT on business_entities: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+}
+
+// BE-RLS-11 (M4-13-02): deleting the parent `tenants` row cascades its
+// business_entities rows away — `tenant_id` is `REFERENCES tenants(id) ON DELETE
+// CASCADE` (migration 20260709155011). Uses a fresh, throwaway tenant (NOT the shared
+// h.tenantA/B, whose teardown owns them) since deleting it is the whole point of the
+// test — mirrors TestRLS_ImportBatchesTenantDeleteCascades's throwaway-tenant seeding.
+// The child entity's cleanup func is discarded: the CASCADE removes it, so there is
+// nothing left to clean up (and no defer for the tenant row itself — deleting it is the
+// action under test). The survival count runs as h.super (BYPASSRLS) so RLS visibility
+// can't mask a row that outlived the cascade.
+func TestRLS_BusinessEntitiesTenantDeleteCascades(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO tenants (id, name) VALUES ($1, 'BE-11 throwaway tenant')`, tenantID,
+	); err != nil {
+		t.Fatalf("seed throwaway tenant: %v", err)
+	}
+	// Deliberately no defer cleanup for the tenant row itself — deleting it is the
+	// action under test, and its CASCADE is expected to take the entity too.
+
+	entityID, _ := seedBusinessEntity(t, tenantID, "BE-11 throwaway entity")
+
+	// Establish the pre-state explicitly (as h.super/BYPASSRLS): the child row exists
+	// == 1 BEFORE the parent delete. Without this, a future regression that made the
+	// seed a silent no-op would let the post-delete count == 0 pass vacuously (a row
+	// that never existed can't prove a cascade removed it).
+	if n := mustCount(t, h.super, `SELECT count(*) FROM business_entities WHERE id = $1`, entityID); n != 1 {
+		t.Fatalf("pre-state: seeded business_entities count = %d, want 1 (before parent tenant delete)", n)
+	}
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		t.Fatalf("delete parent tenants row: %v", err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM business_entities WHERE id = $1`, entityID); n != 0 {
+		t.Errorf("business_entities rows after tenant delete = %d, want 0 (tenant_id ON DELETE CASCADE)", n)
+	}
+}
+
+// BE-RLS-12 (M4-13-02): the composite FK invoices_tenant_entity_fk is ON DELETE
+// RESTRICT (migration 20260718104103). Deleting a business_entities row that still has
+// a live invoice is refused with 23001 restrict_violation — even for invoice_app, which
+// DOES hold the DELETE grant (GRANT ...,DELETE... TO invoice_app). This is the net-new
+// path vs the sibling TestRLS_InvoicesEntityDeleteRestricted (invoices_rls_test.go:648),
+// which deletes via h.super: BE-RLS-12 deletes via h.app inside a tenantA tx (the real
+// runtime identity + context), proving the RESTRICT bites at the DB layer regardless of
+// role privilege, not merely for the superuser. The entity must survive the refusal.
+//
+// Cleanup order matters and copies INV-RLS-16 exactly (invoices_rls_test.go:654-659):
+// the invoice must be removed BEFORE the entity (entity_id is ON DELETE RESTRICT, so
+// cleaning up the entity first would recreate the very violation under test). Deferred
+// funcs run LIFO, so defer the entity cleanup FIRST and the invoice cleanup SECOND —
+// making the invoice cleanup run first.
+func TestRLS_BusinessEntitiesEntityDeleteRestrictedForApp(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entity, cleanupE := seedBusinessEntity(t, h.tenantA, "BE-12 Corp")
+	inv, cleanupI := seedInvoice(t, h.tenantA, entity, "BE-12-INV")
+	defer cleanupE()
+	defer cleanupI()
+	_ = inv
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM business_entities WHERE id = $1`, entity)
+		return e
+	})
+	if err == nil {
+		t.Fatal("app-role DELETE of a business_entities row with a live invoice succeeded, want restrict_violation (SQLSTATE 23001, ON DELETE RESTRICT)")
+	}
+	if code := pgCode(err); code != "23001" {
+		t.Fatalf("app-role DELETE of a business_entities row with a live invoice: SQLSTATE = %q, want 23001 (restrict_violation): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM business_entities WHERE id = $1`, entity); n != 1 {
+		t.Errorf("business_entities rows after refused delete = %d, want 1 (row must survive)", n)
+	}
+}

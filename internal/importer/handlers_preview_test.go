@@ -433,6 +433,35 @@ func TestPreviewHandler_MalformedCSV400(t *testing.T) {
 	}
 }
 
+// TestPreviewHandler_BareQuoteInUnquotedField400 pins a second, genuinely
+// distinct csv.ParseError shape than TestPreviewHandler_MalformedCSV400: a
+// stray double quote inside an UNQUOTED field ("12\"34") trips
+// csv.ErrBareQuote ("bare \" in non-quoted-field"), not the unterminated
+// quote's csv.ErrQuote ("extraneous or missing \" in quoted-field") -- the
+// two do not share a code path inside encoding/csv's field scanner (verified
+// via errors.Is against both sentinels: the unterminated-quote body is
+// ErrQuote/not ErrBareQuote, this body is ErrBareQuote/not ErrQuote).
+// decodeCSV's reader (decode.go:96-98) sets FieldsPerRecord = -1 but never
+// sets LazyQuotes, so it keeps the encoding/csv default (false) -- confirmed
+// this body still errors under that exact config, not a hypothetical
+// LazyQuotes=true reader that would swallow it. Body is pure ASCII (only
+// \n as a control byte, whitelisted), so it also passes M4-15-01's
+// post-decode control-byte gate untouched, proving the 400 comes from
+// ReadAll, not the gate.
+func TestPreviewHandler_BareQuoteInUnquotedField400(t *testing.T) {
+	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	raw := []byte("invoice_number,total\nINV-1,12\"34\n")
+	body, contentType := buildMultipartBody(t, "", "", "data.csv", "", raw)
+	rec, rawBody, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rawBody)
+	}
+	if resp.Error != "could not decode uploaded file" {
+		t.Errorf("error = %q, want %q", resp.Error, "could not decode uploaded file")
+	}
+}
+
 // --- PRV-14: not multipart at all --------------------------------------------
 
 // TestPreviewHandler_InvalidMultipart400 (PRV-14): a request declaring

@@ -141,14 +141,24 @@ func TestFixtures_InFileDupesQuarantined(t *testing.T) {
 // --- AC#3: edge_bad_encoding -------------------------------------------------
 
 // TestFixtures_BadEncodingRejected: edge_bad_encoding.csv is UTF-16LE
-// without a BOM, so Decode's sniff falls through to the windows-1252
-// tolerant fallback, which mangles the header row past recognition --
-// resolveMapping must reject that before any write, like AC#1.
+// without a BOM. Before M4-15-01, Decode's sniff fell through to the
+// windows-1252 tolerant fallback (mangling the header row past
+// recognition) and rejection happened downstream, at resolveMapping. Now
+// decodeCSV's control-byte gate (M4-15-01) rejects the fixture's ~7491
+// raw NUL bytes -- interleaved between every ASCII byte, as UTF-16LE
+// without a BOM always is -- AT Decode, before resolveMapping/svc.Import
+// ever run. Assert that directly instead of routing through
+// importEdgeFixture/svc.Import: Decode never gets far enough to hand
+// svc.Import a header to reject, so the DB-backed pre-write-rejected shape
+// no longer applies to this fixture.
 func TestFixtures_BadEncodingRejected(t *testing.T) {
-	assertPreWriteRejected(t, "../../testdata/invoices/edge_bad_encoding.csv",
-		"M4-11-04 bad-encoding tenant", "M4-11-04 bad-encoding entity",
-		"edge_bad_encoding.csv",
-		"UTF-16LE-without-BOM content tolerantly decoded as windows-1252 must mangle the header row past recognition")
+	data, err := os.ReadFile("../../testdata/invoices/edge_bad_encoding.csv")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if _, _, _, err := Decode(bytes.NewReader(data), "csv"); err == nil {
+		t.Fatal("Decode edge_bad_encoding.csv: err = nil, want a decode error -- BOM-less UTF-16LE content embeds raw NUL bytes the control-byte gate must reject")
+	}
 }
 
 // --- AC#4: edge_bad_tin ------------------------------------------------------

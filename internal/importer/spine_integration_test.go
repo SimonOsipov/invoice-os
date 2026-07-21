@@ -17,6 +17,24 @@
 // signal is a wrong assertion VALUE here (esp. the row counts), which is a
 // bug in THIS test, not in production.
 //
+// Evidence map -- pillars this file deliberately does NOT re-test, and where
+// that coverage lives (story M4-13 Decision [evidence-map-home]):
+//
+//	transition matrix (legal/redundant/illegal 49-pair sweep)
+//	   -> internal/invoice/transition_adversarial_test.go
+//	per-edge transition semantics (INV-SM-01..07)
+//	   -> internal/invoice/transition_test.go
+//	audit immutability / atomicity / isolation
+//	   -> internal/audit/audit_test.go
+//	RLS on invoices / line_items / invoice_status_history / import_batches
+//	   -> internal/platform/db/*_rls_test.go
+//	green import counters + 500-invoice perf budget
+//	   -> internal/importer/{fixtures_green,perf}_test.go
+//
+// What THIS file owns: the live end-to-end spine (import -> validate ->
+// walk-to-accepted) with the status_history chain + audit-payload {from,to} +
+// cross-tenant audit isolation asserted on the REAL path.
+//
 // Spec-to-test map (M4-13-01 Test Specs, SPINE-01..07), all as subtests of
 // TestSpineIntegration so `-run Spine` selects the whole suite:
 //

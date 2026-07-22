@@ -400,6 +400,10 @@ func TestRLS_IdempotencyKeysCrossTenantInsertRefused(t *testing.T) {
 
 	// Negative half: the same tx context may not write a row named for tenant B.
 	crossKey := "IK-06-cross-" + uuid.NewString()
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM idempotency_keys WHERE tenant_id = $1 AND key = $2`, h.tenantB, crossKey)
+	}()
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `INSERT INTO idempotency_keys (tenant_id, key) VALUES ($1, $2)`, h.tenantB, crossKey)
 		return e

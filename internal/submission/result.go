@@ -49,12 +49,19 @@ func (Retryable) isResult() {}
 
 // KindOf names a Result variant for logging and for the contract suite's messages.
 // Returns "" for a nil Result.
-//
-// STAGE 2.5 STUB: this body deliberately returns "" unconditionally, ignoring r. It exists so
-// the package compiles and TestKindOf can demonstrate a real assertion-level RED (rather than
-// a compile error) before the executor implements the real type switch.
 func KindOf(r Result) string {
-	return ""
+	switch r.(type) {
+	case Accepted:
+		return "accepted"
+	case Rejected:
+		return "rejected"
+	case Pending:
+		return "pending"
+	case Retryable:
+		return "retryable"
+	default:
+		return ""
+	}
 }
 
 // Evidence is what the adapter observed during one attempt. It is FAITHFUL — the adapter

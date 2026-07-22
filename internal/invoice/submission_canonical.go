@@ -23,10 +23,36 @@ import "github.com/SimonOsipov/invoice-os/internal/submission"
 // id, no status, no violations -- Canonical has no such fields, so this is
 // enforced at compile time, not by this function. Nil pointers pass through
 // as nil, never coerced to "".
-//
-// STUB (Stage 2.5, M5-02-02 Mode A / QA red): deliberately returns the zero
-// value so the package compiles and the red-first specs fail on real
-// assertions instead of a build error. The executor replaces this body.
 func SubmissionCanonical(inv Invoice) submission.Canonical {
-	return submission.Canonical{}
+	var lines []submission.CanonicalLine
+	for _, li := range inv.LineItems {
+		lines = append(lines, submission.CanonicalLine{
+			LineID:      li.ID,
+			LineNo:      li.LineNo,
+			Description: li.Description,
+			Quantity:    li.Quantity,
+			UnitPrice:   li.UnitPrice,
+			LineTotal:   li.LineTotal,
+			LineTax:     li.LineTax,
+		})
+	}
+
+	return submission.Canonical{
+		InvoiceID:     inv.ID,
+		InvoiceNumber: inv.InvoiceNumber,
+		IssueDate:     inv.IssueDate,
+		Supplier: submission.Party{
+			TIN:  inv.SupplierTIN,
+			Name: inv.SupplierName,
+		},
+		Buyer: submission.Party{
+			TIN:  inv.BuyerTIN,
+			Name: inv.BuyerName,
+		},
+		Currency: inv.Currency,
+		Subtotal: inv.Subtotal,
+		VAT:      inv.VAT,
+		Total:    inv.Total,
+		Lines:    lines,
+	}
 }

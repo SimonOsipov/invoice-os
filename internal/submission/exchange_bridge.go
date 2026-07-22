@@ -32,11 +32,32 @@ const (
 // ExchangeFor builds the M5-01 Exchange for one adapter attempt: a's identity, the caller's
 // own op/attempt/jobID/invoiceID, and the Evidence the adapter observed for this attempt.
 //
-// STAGE 2.5 STUB (task-218 / M5-02-03, Mode A RED bootstrap): deliberately returns a zero
-// Exchange{} regardless of input, so the package compiles and every behavioural spec in
-// exchange_bridge_test.go fails on a real assertion instead of a compile error. The real body
-// -- deriving Outcome from ev.ReachedWire and passing every other field through unscrubbed --
-// lands in this same subtask's Stage 2.5 implementation pass (Mode B).
+// Outcome is derived solely from ev.ReachedWire (true -> OutcomeSent, false ->
+// OutcomeConnectionFailed); ExchangeFor never produces OutcomeTransformFailed,
+// OutcomeBlockedRateLimit or OutcomeSkippedAlreadyCleared -- a caller recording one of those
+// overwrites .Outcome itself after calling ExchangeFor (out of scope here -- M5-04).
+//
+// Evidence passes through unchanged: ScrubHeaders and SafeBody are RecordExchange's job at
+// write time (Decision [scrub-is-the-recorders-job]), not this builder's. Pointer fields are
+// passed through as-is -- a nil stays nil, and a non-nil pointer keeps its identity.
 func ExchangeFor(a Adapter, op Operation, attempt int, jobID, invoiceID string, ev Evidence) Exchange {
-	return Exchange{}
+	outcome := OutcomeConnectionFailed
+	if ev.ReachedWire {
+		outcome = OutcomeSent
+	}
+	return Exchange{
+		SubmissionJobID: jobID,
+		InvoiceID:       invoiceID,
+		Operation:       string(op),
+		Outcome:         outcome,
+		Attempt:         attempt,
+		Adapter:         a.Name(),
+		AdapterVersion:  a.Version(),
+		RequestHeaders:  ev.RequestHeaders,
+		RequestBody:     ev.RequestBody,
+		ResponseHeaders: ev.ResponseHeaders,
+		ResponseBody:    ev.ResponseBody,
+		HTTPStatus:      ev.HTTPStatus,
+		LatencyMS:       ev.LatencyMS,
+	}
 }

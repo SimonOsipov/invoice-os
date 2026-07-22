@@ -778,3 +778,60 @@ func TestContractSuite_RejectsVerdictOnCancelledContext(t *testing.T) {
 	assertExactLawIDs(t, "ignores cancelled context",
 		recordedLawIDs(newIgnoresCancelledContextAdapter), lawSet("L16"))
 }
+
+// TestL04CorpusRestore_ReturnsExactOriginalLiterals (QA-added, Mode B Part 4): a regression
+// guard for the corpus-persistence hazard redCase.newAdapter's doc comment above describes
+// (hazard 2) -- every other test in this file that exercises newMutatingTransformAdapter only
+// checks that restoreL04Corpus RUNS (via t.Cleanup), never that it restores the CORRECT literal
+// to the CORRECT case. A future edit that silently swapped two of restoreL04Corpus's three
+// branches (e.g. writing "SUP-TIN-1" onto "all-nil-money" too) would leave every other test in
+// this file green: TestContractSuite_RejectsInputMutatingTransform only compares this run's own
+// before/after delta, never the corpus's absolute values, so a corpus left permanently wrong --
+// just wrong in a way that still LOOKS restored to that one check -- would go undetected.
+//
+// Runs the L04 adapter inside its own subtest (registering restoreL04Corpus via t.Cleanup,
+// exactly as TestContractSuite_RejectsNonConformingAdapters' L04 row and
+// TestContractSuite_RejectsInputMutatingTransform do), asserts the adapter actually recorded L04
+// first (so this check is not vacuously satisfied by a corpus nothing ever mutated), then --
+// once that subtest has returned, so its Cleanup has already fired -- asserts canonicalCorpus's
+// three affected Supplier.TIN pointers hold their EXACT original literals ("SUP-TIN-1"/
+// "SUP-TIN-2"/"SUP-TIN-3", matching fullCanonical/allNilMoneyCanonical/multiByteLongTextCanonical
+// in contract_test.go, not merely "some non-nil string") and that the three nil-TIN corpus cases
+// ("minimal", "no-lines", "zero") were never touched.
+func TestL04CorpusRestore_ReturnsExactOriginalLiterals(t *testing.T) {
+	wantTIN := map[string]string{
+		"full":                 "SUP-TIN-1",
+		"all-nil-money":        "SUP-TIN-2",
+		"multi-byte-long-text": "SUP-TIN-3",
+	}
+
+	t.Run("exercise L04 adapter", func(t *testing.T) {
+		t.Cleanup(restoreL04Corpus)
+		got := recordedLawIDs(newMutatingTransformAdapter)
+		if !got["L04"] {
+			t.Fatalf("newMutatingTransformAdapter recorded %v, want L04 present -- the "+
+				"restore-correctness check below is meaningless unless the corpus was genuinely "+
+				"mutated first", sortedLawIDs(got))
+		}
+	})
+
+	for _, tc := range canonicalCorpus {
+		want, affected := wantTIN[tc.name]
+		if !affected {
+			if tc.c.Supplier.TIN != nil {
+				t.Errorf("corpus case %q: Supplier.TIN = %q, want nil (never touched by L04's "+
+					"mutation)", tc.name, *tc.c.Supplier.TIN)
+			}
+			continue
+		}
+		if tc.c.Supplier.TIN == nil {
+			t.Errorf("corpus case %q: Supplier.TIN is nil after restore, want %q", tc.name, want)
+			continue
+		}
+		if *tc.c.Supplier.TIN != want {
+			t.Errorf("corpus case %q: Supplier.TIN = %q after restore, want exactly %q "+
+				"(restoreL04Corpus must restore each case's OWN original literal, not a copy of "+
+				"another case's)", tc.name, *tc.c.Supplier.TIN, want)
+		}
+	}
+}

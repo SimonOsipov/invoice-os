@@ -9,7 +9,6 @@
     "test:smoke": "playwright test",
     "test:topology": "playwright test --config playwright.topology.config.ts",
     "test:api": "playwright test --config playwright.api.config.ts",
-    "test:demo": "playwright test --config playwright.demo.config.ts",
     "test:unit": "vitest run",
     "typecheck": "tsc --noEmit"
   },

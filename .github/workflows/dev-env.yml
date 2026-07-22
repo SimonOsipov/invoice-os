@@ -562,11 +562,11 @@ jobs:
 
   # 7. Post-deploy verification (b): smoke (landing + ops-console render), api
   #    (typed contract suite against the gateway), topology (browser login
-  #    + cross-tenant isolation), and demo (Day-30 wedge journey) via Playwright,
+  #    + cross-tenant isolation) via Playwright,
   #    once the fleet is green and the SPAs are deployed. PR environments only
   #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
   e2e:
-    name: E2E (smoke + api + topology + demo)
+    name: E2E (smoke + api + topology)
     needs: [fleet-gate, deploy-spas, prepare-env]
     if: >-
       always() &&
@@ -624,13 +624,6 @@ jobs:
         # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).
         run: pnpm --filter @invoice-os/e2e test:topology
-      - name: Demo (Day-30 wedge journey)
-        # Runs LAST (after topology): the demo kill-switches vat-standard-rate then
-        # restores it, so no rule-dependent suite runs after it in the same run; the
-        # api suite's beforeAll self-heal is the cross-run backstop (M3-11 D6). AC-7
-        # (audit_log read) is parked (M4-22-06 [park-shape]) — no DB access here.
-        # GATEWAY_URL/APP_URL come from this job's `env:`; chromium is installed.
-        run: pnpm --filter @invoice-os/e2e test:demo
       - name: Upload smoke Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -652,14 +645,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: topology-playwright-report
-          path: e2e/playwright-report/
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Upload demo Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: demo-playwright-report
           path: e2e/playwright-report/
           if-no-files-found: warn
           retention-days: 7

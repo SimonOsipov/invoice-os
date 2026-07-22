@@ -8,7 +8,7 @@
 //	    REFERENCES tenants(id) ON DELETE CASCADE, submission_job_id uuid NOT NULL,
 //	    invoice_id uuid NOT NULL, operation text NOT NULL CHECK IN (submit, poll),
 //	    outcome text NOT NULL CHECK IN (sent, blocked_rate_limit, skipped_already_cleared,
-//	    transform_failed), attempt int NOT NULL CHECK (>= 1), request_body text NULL,
+//	    transform_failed, connection_failed), attempt int NOT NULL CHECK (>= 1), request_body text NULL,
 //	    request_headers jsonb NOT NULL DEFAULT '{}', response_body text NULL,
 //	    response_headers jsonb NOT NULL DEFAULT '{}', http_status int NULL (no range CHECK),
 //	    latency_ms int NULL CHECK (IS NULL OR >= 0), truncated boolean NOT NULL DEFAULT false,
@@ -21,6 +21,24 @@
 //	    the verbatim M2-06 FORCE-RLS `tenant_isolation` policy, and
 //	    GRANT SELECT, INSERT TO invoice_app — append-only BY GRANT, nothing at all to
 //	    invoice_tenant_reader.
+//
+// SECOND RED WAVE — `connection_failed` (scope change, post-verification). The migration
+// above shipped with a FOUR-valued outcome CHECK. A fifth value, `connection_failed`, is
+// being added, and AE-15's fifth outcome column plus AE-22 are RED against SQLSTATE 23514
+// check_violation (NOT 42P01 — the table exists now) until the Executor ships it.
+//
+// The semantic boundary the fifth value draws, stated once here so it need not be
+// re-derived: a PRE-CONNECTION failure — DNS resolution failure, TLS handshake failure,
+// connection refused — fits none of the original four. Forcing it into `sent` stretches
+// `sent` to mean "attempted" and makes the evidence log unable to distinguish "we reached
+// the APP and heard nothing back" from "we never reached the APP at all". Those two have
+// different operational responses (retry/poll for a status vs. check the network path or
+// the endpoint), and telling them apart is the log's whole purpose. So:
+//
+//   - `sent`              — bytes LEFT OUR PROCESS toward the APP. Includes a timeout or a
+//     dropped connection AFTER the request was transmitted (AE-19).
+//   - `connection_failed` — we never got far enough to transmit. NO request reached the
+//     wire (AE-22).
 //
 // Five things shape the cases below:
 //
@@ -66,7 +84,13 @@
 //     transform_failed, request_body NULL too) and AE-19 (left the wire, nothing came back:
 //     sent, request_body NON-NULL) are deliberately distinct on BOTH axes — different outcome
 //     AND opposite request_body constraints — so neither can be satisfied by whatever makes
-//     the other pass.
+//     the other pass. AE-22 is the third corner of that triangle and is distinct from BOTH on
+//     the request_body axis exactly as they are from each other: connection_failed, with
+//     request_body NULL because nothing was ever transmitted (unlike AE-19's non-NULL body)
+//     under an outcome that is neither of theirs (unlike AE-18's transform_failed). The three
+//     name three different points at which a submission can die — before a request was built,
+//     before a built request reached the wire, and after it left — and no one of them can be
+//     satisfied by whatever makes another pass.
 //
 //   - The bodies are size-capped in Go (SafeBody, M5-01-05), never by a DB CHECK: a
 //     schema-level cap would hard-reject an over-size evidence write exactly when something
@@ -96,6 +120,9 @@
 //	AE-19 TestRLS_AppExchangeSentWithNoResponseStores
 //	AE-20 TestRLS_AppExchangeBodyColumnsUseLz4
 //	AE-21 TestRLS_AppExchangeLargeBodyRoundTripsByteIdentical
+//	AE-22 TestRLS_AppExchangeConnectionFailedStoresWithNullRequestAndResponse
+//	      (scope change; numbered last, but placed in the file next to AE-18/AE-19, whose
+//	      triangle it completes)
 //
 // Every negative assertion is paired with a positive half or a mutation-verify re-read as the
 // superuser, so no case can pass against a table that simply refuses everything or is empty.
@@ -1154,10 +1181,16 @@ func TestRLS_AppExchangeJobDeleteRestrictedByEvidence(t *testing.T) {
 }
 
 // AE-15: the `operation` and `outcome` CHECKs. Each rejects an out-of-set value (23514) and,
-// critically, all EIGHT legal (operation × outcome) combinations insert successfully — the log
+// critically, all TEN legal (operation × outcome) combinations insert successfully — the log
 // records a poll that was blocked by the rate-limit gate exactly as readily as a submit that
 // reached the wire, and no cross-column CHECK may quietly forbid a pairing. Each rejected
 // statement gets its own tx (a failed statement poisons the surrounding transaction).
+//
+// The outcome axis carries FIVE values, not four: `connection_failed` is the scope change
+// described in the package doc comment ("SECOND RED WAVE"). Its two rows — (submit,
+// connection_failed) and (poll, connection_failed) — are RED with 23514 until the Executor
+// widens the CHECK. `poll` is not a special case there: a poll can die in DNS or the TLS
+// handshake exactly as a submit can.
 func TestRLS_AppExchangeOperationAndOutcomeChecks(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -1200,9 +1233,19 @@ func TestRLS_AppExchangeOperationAndOutcomeChecks(t *testing.T) {
 		}
 	}
 
-	// All 2 x 4 legal combinations are accepted and round-trip.
+	// All 2 x 5 legal combinations are accepted and round-trip.
+	//
+	// A rejected combination is reported with t.Errorf + continue, NOT t.Fatalf: every INSERT
+	// here runs in its OWN WithinTenantTx, so a refusal poisons nothing outside itself, and a
+	// Fatalf would abort the whole matrix at the first bad cell — reporting one broken
+	// combination and hiding the other nine. The point of a matrix case is the full matrix.
+	// (`continue` is required: without a returned id the read-back below would report a
+	// second, spurious failure for the same cell.)
 	for _, operation := range []string{"submit", "poll"} {
-		for _, outcome := range []string{"sent", "blocked_rate_limit", "skipped_already_cleared", "transform_failed"} {
+		for _, outcome := range []string{
+			"sent", "blocked_rate_limit", "skipped_already_cleared", "transform_failed",
+			"connection_failed",
+		} {
 			var id string
 			if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
 				return tx.QueryRow(ctx,
@@ -1212,8 +1255,9 @@ func TestRLS_AppExchangeOperationAndOutcomeChecks(t *testing.T) {
 					h.tenantA, jobA, invoiceA, operation, outcome, marker, sjAdapterVersion,
 				).Scan(&id)
 			}); err != nil {
-				t.Fatalf("INSERT with (operation, outcome) = (%q, %q): want success, got: %v",
-					operation, outcome, err)
+				t.Errorf("INSERT with (operation, outcome) = (%q, %q): want success, got SQLSTATE %q: %v",
+					operation, outcome, pgCode(err), err)
+				continue
 			}
 
 			var gotOperation, gotOutcome string
@@ -1517,6 +1561,99 @@ func TestRLS_AppExchangeSentWithNoResponseStores(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("read back the sent-with-no-response row: %v", err)
+	}
+}
+
+// AE-22 (scope change): the PRE-CONNECTION failure. outcome = 'connection_failed' — DNS did
+// not resolve, the TLS handshake did not complete, the connection was refused — stores with
+// request_body NULL (nothing was ever transmitted) and response_body, http_status and
+// latency_ms all NULL, and reads back unchanged.
+//
+// This is the fifth outcome value, RED with SQLSTATE 23514 check_violation against the shipped
+// four-valued CHECK until the Executor widens it. Why a fifth value rather than reusing one of
+// the four: see the package doc comment's SECOND RED WAVE section. In short — `sent` means
+// bytes LEFT OUR PROCESS, and a pre-connection failure never got that far. Recording it as
+// `sent` + NULL response would collapse it into AE-19's wire-timeout case, and the log would
+// no longer be able to answer "did we reach the APP at all?", which is the question it exists
+// to answer.
+//
+// Third corner of the AE-18 / AE-19 triangle and distinct from BOTH on the request_body axis
+// exactly as those two are from each other: a different outcome from either, with request_body
+// NULL (AE-19 has it non-NULL) under an outcome that is not AE-18's. No one of the three can
+// be satisfied by whatever makes another pass.
+//
+// The all-NULL columns here DESCRIBE the scenario; they are not a schema constraint. Nothing
+// in the DDL may tie outcome to response-column nullability (see the package doc comment and
+// AE-19) — a CHECK enforcing "connection_failed ⟹ request_body IS NULL" would satisfy this
+// case for the wrong reason and is not what it asks for.
+func TestRLS_AppExchangeConnectionFailedStoresWithNullRequestAndResponse(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "AE-22 A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "AE-22-A")
+	defer cleanupInvoiceA()
+	jobA, cleanupJobA := seedSubmissionJob(t, h.tenantA, invoiceA, sjKey("AE-22"))
+	defer cleanupJobA()
+
+	marker := aeMarker("AE-22")
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM app_exchange WHERE adapter = $1`, marker)
+	}()
+
+	var id string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO app_exchange
+			     (tenant_id, submission_job_id, invoice_id, operation, outcome, attempt,
+			      request_body, response_body, http_status, latency_ms, adapter, adapter_version)
+			 VALUES ($1, $2, $3, 'submit', 'connection_failed', 1, NULL, NULL, NULL, NULL, $4, $5)
+			 RETURNING id`,
+			h.tenantA, jobA, invoiceA, marker, sjAdapterVersion,
+		).Scan(&id)
+	})
+	if failIfUndefinedAppExchange(t, "connection_failed INSERT", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("outcome = 'connection_failed' (nothing reached the wire): want success, got SQLSTATE %q: %v — "+
+			"23514 means the outcome CHECK is still the shipped four-valued set and has not been widened; "+
+			"the evidence log must be able to distinguish \"we never reached the APP\" from \"we reached it "+
+			"and heard nothing back\" (AE-19)", pgCode(err), err)
+	}
+
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var (
+			outcome                   string
+			requestBody, responseBody *string
+			httpStatus, latencyMs     *int
+		)
+		if e := tx.QueryRow(ctx,
+			`SELECT outcome, request_body, response_body, http_status, latency_ms
+			   FROM app_exchange WHERE id = $1`, id,
+		).Scan(&outcome, &requestBody, &responseBody, &httpStatus, &latencyMs); e != nil {
+			return e
+		}
+		if outcome != "connection_failed" {
+			t.Errorf("outcome round-trip = %q, want %q", outcome, "connection_failed")
+		}
+		if requestBody != nil {
+			t.Errorf("request_body = %q, want NULL — a pre-connection failure transmits nothing, which is "+
+				"what separates it from AE-19's 'sent' (non-NULL body, no response)", *requestBody)
+		}
+		if responseBody != nil {
+			t.Errorf("response_body = %q, want NULL (the connection was never established)", *responseBody)
+		}
+		if httpStatus != nil {
+			t.Errorf("http_status = %d, want NULL (no HTTP exchange took place)", *httpStatus)
+		}
+		if latencyMs != nil {
+			t.Errorf("latency_ms = %d, want NULL (there is no request/response round trip to time)", *latencyMs)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read back the connection_failed attempt: %v", err)
 	}
 }
 

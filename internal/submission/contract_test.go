@@ -34,6 +34,7 @@ package submission_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -43,6 +44,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -753,5 +755,69 @@ func TestContractSuite_RunsWithoutDatabase(t *testing.T) {
 	if len(rec.messages) != 0 {
 		t.Errorf("RunAdapterContract with DATABASE_URL/DATABASE_MIGRATION_URL unset recorded %d "+
 			"failure(s), want 0: %v", len(rec.messages), rec.messages)
+	}
+}
+
+// TestRunAdapterContract_CallsNewAdapterMoreThanOnce (AC-1, QA-added): a counting factory
+// wrapped around newRef proves newAdapter is actually invoked more than once by
+// RunAdapterContract, not merely documented to be. Without this, a future refactor that
+// silently dropped the second instance (a2) would leave L02/L03/L04's cross-instance
+// comparisons comparing an instance against itself, and nothing would catch it.
+func TestRunAdapterContract_CallsNewAdapterMoreThanOnce(t *testing.T) {
+	var calls int32
+	counting := func() submission.Adapter {
+		atomic.AddInt32(&calls, 1)
+		return newRef()
+	}
+	rec := &lawRecorder{}
+	RunAdapterContract(rec, counting)
+	if calls < 2 {
+		t.Errorf("RunAdapterContract called newAdapter %d time(s), want more than once (AC-1)", calls)
+	}
+}
+
+// TestAllLaws_NoDuplicateIDs (AC-4, QA-added): a standalone, source-scan-independent check
+// that AllLaws contains no duplicate id. Deliberately decoupled from
+// TestAllLaws_IdsAreUniqueAndUsed's regex-based source scan (lawIDsInSuiteSource), so a bug
+// in that scan cannot mask a duplicate that a plain count over the slice would catch.
+func TestAllLaws_NoDuplicateIDs(t *testing.T) {
+	seen := make(map[string]int, len(AllLaws))
+	for _, id := range AllLaws {
+		seen[id]++
+	}
+	for id, count := range seen {
+		if count > 1 {
+			t.Errorf("AllLaws lists %s %d times, want exactly once", id, count)
+		}
+	}
+}
+
+// TestCanonicalCorpus_NoLinesCaseHasNilLines (QA-added): the "no-lines" corpus case's
+// Canonical.Lines must be nil, not an empty-but-non-nil slice, and must marshal to JSON
+// "Lines":null -- the exact nil-vs-empty distinction this file's corpus doc comment calls
+// out (a nil []T marshals to null, not [], the M4-16 gate-failure class). Regresses if
+// SubmissionCanonical's Lines-building ever switches from `var lines []CanonicalLine` to
+// `lines := []CanonicalLine{}`, or if this corpus case's construction changes.
+func TestCanonicalCorpus_NoLinesCaseHasNilLines(t *testing.T) {
+	var found bool
+	for _, tc := range canonicalCorpus {
+		if tc.name != "no-lines" {
+			continue
+		}
+		found = true
+		if tc.c.Lines != nil {
+			t.Errorf("no-lines corpus case: Canonical.Lines = %#v, want nil (not an empty slice)", tc.c.Lines)
+		}
+		b, err := json.Marshal(tc.c)
+		if err != nil {
+			t.Fatalf("json.Marshal(no-lines case): %v", err)
+		}
+		if !bytes.Contains(b, []byte(`"Lines":null`)) {
+			t.Errorf("no-lines corpus case marshals to %s, want \"Lines\":null (the M4-16 "+
+				"nil-vs-empty gate-failure class this corpus case exists to document)", b)
+		}
+	}
+	if !found {
+		t.Fatalf("no-lines corpus case not found in canonicalCorpus")
 	}
 }

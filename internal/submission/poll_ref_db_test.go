@@ -1,11 +1,14 @@
 // M5-02-05 (task-222): the DB-BACKED spec for submission_jobs.poll_ref — a nullable text
 // column that persists a Pending.Ref (result.go:36) so a deferred verdict survives a
-// restart (Core AC-3). Authored BEFORE the migration exists, so RED here is SQLSTATE 42703
-// undefined_column, never a compile error, a connection failure, a fixture failure, or a
-// skip. The ALTER the Executor will add:
+// restart (Core AC-3). Authored BEFORE the migration existed (cef5cd7), when RED here was
+// SQLSTATE 42703 undefined_column, never a compile error, a connection failure, a fixture
+// failure, or a skip. The migration (1b6f581,
+// migrations/20260722182935_submission_jobs_poll_ref.sql) has since landed:
 //
 //	ALTER TABLE submission_jobs
 //	    ADD COLUMN poll_ref text CHECK (poll_ref IS NULL OR char_length(poll_ref) > 0);
+//
+// All four cases below are now GREEN (QA Mode B re-verified this live against the dev DB).
 //
 // Package `submission_test`, matching exchange_db_test.go and failure_modes_test.go — the
 // fixture this file reuses (requireExchangeDB, the package-level fx, exChain) is unexported,
@@ -27,10 +30,13 @@
 //	AC-1 TestPollRef_NullIsTheDefault
 //	AC-5 TestRLS_PollRefNotVisibleAcrossTenants
 //
-// All four go RED with 42703 today. failPollRefUndefined below turns that raw driver error
-// into an explicit, self-explaining t.Fatalf, following the invoices_fiscal_rls_test.go:90-101
-// (failIfUndefinedColumn) precedent for exactly this pre-migration RED shape — reusing this
-// package's own exPgCode (exchange_db_test.go:235-241) rather than re-deriving errors.As.
+// All four went RED with 42703 before the migration landed; now GREEN. failPollRefUndefined
+// below turns that raw driver error into an explicit, self-explaining t.Fatalf rather than a
+// cryptic SQLSTATE, following the invoices_fiscal_rls_test.go:90-101 (failIfUndefinedColumn)
+// precedent — it stays in place post-migration as a guard against running this suite
+// against a DB that has not had 1b6f581 applied yet (same convention as
+// failIfUndefinedAppExchange, internal/platform/db/app_exchange_rls_test.go:200), reusing
+// this package's own exPgCode (exchange_db_test.go:235-241) rather than re-deriving errors.As.
 //
 // Local run: `DEV_DB_PORT=5433 make test-queue` from this worktree, or export DATABASE_URL /
 // DATABASE_MIGRATION_URL and run `go test ./internal/submission/... -run TestPollRef`.
@@ -167,9 +173,9 @@ func TestPollRef_EmptyStringRefused(t *testing.T) {
 			"an empty ref is not the same state as no ref")
 	}
 	if code := exPgCode(err); code != "23514" {
-		t.Errorf("UPDATE poll_ref = '': SQLSTATE = %q, want 23514 (check_violation) — until "+
-			"the M5-02-05 migration lands this is expected to read 42703 (undefined_column) "+
-			"instead: %v", code, err)
+		t.Errorf("UPDATE poll_ref = '': SQLSTATE = %q, want 23514 (check_violation) — a 42703 "+
+			"here would mean the poll_ref migration (1b6f581) is not applied against this DB: "+
+			"%v", code, err)
 	}
 }
 

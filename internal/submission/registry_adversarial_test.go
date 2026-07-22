@@ -163,6 +163,42 @@ func TestSelect_ProductionNormalizationEdgeCases(t *testing.T) {
 	}
 }
 
+// TestIsProduction_DirectlyExercisesNormalization: cmd/submission/main.go's own production
+// check (whether to log.Fatalf when no adapter is selectable) calls submission.IsProduction
+// directly, rather than duplicating the trim+lowercase comparison against "production" a
+// second time -- two independent string comparisons is exactly the drift
+// TestSelect_ProductionCheckIsCaseAndWhitespaceInsensitive and
+// TestSelect_ProductionNormalizationEdgeCases above guard against for Select. This test pins
+// IsProduction's own exported contract directly, without going through Select: padded and
+// miscased spellings of "production" must normalize to true, and merely similar-looking
+// strings must not.
+func TestIsProduction_DirectlyExercisesNormalization(t *testing.T) {
+	cases := []struct {
+		environment string
+		want        bool
+	}{
+		{"production", true},
+		{"Production", true},
+		{"PRODUCTION", true},
+		{" production", true},
+		{"production ", true},
+		{"\tproduction\n", true},
+		{"  PrOdUcTiOn  ", true},
+		{"", false},
+		{"non-production", false},
+		{"production-eu", false},
+		{"prod uction", false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.environment, func(t *testing.T) {
+			if got := submission.IsProduction(c.environment); got != c.want {
+				t.Errorf("IsProduction(%q) = %v, want %v", c.environment, got, c.want)
+			}
+		})
+	}
+}
+
 // NOTE on two adversarial scenarios from the QA brief NOT covered by a test here:
 //
 //  1. An adapter whose Name() is non-deterministic (returns a different string on each

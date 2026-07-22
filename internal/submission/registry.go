@@ -59,7 +59,7 @@ func Select(reg Registry, environment, name string) (Adapter, error) {
 	if name == "" {
 		return nil, ErrNoAdapterConfigured
 	}
-	if isProduction(environment) {
+	if IsProduction(environment) {
 		if _, allowed := productionAdapters[name]; !allowed {
 			return nil, ErrAdapterNotInProd
 		}
@@ -71,20 +71,22 @@ func Select(reg Registry, environment, name string) (Adapter, error) {
 	return a, nil
 }
 
-// isProduction normalizes environment (trim + lowercase) before comparing to
+// IsProduction normalizes environment (trim + lowercase) before comparing to
 // "production". ENVIRONMENT is a free-form, unvalidated env var
 // (internal/platform/config.go's envString does no normalization or validation), and
 // Select's production check is this repo's only boot-refusal gate (Core AC-6: refuse to
 // start rather than run an unauthorized adapter in production). A fail-closed gate that an
 // exact string match defeats via casing or padding -- "Production", "PRODUCTION",
 // " production" -- is not fail-closed at all, so the comparison here must not be
-// case/whitespace sensitive.
+// case/whitespace sensitive. Exported so cmd/submission/main.go's own production check
+// (whether to log.Fatalf when no adapter is selectable) uses this exact normalization
+// instead of duplicating it with a second, unnormalized comparison.
 //
 // internal/gateway.MockIssuerEnabled gates the dev/CI mock issuer with the same
 // `environment != "production"` exact match and is deliberately NOT changed here -- it
 // guards two dev-only routes, not a boot, and is a different story's code. Reconciling the
 // two notions of "production" belongs to M8-07, which MockIssuerEnabled's own comment
 // already defers to.
-func isProduction(environment string) bool {
+func IsProduction(environment string) bool {
 	return strings.ToLower(strings.TrimSpace(environment)) == "production"
 }

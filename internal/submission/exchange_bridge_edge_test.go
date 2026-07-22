@@ -110,6 +110,7 @@ func TestExchangeFor_HeaderCasingAndMultiValueSurviveVerbatim(t *testing.T) {
 	a := exBridgeAdapter{name: "ref", version: "v9"}
 
 	h := http.Header{}
+	//nolint:staticcheck // SA1008: deliberately non-canonical key -- proves ExchangeFor performs no header canonicalisation
 	h["x-request-id"] = []string{"one", "two"} // raw, non-canonical key + multiple values,
 	// bypassing Set/Add's canonicalisation on purpose.
 

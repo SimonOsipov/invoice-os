@@ -51,9 +51,10 @@ func main() {
 	// non-production with APP_ADAPTER unset, log a warning and continue with no
 	// adapter, keeping the dev fleet's boot green.
 	reg := submission.NewDefaultRegistry()
-	adapter, err := submission.Select(reg, app.Config.Environment, os.Getenv("APP_ADAPTER"))
+	appAdapter := os.Getenv("APP_ADAPTER")
+	adapter, err := submission.Select(reg, app.Config.Environment, appAdapter)
 	if err != nil {
-		if app.Config.Environment == "production" || os.Getenv("APP_ADAPTER") != "" {
+		if submission.IsProduction(app.Config.Environment) || appAdapter != "" {
 			log.Fatalf("submission: adapter: %v", err)
 		}
 		log.Printf("submission: adapter: %v (continuing with no adapter configured)", err)

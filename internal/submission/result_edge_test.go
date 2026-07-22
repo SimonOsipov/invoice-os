@@ -37,9 +37,13 @@ func TestKindOf_PointerVariantIsADistinctTypeFromTypeSwitchsPerspective(t *testi
 	// isResult() -- this line IS the compile-time confirmation.
 	var r submission.Result = &submission.Accepted{IRN: "should-be-irrelevant"}
 
-	if r == nil {
-		t.Errorf("a Result holding &Accepted{} must be a non-nil interface value")
-	}
+	// r is a non-nil interface value here: it holds a concrete, non-nil *Accepted, so
+	// `r == nil` is provably always false -- not asserted below (that would be dead code,
+	// SA4023). That very fact is *why* the case matters: an interface holding a typed
+	// non-nil pointer is itself non-nil, so KindOf(r) returning "" below is indistinguishable
+	// from the nil-Result case (see TestKindOf_TypedNilResultDoesNotPanicAndReturnsEmpty) --
+	// a caller cannot use KindOf's "" result to tell "no Result at all" apart from "a Result
+	// whose concrete type doesn't match any arm".
 	if got := submission.KindOf(r); got != "" {
 		t.Errorf("KindOf(&Accepted{}) = %q, want \"\" (pointer variant matches no value-type "+
 			"case arm in KindOf's type switch, same as nil -- this is the documented gap, not "+

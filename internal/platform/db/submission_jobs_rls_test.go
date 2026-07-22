@@ -72,6 +72,13 @@
 //	SJ-15 TestRLS_SubmissionJobsAppDeleteRefused
 //	SJ-16 TestRLS_SubmissionJobsReaderSelectRefused
 //	SJ-17 TestRLS_SubmissionJobsInvoiceDeleteRestricted
+//	SJ-18 TestRLS_SubmissionJobsTenantIdInvoiceUniqueConstraintExists
+//
+// SJ-18 is a QA addition (not in task-213's original Test Specs table): none of SJ-01..17
+// would catch a regression of submission_jobs_tenant_id_invoice_uq from three columns back
+// to two, or to a bare CREATE UNIQUE INDEX (no pg_constraint row at all) — the failure would
+// surface only when M5-01-04's migration can't find its FK target. Modeled on
+// TestRLS_InvoicesTenantIdIdUniqueConstraintExists (invoices_fiscal_rls_test.go:484).
 //
 // Every negative assertion is paired with a positive half or a mutation-verify re-read as
 // the superuser, so no case can pass against a table that simply refuses everything or is
@@ -1171,5 +1178,74 @@ func TestRLS_SubmissionJobsInvoiceDeleteRestricted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("DELETE of an unreferenced invoice: want success (the RESTRICT must be about the "+
 			"reference, not a blanket refusal), got: %v", err)
+	}
+}
+
+// SJ-18: submission_jobs_tenant_id_invoice_uq is a REAL pg_constraint row — not a bare
+// index — with its three columns in exactly (tenant_id, id, invoice_id) order. The plan
+// warns that this constraint must stay at three columns because M5-01-04's app_exchange FK
+// binds to it, yet no other case here would notice a regression to the two-column
+// (tenant_id, id) shape, or to a bare `CREATE UNIQUE INDEX` (which produces no pg_constraint
+// row at all and so cannot be an FK target). Such a regression would surface only when
+// M5-01-04's migration fails to find its FK target — far from its cause. Modeled on
+// TestRLS_InvoicesTenantIdIdUniqueConstraintExists (invoices_fiscal_rls_test.go:484-537),
+// which does exactly this for invoices_tenant_id_id_uq. contype is filtered explicitly:
+// PG18 also stores NOT NULL constraints in pg_constraint as contype='n', of which this table
+// has six, so an unfiltered lookup would assert almost nothing.
+func TestRLS_SubmissionJobsTenantIdInvoiceUniqueConstraintExists(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	n, err := scanCount(ctx, h.super,
+		`SELECT count(*) FROM pg_constraint
+		  WHERE conrelid = 'public.submission_jobs'::regclass
+		    AND contype = 'u' AND conname = 'submission_jobs_tenant_id_invoice_uq'`)
+	if failIfUndefinedSubmissionJobs(t, "query pg_constraint for submission_jobs_tenant_id_invoice_uq", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("query pg_constraint for submission_jobs_tenant_id_invoice_uq: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("UNIQUE constraints on submission_jobs named submission_jobs_tenant_id_invoice_uq = %d, "+
+			"want 1 — constraint not found; the migration is not applied yet, or it declared a bare "+
+			"CREATE UNIQUE INDEX (no pg_constraint row, unusable as M5-01-04's composite-FK target)", n)
+	}
+
+	rows, err := h.super.Query(ctx,
+		`SELECT a.attname
+		   FROM pg_constraint c
+		   CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+		   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+		  WHERE c.conrelid = 'public.submission_jobs'::regclass
+		    AND c.contype = 'u' AND c.conname = 'submission_jobs_tenant_id_invoice_uq'
+		  ORDER BY k.ord`)
+	if err != nil {
+		t.Fatalf("query the constraint's columns: %v", err)
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var col string
+		if e := rows.Scan(&col); e != nil {
+			t.Fatalf("scan constraint column: %v", e)
+		}
+		cols = append(cols, col)
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate constraint columns: %v", e)
+	}
+
+	want := []string{"tenant_id", "id", "invoice_id"}
+	if len(cols) != len(want) {
+		t.Fatalf("submission_jobs_tenant_id_invoice_uq columns = %v, want %v", cols, want)
+	}
+	for i := range want {
+		if cols[i] != want[i] {
+			t.Errorf("submission_jobs_tenant_id_invoice_uq column %d = %q, want %q (order is load-bearing: "+
+				"M5-01-04's composite FK must name (tenant_id, id, invoice_id) in this order)",
+				i+1, cols[i], want[i])
+		}
 	}
 }

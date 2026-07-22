@@ -138,11 +138,20 @@ func SafeBody(s string) (body string, clipped, coerced bool) {
 //
 // Attempt is 1-BASED (app_exchange CHECK attempt >= 1), unlike submission_jobs.attempts,
 // which is 0-based — copying a fresh job's attempts straight across hits 23514.
+//
+// Outcome is one of FIVE values: "sent", "blocked_rate_limit", "skipped_already_cleared",
+// "transform_failed", "connection_failed". The boundary between the first and the last is not
+// visible in the names: "sent" means the bytes LEFT OUR PROCESS, so it covers a timeout or a
+// dropped connection AFTER transmission, whereas "connection_failed" (DNS failure, TLS
+// handshake failure, connection refused) means we never got far enough to transmit and nothing
+// reached the wire. Recording the latter as "sent" would collapse the two and cost the evidence
+// log its ability to answer "did we reach the APP at all?" — see
+// migrations/20260722114935_app_exchange_connection_failed.sql.
 type Exchange struct {
 	SubmissionJobID string // app_exchange.submission_job_id (uuid)
 	InvoiceID       string // app_exchange.invoice_id (uuid); must match the job's
 	Operation       string // "submit" | "poll"
-	Outcome         string // "sent" | "blocked_rate_limit" | "skipped_already_cleared" | "transform_failed"
+	Outcome         string // one of the five values listed in the doc comment above
 	Attempt         int    // 1-based
 	Adapter         string // mirrors submission_jobs.adapter
 	AdapterVersion  string // mirrors submission_jobs.adapter_version

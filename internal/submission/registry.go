@@ -6,6 +6,7 @@ package submission
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Registry maps an adapter name to its adapter. Built once at boot.
@@ -52,12 +53,13 @@ var (
 // Select resolves name against reg for environment. Pure and total -- it opens no
 // connection and reads no environment variable itself, so it is exhaustively
 // unit-testable. Precedence: empty name checked first (works in every environment), then
-// the production allowlist (only when environment == "production"), then registry lookup.
+// the production allowlist (only when environment normalizes to "production"), then
+// registry lookup.
 func Select(reg Registry, environment, name string) (Adapter, error) {
 	if name == "" {
 		return nil, ErrNoAdapterConfigured
 	}
-	if environment == "production" {
+	if isProduction(environment) {
 		if _, allowed := productionAdapters[name]; !allowed {
 			return nil, ErrAdapterNotInProd
 		}
@@ -67,4 +69,22 @@ func Select(reg Registry, environment, name string) (Adapter, error) {
 		return nil, ErrUnknownAdapter
 	}
 	return a, nil
+}
+
+// isProduction normalizes environment (trim + lowercase) before comparing to
+// "production". ENVIRONMENT is a free-form, unvalidated env var
+// (internal/platform/config.go's envString does no normalization or validation), and
+// Select's production check is this repo's only boot-refusal gate (Core AC-6: refuse to
+// start rather than run an unauthorized adapter in production). A fail-closed gate that an
+// exact string match defeats via casing or padding -- "Production", "PRODUCTION",
+// " production" -- is not fail-closed at all, so the comparison here must not be
+// case/whitespace sensitive.
+//
+// internal/gateway.MockIssuerEnabled gates the dev/CI mock issuer with the same
+// `environment != "production"` exact match and is deliberately NOT changed here -- it
+// guards two dev-only routes, not a boot, and is a different story's code. Reconciling the
+// two notions of "production" belongs to M8-07, which MockIssuerEnabled's own comment
+// already defers to.
+func isProduction(environment string) bool {
+	return strings.ToLower(strings.TrimSpace(environment)) == "production"
 }

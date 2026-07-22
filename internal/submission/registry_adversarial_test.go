@@ -15,18 +15,18 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
-// TestSelect_ProductionCheckIsCaseAndWhitespaceSensitive documents a deployment footgun:
-// Select's production gate is an exact `environment == "production"` string comparison
-// ([internal/submission/registry.go], mirroring internal/platform/config.go's envString,
-// which does not normalize ENVIRONMENT). A capitalized or whitespace-padded ENVIRONMENT
-// value therefore silently bypasses the fail-closed allowlist entirely -- Select treats it
-// as non-production and returns the adapter with no error, exactly as if ENVIRONMENT were
-// "development". This is a genuine operational risk (a misspelled/miscased env var in a
-// deploy config would boot with an adapter that was never allowlisted) even though no
-// acceptance criterion in M5-02-04 names it. Flagged as a finding, not asserted as a bug in
-// the code under test -- these assertions pin the OBSERVED behavior so a future change to
-// this comparison is a deliberate, reviewable diff.
-func TestSelect_ProductionCheckIsCaseAndWhitespaceSensitive(t *testing.T) {
+// TestSelect_ProductionCheckIsCaseAndWhitespaceInsensitive pins the fix for a deployment
+// footgun QA found: Select's production gate used to be an exact
+// `environment == "production"` string comparison, which a capitalized or
+// whitespace-padded ENVIRONMENT value (e.g. "Production", "PRODUCTION", " production",
+// "production ") would silently bypass entirely -- Select would treat it as
+// non-production and return the adapter with no error, exactly as if ENVIRONMENT were
+// "development". ENVIRONMENT is a free-form, unvalidated env var
+// (internal/platform/config.go's envString does not normalize it), and this is the repo's
+// only boot-refusal gate (Core AC-6), so it must not be defeatable by casing or padding.
+// Select now normalizes (trim + lowercase) before comparing, so every variant below must
+// be refused with ErrAdapterNotInProd, exactly like the canonical "production" case.
+func TestSelect_ProductionCheckIsCaseAndWhitespaceInsensitive(t *testing.T) {
 	reg, err := submission.NewRegistry(fakeAdapter{name: "mock", version: "v1"})
 	if err != nil {
 		t.Fatalf("NewRegistry setup failed: %v", err)
@@ -36,11 +36,11 @@ func TestSelect_ProductionCheckIsCaseAndWhitespaceSensitive(t *testing.T) {
 	for _, environment := range variants {
 		t.Run(environment, func(t *testing.T) {
 			adapter, err := submission.Select(reg, environment, "mock")
-			if err != nil {
-				t.Errorf("FINDING: Select(reg, %q, \"mock\") returned error %v -- expected the gate to be bypassed (adapter, nil), confirming a case/whitespace variant of \"production\" is NOT recognized as production", environment, err)
+			if !errors.Is(err, submission.ErrAdapterNotInProd) {
+				t.Fatalf(`Select(reg, %q, "mock") error = %v, want errors.Is(err, ErrAdapterNotInProd)`, environment, err)
 			}
-			if adapter == nil {
-				t.Errorf("FINDING: Select(reg, %q, \"mock\") returned nil adapter -- expected the registered adapter, confirming the production allowlist gate is bypassed for this variant", environment)
+			if adapter != nil {
+				t.Errorf(`Select(reg, %q, "mock") adapter = %+v, want nil`, environment, adapter)
 			}
 		})
 	}

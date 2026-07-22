@@ -45,6 +45,21 @@ func main() {
 	// /readyz now reflects the DB dependency the worker carries.
 	app.Ready("database", pool.Ping)
 
+	// M5-02-04: resolve the configured adapter against the fail-closed production
+	// allowlist before the queue starts. Fatal in production (or when APP_ADAPTER is
+	// set but not selectable) -- never boot with an unauthorized adapter in prod. In
+	// non-production with APP_ADAPTER unset, log a warning and continue with no
+	// adapter, keeping the dev fleet's boot green.
+	reg := submission.NewDefaultRegistry()
+	adapter, err := submission.Select(reg, app.Config.Environment, os.Getenv("APP_ADAPTER"))
+	if err != nil {
+		if app.Config.Environment == "production" || os.Getenv("APP_ADAPTER") != "" {
+			log.Fatalf("submission: adapter: %v", err)
+		}
+		log.Printf("submission: adapter: %v (continuing with no adapter configured)", err)
+	}
+	_ = adapter // wired for M5-04's worker to consume; unused here is deliberate for this subtask.
+
 	// Build the working River client (demo workers) and register it on the platform kit's
 	// lifecycle, so it starts alongside /healthz and drains on shutdown (decision #3).
 	q, err := queue.New(pool, queue.Config{

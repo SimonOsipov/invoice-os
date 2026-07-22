@@ -1,31 +1,40 @@
 // registry.go: M5-02-04, the adapter registry, the pure config-lookup Select, and the
-// fail-closed production allowlist. NewRegistry/NewDefaultRegistry/Select below are
-// deliberate Stage 2.5 STUBS -- signatures only, wired for real by the executor. See
-// registry_test.go and cmd/submission/main_test.go for the RED specs these stubs must
-// satisfy once implemented.
+// fail-closed production allowlist. See registry_test.go and cmd/submission/main_test.go
+// for the specs these bodies satisfy.
 package submission
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Registry maps an adapter name to its adapter. Built once at boot.
 type Registry map[string]Adapter
 
 // NewRegistry keys each adapter by its own Name(), so a key can never disagree with the
 // value it stamps into submission_jobs.adapter / app_exchange.adapter. Errors on an empty
-// name or a duplicate name.
-//
-// Stage 2.5 stub: deliberately returns nil, nil. Real body lands with the executor pass.
+// name or a duplicate name. Zero adapters is valid (e.g. the dev boot before M5-03) and
+// returns an empty, non-nil Registry.
 func NewRegistry(adapters ...Adapter) (Registry, error) {
-	return nil, nil
+	reg := make(Registry, len(adapters))
+	for _, a := range adapters {
+		name := a.Name()
+		if name == "" {
+			return nil, errors.New("submission: adapter has an empty Name()")
+		}
+		if _, exists := reg[name]; exists {
+			return nil, fmt.Errorf("submission: duplicate adapter name %q", name)
+		}
+		reg[name] = a
+	}
+	return reg, nil
 }
 
 // NewDefaultRegistry is the single seam through which the binary obtains its adapters.
 // EMPTY in M5-02; M5-03 registers "mock"; M6 registers the sandbox. Registering an
 // adapter here does NOT make it usable in production -- see productionAdapters.
-//
-// Stage 2.5 stub: deliberately returns nil. Real body lands with the executor pass.
 func NewDefaultRegistry() Registry {
-	return nil
+	return Registry{}
 }
 
 // productionAdapters is the FAIL-CLOSED allowlist of names permitted when
@@ -44,10 +53,18 @@ var (
 // connection and reads no environment variable itself, so it is exhaustively
 // unit-testable. Precedence: empty name checked first (works in every environment), then
 // the production allowlist (only when environment == "production"), then registry lookup.
-//
-// Stage 2.5 stub: deliberately returns nil, nil -- this makes
-// TestSelect_NeverReturnsNilAdapterWithNilError fail loudly, which is the totality
-// property AC-5 is about. Real body lands with the executor pass.
 func Select(reg Registry, environment, name string) (Adapter, error) {
-	return nil, nil
+	if name == "" {
+		return nil, ErrNoAdapterConfigured
+	}
+	if environment == "production" {
+		if _, allowed := productionAdapters[name]; !allowed {
+			return nil, ErrAdapterNotInProd
+		}
+	}
+	a, ok := reg[name]
+	if !ok {
+		return nil, ErrUnknownAdapter
+	}
+	return a, nil
 }

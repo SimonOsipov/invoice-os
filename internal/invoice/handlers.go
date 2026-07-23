@@ -504,6 +504,37 @@ func HistoryHandler(history func(ctx context.Context, id string) ([]StatusChange
 	}
 }
 
+// batchSubmitReq is the POST /v1/invoices/submissions wire body ([batch-key-in-the-body],
+// task-231): idempotency_key is a JSON body field, not a header. Declared here as the
+// production-side wire type Stage 3's real decode step will populate; the Mode-A stub below
+// never reads it.
+type batchSubmitReq struct {
+	InvoiceIDs     []string `json:"invoice_ids"`
+	IdempotencyKey string   `json:"idempotency_key"`
+}
+
+// BatchSubmitHandler returns POST /v1/invoices/submissions (task-231, [trigger-surface]).
+// STUBBED for Mode A (RED phase) -- mirrors this file's own M4-02-03 precedent (every
+// handler here originally "always answer[ed] 501 ... without decoding the request,
+// checking identity, or calling the injected store closure"): this handler currently
+// ALWAYS answers 501, ignoring the request and the injected submit closure entirely, so
+// every batch_submit_handler_test.go assertion (T07-7's bound half, T07-8, T07-9) fails on
+// its OWN target value (status code / body shape), never a compile error.
+//
+// The real body (Stage 3) is: identity-first-401 (same order as every handler above) ->
+// decode (400 on malformed JSON) -> pre-tx guards, ALL before any write ([T07-8 non-uuid
+// handling]): empty invoice_ids -> 400; >200 ids -> 400; blank or >218-char
+// idempotency_key -> 400 (218 = 255 - 1 colon - 36 uuid, the idempotency_keys CHECK bound
+// less deriveBatchSubmitKey's own overhead -- task-231 Implementation Notes correct the
+// story's earlier "1..200 chars" language to this precise figure); any non-uuid id -> 400
+// -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound -> 404, the existing
+// map) -> 200 + BatchSubmitResult.
+func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in

@@ -218,8 +218,12 @@ func parseMockEnvelope(w Wire) (mockEnvelope, error) {
 	var env mockEnvelope
 	if err := json.Unmarshal(w, &env); err != nil {
 		// Both verbs are %w: the sentinel so M5-03-03 can errors.Is, the decoder error so the
-		// underlying reason survives into the M5-07 evidence trail.
-		return mockEnvelope{}, fmt.Errorf("submission: parse mock envelope: %w: %w", ErrMockUnparseableWire, err)
+		// underlying reason survives into the M5-07 evidence trail. No extra "submission: ..."
+		// context prefix here -- ErrMockUnparseableWire's own text already starts with
+		// "submission: ", and every other error in this package (registry.go's bare sentinels,
+		// exchange.go:183,187,208's single %w) carries exactly ONE such prefix; adding a second
+		// would duplicate it in the rendered message.
+		return mockEnvelope{}, fmt.Errorf("%w: %w", ErrMockUnparseableWire, err)
 	}
 	return env, nil
 }

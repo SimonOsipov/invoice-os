@@ -36,6 +36,7 @@ package submission
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -723,4 +724,206 @@ func TestMockWire_UsesNoDynamicMaps(t *testing.T) {
 	}
 
 	walk(reflect.TypeOf(mockEnvelope{}), "mockEnvelope")
+}
+
+// ---------------------------------------------------------------------------------------
+// QA Mode B, Part 3: adversarial / edge coverage beyond the story's Test Specs table.
+// ---------------------------------------------------------------------------------------
+
+// TestMockWire_EmptyStringMoneyIsEmittedNotOmitted is the mirror image of AC-4/
+// TestMockWire_NilFieldsAreOmittedNotCoerced: a *string pointing at "" is NOT nil, so
+// mockAmountFrom must still build the amount object and emit "value":"" -- only a genuinely
+// nil pointer omits the object. If this test and AC-4's ever disagreed, one of them would be
+// wrong: the distinction between "no value" (nil) and "an empty value" (pointer-to-"") is
+// exactly what AC-4's own doc comment on mockAmount.Value claims to preserve.
+func TestMockWire_EmptyStringMoneyIsEmittedNotOmitted(t *testing.T) {
+	c := Canonical{InvoiceNumber: "INV-EMPTYSTR", Subtotal: mwStrPtr("")}
+	wire := mwWire(t, c)
+
+	mwWantContains(t, wire, `"LineExtensionAmount":{"value":""}`,
+		"a non-nil pointer-to-empty-string must build the amount object with value:\"\", not omit it")
+	mwWantContains(t, wire, `"TaxExclusiveAmount":{"value":""}`,
+		"Subtotal feeds both LineExtensionAmount and TaxExclusiveAmount")
+}
+
+// TestMockWire_DecimalEdgeShapesPassThroughVerbatim extends AC-5 with shapes a numeric
+// round-trip is especially likely to mangle: a leading minus sign, leading zeros, and a
+// value wide enough to overflow float64's mantissa. Each must land on the wire as the exact
+// same string, because [money-passes-through-verbatim] means nothing here may parse a number
+// at all, wide or not.
+func TestMockWire_DecimalEdgeShapesPassThroughVerbatim(t *testing.T) {
+	tests := []struct{ name, value string }{
+		{"negative", "-1234.56"},
+		{"leading-zeros", "007.500"},
+		{"negative-leading-zeros", "-007.500"},
+		{"wider-than-float64-mantissa", "999999999999999999999999999999.99999999"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Canonical{InvoiceNumber: "INV-DEC", Total: mwStrPtr(tc.value)}
+			wire := mwWire(t, c)
+			mwWantContains(t, wire, `"PayableAmount":{"value":"`+tc.value+`"}`,
+				"AC-5: an edge-shaped decimal string must reach the wire byte-for-byte, un-renormalised")
+		})
+	}
+}
+
+// TestMockWire_InvalidUTF8IsDeterministic covers Name/Description bytes that are not valid
+// UTF-8. encoding/json replaces invalid sequences with U+FFFD when marshalling a Go string,
+// which is a lossy but DETERMINISTIC transform -- so this asserts the determinism property,
+// not a specific rendering (a specific byte sequence would just be pinning encoding/json's
+// implementation detail). It also confirms the field is not silently dropped or the whole
+// marshal caused to error.
+func TestMockWire_InvalidUTF8IsDeterministic(t *testing.T) {
+	bad := string([]byte{0xff, 0xfe, 0xfd, 'A', 0x80})
+	c := Canonical{
+		InvoiceNumber: "INV-BADUTF8",
+		Supplier:      Party{Name: mwStrPtr(bad)},
+		Lines:         []CanonicalLine{{LineID: "l1", LineNo: 1, Description: mwStrPtr(bad)}},
+	}
+
+	w1, err := mockWireFrom(c)
+	if err != nil {
+		t.Fatalf("mockWireFrom returned an unexpected error on invalid UTF-8 input: %v", err)
+	}
+	w2, err := mockWireFrom(c)
+	if err != nil {
+		t.Fatalf("mockWireFrom returned an unexpected error on the second call: %v", err)
+	}
+	if !bytes.Equal(w1, w2) {
+		t.Errorf("invalid UTF-8 input must still marshal deterministically\n1: %s\n2: %s",
+			mwTrunc(string(w1)), mwTrunc(string(w2)))
+	}
+
+	wire := string(w1)
+	mwWantContains(t, wire, `"PartyName"`, "an invalid-UTF8 Name must still produce a PartyName block, not be silently dropped")
+	mwWantContains(t, wire, `"Item":{"Name":"`, "an invalid-UTF8 Description must still produce an Item block")
+}
+
+// TestMockWire_ManyLinesIsDeterministicAndFast is the 1000-line case: it re-checks the
+// determinism property at a scale where an implementation reaching for a map (unordered
+// iteration) or doing anything quadratic in the line count would show up either as
+// non-reproducible bytes or as a test that visibly hangs.
+func TestMockWire_ManyLinesIsDeterministicAndFast(t *testing.T) {
+	const n = 1000
+	build := func() Canonical {
+		lines := make([]CanonicalLine, n)
+		for i := 0; i < n; i++ {
+			lines[i] = CanonicalLine{
+				LineID:   fmt.Sprintf("line-%d", i),
+				LineNo:   i + 1,
+				Quantity: mwStrPtr("1"),
+			}
+		}
+		return Canonical{InvoiceNumber: "INV-MANYLINES", Lines: lines}
+	}
+
+	start := time.Now()
+	w1, err := mockWireFrom(build())
+	if err != nil {
+		t.Fatalf("mockWireFrom returned an unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("building/marshalling %d lines took %s, want well under 2s -- suspect quadratic behaviour", n, elapsed)
+	}
+
+	w2, err := mockWireFrom(build()) // fresh instance, equal value -- AC-7/L03 at scale
+	if err != nil {
+		t.Fatalf("mockWireFrom returned an unexpected error on the fresh instance: %v", err)
+	}
+	if !bytes.Equal(w1, w2) {
+		t.Errorf("marshalling %d equal-but-distinct lines produced different bytes", n)
+	}
+
+	if got := strings.Count(string(w1), `"Item"`); got != 0 {
+		t.Errorf("no line here has a Description, so no Item block should appear")
+	}
+	if got := strings.Count(string(w1), `"InvoicedQuantity":"1"`); got != n {
+		t.Errorf("expected all %d lines to carry InvoicedQuantity, counted %d", n, got)
+	}
+}
+
+// TestMockWire_EmptyNonNilLinesAlsoMarshalsToEmptyArray covers Lines set to a non-nil,
+// zero-length slice ([]CanonicalLine{}) -- distinct from the nil case AC-3 already covers.
+// [wire-lines-empty-not-omitted]'s make()-based construction does not distinguish nil from
+// empty on the way in (both have len 0), so both must produce the identical wire shape.
+func TestMockWire_EmptyNonNilLinesAlsoMarshalsToEmptyArray(t *testing.T) {
+	c := Canonical{InvoiceNumber: "INV-EMPTYLINES", Lines: []CanonicalLine{}}
+	if c.Lines == nil {
+		t.Fatalf("corpus precondition broken: Lines must be non-nil-but-empty, got nil")
+	}
+
+	wire := mwWire(t, c)
+	mwWantContains(t, wire, `"InvoiceLine":[]`,
+		"a non-nil, zero-length Lines must ALSO marshal to [] -- the same wire shape as a nil Lines")
+	mwWantAbsent(t, wire, `"InvoiceLine":null`, "must not regress to null for this shape either")
+}
+
+// TestMockWire_LineNoZeroAndNegativePassThrough covers LineNo values outside the documented
+// 1..N range ([D10] in canonical.go). buildMockEnvelope has no validation layer of its own --
+// it is a pure projection -- so both must render as their verbatim signed decimal string,
+// the same as any other int, rather than being treated as "no line number".
+func TestMockWire_LineNoZeroAndNegativePassThrough(t *testing.T) {
+	c := Canonical{
+		InvoiceNumber: "INV-LINENO",
+		Lines: []CanonicalLine{
+			{LineID: "l-zero", LineNo: 0},
+			{LineID: "l-neg", LineNo: -5},
+		},
+	}
+	wire := mwWire(t, c)
+
+	mwWantContains(t, wire, `"ID":"0"`, "LineNo 0 must render as the decimal string \"0\", not be treated as absent")
+	mwWantContains(t, wire, `"ID":"-5"`, "a negative LineNo must render verbatim as a signed decimal string")
+}
+
+// TestMockWire_IssueDateUsesItsOwnZoneNotUTC pins the deliberate non-normalisation the
+// package comment documents: formatting happens in the time.Time's OWN location, never
+// through .UTC() first. The two zones must disagree on the CALENDAR DAY for this to prove
+// anything -- 2026-01-01 02:00 +05:30 is 2025-12-31 20:30 UTC, so a regression that added
+// .UTC() before formatting would silently shift IssueDate a day earlier.
+func TestMockWire_IssueDateUsesItsOwnZoneNotUTC(t *testing.T) {
+	loc := time.FixedZone("TEST+05:30", 5*3600+30*60)
+	local := time.Date(2026, 1, 1, 2, 0, 0, 0, loc)
+
+	if utcDay := local.UTC().Format(mockIssueDateLayout); utcDay == local.Format(mockIssueDateLayout) {
+		t.Fatalf("test precondition broken: local and UTC dates must differ for this pin to mean anything, both are %s", utcDay)
+	}
+
+	c := Canonical{InvoiceNumber: "INV-TZ", IssueDate: &local}
+	wire := mwWire(t, c)
+
+	mwWantContains(t, wire, `"IssueDate":"2026-01-01"`,
+		"IssueDate must format in the time's OWN zone (2026-01-01 local), not its UTC equivalent (2025-12-31)")
+	mwWantAbsent(t, wire, `"IssueDate":"2025-12-31"`,
+		"a .UTC()-normalised regression would silently shift the rendered date a day earlier")
+}
+
+// TestMockWire_ParseRejectsStructurallyWrongJSON extends AC-8's coverage without touching
+// TestMockWire_ParseRejectsEmptyAndNonJSON, which must stay scoped to exactly empty and
+// non-JSON bytes per [non-reserved-defaults-to-accept] (JSON `null` and `{}` are deliberately
+// NOT error cases). These are additional shapes that are wrong in a different way: valid JSON
+// syntax that is not an object, and JSON truncated mid-token.
+func TestMockWire_ParseRejectsStructurallyWrongJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		w    Wire
+	}{
+		{"truncated-mid-key", Wire(`{"ID"`)},
+		{"truncated-mid-string-value", Wire(`{"ID":"INV-00`)},
+		{"top-level-json-array", Wire(`[1,2,3]`)},
+		{"deeply-nested-array", Wire(strings.Repeat("[", 10000))},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseMockEnvelope(tc.w)
+			if err == nil {
+				t.Fatalf("parseMockEnvelope(%s) returned a nil error, want non-nil", tc.name)
+			}
+			if !errors.Is(err, ErrMockUnparseableWire) {
+				t.Errorf("parseMockEnvelope(%s) error = %v, want it to wrap ErrMockUnparseableWire", tc.name, err)
+			}
+		})
+	}
 }

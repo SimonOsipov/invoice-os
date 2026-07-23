@@ -51,6 +51,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1338,4 +1339,334 @@ func TestMockAdapterDoc_DocumentsEveryAllocation(t *testing.T) {
 				path, mockTriggerUnavailable, mockTINUnavailable)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------------------
+// QA Mode B adversarial coverage (task-225). Everything below extends the Stage-2.5 set above;
+// none of it duplicates a Test Spec from the story's table. Helper prefix `ms`, package
+// submission, stdlib only, no testify, no t.Skip, no new TestMain -- same constraints as the
+// rest of this file.
+// ---------------------------------------------------------------------------------------
+
+// msKnownTINOutcomes is an INDEPENDENT, hand-written record of what each allocated reserved
+// suffix does, deliberately NOT read from mockAllocations -- a mutation test that walked
+// mockAllocations to build its own expectations could never catch a drifted table, since it
+// would just be comparing the production data to itself. Keep this in sync with the doc's
+// allocation table by hand.
+var msKnownTINOutcomes = map[string]mockTrigger{
+	mockTINAccept:      mockTriggerAccept,
+	mockTINReject:      mockTriggerReject,
+	mockTINPending:     mockTriggerPending,
+	mockTINUnavailable: mockTriggerUnavailable,
+	mockTINSlow:        mockTriggerSlow,
+	mockTINTimeout:     mockTriggerTimeout,
+	mockTINConnection:  mockTriggerConnection,
+}
+
+// TestMockTriggerFor_SingleCharacterMutationsOfEachAllocatedTIN mutates every one of the 13
+// characters of each allocated TIN to every other decimal digit and confirms the result is never
+// mistaken for the ORIGINAL trigger. A mutation that happens to land on a DIFFERENT allocated
+// TIN (e.g. flipping -0002's last digit to 1 lands on -0001) is expected to yield THAT trigger,
+// not accept -- msKnownTINOutcomes (not mockAllocations) supplies the expectation so this cannot
+// pass by asking the production table what it thinks of itself.
+func TestMockTriggerFor_SingleCharacterMutationsOfEachAllocatedTIN(t *testing.T) {
+	msRequireAllocations(t)
+	for base, trigger := range msKnownTINOutcomes {
+		t.Run(base, func(t *testing.T) {
+			for i := 0; i < len(base); i++ {
+				for _, r := range "0123456789" {
+					if base[i] == byte(r) {
+						continue
+					}
+					mutated := base[:i] + string(r) + base[i+1:]
+					want, ok := msKnownTINOutcomes[mutated]
+					if !ok {
+						want = mockTriggerAccept
+					}
+					if got := mockTriggerFor(mutated); got != want {
+						t.Errorf("mockTriggerFor(%q) [mutated %q at position %d] = %q, want %q",
+							mutated, base, i, got, want)
+					}
+					_ = trigger
+				}
+			}
+		})
+	}
+}
+
+// TestMockTriggerFor_UnicodeLookAlikeAndFullWidthDigitsDoNotMatch pins that the exact-match rule
+// really is BYTE-exact, not "the same number" -- an Arabic-Indic or full-width rendering of an
+// allocated TIN is visually a digit but is a different Unicode code point (and a different UTF-8
+// byte sequence) entirely, so it must never arm a scripted outcome.
+func TestMockTriggerFor_UnicodeLookAlikeAndFullWidthDigitsDoNotMatch(t *testing.T) {
+	toFullWidth := func(ascii string) string {
+		var b strings.Builder
+		for _, r := range ascii {
+			if r >= '0' && r <= '9' {
+				b.WriteRune('０' + (r - '0')) // full-width digits U+FF10..U+FF19
+			} else {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	toArabicIndic := func(ascii string) string {
+		var b strings.Builder
+		for _, r := range ascii {
+			if r >= '0' && r <= '9' {
+				b.WriteRune('٠' + (r - '0')) // Arabic-Indic digits U+0660..U+0669
+			} else {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+
+	msRequireAllocations(t)
+	for _, a := range mockAllocations {
+		t.Run(a.TIN+"/full-width", func(t *testing.T) {
+			fw := toFullWidth(a.TIN)
+			if fw == a.TIN {
+				t.Fatalf("toFullWidth(%q) == input -- the conversion did nothing, so this case proves "+
+					"nothing", a.TIN)
+			}
+			if got := mockTriggerFor(fw); got != mockTriggerAccept {
+				t.Errorf("mockTriggerFor(%q) [full-width rendering of %q] = %q, want %q", fw, a.TIN, got, mockTriggerAccept)
+			}
+		})
+		t.Run(a.TIN+"/arabic-indic", func(t *testing.T) {
+			ai := toArabicIndic(a.TIN)
+			if ai == a.TIN {
+				t.Fatalf("toArabicIndic(%q) == input -- the conversion did nothing", a.TIN)
+			}
+			if got := mockTriggerFor(ai); got != mockTriggerAccept {
+				t.Errorf("mockTriggerFor(%q) [Arabic-Indic rendering of %q] = %q, want %q", ai, a.TIN, got, mockTriggerAccept)
+			}
+		})
+	}
+
+	t.Run("single-arabic-indic-digit-inside-an-otherwise-exact-tin", func(t *testing.T) {
+		// Only the LAST digit of the reject trigger is swapped for its Arabic-Indic look-alike;
+		// the other 12 characters are byte-identical to mockTINReject.
+		mutated := mockTINReject[:len(mockTINReject)-1] + "٢" // Arabic-Indic '2'
+		if got := mockTriggerFor(mutated); got != mockTriggerAccept {
+			t.Errorf("mockTriggerFor(%q) = %q, want %q -- a single look-alike digit must not arm the "+
+				"reject trigger", mutated, got, mockTriggerAccept)
+		}
+	})
+}
+
+// TestMockTriggerFor_NearMissEightDigitPrefixes covers 8-digit prefixes that are one digit away
+// from the reserved 99999999 block -- closer near-misses than TestMockTriggerFor_DefaultsToAccept
+// already covers (which uses an unrelated 01234567 prefix).
+func TestMockTriggerFor_NearMissEightDigitPrefixes(t *testing.T) {
+	for _, tc := range []struct{ name, tin string }{
+		{"one-digit-short-of-all-nines", "99999998-0001"},
+		{"leading-digit-not-nine", "09999999-0001"},
+		{"trailing-prefix-digit-not-nine", "99999990-0001"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mockTriggerFor(tc.tin); got != mockTriggerAccept {
+				t.Errorf("mockTriggerFor(%q) = %q, want %q -- only the exact 99999999- prefix is "+
+					"reserved", tc.tin, got, mockTriggerAccept)
+			}
+		})
+	}
+}
+
+// TestMockDocRef_TruncationBoundaryLengths pins the exact off-by-one boundary of
+// mockDocRefMaxLen, which TestMockIRN_DocRefUppercasesBeforeStrippingAndTruncates only exercises
+// at 80 characters (comfortably over the boundary either way).
+func TestMockDocRef_TruncationBoundaryLengths(t *testing.T) {
+	digest := sha256.Sum256([]byte("truncation-boundary-fixture"))
+
+	exact := strings.Repeat("A", mockDocRefMaxLen) // already-uppercase ASCII, exactly the limit
+	t.Run("exactly-the-limit-is-not-truncated", func(t *testing.T) {
+		got := mockDocRef(exact, digest)
+		if got != exact {
+			t.Errorf("mockDocRef(<%d chars>) = %q, want it returned VERBATIM (no truncation needed)",
+				len(exact), got)
+		}
+	})
+
+	t.Run("one-over-the-limit-is-truncated-by-exactly-one", func(t *testing.T) {
+		over := exact + "Z"
+		got := mockDocRef(over, digest)
+		if len(got) != mockDocRefMaxLen {
+			t.Errorf("mockDocRef(<%d chars>) has len %d, want %d", len(over), len(got), mockDocRefMaxLen)
+		}
+		if got != exact {
+			t.Errorf("mockDocRef(<limit+1>) = %q, want the first %d characters (%q)", got, mockDocRefMaxLen, exact)
+		}
+	})
+
+	t.Run("two-hundred-chars-truncates-to-the-first-24", func(t *testing.T) {
+		long := strings.Repeat("Q9-", 67) // 201 chars, well past the limit
+		got := mockDocRef(long, digest)
+		if len(got) != mockDocRefMaxLen {
+			t.Errorf("mockDocRef(<%d chars>) has len %d, want %d", len(long), len(got), mockDocRefMaxLen)
+		}
+		if want := long[:mockDocRefMaxLen]; got != want {
+			t.Errorf("mockDocRef(<200 chars>) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("already-all-uppercase-ascii-is-unchanged-when-under-the-limit", func(t *testing.T) {
+		id := "INVOICE-2026-0001"
+		if got := mockDocRef(id, digest); got != id {
+			t.Errorf("mockDocRef(%q) = %q, want it unchanged -- nothing to strip, nothing to case-fold, "+
+				"nothing to truncate", id, got)
+		}
+	})
+}
+
+// TestMockIRNDatePart_AbsurdButSyntacticallyValidDates covers dates that time.Parse accepts even
+// though they would never occur in a real invoice, distinguishing "time.Parse rejected it" from
+// "time.Parse accepted an absurd value and rendered it verbatim" -- both are correct, but for
+// different reasons, and only execution tells them apart.
+func TestMockIRNDatePart_AbsurdButSyntacticallyValidDates(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"year-zero", "0000-01-01", "00000101"},
+		{"year-9999", "9999-12-31", "99991231"},
+		{"day-31-in-a-30-day-month", "2026-04-31", mockIRNNoDate},
+		{"day-30-in-february", "2026-02-30", mockIRNNoDate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mockIRNDatePart(tc.in); got != tc.want {
+				t.Errorf("mockIRNDatePart(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMockIdentifiers_NonUTCZoneIssueDateUsesItsOwnWallClockDate runs the FULL pipeline
+// (Canonical -> Wire -> parseMockEnvelope -> mockIdentifiersFor) with an IssueDate carrying a
+// non-UTC zone, extending TestMockWire_IssueDateUsesItsOwnZoneNotUTC (mock_wire_test.go), which
+// only checks the wire's raw JSON string, to the composed IRN two layers downstream. The fixture
+// is chosen so the local wall-clock date and its UTC equivalent are different calendar days: a
+// .UTC()-normalising regression anywhere in the pipeline would render the wrong day.
+func TestMockIdentifiers_NonUTCZoneIssueDateUsesItsOwnWallClockDate(t *testing.T) {
+	loc := time.FixedZone("TEST+05:30", 5*3600+30*60)
+	local := time.Date(2026, 1, 1, 2, 0, 0, 0, loc) // 2026-01-01 local, 2025-12-31 UTC
+
+	if utcDay := local.UTC().Format(mockIRNDateLayout); utcDay == local.Format(mockIRNDateLayout) {
+		t.Fatalf("test precondition broken: local and UTC calendar days must differ, both are %s", utcDay)
+	}
+
+	c := Canonical{InvoiceNumber: "INV-TZ-0001", IssueDate: &local}
+	_, ids := msIdentifiers(t, c)
+
+	want := "INV-TZ-0001-" + mockServiceID + "-20260101"
+	if ids.IRN != want {
+		t.Errorf("IRN = %q, want %q -- the IRN's date part must reflect the issue date's OWN "+
+			"wall-clock day (2026-01-01), not its UTC-shifted equivalent (2025-12-31)", ids.IRN, want)
+	}
+}
+
+// TestMockRef_RoundTripsEveryJSONSurvivableByteAndVeryLargeN covers two extremes
+// TestMockRef_RoundTrips does not: identifier strings built from every Latin-1 code point
+// (0x00-0xFF, encoded as Go runes so the result is always valid UTF-8 -- control characters,
+// the quote and backslash that JSON must escape, and the C1 control range are all in there), and
+// a poll count at the platform int's maximum.
+func TestMockRef_RoundTripsEveryJSONSurvivableByteAndVeryLargeN(t *testing.T) {
+	var b strings.Builder
+	for c := 0; c <= 0xFF; c++ {
+		b.WriteRune(rune(c))
+	}
+	wideString := b.String()
+
+	ids := mockIdentifiers{IRN: wideString, CSID: wideString, QRPayload: wideString}
+
+	t.Run("every-latin-1-code-point-round-trips", func(t *testing.T) {
+		ref := encodeMockRef(1, ids)
+		gotN, gotIDs, err := decodeMockRef(ref)
+		if err != nil {
+			t.Fatalf("decodeMockRef returned an error for a ref this test just minted: %v", err)
+		}
+		if gotN != 1 {
+			t.Errorf("decoded n = %d, want 1", gotN)
+		}
+		if gotIDs != ids {
+			t.Errorf("decoded identifiers do not match: IRN len got %d want %d, CSID equal=%v, QR equal=%v",
+				len(gotIDs.IRN), len(ids.IRN), gotIDs.CSID == ids.CSID, gotIDs.QRPayload == ids.QRPayload)
+		}
+	})
+
+	t.Run("a-very-large-poll-count-round-trips-exactly", func(t *testing.T) {
+		plainIDs := mockIdentifiers{IRN: "INV-0001-FBMOCK01-20260115", CSID: "c", QRPayload: "q"}
+		ref := encodeMockRef(math.MaxInt, plainIDs)
+		gotN, gotIDs, err := decodeMockRef(ref)
+		if err != nil {
+			t.Fatalf("decodeMockRef returned an error for math.MaxInt: %v", err)
+		}
+		if gotN != math.MaxInt {
+			t.Errorf("decoded n = %d, want %d (math.MaxInt) -- JSON numbers into a concrete int field "+
+				"must not lose precision through a float64 intermediate", gotN, math.MaxInt)
+		}
+		if gotIDs != plainIDs {
+			t.Errorf("decoded identifiers = %+v, want %+v", gotIDs, plainIDs)
+		}
+	})
+}
+
+// TestMockRef_RejectsRightShapeWrongJSONType covers refs whose base64 decodes to SYNTACTICALLY
+// valid JSON of the wrong shape or type -- as opposed to TestMockRef_RejectsMalformed's
+// truncated/non-object cases, these are well-formed JSON values that simply do not fit
+// mockRefPayload's field types, which json.Unmarshal itself must reject.
+func TestMockRef_RejectsRightShapeWrongJSONType(t *testing.T) {
+	b64 := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+	for _, tc := range []struct{ name, json string }{
+		{"n-is-a-string-not-a-number", `{"n":"two","irn":"INV-0001","csid":"c","qr":"q"}`},
+		{"n-is-a-non-integer-number", `{"n":1.5,"irn":"INV-0001","csid":"c","qr":"q"}`},
+		{"irn-is-a-number-not-a-string", `{"n":1,"irn":123,"csid":"c","qr":"q"}`},
+		{"payload-is-a-json-string-not-an-object", `"just a string"`},
+		{"payload-is-a-json-number-not-an-object", `42`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := Ref(mockRefPrefix + b64(tc.json))
+			_, _, err := decodeMockRef(ref)
+			if err == nil {
+				t.Fatalf("decodeMockRef(%q) returned a nil error, want a non-nil one", ref)
+			}
+			if !errors.Is(err, ErrMockUnknownRef) {
+				t.Errorf("decodeMockRef(%q) error = %v, want it to wrap ErrMockUnknownRef", ref, err)
+			}
+		})
+	}
+}
+
+// TestMockBodies_AreDeterministicAcrossManyIterations runs each of the four body builders 2000
+// times in a loop and requires byte-identical output every time, the same style as
+// TestMockIdentifiers_AreDeterministic's 100-iteration part (b): any hidden reliance on Go's
+// randomised map ITERATION order (as opposed to encoding/json's documented, unrelated map KEY
+// SORTING on Marshal) would surface as a flake here long before it surfaced in CI.
+//
+// This was additionally verified OUTSIDE the committed suite by running the equivalent check as
+// five separate `go test` process invocations (not just five iterations in one process): every
+// run produced byte-identical bodies, confirming the stability is encoding/json's documented
+// map-key-sorting behaviour, not an accident of one process's map iteration seed.
+func TestMockBodies_AreDeterministicAcrossManyIterations(t *testing.T) {
+	ids := mockIdentifiers{IRN: "INV-0001-FBMOCK01-20260115", CSID: "csid-fixture", QRPayload: "qr-fixture"}
+	ref := Ref(mockRefPrefix + "ref-fixture")
+
+	wantAccepted := mockAcceptedBody(ids)
+	wantRejected := mockRejectedBody()
+	wantPending := mockPendingBody(ref)
+	wantUnavailable := mockUnavailableBody()
+
+	for i := 0; i < 2000; i++ {
+		if got := mockAcceptedBody(ids); got != wantAccepted {
+			t.Fatalf("iteration %d: mockAcceptedBody drifted:\nfirst: %s\ngot:   %s", i, wantAccepted, got)
+		}
+		if got := mockRejectedBody(); got != wantRejected {
+			t.Fatalf("iteration %d: mockRejectedBody drifted", i)
+		}
+		if got := mockPendingBody(ref); got != wantPending {
+			t.Fatalf("iteration %d: mockPendingBody drifted", i)
+		}
+		if got := mockUnavailableBody(); got != wantUnavailable {
+			t.Fatalf("iteration %d: mockUnavailableBody drifted", i)
+		}
+	}
 }

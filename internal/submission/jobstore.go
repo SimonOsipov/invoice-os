@@ -109,6 +109,33 @@ func markJobPending(ctx context.Context, tx pgx.Tx, jobID string, attempts int, 
 		  WHERE id = $1`, jobID, attempts, ref, pollAfter)
 }
 
+// lockSubmissionJobForPoll is PollWorker's tx1 read-and-lock (M5-04-06): the CURRENT state
+// and poll_ref for jobID under tenantID, FOR UPDATE. poll_ref is read fresh off the row on
+// every hop rather than trusted from the job's own args -- that is what makes "never
+// re-polls the original" ([poll-ticket]) hold even under a River retry of a stale poll job.
+func lockSubmissionJobForPoll(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (state string, pollRef *string, attempts int, err error) {
+	if err = tx.QueryRow(ctx,
+		`SELECT state, poll_ref, attempts FROM submission_jobs
+		  WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
+		tenantID, jobID).Scan(&state, &pollRef, &attempts); err != nil {
+		return "", nil, 0, fmt.Errorf("submission: lock job row for poll: %w", err)
+	}
+	return state, pollRef, attempts, nil
+}
+
+// markJobPollRetry is PollWorker's tx2 mid-budget Retryable write (T06-8, mid-budget half):
+// attempts advanced, last_error recorded, state left UNCHANGED at 'pending' -- unlike
+// SubmitWorker's own markJobRetry (which resets state to 'queued'), a poll's mid-budget
+// retry has no "back to queued": the job is still waiting on the SAME deferred verdict.
+// Deliberately OUTSIDE queue.OncePerJob, mirroring markJobRetry's own doc comment exactly:
+// OncePerJob's marker key is constant across retries of the same River job, so wrapping a
+// mid-budget write would make the SECOND attempt's bookkeeping a silent no-op.
+func markJobPollRetry(ctx context.Context, tx pgx.Tx, jobID string, attempts int, lastErr string) error {
+	return execJobUpdate(ctx, tx,
+		`UPDATE submission_jobs SET attempts = $2, last_error = $3 WHERE id = $1`,
+		jobID, attempts, lastErr)
+}
+
 // markJobRetry is tx2's mid-budget Retryable write (T05-5): state back to 'queued', attempts
 // advanced, last_error recorded -- the invoice is left untouched. The caller wraps this
 // UPDATE deliberately OUTSIDE queue.OncePerJob: OncePerJob's marker key is constant across

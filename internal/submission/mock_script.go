@@ -2,16 +2,16 @@
 // table, the deterministic IRN/CSID/QR synthesis, the rejection vocabulary, the four
 // synthesized APP response bodies, and the pending-handle (Ref) codec.
 //
-// STUB STATE (QA Mode A). The TYPE SET, the CONSTANTS and the FUNCTION SIGNATURES below are the
-// Stage-1 architecture output and are final. Every FUNCTION BODY is a no-op returning zero
-// values so that mock_script_test.go's RED specs fail on their ASSERTIONS rather than on
-// `undefined:`. The executor of M5-03-02 fills the bodies in; nothing here needs a new type,
-// a new constant or a changed signature.
+// The TYPE SET, the CONSTANTS and the FUNCTION SIGNATURES are the Stage-1 architecture output
+// and are final; mock_script_test.go's specs assert against the SYMBOLS here rather than against
+// retyped literals, so a constant may not be inlined at its use site.
 //
-// Constants carry their real values already: they are declarations, not behaviour, and the
-// specs assert against the SYMBOLS rather than retyped literals. `mockAllocations` is the one
-// deliberate exception -- it is left EMPTY, because it is the table the allocation specs
-// iterate and populating it here would make several of them pass before a line of logic exists.
+// The four synthesized response bodies are built as map[string]any and rendered through
+// mockJSONBody (the precedent is internal/invoice/payload.go:86 and platform/health.go:54).
+// That is deliberately NOT the [wire-payload] "structs only" rule next door in mock_wire.go:
+// that rule buys byte-determinism for the WIRE, whose field order must be fixed by declaration.
+// A map buys the same determinism here (encoding/json sorts map keys) and lets the 503 body omit
+// `data` and `errors` outright rather than carrying two omitempty pointers to say nothing.
 //
 // PURITY, enforced by review not by the compiler: this file must never contain an adapter
 // type, a context.Context, time.Now, math/rand, an HTTP status constant, a response header,
@@ -44,7 +44,12 @@ package submission
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 )
 
 // mockTrigger is a STRING type, not an int enum, so a failure message, a log line and
@@ -96,10 +101,17 @@ type mockAllocation struct {
 // declaration order is stable for both the specs and the doc table, and a map would invite
 // nondeterministic range order into a package whose entire point is determinism.
 //
-// TODO(M5-03-02): implemented by the executor. Deliberately EMPTY in the stub -- this is the
-// table the allocation specs iterate, and seeding it here would make them pass before any
-// behaviour exists.
-var mockAllocations = []mockAllocation{}
+// The order here IS the order of the table in docs/mock-app-adapter.md. -0008 and -0009 are
+// absent on purpose; see mockNeverAllocate.
+var mockAllocations = []mockAllocation{
+	{TIN: mockTINAccept, Trigger: mockTriggerAccept},
+	{TIN: mockTINReject, Trigger: mockTriggerReject},
+	{TIN: mockTINPending, Trigger: mockTriggerPending},
+	{TIN: mockTINUnavailable, Trigger: mockTriggerUnavailable},
+	{TIN: mockTINSlow, Trigger: mockTriggerSlow},
+	{TIN: mockTINTimeout, Trigger: mockTriggerTimeout},
+	{TIN: mockTINConnection, Trigger: mockTriggerConnection},
+}
 
 // The APP's own response codes. Foreign-looking on purpose: nothing about them resembles our
 // kebab-case validation rule keys.
@@ -191,21 +203,50 @@ type mockRefPayload struct {
 // EXACT string match, deliberately NOT normalised -- the opposite ruling from registry.go's
 // IsProduction, which normalises to protect a fail-CLOSED boot gate. Normalising here would
 // WIDEN the set of inputs that activate a scripted outcome, which is the wrong direction.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockTriggerFor(buyerTIN string) mockTrigger {
-	_ = buyerTIN
-	return ""
+	for _, a := range mockAllocations {
+		if a.TIN == buyerTIN {
+			return a.Trigger
+		}
+	}
+	// EXPLICIT, not a map-miss default: an unallocated TIN -- including "" and every reserved
+	// suffix nobody has claimed -- takes the ordinary accept path
+	// ([non-reserved-defaults-to-accept]).
+	return mockTriggerAccept
 }
 
 // mockIdentifiersFor synthesizes the IRN, CSID and QR payload. Pure: no clock, no randomness,
 // no counter. w supplies the digest the CSID and QR are keyed on; env supplies the document
 // identity the IRN is keyed on ([irn-is-identity-keyed-not-content-keyed]).
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockIdentifiersFor(w Wire, env mockEnvelope) mockIdentifiers {
-	_, _ = w, env
-	return mockIdentifiers{}
+	digest := sha256.Sum256(w)
+
+	ids := mockIdentifiers{
+		// Exactly two envelope fields, no digest: an amount, a line or a party may change
+		// without moving the IRN. The real FIRS MBS IRN carries no content digest either.
+		IRN:  mockDocRef(env.ID, digest) + "-" + mockServiceID + "-" + mockIRNDatePart(env.IssueDate),
+		CSID: base64.RawURLEncoding.EncodeToString(digest[:]),
+	}
+
+	// The payable amount is nil-safe: an all-nil-money canonical carries no PayableAmount at
+	// all, and "" is the honest rendering of absent -- never "0".
+	amount := ""
+	if payable := env.LegalMonetaryTotal.PayableAmount; payable != nil {
+		amount = payable.Value
+	}
+
+	// The QR carries the CSID, so it moves with any byte of the wire even though the IRN does
+	// not. Its tin is the SUPPLIER's: the buyer TIN is the trigger channel, and stamping a
+	// reserved trigger value into every accepted invoice's payload would be exactly wrong.
+	ids.QRPayload = base64.RawURLEncoding.EncodeToString([]byte(mockJSONBody(mockQR{
+		IRN:  ids.IRN,
+		CSID: ids.CSID,
+		TIN:  mockSupplierTIN(env),
+		Amt:  amount,
+		Cur:  env.DocumentCurrencyCode,
+	})))
+
+	return ids
 }
 
 // mockDocRef sanitises a document reference for the IRN: ToUpper FIRST, then strip to
@@ -213,29 +254,45 @@ func mockIdentifiersFor(w Wire, env mockEnvelope) mockIdentifiers {
 // would delete every lowercase letter, turning "inv-001" into "-001". Empty AFTER sanitisation
 // degrades to mockDocRefFallbackPrefix + the first mockDocRefFallbackHexLen UPPERCASE hex
 // characters of digest, or the IRN would mix cases.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockDocRef(id string, digest [sha256.Size]byte) string {
-	_, _ = id, digest
-	return ""
+	var b strings.Builder
+	for _, r := range strings.ToUpper(id) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	ref := b.String()
+
+	if ref == "" {
+		// %X over the first bytes of the digest: two hex characters per byte, upper-cased so the
+		// composed IRN stays inside [A-Z0-9-].
+		return fmt.Sprintf("%s%X", mockDocRefFallbackPrefix, digest[:mockDocRefFallbackHexLen/2])
+	}
+	if len(ref) > mockDocRefMaxLen {
+		// Safe on bytes: everything that survived the loop is single-byte ASCII.
+		ref = ref[:mockDocRefMaxLen]
+	}
+	return ref
 }
 
 // mockIRNDatePart renders an envelope IssueDate as YYYYMMDD. ANY error, including an empty
 // input, degrades to mockIRNNoDate. time.Parse is a parser, not a clock.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockIRNDatePart(issueDate string) string {
-	_ = issueDate
-	return ""
+	d, err := time.Parse(mockIssueDateLayout, issueDate)
+	if err != nil {
+		return mockIRNNoDate
+	}
+	return d.Format(mockIRNDateLayout)
 }
 
 // mockSupplierTIN reads the supplier TIN back out of a parsed envelope, for the QR payload.
 // Total and nil-safe, the mirror of mockBuyerTIN (mock_wire.go:233).
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockSupplierTIN(env mockEnvelope) string {
-	_ = env
-	return ""
+	scheme := env.AccountingSupplierParty.Party.PartyTaxScheme
+	if scheme == nil {
+		return ""
+	}
+	return scheme.CompanyID
 }
 
 // mockRejectionReasons returns the reason set the reject trigger hands upward.
@@ -243,59 +300,98 @@ func mockSupplierTIN(env mockEnvelope) string {
 // A FUNCTION returning a FRESH slice, never a package var: Rejected.Reasons crosses the adapter
 // seam, and a shared backing array is the exact L04 failure mode contract_red_test.go:57-58
 // documents.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockRejectionReasons() []Reason {
-	return nil
+	// A composite literal, evaluated afresh on every call: the returned slice shares no backing
+	// array with any other call's.
+	return []Reason{{
+		Code: mockCodeRejected,
+		// The message is the APP's, so it reads like an authority verdict rather than one of our
+		// validation strings -- but it is what the SPA shows the operator, so it must say what to
+		// do about it.
+		Message: "Customer tax identifier is not registered with the tax authority.",
+		// OURS. The 422 body next door names the same field mockRejectField; translating between
+		// the two vocabularies is the adapter's job and the whole point of the exercise.
+		Path: mockRejectPath,
+	}}
 }
 
 // mockAcceptedBody renders the synthesized 200 body.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockAcceptedBody(ids mockIdentifiers) string {
-	_ = ids
-	return ""
+	return mockJSONBody(map[string]any{
+		"status":  "ACCEPTED",
+		"code":    mockCodeAccepted,
+		"message": "Invoice cleared.",
+		"data": map[string]any{
+			"irn":  ids.IRN,
+			"csid": ids.CSID,
+			"qr":   ids.QRPayload,
+		},
+	})
 }
 
 // mockRejectedBody renders the synthesized 422 body. It names the field in the APP's OWN
 // vocabulary (mockRejectField) and must never contain our dotted path.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockRejectedBody() string {
-	return ""
+	return mockJSONBody(map[string]any{
+		"status":  "REJECTED",
+		"code":    mockCodeRejected,
+		"message": "Invoice was not cleared.",
+		"errors": []map[string]any{{
+			"code":    mockCodeRejected,
+			"message": "Customer tax identifier is not registered with the tax authority.",
+			"field":   mockRejectField,
+		}},
+	})
 }
 
 // mockPendingBody renders the synthesized 202 body, carrying the Ref the caller must persist.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockPendingBody(ref Ref) string {
-	_ = ref
-	return ""
+	return mockJSONBody(map[string]any{
+		"status":  "PENDING",
+		"code":    mockCodePending,
+		"message": "Invoice queued for clearance.",
+		"data": map[string]any{
+			"reference": string(ref),
+			// The same constant M5-03-05's mockPollBackoff is derived from, never a second
+			// literal 5.
+			"pollAfterSeconds": mockPollAfterSeconds,
+		},
+	})
 }
 
 // mockUnavailableBody renders the synthesized 503 body. No data block: the authority decided
 // nothing.
-//
-// TODO(M5-03-02): implemented by the executor.
 func mockUnavailableBody() string {
-	return ""
+	// No "errors" key either: a 503 is a transport verdict, not a validation one
+	// ([errors-never-verdicts]).
+	return mockJSONBody(map[string]any{
+		"status":  "ERROR",
+		"code":    mockCodeUnavailable,
+		"message": "Clearance service is temporarily unavailable.",
+	})
 }
 
 // mockJSONBody marshals v compactly and returns "" on the unreachable marshal error rather than
 // panicking -- a panic trips L15/L14, a contract violation; an empty body is a cosmetic one.
 //
-// TODO(M5-03-02): implemented by the executor.
+// json.Marshal, never Encoder.Encode: every body here is archived verbatim as
+// app_exchange.response_body and Encode's trailing newline would ride along.
 func mockJSONBody(v any) string {
-	_ = v
-	return ""
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // encodeMockRef mints the opaque pending handle: mockRefPrefix + base64url(compact JSON).
-//
-// TODO(M5-03-02): implemented by the executor.
 func encodeMockRef(n int, ids mockIdentifiers) Ref {
-	_, _ = n, ids
-	return ""
+	return Ref(mockRefPrefix + base64.RawURLEncoding.EncodeToString([]byte(mockJSONBody(mockRefPayload{
+		N:    n,
+		IRN:  ids.IRN,
+		CSID: ids.CSID,
+		QR:   ids.QRPayload,
+	}))))
 }
 
 // decodeMockRef reverses encodeMockRef. It errors, wrapping ErrMockUnknownRef, for FOUR
@@ -303,9 +399,38 @@ func encodeMockRef(n int, ids mockIdentifiers) Ref {
 // "contract-suite-never-issued-ref"); bad base64; bad JSON (where a truncated ref lands); and
 // an INVARIANT violation -- a negative poll count or a blank IRN
 // ([ref-enforces-its-own-invariants]).
-//
-// TODO(M5-03-02): implemented by the executor.
 func decodeMockRef(ref Ref) (int, mockIdentifiers, error) {
-	_ = ref
-	return 0, mockIdentifiers{}, nil
+	// CutPrefix, not TrimPrefix: only CutPrefix distinguishes "the prefix was absent" from "the
+	// prefix was there and the remainder is empty", and those two land in different classes.
+	encoded, ok := strings.CutPrefix(string(ref), mockRefPrefix)
+	if !ok {
+		return 0, mockIdentifiers{}, fmt.Errorf("%w: ref does not carry the %q prefix", ErrMockUnknownRef, mockRefPrefix)
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return 0, mockIdentifiers{}, fmt.Errorf("%w: %w", ErrMockUnknownRef, err)
+	}
+
+	var payload mockRefPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return 0, mockIdentifiers{}, fmt.Errorf("%w: %w", ErrMockUnknownRef, err)
+	}
+
+	// The INVARIANT class. A ref is trivially constructible by hand, and M5-03-04's convergence
+	// branch returns Accepted{IRN: ids.IRN} straight out of one -- so a blank IRN here would
+	// mint an Accepted that violates L07. Enforcing once at the codec boundary beats enforcing
+	// at every consumer.
+	if payload.N < 0 {
+		return 0, mockIdentifiers{}, fmt.Errorf("%w: poll count %d is negative", ErrMockUnknownRef, payload.N)
+	}
+	if strings.TrimSpace(payload.IRN) == "" {
+		return 0, mockIdentifiers{}, fmt.Errorf("%w: ref carries a blank IRN", ErrMockUnknownRef)
+	}
+
+	return payload.N, mockIdentifiers{
+		IRN:       payload.IRN,
+		CSID:      payload.CSID,
+		QRPayload: payload.QR,
+	}, nil
 }

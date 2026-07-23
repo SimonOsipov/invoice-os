@@ -1,14 +1,11 @@
-// mock_wire.go: M5-03-01 (task-224) STAGE 2.5 STUB. The BIS Billing 3.0 / EN 16931-shaped
-// wire envelope the mock APP adapter puts on the wire ([wire-payload]), plus the read-back
-// path the content-keyed trigger needs ([trigger-read-from-the-real-bis-field]).
+// mock_wire.go: M5-03-01 (task-224). The BIS Billing 3.0 / EN 16931-shaped wire envelope the
+// mock APP adapter puts on the wire ([wire-payload]), plus the read-back path the content-keyed
+// trigger needs ([trigger-read-from-the-real-bis-field]).
 //
-// WHAT IS REAL HERE AND WHAT IS NOT: the TYPE SET below (every struct, every field, every
-// json tag) and the FUNCTION SIGNATURES are the Stage-1 architecture output and are final.
-// The function BODIES are deliberate no-ops -- they exist only so mock_wire_test.go compiles
-// and fails on ASSERTIONS rather than on "undefined: buildMockEnvelope". Every body is marked
-// TODO(M5-03-01) and is the executor's Stage 3 work. Do not read a body here as a decision.
+// The TYPE SET below (every struct, every field, every json tag) and the FUNCTION SIGNATURES are
+// the Stage-1 architecture output and are final.
 //
-// Decisions this file implements once the bodies are real:
+// Decisions this file implements:
 //   - [wire-payload] structs only, never map[string]any, so field order is fixed by
 //     declaration and json.Marshal is byte-deterministic for a given input (L03).
 //   - [zero-line-invoice] / [wire-lines-empty-not-omitted] InvoiceLine is built with
@@ -29,7 +26,12 @@
 // CORRECT output for an all-nil-money canonical.
 package submission
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+)
 
 const (
 	mockCustomizationID = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
@@ -127,23 +129,82 @@ type mockLine struct {
 // randomness, and it never mutates c (L03/L04) -- every *string it carries across is COPIED,
 // not aliased. It never panics, including on the zero Canonical.
 func buildMockEnvelope(c Canonical) mockEnvelope {
-	_ = c
-	return mockEnvelope{} // TODO(M5-03-01): implemented by the executor
+	env := mockEnvelope{
+		CustomizationID:         mockCustomizationID,
+		ProfileID:               mockProfileID,
+		ID:                      c.InvoiceNumber,
+		UUID:                    c.InvoiceID,
+		InvoiceTypeCode:         mockInvoiceTypeCode,
+		AccountingSupplierParty: mockPartyFrom(c.Supplier),
+		AccountingCustomerParty: mockPartyFrom(c.Buyer),
+	}
+
+	if c.IssueDate != nil {
+		// Formatted in the value's OWN location, deliberately NOT .UTC()-normalised: pgx scans
+		// a `date` to UTC so it is a no-op in production, but .UTC() on a hand-built FixedZone
+		// time would silently shift the date by a day.
+		env.IssueDate = c.IssueDate.Format(mockIssueDateLayout)
+	}
+	if c.Currency != nil {
+		env.DocumentCurrencyCode = *c.Currency
+	}
+	if amt := mockAmountFrom(c.VAT, c.Currency); amt != nil {
+		env.TaxTotal = &mockTaxTotal{TaxAmount: *amt}
+	}
+	// LineExtensionAmount and TaxExclusiveAmount are BOTH fed from Subtotal -- see the type's
+	// comment. Two separate mockAmountFrom calls, so the two keys never share a pointer.
+	env.LegalMonetaryTotal = mockMonetaryTotal{
+		LineExtensionAmount: mockAmountFrom(c.Subtotal, c.Currency),
+		TaxExclusiveAmount:  mockAmountFrom(c.Subtotal, c.Currency),
+		PayableAmount:       mockAmountFrom(c.Total, c.Currency),
+	}
+
+	// [wire-lines-empty-not-omitted] make() UNCONDITIONALLY, before the loop: len(nil slice) is
+	// 0, so no branch is needed, and the result is a non-nil empty slice that marshals to [].
+	//
+	// CONFLICT, deliberate, do not "harmonise": internal/invoice/payload.go:113-121 does the
+	// exact OPPOSITE -- it OMITS line_items when there are none, because omission is what makes
+	// the MBS line-items-required rule fire ([payload-absence]). That is the validator payload;
+	// this is the APP wire envelope, where BIS wants the key present and empty. Both are correct
+	// in their own package.
+	env.InvoiceLine = make([]mockLine, 0, len(c.Lines))
+	for _, l := range c.Lines {
+		line := mockLine{
+			ID:                  strconv.Itoa(l.LineNo),
+			UUID:                l.LineID,
+			InvoicedQuantity:    mockCopyString(l.Quantity),
+			LineExtensionAmount: mockAmountFrom(l.LineTotal, c.Currency),
+		}
+		if l.Description != nil {
+			line.Item = &mockItem{Name: *l.Description}
+		}
+		if amt := mockAmountFrom(l.UnitPrice, c.Currency); amt != nil {
+			line.Price = &mockPrice{PriceAmount: *amt}
+		}
+		if amt := mockAmountFrom(l.LineTax, c.Currency); amt != nil {
+			line.TaxTotal = &mockTaxTotal{TaxAmount: *amt}
+		}
+		env.InvoiceLine = append(env.InvoiceLine, line)
+	}
+
+	return env
 }
 
 // marshalMockEnvelope renders env with json.Marshal -- NOT json.Encoder.Encode, whose trailing
 // newline would carry a stray byte into the M5-07 archive via RequestBody = string(w). On
 // error it returns a NIL Wire, never a partial one (L05).
 func marshalMockEnvelope(env mockEnvelope) (Wire, error) {
-	_ = env
-	return nil, nil // TODO(M5-03-01): implemented by the executor
+	b, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("submission: marshal mock envelope: %w", err)
+	}
+	return Wire(b), nil
 }
 
 // mockWireFrom is the single build+marshal entry point. M5-03-03's Transform is exactly
 // `return mockWireFrom(c)` and nothing else, so there is only ever one marshal path.
 func mockWireFrom(c Canonical) (Wire, error) {
-	_ = c
-	return nil, nil // TODO(M5-03-01): implemented by the executor
+	return marshalMockEnvelope(buildMockEnvelope(c))
 }
 
 // parseMockEnvelope decodes wire bytes back into the envelope, wrapping ErrMockUnparseableWire
@@ -154,15 +215,23 @@ func mockWireFrom(c Canonical) (Wire, error) {
 // ([non-reserved-defaults-to-accept]). That is deliberate and is unreachable from any Transform
 // in this package. This function owns no validation rule beyond "these bytes are JSON".
 func parseMockEnvelope(w Wire) (mockEnvelope, error) {
-	_ = w
-	return mockEnvelope{}, nil // TODO(M5-03-01): implemented by the executor
+	var env mockEnvelope
+	if err := json.Unmarshal(w, &env); err != nil {
+		// Both verbs are %w: the sentinel so M5-03-03 can errors.Is, the decoder error so the
+		// underlying reason survives into the M5-07 evidence trail.
+		return mockEnvelope{}, fmt.Errorf("submission: parse mock envelope: %w: %w", ErrMockUnparseableWire, err)
+	}
+	return env, nil
 }
 
 // mockBuyerTIN reads the buyer TIN back out of a parsed envelope. Total and nil-safe: it
 // returns "" when there is no PartyTaxScheme, and never errors.
 func mockBuyerTIN(env mockEnvelope) string {
-	_ = env
-	return "" // TODO(M5-03-01): implemented by the executor
+	scheme := env.AccountingCustomerParty.Party.PartyTaxScheme
+	if scheme == nil {
+		return ""
+	}
+	return scheme.CompanyID
 }
 
 // mockCopyString returns an independent copy of s (nil stays nil). Strings are immutable so
@@ -171,22 +240,40 @@ func mockBuyerTIN(env mockEnvelope) string {
 // documents an adapter mutating a shared corpus through exactly such a pointer -- L04's live
 // failure mode.
 func mockCopyString(s *string) *string {
-	_ = s
-	return nil // TODO(M5-03-01): implemented by the executor
+	if s == nil {
+		return nil
+	}
+	v := *s
+	return &v
 }
 
 // mockAmountFrom returns nil when v is nil, so a nil *string deletes the whole amount object
 // rather than coercing to "" or "0". currency is the DOCUMENT currency (Canonical.Currency) --
 // the canonical carries no per-line currency.
 func mockAmountFrom(v, currency *string) *mockAmount {
-	_, _ = v, currency
-	return nil // TODO(M5-03-01): implemented by the executor
+	if v == nil {
+		return nil
+	}
+	amount := mockAmount{Value: *v}
+	if currency != nil {
+		amount.CurrencyID = *currency
+	}
+	return &amount
 }
 
 // mockPartyFrom projects a Party. An all-nil Party omits both sub-blocks, but the enclosing
 // AccountingSupplierParty/AccountingCustomerParty key is always present -- both are required
 // in BIS.
 func mockPartyFrom(p Party) mockParty {
-	_ = p
-	return mockParty{} // TODO(M5-03-01): implemented by the executor
+	var body mockPartyBody
+	if p.Name != nil {
+		body.PartyName = &mockPartyName{Name: *p.Name}
+	}
+	if p.TIN != nil {
+		body.PartyTaxScheme = &mockPartyTaxScheme{
+			CompanyID: *p.TIN,
+			TaxScheme: mockTaxScheme{ID: mockTaxSchemeID},
+		}
+	}
+	return mockParty{Party: body}
 }

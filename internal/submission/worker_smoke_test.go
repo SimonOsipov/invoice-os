@@ -1,8 +1,16 @@
 // Env-gated integration smoke test for the M2-08 job spine: the transactional-outbox
-// enqueue helper + a real River worker pool against a real Postgres. It proves the
-// HAPPY paths only (enqueue → worker runs → job completes; duplicate business key → one
-// job; a job that exhausts MaxAttempts → discarded). The ADVERSARIAL exactly-once /
-// re-drive proof is M2-09 — deliberately not here.
+// enqueue helper + a real River worker pool against a real Postgres. It proves the outbox's
+// HAPPY paths (enqueue commits/rolls back atomically; duplicate business key → one job) and
+// that a job that exhausts MaxAttempts → discarded. The ADVERSARIAL exactly-once / re-drive
+// proof is M2-09 — deliberately not here.
+//
+// M5-04-05 deletes the M2-08 DemoArgs/DemoWorker scaffold this file originally exercised
+// (worker.go); the outbox-only subtests below now use SubmitArgs instead, since EnqueueTx's
+// own mechanics don't care which JobArgs implementation they carry. The one subtest that
+// DID need a live, completing worker ("demo job runs to completion") is gone with its
+// subject: Workers(pool, logger) returns an EMPTY bundle until M5-04-08 wires SubmitWorker
+// into it, so there is no worker yet that could carry a submission_submit job to completion
+// here (see worker.go's own doc comment).
 //
 // Like the M2-07 RLS suite, it reuses the Postgres-service-container + Makefile-bootstrap
 // path (not testcontainers): it connects as invoice_app via DATABASE_URL and SKIPS ITSELF
@@ -82,8 +90,9 @@ type immediateRetry struct{}
 
 func (immediateRetry) NextRetry(*rivertype.JobRow) time.Time { return time.Now() }
 
-// newSmokeClient builds a WORKING client with the production demo worker plus the
-// test-only fail worker, under the fast retry policy.
+// newSmokeClient builds a WORKING client with whatever Workers(pool, nil) currently
+// registers (an empty bundle until M5-04-08 wires SubmitWorker in) plus the test-only fail
+// worker, under the fast retry policy.
 func newSmokeClient(t *testing.T, pool *pgxpool.Pool) *queue.Client {
 	t.Helper()
 	workers := submission.Workers(pool, nil)
@@ -99,20 +108,37 @@ func newSmokeClient(t *testing.T, pool *pgxpool.Pool) *queue.Client {
 	return q
 }
 
+// smokeOutboxQueue is a River queue name no client in this test binary ever configures
+// (newSmokeClient/newWorkerClient only configure river.QueueDefault). TestQueueSmoke_Outbox
+// below enqueues SubmitArgs jobs that nothing in this subtask's Workers(...) bundle can work
+// yet (see worker.go's doc comment) -- without a dedicated queue, a later-started working
+// client sharing this package's Postgres (e.g. TestQueueSmoke_Worker's) would fetch these
+// stray `default`-queue rows anyway and log "Unhandled job kind" on every immediate retry.
+const smokeOutboxQueue = "smoke-outbox-only"
+
 // TestQueueSmoke_Outbox exercises the transactional outbox without a running worker: it
 // only cares that the enqueue's writes commit or roll back atomically (AC #3) and that a
-// duplicate business key yields exactly one job (AC #4).
+// duplicate business key yields exactly one job (AC #4). It uses the M2-09 insert-only
+// client shape (newInsertClient, failure_modes_test.go) rather than newSmokeClient: River
+// validates at InsertTx time that a job's Kind is registered in the client's Workers bundle
+// whenever that bundle is non-nil, even for a client that is never Start()ed -- true of
+// newSmokeClient's bundle once M5-04-05 empties Workers(...) (worker.go) of the M2-08
+// DemoWorker registration these subtests used to ride along on. An insert-only client
+// (Workers left nil entirely) skips that check, matching every other pure-EnqueueTx test in
+// this package (failure_modes_test.go's rawArgs/guardedArgs/poisonArgs/noTenantArgs, none of
+// which are registered anywhere either).
 func TestQueueSmoke_Outbox(t *testing.T) {
 	pool := requireDB(t)
 	defer pool.Close()
 	ctx := context.Background()
-	q := newSmokeClient(t, pool) // never Start()ed: EnqueueTx is an insert-only path
+	q := newInsertClient(t, pool) // insert-only: no Workers bundle, so no kind-registration check
 
 	t.Run("rollback leaves neither key nor job", func(t *testing.T) {
-		tenant, key, note := uuid.NewString(), uuid.NewString(), uuid.NewString()
+		tenant, key, idemKey := uuid.NewString(), uuid.NewString(), uuid.NewString()
 		err := db.WithinTenantTx(ctx, pool, tenant, func(tx pgx.Tx) error {
 			if _, e := q.EnqueueTx(ctx, tx, tenant, key,
-				submission.DemoArgs{TenantID: tenant, Note: note}, nil); e != nil {
+				submission.SubmitArgs{TenantID: tenant, InvoiceID: uuid.NewString(), IdempotencyKey: idemKey},
+				&river.InsertOpts{Queue: smokeOutboxQueue}); e != nil {
 				return e
 			}
 			return errRollback // force the whole tx to roll back
@@ -120,7 +146,7 @@ func TestQueueSmoke_Outbox(t *testing.T) {
 		if !errors.Is(err, errRollback) {
 			t.Fatalf("WithinTenantTx err = %v, want errRollback", err)
 		}
-		if n := countJobs(t, pool, submission.DemoArgs{}.Kind(), note); n != 0 {
+		if n := countSubmitJobs(t, pool, idemKey); n != 0 {
 			t.Errorf("river_job rows after rollback = %d, want 0", n)
 		}
 		if n := countKeys(t, pool, tenant, key); n != 0 {
@@ -129,12 +155,12 @@ func TestQueueSmoke_Outbox(t *testing.T) {
 	})
 
 	t.Run("commit leaves both key and job", func(t *testing.T) {
-		tenant, key, note := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		skipped := enqueueDemo(t, ctx, q, pool, tenant, key, note)
+		tenant, key, idemKey := uuid.NewString(), uuid.NewString(), uuid.NewString()
+		skipped := enqueueSubmit(t, ctx, q, pool, tenant, key, idemKey)
 		if skipped {
 			t.Fatal("first enqueue reported skipped, want inserted")
 		}
-		if n := countJobs(t, pool, submission.DemoArgs{}.Kind(), note); n != 1 {
+		if n := countSubmitJobs(t, pool, idemKey); n != 1 {
 			t.Errorf("river_job rows after commit = %d, want 1", n)
 		}
 		if n := countKeys(t, pool, tenant, key); n != 1 {
@@ -146,7 +172,8 @@ func TestQueueSmoke_Outbox(t *testing.T) {
 		tenant := uuid.NewString()
 		err := db.WithinTenantTx(ctx, pool, tenant, func(tx pgx.Tx) error {
 			_, e := q.EnqueueTx(ctx, tx, tenant, "",
-				submission.DemoArgs{TenantID: tenant, Note: uuid.NewString()}, nil)
+				submission.SubmitArgs{TenantID: tenant, InvoiceID: uuid.NewString(), IdempotencyKey: uuid.NewString()},
+				&river.InsertOpts{Queue: smokeOutboxQueue})
 			return e
 		})
 		if err == nil {
@@ -155,23 +182,26 @@ func TestQueueSmoke_Outbox(t *testing.T) {
 	})
 
 	t.Run("duplicate business key produces exactly one job", func(t *testing.T) {
-		tenant, key, note := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		if skipped := enqueueDemo(t, ctx, q, pool, tenant, key, note); skipped {
+		tenant, key, idemKey := uuid.NewString(), uuid.NewString(), uuid.NewString()
+		if skipped := enqueueSubmit(t, ctx, q, pool, tenant, key, idemKey); skipped {
 			t.Fatal("first enqueue skipped, want inserted")
 		}
 		// Same (tenant, key): the authoritative idempotency_keys UNIQUE dedupes it.
-		if skipped := enqueueDemo(t, ctx, q, pool, tenant, key, note); !skipped {
+		if skipped := enqueueSubmit(t, ctx, q, pool, tenant, key, idemKey); !skipped {
 			t.Fatal("second enqueue of the same key was not skipped")
 		}
-		if n := countJobs(t, pool, submission.DemoArgs{}.Kind(), note); n != 1 {
+		if n := countSubmitJobs(t, pool, idemKey); n != 1 {
 			t.Errorf("river_job rows for duplicate key = %d, want exactly 1", n)
 		}
 	})
 }
 
-// TestQueueSmoke_Worker starts the pool once and proves a demo job runs to completion
-// (AC #8 / the worker-role WithinTenantTx path, AC #7) and that an always-failing job
-// exhausts MaxAttempts into the discarded state (AC #5).
+// TestQueueSmoke_Worker starts the pool once and proves an always-failing job exhausts
+// MaxAttempts into the discarded state (AC #5). It no longer also proves a job "runs to
+// completion": that subtest exercised the now-deleted M2-08 DemoWorker, and
+// Workers(pool, logger) registers no worker for submission_submit until M5-04-08 wires
+// SubmitWorker in, so there is nothing here yet that could carry a job to `completed`
+// (worker.go's own doc comment).
 func TestQueueSmoke_Worker(t *testing.T) {
 	pool := requireDB(t)
 	defer pool.Close()
@@ -188,13 +218,6 @@ func TestQueueSmoke_Worker(t *testing.T) {
 			t.Errorf("stop worker pool: %v", err)
 		}
 	}()
-
-	t.Run("demo job runs to completion", func(t *testing.T) {
-		tenant, key, note := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		enqueueDemo(t, ctx, q, pool, tenant, key, note)
-		id := jobID(t, pool, submission.DemoArgs{}.Kind(), note)
-		waitForJobState(t, pool, id, string(rivertype.JobStateCompleted), 20*time.Second)
-	})
 
 	t.Run("exhausted job lands in discarded", func(t *testing.T) {
 		tenant, key, note := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -215,19 +238,40 @@ func TestQueueSmoke_Worker(t *testing.T) {
 
 // --- helpers -------------------------------------------------------------------------
 
-// enqueueDemo runs the transactional-outbox enqueue for a demo job and commits.
-func enqueueDemo(t *testing.T, ctx context.Context, q *queue.Client, pool *pgxpool.Pool, tenant, key, note string) (skipped bool) {
+// enqueueSubmit runs the transactional-outbox enqueue for a submission_submit job and
+// commits. invoiceID is filler (a fresh uuid): these outbox-only subtests exercise
+// EnqueueTx's own mechanics, never SubmitWorker.Work, so it need not name a real invoice.
+func enqueueSubmit(t *testing.T, ctx context.Context, q *queue.Client, pool *pgxpool.Pool, tenant, key, idemKey string) (skipped bool) {
 	t.Helper()
 	err := db.WithinTenantTx(ctx, pool, tenant, func(tx pgx.Tx) error {
 		s, e := q.EnqueueTx(ctx, tx, tenant, key,
-			submission.DemoArgs{TenantID: tenant, Note: note}, nil)
+			submission.SubmitArgs{TenantID: tenant, InvoiceID: uuid.NewString(), IdempotencyKey: idemKey},
+			&river.InsertOpts{Queue: smokeOutboxQueue})
 		skipped = s
 		return e
 	})
 	if err != nil {
-		t.Fatalf("enqueue demo: %v", err)
+		t.Fatalf("enqueue submit: %v", err)
 	}
 	return skipped
+}
+
+// countSubmitJobs counts river_job rows for SubmitArgs jobs whose own args carry idemKey as
+// their idempotency_key field. SubmitArgs has no "note" field (unlike DemoArgs, failArgs,
+// rawArgs, guardedArgs, poisonArgs below and in failure_modes_test.go, all of which do and
+// are read back through the shared countJobs/jobID by that field) -- IdempotencyKey is the
+// only test-controlled, per-call-unique string on SubmitArgs, so it doubles as this file's
+// tracking value. river_job has no RLS (it is cross-tenant infrastructure), so the app role
+// sees every row.
+func countSubmitJobs(t *testing.T, pool *pgxpool.Pool, idemKey string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'idempotency_key' = $2`,
+		submission.SubmitArgs{}.Kind(), idemKey).Scan(&n); err != nil {
+		t.Fatalf("count river_job: %v", err)
+	}
+	return n
 }
 
 // countJobs counts river_job rows for a kind + note. river_job has no RLS (it is

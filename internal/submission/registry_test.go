@@ -104,13 +104,71 @@ func TestNewRegistry_RejectsEmptyAndDuplicateNames(t *testing.T) {
 	})
 }
 
-// AC-2: NewDefaultRegistry() is EMPTY in M5-02. This test is M5-03's tripwire: it must be
-// updated deliberately when M5-03 registers "mock".
-func TestNewDefaultRegistry_IsEmptyInM502(t *testing.T) {
-	reg := submission.NewDefaultRegistry()
-	if len(reg) != 0 {
-		t.Errorf("NewDefaultRegistry() = %d entries, want 0 (M5-02 registers no adapter; M5-03 owns the first entry)", len(reg))
+// TestNewDefaultRegistry_RegistersExactlyMock: M5-03-05 AC-3. REPLACES M5-02-04's tripwire
+// TestNewDefaultRegistry_IsEmptyInM502, which named this story as its owner and told it to
+// update it deliberately -- this is that deliberate update.
+//
+// THREE assertions, not one, because "len == 1 and the key is mock" is satisfied by a
+// registry that hardcodes some unrelated adapter under that key:
+//
+//  1. exactly one entry -- the mock, and nothing the sandbox story (M6) has not landed yet;
+//  2. FOR EVERY k, v: k == v.Name(), by iteration. NewRegistry enforces that invariant
+//     (registry.go:19-32) but M5-03-05's NewDefaultRegistry is a one-key MAP LITERAL, which
+//     bypasses it entirely -- so the invariant has no mechanical enforcement anywhere else.
+//     A key that disagreed with Name() would write one string into submission_jobs.adapter and
+//     be looked up under another;
+//  3. the value TYPE-ASSERTS to *submission.MockAdapter, so the entry is provably the mock and
+//     not a stub that merely answers "mock" to Name().
+//
+// Plus Version() non-empty and equal to a freshly constructed NewMockAdapter's -- L02 pins
+// Version across fresh instances, so a registry entry disagreeing with a fresh one would mean
+// the registry built something else.
+//
+// Does NOT assert anything about the LATENCY reaching the adapter; that hole is
+// TestNewDefaultRegistry_PassesConfigToTheMock's (mock_adapter_test.go), because it needs a
+// wall-clock oracle and the mock's own Transform/Submit helpers.
+func TestNewDefaultRegistry_RegistersExactlyMock(t *testing.T) {
+	reg := submission.NewDefaultRegistry(submission.MockConfig{})
+
+	if len(reg) != 1 {
+		t.Fatalf("NewDefaultRegistry(cfg) = %d entries, want exactly 1 (the mock; M6 owns the sandbox entry): %+v", len(reg), reg)
 	}
+
+	for k, v := range reg {
+		if v == nil {
+			t.Fatalf("NewDefaultRegistry(cfg)[%q] is nil", k)
+		}
+		if got := v.Name(); k != got {
+			t.Errorf("NewDefaultRegistry(cfg): key %q maps to an adapter whose Name() is %q -- the "+
+				"registry MUST be keyed by Name() (registry.go:15), or the name looked up and the "+
+				"name persisted into submission_jobs.adapter disagree", k, got)
+		}
+	}
+
+	got, ok := reg["mock"]
+	if !ok {
+		t.Fatalf(`NewDefaultRegistry(cfg) has no key "mock" -- keys present: %v`, maRegistryKeys(reg))
+	}
+	if _, isMock := got.(*submission.MockAdapter); !isMock {
+		t.Errorf(`NewDefaultRegistry(cfg)["mock"] is %T, want *submission.MockAdapter -- an adapter `+
+			`that merely answers "mock" to Name() is not the mock`, got)
+	}
+	if got.Version() == "" {
+		t.Error(`NewDefaultRegistry(cfg)["mock"].Version() is empty (L01)`)
+	}
+	if want := submission.NewMockAdapter(submission.MockConfig{}).Version(); got.Version() != want {
+		t.Errorf(`NewDefaultRegistry(cfg)["mock"].Version() = %q, want %q (a freshly constructed `+
+			`NewMockAdapter's -- L02 pins Version across fresh instances)`, got.Version(), want)
+	}
+}
+
+// maRegistryKeys renders a registry's key set for failure messages only.
+func maRegistryKeys(reg submission.Registry) []string {
+	keys := make([]string, 0, len(reg))
+	for k := range reg {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // AC-3 / Core AC-6: Select refuses a name in production even when that name IS registered

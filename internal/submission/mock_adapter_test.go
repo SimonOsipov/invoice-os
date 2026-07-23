@@ -110,7 +110,9 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -161,6 +163,19 @@ const (
 	maRetryAfter      = "30" // mock_adapter.go mockRetryAfterSeconds
 	maSlowFactor      = 4    // mock_adapter.go mockSlowFactor
 	maTimeoutFactor   = 8    // mock_adapter.go mockTimeoutFactor
+
+	// maLatencyEnv is the env var MockConfigFromEnv reads. mockLatencyEnv is unexported and
+	// this file is external, so the NAME has to be retyped. Drift fails LOUDLY rather than
+	// vacuously: if the symbol were renamed, the "250ms" row below would set a variable nothing
+	// reads, MockConfigFromEnv would return the default, and the exact-value assertion rejects
+	// it.
+	maLatencyEnv = "APP_ADAPTER_MOCK_LATENCY" // mock_script.go:144
+	// maLatencyDefault is the value MockConfigFromEnv applies when maLatencyEnv is unset or
+	// empty. Retyped from mock_adapter.go's mockLatencyDefault, which docs/mock-app-adapter.md:123
+	// publishes as `800ms`. The in-package pin in TestMockAdapterDoc_DocumentsEveryAllocation
+	// (mock_script_test.go) ties the CONSTANT to the DOC; this literal is tied to the same doc by
+	// transcription, so the three can only drift apart through a failing test.
+	maLatencyDefault = 800 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------------------
@@ -3164,4 +3179,486 @@ func TestMockAdapter_PollEvidenceOutcomeAcrossFullMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// =========================================================================================
+// M5-03-05 (task-228) RED specs (QA Mode A): contract conformance, the registry entry, and
+// the config wiring. Rows 1-9 of the plan's revised Test Specs table; row 10 (the doc pin)
+// lives in mock_script_test.go because it needs the in-package constant, and row 11 (main's
+// fatal path) in cmd/submission/main_test.go.
+//
+// WHAT IS RED AT AUTHORING AND WHAT IS NOT -- stated plainly, because "all green" and "the
+// suite silently did nothing" record the same thing:
+//
+//   - S30/S31/S32 (the three contract runs + the negative control) are GREEN at authoring.
+//     M5-03-03 and M5-03-04 already shipped Submit AND Poll, so the mock genuinely conforms
+//     today. They are transcribed anyway because AC-1 is a story acceptance criterion and
+//     because S31 is what proves the harness is WIRED -- see its own comment.
+//   - S33-S38 are RED: NewDefaultRegistry still returns an empty Registry{} and drops cfg, and
+//     MockConfigFromEnv is a stub returning (MockConfig{}, nil).
+//
+// Both facts are re-verified in the commit message, not asserted here.
+// =========================================================================================
+
+// maContractFactory returns a factory RunAdapterContract can call, plus a pointer to the count
+// of calls it has served.
+//
+// THE COUNT IS THE POSITIVE CONTROL, and it is not decoration. "zero recorded failures" is
+// exactly what a suite that silently did nothing also records -- a RunAdapterContract that
+// returned early, or a ContractT double that swallowed its own Errorf, would look identical to
+// a conforming adapter. RunAdapterContract constructs TWO instances on purpose (a1, a2, so L02
+// and L03/L04 compare across fresh instances), so `*calls >= 2` is the cheapest available proof
+// that the harness actually ran before the emptiness of the recorder means anything.
+//
+// The factory is NOT safe for concurrent use; RunAdapterContract is single-goroutine and this
+// package never calls t.Parallel.
+func maContractFactory(cfg submission.MockConfig) (func() submission.Adapter, *int) {
+	calls := 0
+	return func() submission.Adapter {
+		calls++
+		return submission.NewMockAdapter(cfg)
+	}, &calls
+}
+
+// S30 (AC-1, row 1): the shipped 16-law contract suite, UNMODIFIED, run against the mock at
+// MockConfig{} -- zero recorded failures.
+//
+// The assertion ORDER matters: `*calls >= 2` first, `len(rec.messages) == 0` second. Reversing
+// them would report "the mock conforms" from a run that never happened.
+func TestMockAdapter_PassesContract(t *testing.T) {
+	factory, calls := maContractFactory(submission.MockConfig{})
+	rec := &lawRecorder{}
+
+	RunAdapterContract(rec, factory)
+
+	if *calls < 2 {
+		t.Fatalf("the adapter factory was called %d time(s), want >= 2 -- RunAdapterContract "+
+			"constructs two fresh instances (a1, a2) for L02/L03/L04, so a lower count means the "+
+			"suite did not really run and its empty message list proves nothing about the mock",
+			*calls)
+	}
+	if len(rec.messages) != 0 {
+		t.Errorf("RunAdapterContract recorded %d contract failure(s) against MockAdapter at "+
+			"MockConfig{}, want 0.\nlaws tripped: %v\nmessages:\n  %s",
+			len(rec.messages), maSortedLawIDs(rec), strings.Join(rec.messages, "\n  "))
+	}
+}
+
+// S31 (AC-1, row 2): THE NEGATIVE CONTROL for S30 and S32.
+//
+// Without this spec, "the mock passes the contract suite" proves nothing about the WIRING: a
+// RunAdapterContract call that recorded into a discarded recorder, or a lawRecorder whose Errorf
+// dropped its argument, would make S30 green for a broken adapter too. maBrokenVersionMock is a
+// deliberately non-conforming adapter -- identical to the real mock in every respect except an
+// empty Version() -- and L01 ("Name()/Version() must be non-empty") MUST appear in the recorded
+// law ids. If it does not, S30's silence is meaningless and both it and S32 must be distrusted.
+//
+// Scoped to L01 by CONTAINMENT, not set equality: proving that an empty Version trips L01 and
+// NOTHING else is M5-02-07's job (contract_red_test.go owns the per-law set-equality assertions
+// and its own deliberately-broken adapters). This spec only needs the harness to be alive.
+func TestMockAdapter_ContractSuiteWouldCatchABrokenMock(t *testing.T) {
+	rec := &lawRecorder{}
+
+	RunAdapterContract(rec, func() submission.Adapter {
+		return maBrokenVersionMock{MockAdapter: submission.NewMockAdapter(submission.MockConfig{})}
+	})
+
+	if len(rec.messages) == 0 {
+		t.Fatal("RunAdapterContract recorded NOTHING against an adapter whose Version() is empty -- " +
+			"the harness is not wired to this recorder, so TestMockAdapter_PassesContract's empty " +
+			"message list is not evidence of conformance")
+	}
+	if ids := rec.lawIDs(); !ids["L01"] {
+		t.Errorf("RunAdapterContract against an empty-Version() adapter recorded law ids %v, which "+
+			"does not include L01 (Name()/Version() must be non-empty).\nmessages:\n  %s",
+			maSortedLawIDs(rec), strings.Join(rec.messages, "\n  "))
+	}
+}
+
+// maBrokenVersionMock is the real mock with ONE law broken: Version() returns "".
+//
+// It embeds *submission.MockAdapter (a POINTER, matching the pointer receivers and the
+// `var _ Adapter = (*MockAdapter)(nil)` assertion in mock_adapter.go), so Name, Transform,
+// Submit and Poll are promoted unchanged and only Version is overridden. Everything else about
+// it conforms, which is what keeps S31 pointed at L01 rather than at a shotgun of laws.
+type maBrokenVersionMock struct {
+	*submission.MockAdapter
+}
+
+func (maBrokenVersionMock) Version() string { return "" }
+
+// maSortedLawIDs renders a recorder's law-id set deterministically, for failure messages only.
+func maSortedLawIDs(rec *lawRecorder) []string {
+	ids := rec.lawIDs()
+	out := make([]string, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// S32 (AC-1, row 3): the SECOND contract run AC-1 asks for -- with a non-zero Latency.
+//
+// The elapsed assertion is what makes this spec anything other than a copy of S30. At
+// MockConfig{} every wait is a no-op (mockWait's `d <= 0` returns immediately), so a run that
+// silently ignored cfg.Latency would produce an identical zero-failure recorder and this test
+// would be a duplicate. Wall-clock elapsed is the only oracle that separates them.
+//
+// 2ms, NOT the 800ms production default. The traced cost of a non-zero run is exactly
+// 6 x Latency: the six Canonical-corpus Submits reach mockWait (their buyer TINs are BUY-TIN-*
+// or absent, so mockTriggerFor yields accept), while the empty-wire Submit fails at parse
+// before the wait, the unissued-ref Poll fails at decode, and both cancelled-context calls
+// short-circuit at step 1. slow (x4) and timeout (x8) are unreachable from the corpus -- no
+// reserved TIN appears in it. At 800ms that is ~5 seconds of test time for nothing.
+//
+// The BOUND is one Latency, not six, deliberately: six would still pass but couples this spec
+// to the corpus's exact size, which contract_test.go owns and may grow. One Latency already
+// separates "honours the knob" (>= 2ms) from "ignores it" (microseconds).
+func TestMockAdapter_PassesContractWithLatencyConfigured(t *testing.T) {
+	const latency = 2 * time.Millisecond
+
+	factory, calls := maContractFactory(submission.MockConfig{Latency: latency})
+	rec := &lawRecorder{}
+
+	start := time.Now()
+	RunAdapterContract(rec, factory)
+	elapsed := time.Since(start)
+
+	if *calls < 2 {
+		t.Fatalf("the adapter factory was called %d time(s), want >= 2 -- the suite did not really run", *calls)
+	}
+	if len(rec.messages) != 0 {
+		t.Errorf("RunAdapterContract recorded %d contract failure(s) against MockAdapter at "+
+			"MockConfig{Latency: %v}, want 0.\nlaws tripped: %v\nmessages:\n  %s",
+			len(rec.messages), latency, maSortedLawIDs(rec), strings.Join(rec.messages, "\n  "))
+	}
+	if elapsed < latency {
+		t.Errorf("RunAdapterContract at MockConfig{Latency: %v} returned in %v -- less than a single "+
+			"configured latency, so the run cannot have waited at all and this spec is "+
+			"indistinguishable from the MockConfig{} run. Expected ~6x latency (the six corpus "+
+			"Submits); asserting only 1x to stay independent of the corpus size",
+			latency, elapsed)
+	}
+}
+
+// S33 (row 5): THE CONFIG MUST REACH THE ADAPTER.
+//
+// This is the hole with no acceptance criterion behind it, and the reason it is the most
+// important new spec in this subtask. `func NewDefaultRegistry(cfg MockConfig) Registry {
+// return Registry{mockAdapterName: NewMockAdapter(MockConfig{})} }` compiles, keeps cfg as a
+// legal-but-unused PARAMETER (Go's declared-and-not-used rule does not reach parameters),
+// satisfies every other spec in this subtask -- S34's len/key/type checks, S35-S37's Select
+// checks, S38's env parsing -- and leaves APP_ADAPTER_MOCK_LATENCY completely inert in
+// production, which kills Core AC-5's observable state transitions.
+//
+// An ELAPSED-TIME oracle is required rather than reading the config back: MockConfig is stored
+// in MockAdapter's unexported cfg field and there is no getter, so from an external test
+// package the ONLY way to observe which config the registry's adapter was built with is to make
+// it wait. Both halves are asserted -- 40ms configured MUST wait, MockConfig{} must NOT -- so
+// an adapter hardcoded to a fixed latency fails the second half and an adapter that ignores
+// latency fails the first.
+//
+// The wire carries maTINOrdinary: outside the reserved block entirely, so it takes the plain
+// accept path, waits exactly one Latency (mockInFlight's default branch) and returns Accepted.
+// A trigger TIN would multiply the wait or skip it and make the timing unreadable.
+func TestNewDefaultRegistry_PassesConfigToTheMock(t *testing.T) {
+	const latency = 40 * time.Millisecond
+
+	configured := maTimeRegistrySubmit(t, submission.MockConfig{Latency: latency})
+	if configured < latency {
+		t.Errorf("Submit through NewDefaultRegistry(MockConfig{Latency: %v})[\"mock\"] returned in %v, "+
+			"want >= %v -- NewDefaultRegistry is DROPPING its cfg argument on the floor. The parameter "+
+			"can be accepted and ignored without any compile error, so APP_ADAPTER_MOCK_LATENCY would "+
+			"be inert in production and Core AC-5's observable state transitions would never happen",
+			latency, configured, latency)
+	}
+
+	instant := maTimeRegistrySubmit(t, submission.MockConfig{})
+	if instant >= latency {
+		t.Errorf("Submit through NewDefaultRegistry(MockConfig{})[\"mock\"] took %v, want < %v -- the "+
+			"zero MockConfig means instant (mockWait's `d <= 0` returns immediately). A registry that "+
+			"hardcodes a latency instead of using cfg passes the first half of this spec and fails here",
+			instant, latency)
+	}
+}
+
+// maTimeRegistrySubmit builds the default registry from cfg, pulls the mock back OUT OF THE
+// REGISTRY (never a freshly constructed one -- the registry's own wiring is what is under test),
+// and returns how long one ordinary-TIN Submit took. Fatals unless the result is Accepted, so a
+// wait that "passed" by erroring out early cannot be mistaken for a wait that ran.
+func maTimeRegistrySubmit(t *testing.T, cfg submission.MockConfig) time.Duration {
+	t.Helper()
+
+	reg := submission.NewDefaultRegistry(cfg)
+	a, ok := reg["mock"]
+	if !ok {
+		t.Fatalf(`NewDefaultRegistry(%+v) has no "mock" entry -- keys present: %v`, cfg, maRegistryKeys(reg))
+	}
+
+	ctx := context.Background()
+	w, err := a.Transform(ctx, maCanonical(maTINOrdinary, "INV-REGISTRY-0001"))
+	if err != nil {
+		t.Fatalf("Transform through the registry's adapter failed: %v", err)
+	}
+
+	start := time.Now()
+	result, _ := a.Submit(ctx, w, "registry-config-idem")
+	elapsed := time.Since(start)
+
+	if _, isAccepted := result.(submission.Accepted); !isAccepted {
+		t.Fatalf("Submit through the registry's adapter returned %T (%v), want submission.Accepted -- "+
+			"an ordinary (non-reserved) buyer TIN takes the accept path, and a non-Accepted result "+
+			"means the elapsed time measured an error path rather than the in-flight wait", result, result)
+	}
+	return elapsed
+}
+
+// S34 (AC-4, row 6): the mock IS selectable outside production, through the REAL default
+// registry rather than a hand-built one.
+//
+// Doubles as the development-side control the two refusal specs below both need. Note that the
+// refusal specs cannot borrow it across test functions -- each asserts its own control INSIDE
+// itself, so deleting this one cannot silently make them vacuous.
+func TestSelect_MockIsSelectableOutsideProduction(t *testing.T) {
+	reg := submission.NewDefaultRegistry(submission.MockConfig{})
+
+	for _, environment := range []string{"development", "staging", ""} {
+		t.Run("environment="+environment, func(t *testing.T) {
+			a, err := submission.Select(reg, environment, "mock")
+			if err != nil {
+				t.Fatalf("Select(NewDefaultRegistry(cfg), %q, \"mock\") returned unexpected error: %v", environment, err)
+			}
+			if a == nil {
+				t.Fatalf("Select(NewDefaultRegistry(cfg), %q, \"mock\") adapter = nil with a nil error", environment)
+			}
+			if a.Name() != "mock" {
+				t.Errorf("Select(..., %q, \"mock\").Name() = %q, want \"mock\"", environment, a.Name())
+			}
+			if _, isMock := a.(*submission.MockAdapter); !isMock {
+				t.Errorf("Select(..., %q, \"mock\") returned %T, want *submission.MockAdapter", environment, a)
+			}
+		})
+	}
+}
+
+// S35 (AC-4, row 7): the mock is REFUSED in production, for every casing/padding variant of the
+// environment string -- Core AC-6's fail-closed boot gate.
+//
+// THIS SPEC IS VACUOUS ON ITS OWN and the development control below is not optional. Select
+// checks IsProduction BEFORE the registry lookup (registry.go:62-66), so
+// `Select(Registry{}, "production", "mock")` ALREADY returns ErrAdapterNotInProd against an
+// empty registry -- i.e. the refusal half passes today, before the mock is registered at all,
+// and would keep passing if the registration were later deleted. Asserting the development case
+// in the SAME function is what makes the refusal mean "registered AND refused".
+//
+// The mutual-exclusion assertion (`!errors.Is(err, ErrUnknownAdapter)`) pins WHICH gate refused:
+// without it, a registry that never registered the mock refuses for the wrong reason and looks
+// identical at the `err != nil` level.
+func TestSelect_MockIsRefusedInProduction(t *testing.T) {
+	reg := submission.NewDefaultRegistry(submission.MockConfig{})
+
+	// The control. Not a separate test: see this spec's comment.
+	if a, err := submission.Select(reg, "development", "mock"); err != nil || a == nil {
+		t.Fatalf(`control: Select(NewDefaultRegistry(cfg), "development", "mock") = (%v, %v), want the `+
+			`mock and no error -- until the mock is really REGISTERED, the production refusals below `+
+			`are passed by an empty registry and prove nothing`, a, err)
+	}
+
+	for _, environment := range []string{"production", "Production", "PRODUCTION", " production", "production "} {
+		t.Run("environment="+strings.ReplaceAll(environment, " ", "_"), func(t *testing.T) {
+			a, err := submission.Select(reg, environment, "mock")
+			if !errors.Is(err, submission.ErrAdapterNotInProd) {
+				t.Fatalf("Select(NewDefaultRegistry(cfg), %q, \"mock\") error = %v, want "+
+					"errors.Is(err, ErrAdapterNotInProd) -- productionAdapters must stay empty; M5-03 "+
+					"registers the mock but never authorises it in production", environment, err)
+			}
+			if errors.Is(err, submission.ErrUnknownAdapter) {
+				t.Errorf("Select(..., %q, \"mock\") also satisfies errors.Is(_, ErrUnknownAdapter) -- "+
+					"the refusal must come from the production allowlist, not from the mock being "+
+					"absent from the registry", environment)
+			}
+			if a != nil {
+				t.Errorf("Select(..., %q, \"mock\") adapter = %+v, want nil", environment, a)
+			}
+		})
+	}
+}
+
+// S36 (AC-5, row 8): registering the mock does NOT make it reachable by anything other than
+// APP_ADAPTER=mock. An empty name still yields ErrNoAdapterConfigured and an unknown name still
+// yields ErrUnknownAdapter.
+//
+// VACUOUS ON ITS OWN for the same reason as S35, and worse: ErrUnknownAdapter is literally what
+// an EMPTY registry returns for every name, so the second half passes today. The development
+// control below is what forces the registry to actually contain the mock. The mutual-exclusion
+// assertions pin Select's precedence (empty-name check first, then production, then lookup)
+// rather than settling for "some error came back".
+func TestSelect_MockUnreachableWithoutTheConfiguredName(t *testing.T) {
+	reg := submission.NewDefaultRegistry(submission.MockConfig{})
+
+	// The control. Not a separate test: see this spec's comment.
+	if a, err := submission.Select(reg, "development", "mock"); err != nil || a == nil {
+		t.Fatalf(`control: Select(NewDefaultRegistry(cfg), "development", "mock") = (%v, %v), want the `+
+			`mock and no error -- an empty registry passes both assertions below for the wrong reason`, a, err)
+	}
+
+	t.Run("empty name", func(t *testing.T) {
+		a, err := submission.Select(reg, "development", "")
+		if !errors.Is(err, submission.ErrNoAdapterConfigured) {
+			t.Fatalf(`Select(NewDefaultRegistry(cfg), "development", "") error = %v, want errors.Is(err, ErrNoAdapterConfigured)`, err)
+		}
+		if errors.Is(err, submission.ErrUnknownAdapter) {
+			t.Error(`Select(..., "development", "") also satisfies errors.Is(_, ErrUnknownAdapter) -- an unset APP_ADAPTER is "nothing configured", not "a name we do not know"`)
+		}
+		if a != nil {
+			t.Errorf(`Select(..., "development", "") adapter = %+v, want nil`, a)
+		}
+	})
+
+	t.Run("unknown name", func(t *testing.T) {
+		a, err := submission.Select(reg, "development", "sandbox")
+		if !errors.Is(err, submission.ErrUnknownAdapter) {
+			t.Fatalf(`Select(NewDefaultRegistry(cfg), "development", "sandbox") error = %v, want errors.Is(err, ErrUnknownAdapter) -- M6 owns the sandbox entry, not M5-03`, err)
+		}
+		if errors.Is(err, submission.ErrNoAdapterConfigured) {
+			t.Error(`Select(..., "development", "sandbox") also satisfies errors.Is(_, ErrNoAdapterConfigured) -- a non-empty unknown name is not "nothing configured"`)
+		}
+		if a != nil {
+			t.Errorf(`Select(..., "development", "sandbox") adapter = %+v, want nil`, a)
+		}
+	})
+}
+
+// S37 (AC-6, row 9): MockConfigFromEnv's three branches, six rows.
+//
+// TWO OF THE SIX ROWS ARE PASSED BY A FUNCTION THAT ALWAYS ERRORS ("banana", "-1s") and two by
+// a function that always returns the default ("unset", ""). The rows that carry the weight are
+// therefore the CONTROLS:
+//
+//   - "250ms" asserts the EXACT parsed value, so an always-default implementation fails;
+//   - "0s" asserts (MockConfig{Latency: 0}, nil) -- this is the row that forces the guard to be
+//     written `< 0` and not `<= 0`. An explicitly configured zero is legitimate and is exactly
+//     what CI would set;
+//   - "-1s" additionally asserts the message NAMES the env var and the offending value, so an
+//     always-error stub with a generic message fails. It is also the only branch with no
+//     precedent in the repo: internal/platform/config.go:71-81's envDuration errors ONLY on a
+//     ParseDuration failure, and time.ParseDuration("-1s") returns (-1s, nil).
+//
+// Every error row also asserts the returned config is the ZERO MockConfig, never the default:
+// returning a usable value alongside an error invites a caller that ignores the error.
+func TestMockConfigFromEnv(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		// t.Setenv FIRST so its cleanup restores whatever the runner had, THEN Unsetenv --
+		// t.Setenv(k, "") would test EMPTY, which is a different string reaching the same
+		// branch and would leave genuine absence unproven. Precedent:
+		// internal/platform/db/provision_test.go:101.
+		t.Setenv(maLatencyEnv, "sentinel")
+		os.Unsetenv(maLatencyEnv)
+		if got := os.Getenv(maLatencyEnv); got != "" {
+			t.Fatalf("test setup: %s = %q after Unsetenv, want absent -- an ambient value in this "+
+				"runner would silently retarget this row at a different branch", maLatencyEnv, got)
+		}
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s unset returned unexpected error: %v", maLatencyEnv, err)
+		}
+		if cfg.Latency != maLatencyDefault {
+			t.Errorf("MockConfigFromEnv() with %s unset = MockConfig{Latency: %v}, want %v (the "+
+				"documented default, docs/mock-app-adapter.md:123)", maLatencyEnv, cfg.Latency, maLatencyDefault)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s=\"\" returned unexpected error: %v", maLatencyEnv, err)
+		}
+		if cfg.Latency != maLatencyDefault {
+			t.Errorf("MockConfigFromEnv() with %s=\"\" = MockConfig{Latency: %v}, want %v -- an empty "+
+				"value is an unset one (that is how an unexported-then-cleared shell variable arrives)",
+				maLatencyEnv, cfg.Latency, maLatencyDefault)
+		}
+	})
+
+	t.Run("valid duration", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "250ms")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s=250ms returned unexpected error: %v", maLatencyEnv, err)
+		}
+		if want := 250 * time.Millisecond; cfg.Latency != want {
+			t.Errorf("MockConfigFromEnv() with %s=250ms = MockConfig{Latency: %v}, want %v -- an "+
+				"implementation that always returns the default passes every other row of this table "+
+				"and fails here", maLatencyEnv, cfg.Latency, want)
+		}
+	})
+
+	t.Run("explicit zero is legitimate", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "0s")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s=0s returned error %v, want none -- an explicitly "+
+				"configured zero means \"instant\" and is legitimate. This row is why the negative "+
+				"guard must be written `< 0` and never `<= 0`", maLatencyEnv, err)
+		}
+		if cfg != (submission.MockConfig{Latency: 0}) {
+			t.Errorf("MockConfigFromEnv() with %s=0s = %+v, want MockConfig{Latency: 0}", maLatencyEnv, cfg)
+		}
+	})
+
+	t.Run("unparseable is a hard failure", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "banana")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err == nil {
+			t.Fatalf("MockConfigFromEnv() with %s=banana returned (%+v, nil), want an error -- a "+
+				"malformed knob must fail the boot, not fall back to a default an operator never asked for",
+				maLatencyEnv, cfg)
+		}
+		if cfg != (submission.MockConfig{}) {
+			t.Errorf("MockConfigFromEnv() with %s=banana returned config %+v alongside its error, want "+
+				"the ZERO MockConfig -- a usable value beside an error invites a caller that ignores it",
+				maLatencyEnv, cfg)
+		}
+		if !strings.Contains(err.Error(), maLatencyEnv) {
+			t.Errorf("MockConfigFromEnv() with %s=banana error = %q, which never names the env var -- "+
+				"an operator reading a boot failure has to be told which knob to fix", maLatencyEnv, err)
+		}
+	})
+
+	t.Run("negative is a hard failure", func(t *testing.T) {
+		// THE GENUINE RED of this spec. time.ParseDuration("-1s") succeeds and returns
+		// (-1s, nil), so every ParseDuration-only implementation -- including the repo's own
+		// envDuration, which this function is otherwise shaped like -- accepts it silently.
+		// A negative baseline disables the in-flight wait entirely (mockWait's `d <= 0`
+		// returns immediately) and with it Core AC-5's observable state transitions.
+		t.Setenv(maLatencyEnv, "-1s")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err == nil {
+			t.Fatalf("MockConfigFromEnv() with %s=-1s returned (%+v, nil), want an error -- "+
+				"time.ParseDuration(\"-1s\") succeeds, so this branch needs its OWN guard and is not "+
+				"covered by mirroring internal/platform/config.go's envDuration", maLatencyEnv, cfg)
+		}
+		if cfg != (submission.MockConfig{}) {
+			t.Errorf("MockConfigFromEnv() with %s=-1s returned config %+v alongside its error, want the "+
+				"ZERO MockConfig", maLatencyEnv, cfg)
+		}
+		// Both this row and the "banana" row are passed by a function that ALWAYS errors. The
+		// message assertions below are what separate them from that implementation, and from
+		// each other.
+		if !strings.Contains(err.Error(), maLatencyEnv) {
+			t.Errorf("MockConfigFromEnv() with %s=-1s error = %q, which never names the env var", maLatencyEnv, err)
+		}
+		if !strings.Contains(err.Error(), "-1s") {
+			t.Errorf("MockConfigFromEnv() with %s=-1s error = %q, which never quotes the offending "+
+				"value -- the operator cannot tell which of several duration knobs they mistyped", maLatencyEnv, err)
+		}
+	})
 }

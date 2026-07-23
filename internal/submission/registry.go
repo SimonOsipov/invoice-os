@@ -34,7 +34,15 @@ func NewRegistry(adapters ...Adapter) (Registry, error) {
 // NewDefaultRegistry is the single seam through which the binary obtains its adapters.
 // EMPTY in M5-02; M5-03 registers "mock"; M6 registers the sandbox. Registering an
 // adapter here does NOT make it usable in production -- see productionAdapters.
-func NewDefaultRegistry() Registry {
+//
+// TODO(M5-03-05): implemented by the executor. The signature already takes cfg (so the RED
+// specs compile) but the body still returns an EMPTY registry and DROPS cfg on the floor.
+// That is deliberately the exact vacuity hazard task-228's plan names: a body that keeps the
+// parameter and ignores it compiles fine, leaves APP_ADAPTER_MOCK_LATENCY inert and kills Core
+// AC-5 while every other spec stays green. TestNewDefaultRegistry_PassesConfigToTheMock
+// (mock_adapter_test.go) is the one spec that catches it, via a wall-clock oracle.
+func NewDefaultRegistry(cfg MockConfig) Registry {
+	_ = cfg
 	return Registry{}
 }
 

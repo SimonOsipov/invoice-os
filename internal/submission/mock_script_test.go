@@ -1321,6 +1321,15 @@ func TestMockAdapterDoc_DocumentsEveryAllocation(t *testing.T) {
 	if !strings.Contains(doc, mockLatencyEnv) {
 		t.Errorf("%s does not document the env knob %s", path, mockLatencyEnv)
 	}
+	// M5-03-05: the doc PUBLISHES the default (`800ms`) and MockConfigFromEnv applies the
+	// constant. After this subtask nothing but a human ties the two together, so pin them here
+	// -- this file is in-package and can see mockLatencyDefault; the external
+	// mock_adapter_test.go cannot.
+	if !strings.Contains(doc, mockLatencyDefault.String()) {
+		t.Errorf("%s never states the default latency %s -- mockLatencyDefault (mock_adapter.go) and "+
+			"the published default have drifted apart, and an operator has no way to learn what the "+
+			"mock does with %s unset", path, mockLatencyDefault, mockLatencyEnv)
+	}
 	if !strings.Contains(doc, "APP_ADAPTER") {
 		t.Errorf("%s does not mention APP_ADAPTER, the selector that turns the mock on at all", path)
 	}

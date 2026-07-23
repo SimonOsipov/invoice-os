@@ -68,6 +68,18 @@ const (
 	// mockRetryAfterSeconds is the 503's Retry-After. Deliberately NOT mockPollAfterSeconds:
 	// one number behind two meanings ("when to re-submit" vs "when to poll") decays.
 	mockRetryAfterSeconds = 30
+
+	// mockLatencyDefault is the in-flight baseline MockConfigFromEnv applies when
+	// mockLatencyEnv is unset or empty. It is the default AT THE ENV EDGE ONLY -- MockConfig's
+	// zero value still means "instant", which every unit test and both contract runs use.
+	//
+	// The VALUE is not a free choice: docs/mock-app-adapter.md:123 already publishes `800ms`,
+	// so a different number here is doc drift. TestMockAdapterDoc_DocumentsEveryAllocation
+	// (mock_script_test.go) is the mechanical tie between the two.
+	//
+	// Declared by M5-03-05's RED authoring pass because that doc pin cannot compile without
+	// it; the body that CONSUMES it (MockConfigFromEnv, below) is the executor's.
+	mockLatencyDefault = 800 * time.Millisecond
 )
 
 // The three transport sentinels. Every one of them travels inside a Retryable, never a verdict
@@ -93,6 +105,23 @@ type MockConfig struct {
 	// "instant". cmd/submission supplies the real value from APP_ADAPTER_MOCK_LATENCY
 	// (mockLatencyEnv, mock_script.go).
 	Latency time.Duration
+}
+
+// MockConfigFromEnv reads mockLatencyEnv (APP_ADAPTER_MOCK_LATENCY) into a MockConfig.
+//
+// TODO(M5-03-05): implemented by the executor. This is a STUB returning the zero MockConfig and
+// a nil error so the M5-03-05 RED specs compile; TestMockConfigFromEnv is red against it.
+//
+// The shipped body owes three branches (task-228's plan):
+//   - unset or empty  -> (MockConfig{Latency: mockLatencyDefault}, nil)
+//   - unparseable     -> (MockConfig{}, error naming the env var and the offending value)
+//   - parsed NEGATIVE -> (MockConfig{}, error) -- NET-NEW logic with no precedent to copy.
+//     internal/platform/config.go:71-81's envDuration errors ONLY on a ParseDuration failure and
+//     time.ParseDuration("-1s") returns (-1s, nil), so "mirrors envDuration" is NOT license to
+//     skip this guard. Write it as `< 0`, never `<= 0`: an explicitly configured "0s" is
+//     legitimate (it is what CI would set) and must return (MockConfig{Latency: 0}, nil).
+func MockConfigFromEnv() (MockConfig, error) {
+	return MockConfig{}, nil
 }
 
 // MockAdapter is the content-keyed simulator behind the M5-02 Adapter seam. Exactly one

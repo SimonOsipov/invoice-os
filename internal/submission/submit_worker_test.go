@@ -408,6 +408,13 @@ type scriptedOutcome struct {
 // scriptedAdapter wraps refAdapter with exactly what these specs need beyond its single
 // fixed pair -- see this file's header for the full rationale. Every method not overridden
 // here forwards to the embedded *refAdapter.
+//
+// pollQueue/pollCalls/pollRefs (M5-04-06, task-234) extend it with the POLL-side mirror of
+// submitQueue/submitCalls: a per-call Result/Evidence SEQUENCE and a record of every Ref
+// Poll was actually invoked with, in call order -- T06-3's supersession oracle. refAdapter's
+// own embedded Poll (reference_adapter_test.go) offers only one fixed pair reused forever
+// and never records which ref it was called with, which cannot express a multi-hop
+// Pending -> Pending -> Accepted sequence at all.
 type scriptedAdapter struct {
 	*refAdapter
 
@@ -416,6 +423,10 @@ type scriptedAdapter struct {
 	submitQueue  []scriptedOutcome
 	transformErr error  // when set, Transform returns it instead of delegating
 	onSubmit     func() // called synchronously, before returning, if non-nil
+
+	pollCalls int
+	pollQueue []scriptedOutcome
+	pollRefs  []submission.Ref // every ref Poll was called with, in call order
 }
 
 var _ submission.Adapter = (*scriptedAdapter)(nil)
@@ -467,22 +478,65 @@ func (a *scriptedAdapter) calls() int {
 	return a.submitCalls
 }
 
+// Poll overrides refAdapter's embedded Poll (which always returns one fixed pair regardless
+// of ref) exactly the way Submit already overrides Submit -- see this type's own doc
+// comment. An empty pollQueue panics loudly on call, mirroring newScriptedAdapter's own
+// contract for submitQueue: a spec that expects zero Poll calls (T06-7's superseded-poll
+// no-op) gets an unmistakable failure if the worker calls Poll anyway, rather than a
+// silently-returned zero Result.
+func (a *scriptedAdapter) Poll(ctx context.Context, ref submission.Ref) (submission.Result, submission.Evidence) {
+	a.mu.Lock()
+	a.pollRefs = append(a.pollRefs, ref)
+	if len(a.pollQueue) == 0 {
+		a.mu.Unlock()
+		panic("scriptedAdapter.Poll: called with an empty outcome queue -- the caller must " +
+			"not have reached the adapter (e.g. a superseded-poll no-op) yet Poll fired anyway")
+	}
+	idx := a.pollCalls
+	if idx >= len(a.pollQueue) {
+		idx = len(a.pollQueue) - 1
+	}
+	a.pollCalls++
+	outcome := a.pollQueue[idx]
+	a.mu.Unlock()
+	return outcome.result, outcome.evidence
+}
+
+// pollCallCount reports how many times Poll has been invoked.
+func (a *scriptedAdapter) pollCallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pollCalls
+}
+
 // --- InvoicePort double (own, hand-rolled -- [mapper-lives-in-03]) --------------------
 
 // testInvoicePort is a hand-rolled, package-local submission.InvoicePort double.
 // internal/submission (and its external test package) may not import internal/invoice
 // (deps_test.go / [mapper-lives-in-03]), so this duplicates only the SLICE of *invoice.
 // Store's real behaviour these specs actually exercise -- the queued->submitted /
-// queued->failed edges worker.go drives InvoicePort through, with the same idempotent-
-// no-op shape invoice_port.go's own doc comment promises ("a redundant call on an
-// already-[submitted|failed] invoice returns nil"). It is NOT a general invoice state
-// machine: it recognises exactly the "queued" source state and panics via a returned error
-// on anything else, which is deliberate -- if the worker starts asking this double to do
-// more, that is a signal the double needs to grow, not a silent false pass.
-type testInvoicePort struct{}
+// queued->failed / submitted->failed edges worker.go drives InvoicePort through, with the
+// same idempotent-no-op shape invoice_port.go's own doc comment promises ("a redundant call
+// on an already-[submitted|failed] invoice returns nil"). It is NOT a general invoice state
+// machine: tipMarkTerminal recognises exactly the source states tipLegalTransitions names
+// and errors on anything else, which is deliberate -- if the worker starts asking this
+// double to do more, that is a signal the double needs to grow, not a silent false pass.
+//
+// buyerTIN (M5-04-06, task-234) is "" by default -- Canonical carries no Buyer party, the
+// exact zero-value behaviour every pre-existing T05/adversarial spec already relies on. Only
+// T06-5 sets it, to route an invoice through the REAL M5-03 mock adapter's content-keyed
+// trigger (mock_script.go's magic-TIN table) rather than a scripted outcome.
+type testInvoicePort struct {
+	buyerTIN string
+}
 
-func (testInvoicePort) Canonical(ctx context.Context, tx pgx.Tx, invoiceID string) (submission.Canonical, error) {
-	return submission.Canonical{InvoiceID: invoiceID}, nil
+func (t testInvoicePort) Canonical(ctx context.Context, tx pgx.Tx, invoiceID string) (submission.Canonical, error) {
+	c := submission.Canonical{InvoiceID: invoiceID}
+	if t.buyerTIN != "" {
+		tin := t.buyerTIN
+		c.Buyer = submission.Party{TIN: &tin}
+	}
+	return c, nil
 }
 
 func (testInvoicePort) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error) {
@@ -504,10 +558,21 @@ func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, ten
 
 var _ submission.InvoicePort = testInvoicePort{}
 
+// tipLegalTransitions mirrors the SLICE of internal/invoice/store.go's own legalTransitions
+// (store.go:639-643) this double's two callers actually drive: queued (SubmitWorker's
+// MarkSubmitted/MarkFailed) and submitted (PollWorker's dead-letter path, M5-04-06/T06-8,
+// AC-5 -- "moves the invoice submitted -> failed via the existing edge"). Duplicated, not
+// imported ([mapper-lives-in-03]) -- the same duplicate-never-import precedent as every other
+// double in this file.
+var tipLegalTransitions = map[string]map[string]bool{
+	"queued":    {"submitted": true, "failed": true},
+	"submitted": {"failed": true},
+}
+
 // tipMarkTerminal is MarkSubmitted/MarkFailed's shared tail: lock+read the current status,
-// short-circuit as an idempotent no-op when already at target, otherwise require the source
-// to be "queued" (the only edge this worker drives) and write the transition + one history
-// row with actor 'system'.
+// short-circuit as an idempotent no-op when already at target, otherwise require the
+// (current, target) pair to be one of tipLegalTransitions' edges and write the transition +
+// one history row with actor 'system'.
 func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target string) error {
 	var current string
 	if err := tx.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID).Scan(&current); err != nil {
@@ -516,7 +581,7 @@ func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target
 	if current == target {
 		return nil // idempotent no-op, mirrors invoice.Store.markTerminalTx
 	}
-	if current != "queued" {
+	if !tipLegalTransitions[current][target] {
 		return fmt.Errorf("testInvoicePort: illegal transition %s -> %s", current, target)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE invoices SET status = $1 WHERE id = $2`, target, invoiceID); err != nil {
@@ -534,6 +599,13 @@ func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target
 // newTestWorker builds a SubmitWorker over pool/adapter with a fresh RateLimiter (never
 // shared across tests) and the default limit high enough not to interfere with any spec
 // other than T05-10, which overrides RateLimit itself.
+//
+// Queue (M5-04-06, task-234) is wired to a real insert-only *queue.Client via
+// newQueueClient (worker_poll_test.go) rather than left nil -- SubmitWorker's own Work body
+// does not read it yet (case Pending's EnqueueTx call is this subtask's Stage 3, not Mode
+// A), but every construction site is wired now so Stage 3 touches production code only, not
+// this test harness. Building it here rather than threading a *testing.T through this
+// function's signature keeps all 23 of 05's existing call sites unchanged.
 func newTestWorker(pool *pgxpool.Pool, adapter submission.Adapter) *submission.SubmitWorker {
 	return &submission.SubmitWorker{
 		Pool:        pool,
@@ -541,6 +613,7 @@ func newTestWorker(pool *pgxpool.Pool, adapter submission.Adapter) *submission.S
 		InvoicePort: testInvoicePort{},
 		Limiter:     submission.NewRateLimiter(),
 		RateLimit:   60,
+		Queue:       newQueueClient(pool),
 	}
 }
 

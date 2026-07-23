@@ -524,6 +524,15 @@ const maxBatchSubmitInvoiceIDs = 200
 // Implementation Notes; T07-7's bound half pins 218 accepted, 219 rejected).
 const maxBatchSubmitIdempotencyKeyLen = 218
 
+// maxBatchSubmitBodyBytes bounds the request body BEFORE it is decoded (CodeRabbit,
+// PR #92, handlers.go:547): the platform server applies no request body limit of its own,
+// so an oversized invoice_ids array would be fully materialized by json.Decode before the
+// 200-id cap (maxBatchSubmitInvoiceIDs) ever gets a chance to reject it. A legitimate body
+// tops out at ~8.1 KB -- 200 UUIDs, quoted + comma-separated (200 * 39 = 7800 bytes) plus a
+// <=218-char idempotency_key, quoted (~220 bytes) plus field names/braces (~100 bytes).
+// 64 KiB leaves ~8x headroom without opening the door to unbounded allocation.
+const maxBatchSubmitBodyBytes = 64 * 1024
+
 // BatchSubmitHandler returns POST /v1/invoices/submissions (task-231, [trigger-surface]).
 // Identity-first-401 (same order as every handler above) -> decode (400 on malformed JSON)
 // -> pre-tx validation, ALL before submit is ever called ([T07-8 non-uuid handling]): empty
@@ -540,6 +549,7 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxBatchSubmitBodyBytes)
 		var req batchSubmitReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body")

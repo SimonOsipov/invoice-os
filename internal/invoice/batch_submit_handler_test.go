@@ -225,3 +225,55 @@ func TestBatchSubmitHandler_EmptyResultsMarshalsEmptyArrayNotNull(t *testing.T) 
 		t.Errorf("body = %s, must NOT contain \"results\":null", raw)
 	}
 }
+
+// --- CodeRabbit PR #92 (handlers.go:547) --------------------------------------
+
+// TestBatchSubmitHandler_BodySizeCap: regression test for maxBatchSubmitBodyBytes'
+// http.MaxBytesReader wrap. An over-cap body must be rejected 400 before it can be fully
+// decoded (submit never reached); a full 200-id batch with a 218-char idempotency_key --
+// the endpoint's own legitimate maximum, ~8.1 KB -- must still succeed comfortably inside
+// the 64 KiB cap.
+func TestBatchSubmitHandler_BodySizeCap(t *testing.T) {
+	t.Run("body over the cap is rejected 400 before decode succeeds", func(t *testing.T) {
+		submitCalled := false
+		submit := func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error) {
+			submitCalled = true
+			return BatchSubmitResult{Results: []BatchSubmitResultItem{}}, nil
+		}
+		identity := &auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		oversizedKey := strings.Repeat("k", maxBatchSubmitBodyBytes+1)
+		body := marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: []string{uuid.NewString()}, IdempotencyKey: oversizedKey})
+
+		rec, resp := doBatchSubmit(t, submit, identity, body)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Errorf("body error = %q, want a non-empty {\"error\":...} message", resp.Error)
+		}
+		if submitCalled {
+			t.Errorf("submit was called, want it NEVER reached for an over-cap body")
+		}
+	})
+
+	t.Run("a full 200-id batch with a 218-char key, the legitimate maximum, still succeeds", func(t *testing.T) {
+		ids := nUUIDs(maxBatchSubmitInvoiceIDs)
+		results := make([]BatchSubmitResultItem, len(ids))
+		for i, id := range ids {
+			results[i] = BatchSubmitResultItem{InvoiceID: id, Enqueued: true, Status: "queued"}
+		}
+		submit := func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error) {
+			return BatchSubmitResult{Results: results}, nil
+		}
+		identity := &auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("k", maxBatchSubmitIdempotencyKeyLen)
+		body := marshalBatchSubmit(t, batchSubmitRequestWire{InvoiceIDs: ids, IdempotencyKey: key})
+
+		rec, _ := doBatchSubmit(t, submit, identity, body)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+	})
+}

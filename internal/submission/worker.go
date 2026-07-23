@@ -13,18 +13,17 @@ package submission
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-)
 
-// errWorkerNotImplemented is the RED-stage stub body SubmitWorker.Work returns below
-// (M5-04-05, Mode A / RALPH Stage 2.5): the real tx1 / adapter / tx2 decision flow lands in
-// this subtask's Mode B (Executor, Stage 3) pass. Mirrors the errActorNotImplemented /
-// errPortNotImplemented / errRateLimiterNotImplemented precedent from M5-04-02/03/04.
-var errWorkerNotImplemented = errors.New("submission: submit worker not implemented")
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+)
 
 // SubmitArgs is one submission attempt's job payload. Per [job-row-is-the-workers],
 // SubmitWorker.Work creates the submission_jobs row itself on its own first attempt -- the
@@ -72,12 +71,241 @@ type SubmitWorker struct {
 	Logger      *slog.Logger
 }
 
-// Work is stubbed for RALPH Stage 2.5 (Mode A, test-first): the real tx1 / adapter / tx2
-// decision flow lands in Stage 3. Returning (never panicking) the sentinel below is what
-// lets T05-1..T05-15 reach their own assertions and fail on THOSE -- never on a compile
-// error, a connection failure, or a panic.
+// tx1Outcome is what tx1 decided before it committed: whether Work should short-circuit
+// (and how) or proceed to the adapter.
+type tx1Outcome int
+
+const (
+	tx1Proceed tx1Outcome = iota
+	tx1Terminal
+	tx1AlreadyCleared
+	tx1RateLimited
+)
+
+// Work drives the tx1 / adapter / tx2 decision flow (worker.go's own doc comment, and the
+// M5-04-05 story's System Design). tx1 ensures the job row, applies the terminal /
+// already-cleared / rate-limit gates and, if none fire, hands the invoice's Canonical
+// projection back and commits. The adapter is then called with NO transaction held
+// ([adapters-are-db-free], T05-15). tx2 records the outcome, advances the job's state and
+// drives InvoicePort.
 func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) error {
-	return errWorkerNotImplemented
+	args := job.Args
+	adapterName := w.Adapter.Name()
+	adapterVersion := w.Adapter.Version()
+
+	var (
+		jobID      string
+		attempts   int
+		canonical  Canonical
+		outcome    tx1Outcome
+		retryAfter time.Duration
+	)
+
+	tx1Err := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+		id, state, att, err := ensureSubmissionJob(ctx, tx, args.TenantID, args.InvoiceID,
+			args.IdempotencyKey, adapterName, adapterVersion, job.ID)
+		if err != nil {
+			return err
+		}
+		jobID, attempts = id, att
+
+		// Terminal short-circuit: a crash-replay of an already-finished job (T05-12).
+		if isTerminalJobState(state) {
+			outcome = tx1Terminal
+			return nil
+		}
+
+		// Already-cleared gate: a sibling job already got Accepted, or the invoice already
+		// carries a stored fiscal outcome (T05-8, T05-9). adapter.Submit must never be
+		// reached from here.
+		alreadyCleared, err := invoiceHasSiblingAcceptedJob(ctx, tx, args.TenantID, args.InvoiceID, jobID)
+		if err != nil {
+			return err
+		}
+		if !alreadyCleared {
+			if alreadyCleared, err = w.InvoicePort.HasFiscalOutcome(ctx, tx, args.InvoiceID); err != nil {
+				return err
+			}
+		}
+		if alreadyCleared {
+			ex := Exchange{
+				SubmissionJobID: jobID,
+				InvoiceID:       args.InvoiceID,
+				Operation:       string(OpSubmit),
+				Outcome:         OutcomeSkippedAlreadyCleared,
+				Attempt:         attempts + 1,
+				Adapter:         adapterName,
+				AdapterVersion:  adapterVersion,
+			}
+			if err := RecordExchange(ctx, tx, ex); err != nil {
+				return err
+			}
+			if err := markJobAlreadyCleared(ctx, tx, jobID); err != nil {
+				return err
+			}
+			outcome = tx1AlreadyCleared
+			return nil
+		}
+
+		// Rate-limit gate (T05-10). A denial does not consume the retry budget.
+		limit, err := RateLimitFor(ctx, tx, w.RateLimit)
+		if err != nil {
+			return err
+		}
+		allowed, ra := w.Limiter.Allow(args.TenantID, limit, time.Now())
+		if !allowed {
+			ex := Exchange{
+				SubmissionJobID: jobID,
+				InvoiceID:       args.InvoiceID,
+				Operation:       string(OpSubmit),
+				Outcome:         OutcomeBlockedRateLimit,
+				Attempt:         attempts + 1,
+				Adapter:         adapterName,
+				AdapterVersion:  adapterVersion,
+			}
+			if err := RecordExchange(ctx, tx, ex); err != nil {
+				return err
+			}
+			outcome = tx1RateLimited
+			retryAfter = ra
+			return nil
+		}
+
+		c, err := w.InvoicePort.Canonical(ctx, tx, args.InvoiceID)
+		if err != nil {
+			return err
+		}
+		canonical = c
+		return markJobSubmitting(ctx, tx, jobID)
+	})
+	if tx1Err != nil {
+		return tx1Err
+	}
+
+	switch outcome {
+	case tx1Terminal, tx1AlreadyCleared:
+		return nil
+	case tx1RateLimited:
+		return river.JobSnooze(retryAfter)
+	}
+
+	// No transaction held from here through adapter.Submit's return
+	// ([adapters-are-db-free], proven by T05-15).
+	wire, transformErr := w.Adapter.Transform(ctx, canonical)
+	if transformErr != nil {
+		ex := Exchange{
+			SubmissionJobID: jobID,
+			InvoiceID:       args.InvoiceID,
+			Operation:       string(OpSubmit),
+			Outcome:         OutcomeTransformFailed,
+			Attempt:         attempts + 1,
+			Adapter:         adapterName,
+			AdapterVersion:  adapterVersion,
+		}
+		txErr := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+				if err := RecordExchange(ctx, tx, ex); err != nil {
+					return err
+				}
+				if err := markJobTransformFailed(ctx, tx, jobID); err != nil {
+					return err
+				}
+				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+			})
+			return err
+		})
+		if txErr != nil {
+			return txErr
+		}
+		return river.JobCancel(transformErr)
+	}
+
+	result, evidence := w.Adapter.Submit(ctx, wire, args.IdempotencyKey)
+
+	var submitErr error
+	tx2Err := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+		newAttempts := attempts + 1
+		switch r := result.(type) {
+		case Accepted:
+			ex := ExchangeFor(w.Adapter, OpSubmit, newAttempts, jobID, args.InvoiceID, evidence)
+			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+				if err := RecordExchange(ctx, tx, ex); err != nil {
+					return err
+				}
+				if err := markJobAccepted(ctx, tx, jobID, newAttempts); err != nil {
+					return err
+				}
+				return w.InvoicePort.MarkSubmitted(ctx, tx, args.InvoiceID, args.TenantID)
+			})
+			return err
+
+		case Rejected:
+			// [reaching-the-app-means-a-verdict]: Rejected still moves the invoice to
+			// submitted -- the invoice was read and refused, not left in limbo.
+			ex := ExchangeFor(w.Adapter, OpSubmit, newAttempts, jobID, args.InvoiceID, evidence)
+			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+				if err := RecordExchange(ctx, tx, ex); err != nil {
+					return err
+				}
+				if err := markJobRejected(ctx, tx, jobID, newAttempts); err != nil {
+					return err
+				}
+				return w.InvoicePort.MarkSubmitted(ctx, tx, args.InvoiceID, args.TenantID)
+			})
+			return err
+
+		case Pending:
+			ex := ExchangeFor(w.Adapter, OpSubmit, newAttempts, jobID, args.InvoiceID, evidence)
+			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+				if err := RecordExchange(ctx, tx, ex); err != nil {
+					return err
+				}
+				if err := markJobPending(ctx, tx, jobID, newAttempts, string(r.Ref), r.PollAfter); err != nil {
+					return err
+				}
+				return w.InvoicePort.MarkSubmitted(ctx, tx, args.InvoiceID, args.TenantID)
+			})
+			return err
+
+		case Retryable:
+			ex := ExchangeFor(w.Adapter, OpSubmit, newAttempts, jobID, args.InvoiceID, evidence)
+			if job.Attempt >= job.MaxAttempts {
+				// Final attempt: dead-letter. Wrapped in OncePerJob -- this is a terminal
+				// write, unlike the mid-budget branch below.
+				_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
+					if err := RecordExchange(ctx, tx, ex); err != nil {
+						return err
+					}
+					if err := markJobDeadLettered(ctx, tx, jobID, newAttempts, r.Err.Error()); err != nil {
+						return err
+					}
+					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+				})
+				if err != nil {
+					return err
+				}
+				submitErr = r.Err
+				return nil
+			}
+			// Mid-budget: deliberately OUTSIDE queue.OncePerJob -- see markJobRetry's doc
+			// comment for why wrapping it would silently no-op the next attempt.
+			if err := RecordExchange(ctx, tx, ex); err != nil {
+				return err
+			}
+			if err := markJobRetry(ctx, tx, jobID, newAttempts, r.Err.Error()); err != nil {
+				return err
+			}
+			submitErr = r.Err
+			return nil
+
+		default:
+			return fmt.Errorf("submission: unknown Result variant %T", result)
+		}
+	})
+	if tx2Err != nil {
+		return tx2Err
+	}
+	return submitErr
 }
 
 // Workers builds the River worker bundle for the submission service. It returns an

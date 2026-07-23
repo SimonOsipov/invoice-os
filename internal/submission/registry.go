@@ -1,6 +1,7 @@
-// registry.go: M5-02-04, the adapter registry, the pure config-lookup Select, and the
-// fail-closed production allowlist. See registry_test.go and cmd/submission/main_test.go
-// for the specs these bodies satisfy.
+// registry.go: M5-02-04 (the adapter registry, the pure config-lookup Select and the
+// fail-closed production allowlist) and M5-03-05 (NewDefaultRegistry registering the mock).
+// See registry_test.go, internal/submission/mock_adapter_test.go and
+// cmd/submission/main_test.go for the specs these bodies satisfy.
 package submission
 
 import (
@@ -14,8 +15,7 @@ type Registry map[string]Adapter
 
 // NewRegistry keys each adapter by its own Name(), so a key can never disagree with the
 // value it stamps into submission_jobs.adapter / app_exchange.adapter. Errors on an empty
-// name or a duplicate name. Zero adapters is valid (e.g. the dev boot before M5-03) and
-// returns an empty, non-nil Registry.
+// name or a duplicate name. Zero adapters is valid and returns an empty, non-nil Registry.
 func NewRegistry(adapters ...Adapter) (Registry, error) {
 	reg := make(Registry, len(adapters))
 	for _, a := range adapters {
@@ -32,18 +32,22 @@ func NewRegistry(adapters ...Adapter) (Registry, error) {
 }
 
 // NewDefaultRegistry is the single seam through which the binary obtains its adapters.
-// EMPTY in M5-02; M5-03 registers "mock"; M6 registers the sandbox. Registering an
-// adapter here does NOT make it usable in production -- see productionAdapters.
+// It registers "mock" (M5-03); M6 registers the sandbox. Registering an adapter here does
+// NOT make it usable in production -- see productionAdapters.
 //
-// TODO(M5-03-05): implemented by the executor. The signature already takes cfg (so the RED
-// specs compile) but the body still returns an EMPTY registry and DROPS cfg on the floor.
-// That is deliberately the exact vacuity hazard task-228's plan names: a body that keeps the
-// parameter and ignores it compiles fine, leaves APP_ADAPTER_MOCK_LATENCY inert and kills Core
-// AC-5 while every other spec stays green. TestNewDefaultRegistry_PassesConfigToTheMock
-// (mock_adapter_test.go) is the one spec that catches it, via a wall-clock oracle.
+// A one-key map literal rather than NewRegistry(...): NewRegistry returns an error this
+// signature cannot carry, and swallowing an impossible error with `_` or panicking is worse.
+// The key is mockAdapterName, the SAME constant (*MockAdapter).Name() returns, so the key and
+// the value can never disagree about what lands in submission_jobs.adapter. The literal does
+// bypass NewRegistry's key-by-Name() invariant, which is why
+// TestNewDefaultRegistry_RegistersExactlyMock asserts it by iteration.
+//
+// cfg MUST reach NewMockAdapter. A body that accepts the parameter and ignores it compiles
+// fine, leaves APP_ADAPTER_MOCK_LATENCY inert and kills Core AC-5 while every other spec stays
+// green; TestNewDefaultRegistry_PassesConfigToTheMock (mock_adapter_test.go) is the one spec
+// that catches that, via a wall-clock oracle.
 func NewDefaultRegistry(cfg MockConfig) Registry {
-	_ = cfg
-	return Registry{}
+	return Registry{mockAdapterName: NewMockAdapter(cfg)}
 }
 
 // productionAdapters is the FAIL-CLOSED allowlist of names permitted when

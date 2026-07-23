@@ -36,7 +36,9 @@ package submission
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -107,21 +109,36 @@ type MockConfig struct {
 	Latency time.Duration
 }
 
-// MockConfigFromEnv reads mockLatencyEnv (APP_ADAPTER_MOCK_LATENCY) into a MockConfig.
+// MockConfigFromEnv reads mockLatencyEnv (APP_ADAPTER_MOCK_LATENCY) into a MockConfig. It is the
+// ONLY place the mock touches the environment; MockConfig itself stays a plain value the tests
+// construct directly.
 //
-// TODO(M5-03-05): implemented by the executor. This is a STUB returning the zero MockConfig and
-// a nil error so the M5-03-05 RED specs compile; TestMockConfigFromEnv is red against it.
-//
-// The shipped body owes three branches (task-228's plan):
+// Three branches:
 //   - unset or empty  -> (MockConfig{Latency: mockLatencyDefault}, nil)
 //   - unparseable     -> (MockConfig{}, error naming the env var and the offending value)
 //   - parsed NEGATIVE -> (MockConfig{}, error) -- NET-NEW logic with no precedent to copy.
 //     internal/platform/config.go:71-81's envDuration errors ONLY on a ParseDuration failure and
 //     time.ParseDuration("-1s") returns (-1s, nil), so "mirrors envDuration" is NOT license to
-//     skip this guard. Write it as `< 0`, never `<= 0`: an explicitly configured "0s" is
-//     legitimate (it is what CI would set) and must return (MockConfig{Latency: 0}, nil).
+//     skip this guard. It is written `< 0`, never `<= 0`: an explicitly configured "0s" is
+//     legitimate (it is what CI sets) and returns (MockConfig{Latency: 0}, nil).
+//
+// Both error paths return the ZERO MockConfig, never the default: handing back a usable value
+// alongside an error invites a caller that ignores the error. The negative branch carries no %w
+// (there is no underlying error) and no exported sentinel (nothing branches on it -- the only
+// caller, cmd/submission, log.Fatalf's).
 func MockConfigFromEnv() (MockConfig, error) {
-	return MockConfig{}, nil
+	raw := os.Getenv(mockLatencyEnv)
+	if raw == "" {
+		return MockConfig{Latency: mockLatencyDefault}, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return MockConfig{}, fmt.Errorf("submission: invalid %s=%q: %w", mockLatencyEnv, raw, err)
+	}
+	if d < 0 {
+		return MockConfig{}, fmt.Errorf("submission: invalid %s=%q: latency must not be negative", mockLatencyEnv, raw)
+	}
+	return MockConfig{Latency: d}, nil
 }
 
 // MockAdapter is the content-keyed simulator behind the M5-02 Adapter seam. Exactly one

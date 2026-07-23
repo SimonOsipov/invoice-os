@@ -50,12 +50,17 @@ func main() {
 	// set but not selectable) -- never boot with an unauthorized adapter in prod. In
 	// non-production with APP_ADAPTER unset, log a warning and continue with no
 	// adapter, keeping the dev fleet's boot green.
-	// TODO(M5-03-05): implemented by the executor -- read the mock's config from the environment
-	// via the submission package's MockConfigFromEnv helper and log.Fatalf on its error, BEFORE
-	// building the registry. The zero MockConfig here is a compile-only placeholder for the RED
-	// specs. This comment deliberately does NOT spell the helper's call-site form: the AC-7
-	// source scan matches raw bytes and cannot tell code from a comment.
-	reg := submission.NewDefaultRegistry(submission.MockConfig{})
+	//
+	// M5-03-05: the mock's latency baseline is read from the environment BEFORE the registry is
+	// built, and a malformed value is fatal. The fatal is UNCONDITIONAL -- it fires even when
+	// APP_ADAPTER is unset and the mock is never selected -- deliberately, matching how PORT
+	// behaves: gating it on `appAdapter == "mock"` would defer the failure to the moment someone
+	// flips the adapter on a fleet, the worst time to discover a typo.
+	mockCfg, err := submission.MockConfigFromEnv()
+	if err != nil {
+		log.Fatalf("submission: adapter config: %v", err)
+	}
+	reg := submission.NewDefaultRegistry(mockCfg)
 	appAdapter := os.Getenv("APP_ADAPTER")
 	adapter, err := submission.Select(reg, app.Config.Environment, appAdapter)
 	if err != nil {

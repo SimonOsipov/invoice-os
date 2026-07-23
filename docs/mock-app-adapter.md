@@ -120,7 +120,7 @@ operator at a field that genuinely exists, and lets fixing it make the resubmiss
 | Variable | Read by | Meaning |
 |---|---|---|
 | `APP_ADAPTER` | `cmd/submission/main.go` | Set to `mock` to select this adapter. Unset means no adapter, which is fatal in production. |
-| `APP_ADAPTER_MOCK_LATENCY` | `cmd/submission/main.go` | Boot-time in-flight latency baseline, default `800ms`. `slow` waits 4×, `timeout` waits 8×. Unparseable or **negative** is a hard boot failure; `0s` is legitimate and means instant. |
+| `APP_ADAPTER_MOCK_LATENCY` | `MockConfigFromEnv` in `internal/submission/mock_adapter.go`, called from `cmd/submission/main.go` | Boot-time in-flight latency baseline, default `800ms`. `slow` waits 4×, `timeout` waits 8×. Unparseable or **negative** is a hard boot failure; `0s` is legitimate and means instant. |
 
 There is no runtime control surface — adjusting latency without a redeploy is M5-14's scope.
 Registering the mock does **not** make it bootable in production: `productionAdapters` stays
@@ -146,6 +146,7 @@ reports `Retryable` with `ReachedWire` false.
 
 ## See also
 
-- [migrations.md](./migrations.md) — the seed migration that pins `buyer-tin-format`.
+- `migrations/20260711121327_seed_mbs_v1.sql:16` — the v1 rule-set seed that pins `buyer-tin-format`
+  to `^[0-9]{8}-[0-9]{4}$`, which is why every trigger TIN is 8 digits, a dash and 4 digits.
 - `internal/submission/mock_script.go` — the table, the synthesis and the ref codec.
 - `internal/submission/mock_wire.go` — the BIS Billing 3.0 envelope the trigger travels in.

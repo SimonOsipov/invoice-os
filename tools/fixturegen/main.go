@@ -26,6 +26,11 @@ const defaultOut = "testdata/invoices"
 // regardless of --invoices.
 const edgeInvoices = 20
 
+// submissionDemoInvoices is green_submission_demo.csv's invoice count: the four
+// mock trigger TINs plus two ordinary invoices, so the happy path is visible
+// alongside the failure modes without making the demo long to read.
+const submissionDemoInvoices = 6
+
 // fixtureFile is one manifest entry: a filename plus a thunk that builds
 // its bytes (a thunk so each entry can pin its own seed/count).
 type fixtureFile struct {
@@ -45,6 +50,7 @@ func manifest(baseSeed int64, baseInvoices int) []fixtureFile {
 		{"edge_bad_encoding.csv", func() []byte { return buildEdgeBadEncoding(baseSeed+4, edgeInvoices) }},
 		{"edge_bad_tin.csv", func() []byte { return buildEdgeBadTin(baseSeed+5, edgeInvoices) }},
 		{"edge_vat_math_wrong.csv", func() []byte { return buildEdgeVatMathWrong(baseSeed+6, edgeInvoices) }},
+		{"green_submission_demo.csv", func() []byte { return buildGreenSubmissionDemo(baseSeed+7, submissionDemoInvoices) }},
 	}
 }
 

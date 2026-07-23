@@ -41,7 +41,7 @@ export function Compliance() {
                     flex: 'none',
                     width: 22,
                     height: 22,
-                    borderRadius: 4,
+                    borderRadius: 'var(--radius-md)',
                     background: 'var(--accent-tint)',
                     color: 'var(--accent)',
                     display: 'grid',
@@ -61,7 +61,7 @@ export function Compliance() {
         </div>
 
         {/* readiness card */}
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div
             style={{
               display: 'flex',
@@ -128,8 +128,8 @@ export function Compliance() {
                       {b.pct}
                     </span>
                   </div>
-                  <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3 }}>
-                    <div style={{ width: b.pct, height: '100%', background: b.color, borderRadius: 3 }} />
+                  <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)' }}>
+                    <div style={{ width: b.pct, height: '100%', background: b.color, borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
               ))}

@@ -63,7 +63,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onClose}
             className="ops-btn"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 6, color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
+            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-lg)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
           >
             {CLOSE_ICON}
           </button>
@@ -71,7 +71,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>
           {/* meta grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden', marginBottom: 22 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: 22 }}>
             <div style={{ background: 'var(--bg-2)', padding: '12px 14px' }}>
               <div className="label">Idempotency key</div>
               <div className="mono" style={{ fontSize: 12, fontWeight: 600, marginTop: 4 }}>
@@ -102,7 +102,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           <div className="label" style={{ marginBottom: 10 }}>
             Validation result
           </div>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 8, background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 22 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 22 }}>
             {d.checks.map((c) => (
               <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ color: c.color, display: 'inline-flex' }}>{c.icon}</span>
@@ -173,7 +173,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onCancel}
             className="ops-btn"
-            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 4, fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, color: 'var(--status-red-text)' }}
+            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, color: 'var(--status-red-text)' }}
           >
             Cancel
           </button>

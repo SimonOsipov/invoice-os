@@ -1,4 +1,4 @@
-/* Local page styles — ported verbatim from the FiscalBridge Africa Platform
+/* Local page styles — ported verbatim from the ASComply Africa Platform
    prototype's inline <style> block (reset + keyframes + hover/focus/active
    transitions), plus a responsive media-query layer for the app shell.
    Token vars (--accent, --bg-2, --line-2, …) resolve via inheritance from .if-v2. */
@@ -62,7 +62,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   height: 38px;
   padding: 0 12px;
   width: 100%;
@@ -79,7 +79,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   height: 34px;
   padding: 0 10px;
   width: 100%;

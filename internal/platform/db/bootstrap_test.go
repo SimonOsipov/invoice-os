@@ -6,7 +6,7 @@
 // is rejected with a syntax error before a single statement runs. So EVERY test below
 // is expected to fail at its first applyBootstrap call — that failure IS the RED state
 // this file proves; [M4-21-02]'s execution stage rewrites the file to read three
-// `fiscalbridge.*` session GUCs (Decision `[one-bootstrap-file]`) and these tests turn
+// `ascomply.*` session GUCs (Decision `[one-bootstrap-file]`) and these tests turn
 // green with no changes needed here, other than removing this paragraph.
 //
 // Design, mirroring this package's existing conventions:
@@ -73,7 +73,7 @@ func unsetGUC() gucValue      { return gucValue{} }
 func emptyGUC() gucValue      { return gucValue{set: true, value: ""} }
 func pwGUC(v string) gucValue { return gucValue{set: true, value: v} }
 
-// bootstrapGUCs bundles the three fiscalbridge.*_password session GUCs a pgx caller
+// bootstrapGUCs bundles the three ascomply.*_password session GUCs a pgx caller
 // (or the Makefile's `-c "SELECT set_config(...)" -f` psql invocation) must set before
 // running db/bootstrap.sql.
 type bootstrapGUCs struct {
@@ -133,7 +133,7 @@ func readBootstrapSQL(t *testing.T) string {
 }
 
 // applyBootstrap runs db/bootstrap.sql over ONE acquired connection: the three
-// fiscalbridge.* GUCs set (session-scoped, is_local=false — matching the Makefile's
+// ascomply.* GUCs set (session-scoped, is_local=false — matching the Makefile's
 // `-c "SELECT set_config(..., false)" -f` precedent) on that connection first, then the
 // file executed as a single zero-arg Exec so pgx uses the simple query protocol its
 // multi-statement DO $$ … $$ body requires. Using one acquired connection (not the pool
@@ -153,9 +153,9 @@ func applyBootstrap(t *testing.T, pool *pgxpool.Pool, guc bootstrapGUCs, sql str
 		name string
 		v    gucValue
 	}{
-		{"fiscalbridge.migrator_password", guc.migrator},
-		{"fiscalbridge.app_password", guc.app},
-		{"fiscalbridge.reader_password", guc.reader},
+		{"ascomply.migrator_password", guc.migrator},
+		{"ascomply.app_password", guc.app},
+		{"ascomply.reader_password", guc.reader},
 	} {
 		if !kv.v.set {
 			continue // leave unset: current_setting(name, true) then reads NULL.
@@ -408,8 +408,8 @@ func TestBootstrapSQLFailsClosedOnMissingPassword(t *testing.T) {
 			if err == nil {
 				t.Fatalf("apply db/bootstrap.sql with %s GUCs: got nil error, want a fail-closed error naming the missing setting", tc.name)
 			}
-			if !strings.Contains(err.Error(), "fiscalbridge.migrator_password") {
-				t.Errorf("error = %q, want it to name fiscalbridge.migrator_password as the missing setting", err.Error())
+			if !strings.Contains(err.Error(), "ascomply.migrator_password") {
+				t.Errorf("error = %q, want it to name ascomply.migrator_password as the missing setting", err.Error())
 			}
 			for role, pw := range sentinels {
 				if loginErr := attemptLogin(t, loginDSN(t, superDSN, role, pw)); loginErr != nil {
@@ -685,9 +685,9 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 			}
 			defer conn.Release()
 			for _, kv := range []struct{ name, value string }{
-				{"fiscalbridge.migrator_password", guc.migrator.value},
-				{"fiscalbridge.app_password", guc.app.value},
-				{"fiscalbridge.reader_password", guc.reader.value},
+				{"ascomply.migrator_password", guc.migrator.value},
+				{"ascomply.app_password", guc.app.value},
+				{"ascomply.reader_password", guc.reader.value},
 			} {
 				if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
 					errs <- fmt.Errorf("set_config(%s): %w", kv.name, err)

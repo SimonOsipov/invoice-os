@@ -1,4 +1,4 @@
-# Ralph Workflow — FiscalBridge Africa (invoice-os)
+# Ralph Workflow — ASComply Africa (invoice-os)
 
 ## Overview
 
@@ -90,8 +90,8 @@ Design references (for UI stories): the Claude Design **prototype** project `626
 
 1. **Validate the story arg.** `/ralph` requires exactly one build-plan task ID (e.g., `M3-04`). Error and exit if missing.
 2. **Read the Obsidian user story file**:
-   - `mcp__obsidian-mcp-tools__get_vault_file` matching `Simon Vault/Projects/FiscalBridge Africa/User Stories/<Mn>/<STORY-ID>*.md` (use `list_vault_files` against `.../User Stories/<Mn>/` to disambiguate; also check `.../User Stories/Archive/<Mn>/`).
-   - If no Obsidian story exists yet, fall back to the build plan: read `Simon Vault/Projects/FiscalBridge Africa/Build Plan — 0 to MVP.html`, find the `<STORY-ID>` row (Task / Layer / Size / Depends / the milestone's "Ships when true"), and treat that row + the milestone goal as a **basic** story (set `PLANNING_REQUIRED=true`).
+   - `mcp__obsidian-mcp-tools__get_vault_file` matching `Simon Vault/Projects/ASComply Africa/User Stories/<Mn>/<STORY-ID>*.md` (use `list_vault_files` against `.../User Stories/<Mn>/` to disambiguate; also check `.../User Stories/Archive/<Mn>/`).
+   - If no Obsidian story exists yet, fall back to the build plan: read `Simon Vault/Projects/ASComply Africa/Build Plan — 0 to MVP.html`, find the `<STORY-ID>` row (Task / Layer / Size / Depends / the milestone's "Ships when true"), and treat that row + the milestone goal as a **basic** story (set `PLANNING_REQUIRED=true`).
 3. **Derive the branch slug.** If the story has a `## Branch Strategy` section, use it. Otherwise synthesize `BRANCH=feature/<lowercase-story-id>-<kebab-title>` (e.g. `feature/m3-04-validation-v1`).
 4. **Query Backlog for subtasks**:
    ```

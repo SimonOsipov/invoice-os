@@ -43,7 +43,7 @@ export function Developers() {
         </div>
 
         {/* code block */}
-        <div style={{ background: '#0c0e10', border: '1px solid var(--slate-800)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: '#0c0e10', border: '1px solid var(--slate-800)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--slate-800)' }}>
             <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />
             <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />
@@ -54,7 +54,7 @@ export function Developers() {
           </div>
           <pre className="mono" style={{ margin: 0, padding: 20, fontSize: 12.5, lineHeight: 1.75, color: 'var(--slate-200)', overflowX: 'auto' }}>
             <span style={{ color: 'var(--slate-500)' }}># Validate an invoice against Nigeria MBS rules</span>
-            {'\ncurl https://api.fiscalbridge.africa/v1/invoices/validate \\\n  -H '}
+            {'\ncurl https://api.ascomply.africa/v1/invoices/validate \\\n  -H '}
             <span style={{ color: 'var(--teal-300)' }}>"Authorization: Bearer sk_live_…"</span>
             {' \\\n  -d '}
             <span style={{ color: 'var(--teal-300)' }}>

@@ -1,4 +1,4 @@
-/* Local app-shell styles — ported verbatim from the FiscalBridge Africa Ops Console
+/* Local app-shell styles — ported verbatim from the ASComply Africa Ops Console
    prototype's inline <style> block (keyframes + hover/focus/active/toggle
    transitions), plus a responsive media-query layer for the app shell. */
 
@@ -92,7 +92,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   height: 34px;
   padding: 0 11px;
   outline: none;
@@ -125,7 +125,7 @@ pre.ops-json {
   line-height: 1.6;
   color: var(--slate-200);
   background: #0c0e10;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   overflow-x: auto;
   white-space: pre;

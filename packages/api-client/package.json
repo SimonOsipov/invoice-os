@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared typed gateway client + inherited async-state UI for the FiscalBridge Africa frontends (M3-06).",
+  "description": "Shared typed gateway client + inherited async-state UI for the ASComply Africa frontends (M3-06).",
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts"

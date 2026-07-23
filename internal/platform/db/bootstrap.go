@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RolePasswords carries the three fiscalbridge.*_password values Bootstrap sets
+// RolePasswords carries the three ascomply.*_password values Bootstrap sets
 // via set_config before executing db/bootstrap.sql. All three are required —
 // Bootstrap validates them before opening any connection (AC-4).
 type RolePasswords struct {
@@ -121,7 +121,7 @@ func validateRolePasswords(pw RolePasswords) error {
 // single pinned connection, holds BootstrapAdvisoryLockKey for the duration
 // (QA F7 — proven empirically necessary: concurrent bootstrap without it raises
 // Postgres's "tuple concurrently updated", SQLSTATE XX000), sets the three
-// fiscalbridge.* password GUCs, and executes bootstrap.sql read from fsys in a
+// ascomply.* password GUCs, and executes bootstrap.sql read from fsys in a
 // single argument-less Exec (so pgx uses the simple protocol its multi-statement
 // body requires — passing any argument would switch to the extended protocol,
 // under which multi-statement is illegal).
@@ -166,9 +166,9 @@ func Bootstrap(ctx context.Context, superuserDSN string, pw RolePasswords, fsys 
 	// set_config failure's error text contains only the offending argument, not
 	// an unrelated valid one — so wrapping this error can't leak a password.
 	for _, kv := range []struct{ name, value string }{
-		{"fiscalbridge.migrator_password", pw.Migrator},
-		{"fiscalbridge.app_password", pw.App},
-		{"fiscalbridge.reader_password", pw.Reader},
+		{"ascomply.migrator_password", pw.Migrator},
+		{"ascomply.app_password", pw.App},
+		{"ascomply.reader_password", pw.Reader},
 	} {
 		if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
 			return fmt.Errorf("db: set_config(%s): %w", kv.name, err)

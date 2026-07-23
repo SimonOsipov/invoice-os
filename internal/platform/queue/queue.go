@@ -1,5 +1,5 @@
 // Package queue is the platform-kit wrapper over River (github.com/riverqueue/river),
-// the Postgres-backed job queue that is FiscalBridge's async spine. It gives every
+// the Postgres-backed job queue that is ASComply's async spine. It gives every
 // service one way to build a River client and one way to enqueue: EnqueueTx, the
 // transactional-outbox helper that writes a domain change, its idempotency-key row, and
 // the River job in a SINGLE transaction so they commit or roll back together.
@@ -135,7 +135,7 @@ func (c *Client) EnqueueTx(ctx context.Context, tx pgx.Tx, tenantID, key string,
 	return false, nil
 }
 
-// OncePerJob makes a side-effecting handler idempotent — the third leg of FiscalBridge's
+// OncePerJob makes a side-effecting handler idempotent — the third leg of ASComply's
 // exactly-once composite (enqueue dedupe + River single-delivery + idempotent handler).
 // River is at-least-once: a worker can commit its effect and crash before River marks the
 // job completed, so the effect re-runs on retry unless the handler guards it. OncePerJob

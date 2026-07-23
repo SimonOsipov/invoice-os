@@ -15,7 +15,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// DemoArgs is the M2-08 demo job. Every FiscalBridge job carries its tenant_id so the
+// DemoArgs is the M2-08 demo job. Every ASComply job carries its tenant_id so the
 // handler can re-establish tenant context from the payload (the worker-role pattern,
 // docs/migrations.md §8) — River's queue tables have none. Real job args (e.g. an invoice
 // id to submit) arrive in M3.

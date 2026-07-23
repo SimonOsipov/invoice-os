@@ -71,7 +71,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
         {API_KEYS.map((k) => {
           const revealed = !!reveal[k.id]
           return (
-            <div key={k.id} style={{ border: '1px solid ' + k.borderColor, background: 'var(--bg-2)', borderRadius: 10, padding: '16px 18px' }}>
+            <div key={k.id} style={{ border: '1px solid ' + k.borderColor, background: 'var(--bg-2)', borderRadius: 'var(--radius-xl)', padding: '16px 18px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <span
                   style={{
@@ -80,7 +80,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                     gap: 5,
                     background: k.tagBg,
                     border: '1px solid ' + k.tagBorder,
-                    borderRadius: 5,
+                    borderRadius: 'var(--radius-md)',
                     padding: '2px 8px',
                   }}
                 >
@@ -99,7 +99,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                   gap: 8,
                   background: 'var(--bg-1)',
                   border: '1px solid var(--line-1)',
-                  borderRadius: 6,
+                  borderRadius: 'var(--radius-lg)',
                   padding: '9px 12px',
                   marginBottom: 12,
                 }}
@@ -143,7 +143,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                     cursor: 'pointer',
                     height: 28,
                     padding: '0 10px',
-                    borderRadius: 5,
+                    borderRadius: 'var(--radius-md)',
                     fontFamily: 'var(--font-sans)',
                     fontSize: 11.5,
                     fontWeight: 600,
@@ -171,7 +171,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 22 }}>
         {WEBHOOKS.map((w) => (
-          <div key={w.url} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 10, padding: '15px 18px' }}>
+          <div key={w.url} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-xl)', padding: '15px 18px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <span style={{ color: 'var(--accent)', display: 'inline-flex', flex: 'none' }}>{LINK_ICON}</span>
               <span
@@ -188,7 +188,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                   gap: 5,
                   background: w.envBg,
                   border: '1px solid ' + w.envBorder,
-                  borderRadius: 5,
+                  borderRadius: 'var(--radius-md)',
                   padding: '2px 7px',
                 }}
               >
@@ -227,7 +227,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                 <span
                   key={w.url + ':' + ev}
                   className="mono"
-                  style={{ fontSize: 10.5, color: 'var(--fg-2)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 4, padding: '3px 8px' }}
+                  style={{ fontSize: 10.5, color: 'var(--fg-2)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '3px 8px' }}
                 >
                   {ev}
                 </span>
@@ -239,7 +239,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
 
       {/* deliveries + rate limit + request log (proto:409-444) */}
       <div className="ops-api-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        <div style={{ border: '1px solid var(--line-1)', borderRadius: 9, background: 'var(--bg-2)', overflow: 'hidden' }}>
+        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflow: 'hidden' }}>
           <div
             style={{
               padding: '12px 16px',
@@ -308,7 +308,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
             minWidth blow out the 1fr track instead of scrolling inside it. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           {/* rate limit (proto:424-430) */}
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 9, background: 'var(--bg-2)', padding: '16px 18px' }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', padding: '16px 18px' }}>
             <div className="label" style={{ marginBottom: 12 }}>
               Rate limit · {envWord}
             </div>
@@ -320,8 +320,8 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                 / {rate.limit} req·s
               </span>
             </div>
-            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
-              <div style={{ width: rate.width, height: '100%', background: rate.color, borderRadius: 3 }} />
+            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+              <div style={{ width: rate.width, height: '100%', background: rate.color, borderRadius: 'var(--radius-sm)' }} />
             </div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 8 }}>
               {rate.detail}
@@ -329,7 +329,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
           </div>
 
           {/* request log (proto:431-442) — title bar only, no column header row. */}
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 9, background: 'var(--bg-2)', overflow: 'hidden', flex: 1 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflow: 'hidden', flex: 1 }}>
             <div
               style={{
                 padding: '12px 16px',
@@ -358,7 +358,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                 >
                   <span
                     className="mono"
-                    style={{ fontSize: 10, fontWeight: 700, color: METHOD_FG[r.m], background: METHOD_BG[r.m], borderRadius: 4, padding: '2px 5px', textAlign: 'center' }}
+                    style={{ fontSize: 10, fontWeight: 700, color: METHOD_FG[r.m], background: METHOD_BG[r.m], borderRadius: 'var(--radius-md)', padding: '2px 5px', textAlign: 'center' }}
                   >
                     {r.m}
                   </span>

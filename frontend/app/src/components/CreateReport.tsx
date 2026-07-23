@@ -34,7 +34,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function Section({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
       <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--line-1)' }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>{title}</div>
         <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>{subtitle}</div>
@@ -57,7 +57,7 @@ export function CreateReport({ ctx }: { ctx: PlatformCtx }) {
   // those zeros would read as a flawless import of nothing ([report-failed-status]).
   if (summary.kind === 'failed') {
     return (
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 8, padding: '24px 22px', maxWidth: 720 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-xl)', padding: '24px 22px', maxWidth: 720 }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--status-red-text)', marginBottom: 8 }}>Import failed</div>
         <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
           The server reported this import as failed and created no invoices. This usually means the file held no data rows — a spreadsheet with only a header row, for example. Check the file and start a new import.
@@ -75,7 +75,7 @@ export function CreateReport({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: '18px 20px' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '18px 20px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 18 }}>
           <Stat label="Rows valid" value={`${summary.rows_valid} / ${summary.rows_total}`} />
           <Stat label="Ready invoices" value={String(summary.ready_invoices)} />

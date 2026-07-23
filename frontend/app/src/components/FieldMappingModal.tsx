@@ -35,7 +35,7 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
         role="dialog"
         aria-modal="true"
         aria-label="Edit field mapping"
-        style={{ width: 620, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ width: 620, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ minWidth: 0 }}>
@@ -49,7 +49,7 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
             onClick={onClose}
             className="pf-btn"
             aria-label="Close"
-            style={{ flex: 'none', width: 34, height: 34, borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+            style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
             {closeGlyph}
           </button>

@@ -3,7 +3,7 @@
 // failure modes that break naive queues — transaction rollback, concurrent workers, poison
 // jobs, and operator re-drive — against a real Postgres.
 //
-// HONEST FRAMING: River is at-least-once, NOT exactly-once. "Exactly once" in FiscalBridge
+// HONEST FRAMING: River is at-least-once, NOT exactly-once. "Exactly once" in ASComply
 // is a composite of three legs, and this suite proves each:
 //  1. Enqueue dedupe   — idempotency_keys UNIQUE(tenant_id, key) + ON CONFLICT in EnqueueTx
 //     (a duplicate business key inserts neither key nor job).

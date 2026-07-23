@@ -1,4 +1,4 @@
-// The full sign-in experience (task-21), ported faithfully from the FiscalBridge Africa
+// The full sign-in experience (task-21), ported faithfully from the ASComply Africa
 // sign-in prototype: a two-step modal — choose an account (persona picker), then verify
 // a 6-digit OTP — that routes each role to only the workspace it may open. The OTP is
 // client-side theater (the demo code is fixed); the real JWT mint + /v1/me round trip
@@ -115,17 +115,17 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
 
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden', animation: 'siCardIn 200ms var(--ease-out)' }}
+        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden', animation: 'siCardIn 200ms var(--ease-out)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <BrandMark size={19} />
-            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
-            <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
+            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
+            <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
               AFRICA
             </span>
           </div>
-          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 6, border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-lg)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
             <Glyph d="M18 6 6 18M6 6l12 12" size={17} sw={1.8} />
           </button>
         </div>
@@ -141,13 +141,13 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
                   key={p.id}
                   onClick={() => pickPersona(p)}
                   className="si-persona"
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
-                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 7, background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
+                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{p.name}</span>
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title} · {p.org}</span>
-                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 3, padding: '2px 6px' }}>{p.access}</span>
+                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>{p.access}</span>
                   </span>
                   <span style={{ flex: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
                     <Glyph d="m9 18 6-6-6-6" size={16} sw={1.8} />
@@ -160,7 +160,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               <span className="mono" style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--fg-3)' }}>SSO · OAUTH2</span>
             </div>
             {forgotNote && (
-              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 6, padding: '10px 12px' }}>
+              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '10px 12px' }}>
                 Password reset is disabled in this demo — choose one of the profiles above to sign in.
               </div>
             )}
@@ -173,7 +173,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               <Glyph d="m15 18-6-6 6-6" size={15} sw={1.8} /> Back to accounts
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 18 }}>
-              <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 7, background: persona.avBg, color: persona.avColor, display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700 }}>{persona.initials}</span>
+              <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-lg)', background: persona.avBg, color: persona.avColor, display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700 }}>{persona.initials}</span>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{persona.name}</div>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{maskedEmail(persona.email)}</div>
@@ -193,7 +193,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
                   inputMode="numeric"
                   maxLength={1}
                   autoComplete="off"
-                  style={{ width: '100%', height: 54, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: 0 }}
+                  style={{ width: '100%', height: 54, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: 0 }}
                 />
               ))}
             </div>
@@ -214,7 +214,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               )}
             </button>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 }}>
-              <span className="mono" style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 4, padding: '4px 8px' }}>DEMO CODE · {DEMO_CODE}</span>
+              <span className="mono" style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 'var(--radius-md)', padding: '4px 8px' }}>DEMO CODE · {DEMO_CODE}</span>
               <a href="#" onClick={(e) => e.preventDefault()} className="si-link" style={{ fontSize: 12, color: 'var(--fg-3)' }}>Resend code</a>
             </div>
           </div>

@@ -12,7 +12,7 @@ export function EmptyState(props: { title?: string; message?: string }): React.J
       style={{
         background: 'var(--bg-2)',
         border: '1px dashed var(--line-3)',
-        borderRadius: 10,
+        borderRadius: 'var(--radius-xl)',
         padding: 56,
         display: 'flex',
         flexDirection: 'column',
@@ -25,7 +25,7 @@ export function EmptyState(props: { title?: string; message?: string }): React.J
         style={{
           width: 44,
           height: 44,
-          borderRadius: 10,
+          borderRadius: 'var(--radius-xl)',
           background: 'var(--bg-3)',
           color: 'var(--fg-3)',
           display: 'grid',

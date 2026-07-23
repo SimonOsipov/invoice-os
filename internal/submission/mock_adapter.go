@@ -2,12 +2,8 @@
 // NewMockAdapter, Name/Version/Transform, the two-phase Submit, and the context-aware wait
 // helper both Submit and Poll share.
 //
-// STAGE 1 (QA Mode A, RED): this file ships the complete DECLARATION SET -- every constant with
-// its real value, the three sentinels, the types and every function signature -- with
-// deliberately no-op bodies for Submit, Poll, mockWait, mockInFlight and mockRequestHeaders, so
-// that every spec in mock_adapter_test.go fails on an ASSERTION rather than on a compile error.
-// Name, Version and Transform ARE fully implemented: each is a one-liner whose spec would
-// otherwise be untestable, and neither carries any of this subtask's real behaviour.
+// Everything M5-03-03 owns is implemented here. Poll alone is still a no-op stub: it belongs to
+// M5-03-04, which reuses mockWait unchanged.
 //
 // Decisions this file implements (the executor must not "improve" any of them):
 //
@@ -44,6 +40,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -114,11 +111,16 @@ var _ Adapter = (*MockAdapter)(nil)
 
 // NewMockAdapter builds a mock adapter from cfg.
 //
-// TODO(M5-03-03): implemented by the executor -- a negative cfg.Latency must be CLAMPED to zero
-// here. The hard failure for a negative value lives at the env edge in M5-03-05
-// ([negative-latency-rejected-at-the-env-edge]); reaching this constructor with one is a test's
-// business, and a negative timer fires immediately anyway.
+// A negative cfg.Latency is CLAMPED to zero rather than refused
+// ([negative-latency-rejected-at-the-env-edge]): the HARD failure for a negative value belongs at
+// the env edge in M5-03-05, where an operator typed it; reaching this constructor with one is Go
+// code's -- i.e. a test's -- business. Clamping keeps a.cfg.Latency a value mockInFlight can
+// multiply without producing a negative in-flight duration that only mockWait's `d <= 0` branch
+// happens to absorb.
 func NewMockAdapter(cfg MockConfig) *MockAdapter {
+	if cfg.Latency < 0 {
+		cfg.Latency = 0
+	}
 	return &MockAdapter{cfg: cfg}
 }
 
@@ -135,30 +137,111 @@ func (a *MockAdapter) Transform(_ context.Context, c Canonical) (Wire, error) {
 }
 
 // Submit runs the simulated call in six ordered steps and returns exactly one Result variant
-// plus the Evidence of the attempt.
-//
-// TODO(M5-03-03): implemented by the executor. The ordered steps and the ten-row evidence matrix
-// are in task-226's implementation plan; the short version:
-//
-//	step 0  start := time.Now() and build the request headers -- BEFORE the ctx check, so the
-//	        pre-cancelled row still carries headers (L13 is non-vacuous for the contract suite's
-//	        cancelled-Submit call, contract_test.go:314).
-//	step 1  ctx.Err() (L16) -> Retryable, ReachedWire false, and the ONE row where LatencyMS
-//	        stays nil. Nothing else runs.
-//	step 2  request body: set only when len(w) > 0 -- never-captured is not the same evidence as
-//	        empty (exchange.go:213-221).
-//	step 3  parse -> on error, Retryable carrying the WRAPPED error from parseMockEnvelope (so
-//	        the decoder's reason reaches the M5-07 archive), ReachedWire false, NEVER Rejected.
-//	step 4  trigger, then the INSTANT connect phase: connection -> Retryable{
-//	        ErrMockConnectionRefused}, ReachedWire still false.
-//	step 5  ReachedWire = true, THEN mockWait. A wait error -> Retryable{ctx.Err()} with
-//	        ReachedWire true and no status/bodies. Then timeout -> Retryable{ErrMockTimeout}.
-//	step 6  synthesize: reject 422, pending 202, unavailable 503 + Retry-After, and a MANDATORY
-//	        default: arm (accept, slow and any future unallocated trigger) 200 -- four explicit
-//	        cases with no default would leave Result nil for an unhandled trigger, an L06 hard
-//	        failure.
+// plus the Evidence of the attempt. The step comments below are the ten-row evidence matrix in
+// task-226's implementation plan, read top to bottom.
 func (a *MockAdapter) Submit(ctx context.Context, w Wire, idemKey string) (Result, Evidence) {
-	return nil, Evidence{}
+	// STEP 0, BEFORE the ctx check on purpose. The headers describe the call we were ABOUT to
+	// make, so they belong on every row of the matrix without exception -- including the
+	// pre-cancelled one, where omitting them would make L13 vacuous for the contract suite's
+	// cancelled-Submit call (contract_test.go:314 passes a real key). reference_adapter_test.go:65
+	// already builds them first for the same reason.
+	start := time.Now()
+	ev := Evidence{RequestHeaders: mockRequestHeaders(idemKey)}
+
+	// STEP 1 (L16). The ONE row of the matrix where LatencyMS stays nil: nothing ran, so nothing
+	// was measured, and stamping a 0 here would be a measurement we never took. ReachedWire stays
+	// false, so ExchangeFor derives "connection_failed" -- correct, the bytes never left.
+	if err := ctx.Err(); err != nil {
+		return Retryable{Err: err}, ev
+	}
+
+	// STEP 2. Only when there were bytes: a never-captured body is different evidence from an
+	// empty one, and exchange.go:213-221 preserves that difference all the way to SQL NULL.
+	if len(w) > 0 {
+		body := string(w)
+		ev.RequestBody = &body
+	}
+
+	// STEP 3. The WRAPPED error travels upward, never the bare sentinel: errors.Is still reaches
+	// ErrMockUnparseableWire, and the decoder's own reason survives into the M5-07 archive
+	// (mock_wire.go:226). NEVER Rejected -- an unparseable wire is a transport failure, not an
+	// authority verdict ([errors-never-verdicts]).
+	env, err := parseMockEnvelope(w)
+	if err != nil {
+		ev.LatencyMS = mockElapsedMS(start)
+		return Retryable{Err: err}, ev
+	}
+
+	// STEP 4. The trigger is read back OUT of the wire ([trigger-read-from-the-real-bis-field]) --
+	// Submit never sees the Canonical. Then the connect phase, which is INSTANT: it does not wait
+	// even at a large baseline, because nothing has left the process yet to be in flight
+	// ([two-phase-wire]). ReachedWire therefore stays false.
+	trigger := mockTriggerFor(mockBuyerTIN(env))
+	if trigger == mockTriggerConnection {
+		ev.LatencyMS = mockElapsedMS(start)
+		return Retryable{Err: ErrMockConnectionRefused}, ev
+	}
+
+	// STEP 5. ReachedWire goes true BEFORE the wait: from here on the bytes are on the wire and a
+	// context that dies mid-flight must report "sent", because the APP may well have received
+	// them. That is the row M5-01 kept the two outcomes apart for.
+	ev.ReachedWire = true
+	if err := mockWait(ctx, mockInFlight(a.cfg, trigger)); err != nil {
+		ev.LatencyMS = mockElapsedMS(start)
+		return Retryable{Err: err}, ev
+	}
+	// A timeout is the in-flight failure: we waited the whole (multiplied) duration and no
+	// response came back. ReachedWire is already true and stays true.
+	if trigger == mockTriggerTimeout {
+		ev.LatencyMS = mockElapsedMS(start)
+		return Retryable{Err: ErrMockTimeout}, ev
+	}
+
+	// STEP 6 -- synthesize the response. Everything below this line is a function of w alone
+	// ([deterministic-evidence]); the only value that is not is Pending.PollAfter.
+	ids := mockIdentifiersFor(w, env)
+
+	respHeaders := http.Header{}
+	respHeaders.Set("Content-Type", mockContentTypeJSON)
+
+	var (
+		result Result
+		status int
+		body   string
+	)
+	switch trigger {
+	case mockTriggerReject:
+		status, body = http.StatusUnprocessableEntity, mockRejectedBody()
+		result = Rejected{Reasons: mockRejectionReasons()}
+	case mockTriggerPending:
+		// The SAME ref goes into the Pending and into the archived 202 body: the caller who polls
+		// and the caller who reads the archive must not see two different handles.
+		ref := encodeMockRef(mockPendingPolls, ids)
+		status, body = http.StatusAccepted, mockPendingBody(ref)
+		result = Pending{Ref: ref, PollAfter: time.Now().Add(mockPollBackoff)}
+	case mockTriggerUnavailable:
+		status, body = http.StatusServiceUnavailable, mockUnavailableBody()
+		respHeaders.Set("Retry-After", strconv.Itoa(mockRetryAfterSeconds))
+		// A 503 is a transport verdict, not a validation one, so Retryable and never Rejected.
+		result = Retryable{Err: ErrMockUnavailable}
+	default:
+		// MANDATORY default, covering accept, slow AND any trigger a later story allocates but
+		// forgets to case here: four explicit cases with no default would leave result nil, an L06
+		// hard failure. Deliberately the opposite ruling from mockTriggerFor (mock_script.go:212),
+		// where a default would silently WIDEN the set of inputs that activate a scripted outcome;
+		// here it narrows the blast radius of an omission to "behaves like accept".
+		//
+		// slow lands here on purpose: what makes it slow is its duration (already waited out in
+		// step 5), not its verdict, so at MockConfig{} it is indistinguishable from accept.
+		status, body = http.StatusOK, mockAcceptedBody(ids)
+		result = Accepted{IRN: ids.IRN, CSID: ids.CSID, QRPayload: ids.QRPayload}
+	}
+
+	ev.HTTPStatus = mockIntPtr(status)
+	ev.ResponseBody = &body
+	ev.ResponseHeaders = respHeaders
+	ev.LatencyMS = mockElapsedMS(start)
+	return result, ev
 }
 
 // Poll resumes a deferred verdict from the Ref a prior Pending carried.
@@ -173,29 +256,49 @@ func (a *MockAdapter) Poll(ctx context.Context, ref Ref) (Result, Evidence) {
 // mockWait is the ONE in-flight wait, shared by Submit and Poll. It returns nil when the full
 // duration elapsed and ctx.Err() when the context ended first. No bool, no second return.
 //
-// TODO(M5-03-03): implemented by the executor, and it MUST be:
+// A bare time.Sleep is FORBIDDEN here ([cancellation-is-observable-in-the-wait]), and so is a
+// time.Sleep followed by a post-wake ctx.Err() re-check: both return exactly the Retryable a
+// correct select returns, they just take the full duration to do it. The only thing that tells
+// them apart is ELAPSED TIME, which is what
+// TestMockAdapter_SubmitAbortsTheInFlightWaitOnCancellation measures.
 //
-//	if d <= 0 { return nil }
-//	timer := time.NewTimer(d)
-//	defer timer.Stop()
-//	select {
-//	case <-ctx.Done(): return ctx.Err()
-//	case <-timer.C:    return nil
-//	}
+// TWO RULES BELOW LOOK LIKE OMISSIONS AND ARE NOT -- neither is covered by a spec, both are
+// review-enforced:
 //
-// A bare time.Sleep is FORBIDDEN here ([cancellation-is-observable-in-the-wait]). Leaving this
-// stubbed is deliberate: the elapsed-time specs must genuinely fail against it.
+//  1. No ctx.Err() re-check after a wait that returned nil. The select's outcome is
+//     AUTHORITATIVE. Re-checking would reintroduce exactly the race the select removes: a
+//     context cancelled in the instant between the timer firing and the re-check would flip a
+//     completed in-flight wait to Retryable, a row the evidence matrix does not have.
+//  2. `d <= 0` returns immediately WITHOUT consulting ctx. Submit's entry check (L16) has
+//     already run; a zero-length wait must not become a second, racy cancellation gate. At
+//     MockConfig{} -- what the whole suite and CI use -- there is no in-flight window to cancel
+//     in at all.
 func mockWait(ctx context.Context, d time.Duration) error {
-	return nil
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // mockInFlight is the ONLY place a latency multiple is computed -- mockWait knows nothing about
 // triggers. slow -> Latency*mockSlowFactor, timeout -> Latency*mockTimeoutFactor, everything
 // else -> Latency. The connection trigger never reaches the wait at all.
-//
-// TODO(M5-03-03): implemented by the executor.
 func mockInFlight(cfg MockConfig, trigger mockTrigger) time.Duration {
-	return 0
+	switch trigger {
+	case mockTriggerSlow:
+		return cfg.Latency * mockSlowFactor
+	case mockTriggerTimeout:
+		return cfg.Latency * mockTimeoutFactor
+	default:
+		return cfg.Latency
+	}
 }
 
 // mockRequestHeaders builds a FRESH http.Header per call via Set (which canonicalises keys); no
@@ -204,8 +307,29 @@ func mockInFlight(cfg MockConfig, trigger mockTrigger) time.Duration {
 //
 // Content-Length is on the allowlist but deliberately NOT set: AC-6 names three unconditional
 // request headers, and a fourth is smuggled scope.
-//
-// TODO(M5-03-03): implemented by the executor.
 func mockRequestHeaders(idemKey string) http.Header {
-	return nil
+	h := http.Header{}
+	h.Set("Content-Type", mockContentTypeJSON)
+	h.Set("Accept", mockContentTypeJSON)
+	h.Set("User-Agent", mockUserAgent)
+	// ABSENT, not empty-valued, when there is no key: idempotencyKeyValue
+	// (contract_test.go:566) reports present=true for an empty value slice, so an empty-valued
+	// header would read as a real one and is meaningless evidence. Poll reaches this helper with
+	// "" and therefore stamps none -- [poll-sets-no-idempotency-key], enforced by construction.
+	if idemKey != "" {
+		h.Set("Idempotency-Key", idemKey)
+	}
+	return h
 }
+
+// mockElapsedMS measures one attempt for Evidence.LatencyMS.
+//
+// Non-negative BY CONSTRUCTION, which is what satisfies L12 and app_exchange's `latency_ms >= 0`
+// CHECK without a clamp: time.Now carries a monotonic reading and time.Since subtracts through
+// it, so the result cannot go backwards across a wall-clock adjustment.
+func mockElapsedMS(start time.Time) *int {
+	return mockIntPtr(int(time.Since(start).Milliseconds()))
+}
+
+// mockIntPtr returns a pointer to its own copy of v, so no two Evidences ever share one.
+func mockIntPtr(v int) *int { return &v }

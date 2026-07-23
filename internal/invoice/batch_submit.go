@@ -13,31 +13,29 @@
 // cmd/invoice/main.go (M5-04-08's job, not this file's -- that subtask also builds the
 // insert-only queue.Client this Submitter needs, per the same Implementation Notes).
 //
-// Mode A (test-first) scaffold for M5-04-07 -- BatchSubmit is STUBBED, always returning
-// errBatchSubmitNotImplemented (mirrors the errActorNotImplemented / errApplyValidationNotImplemented
-// / errPortNotImplemented / errWorkerNotImplemented precedent across 02/03/05/06), so every
-// T07-* assertion in batch_submit_test.go/batch_submit_handler_test.go fails on ITS OWN
-// target value, never a compile error. The real tx1-loop-tx2 body (System Design, task-231)
-// is Stage 3's job.
+// Stage 3 (task-231): BatchSubmit's real body, below -- one db.WithinRequestTenantTx over
+// the whole batch, eligibility resolved once per distinct id up front (the T07-4 ordering
+// trap), EnqueueTx per requested list position, transitionTx on every real enqueue.
 package invoice
 
 import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
-// errBatchSubmitNotImplemented is BatchSubmit's Mode-A stub error.
-var errBatchSubmitNotImplemented = errors.New("invoice: batch submit not implemented")
-
-// errBatchSubmitInjectedTestFailure is the error the REAL (Stage 3) BatchSubmit must return
-// when BatchSubmitInput's failAfterLastEnqueue test hook fires -- the T07-2 atomicity
-// injection seam (task-231 note: "design the injection seam now"). Deliberately distinct
-// from errBatchSubmitNotImplemented so TestBatchSubmit_AtomicityRollsBackOnInjectedFailureAfterLastEnqueue
+// errBatchSubmitInjectedTestFailure is the error BatchSubmit returns when
+// BatchSubmitInput's failAfterLastEnqueue test hook fires -- the T07-2 atomicity injection
+// seam (task-231 note: "design the injection seam now"). A distinct sentinel (not a bare
+// fmt.Errorf) so TestBatchSubmit_AtomicityRollsBackOnInjectedFailureAfterLastEnqueue
 // (batch_submit_test.go) can assert BatchSubmit actually exercised the injected-failure path
-// rather than vacuously matching against an unimplemented stub that never enqueues anything
-// (see that test's own doc comment for why the distinction is load-bearing).
+// -- ran the enqueue, then deliberately aborted before commit -- rather than matching any
+// unrelated error (see that test's own doc comment for why the distinction is load-bearing).
 var errBatchSubmitInjectedTestFailure = errors.New("invoice: batch submit test-injected failure after last enqueue")
 
 // The two reachable skip reasons ([partial-batch] eligibility table, task-231 System
@@ -116,10 +114,8 @@ func NewSubmitter(store *Store, q *queue.Client) *Submitter {
 }
 
 // BatchSubmit is the endpoint's store-layer operation: POST /v1/invoices/submissions
-// ([trigger-surface]) exposes it via BatchSubmitHandler (handlers.go). STUBBED for Mode A
-// -- see this file's header -- always errBatchSubmitNotImplemented, touching neither
-// s.store nor s.queue. The real tx1-loop-tx2 body (System Design, task-231) is Stage 3's
-// job:
+// ([trigger-surface]) exposes it via BatchSubmitHandler (handlers.go). The body (System
+// Design, task-231):
 //
 //  1. one db.WithinRequestTenantTx over the WHOLE batch ([one-tx-per-batch]);
 //  2. per invoice id: SELECT status ... FOR UPDATE (0 rows -> ErrNotFound, hard-fails the
@@ -145,5 +141,99 @@ func NewSubmitter(store *Store, q *queue.Client) *Submitter {
 // legitimately hits its own (tenant_id, key) dedupe and reports duplicate_request, per
 // TestBatchSubmit_DuplicateIDWithinOneRequestEnqueuesOnce (batch_submit_test.go, T07-4).
 func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error) {
-	return BatchSubmitResult{}, errBatchSubmitNotImplemented
+	actor := actorFromContext(ctx)
+
+	var out BatchSubmitResult
+	err := db.WithinRequestTenantTx(ctx, s.store.pool, func(tx pgx.Tx) error {
+		// Resolve eligibility ONCE per DISTINCT invoice id, before any transition or
+		// enqueue runs, so a later occurrence of a duplicate id in in.InvoiceIDs never
+		// observes an EARLIER occurrence's own validated->queued write from inside this
+		// same transaction (the T07-4 ordering trap -- see this file's header comment on
+		// BatchSubmit). Unknown/cross-tenant ids (0 rows under RLS) hard-fail the whole
+		// request via ErrNotFound; a non-uuid id would raise 22P02, but that is already
+		// rejected pre-tx by BatchSubmitHandler.
+		statuses := make(map[string]Status, len(in.InvoiceIDs))
+		for _, id := range in.InvoiceIDs {
+			if _, seen := statuses[id]; seen {
+				continue
+			}
+			var status Status
+			if err := tx.QueryRow(ctx,
+				`SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, id,
+			).Scan(&status); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				if pgCode(err) == "22P02" {
+					return ErrValidation
+				}
+				return err
+			}
+			statuses[id] = status
+		}
+
+		// Classify per REQUESTED LIST POSITION (duplicates preserved, one result item
+		// per position) using the eligibility already resolved above.
+		results := make([]BatchSubmitResultItem, 0, len(in.InvoiceIDs))
+		anyEnqueued := false
+		for _, id := range in.InvoiceIDs {
+			if statuses[id] != StatusValidated {
+				results = append(results, BatchSubmitResultItem{
+					InvoiceID: id,
+					Enqueued:  false,
+					Status:    string(statuses[id]),
+					Reason:    batchSubmitReasonNotValidated,
+				})
+				continue
+			}
+
+			derivedKey := deriveBatchSubmitKey(in.IdempotencyKey, id)
+			skipped, err := s.queue.EnqueueTx(ctx, tx, actor.TenantID, derivedKey, submission.SubmitArgs{
+				TenantID:       actor.TenantID,
+				InvoiceID:      id,
+				IdempotencyKey: derivedKey,
+			}, nil)
+			if err != nil {
+				return err
+			}
+			if skipped {
+				// The only way to reach a skip here (statuses[id] == StatusValidated,
+				// yet the derived key already exists) is an EARLIER occurrence of this
+				// SAME id, in this SAME request, already having enqueued and
+				// transitioned it to queued moments ago in this same transaction -- so
+				// the invoice's real status is genuinely "queued" now, not the stale
+				// upfront "validated" reading.
+				results = append(results, BatchSubmitResultItem{
+					InvoiceID: id,
+					Enqueued:  false,
+					Status:    string(StatusQueued),
+					Reason:    batchSubmitReasonDuplicate,
+				})
+				continue
+			}
+
+			if _, err := transitionTx(ctx, tx, id, StatusValidated, StatusQueued, actor); err != nil {
+				return err
+			}
+			anyEnqueued = true
+			results = append(results, BatchSubmitResultItem{
+				InvoiceID: id,
+				Enqueued:  true,
+				Status:    string(StatusQueued),
+			})
+		}
+
+		// T07-2's atomicity injection seam: fire only after the batch actually
+		// enqueued something, right before commit.
+		if in.failAfterLastEnqueue && anyEnqueued {
+			return errBatchSubmitInjectedTestFailure
+		}
+
+		out = BatchSubmitResult{Results: results}
+		return nil
+	})
+	if err != nil {
+		return BatchSubmitResult{}, err
+	}
+	return out, nil
 }

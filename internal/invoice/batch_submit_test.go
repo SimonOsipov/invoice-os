@@ -489,12 +489,21 @@ func TestBatchSubmit_SuccessPathInvoiceQueuedAndJobExistTogether(t *testing.T) {
 		t.Fatalf("BatchSubmit: %v, want nil", err)
 	}
 
+	// $1/$2 (not $1 reused) -- deliberately: reusing $1 for both the args->>'invoice_id'
+	// (text) comparison and the invoices.id (uuid) comparison makes Postgres infer a
+	// single type for $1 across the whole statement and fails to prepare with
+	// "operator does not exist: uuid = text" (42883, reproduced independently via a bare
+	// psql PREPARE against this schema) -- a pre-existing SQL-binding bug in this RED
+	// spec's own query, unrelated to Submitter.BatchSubmit. Splitting into two
+	// placeholders (same invID value, bound twice) lets each site infer its own natural
+	// type and changes NOTHING about what is asserted -- the joined boolean, "does a
+	// queued invoice AND its matching river_job exist together", is identical either way.
 	var both bool
 	if err := super.QueryRow(ctx,
 		`SELECT (status = 'queued') AND EXISTS (
 			SELECT 1 FROM river_job WHERE kind = 'submission_submit' AND args->>'invoice_id' = $1
-		) FROM invoices WHERE id = $1`,
-		invID,
+		) FROM invoices WHERE id = $2`,
+		invID, invID,
 	).Scan(&both); err != nil {
 		t.Fatalf("joined status+job existence check: %v", err)
 	}

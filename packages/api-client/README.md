@@ -1,6 +1,6 @@
 # @invoice-os/api-client
 
-Shared typed gateway client + inherited async-state UI for the FiscalBridge
+Shared typed gateway client + inherited async-state UI for the ASComply
 Africa frontends. Every wired surface gets ONE way to talk to the gateway: an
 authenticated request path (Bearer auth header), a single consistent typed
 error envelope (`network` / `http` / `malformed`), and — in later M3-06

@@ -1,4 +1,4 @@
--- db/bootstrap.sql — one-time, superuser-run role bootstrap for the FiscalBridge DB.
+-- db/bootstrap.sql — one-time, superuser-run role bootstrap for the ASComply DB.
 --
 -- Creates the NON-superuser LOGIN roles the whole M2 data model depends on:
 --   invoice_migrator       — owns every schema object and runs migrations (goose).
@@ -22,9 +22,9 @@
 -- migration runner, M4-21-03) execute this identical file (Decision
 -- [one-bootstrap-file]):
 --   psql "$DATABASE_SUPERUSER_URL" -v ON_ERROR_STOP=1 \
---     -c "SELECT set_config('fiscalbridge.migrator_password', '…', false)" \
---     -c "SELECT set_config('fiscalbridge.app_password',      '…', false)" \
---     -c "SELECT set_config('fiscalbridge.reader_password',   '…', false)" \
+--     -c "SELECT set_config('ascomply.migrator_password', '…', false)" \
+--     -c "SELECT set_config('ascomply.app_password',      '…', false)" \
+--     -c "SELECT set_config('ascomply.reader_password',   '…', false)" \
 --     -f db/bootstrap.sql
 -- `make db-bootstrap` / `make dev-db` do exactly this with dev-default passwords.
 -- Idempotent: safe to re-run (it also rotates the passwords and re-asserts the
@@ -58,7 +58,7 @@ ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB N
 ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 
 -- 3. Set / rotate passwords, read from three session GUCs the caller sets beforehand
---    (`fiscalbridge.migrator_password` / `.app_password` / `.reader_password`) —
+--    (`ascomply.migrator_password` / `.app_password` / `.reader_password`) —
 --    replaces psql's :'var' client-side interpolation, which a pgx caller has no
 --    equivalent of. Fail closed: every GUC is checked BEFORE any password is
 --    applied, so a partial run never rotates one role while leaving another's GUC
@@ -71,19 +71,19 @@ ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB N
 --    %L (literal quoting) is what makes that EXECUTE format(...) injection-safe.
 DO $$
 BEGIN
-  IF coalesce(current_setting('fiscalbridge.migrator_password', true), '') = '' THEN
-    RAISE EXCEPTION 'fiscalbridge.migrator_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  IF coalesce(current_setting('ascomply.migrator_password', true), '') = '' THEN
+    RAISE EXCEPTION 'ascomply.migrator_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
   END IF;
-  IF coalesce(current_setting('fiscalbridge.app_password', true), '') = '' THEN
-    RAISE EXCEPTION 'fiscalbridge.app_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  IF coalesce(current_setting('ascomply.app_password', true), '') = '' THEN
+    RAISE EXCEPTION 'ascomply.app_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
   END IF;
-  IF coalesce(current_setting('fiscalbridge.reader_password', true), '') = '' THEN
-    RAISE EXCEPTION 'fiscalbridge.reader_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  IF coalesce(current_setting('ascomply.reader_password', true), '') = '' THEN
+    RAISE EXCEPTION 'ascomply.reader_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
   END IF;
 
-  EXECUTE format('ALTER ROLE invoice_migrator      PASSWORD %L', current_setting('fiscalbridge.migrator_password'));
-  EXECUTE format('ALTER ROLE invoice_app           PASSWORD %L', current_setting('fiscalbridge.app_password'));
-  EXECUTE format('ALTER ROLE invoice_tenant_reader PASSWORD %L', current_setting('fiscalbridge.reader_password'));
+  EXECUTE format('ALTER ROLE invoice_migrator      PASSWORD %L', current_setting('ascomply.migrator_password'));
+  EXECUTE format('ALTER ROLE invoice_app           PASSWORD %L', current_setting('ascomply.app_password'));
+  EXECUTE format('ALTER ROLE invoice_tenant_reader PASSWORD %L', current_setting('ascomply.reader_password'));
 END
 $$;
 

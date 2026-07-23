@@ -44,7 +44,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
       <div style={{ padding: '16px 16px 14px', borderBottom: '1px solid var(--line-1)' }}>
         <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-1)', marginBottom: 14 }}>
           <BrandMark size={20} />
-          <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.02em' }}>FiscalBridge</span>
+          <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.02em' }}>ASComply</span>
           <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
             AFRICA
           </span>

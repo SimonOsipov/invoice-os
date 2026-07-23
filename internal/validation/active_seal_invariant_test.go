@@ -15,7 +15,7 @@
 //	    current HEAD and fails on the target assertion, not on a compile or
 //	    setup error.
 //
-// See the M4-18 story (Obsidian, "Simon Vault/Projects/FiscalBridge Africa/
+// See the M4-18 story (Obsidian, "Simon Vault/Projects/ASComply Africa/
 // User Stories/M4/M4-18 Active-Version Seal Invariant.md") for the
 // authoritative Objective/Acceptance Criteria/System Design/Test Specs this
 // file transcribes, and rule_immutability_test.go / schema_test.go for the

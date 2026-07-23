@@ -2,7 +2,7 @@
   "name": "invoice-os",
   "private": true,
   "version": "0.0.0",
-  "description": "FiscalBridge Africa (codename invoice-os) — pnpm workspace root for the three frontend apps.",
+  "description": "ASComply Africa (codename invoice-os) — pnpm workspace root for the three frontend apps.",
   "packageManager": "pnpm@10.32.1",
   "scripts": {
     "build": "pnpm -r build",

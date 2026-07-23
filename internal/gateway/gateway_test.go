@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	testIssuer  = "https://mock.fiscalbridge.test"
+	testIssuer  = "https://mock.ascomply.test"
 	testSubject = "11111111-1111-1111-1111-111111111111"
 	testTenant  = "tenant-a"
 	testRole    = "authenticated"

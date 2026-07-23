@@ -239,7 +239,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
       </div>
 
       {/* past invoices (proto:511-523) */}
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Invoices from FiscalBridge</div>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Invoices from ASComply</div>
       <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflowX: 'auto' }}>
         <div
           className="ops-invoice-table"

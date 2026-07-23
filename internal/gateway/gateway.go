@@ -1,4 +1,4 @@
-// Package gateway is the FiscalBridge API edge: a thin reverse proxy that is the
+// Package gateway is the ASComply API edge: a thin reverse proxy that is the
 // single authenticated ingress to the backend context services. For each request
 // it verifies the caller's JWT (via the platform auth Verifier), authorizes the
 // route, injects the verified tenant/user/role and request id as headers the

@@ -86,6 +86,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -290,5 +291,198 @@ func TestRLS_SubmissionRateLimitsOwnerSelectScopedUnderForce(t *testing.T) {
 	if n != 1 {
 		t.Errorf("owner's visible row count scoped to tenant A = %d, want 1 (both tenants have a row; "+
 			"without FORCE the owner would see both = 2, a silent RLS bypass)", n)
+	}
+}
+
+// ---- QA adversarial coverage (task-235, RALPH Phase 1 Stage 4 Mode B) ----
+//
+// Five cases the architect's Test Specs (T01-4/5/6/8 above) do not cover, each
+// proving a distinct fact: FK cascade (AC-5's "ON DELETE CASCADE" half, never
+// exercised — T01-4/8 only ever DELETE rows, never a tenant), the max_per_minute
+// lower boundary's off-by-one (T01-6 only probes the illegal side, 0 and -1; never
+// confirms 1 — the first LEGAL value — is actually accepted), a cross-tenant WRITE
+// refused via the policy's implicit WITH CHECK rather than the grant layer (T01-5
+// tests invoice_app, which never had INSERT to begin with, so it cannot distinguish
+// grant-refusal from RLS-refusal), fail-closed behavior with the GUC entirely UNSET
+// (T01-4 only tests a MISMATCHED tenant, never an absent one), and the PK's
+// uniqueness (no case above ever attempts a second row for an existing tenant).
+
+// QA-1: deleting a tenant cascades to its submission_rate_limits row (AC-5, "ON
+// DELETE CASCADE"). Uses a throwaway tenant — not h.tenantA/h.tenantB, which every
+// other case in this package shares — so the DELETE cannot disturb sibling tests.
+func TestRLS_SubmissionRateLimitsTenantDeleteCascades(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO tenants (id, name) VALUES ($1, 'QA-1 throwaway tenant')`, tenantID,
+	); err != nil {
+		t.Fatalf("seed throwaway tenant: %v", err)
+	}
+	defer func() {
+		// Idempotent: a no-op once the DELETE below runs; guards only the path where
+		// an earlier assertion fails and returns before that point.
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	}()
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO submission_rate_limits (tenant_id, max_per_minute) VALUES ($1, $2)`,
+		tenantID, 5,
+	); err != nil {
+		if failIfUndefinedSubmissionRateLimits(t, "seed rate-limit row for cascade probe", err) {
+			return
+		}
+		t.Fatalf("seed rate-limit row for cascade probe: %v", err)
+	}
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		t.Fatalf("DELETE tenant: %v", err)
+	}
+
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM submission_rate_limits WHERE tenant_id = $1`, tenantID); n != 0 {
+		t.Errorf("submission_rate_limits rows after deleting the owning tenant = %d, want 0 (ON DELETE CASCADE)", n)
+	}
+}
+
+// QA-2: max_per_minute's lower boundary is exactly 1, not 2 — the CHECK is
+// `max_per_minute > 0`, so 1 is the FIRST legal value. T01-6 only probes the
+// illegal side (0 and -1); an accidental `> 1` off-by-one would silently reject
+// this boundary with no other case here catching it.
+func TestRLS_SubmissionRateLimitsMaxPerMinuteBoundaryOneAccepted(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	cleanup := seedSubmissionRateLimit(t, h.tenantA, 1)
+	defer cleanup()
+
+	var got int
+	if err := h.super.QueryRow(ctx,
+		`SELECT max_per_minute FROM submission_rate_limits WHERE tenant_id = $1`, h.tenantA,
+	).Scan(&got); err != nil {
+		t.Fatalf("read back max_per_minute: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("max_per_minute round-trip = %d, want 1 (the CHECK's first legal value)", got)
+	}
+}
+
+// QA-3: a cross-tenant WRITE — not merely a read — is refused via the policy's
+// implicit WITH CHECK, not the grant layer. Uses h.mig (invoice_migrator, the
+// table owner, which already holds every DDL/DML privilege) so the refusal can
+// only come from RLS itself; T01-5 tests invoice_app, which never had INSERT to
+// begin with, so it cannot isolate this path. With tenant A's GUC set, an INSERT
+// naming tenant B's id violates WITH CHECK — mirrors
+// TestRLS_SubmissionJobsOwnerInsertRefusedUnderForce (submission_jobs_rls_test.go).
+func TestRLS_SubmissionRateLimitsOwnerCrossTenantInsertRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO submission_rate_limits (tenant_id, max_per_minute) VALUES ($1, $2)`,
+			h.tenantB, 10,
+		)
+		return e
+	})
+	if failIfUndefinedSubmissionRateLimits(t, "owner cross-tenant INSERT", err) {
+		return
+	}
+	assertRLSViolation(t, err)
+
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM submission_rate_limits WHERE tenant_id = $1`, h.tenantB); n != 0 {
+		t.Errorf("rows after the owner's refused cross-tenant INSERT = %d, want 0", n)
+	}
+
+	// Positive half: the owner CAN write within its own tenant scope — the refusal
+	// above is cross-tenant isolation, not a blanket ban on the owner writing at all.
+	if err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO submission_rate_limits (tenant_id, max_per_minute) VALUES ($1, $2)`,
+			h.tenantA, 12,
+		)
+		return e
+	}); err != nil {
+		t.Fatalf("owner INSERT within own tenant scope: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(),
+			`DELETE FROM submission_rate_limits WHERE tenant_id = $1`, h.tenantA)
+	}()
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM submission_rate_limits WHERE tenant_id = $1`, h.tenantA); n != 1 {
+		t.Errorf("rows after the owner's own-tenant INSERT = %d, want 1", n)
+	}
+}
+
+// QA-4: with app.current_tenant entirely UNSET (not merely mismatched, which is
+// all T01-4 tests), the app role sees ZERO rows — fail-closed, not an error and
+// not every row. Seeds a row first so an empty-table false positive is impossible.
+// Mirrors the "SELECT with no tenant context" idiom in app_exchange_rls_test.go.
+func TestRLS_SubmissionRateLimitsNoTenantContextZeroRows(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	cleanup := seedSubmissionRateLimit(t, h.tenantA, 7)
+	defer cleanup()
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	n, err := scanCount(ctx, tx, `SELECT count(*) FROM submission_rate_limits`)
+	if failIfUndefinedSubmissionRateLimits(t, "SELECT with no tenant context", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("SELECT with no tenant context: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("submission_rate_limits visible with no tenant context set = %d, want 0 (fail-closed)", n)
+	}
+
+	// The row genuinely exists and is genuinely readable — with the GUC set.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if got := mustCount(t, tx,
+			`SELECT count(*) FROM submission_rate_limits WHERE tenant_id = $1`, h.tenantA); got != 1 {
+			t.Errorf("tenant A's own row visible with context set = %d, want 1", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithinTenantTx (tenant A, positive half): %v", err)
+	}
+}
+
+// QA-5: tenant_id is the PRIMARY KEY, so a second row for the same tenant is
+// refused — "at most one row per tenant", not merely "at least one permitted". No
+// case above ever attempts a second INSERT against an already-occupied PK.
+func TestRLS_SubmissionRateLimitsDuplicateTenantRejected(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	cleanup := seedSubmissionRateLimit(t, h.tenantA, 9)
+	defer cleanup()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO submission_rate_limits (tenant_id, max_per_minute) VALUES ($1, $2)`,
+		h.tenantA, 99,
+	)
+	if failIfUndefinedSubmissionRateLimits(t, "duplicate-tenant INSERT", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("second INSERT for the same tenant_id succeeded, want a primary-key violation (SQLSTATE 23505)")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("duplicate-tenant INSERT: SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM submission_rate_limits WHERE tenant_id = $1`, h.tenantA); n != 1 {
+		t.Errorf("rows for tenant A after the refused duplicate INSERT = %d, want 1 (only the original)", n)
 	}
 }

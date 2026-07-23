@@ -66,9 +66,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1406,5 +1409,377 @@ func TestMockAdapter_InFlightCancellationRecordsSent(t *testing.T) {
 	if got := submission.ExchangeFor(instant, submission.OpSubmit, 1, "job", "inv", preEv).Outcome; got != submission.OutcomeConnectionFailed {
 		t.Errorf("pre-cancelled: ExchangeFor(...).Outcome = %q, want %q -- L16's check runs BEFORE "+
 			"the connect phase, so nothing left the process", got, submission.OutcomeConnectionFailed)
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+// QA Mode B (task-226 Stage-2.5 finding, gap a) -- the negative-latency clamp.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_NegativeLatencyBehavesLikeZeroConfig (QA Mode B gap-fill): pins the
+// OBSERVABLE behaviour NewMockAdapter's negative-Latency clamp
+// ([negative-latency-rejected-at-the-env-edge]) exists for -- a negative baseline must not
+// make Submit hang or error, and must behave identically to MockConfig{}.
+//
+// HONEST LABEL, in the same spirit as S16's above: mutation-tested by removing
+// `if cfg.Latency < 0 { cfg.Latency = 0 }` from NewMockAdapter entirely -- the WHOLE existing
+// 18-spec suite, and this spec, stayed green. That is a STRUCTURAL fact, not a coverage gap:
+// mockWait's own `d <= 0` branch already absorbs any non-positive duration on every path that
+// reaches it (accept/reject/pending/unavailable pass cfg.Latency through unmultiplied;
+// slow/timeout multiply it by a POSITIVE factor, which preserves its sign). A negative
+// cfg.Latency and a zero cfg.Latency are therefore byte-for-byte indistinguishable from
+// outside the package on every Result/Evidence/elapsed-time axis -- the only way to tell them
+// apart would be reading the unexported `cfg` field via unsafe reflection, which is out of
+// scope for an external contract test. The clamp is still correct to KEEP: it is the
+// documented invariant and a belt-and-suspenders guard against a future mockInFlight/mockWait
+// that no longer routes every path through `d <= 0`. This spec is kept because it pins the
+// actually user-facing property (a misconfigured negative latency must never hang), not
+// because it can distinguish clamped-to-zero from left-negative.
+func TestMockAdapter_NegativeLatencyBehavesLikeZeroConfig(t *testing.T) {
+	negative := submission.NewMockAdapter(submission.MockConfig{Latency: -1 * time.Second})
+	zero := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+	w := maWire(t, negative, maTINAccept)
+
+	done := make(chan struct{})
+	var r submission.Result
+	var ev submission.Evidence
+	var elapsed time.Duration
+	go func() {
+		start := time.Now()
+		r, ev = maSubmit(t, negative, ctx, w, "idem-negative-latency")
+		elapsed = time.Since(start)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Submit with MockConfig{Latency: -1s} did not return within 2s -- a negative " +
+			"baseline must never hang Submit")
+	}
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Submit with MockConfig{Latency: -1s} took %v, want effectively instant -- same as "+
+			"MockConfig{}", elapsed)
+	}
+	acc := maAccepted(t, "negative-latency", r)
+	if strings.TrimSpace(acc.IRN) == "" {
+		t.Errorf("negative-latency: Accepted.IRN is blank")
+	}
+
+	// Identical behaviour to MockConfig{}, on the SAME wire and idemKey.
+	r2, ev2 := maSubmit(t, zero, ctx, w, "idem-negative-latency")
+	if !reflect.DeepEqual(r, r2) {
+		t.Errorf("MockConfig{Latency: -1s} and MockConfig{} returned different Results:\n"+
+			" negative: %#v\n zero: %#v", r, r2)
+	}
+	if ev.ResponseBody == nil || ev2.ResponseBody == nil || *ev.ResponseBody != *ev2.ResponseBody {
+		t.Errorf("MockConfig{Latency: -1s} and MockConfig{} synthesized different response bodies")
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+// QA Mode B -- adversarial coverage the 18 RED specs did not include.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_IdempotencyKeyWithUnusualBytesIsRecordedVerbatim (QA Mode B): an idemKey
+// containing spaces, non-ASCII, an embedded CRLF (a header-injection attempt) or a very long
+// value must be recorded VERBATIM in Evidence.RequestHeaders and must never smuggle a second
+// header name into the map -- http.Header.Set stores the value as an opaque map entry, it does
+// not parse it as raw wire text, so this is safe by construction as long as nothing downstream
+// ever re-serializes it as a literal HTTP header line (RecordExchange does not: it goes through
+// ScrubHeaders -> json.Marshal, never net/http's wire writer).
+func TestMockAdapter_IdempotencyKeyWithUnusualBytesIsRecordedVerbatim(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+	w := maWire(t, a, maTINAccept)
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{"embedded-spaces", "idem with spaces"},
+		{"leading-and-trailing-whitespace", "  idem-padded  "},
+		{"embedded-crlf-injection-attempt", "idem-key\r\nX-Injected-Header: evil"},
+		{"non-ascii", "idem-δοκιμή-你好-🎉"},
+		{"very-long", "idem-" + strings.Repeat("x", 8192)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ev := maSubmit(t, a, ctx, w, tc.key)
+
+			if got := ev.RequestHeaders.Get("Idempotency-Key"); got != tc.key {
+				t.Errorf("Idempotency-Key = %q, want the key verbatim %q", got, tc.key)
+			}
+			// No smuggled second header: the map has exactly the four names Submit ever sets.
+			if len(ev.RequestHeaders) != 4 {
+				t.Errorf("RequestHeaders has %d names, want exactly 4 (Content-Type, Accept, "+
+					"User-Agent, Idempotency-Key) -- got %v", len(ev.RequestHeaders), ev.RequestHeaders)
+			}
+			if maHeaderPresent(ev.RequestHeaders, "X-Injected-Header") {
+				t.Errorf("the CRLF-embedded idemKey smuggled a second header into the map: %v",
+					ev.RequestHeaders)
+			}
+			// Still survives ScrubHeaders unchanged -- Idempotency-Key is on the allowlist
+			// regardless of what value it carries.
+			if got := submission.ScrubHeaders(ev.RequestHeaders).Get("Idempotency-Key"); got != tc.key {
+				t.Errorf("ScrubHeaders altered the Idempotency-Key value: got %q, want %q", got, tc.key)
+			}
+			// Submit must still take the ordinary accept path -- the idemKey is evidence, never
+			// part of the trigger channel.
+			maAccepted(t, tc.name, r)
+		})
+	}
+}
+
+// TestMockAdapter_ConcurrentSubmitsOnOneInstance (QA Mode B): MockAdapter claims to hold no
+// mutable state ([one-latency-knob]'s doc comment, mock_adapter.go:101-105) -- this drives many
+// concurrent Submit calls through ONE shared instance and checks per-call correctness. Run with
+// `go test -race` to catch a shared-state bug the type system alone does not rule out.
+//
+// Every wire and idemKey is built BEFORE any goroutine is spawned: the helpers that build them
+// (maWireFor) call t.Fatalf, which testing.T forbids from any goroutine but the one running the
+// test function itself. Each goroutine's own check callback uses only t.Errorf (safe for
+// concurrent use) and recovers its own panic so one goroutine's failure does not corrupt the
+// others' reporting.
+func TestMockAdapter_ConcurrentSubmitsOnOneInstance(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	type job struct {
+		label string
+		wire  submission.Wire
+		idem  string
+		check func(t *testing.T, r submission.Result)
+	}
+
+	const rounds = 25
+	var jobs []job
+	for i := 0; i < rounds; i++ {
+		jobs = append(jobs,
+			job{
+				label: "accept",
+				wire:  maWireFor(t, a, maTINAccept, fmt.Sprintf("INV-CONC-A-%d", i)),
+				idem:  fmt.Sprintf("idem-conc-a-%d", i),
+				check: func(t *testing.T, r submission.Result) {
+					if _, ok := r.(submission.Accepted); !ok {
+						t.Errorf("concurrent accept: Result is %T, want Accepted", r)
+					}
+				},
+			},
+			job{
+				label: "reject",
+				wire:  maWireFor(t, a, maTINReject, fmt.Sprintf("INV-CONC-R-%d", i)),
+				idem:  fmt.Sprintf("idem-conc-r-%d", i),
+				check: func(t *testing.T, r submission.Result) {
+					if _, ok := r.(submission.Rejected); !ok {
+						t.Errorf("concurrent reject: Result is %T, want Rejected", r)
+					}
+				},
+			},
+			job{
+				label: "pending",
+				wire:  maWireFor(t, a, maTINPending, fmt.Sprintf("INV-CONC-P-%d", i)),
+				idem:  fmt.Sprintf("idem-conc-p-%d", i),
+				check: func(t *testing.T, r submission.Result) {
+					if _, ok := r.(submission.Pending); !ok {
+						t.Errorf("concurrent pending: Result is %T, want Pending", r)
+					}
+				},
+			},
+			job{
+				label: "unavailable",
+				wire:  maWireFor(t, a, maTINUnavailable, fmt.Sprintf("INV-CONC-U-%d", i)),
+				idem:  fmt.Sprintf("idem-conc-u-%d", i),
+				check: func(t *testing.T, r submission.Result) {
+					rt, ok := r.(submission.Retryable)
+					if !ok || rt.Err == nil {
+						t.Errorf("concurrent unavailable: Result is %#v, want Retryable with a "+
+							"non-nil Err", r)
+					}
+				},
+			},
+		)
+	}
+
+	var wg sync.WaitGroup
+	for _, jb := range jobs {
+		wg.Add(1)
+		go func(jb job) {
+			defer wg.Done()
+			defer func() {
+				if rec := recover(); rec != nil {
+					t.Errorf("%s: Submit panicked: %v", jb.label, rec)
+				}
+			}()
+			r, ev := a.Submit(ctx, jb.wire, jb.idem)
+			jb.check(t, r)
+			if got := ev.RequestHeaders.Get("Content-Type"); got != maContentTypeJSON {
+				t.Errorf("%s: RequestHeaders Content-Type = %q, want %q", jb.label, got, maContentTypeJSON)
+			}
+			if got := ev.RequestHeaders.Get("Idempotency-Key"); got != jb.idem {
+				t.Errorf("%s: RequestHeaders Idempotency-Key = %q, want %q", jb.label, got, jb.idem)
+			}
+		}(jb)
+	}
+	wg.Wait()
+}
+
+// TestMockAdapter_ReservedTriggerTINWithOtherwiseZeroCanonical (QA Mode B): every field except
+// Buyer.TIN is the zero value -- no InvoiceID, no lines, no currency, no money -- so the trigger
+// must fire from the buyer TIN alone, independent of everything else in the envelope.
+func TestMockAdapter_ReservedTriggerTINWithOtherwiseZeroCanonical(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	c := submission.Canonical{Buyer: submission.Party{TIN: strPtr(maTINReject)}}
+	w, err := a.Transform(ctx, c)
+	if err != nil {
+		t.Fatalf("Transform(zero canonical + reserved buyer TIN) failed: %v", err)
+	}
+
+	r, ev := maSubmit(t, a, ctx, w, "idem-zero-canonical-reject")
+	rej, ok := r.(submission.Rejected)
+	if !ok {
+		t.Fatalf("Result is %T, want submission.Rejected -- the trigger must fire even when every "+
+			"other envelope field is the zero value", r)
+	}
+	if len(rej.Reasons) != 1 || rej.Reasons[0].Code != maCodeRejected {
+		t.Errorf("Reasons = %+v, want exactly one with code %q", rej.Reasons, maCodeRejected)
+	}
+
+	rec := &lawRecorder{}
+	CheckResult(rec, "zero-canonical-reject", r)
+	CheckEvidence(rec, "zero-canonical-reject", ev, "idem-zero-canonical-reject")
+	if len(rec.messages) != 0 {
+		t.Errorf("contract law failure(s) on the zero-canonical reject path: %v", rec.messages)
+	}
+}
+
+// TestMockAdapter_EvidenceDoesNotAliasAcrossCalls (QA Mode B): two Submit calls on the same
+// wire must not share any backing array or map between their two Evidences -- mutating one
+// must never affect the other. mockRequestHeaders documents building "a FRESH map per call";
+// this spec holds it to that claim directly rather than trusting the comment.
+func TestMockAdapter_EvidenceDoesNotAliasAcrossCalls(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+	w := maWire(t, a, maTINAccept)
+
+	_, ev1 := maSubmit(t, a, ctx, w, "idem-alias-1")
+	_, ev2 := maSubmit(t, a, ctx, w, "idem-alias-2")
+
+	if reflect.ValueOf(ev1.RequestHeaders).Pointer() == reflect.ValueOf(ev2.RequestHeaders).Pointer() {
+		t.Errorf("two Submit calls share the SAME RequestHeaders map")
+	}
+	ev1.RequestHeaders.Set("Idempotency-Key", "tampered")
+	if got := ev2.RequestHeaders.Get("Idempotency-Key"); got != "idem-alias-2" {
+		t.Errorf("mutating ev1.RequestHeaders changed ev2's: got %q, want %q", got, "idem-alias-2")
+	}
+
+	if ev1.RequestBody == nil || ev2.RequestBody == nil {
+		t.Fatalf("RequestBody is nil on the accept path: %v / %v", ev1.RequestBody, ev2.RequestBody)
+	}
+	if ev1.RequestBody == ev2.RequestBody {
+		t.Errorf("two Submit calls returned the SAME *string for RequestBody")
+	}
+	if *ev1.RequestBody != *ev2.RequestBody {
+		t.Errorf("RequestBody content differs for the identical wire:\n got %q\nwant %q",
+			*ev1.RequestBody, *ev2.RequestBody)
+	}
+
+	if ev1.ResponseBody == nil || ev2.ResponseBody == nil {
+		t.Fatalf("ResponseBody is nil on the accept path")
+	}
+	if ev1.ResponseBody == ev2.ResponseBody {
+		t.Errorf("two Submit calls returned the SAME *string for ResponseBody")
+	}
+
+	if reflect.ValueOf(ev1.ResponseHeaders).Pointer() == reflect.ValueOf(ev2.ResponseHeaders).Pointer() {
+		t.Errorf("two Submit calls share the SAME ResponseHeaders map")
+	}
+	ev1.ResponseHeaders.Set("Content-Type", "text/plain")
+	if got := ev2.ResponseHeaders.Get("Content-Type"); got != maContentTypeJSON {
+		t.Errorf("mutating ev1.ResponseHeaders changed ev2's: got %q, want %q", got, maContentTypeJSON)
+	}
+}
+
+// TestMockAdapter_TransformSubmitRoundTripAcrossCanonicalCorpus (QA Mode B): every shape in
+// contract_test.go's canonicalCorpus -- full, minimal, no-lines, all-nil-money,
+// multi-byte-long-text and zero -- driven through the REAL Transform and then Submit, asserting
+// each produces a law-clean Result/Evidence pair via CheckResult/CheckEvidence. None of the
+// corpus's buyer TINs are reserved trigger values (they are "BUY-TIN-N" or absent entirely), so
+// every case must take the ordinary accept path ([non-reserved-defaults-to-accept]).
+func TestMockAdapter_TransformSubmitRoundTripAcrossCanonicalCorpus(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	for _, tc := range canonicalCorpus {
+		t.Run(tc.name, func(t *testing.T) {
+			w, err := a.Transform(ctx, tc.c)
+			if err != nil {
+				t.Fatalf("Transform(%s) failed: %v", tc.name, err)
+			}
+			idemKey := "idem-corpus-" + tc.name
+			r, ev := maSubmit(t, a, ctx, w, idemKey)
+
+			rec := &lawRecorder{}
+			CheckResult(rec, tc.name, r)
+			CheckEvidence(rec, tc.name, ev, idemKey)
+			if len(rec.messages) != 0 {
+				t.Errorf("%s: contract law failure(s): %v", tc.name, rec.messages)
+			}
+
+			acc, ok := r.(submission.Accepted)
+			if !ok {
+				t.Fatalf("%s: Result is %T, want submission.Accepted -- none of the corpus's buyer "+
+					"TINs are reserved trigger values", tc.name, r)
+			}
+			if strings.TrimSpace(acc.IRN) == "" {
+				t.Errorf("%s: Accepted.IRN is blank", tc.name)
+			}
+		})
+	}
+}
+
+// TestMockAdapter_ExtremeLatencyOverflowDoesNotHangOnTimeout (QA Mode B): pins the doc comment's
+// own claim -- "an x8 that wrapped negative lands in mockWait's `d <= 0` branch" -- by actually
+// constructing a Latency for which mockTimeoutFactor's x8 multiplication overflows int64 and
+// wraps to a large NEGATIVE duration, then asserting Submit still returns fast rather than
+// hanging. The 2s guard turns a hang into a fast, diagnosable test failure instead of a stuck
+// CI job.
+//
+// MUTATION NOTE (honesty, matching the negative-latency spec above): removing mockWait's
+// `d <= 0` early return entirely and letting a very-negative d reach `time.NewTimer(d)` directly
+// did NOT make this spec fail on this toolchain -- Go's runtime Timer already fires a
+// non-positive duration immediately, so overflow-driven hangs are a belt-and-suspenders concern,
+// not the sole line of defence. The `d <= 0` guard's primary, load-bearing purpose (per
+// mockWait's own doc comment, rule 2) is avoiding a SECOND racy cancellation gate on a
+// zero-length wait, which is review-enforced and cannot be pinned by any non-flaky spec. This
+// test still earns its keep: it directly exercises the overflow arithmetic the doc comment
+// claims happens, on the actual production constant mockTimeoutFactor, rather than trusting the
+// comment.
+func TestMockAdapter_ExtremeLatencyOverflowDoesNotHangOnTimeout(t *testing.T) {
+	const huge = time.Duration(math.MaxInt64)/8 + 1 // x8 (mockTimeoutFactor) overflows int64
+	a := submission.NewMockAdapter(submission.MockConfig{Latency: huge})
+	w := maWire(t, a, maTINTimeout)
+
+	done := make(chan struct{})
+	var r submission.Result
+	go func() {
+		r, _ = a.Submit(context.Background(), w, "idem-overflow")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Submit with an overflow-inducing Latency did not return within 2s -- mockInFlight's " +
+			"x8 multiplier must have wrapped negative and mockWait's `d <= 0` branch should have " +
+			"absorbed it instantly")
+	}
+
+	rt, ok := r.(submission.Retryable)
+	if !ok || !errors.Is(rt.Err, submission.ErrMockTimeout) {
+		t.Errorf("Result = %#v, want Retryable wrapping ErrMockTimeout", r)
 	}
 }

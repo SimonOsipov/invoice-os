@@ -1,4 +1,4 @@
-/* Local page styles — ported verbatim from the FiscalBridge Africa Platform
+/* Local page styles — ported verbatim from the ASComply Africa Platform
    prototype's inline <style> block (reset + keyframes + hover/focus/active
    transitions), plus a responsive media-query layer for the app shell.
    Token vars (--accent, --bg-2, --line-2, …) resolve via inheritance from .if-v2. */

@@ -35,7 +35,7 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
       >
         <a href="#top" style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg-1)' }}>
           <BrandMark size={22} />
-          <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: '-0.02em' }}>FiscalBridge</span>
+          <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: '-0.02em' }}>ASComply</span>
           <span
             className="mono"
             style={{

@@ -59,9 +59,9 @@ db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs
 	# passwords never flow through this Makefile) — don't copy this exact pattern
 	# into a script that handles real secrets.
 	psql "$(DATABASE_SUPERUSER_URL)" -v ON_ERROR_STOP=1 \
-		-c "SELECT set_config('fiscalbridge.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
-		-c "SELECT set_config('fiscalbridge.app_password', '$(APP_PASSWORD)', false)" \
-		-c "SELECT set_config('fiscalbridge.reader_password', '$(READER_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -89,9 +89,9 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 	# `-f -` is required (not bare stdin redirection): psql ignores stdin when -c
 	# options are also given unless the input is explicitly named as a file via "-".
 	docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
-		-c "SELECT set_config('fiscalbridge.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
-		-c "SELECT set_config('fiscalbridge.app_password', '$(APP_PASSWORD)', false)" \
-		-c "SELECT set_config('fiscalbridge.reader_password', '$(READER_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
 		-f - \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"

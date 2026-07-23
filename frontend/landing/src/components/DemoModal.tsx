@@ -1,7 +1,7 @@
 // The Book-a-Demo lead-capture modal (task-117 / M4-19), ported from the refreshed
-// FiscalBridge Africa landing prototype (.ralph/prototype/InvoiceOS-Africa.dc.html,
+// ASComply Africa landing prototype (.ralph/prototype/InvoiceOS-Africa.dc.html,
 // "Book a demo" modal). Shell (overlay/card/header) is cloned VERBATIM from
-// SignInModal.tsx — including its "FiscalBridge" brand, which is already correct
+// SignInModal.tsx — including its "ASComply" brand, which is already correct
 // per task-99 (the prototype still shows the old "InvoiceOS" codename; normalized
 // here). Submit is client-side theater only (no backend, no persistence), matching
 // the existing landing pattern (auth.ts). Mount = open: the parent renders
@@ -184,7 +184,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <BrandMark size={19} />
-            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
+            <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
             <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
               AFRICA
             </span>

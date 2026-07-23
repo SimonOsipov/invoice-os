@@ -51,7 +51,7 @@ const (
 	mockAdapterVersion = "v1"
 
 	mockContentTypeJSON = "application/json"
-	mockUserAgent       = "FiscalBridge-MockAPP/v1"
+	mockUserAgent       = "ASComply-MockAPP/v1"
 
 	// The slow and timeout triggers are fixed multiples of the one latency knob
 	// ([one-latency-knob]). At MockConfig{} both multiply to zero, which is why

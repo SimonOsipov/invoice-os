@@ -69,7 +69,7 @@ const KPI_DEFS: KpiDef[] = [
   { label: 'Invoices cleared', value: '46,820', delta: '+11.1%', up: true, good: true, sub: '97.1% of requests', seed: 22, base: 1450, trend: 38 },
   { label: 'Acceptance rate', value: '97.1%', delta: '+0.6pp', up: true, good: true, sub: 'target ≥ 96%', seed: 33, base: 96, trend: 0.1 },
   { label: 'Spend MTD', value: nairaC(SPEND.mtd), delta: '+9.8%', up: true, good: null, sub: 'proj ' + nairaC(SPEND.proj) + ' month-end', seed: 44, base: 120000, trend: 3000 },
-  { label: 'Invoice value processed', value: '₦18.7B', delta: '+14.2%', up: true, good: true, sub: 'flowing through FiscalBridge', seed: 55, base: 500, trend: 20 },
+  { label: 'Invoice value processed', value: '₦18.7B', delta: '+14.2%', up: true, good: true, sub: 'flowing through ASComply', seed: 55, base: 500, trend: 20 },
   // U+2212 MINUS SIGN, not an ASCII hyphen. Down arrow in green: clearance time falling
   // is good, so the colour follows `good`, never the arrow direction.
   { label: 'Avg clearance time', value: '1.8s', delta: '−0.3s', up: false, good: true, sub: 'p95 across submissions', seed: 66, base: 2.0, trend: -0.03 },
@@ -351,7 +351,7 @@ export function Overview({ range, onRangeChange }: Props) {
             </span>
           </div>
           <p style={{ fontSize: 12, color: 'var(--fg-3)', margin: '0 0 16px', lineHeight: 1.5 }}>
-            Errors FiscalBridge caught before the tax authority — protecting your acceptance rate.
+            Errors ASComply caught before the tax authority — protecting your acceptance rate.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
             {REJ_REASONS.map((r) => (

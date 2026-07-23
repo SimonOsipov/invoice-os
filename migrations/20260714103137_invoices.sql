@@ -1,4 +1,4 @@
--- M4-01-02: invoices — the canonical invoice, on FiscalBridge's own terms (NOT a
+-- M4-01-02: invoices — the canonical invoice, on ASComply's own terms (NOT a
 -- mirror of the MBS/FIRS wire format the validation engine consumes; that mapping is
 -- M4-04's job). This is the spine the import -> validate -> fix -> re-validate loop
 -- writes into.

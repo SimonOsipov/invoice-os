@@ -1,4 +1,4 @@
-// Package auth is the JWT layer for FiscalBridge: a config-driven verification
+// Package auth is the JWT layer for ASComply: a config-driven verification
 // middleware plus a dev/CI mock issuer that mints GoTrue-shaped tokens. The
 // verification path is identical whether tokens come from the mock issuer or,
 // after the M8 cutover, from Supabase GoTrue — only the issuer/JWKS config

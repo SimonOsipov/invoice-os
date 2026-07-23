@@ -41,7 +41,7 @@ type ProvisionConfig struct {
 	SuperuserDSN string // DATABASE_SUPERUSER_URL; read once per gated step, never retained (QA F3)
 	MigrationDSN string // DATABASE_MIGRATION_URL; always required, guard-independent (unchanged gateway-as-migrator behavior)
 
-	Passwords    RolePasswords // fiscalbridge.*_password GUCs Bootstrap sets
+	Passwords    RolePasswords // ascomply.*_password GUCs Bootstrap sets
 	BootstrapFS  fs.FS         // db/bootstrap.sql (db.FS)
 	MigrationsFS fs.FS         // embedded migrations (migrations.FS)
 	SeedFS       fs.FS         // db/seed.dev.sql (db.FS)

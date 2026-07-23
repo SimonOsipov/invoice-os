@@ -171,7 +171,7 @@ export const API_KEYS: ApiKey[] = [
 // seed field — every endpoint in the prototype is active.
 export const WEBHOOKS: Webhook[] = [
   {
-    url: 'https://api.zephyrpay.io/hooks/fiscalbridge',
+    url: 'https://api.zephyrpay.io/hooks/ascomply',
     env: 'LIVE',
     envBg: 'var(--status-green-bg)',
     envBorder: 'var(--status-green-border)',
@@ -179,7 +179,7 @@ export const WEBHOOKS: Webhook[] = [
     events: ['invoice.cleared', 'invoice.rejected', 'submission.failed'],
   },
   {
-    url: 'https://sandbox.zephyrpay.io/hooks/fiscalbridge',
+    url: 'https://sandbox.zephyrpay.io/hooks/ascomply',
     env: 'SANDBOX',
     envBg: 'var(--status-amber-bg)',
     envBorder: 'var(--status-amber-border)',

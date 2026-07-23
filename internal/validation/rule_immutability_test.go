@@ -9,7 +9,7 @@
 //	    TestRuleSetV2_DownRestoresV1) are reworked to disable USER triggers --
 //	    both untouched by this file.
 //
-// See the M4-17 story (Obsidian, "Simon Vault/Projects/FiscalBridge Africa/
+// See the M4-17 story (Obsidian, "Simon Vault/Projects/ASComply Africa/
 // User Stories/M4/M4-17 Rule-set Immutability Trigger.md") for the
 // authoritative Objective/Acceptance Criteria/System Design/Test Specs this
 // file transcribes, and schema_test.go / seed_test.go / store.go for the

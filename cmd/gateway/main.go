@@ -1,4 +1,4 @@
-// Command gateway is the FiscalBridge API edge (M2-11). It verifies caller JWTs,
+// Command gateway is the ASComply API edge (M2-11). It verifies caller JWTs,
 // injects the verified tenant/user/role context that downstream services and RLS
 // depend on, and reverse-proxies each request to the owning context service. In
 // dev/CI it also embeds a mock issuer (mint + JWKS) so a token can be minted and

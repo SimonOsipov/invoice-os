@@ -160,7 +160,7 @@ const (
 	maRejectField = "customer.taxIdentifier" // mock_script.go:130 -- THEIRS, only in the 422 body
 
 	maContentTypeJSON = "application/json" // mock_adapter.go mockContentTypeJSON
-	maUserAgent       = "FiscalBridge-MockAPP/v1"
+	maUserAgent       = "ASComply-MockAPP/v1"
 	maRetryAfter      = "30" // mock_adapter.go mockRetryAfterSeconds
 	maSlowFactor      = 4    // mock_adapter.go mockSlowFactor
 	maTimeoutFactor   = 8    // mock_adapter.go mockTimeoutFactor

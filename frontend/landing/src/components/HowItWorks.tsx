@@ -42,7 +42,7 @@ export function HowItWorks() {
               <span className="label">No rip-and-replace</span>
             </div>
             <p style={{ fontSize: 15, lineHeight: 1.6, color: 'var(--fg-2)', margin: 0 }}>
-              FiscalBridge sits beside your existing stack and handles the compliance work — nothing to migrate, nothing to
+              ASComply sits beside your existing stack and handles the compliance work — nothing to migrate, nothing to
               switch off.
             </p>
           </div>

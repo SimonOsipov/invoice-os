@@ -43,7 +43,7 @@ export function Developers() {
         </div>
 
         {/* code block */}
-        <div style={{ background: '#0c0e10', border: '1px solid var(--slate-800)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: '#0c0e10', border: '1px solid var(--slate-800)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--slate-800)' }}>
             <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />
             <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />

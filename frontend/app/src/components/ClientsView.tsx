@@ -134,7 +134,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && (
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div
             className="pf-list-head"
             style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
@@ -157,7 +157,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 6, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-lg)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
                     {initials(e.name)}
                   </span>
                   <span style={{ minWidth: 0 }}>

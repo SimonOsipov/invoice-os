@@ -72,7 +72,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         className="pf-dash-row-b"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 18, marginBottom: 18 }}
       >
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, padding: 26, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 26, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
             <span className="label">Needs attention</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
@@ -99,7 +99,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
           </button>
         </div>
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, padding: 24 }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Invoice status</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -128,7 +128,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
             <div style={{ width: '100%', marginTop: 22, display: 'flex', flexDirection: 'column', gap: 11 }}>
               {segments.map((d) => (
                 <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '12px 1fr auto 40px', alignItems: 'center', gap: 10 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 2, background: d.color }} />
+                  <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: d.color }} />
                   <span style={{ fontSize: 13, color: 'var(--fg-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', textAlign: 'right' }}>
                     {d.pct}
@@ -144,7 +144,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
       </div>
 
       {/* Row 2: top validation failures (firm-wide, de-slugged rule keys) */}
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
           <span style={{ fontSize: 14, fontWeight: 600 }}>Top validation failures</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -155,11 +155,11 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
           <div>
             {failures.map((f) => (
               <div key={f.ruleKey} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
-                <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 6, background: 'var(--status-red-bg)', color: 'var(--status-red-text)', display: 'grid', placeItems: 'center' }}>{crossGlyph}</span>
+                <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', color: 'var(--status-red-text)', display: 'grid', placeItems: 'center' }}>{crossGlyph}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{f.label}</div>
-                  <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden', maxWidth: 240 }}>
-                    <div style={{ width: f.bar, height: '100%', background: 'var(--status-red-text)', opacity: 0.55, borderRadius: 3 }} />
+                  <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', maxWidth: 240 }}>
+                    <div style={{ width: f.bar, height: '100%', background: 'var(--status-red-text)', opacity: 0.55, borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
                 <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 96 }}>

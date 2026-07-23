@@ -127,7 +127,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        style={{ width: 480, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ width: 480, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>{title}</div>
@@ -136,7 +136,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
             onClick={onClose}
             className="pf-btn"
             aria-label="Close"
-            style={{ width: 34, height: 34, borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+            style={{ width: 34, height: 34, borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
             {closeGlyph}
           </button>
@@ -145,7 +145,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
         <form onSubmit={handleSubmit} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
             {formError && (
-              <div style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 6, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
+              <div style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
                 {formError}
               </div>
             )}

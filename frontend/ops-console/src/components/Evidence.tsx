@@ -38,7 +38,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             gap: 7,
             background: 'var(--status-muted-bg)',
             border: '1px solid var(--line-2)',
-            borderRadius: 6,
+            borderRadius: 'var(--radius-lg)',
             padding: '7px 12px',
           }}
         >
@@ -72,7 +72,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
       </div>
 
       {/* bundle table */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 9, overflowX: 'auto', background: 'var(--bg-2)' }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflowX: 'auto', background: 'var(--bg-2)' }}>
         <div
           className="ops-evidence-table"
           style={{

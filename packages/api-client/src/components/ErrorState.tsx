@@ -1,7 +1,7 @@
 // Presentational error surface (M3-06-03): renders an ApiError's message in a
 // status-red card, with an optional retry action wired via onRetry. Styled purely via
 // @invoice-os/design-tokens vars (--status-red-bg/-border/-text, --fg-1/-2, --line-2,
-// --font-sans, --radius-md) — mirrors the verdict-banner convention in
+// --font-sans, --radius-md/-xl) — mirrors the verdict-banner convention in
 // CreateResults.tsx and the app's `.v2-btn-ghost` look, but the retry button is fully
 // self-contained (inline styles, not a dependency on the app's global v2-btn/pf-btn
 // classes) since this package may be consumed by frontends that don't load that CSS.
@@ -17,7 +17,7 @@ export function ErrorState(props: { error: ApiError; onRetry?: () => void }): Re
       style={{
         background: 'var(--status-red-bg)',
         border: '1px solid var(--status-red-border)',
-        borderRadius: 8,
+        borderRadius: 'var(--radius-xl)',
         padding: '18px 20px',
         display: 'flex',
         alignItems: 'center',
@@ -30,7 +30,7 @@ export function ErrorState(props: { error: ApiError; onRetry?: () => void }): Re
           flex: 'none',
           width: 38,
           height: 38,
-          borderRadius: 8,
+          borderRadius: 'var(--radius-xl)',
           background: 'var(--status-red-text)',
           color: '#fff',
           display: 'grid',

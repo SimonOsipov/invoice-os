@@ -24,7 +24,7 @@ export function Modules() {
             gap: 1,
             background: 'var(--line-1)',
             border: '1px solid var(--line-1)',
-            borderRadius: 8,
+            borderRadius: 'var(--radius-xl)',
             overflow: 'hidden',
           }}
         >

@@ -32,7 +32,7 @@ export function ScanlineSteps({
   const progressPct = Math.min(100, Math.round((idx / labels.length) * 100))
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: '44px 20px 52px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '44px 20px 52px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
       <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>{title}</div>
       <div className="mono" style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 24 }}>
         {subtitle}

@@ -127,7 +127,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
       <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
               <div>
@@ -146,7 +146,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
                 </div>
               </div>
             </div>
-            <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
                 <span className="label">Description</span>
                 <span className="label" style={{ textAlign: 'right' }}>Qty</span>
@@ -182,14 +182,14 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {isTransmitted && fiscal && (
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--accent)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{shieldGlyph}</span>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>FIRS fiscal record</span>
               </div>
               <div style={{ padding: '16px 18px' }}>
                 <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-                  <div style={{ flex: 'none', padding: 7, background: '#fff', border: '1px solid var(--line-1)', borderRadius: 8 }}>
+                  <div style={{ flex: 'none', padding: 7, background: '#fff', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)' }}>
                     <Qr seed={fiscal.irn} size={116} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 11 }}>
@@ -216,7 +216,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
               </div>
             </div>
           )}
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>Validation</span>
               <span className="mono" style={{ fontSize: 11, color: detailValOk ? 'var(--status-green-text)' : 'var(--status-red-text)', fontWeight: 600 }}>
@@ -232,7 +232,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
               ))}
             </div>
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>Audit trail</span>
             </div>
@@ -418,7 +418,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         </div>
 
         <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
                 <div>
@@ -431,7 +431,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{inv.buyer_tin ?? '—'}</div>
                 </div>
               </div>
-              <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, overflow: 'hidden' }}>
+              <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="label">Description</span>
                   <span className="label" style={{ textAlign: 'right' }}>Qty</span>
@@ -467,7 +467,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Compliance</span>
               </div>
@@ -475,7 +475,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 {verdict === 'stale' && (
                   <div
                     data-testid="stale-verdict"
-                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 6, background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
+                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
                   >
                     Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.
                   </div>
@@ -487,7 +487,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 ) : (
                   <div
                     data-testid="not-validated"
-                    style={{ padding: '12px 14px', borderRadius: 6, background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
+                    style={{ padding: '12px 14px', borderRadius: 'var(--radius-lg)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
                   >
                     Not yet validated — run Re-validate to check compliance.
                   </div>
@@ -496,7 +496,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </div>
 
             {isFixable(inv.status) && (
-              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: 14, fontWeight: 600 }}>Fix &amp; re-validate</span>
                   <button
@@ -511,7 +511,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   </button>
                 </div>
                 {revalidateError && (
-                  <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 6, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+                  <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
                     {revalidateError}
                   </div>
                 )}
@@ -519,7 +519,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Status history</span>
               </div>
@@ -608,7 +608,7 @@ function InvoiceEditForm({
   return (
     <form data-testid="edit-invoice" onSubmit={handleSubmit} style={{ padding: 16 }}>
       {formError && (
-        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 6, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
           {formError}
         </div>
       )}

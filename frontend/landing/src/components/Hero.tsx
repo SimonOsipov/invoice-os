@@ -67,7 +67,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               <div className="label" style={{ marginBottom: 6 }}>
                 Large taxpayers
               </div>
-              <div style={{ height: 4, background: 'var(--accent)', borderRadius: 2 }} />
+              <div style={{ height: 4, background: 'var(--accent)', borderRadius: 'var(--radius-xs)' }} />
               <div className="mono" style={{ fontSize: 11, color: 'var(--accent)', marginTop: 6, fontWeight: 600 }}>
                 LIVE
               </div>
@@ -77,7 +77,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               <div className="label" style={{ marginBottom: 6 }}>
                 Medium taxpayers
               </div>
-              <div style={{ height: 4, background: 'var(--status-amber-text)', opacity: 0.55, borderRadius: 2 }} />
+              <div style={{ height: 4, background: 'var(--status-amber-text)', opacity: 0.55, borderRadius: 'var(--radius-xs)' }} />
               <div className="mono" style={{ fontSize: 11, color: 'var(--status-amber-text)', marginTop: 6, fontWeight: 600 }}>
                 NEXT
               </div>
@@ -87,7 +87,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               <div className="label" style={{ marginBottom: 6 }}>
                 Small / SME
               </div>
-              <div style={{ height: 4, background: 'var(--line-3)', borderRadius: 2 }} />
+              <div style={{ height: 4, background: 'var(--line-3)', borderRadius: 'var(--radius-xs)' }} />
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 6, fontWeight: 600 }}>
                 PLANNED
               </div>
@@ -101,7 +101,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
             style={{
               background: 'var(--bg-2)',
               border: '1px solid var(--line-2)',
-              borderRadius: 8,
+              borderRadius: 'var(--radius-xl)',
               overflow: 'hidden',
               boxShadow: '0 1px 0 rgba(20,23,26,0.02), 0 24px 48px -24px rgba(20,23,26,0.18)',
             }}
@@ -203,7 +203,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               right: -14,
               background: 'var(--slate-900)',
               color: '#fff',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-lg)',
               padding: '10px 14px',
               boxShadow: '0 16px 32px -16px rgba(20,23,26,0.5)',
             }}

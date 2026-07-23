@@ -44,7 +44,7 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
               letterSpacing: '0.08em',
               color: 'var(--fg-3)',
               border: '1px solid var(--line-2)',
-              borderRadius: 3,
+              borderRadius: 'var(--radius-sm)',
               padding: '2px 5px',
             }}
           >

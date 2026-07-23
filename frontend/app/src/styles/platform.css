@@ -62,7 +62,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   height: 38px;
   padding: 0 12px;
   width: 100%;
@@ -79,7 +79,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   height: 34px;
   padding: 0 10px;
   width: 100%;

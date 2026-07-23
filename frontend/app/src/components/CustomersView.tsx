@@ -40,7 +40,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
         <div>
           <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
             {custKpis.map((k) => (
-              <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, padding: '16px 20px' }}>
+              <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '16px 20px' }}>
                 <div className="label" style={{ marginBottom: 12 }}>
                   {k.label}
                 </div>
@@ -50,7 +50,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
               </div>
             ))}
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1.6fr) 140px 70px 140px 104px', gap: 14, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
               <span className="label">Customer</span>
               <span className="label">Tax ID</span>
@@ -61,7 +61,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
             {customers.map((c) => (
               <div key={c.name} className="pf-list-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1.6fr) 140px 70px 140px 104px', gap: 14, padding: '13px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
-                  <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 6, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{c.initials}</span>
+                  <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-lg)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{c.initials}</span>
                   <span style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
                 </span>
                 <span className="mono" style={{ fontSize: 12, color: c.tinColor }}>{c.tin}</span>
@@ -80,8 +80,8 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {customers.length === 0 && (
-        <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 10, padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-          <span style={{ width: 44, height: 44, borderRadius: 10, background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
+        <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-xl)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+          <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-xl)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No customers yet</div>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: '0 0 20px', maxWidth: 320 }}>Customers appear automatically as you create invoices for {active.short}.</p>
           <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">

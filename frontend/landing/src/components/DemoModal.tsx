@@ -179,17 +179,17 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       <div
         onClick={(e) => e.stopPropagation()}
         onKeyDown={trapTab}
-        style={{ width: '100%', maxWidth: 452, maxHeight: 'calc(100dvh - 48px)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflowY: 'auto', animation: 'dmCardIn 200ms var(--ease-out)' }}
+        style={{ width: '100%', maxWidth: 452, maxHeight: 'calc(100dvh - 48px)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflowY: 'auto', animation: 'dmCardIn 200ms var(--ease-out)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <BrandMark size={19} />
             <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
-            <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
+            <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
               AFRICA
             </span>
           </div>
-          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 6, border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-lg)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
             <Glyph d="M18 6 6 18M6 6l12 12" size={17} sw={1.8} />
           </button>
         </div>
@@ -217,7 +217,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   aria-invalid={Boolean(errors.name)}
                   aria-describedby={errors.name ? 'dm-name-error' : undefined}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.name && (
                   <div id="dm-name-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
@@ -242,7 +242,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   aria-invalid={Boolean(errors.email)}
                   aria-describedby={errors.email ? 'dm-email-error' : undefined}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.email && (
                   <div id="dm-email-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
@@ -267,7 +267,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   aria-invalid={Boolean(errors.company)}
                   aria-describedby={errors.company ? 'dm-company-error' : undefined}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.company && (
                   <div id="dm-company-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
@@ -287,7 +287,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                     value={form.role}
                     onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('role', e.target.value)}
                     disabled={submitting}
-                    style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                    style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                   >
                     <option value="" disabled>Select…</option>
                     {ROLE_OPTIONS.map((opt) => (
@@ -312,7 +312,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                       value={form.size}
                       onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('size', e.target.value)}
                       disabled={submitting}
-                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                     >
                       <option value="" disabled>Select…</option>
                       {SIZE_OPTIONS.map((opt) => (
@@ -335,7 +335,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                       value={form.volume}
                       onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('volume', e.target.value)}
                       disabled={submitting}
-                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                     >
                       <option value="" disabled>Select…</option>
                       {VOLUME_OPTIONS.map((opt) => (

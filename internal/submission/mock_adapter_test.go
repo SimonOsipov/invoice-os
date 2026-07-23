@@ -2919,3 +2919,249 @@ func TestMockAdapter_PollWaitsTheConfiguredLatency(t *testing.T) {
 			"instant ([one-latency-knob]), which is what keeps the contract suite fast", elapsed, baseline)
 	}
 }
+
+// =======================================================================================
+// QA Mode B (M5-03-04) -- adversarial coverage the 11 RED specs (S19-S29) did not include.
+// =======================================================================================
+
+// TestMockAdapter_PollRefWithVeryLargeNTerminates (QA Mode B): a ref minted with an enormous poll
+// count must still decode, decrement and re-encode in O(1) -- Poll reads n once and subtracts
+// one, it never loops n times. The 2s guard turns a hang into a fast, diagnosable failure rather
+// than a stuck CI job. The successor ref's byte length is also checked: it is dominated by the
+// three identifiers, not by n's decimal width, so an enormous n does not balloon the handle.
+func TestMockAdapter_PollRefWithVeryLargeNTerminates(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	const huge = math.MaxInt
+	ref := maMintRef(t, maRefPayload{N: huge, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	done := make(chan struct{})
+	var r submission.Result
+	go func() {
+		r, _ = a.Poll(ctx, ref)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Poll on a ref carrying n=%d did not return within 2s -- convergence must be a "+
+			"single O(1) decrement, never a loop bounded by n", huge)
+	}
+
+	p := maPending(t, "huge-n", r)
+	got := maDecodeRef(t, p.Ref)
+	if got.N != huge-1 {
+		t.Errorf("huge-n poll: successor ref carries n = %d, want %d -- a single poll must "+
+			"decrement by exactly one regardless of magnitude", got.N, huge-1)
+	}
+	if len(p.Ref) > 2048 {
+		t.Errorf("huge-n poll: successor Ref is %d bytes, want a bounded handle -- ref size is "+
+			"dominated by the identifiers, not by n's decimal width", len(p.Ref))
+	}
+}
+
+// TestMockAdapter_ConcurrentPollsOnSameRefOnOneInstance (QA Mode B): S26(b) polls the same ref
+// twice SEQUENTIALLY on one instance; this adds concurrency under -race. Poll must be a pure
+// function of the ref it is given (AC-8), so N goroutines polling the IDENTICAL ref on ONE
+// instance simultaneously must all observe the identical successor Pending and body, with no
+// data race the race detector can find.
+func TestMockAdapter_ConcurrentPollsOnSameRefOnOneInstance(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+	p0, _ := maSubmitPending(t, a, "INV-CONCURRENT-POLL")
+
+	const rounds = 25
+	refs := make([]submission.Ref, rounds)
+	bodies := make([]string, rounds)
+
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r, ev := a.Poll(ctx, p0.Ref)
+			p, ok := r.(submission.Pending)
+			if !ok {
+				t.Errorf("concurrent poll %d: Result is %T, want Pending", i, r)
+				return
+			}
+			refs[i] = p.Ref
+			if ev.ResponseBody != nil {
+				bodies[i] = *ev.ResponseBody
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 1; i < rounds; i++ {
+		if refs[i] != refs[0] {
+			t.Errorf("concurrent poll %d returned successor ref %q, want %q -- concurrent calls "+
+				"on ONE instance must not race", i, refs[i], refs[0])
+		}
+		if bodies[i] != bodies[0] {
+			t.Errorf("concurrent poll %d synthesized a different body:\n got %s\nwant %s",
+				i, bodies[i], bodies[0])
+		}
+	}
+}
+
+// TestMockAdapter_PollRefIgnoresUnknownFields (QA Mode B): the ref's prefix is the version
+// channel, not the JSON schema ([test-transcribes-the-published-ref-codec]'s own reasoning
+// extended). A hand-built payload carrying keys decodeMockRef's struct does not declare -- a
+// scalar and a nested object -- must be silently ignored, exactly as encoding/json's default
+// unmarshal behaviour does, so a future v1 payload that gains an optional field never breaks an
+// older v1 decoder.
+func TestMockAdapter_PollRefIgnoresUnknownFields(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	raw := fmt.Sprintf(`{"n":0,"irn":%q,"csid":%q,"qr":%q,"futureField":"from-a-later-version","nested":{"a":1}}`,
+		maSentinelIRN, maSentinelCSID, maSentinelQR)
+	ref := submission.Ref(maRefPrefix + base64.RawURLEncoding.EncodeToString([]byte(raw)))
+
+	r, _ := maPoll(t, a, ctx, ref)
+	acc := maAccepted(t, "unknown-fields", r)
+	if acc.IRN != maSentinelIRN || acc.CSID != maSentinelCSID || acc.QRPayload != maSentinelQR {
+		t.Errorf("a ref carrying unrecognised extra fields decoded to the wrong identifiers: "+
+			"got irn=%q csid=%q qr=%q, want irn=%q csid=%q qr=%q -- unknown keys must be ignored, "+
+			"never rejected", acc.IRN, acc.CSID, acc.QRPayload, maSentinelIRN, maSentinelCSID, maSentinelQR)
+	}
+}
+
+// TestMockAdapter_PollRefFieldOrderIndependent (QA Mode B): a JSON object's key order carries no
+// meaning. Two hand-built refs encoding the SAME logical payload with their keys in different
+// declaration order must decode to the same result and synthesize the same body.
+func TestMockAdapter_PollRefFieldOrderIndependent(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	declared := fmt.Sprintf(`{"n":2,"irn":%q,"csid":%q,"qr":%q}`, maSentinelIRN, maSentinelCSID, maSentinelQR)
+	reordered := fmt.Sprintf(`{"qr":%q,"n":2,"csid":%q,"irn":%q}`, maSentinelQR, maSentinelCSID, maSentinelIRN)
+
+	refA := submission.Ref(maRefPrefix + base64.RawURLEncoding.EncodeToString([]byte(declared)))
+	refB := submission.Ref(maRefPrefix + base64.RawURLEncoding.EncodeToString([]byte(reordered)))
+
+	rA, evA := maPoll(t, a, ctx, refA)
+	rB, evB := maPoll(t, a, ctx, refB)
+
+	pA := maPending(t, "declared-order", rA)
+	pB := maPending(t, "reordered", rB)
+
+	payloadA, payloadB := maDecodeRef(t, pA.Ref), maDecodeRef(t, pB.Ref)
+	if payloadA != payloadB {
+		t.Errorf("two refs carrying the same payload in different key orders converged to "+
+			"different successors: %+v vs %+v", payloadA, payloadB)
+	}
+	if evA.ResponseBody == nil || evB.ResponseBody == nil || *evA.ResponseBody != *evB.ResponseBody {
+		t.Errorf("key order affected the synthesized response body: %v vs %v", evA.ResponseBody, evB.ResponseBody)
+	}
+}
+
+// TestMockAdapter_InterleavedSubmitAndPollNoCrossTalk (QA Mode B): Submit for an UNRELATED
+// invoice and Poll for a pending chain, concurrently interleaved on ONE adapter instance, must
+// never leak state between them -- each chain's convergence depends only on the ref it was
+// given, never on what an unrelated Submit did concurrently on the same instance.
+//
+// Fatal-capable helpers (maDecodeRef, maPending, maAccepted) are called OUTSIDE the goroutines,
+// mirroring TestMockAdapter_ConcurrentSubmitsOnOneInstance's t.Errorf-only convention: t.FailNow
+// (which t.Fatalf calls) must run on the goroutine executing the test function, never a spawned
+// one.
+func TestMockAdapter_InterleavedSubmitAndPollNoCrossTalk(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	const chains = 10
+	starts := make([]submission.Pending, chains)
+	wants := make([]maRefPayload, chains)
+	wires := make([]submission.Wire, chains)
+	for i := 0; i < chains; i++ {
+		p, _ := maSubmitPending(t, a, fmt.Sprintf("INV-INTERLEAVE-%d", i))
+		starts[i] = p
+		wants[i] = maDecodeRef(t, p.Ref)
+		wires[i] = maWireFor(t, a, maTINAccept, fmt.Sprintf("INV-INTERLEAVE-ACCEPT-%d", i))
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < chains; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() {
+				if rec := recover(); rec != nil {
+					t.Errorf("chain %d panicked: %v", i, rec)
+				}
+			}()
+
+			// Interleave an unrelated Submit (accept path) concurrently with this chain's Poll.
+			ra, _ := a.Submit(ctx, wires[i], fmt.Sprintf("idem-interleave-%d", i))
+			if _, ok := ra.(submission.Accepted); !ok {
+				t.Errorf("chain %d: interleaved Submit returned %T, want Accepted", i, ra)
+			}
+
+			r1, _ := a.Poll(ctx, starts[i].Ref)
+			p1, ok := r1.(submission.Pending)
+			if !ok {
+				t.Errorf("chain %d poll-1: Result is %T, want Pending", i, r1)
+				return
+			}
+			r2, _ := a.Poll(ctx, p1.Ref)
+			acc, ok := r2.(submission.Accepted)
+			if !ok {
+				t.Errorf("chain %d poll-2: Result is %T, want Accepted", i, r2)
+				return
+			}
+
+			if acc.IRN != wants[i].IRN || acc.CSID != wants[i].CSID || acc.QRPayload != wants[i].QR {
+				t.Errorf("chain %d converged on identifiers belonging to a DIFFERENT chain -- "+
+					"cross-talk between concurrently interleaved Submit/Poll calls: got irn=%q "+
+					"csid=%q qr=%q, want irn=%q csid=%q qr=%q",
+					i, acc.IRN, acc.CSID, acc.QRPayload, wants[i].IRN, wants[i].CSID, wants[i].QR)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestMockAdapter_PollEvidenceOutcomeAcrossFullMatrix (QA Mode B): task-227's plan names five
+// distinct Poll evidence-matrix rows (P1-P5); S28 exercises P1, P2, P3 plus a still-pending row
+// its own comment mislabels "completed". This pins all five explicitly, including the CONVERGED
+// (P5) row by name, so a future change cannot silently stop generating a row ExchangeFor has
+// never been driven through. P4 and P5 are expected to agree (both "sent") -- ExchangeFor derives
+// outcome from Evidence.ReachedWire alone (exchange_bridge.go:44-47), never from HTTPStatus, so
+// this also documents that the pending/converged distinction is invisible to the outcome derived
+// here and lives entirely in Result.
+func TestMockAdapter_PollEvidenceOutcomeAcrossFullMatrix(t *testing.T) {
+	slow := submission.NewMockAdapter(submission.MockConfig{Latency: 5 * time.Second})
+	instant := submission.NewMockAdapter(submission.MockConfig{})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	inFlightCtx, cancelInFlight := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancelInFlight()
+
+	pendingRef := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+	convergingRef := maMintRef(t, maRefPayload{N: 1, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	for _, tc := range []struct {
+		name        string
+		a           *submission.MockAdapter
+		ctx         context.Context
+		ref         submission.Ref
+		wantOutcome string
+	}{
+		{"P1-pre-cancelled", instant, cancelled, pendingRef, submission.OutcomeConnectionFailed},
+		{"P2-unreadable-ref", instant, context.Background(),
+			submission.Ref("contract-suite-never-issued-ref"), submission.OutcomeConnectionFailed},
+		{"P3-ctx-dies-in-flight", slow, inFlightCtx, pendingRef, submission.OutcomeSent},
+		{"P4-still-pending", instant, context.Background(), pendingRef, submission.OutcomeSent},
+		{"P5-converged", instant, context.Background(), convergingRef, submission.OutcomeSent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ev := maPoll(t, tc.a, tc.ctx, tc.ref)
+			if got := submission.ExchangeFor(tc.a, submission.OpPoll, 1, "job", "inv", ev).Outcome; got != tc.wantOutcome {
+				t.Errorf("%s: ExchangeFor(...).Outcome = %q, want %q", tc.name, got, tc.wantOutcome)
+			}
+		})
+	}
+}

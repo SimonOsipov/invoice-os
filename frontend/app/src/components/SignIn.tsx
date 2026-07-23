@@ -42,11 +42,11 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
         .si-persona:disabled { cursor: default; opacity: 0.6; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
-          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
+          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
             AFRICA
           </span>
         </div>
@@ -68,9 +68,9 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
                   className="si-persona"
                   disabled={busy}
                   onClick={() => onPick(p)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
-                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 7, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>
+                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>
                     {p.initials}
                   </span>
                   <span style={{ flex: 1, minWidth: 0 }}>
@@ -78,7 +78,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {p.title} · {p.org}
                     </span>
-                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 3, padding: '2px 6px' }}>
+                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>
                       {p.access}
                     </span>
                   </span>
@@ -114,11 +114,11 @@ export function SignInLoading({ persona }: { persona: Persona }) {
         .si-spin { animation: siSpin 0.7s linear infinite; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 10, boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>FiscalBridge</span>
-          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
+          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
             AFRICA
           </span>
         </div>

@@ -56,7 +56,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
             type="button"
             onClick={onClose}
             className="ops-btn"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 6, color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
+            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-lg)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
           >
             {CLOSE_ICON}
           </button>
@@ -87,7 +87,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
               gap: 1,
               background: 'var(--line-1)',
               border: '1px solid var(--line-1)',
-              borderRadius: 8,
+              borderRadius: 'var(--radius-xl)',
               overflow: 'hidden',
               marginBottom: 20,
             }}
@@ -123,13 +123,13 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
               gap: 14,
               alignItems: 'center',
               border: '1px solid var(--line-1)',
-              borderRadius: 8,
+              borderRadius: 'var(--radius-xl)',
               background: 'var(--bg-2)',
               padding: 14,
               marginBottom: 20,
             }}
           >
-            <div style={{ width: 92, height: 92, background: '#0c0e10', borderRadius: 6, display: 'grid', placeItems: 'center' }}>{EVIDENCE_QR}</div>
+            <div style={{ width: 92, height: 92, background: '#0c0e10', borderRadius: 'var(--radius-lg)', display: 'grid', placeItems: 'center' }}>{EVIDENCE_QR}</div>
             <div>
               <div className="label" style={{ marginBottom: 6 }}>
                 CSID signature
@@ -140,7 +140,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
             </div>
           </div>
 
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 8, background: 'var(--bg-2)', padding: '12px 14px', marginBottom: 20 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', padding: '12px 14px', marginBottom: 20 }}>
             <div className="label" style={{ marginBottom: 6 }}>
               Entry hash
             </div>

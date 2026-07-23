@@ -21,7 +21,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div className="pf-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
         {hasUploadFile && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 20px', background: 'var(--accent-tint)', borderBottom: '1px solid var(--line-1)' }}>
             <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{tickGlyph13}</span>
@@ -47,9 +47,9 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                   key={code}
                   onClick={() => ctx.updateDraft('docType', code as 'B2B' | 'B2G' | 'B2C')}
                   className="pf-btn"
-                  style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', textAlign: 'left', border: `1px solid ${a ? 'var(--accent)' : 'var(--line-2)'}`, background: a ? 'var(--accent-tint)' : 'var(--bg-1)', borderRadius: 8, padding: '11px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', textAlign: 'left', border: `1px solid ${a ? 'var(--accent)' : 'var(--line-2)'}`, background: a ? 'var(--accent-tint)' : 'var(--bg-1)', borderRadius: 'var(--radius-xl)', padding: '11px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
-                  <span className="mono" style={{ flex: 'none', fontSize: 11, fontWeight: 700, color, border: `1px solid ${a ? 'var(--accent)' : 'var(--line-2)'}`, borderRadius: 4, padding: '2px 6px' }}>{code}</span>
+                  <span className="mono" style={{ flex: 'none', fontSize: 11, fontWeight: 700, color, border: `1px solid ${a ? 'var(--accent)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-md)', padding: '2px 6px' }}>{code}</span>
                   <span style={{ flex: 'none', fontSize: 13, fontWeight: 600, color }}>{label}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: a ? 'var(--accent)' : 'var(--fg-3)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{desc}</span>
                 </button>
@@ -76,7 +76,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           <div className="label" style={{ marginBottom: 12 }}>
             Line items
           </div>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, overflow: 'hidden', marginBottom: 14 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 14 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 120px 120px', gap: 10, padding: '9px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
               <span className="label">Description</span>
               <span className="label" style={{ textAlign: 'right' }}>Qty</span>
@@ -92,12 +92,12 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
               </div>
             ))}
           </div>
-          <button className="pf-chip" style={{ height: 30, padding: '0 12px', borderRadius: 6, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <button className="pf-chip" style={{ height: 30, padding: '0 12px', borderRadius: 'var(--radius-lg)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Add line
           </button>
         </div>
       </div>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: 20, position: 'sticky', top: 0 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 20, position: 'sticky', top: 0 }}>
         <div className="label" style={{ marginBottom: 16 }}>
           Summary
         </div>

@@ -45,7 +45,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
         <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-1)', marginBottom: 14 }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.02em' }}>FiscalBridge</span>
-          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 4px' }}>
+          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
             AFRICA
           </span>
         </a>
@@ -56,9 +56,9 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
             <button
               onClick={ctx.toggleSwitcher}
               className="pf-btn"
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--accent)' : 'var(--line-2)'}`, borderRadius: 6, padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--accent)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-lg)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
             >
-              <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 5, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
+              <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-md)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{active.short}</span>
                 <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>TIN {active.tin}</span>
@@ -66,7 +66,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
               <span style={{ flex: 'none', color: 'var(--fg-3)', transform: switcherOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}>{chevDownGlyph}</span>
             </button>
             {switcherOpen && (
-              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 8, boxShadow: '0 16px 40px -16px rgba(20,23,26,0.28)', overflow: 'hidden', animation: 'popIn 140ms ease-out' }}>
+              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 16px 40px -16px rgba(20,23,26,0.28)', overflow: 'hidden', animation: 'popIn 140ms ease-out' }}>
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
@@ -77,7 +77,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                     className="pf-menu-item"
                     style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, background: i === activeIdx ? 'var(--bg-3)' : 'transparent', cursor: 'pointer', textAlign: 'left', padding: '9px 12px' }}
                   >
-                    <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 5, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>{c.initials}</span>
+                    <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-md)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>{c.initials}</span>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.short}</span>
                       <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
@@ -94,8 +94,8 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
 
         {/* in-house mode: single company, no switching */}
         {isInhouse && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 6, padding: '8px 10px' }}>
-            <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 5, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: '8px 10px' }}>
+            <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-md)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{active.short}</span>
               <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -123,9 +123,9 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
               key={n.id}
               onClick={() => ctx.nav(n.id)}
               className="pf-nav"
-              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 5, padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: a ? 600 : 500, background: a ? 'var(--bg-3)' : 'transparent', color: a ? 'var(--fg-1)' : 'var(--fg-2)', position: 'relative' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-md)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: a ? 600 : 500, background: a ? 'var(--bg-3)' : 'transparent', color: a ? 'var(--fg-1)' : 'var(--fg-2)', position: 'relative' }}
             >
-              <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 2, background: a ? 'var(--accent)' : 'transparent' }} />
+              <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 'var(--radius-xs)', background: a ? 'var(--accent)' : 'transparent' }} />
               <span style={{ color: a ? 'var(--accent)' : 'var(--fg-3)', display: 'inline-flex' }}>{n.glyph}</span>
               <span style={{ flex: 1 }}>{n.label}</span>
               {n.badge && (
@@ -164,7 +164,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
           className="pf-btn pf-signout"
           aria-label="Sign out"
           title="Sign out"
-          style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer' }}
+          style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-md)', background: 'transparent', cursor: 'pointer' }}
         >
           <Icon paths={['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9']} size={16} />
         </button>

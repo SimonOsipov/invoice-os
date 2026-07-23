@@ -48,7 +48,7 @@ export function Status() {
           gap: 14,
           background: 'var(--status-amber-bg)',
           border: '1px solid var(--status-amber-border)',
-          borderRadius: 10,
+          borderRadius: 'var(--radius-xl)',
           padding: '16px 20px',
           marginBottom: 16,
         }}
@@ -58,7 +58,7 @@ export function Status() {
             flex: 'none',
             width: 40,
             height: 40,
-            borderRadius: 9,
+            borderRadius: 'var(--radius-xl)',
             background: 'var(--status-amber-text)',
             color: '#fff',
             display: 'grid',
@@ -86,7 +86,7 @@ export function Status() {
       </div>
 
       {/* components (proto:549-563) */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 10, background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
         {STATUS_COMPONENTS.map((c) => {
           const tone = STATUS_TONE[c.tone]
           return (
@@ -167,7 +167,7 @@ export function Status() {
                       color: tone.text,
                       background: tone.bg,
                       border: '1px solid ' + tone.border,
-                      borderRadius: 4,
+                      borderRadius: 'var(--radius-md)',
                       padding: '2px 7px',
                     }}
                   >

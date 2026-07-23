@@ -93,12 +93,12 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
             {CONNECTOR_DEFS.map((c) => {
               const on = !!connectors[c.id]
               return (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, padding: '16px 18px' }}>
-                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 9, background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '16px 18px' }}>
+                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-xl)', background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                       <span style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</span>
-                      <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.06em' }}>{c.cat}</span>
+                      <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', letterSpacing: '0.06em' }}>{c.cat}</span>
                     </div>
                     <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>
                       {on ? 'Synced 2 min ago' : 'No sync yet'}
@@ -112,7 +112,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                     <button
                       onClick={() => setOpenId(c.id)}
                       className="pf-btn"
-                      style={{ flex: 'none', height: 34, padding: '0 14px', borderRadius: 6, border: 0, background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
+                      style={{ flex: 'none', height: 34, padding: '0 14px', borderRadius: 'var(--radius-lg)', border: 0, background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
                     >
                       Manage
                     </button>
@@ -120,7 +120,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                   <button
                     onClick={() => ctx.toggleConnector(c.id)}
                     className="pf-btn"
-                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 6, border: `1px solid ${on ? 'var(--line-2)' : 'var(--accent)'}`, background: on ? 'transparent' : 'var(--accent)', color: on ? 'var(--fg-2)' : '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
+                    style={{ flex: 'none', height: 34, padding: '0 16px', borderRadius: 'var(--radius-lg)', border: `1px solid ${on ? 'var(--line-2)' : 'var(--accent)'}`, background: on ? 'transparent' : 'var(--accent)', color: on ? 'var(--fg-2)' : '#fff', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500 }}
                   >
                     {on ? 'Disconnect' : 'Connect'}
                   </button>
@@ -134,18 +134,18 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
       {/* API & webhooks */}
       {settingsTab === 'api' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, padding: '18px 20px' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '18px 20px' }}>
             <div className="label" style={{ marginBottom: 10 }}>
               Base URL
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <code className="mono" style={{ flex: 1, fontSize: 13, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 6, padding: '9px 12px' }}>{API_BASE}</code>
-              <button className="pf-btn" style={{ flex: 'none', height: 36, padding: '0 12px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <code className="mono" style={{ flex: 1, fontSize: 13, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '9px 12px' }}>{API_BASE}</code>
+              <button className="pf-btn" style={{ flex: 'none', height: 36, padding: '0 12px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
                 {copyGlyph} Copy
               </button>
             </div>
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>API keys</span>
             </div>
@@ -153,21 +153,21 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               const dim = k.env === 'LIVE' ? (sandbox ? 0.45 : 1) : sandbox ? 1 : 0.45
               return (
                 <div key={k.env} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '15px 20px', borderBottom: '1px solid var(--line-1)', opacity: dim }}>
-                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: k.envBg, borderRadius: 4, padding: '3px 8px' }}>
+                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: k.envBg, borderRadius: 'var(--radius-md)', padding: '3px 8px' }}>
                     <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: k.envColor, letterSpacing: '0.06em' }}>{k.env}</span>
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <code className="mono" style={{ fontSize: 12.5, color: 'var(--fg-1)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.key}</code>
                     <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 3 }}>{k.note}</div>
                   </div>
-                  <button className="pf-btn" style={{ flex: 'none', height: 32, padding: '0 11px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                  <button className="pf-btn" style={{ flex: 'none', height: 32, padding: '0 11px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
                     {copyGlyph} Copy
                   </button>
                 </div>
               )
             })}
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>Endpoints</span>
             </div>
@@ -175,7 +175,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               const mc = methodColor(e.m)
               return (
                 <div key={e.path} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span style={{ flex: 'none', width: 48, textAlign: 'center', background: mc.bg, borderRadius: 4, padding: '3px 0' }}>
+                  <span style={{ flex: 'none', width: 48, textAlign: 'center', background: mc.bg, borderRadius: 'var(--radius-md)', padding: '3px 0' }}>
                     <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: mc.color }}>{e.m}</span>
                   </span>
                   <code className="mono" style={{ flex: 'none', fontSize: 13, color: 'var(--fg-1)', fontWeight: 500 }}>{e.path}</code>
@@ -184,10 +184,10 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               )
             })}
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>Webhooks</span>
-              <button className="pf-btn" style={{ height: 30, padding: '0 11px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5 }}>
+              <button className="pf-btn" style={{ height: 30, padding: '0 11px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5 }}>
                 {plusGlyph} Add endpoint
               </button>
             </div>
@@ -209,9 +209,9 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
       {settingsTab === 'signing' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {CERTS.map((c) => (
-            <div key={c.name} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10, overflow: 'hidden' }}>
+            <div key={c.name} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 11 }}>
-                <span style={{ flex: 'none', width: 36, height: 36, borderRadius: 8, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>{shieldGlyph}</span>
+                <span style={{ flex: 'none', width: 36, height: 36, borderRadius: 'var(--radius-xl)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>{shieldGlyph}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
@@ -248,8 +248,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>Expires {c.expires}</span>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{c.daysLeft} left</span>
                 </div>
-                <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden', marginBottom: 16 }}>
-                  <div style={{ width: c.pct, height: '100%', background: c.barColor, borderRadius: 3 }} />
+                <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 16 }}>
+                  <div style={{ width: c.pct, height: '100%', background: c.barColor, borderRadius: 'var(--radius-sm)' }} />
                 </div>
                 <button className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, fontSize: 13 }}>
                   Renew certificate

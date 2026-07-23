@@ -51,7 +51,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           style={{
             height: 30,
             padding: '0 12px',
-            borderRadius: 6,
+            borderRadius: 'var(--radius-lg)',
             fontFamily: 'var(--font-sans)',
             fontSize: 12.5,
             fontWeight: 500,
@@ -80,7 +80,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && (
-        <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+        <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: '150px 1fr 140px 120px 130px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
             <span className="label">Invoice #</span>
             <span className="label">Buyer</span>

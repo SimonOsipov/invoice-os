@@ -30,14 +30,14 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
         <span style={{ fontSize: 14, fontWeight: 600 }}>{crumb}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div className="pf-header-search" style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 6, background: 'var(--bg-2)', width: 240 }}>
+        <div className="pf-header-search" style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', width: 240 }}>
           <span style={{ color: 'var(--fg-3)' }}>{searchGlyph}</span>
           <span style={{ fontSize: 13, color: 'var(--fg-4)' }}>Search invoices, TINs…</span>
         </div>
         <button
           onClick={ctx.toggleSandbox}
           className="pf-btn"
-          style={{ display: 'flex', alignItems: 'center', gap: 7, height: 34, padding: '0 11px', borderRadius: 6, border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--line-2)'}`, background: sandbox ? 'var(--status-amber-bg)' : 'transparent', color: sandbox ? 'var(--status-amber-text)' : 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 7, height: 34, padding: '0 11px', borderRadius: 'var(--radius-lg)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--line-2)'}`, background: sandbox ? 'var(--status-amber-bg)' : 'transparent', color: sandbox ? 'var(--status-amber-text)' : 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em' }}
         >
           <span style={{ width: 6, height: 6, borderRadius: 99, background: sandbox ? 'var(--status-amber-text)' : 'var(--status-green-text)' }} />
           {sandbox ? 'SANDBOX' : 'LIVE'}

@@ -15,7 +15,7 @@ import { fmtPlain } from '../lib/format'
 import { backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
-const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 10 }
+const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)' }
 const CARD_HEAD: React.CSSProperties = { padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }
 
 // Faint = the connector doing its own housekeeping (a scheduled pull, a poll); the
@@ -96,11 +96,11 @@ export function ConnectorDetail({
 
       {/* Header */}
       <div style={{ ...CARD, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 15, marginBottom: 16 }}>
-        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 9, background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
+        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-xl)', background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <span style={{ fontSize: 16, fontWeight: 600 }}>{def.name}</span>
-            <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.06em' }}>{def.cat}</span>
+            <span className="mono" style={{ fontSize: 9, fontWeight: 600, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', letterSpacing: '0.06em' }}>{def.cat}</span>
           </div>
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {def.host} · {def.module}
@@ -173,7 +173,7 @@ export function ConnectorDetail({
         <div style={{ padding: '20px 20px 18px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 76 }}>
             {d.volume.map((v, i) => (
-              <div key={i} title={`${v} documents`} style={{ flex: 1, height: `${Math.max(4, (v / volMax) * 100)}%`, background: 'var(--accent)', opacity: 0.55, borderRadius: 2 }} />
+              <div key={i} title={`${v} documents`} style={{ flex: 1, height: `${Math.max(4, (v / volMax) * 100)}%`, background: 'var(--accent)', opacity: 0.55, borderRadius: 'var(--radius-xs)' }} />
             ))}
           </div>
         </div>
@@ -247,7 +247,7 @@ export function ConnectorDetail({
                 { label: 'Items / SKUs', value: fmtPlain(d.master.items) },
                 { label: 'Units of measure', value: String(d.master.uoms) },
               ].map((s) => (
-                <div key={s.label} style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 6, padding: '12px 13px' }}>
+                <div key={s.label} style={{ background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '12px 13px' }}>
                   <div className="mono" style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em' }}>{s.value}</div>
                   <div className="label" style={{ marginTop: 5 }}>
                     {s.label}
@@ -291,8 +291,8 @@ export function ConnectorDetail({
               <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>IRN + CSID stamped</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{d.writeBack.pct}%</span>
             </div>
-            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden', marginBottom: 14 }}>
-              <div style={{ width: `${d.writeBack.pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 3 }} />
+            <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', marginBottom: 14 }}>
+              <div style={{ width: `${d.writeBack.pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 'var(--radius-sm)' }} />
             </div>
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>IRN + CSID synced back into {def.name} invoice records.</p>
           </div>
@@ -303,7 +303,7 @@ export function ConnectorDetail({
       <div style={{ ...CARD, overflow: 'hidden' }}>
         <div style={CARD_HEAD}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
-            <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 7, background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', display: 'grid', placeItems: 'center' }}>{warnTriGlyph}</span>
+            <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-lg)', background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', display: 'grid', placeItems: 'center' }}>{warnTriGlyph}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 600 }}>Held documents</div>
               <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>{fmtPlain(d.heldTotal)} pulled but not transmitted</div>

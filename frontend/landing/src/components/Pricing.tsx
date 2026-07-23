@@ -64,7 +64,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
               }}
             >
               Annual{' '}
-              <span className="mono" style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--accent-tint)', padding: '1px 5px', borderRadius: 3 }}>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--accent-tint)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
                 –2 MONTHS
               </span>
             </button>
@@ -82,7 +82,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                 style={{
                   background: c.cardBg,
                   border: `1px solid ${c.cardBorder}`,
-                  borderRadius: 8,
+                  borderRadius: 'var(--radius-xl)',
                   padding: '28px 26px 30px',
                   display: 'flex',
                   flexDirection: 'column',
@@ -94,7 +94,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                   {p.featured && (
                     <span
                       className="mono"
-                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--teal-700)', color: '#fff', padding: '3px 8px', borderRadius: 3 }}
+                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--teal-700)', color: '#fff', padding: '3px 8px', borderRadius: 'var(--radius-sm)' }}
                     >
                       POPULAR
                     </span>

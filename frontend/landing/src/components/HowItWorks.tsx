@@ -23,14 +23,14 @@ export function HowItWorks() {
               From your accounting system to a compliant invoice in three steps.
             </h2>
           </div>
-          <div style={{ maxWidth: 340, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: '20px 22px' }}>
+          <div style={{ maxWidth: 340, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '20px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
               <span
                 style={{
                   flex: 'none',
                   width: 26,
                   height: 26,
-                  borderRadius: 4,
+                  borderRadius: 'var(--radius-md)',
                   background: 'var(--accent-tint)',
                   color: 'var(--accent)',
                   display: 'grid',
@@ -55,7 +55,7 @@ export function HowItWorks() {
             gap: 1,
             background: 'var(--line-1)',
             border: '1px solid var(--line-1)',
-            borderRadius: 8,
+            borderRadius: 'var(--radius-xl)',
             overflow: 'hidden',
           }}
         >

@@ -38,7 +38,7 @@ const layer = (visible: boolean): CSSProperties => ({
 
 function FirmMock() {
   return (
-    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, overflow: 'hidden' }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
       <div
         style={{
           display: 'flex',
@@ -70,7 +70,7 @@ function FirmMock() {
               flex: 'none',
               width: 30,
               height: 30,
-              borderRadius: 5,
+              borderRadius: 'var(--radius-md)',
               background: 'var(--accent-tint)',
               color: 'var(--accent)',
               display: 'grid',
@@ -120,7 +120,7 @@ function FirmMock() {
 
 function InhouseMock() {
   return (
-    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 8, overflow: 'hidden' }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
       <div
         style={{
           display: 'flex',
@@ -227,7 +227,7 @@ function AudienceCopy({ data, onBookDemo }: { data: AudienceData; onBookDemo: ()
                 flex: 'none',
                 width: 24,
                 height: 24,
-                borderRadius: 4,
+                borderRadius: 'var(--radius-md)',
                 background: 'var(--accent-tint)',
                 color: 'var(--accent)',
                 display: 'grid',
@@ -246,7 +246,7 @@ function AudienceCopy({ data, onBookDemo }: { data: AudienceData; onBookDemo: ()
       </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 30 }}>
         {data.stats.map((st) => (
-          <div key={st.label} style={{ flex: 1, minWidth: 150, border: '1px solid var(--line-1)', borderRadius: 6, padding: '16px 18px' }}>
+          <div key={st.label} style={{ flex: 1, minWidth: 150, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '16px 18px' }}>
             <div className="mono" style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: st.color }}>
               {st.value}
             </div>

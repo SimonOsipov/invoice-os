@@ -45,8 +45,8 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div className="pf-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ background: verdict.bg, border: `1px solid ${verdict.border}`, borderRadius: 8, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 8, background: verdict.iconBg, color: verdict.iconColor, display: 'grid', placeItems: 'center' }}>{verdict.glyph}</span>
+        <div style={{ background: verdict.bg, border: `1px solid ${verdict.border}`, borderRadius: 'var(--radius-xl)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-xl)', background: verdict.iconBg, color: verdict.iconColor, display: 'grid', placeItems: 'center' }}>{verdict.glyph}</span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: verdict.titleColor }}>{verdict.title}</div>
             <div style={{ fontSize: 13, color: verdict.subColor }}>{verdict.sub}</div>
@@ -55,7 +55,7 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
         </div>
 
         {issues.length > 0 && (
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
             <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>Issues to resolve</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -64,7 +64,7 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
             </div>
             {issues.map((e) => (
               <div key={e.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 13, padding: '14px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                <span style={{ flex: 'none', width: 24, height: 24, borderRadius: 6, background: e.iconBg, color: e.iconColor, display: 'grid', placeItems: 'center', marginTop: 1 }}>{e.glyph}</span>
+                <span style={{ flex: 'none', width: 24, height: 24, borderRadius: 'var(--radius-lg)', background: e.iconBg, color: e.iconColor, display: 'grid', placeItems: 'center', marginTop: 1 }}>{e.glyph}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 500 }}>{e.label}</div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
@@ -79,7 +79,7 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
           </div>
         )}
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
           <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Passed checks</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--status-green-text)' }}>
@@ -99,7 +99,7 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
           </div>
         </div>
       </div>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: 20, position: 'sticky', top: 0 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 20, position: 'sticky', top: 0 }}>
         <div className="label" style={{ marginBottom: 14 }}>
           Invoice
         </div>

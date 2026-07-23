@@ -66,7 +66,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
         ))}
       </div>
 
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 8, padding: 20, marginBottom: 20 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 20, marginBottom: 20 }}>
         <div className="label" style={{ marginBottom: 12 }}>
           Invoice
         </div>
@@ -112,7 +112,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
         <div className="label" style={{ marginBottom: 12 }}>
           Line items
         </div>
-        <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, overflow: 'hidden', marginBottom: 14 }}>
+        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 90px 120px 40px', gap: 10, padding: '9px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
             <span className="label">Line ID</span>
             <span className="label">Description</span>
@@ -131,7 +131,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
                 onClick={() => removeLineItem(i)}
                 className="pf-btn"
                 aria-label="Remove line item"
-                style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+                style={{ width: 30, height: 30, borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
               >
                 {closeGlyph}
               </button>
@@ -142,7 +142,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
           type="button"
           onClick={addLineItem}
           className="pf-chip"
-          style={{ height: 30, padding: '0 12px', borderRadius: 6, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          style={{ height: 30, padding: '0 12px', borderRadius: 'var(--radius-lg)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
         >
           <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Add line item
         </button>

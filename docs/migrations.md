@@ -333,7 +333,8 @@ is **not** special-cased against RLS:
 `EnqueueTx` transactional-outbox helper (a domain change, its `idempotency_keys` row, and
 the River job commit or roll back together); `cmd/submission` runs the worker pool on the
 platform-kit lifecycle hook (`platform.BackgroundWorker`), draining in the shutdown window.
-Each `DemoWorker` job wraps its tenant-scoped work in `WithinTenantTx(job.Args.TenantID, …)`.
+Each `SubmitWorker`/`PollWorker` job wraps its tenant-scoped work in
+`WithinTenantTx(job.Args.TenantID, …)`.
 The happy-path proof is the `queue` CI job (`make test-queue` locally); the adversarial
 exactly-once / re-drive suite is M2-09.
 

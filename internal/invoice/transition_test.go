@@ -589,3 +589,33 @@ func TestTransition_ValidatedToDraftLegalityUnit(t *testing.T) {
 		t.Errorf("canTransition(queued, draft) = true, want false (unrelated illegal edge must stay illegal)")
 	}
 }
+
+// TestTransition_QueuedToFailedLegalityUnit is a DB-free unit pin on
+// canTransition(queued, failed) -- M5-04-02's (task-233) dead-letter edge: a
+// background worker that gives up on an invoice before it ever reaches
+// submitted needs a legal queued->failed edge to drive Store.MarkFailedTx.
+// Mirrors TestTransition_ValidatedToDraftLegalityUnit's shape (a direct
+// canTransition pin, independent of and narrower than the DB-backed
+// TestTransition_ExhaustiveMatrixLocksLegalEdgeTable's full 49-pair sweep).
+// Also spot-checks that queued->accepted/rejected stay illegal (M5-04-02
+// adds ONLY queued->failed, not a shortcut around submitted) and that
+// failed->queued / rejected->draft -- the recovery edges M5-05, not this
+// subtask, owns -- stay illegal too, so a change that widened canTransition
+// across the board would not pass this test by accident.
+func TestTransition_QueuedToFailedLegalityUnit(t *testing.T) {
+	if !canTransition(StatusQueued, StatusFailed) {
+		t.Errorf("canTransition(queued, failed) = false, want true (M5-04-02 dead-letter edge)")
+	}
+	if canTransition(StatusQueued, StatusAccepted) {
+		t.Errorf("canTransition(queued, accepted) = true, want false (unrelated illegal edge must stay illegal)")
+	}
+	if canTransition(StatusQueued, StatusRejected) {
+		t.Errorf("canTransition(queued, rejected) = true, want false (unrelated illegal edge must stay illegal)")
+	}
+	if canTransition(StatusFailed, StatusQueued) {
+		t.Errorf("canTransition(failed, queued) = true, want false (M5-05's recovery edge, not this subtask's)")
+	}
+	if canTransition(StatusRejected, StatusDraft) {
+		t.Errorf("canTransition(rejected, draft) = true, want false (M5-05's recovery edge, not this subtask's)")
+	}
+}

@@ -44,10 +44,14 @@
 //     persist. The uniqueness guard is (tenant_id, idempotency_key) — SJ-11 — and
 //     deliberately NOT (tenant_id, invoice_id), which would make resubmission impossible.
 //   - The state vocabulary is the job's own — queued, submitting, pending, accepted,
-//     rejected, failed — in a column named `state`, never `status`. It shares four names
-//     with invoices.status but is a different column on a different table; SJ-08 inserts
-//     and reads back all six so a copy-pasted invoice CHECK (which has no `submitting` /
-//     `pending`) fails loudly.
+//     rejected, failed, dead_lettered — in a column named `state`, never `status`. It
+//     shares four names with invoices.status but is a different column on a different
+//     table; SJ-08 inserts and reads back all seven so a copy-pasted invoice CHECK (which
+//     has no `submitting` / `pending` / `dead_lettered`) fails loudly. `dead_lettered` is
+//     M5-04-01's SECOND RED WAVE addition (Decision [dead-letter-state]) — a job River
+//     itself discards, kept distinct from `failed` so M7-04 can list/re-drive by state and
+//     M8-08 can alert on DLQ size without conflating "discarded by the queue" with "a real
+//     terminal failure".
 //
 // Cross-tenant refusal is the load-bearing category: SJ-01/02/03/04 each assert a DISTINCT
 // isolation failure mode — SELECT visibility, INSERT rejection, GUC-unset fail-closed, and
@@ -576,12 +580,19 @@ func TestRLS_SubmissionJobsCrossTenantInvoiceRefRejected(t *testing.T) {
 	}
 }
 
-// SJ-08: the state CHECK admits exactly the job's own six-value vocabulary and nothing
-// else. All six are inserted AND read back (a CHECK that silently coerced or a column that
-// dropped the value would pass a rejection-only test), and 'bogus' is refused with 23514.
-// The six are deliberately NOT the invoice's seven (draft/validated/queued/submitted/
-// accepted/rejected/failed): a copy-pasted invoices_status_check would reject 'submitting'
-// and 'pending' here and this case is what catches it.
+// SJ-08: the state CHECK admits exactly the job's own seven-value vocabulary and nothing
+// else. All seven are inserted AND read back (a CHECK that silently coerced or a column
+// that dropped the value would pass a rejection-only test), and out-of-vocabulary values
+// are refused with 23514 — both an unrelated word ('bogus') and, more pointedly, the
+// near-miss typo 'dead_letter' (missing the trailing -ed), so the CHECK is proven to match
+// the vocabulary exactly rather than a permissive prefix/substring test. The six inherited
+// from M5-01-03 are deliberately NOT the invoice's seven
+// (draft/validated/queued/submitted/accepted/rejected/failed): a copy-pasted
+// invoices_status_check would reject 'submitting' and 'pending' here and this case is what
+// catches it. `dead_lettered` (M5-04-01, SECOND RED WAVE — the migration widened this
+// CHECK from six values to seven, same DROP+re-ADD-under-the-same-name idiom as
+// app_exchange's `connection_failed`) is the seventh; RED against SQLSTATE 23514 until the
+// Executor ships it.
 func TestRLS_SubmissionJobsStateCheck(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -598,8 +609,9 @@ func TestRLS_SubmissionJobsStateCheck(t *testing.T) {
 	}()
 
 	// Every legal state inserts and reads back verbatim. Each gets its own tx so one
-	// unexpected rejection cannot poison the rest.
-	for _, state := range []string{"queued", "submitting", "pending", "accepted", "rejected", "failed"} {
+	// unexpected rejection cannot poison the rest. `dead_lettered` is the M5-04-01 SECOND
+	// RED WAVE addition — RED against 23514 until the Executor widens the CHECK.
+	for _, state := range []string{"queued", "submitting", "pending", "accepted", "rejected", "failed", "dead_lettered"} {
 		key := keyPrefix + "-" + state
 		var got string
 		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
@@ -613,7 +625,7 @@ func TestRLS_SubmissionJobsStateCheck(t *testing.T) {
 			return
 		}
 		if err != nil {
-			t.Errorf("INSERT with state %q: want success (it is one of the six legal states), got: %v", state, err)
+			t.Errorf("INSERT with state %q: want success (it is one of the seven legal states), got: %v", state, err)
 			continue
 		}
 		if got != state {
@@ -621,21 +633,28 @@ func TestRLS_SubmissionJobsStateCheck(t *testing.T) {
 		}
 	}
 
-	// And a value outside the vocabulary is refused, in its own tx.
-	bogusKey := keyPrefix + "-bogus"
-	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
-		_, e := tx.Exec(ctx,
-			`INSERT INTO submission_jobs (tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state)
-			 VALUES ($1, $2, $3, $4, $5, 'bogus')`,
-			h.tenantA, invoiceA, bogusKey, sjAdapter, sjAdapterVersion,
-		)
-		return e
-	})
-	if err == nil {
-		t.Fatal("INSERT with state 'bogus' succeeded, want CHECK violation (SQLSTATE 23514)")
-	}
-	if code := pgCode(err); code != "23514" {
-		t.Fatalf("INSERT with state 'bogus': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	// And values outside the vocabulary are refused, each in its own tx so one unexpected
+	// acceptance cannot poison the rest. 'dead_letter' is the load-bearing case: the near
+	// miss (missing the trailing -ed) proves the widened CHECK matches the vocabulary
+	// exactly rather than a permissive prefix/substring test that would let the typo slide
+	// through as a distinct, silently-accepted eighth value.
+	for _, bogus := range []string{"bogus", "dead_letter"} {
+		key := keyPrefix + "-" + bogus
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx,
+				`INSERT INTO submission_jobs (tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state)
+				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				h.tenantA, invoiceA, key, sjAdapter, sjAdapterVersion, bogus,
+			)
+			return e
+		})
+		if err == nil {
+			t.Errorf("INSERT with state %q succeeded, want CHECK violation (SQLSTATE 23514)", bogus)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with state %q: SQLSTATE = %q, want 23514 (check_violation): %v", bogus, code, err)
+		}
 	}
 }
 

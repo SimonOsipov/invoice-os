@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -501,6 +503,96 @@ func HistoryHandler(history func(ctx context.Context, id string) ([]StatusChange
 		}
 
 		writeJSON(w, http.StatusOK, changes)
+	}
+}
+
+// batchSubmitReq is the POST /v1/invoices/submissions wire body ([batch-key-in-the-body],
+// task-231): idempotency_key is a JSON body field, not a header.
+type batchSubmitReq struct {
+	InvoiceIDs     []string `json:"invoice_ids"`
+	IdempotencyKey string   `json:"idempotency_key"`
+}
+
+// maxBatchSubmitInvoiceIDs is the invented per-request cap ([batch-route-and-cap], task-231
+// System Design): an unbounded batch is an unbounded transaction.
+const maxBatchSubmitInvoiceIDs = 200
+
+// maxBatchSubmitIdempotencyKeyLen is 255 (idempotency_keys.key's CHECK char_length<=255) minus
+// 1 (the ":" deriveBatchSubmitKey inserts) minus 36 (a uuid) = 218 -- the precise bound that
+// keeps every derived "<request key>:<invoice id>" key within the shared idempotency_keys /
+// submission_jobs CHECK, superseding the story's earlier "1..200 chars" language (task-231
+// Implementation Notes; T07-7's bound half pins 218 accepted, 219 rejected).
+const maxBatchSubmitIdempotencyKeyLen = 218
+
+// maxBatchSubmitBodyBytes bounds the request body BEFORE it is decoded (CodeRabbit,
+// PR #92, handlers.go:547): the platform server applies no request body limit of its own,
+// so an oversized invoice_ids array would be fully materialized by json.Decode before the
+// 200-id cap (maxBatchSubmitInvoiceIDs) ever gets a chance to reject it. A legitimate body
+// tops out at ~8.1 KB -- 200 UUIDs, quoted + comma-separated (200 * 39 = 7800 bytes) plus a
+// <=218-char idempotency_key, quoted (~220 bytes) plus field names/braces (~100 bytes).
+// 64 KiB leaves ~8x headroom without opening the door to unbounded allocation.
+const maxBatchSubmitBodyBytes = 64 * 1024
+
+// BatchSubmitHandler returns POST /v1/invoices/submissions (task-231, [trigger-surface]).
+// Identity-first-401 (same order as every handler above) -> decode (400 on malformed JSON)
+// -> pre-tx validation, ALL before submit is ever called ([T07-8 non-uuid handling]): empty
+// invoice_ids -> 400; >200 ids -> 400; blank or >218-char idempotency_key -> 400; any
+// non-uuid id -> 400 -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound ->
+// 404, ErrValidation -> 400, the existing map) -> 200 + BatchSubmitResult.
+func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxBatchSubmitBodyBytes)
+		var req batchSubmitReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if len(req.InvoiceIDs) == 0 {
+			writeError(w, http.StatusBadRequest, "invoice_ids is required")
+			return
+		}
+		if len(req.InvoiceIDs) > maxBatchSubmitInvoiceIDs {
+			writeError(w, http.StatusBadRequest, "invoice_ids exceeds the 200 cap")
+			return
+		}
+		if req.IdempotencyKey == "" {
+			writeError(w, http.StatusBadRequest, "idempotency_key is required")
+			return
+		}
+		if len(req.IdempotencyKey) > maxBatchSubmitIdempotencyKeyLen {
+			writeError(w, http.StatusBadRequest, "idempotency_key exceeds the 218-char bound")
+			return
+		}
+		for _, id := range req.InvoiceIDs {
+			if _, err := uuid.Parse(id); err != nil {
+				writeError(w, http.StatusBadRequest, "invoice_ids must be well-formed UUIDs")
+				return
+			}
+		}
+
+		result, err := submit(r.Context(), BatchSubmitInput{
+			InvoiceIDs:     req.InvoiceIDs,
+			IdempotencyKey: req.IdempotencyKey,
+		})
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: batch submit", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 

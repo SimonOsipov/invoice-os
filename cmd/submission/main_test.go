@@ -109,3 +109,47 @@ func TestSubmissionMain_FatalOnAdapterConfigError(t *testing.T) {
 			"from:\n%s", window)
 	}
 }
+
+// TestSubmissionMain_NoNonProductionAdapterFallback: M5-04-08 AC-2. The two tests above
+// prove a log.Fatalf sits somewhere inside a fixed window after submission.Select( -- true
+// of both the OLD conditional fatal (IsProduction(...) || appAdapter != "") and the NEW
+// unconditional one, so neither is sufficient on its own to prove the conditional fallback
+// branch was actually deleted, not merely not-shown-by-the-window. This test asserts that
+// positively:
+//
+//  1. the exact log.Printf string the non-production fallback used to emit
+//     ("continuing with no adapter configured") is gone from the file entirely -- its
+//     presence anywhere, even in a comment, would mean the fallback (or a vestige of it)
+//     survived;
+//  2. IsProduction( does not appear in the window between submission.Select( and the next
+//     statement -- deliberately scoped to that window, not the whole file: registry.go and
+//     other call sites may legitimately reference IsProduction elsewhere.
+func TestSubmissionMain_NoNonProductionAdapterFallback(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read cmd/submission/main.go: %v", err)
+	}
+	src := string(b)
+
+	if strings.Contains(src, "continuing with no adapter configured") {
+		t.Error(`cmd/submission/main.go still contains "continuing with no adapter configured" -- ` +
+			"the non-production fallback branch (or a vestige of it) was not fully removed; a failed " +
+			"adapter Select must be fatal in EVERY environment")
+	}
+
+	idx := strings.Index(src, "submission.Select(")
+	if idx == -1 {
+		t.Fatal(`cmd/submission/main.go does not contain a "submission.Select(" call site -- this test's anchor moved`)
+	}
+	end := idx + 500
+	if end > len(src) {
+		end = len(src)
+	}
+	window := src[idx:end]
+
+	if strings.Contains(window, "IsProduction(") {
+		t.Errorf("found IsProduction( within 500 bytes after the submission.Select( call site -- the "+
+			"adapter-selection error path must be an unconditional log.Fatalf, not gated on "+
+			"IsProduction(...) || appAdapter != \"\":\n%s", window)
+	}
+}

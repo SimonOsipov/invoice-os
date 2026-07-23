@@ -348,3 +348,39 @@ func buildOversized() []byte {
 		count *= 2
 	}
 }
+
+// submissionDemoTINs are the M5-03 mock-adapter trigger TINs, in the order
+// this fixture assigns them. The mock decides its verdict by EXACT buyer-TIN
+// match (internal/submission/mock_script.go, mockTriggerFor) -- any TIN
+// outside this reserved block takes the ordinary accept path, which is why
+// every other committed fixture demos only the happy path.
+//
+// Deliberately Luhn-INVALID, so genBuyerTIN can never mint one by accident;
+// that is what makes them safe as reserved triggers. They still satisfy the
+// seeded buyer-tin-format rule (^[0-9]{8}-[0-9]{4}$), so invoices carrying
+// them validate normally and are genuinely submittable -- the whole point.
+var submissionDemoTINs = []string{
+	"99999999-0001", // accepted
+	"99999999-0002", // rejected, with a reason on buyer.tin
+	"99999999-0003", // pending, then accepted after exactly two re-polls
+	"99999999-0004", // permanently unavailable: retries, then dead-letters
+}
+
+// buildGreenSubmissionDemo derives from a green base and overrides the first
+// len(submissionDemoTINs) buyer TINs with the mock's trigger block, leaving
+// the remaining invoices ordinary (and therefore accepted). The result is a
+// fully valid, importable CSV that exercises every M5-04 submission outcome
+// -- accept, reject, deferred re-poll, and dead-letter -- in one import.
+//
+// Same override idiom as buildEdgeBadTin/buildEdgeBadEncoding: generate green,
+// mutate the minimum, re-render. Unlike those, nothing here is malformed.
+func buildGreenSubmissionDemo(seed int64, invoices int) []byte {
+	rng := rand.New(rand.NewSource(seed))
+	invs := genInvoices(rng, invoices)
+	for i, tin := range submissionDemoTINs {
+		if i < len(invs) {
+			invs[i].buyerTIN = tin
+		}
+	}
+	return renderCSV(strings.Split(canonicalHeader, ","), allRows(invs))
+}

@@ -216,61 +216,76 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := scanInvoice(tx.QueryRow(ctx,
-			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
-		), &inv); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			if pgCode(err) == "22P02" {
-				return ErrValidation
-			}
-			return err
-		}
-
-		rows, err := tx.Query(ctx,
-			`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, inv.ID,
-		)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var item LineItem
-			if err := scanLineItem(rows, &item); err != nil {
-				return err
-			}
-			inv.LineItems = append(inv.LineItems, item)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		// Resolve the human-facing rule_set_versions.version int onto the
-		// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
-		// a correlated scalar SELECT, not a join (a join would make the bare
-		// `id` column ambiguous against invoiceColumns/scanInvoice, shared by
-		// six other writers). Nil when rule_set_version_id IS NULL (never
-		// validated); rule_set_versions is a global table with GRANT SELECT
-		// TO invoice_app, so this is RLS-safe inside the app-pool tx.
-		if inv.RuleSetVersionID != nil {
-			var v int
-			if err := tx.QueryRow(ctx,
-				`SELECT version FROM rule_set_versions WHERE id = $1`, *inv.RuleSetVersionID,
-			).Scan(&v); err != nil {
-				if !errors.Is(err, pgx.ErrNoRows) {
-					return err
-				}
-			} else {
-				inv.RuleSetVersion = &v
-			}
-		}
-
-		return nil
+		var err error
+		inv, err = getTx(ctx, tx, id)
+		return err
 	})
 	if err != nil {
 		return Invoice{}, err
 	}
+	return inv, nil
+}
+
+// getTx is Get's tx-scoped body, extracted verbatim (M5-04-03,
+// [invoice-port-in-05]) so submission's InvoicePort.Canonical can hydrate an
+// invoice inside a caller-supplied tx (e.g. the worker's own
+// db.WithinTenantTx, with no request identity) without opening a second,
+// nested transaction. Get itself is now a thin wrapper around this plus its
+// own db.WithinRequestTenantTx. Byte-identical observable behaviour to the
+// pre-extraction Get, incl. line_no ordering and the rule_set_version
+// subselect (T03-2).
+func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
+	), &inv); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return Invoice{}, ErrValidation
+		}
+		return Invoice{}, err
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, inv.ID,
+	)
+	if err != nil {
+		return Invoice{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item LineItem
+		if err := scanLineItem(rows, &item); err != nil {
+			return Invoice{}, err
+		}
+		inv.LineItems = append(inv.LineItems, item)
+	}
+	if err := rows.Err(); err != nil {
+		return Invoice{}, err
+	}
+
+	// Resolve the human-facing rule_set_versions.version int onto the
+	// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
+	// a correlated scalar SELECT, not a join (a join would make the bare
+	// `id` column ambiguous against invoiceColumns/scanInvoice, shared by
+	// six other writers). Nil when rule_set_version_id IS NULL (never
+	// validated); rule_set_versions is a global table with GRANT SELECT
+	// TO invoice_app, so this is RLS-safe inside the app-pool tx.
+	if inv.RuleSetVersionID != nil {
+		var v int
+		if err := tx.QueryRow(ctx,
+			`SELECT version FROM rule_set_versions WHERE id = $1`, *inv.RuleSetVersionID,
+		).Scan(&v); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return Invoice{}, err
+			}
+		} else {
+			inv.RuleSetVersion = &v
+		}
+	}
+
 	return inv, nil
 }
 
@@ -595,7 +610,7 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 		// 8. demote iff `before` was validated -- a draft has nothing to
 		// demote from.
 		if before.Status == StatusValidated {
-			if after, err = transitionTx(ctx, tx, id, StatusValidated, StatusDraft); err != nil {
+			if after, err = transitionTx(ctx, tx, id, StatusValidated, StatusDraft, actorFromContext(ctx)); err != nil {
 				return err
 			}
 		}
@@ -611,17 +626,20 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 
 // legalTransitions is the SINGLE source of truth for the invoice lifecycle
 // state machine ([D1], [D11] -- no generic FSM framework, Simplicity First):
-// forward-only in M4-02 -- 6 edges, 3 terminals (accepted/rejected/failed have
+// forward-only in M4-02 -- 7 edges, 3 terminals (accepted/rejected/failed have
 // no outgoing edge, so they are simply absent as map keys). M4-05 adds the
 // first recovery edge, validated->draft (the fix-loop demotion: editing a
-// validated invoice sends it back to draft for re-validation) -- 7 edges now.
-// Remaining recovery/retry edges (e.g. rejected->draft, failed->queued) are
-// added by the consumer stories that DRIVE them (M5 submission retries),
+// validated invoice sends it back to draft for re-validation). M5-04-02 adds
+// queued->failed -- 8 edges now -- the dead-letter path for a background
+// worker that gives up on an invoice before it ever reaches submitted; unlike
+// validated->draft this is a forward FAILURE edge, not a recovery edge (it
+// has no reverse). Remaining recovery/retry edges (e.g. rejected->draft,
+// failed->queued) are added by the consumer stories that DRIVE them (M5-05),
 // never speculatively here.
 var legalTransitions = map[Status][]Status{
 	StatusDraft:     {StatusValidated},
 	StatusValidated: {StatusQueued, StatusDraft},
-	StatusQueued:    {StatusSubmitted},
+	StatusQueued:    {StatusSubmitted, StatusFailed},
 	StatusSubmitted: {StatusAccepted, StatusRejected, StatusFailed},
 }
 
@@ -687,7 +705,7 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		}
 
 		var err error
-		inv, err = transitionTx(ctx, tx, id, current, target)
+		inv, err = transitionTx(ctx, tx, id, current, target, actorFromContext(ctx))
 		return err
 	})
 	if err != nil {
@@ -716,11 +734,18 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 //
 // The CALLER owns the FOR UPDATE lock and the redundancy check
 // (current == target -> ErrRedundantTransition, [D4] — checked before
-// legality, hence above the call, not in here). callerID is derived from ctx
-// HERE rather than passed in: the history INSERT binds BOTH TenantID and
-// Subject, so a Subject-only `actor` param (the originally specified
-// signature) would have to re-derive the identity for TenantID anyway, and
-// could then only ever disagree with the tenant_id beside it [Stage-1 F3].
+// legality, hence above the call, not in here). The caller also owns the
+// actor: an `actor Actor` parameter (M5-04-02) rather than transitionTx
+// re-deriving it from ctx itself, because the history INSERT binds BOTH
+// TenantID and Subject, so a Subject-only `actor` param (the originally
+// specified signature) would have to re-derive the identity for TenantID
+// anyway, and could then only ever disagree with the tenant_id beside it
+// [Stage-1 F3] — the {TenantID, Subject} pair sidesteps that by construction.
+// The three pre-M5-04 HTTP-path callers pass actorFromContext(ctx), which
+// reproduces the old inline `callerID, _ := auth.IdentityFromContext(ctx)`
+// byte-for-byte; MarkSubmittedTx/MarkFailedTx (actor.go) pass
+// SystemActor(tenantID) instead, so a background worker with no JWT identity
+// in ctx no longer trips the actor CHECK constraints.
 //
 // Errors propagate RAW — never wrapped, and the actor is never
 // pre-validated — so their SQLSTATE survives for the atomicity specs: an
@@ -728,9 +753,7 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // 256-char one passes that but fails audit_log's char_length(actor)<=255,
 // both 23514, which TestTransition_AtomicityRollsBackOnActorCheckFailure and
 // GATE-13 assert via pgCode.
-func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status) (Invoice, error) {
-	callerID, _ := auth.IdentityFromContext(ctx)
-
+func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor) (Invoice, error) {
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition
 	}
@@ -746,12 +769,12 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor)
 		 VALUES ($1, $2, $3, $4, $5)`,
-		callerID.TenantID, id, string(current), string(target), callerID.Subject,
+		actor.TenantID, id, string(current), string(target), actor.Subject,
 	); err != nil {
 		return Invoice{}, err
 	}
 
-	if err := audit.Record(ctx, tx, callerID.Subject, "invoice.transitioned", map[string]any{
+	if err := audit.Record(ctx, tx, actor.Subject, "invoice.transitioned", map[string]any{
 		"id":   id,
 		"from": current,
 		"to":   target,
@@ -893,7 +916,7 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 		// carries the violations/version AND the new status.
 		if !blocked {
 			var err error
-			if inv, err = transitionTx(ctx, tx, id, StatusDraft, StatusValidated); err != nil {
+			if inv, err = transitionTx(ctx, tx, id, StatusDraft, StatusValidated, actorFromContext(ctx)); err != nil {
 				return err
 			}
 		}

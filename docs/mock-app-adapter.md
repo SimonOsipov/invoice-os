@@ -119,8 +119,9 @@ operator at a field that genuinely exists, and lets fixing it make the resubmiss
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `APP_ADAPTER` | `cmd/submission/main.go` | Set to `mock` to select this adapter. Unset means no adapter, which is fatal in production. |
+| `APP_ADAPTER` | `cmd/submission/main.go` | Set to `mock` to select this adapter. Unset is fatal in EVERY environment (tightened M5-04) — SubmitWorker/PollWorker need a real adapter to do anything, so the service refuses to boot without one, dev included. |
 | `APP_ADAPTER_MOCK_LATENCY` | `MockConfigFromEnv` in `internal/submission/mock_adapter.go`, called from `cmd/submission/main.go` | Boot-time in-flight latency baseline, default `800ms`. `slow` waits 4×, `timeout` waits 8×. Unparseable or **negative** is a hard boot failure; `0s` is legitimate and means instant. |
+| `SUBMISSION_RATE_LIMIT_PER_MINUTE` | `RateLimitConfigFromEnv` in `internal/submission/ratelimit.go`, called from `cmd/submission/main.go` | Default per-tenant submit rate limit, default `60`. Unset is fine (falls back to the default); unparseable or **`<= 0`** is a hard boot failure. |
 
 There is no runtime control surface — adjusting latency without a redeploy is M5-14's scope.
 Registering the mock does **not** make it bootable in production: `productionAdapters` stays

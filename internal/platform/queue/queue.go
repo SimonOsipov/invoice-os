@@ -80,7 +80,8 @@ func (c *Client) River() *river.Client[pgx.Tx] { return c.river }
 // returns the tenant the job will run its work under (the worker re-establishes that
 // context from the payload — the worker-role pattern, docs/migrations.md §8). EnqueueTx
 // uses it to fail closed when the declared tenant diverges from the tenant the
-// idempotency key is recorded under. DemoArgs implements it; every real job-args type must.
+// idempotency key is recorded under. submission.SubmitArgs implements it; every real
+// job-args type must.
 type TenantScoped interface {
 	Tenant() string
 }

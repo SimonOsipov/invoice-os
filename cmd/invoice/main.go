@@ -3,7 +3,9 @@
 // routes (M4-02): manual create, read/list, and the single guarded
 // transitions endpoint — all resolved under RLS via internal/invoice.Store —
 // plus the validate gate (M4-04), which evaluates an invoice against 04's
-// active rule set and is the only route to the validated status.
+// active rule set and is the only route to the validated status, and the
+// batch submit endpoint (M5-04-07/08), which enqueues validated invoices
+// onto the submission worker's queue via a transactional-outbox insert.
 package main
 
 import (
@@ -16,6 +18,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
 func main() {
@@ -96,6 +99,20 @@ func main() {
 	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler())
+
+	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
+	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this
+	// service only ever enqueues submission_submit jobs via the transactional outbox
+	// (EnqueueTx), it never fetches or runs them, so it must NOT be registered on the
+	// platform kit's background-worker lifecycle (queue.Client.Start is for working
+	// clients only -- internal/platform/queue/queue.go's own doc comment). Reached via
+	// the gateway as /api/invoice/v1/invoices/submissions.
+	q, err := queue.New(pool, queue.Config{})
+	if err != nil {
+		log.Fatalf("invoice: queue: %v", err)
+	}
+	submitter := invoice.NewSubmitter(store, q)
+	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("invoice: %v", err)

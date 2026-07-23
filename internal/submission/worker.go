@@ -6,14 +6,12 @@
 // branch (case Pending, below) enqueues the first poll hop at the adapter's exact PollAfter
 // inside the same OncePerJob closure that persists poll_ref/next_poll_at, so the enqueue
 // commits atomically with the state write; PollWorker's own Pending branch does the same for
-// every hop after that. Workers(pool, logger) still returns an EMPTY river.Workers bundle
-// here -- both workers are independently constructible (every dependency, including the
-// Queue field, is an exported struct field) so a caller (or a test) builds one directly and
-// calls Work without wiring through the bundle. Wiring SubmitWorker/PollWorker into the
-// bundle cmd/submission actually runs is M5-04-08's job, atomically with widening this
-// function's signature and updating its two call sites (cmd/submission/main.go and this
-// package's own worker_smoke_test.go) -- see the M5-04-05 story's Stage-2 architect
-// validation, item 9.
+// every hop after that. Workers(sw, pw) (M5-04-08) registers both, built by the caller with
+// every field except Queue set -- Queue is backfilled onto the same pointers after
+// queue.New returns, breaking the circular dependency between the client (which needs the
+// Workers bundle) and the workers (which need the client). Both workers are independently
+// constructible (every dependency is an exported struct field), so a caller (or a test) can
+// still build one directly and call Work without going through the bundle at all.
 package submission
 
 import (
@@ -513,12 +511,16 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 	return pollErr
 }
 
-// Workers builds the River worker bundle for the submission service. It returns an
-// otherwise-empty bundle here: SubmitWorker needs an Adapter / InvoicePort / RateLimiter /
-// default rate limit that only cmd/submission's composition root can build, and wiring those
-// in (plus M5-04-06's PollWorker) is M5-04-08's job. Until then an empty bundle is harmless
-// -- nothing in this package's own tests enqueues a submission_submit job through a live
-// queue.Client, so an unregistered kind is never fetched.
-func Workers(pool *pgxpool.Pool, logger *slog.Logger) *river.Workers {
-	return river.NewWorkers()
+// Workers builds the River worker bundle for the submission service: sw and pw, already
+// constructed by the caller (composition root: cmd/submission/main.go, or a test's own
+// smoke client) with every dependency set except Queue, which does not exist yet at this
+// point -- queue.New needs this very bundle to build the client. The caller backfills
+// sw.Queue/pw.Queue onto these same pointers once queue.New returns (river.NewClient only
+// reads Workers to register Work funcs by kind at construction time; it never inspects
+// worker fields afterward, so mutating them post-registration is safe).
+func Workers(sw *SubmitWorker, pw *PollWorker) *river.Workers {
+	workers := river.NewWorkers()
+	river.AddWorker(workers, sw)
+	river.AddWorker(workers, pw)
+	return workers
 }

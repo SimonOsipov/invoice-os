@@ -8,9 +8,12 @@
 // (worker.go); the outbox-only subtests below now use SubmitArgs instead, since EnqueueTx's
 // own mechanics don't care which JobArgs implementation they carry. The one subtest that
 // DID need a live, completing worker ("demo job runs to completion") is gone with its
-// subject: Workers(pool, logger) returns an EMPTY bundle until M5-04-08 wires SubmitWorker
-// into it, so there is no worker yet that could carry a submission_submit job to completion
-// here (see worker.go's own doc comment).
+// subject: newSmokeClient builds a bare SubmitWorker/PollWorker pair (Adapter/InvoicePort
+// left zero-value -- neither's Work is exercised here, only failWorker's), registered via
+// submission.Workers(sw, pw) alongside the test-only failWorker, so there is still no
+// worker here that could carry a submission_submit job to completion (that needs a real
+// Adapter/InvoicePort, which is cmd/submission's composition root, not this package's own
+// tests).
 //
 // Like the M2-07 RLS suite, it reuses the Postgres-service-container + Makefile-bootstrap
 // path (not testcontainers): it connects as invoice_app via DATABASE_URL and SKIPS ITSELF
@@ -90,12 +93,15 @@ type immediateRetry struct{}
 
 func (immediateRetry) NextRetry(*rivertype.JobRow) time.Time { return time.Now() }
 
-// newSmokeClient builds a WORKING client with whatever Workers(pool, nil) currently
-// registers (an empty bundle until M5-04-08 wires SubmitWorker in) plus the test-only fail
+// newSmokeClient builds a WORKING client registering a bare SubmitWorker/PollWorker pair
+// (submission.Workers(sw, pw) -- Adapter/InvoicePort/Limiter left zero-value, since neither
+// worker's Work is exercised by this file, only failWorker's) plus the test-only fail
 // worker, under the fast retry policy.
 func newSmokeClient(t *testing.T, pool *pgxpool.Pool) *queue.Client {
 	t.Helper()
-	workers := submission.Workers(pool, nil)
+	sw := &submission.SubmitWorker{Pool: pool}
+	pw := &submission.PollWorker{Pool: pool}
+	workers := submission.Workers(sw, pw)
 	river.AddWorker(workers, &failWorker{})
 	q, err := queue.New(pool, queue.Config{
 		Queues:      map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 5}},
@@ -105,15 +111,16 @@ func newSmokeClient(t *testing.T, pool *pgxpool.Pool) *queue.Client {
 	if err != nil {
 		t.Fatalf("build queue client: %v", err)
 	}
+	sw.Queue, pw.Queue = q, q
 	return q
 }
 
 // smokeOutboxQueue is a River queue name no client in this test binary ever configures
-// (newSmokeClient/newWorkerClient only configure river.QueueDefault). TestQueueSmoke_Outbox
-// below enqueues SubmitArgs jobs that nothing in this subtask's Workers(...) bundle can work
-// yet (see worker.go's doc comment) -- without a dedicated queue, a later-started working
-// client sharing this package's Postgres (e.g. TestQueueSmoke_Worker's) would fetch these
-// stray `default`-queue rows anyway and log "Unhandled job kind" on every immediate retry.
+// (newSmokeClient/newWorkerClient only configure river.QueueDefault) -- without a dedicated
+// queue, a later-started working client sharing this package's Postgres (e.g.
+// TestQueueSmoke_Worker's) would fetch these stray `default`-queue rows anyway and process
+// them with the zero-value SubmitWorker newSmokeClient registers (nil Adapter/InvoicePort),
+// which would panic on Work rather than exercising the outbox mechanics this test wants.
 const smokeOutboxQueue = "smoke-outbox-only"
 
 // TestQueueSmoke_Outbox exercises the transactional outbox without a running worker: it
@@ -122,11 +129,11 @@ const smokeOutboxQueue = "smoke-outbox-only"
 // client shape (newInsertClient, failure_modes_test.go) rather than newSmokeClient: River
 // validates at InsertTx time that a job's Kind is registered in the client's Workers bundle
 // whenever that bundle is non-nil, even for a client that is never Start()ed -- true of
-// newSmokeClient's bundle once M5-04-05 empties Workers(...) (worker.go) of the M2-08
-// DemoWorker registration these subtests used to ride along on. An insert-only client
-// (Workers left nil entirely) skips that check, matching every other pure-EnqueueTx test in
-// this package (failure_modes_test.go's rawArgs/guardedArgs/poisonArgs/noTenantArgs, none of
-// which are registered anywhere either).
+// newSmokeClient's bundle now that it registers SubmitWorker/PollWorker (M5-04-08). An
+// insert-only client (Workers left nil entirely) skips that check, matching every other
+// pure-EnqueueTx test in this package (failure_modes_test.go's
+// rawArgs/guardedArgs/poisonArgs/noTenantArgs, none of which are registered anywhere
+// either).
 func TestQueueSmoke_Outbox(t *testing.T) {
 	pool := requireDB(t)
 	defer pool.Close()
@@ -198,10 +205,11 @@ func TestQueueSmoke_Outbox(t *testing.T) {
 
 // TestQueueSmoke_Worker starts the pool once and proves an always-failing job exhausts
 // MaxAttempts into the discarded state (AC #5). It no longer also proves a job "runs to
-// completion": that subtest exercised the now-deleted M2-08 DemoWorker, and
-// Workers(pool, logger) registers no worker for submission_submit until M5-04-08 wires
-// SubmitWorker in, so there is nothing here yet that could carry a job to `completed`
-// (worker.go's own doc comment).
+// completion": that subtest exercised the now-deleted M2-08 DemoWorker, and this file never
+// enqueues a real SubmitArgs/PollArgs job onto river.QueueDefault -- newSmokeClient's
+// SubmitWorker/PollWorker are registered with nil Adapter/InvoicePort (see its own doc
+// comment), so driving one to `completed` needs the real dependencies only cmd/submission's
+// composition root builds.
 func TestQueueSmoke_Worker(t *testing.T) {
 	pool := requireDB(t)
 	defer pool.Close()

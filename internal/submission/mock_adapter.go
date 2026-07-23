@@ -1,9 +1,6 @@
-// mock_adapter.go: M5-03-03 (task-226). The exported MockAdapter seam -- MockConfig,
-// NewMockAdapter, Name/Version/Transform, the two-phase Submit, and the context-aware wait
-// helper both Submit and Poll share.
-//
-// Everything M5-03-03 owns is implemented here. Poll alone is still a no-op stub: it belongs to
-// M5-03-04, which reuses mockWait unchanged.
+// mock_adapter.go: M5-03-03 (task-226) and M5-03-04 (task-227). The exported MockAdapter seam --
+// MockConfig, NewMockAdapter, Name/Version/Transform, the two-phase Submit, the ref-driven Poll,
+// and the context-aware wait helper both Submit and Poll share.
 //
 // Decisions this file implements (the executor must not "improve" any of them):
 //
@@ -244,13 +241,98 @@ func (a *MockAdapter) Submit(ctx context.Context, w Wire, idemKey string) (Resul
 	return result, ev
 }
 
-// Poll resumes a deferred verdict from the Ref a prior Pending carried.
+// Poll resumes a deferred verdict from the Ref a prior Pending carried. Like Submit it returns
+// exactly one Result variant plus the Evidence of the attempt; the step comments below are
+// task-227's five-row evidence matrix read top to bottom.
 //
-// TODO(M5-03-04): implemented there, not here. It reuses mockWait with a.cfg.Latency (always the
-// baseline -- a ref carries no trigger), placed after the ref decode and before the 202/200
-// synthesis, with ReachedWire already true.
+// THE HAND-OFF CONTRACT M5-04 DEPENDS ON. The ref is the ONLY state that exists
+// ([ref-carries-the-verdict]): it carries the deferred identifiers AND a decrementing poll count,
+// and this adapter remembers nothing between calls. So the caller MUST persist the ref carried by
+// EACH Pending and poll the NEWEST one. Re-polling a stale ref returns the same Pending forever --
+// it is a pure function of the handle it was given, not a subscription that ages.
+//
+// The rejected alternative was a wall-clock deadline baked into the ref, which would converge
+// regardless of what the caller persisted. It was refused because it makes the outcome
+// TIME-dependent: the same ref would return Pending or Accepted depending on when it was polled,
+// which breaks Core AC-2's determinism (a worker restarted between polls, or a second replica,
+// must converge identically).
+//
+// This contract belongs HERE and not on Ref: Ref is declared in adapter.go and belongs to the
+// generic M5-02 seam that every future adapter's handle uses. The decrementing counter is the
+// MOCK's design, not the seam's.
+//
+// [poll-consumes-one-then-tests]: `remaining := n - 1` is computed FIRST -- this call consumes one
+// -- and convergence tests `remaining <= 0`. n means "polls still required, INCLUDING this one",
+// so the first ref (n = mockPendingPolls = 2) converges on the SECOND poll, which is AC-2's "twice
+// in total".
 func (a *MockAdapter) Poll(ctx context.Context, ref Ref) (Result, Evidence) {
-	return nil, Evidence{}
+	// STEP 0, BEFORE the ctx check, exactly as Submit does: the headers describe the call we were
+	// ABOUT to make. mockRequestHeaders("") stamps Content-Type, Accept and User-Agent and, BY
+	// CONSTRUCTION, no Idempotency-Key -- which is what keeps L13 satisfied for the contract
+	// suite's two Poll drives (contract_test.go:304 and :340, both with idemKey "").
+	start := time.Now()
+	ev := Evidence{RequestHeaders: mockRequestHeaders("")}
+
+	// STEP 1 (L16), BEFORE the decode. The ONE row of Poll's matrix where LatencyMS stays nil:
+	// nothing ran, so nothing was measured. The ordering is OBSERVABLE -- contract_test.go:340
+	// drives a cancelled ctx AND an unissued ref, so both orderings return Retryable and only the
+	// nil latency (and the ctx error rather than ErrMockUnknownRef) tells them apart.
+	if err := ctx.Err(); err != nil {
+		return Retryable{Err: err}, ev
+	}
+
+	// STEP 2. The decoder's error travels UNWRAPPED: it already wraps ErrMockUnknownRef and already
+	// carries exactly one "submission: " prefix, so a second fmt.Errorf would double it (the defect
+	// QA fixed in M5-03-01). No re-validation of n or the IRN either -- decodeMockRef owns those
+	// invariants ([ref-enforces-its-own-invariants]), which is why its guard is `n < 0` and a
+	// hand-built n = 0 ref is legal and converges immediately. ReachedWire stays false: a handle we
+	// cannot READ is a call we never MADE.
+	n, ids, err := decodeMockRef(ref)
+	if err != nil {
+		ev.LatencyMS = mockElapsedMS(start)
+		return Retryable{Err: err}, ev
+	}
+
+	// STEP 3. ReachedWire goes true BEFORE the wait ([two-phase-wire]), so a context that dies
+	// mid-flight reports "sent". The wait is mockWait with the BASELINE directly, never
+	// mockInFlight: a ref carries no trigger, so there is nothing to multiply.
+	ev.ReachedWire = true
+	if err := mockWait(ctx, a.cfg.Latency); err != nil {
+		ev.LatencyMS = mockElapsedMS(start)
+		return Retryable{Err: err}, ev
+	}
+
+	// STEP 4 -- synthesize the response. RequestBody is left nil on EVERY path above and below: a
+	// poll is GET /submissions/{ref} and there is no document to send. exchange.go:213-221
+	// preserves nil as SQL NULL distinctly from "" as an empty string, so `request_body IS NULL` on
+	// a poll row IS the evidence that we asked without transmitting anything.
+	respHeaders := http.Header{}
+	respHeaders.Set("Content-Type", mockContentTypeJSON)
+
+	var (
+		result Result
+		status int
+		body   string
+	)
+	if remaining := n - 1; remaining > 0 {
+		// The SAME new ref goes into the Pending and into the archived 202 body: the caller who
+		// polls and the caller who reads the archive must not see two different handles. The
+		// identifiers are RE-ENCODED unchanged, never regenerated -- Poll has no wire to
+		// regenerate them from.
+		next := encodeMockRef(remaining, ids)
+		status, body = http.StatusAccepted, mockPendingBody(next)
+		result = Pending{Ref: next, PollAfter: time.Now().Add(mockPollBackoff)}
+	} else {
+		// Convergence. The verdict is READ OUT of the ref, never recomputed.
+		status, body = http.StatusOK, mockAcceptedBody(ids)
+		result = Accepted{IRN: ids.IRN, CSID: ids.CSID, QRPayload: ids.QRPayload}
+	}
+
+	ev.HTTPStatus = mockIntPtr(status)
+	ev.ResponseBody = &body
+	ev.ResponseHeaders = respHeaders
+	ev.LatencyMS = mockElapsedMS(start)
+	return result, ev
 }
 
 // mockWait is the ONE in-flight wait, shared by Submit and Poll. It returns nil when the full

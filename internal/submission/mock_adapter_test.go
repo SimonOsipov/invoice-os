@@ -111,6 +111,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -3661,4 +3662,220 @@ func TestMockConfigFromEnv(t *testing.T) {
 				"value -- the operator cannot tell which of several duration knobs they mistyped", maLatencyEnv, err)
 		}
 	})
+}
+
+// TestMockConfigFromEnv_AdversarialValues: M5-03-05 QA Mode B adversarial coverage --
+// APP_ADAPTER_MOCK_LATENCY values not in the story's own Test Specs table.
+//
+// The "unitless zero" row corrects an assumption in this subtask's own review notes, which
+// expected time.ParseDuration to REJECT a bare "0". Verified by execution
+// (2026-07-23): time.ParseDuration("0") = (0s, nil) -- Go special-cases a lone zero as valid
+// with no unit suffix. So APP_ADAPTER_MOCK_LATENCY=0 must behave exactly like =0s: accepted,
+// MockConfig{Latency: 0}, nil. Asserting rejection here would be a wrong test pinning a
+// misunderstanding of the stdlib, not a real requirement.
+func TestMockConfigFromEnv_AdversarialValues(t *testing.T) {
+	t.Run("huge value parses and is accepted", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "100000h")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s=100000h returned unexpected error: %v", maLatencyEnv, err)
+		}
+		if want := 100000 * time.Hour; cfg.Latency != want {
+			t.Errorf("MockConfigFromEnv() with %s=100000h = MockConfig{Latency: %v}, want %v",
+				maLatencyEnv, cfg.Latency, want)
+		}
+	})
+
+	t.Run("unitless zero is accepted, same as 0s", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "0")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s=0 returned error %v, want none -- "+
+				"time.ParseDuration(\"0\") succeeds with no unit suffix", maLatencyEnv, err)
+		}
+		if cfg != (submission.MockConfig{Latency: 0}) {
+			t.Errorf("MockConfigFromEnv() with %s=0 = %+v, want MockConfig{Latency: 0}", maLatencyEnv, cfg)
+		}
+	})
+
+	t.Run("whitespace-padded value is a hard failure", func(t *testing.T) {
+		const raw = "  100ms  "
+		t.Setenv(maLatencyEnv, raw)
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err == nil {
+			t.Fatalf("MockConfigFromEnv() with %s=%q returned (%+v, nil), want an error -- "+
+				"time.ParseDuration does not trim surrounding whitespace", maLatencyEnv, raw, cfg)
+		}
+		if cfg != (submission.MockConfig{}) {
+			t.Errorf("MockConfigFromEnv() with %s=%q returned config %+v alongside its error, want "+
+				"the ZERO MockConfig", maLatencyEnv, raw, cfg)
+		}
+		if !strings.Contains(err.Error(), maLatencyEnv) {
+			t.Errorf("MockConfigFromEnv() with %s=%q error = %q, which never names the env var",
+				maLatencyEnv, raw, err)
+		}
+		if !strings.Contains(err.Error(), raw) {
+			t.Errorf("MockConfigFromEnv() with %s=%q error = %q, which never quotes the offending value",
+				maLatencyEnv, raw, err)
+		}
+	})
+
+	t.Run("leading plus sign parses and is accepted", func(t *testing.T) {
+		t.Setenv(maLatencyEnv, "+5s")
+
+		cfg, err := submission.MockConfigFromEnv()
+		if err != nil {
+			t.Fatalf("MockConfigFromEnv() with %s=+5s returned unexpected error: %v", maLatencyEnv, err)
+		}
+		if want := 5 * time.Second; cfg.Latency != want {
+			t.Errorf("MockConfigFromEnv() with %s=+5s = MockConfig{Latency: %v}, want %v",
+				maLatencyEnv, cfg.Latency, want)
+		}
+	})
+}
+
+// TestMockConfigFromEnv_NotMemoized: two calls reading two DIFFERENT env values must return two
+// DIFFERENT configs. MockConfigFromEnv has no package-level cache to bust and the comment above
+// it says "MockConfig itself stays a plain value the tests construct directly" -- but nothing
+// mechanically pins the absence of memoization until this test does. A memoized implementation
+// (return the first parsed value forever) would pass every row of TestMockConfigFromEnv, because
+// each of ITS subtests calls MockConfigFromEnv exactly once against a fresh t.Setenv.
+func TestMockConfigFromEnv_NotMemoized(t *testing.T) {
+	t.Setenv(maLatencyEnv, "111ms")
+	first, err := submission.MockConfigFromEnv()
+	if err != nil {
+		t.Fatalf("MockConfigFromEnv() first call returned unexpected error: %v", err)
+	}
+	if want := 111 * time.Millisecond; first.Latency != want {
+		t.Fatalf("MockConfigFromEnv() first call = %v, want %v", first.Latency, want)
+	}
+
+	// Re-read against the SAME value: a memoized implementation and a non-memoized one agree
+	// here, so this call alone would not catch memoization.
+	second, err := submission.MockConfigFromEnv()
+	if err != nil {
+		t.Fatalf("MockConfigFromEnv() second call (same env) returned unexpected error: %v", err)
+	}
+	if second != first {
+		t.Errorf("MockConfigFromEnv() second call (env unchanged) = %+v, want %+v", second, first)
+	}
+
+	// Change the env and read a THIRD time: this is the row that catches memoization. A cached
+	// implementation would still return 111ms here.
+	t.Setenv(maLatencyEnv, "222ms")
+	third, err := submission.MockConfigFromEnv()
+	if err != nil {
+		t.Fatalf("MockConfigFromEnv() third call (env changed) returned unexpected error: %v", err)
+	}
+	if want := 222 * time.Millisecond; third.Latency != want {
+		t.Errorf("MockConfigFromEnv() third call (env changed to 222ms) = %+v, want MockConfig{Latency: %v} -- "+
+			"got the FIRST call's value back, which means the env is not really being re-read on every call",
+			third, want)
+	}
+}
+
+// TestNewDefaultRegistry_ReturnsIndependentAdapters: two calls to NewDefaultRegistry with the
+// same cfg must not hand back the SAME *MockAdapter instance. MockAdapter holds no mutable state
+// today, so nothing in the current suite would observably break if a future refactor cached and
+// shared one instance across calls -- but MockAdapter's own header comment says "no clock beyond
+// measurement, no randomness, no counter, no database", and a stateful adapter added later (or a
+// mutable field added to MockAdapter) would silently leak across every caller of
+// NewDefaultRegistry (cmd/submission/main.go boots exactly once today, but nothing pins that a
+// future test helper or a second service entrypoint calling it twice stays isolated).
+func TestNewDefaultRegistry_ReturnsIndependentAdapters(t *testing.T) {
+	cfg := submission.MockConfig{Latency: 5 * time.Millisecond}
+
+	reg1 := submission.NewDefaultRegistry(cfg)
+	reg2 := submission.NewDefaultRegistry(cfg)
+
+	a1, ok := reg1["mock"]
+	if !ok {
+		t.Fatalf(`NewDefaultRegistry(cfg) (first call) has no "mock" entry: %+v`, reg1)
+	}
+	a2, ok := reg2["mock"]
+	if !ok {
+		t.Fatalf(`NewDefaultRegistry(cfg) (second call) has no "mock" entry: %+v`, reg2)
+	}
+
+	p1, ok := a1.(*submission.MockAdapter)
+	if !ok {
+		t.Fatalf("NewDefaultRegistry(cfg)[\"mock\"] (first call) is %T, want *submission.MockAdapter", a1)
+	}
+	p2, ok := a2.(*submission.MockAdapter)
+	if !ok {
+		t.Fatalf("NewDefaultRegistry(cfg)[\"mock\"] (second call) is %T, want *submission.MockAdapter", a2)
+	}
+
+	if p1 == p2 {
+		t.Error("NewDefaultRegistry(cfg) called twice returned the SAME *MockAdapter pointer both " +
+			"times -- the two registries share one instance. Harmless while MockAdapter is stateless, " +
+			"but a future stateful adapter (or a mutable field added here) would leak across every " +
+			"caller of NewDefaultRegistry through this shared instance")
+	}
+}
+
+// TestSelect_AdapterNameIsCaseSensitive: registry.go documents that IsProduction normalizes
+// ENVIRONMENT (trim + lowercase) because it is an unvalidated, operator-typed value where
+// "Production" / "PRODUCTION" / " production" must all still trip the fail-closed gate. Select's
+// adapter NAME lookup gets no such normalization -- it is a plain map index into Registry. This
+// test pins that asymmetry as OBSERVED BEHAVIOUR: "Mock" and "MOCK" do not match the registry's
+// "mock" key.
+//
+// This is deliberate, not a gap: the registry is keyed by Adapter.Name() (registry.go:16), which
+// every adapter this repo ships returns as a fixed lowercase literal ("mock", mock_adapter.go:49)
+// -- there is exactly one spelling to match, unlike ENVIRONMENT which arrives from operator-set
+// infra config with no enforced casing convention. Normalizing name lookups would only paper over
+// a typo in APP_ADAPTER, which should fail loudly (ErrUnknownAdapter) rather than silently
+// coerce to a name nobody typed.
+func TestSelect_AdapterNameIsCaseSensitive(t *testing.T) {
+	reg := submission.NewDefaultRegistry(submission.MockConfig{})
+
+	for _, name := range []string{"Mock", "MOCK"} {
+		t.Run("name="+name, func(t *testing.T) {
+			a, err := submission.Select(reg, "development", name)
+			if !errors.Is(err, submission.ErrUnknownAdapter) {
+				t.Errorf("Select(NewDefaultRegistry(cfg), \"development\", %q) error = %v, want "+
+					"errors.Is(err, ErrUnknownAdapter) -- adapter name lookup is case-sensitive by "+
+					"design (unlike IsProduction's environment normalization), so a casing variant of "+
+					"the registered \"mock\" key must not match", name, err)
+			}
+			if a != nil {
+				t.Errorf("Select(..., %q) adapter = %+v, want nil", name, a)
+			}
+		})
+	}
+}
+
+// TestMockAdapterDoc_SeeAlsoCitesTheSeedMigration: M5-03-05's docs/mock-app-adapter.md fix. The
+// "See also" section previously claimed docs/migrations.md pinned buyer-tin-format -- FALSE; that
+// doc is "Database Migrations & Role Model (M2-01)" and never mentions buyer-tin-format or any
+// seed. This pins the fix: the section must cite the actual seed migration and must not still
+// point a reader at migrations.md for this fact.
+func TestMockAdapterDoc_SeeAlsoCitesTheSeedMigration(t *testing.T) {
+	path := filepath.Join("..", "..", "docs", "mock-app-adapter.md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(b)
+
+	const seedMigration = "migrations/20260711121327_seed_mbs_v1.sql"
+	if !strings.Contains(doc, seedMigration) {
+		t.Errorf("%s does not cite %s -- the See-also section must point an operator at the actual "+
+			"seed that pins buyer-tin-format", path, seedMigration)
+	}
+
+	seeAlsoIdx := strings.Index(doc, "## See also")
+	if seeAlsoIdx == -1 {
+		t.Fatal(`docs/mock-app-adapter.md has no "## See also" section -- this test's anchor moved`)
+	}
+	seeAlso := doc[seeAlsoIdx:]
+	if strings.Contains(seeAlso, "migrations.md") {
+		t.Error(`docs/mock-app-adapter.md's "## See also" section still references migrations.md -- ` +
+			"that doc (\"Database Migrations & Role Model (M2-01)\") never mentions buyer-tin-format " +
+			"or any seed; the section must cite the seed migration directly instead of a dangling link")
+	}
 }

@@ -40,6 +40,46 @@
 // and still fails a time.Sleep implementation by three seconds. See
 // [cancellation-is-observable-in-the-wait].
 //
+// M5-03-04 (task-227) ADDS S19-S29 at the bottom of this file -- Poll's convergence arc, the ref
+// invariants and Poll's own cancellation oracle. What that block proves, once green:
+//
+//   - that the pending trigger mints a ref carrying n = 2 (S19, green at authoring: M5-03-03
+//     already shipped the pending branch, and the ONLY new content is the count);
+//   - that Poll consumes one poll per call and converges on the SECOND one, and -- the killer --
+//     that re-polling a STALE ref never converges but returns the same Pending forever, which is
+//     the M5-04 hand-off contract made executable (S20);
+//   - that the converged Accepted comes STRAIGHT OUT OF THE REF and is neither recomputed nor
+//     constant, proved by minting a ref carrying sentinels that exist nowhere else (S21);
+//   - that every unreadable handle -- unknown, empty, truncated, wrong-prefix, bad base64, bad
+//     JSON, negative n, blank IRN -- is Retryable with ReachedWire false, with a real minted ref
+//     as the mandatory positive control (S22);
+//   - that the context check runs BEFORE the decode, which only Evidence.LatencyMS can observe
+//     (S23);
+//   - that Poll stamps exactly three request headers and never an Idempotency-Key, with a Submit
+//     on the same adapter as the negative control (S24);
+//   - that Poll's evidence rows carry a NIL RequestBody, one response header, and 202-then-200
+//     with a body (S25);
+//   - that the adapter still holds no mutable field and that two polls of one ref on one instance
+//     are identical (S26);
+//   - and that Poll routes through the SAME shared context-aware wait as Submit: it aborts a 5s
+//     in-flight wait on a 250ms deadline (S27), records "sent" for it (S28), and -- the positive
+//     control without which S27 is vacuous -- really does wait the configured latency (S29).
+//
+// THE CONVERGENCE RULE IS [poll-consumes-one-then-tests]: Poll computes `remaining := n - 1`
+// FIRST and converges when `remaining <= 0`, so `n` means "polls still required, INCLUDING this
+// one". Submit mints n = 2, Poll #1 returns n = 1, Poll #2 returns Accepted -- exactly TWO polls.
+// The design section's original "n > 0 -> Pending(n-1); n == 0 -> Accepted" took THREE and
+// contradicted AC-2; it has been corrected in the story. Do not write these specs to it.
+//
+// THE REF CODEC IS TRANSCRIBED HERE (maDecodeRef / maMintRef), not called through the unexported
+// decodeMockRef ([test-transcribes-the-published-ref-codec]). A spec that called decodeMockRef
+// would compare the implementation to itself through the same function and could falsify neither
+// "Poll recomputes the identifiers" nor "Poll returns a constant". A transcribed codec can MINT a
+// ref carrying sentinels that exist nowhere but in that ref -- and Poll has no wire to synthesize
+// from, so no recomputing implementation can produce them. The transcription can drift, but it
+// fails LOUDLY: a wrong field name mints a ref decodeMockRef rejects as blank-IRN, turning an
+// expected Accepted into a Retryable.
+//
 // PACKAGE submission_test (EXTERNAL), deliberately unlike the two in-package files next door
 // (mock_wire_test.go, mock_script_test.go). This subtask ships the EXPORTED MockAdapter seam and
 // every spec below was checked to need only exported symbols plus CheckResult / CheckEvidence /
@@ -64,6 +104,7 @@ package submission_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1781,5 +1822,1100 @@ func TestMockAdapter_ExtremeLatencyOverflowDoesNotHangOnTimeout(t *testing.T) {
 	rt, ok := r.(submission.Retryable)
 	if !ok || !errors.Is(rt.Err, submission.ErrMockTimeout) {
 		t.Errorf("Result = %#v, want Retryable wrapping ErrMockTimeout", r)
+	}
+}
+
+// =======================================================================================
+// M5-03-04 (task-227) -- S19-S29. Poll: the stateless pending handle, the two-poll
+// convergence arc, the ref invariants and Poll's own cancellation oracle.
+// =======================================================================================
+
+// ---------------------------------------------------------------------------------------
+// The transcribed ref codec and the Poll helpers.
+// ---------------------------------------------------------------------------------------
+
+// maRefPayload is the decoded shape of a Ref, transcribed from mock_script.go:194-199. The JSON
+// tags are load-bearing: they are what encodeMockRef emits and what decodeMockRef reads, so a
+// drifted tag here mints a ref the production decoder rejects and the spec fails LOUDLY rather
+// than passing vacuously ([test-transcribes-the-published-ref-codec]).
+type maRefPayload struct {
+	N    int    `json:"n"`
+	IRN  string `json:"irn"`
+	CSID string `json:"csid"`
+	QR   string `json:"qr"`
+}
+
+// maDecodeRef reverses the PUBLISHED ref format -- mockRefPrefix + base64url(compact JSON) --
+// without touching the unexported decodeMockRef. It is deliberately PERMISSIVE about the
+// invariants decodeMockRef enforces (n >= 0, non-blank IRN): its job is to read what the adapter
+// minted, not to re-implement the guard.
+func maDecodeRef(t *testing.T, ref submission.Ref) maRefPayload {
+	t.Helper()
+	encoded, ok := strings.CutPrefix(string(ref), maRefPrefix)
+	if !ok {
+		t.Fatalf("ref %q does not carry the published %q prefix", ref, maRefPrefix)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("ref %q is not base64url after the prefix: %v", ref, err)
+	}
+	var p maRefPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("ref %q does not carry compact JSON: %v\npayload: %s", ref, err, raw)
+	}
+	return p
+}
+
+// maMintRef is maDecodeRef's inverse: it builds a ref the adapter never issued.
+//
+// THIS IS THE WHOLE POINT of transcribing the codec. A minted ref can carry identifiers that
+// exist nowhere in the repository -- no wire produces them, no digest yields them -- so an
+// implementation that recomputes the identifiers, or returns a constant, CANNOT produce them.
+func maMintRef(t *testing.T, p maRefPayload) submission.Ref {
+	t.Helper()
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshalling ref payload %+v failed: %v", p, err)
+	}
+	return submission.Ref(maRefPrefix + base64.RawURLEncoding.EncodeToString(b))
+}
+
+// maPoll calls Poll under a recover, so a panicking implementation is reported as a FAILURE at
+// the spec that provoked it rather than tearing down the binary. Mirrors maSubmit -- and mirrors
+// the contract suite's own callPoll, which charges a Poll panic to L14.
+func maPoll(t *testing.T, a *submission.MockAdapter, ctx context.Context, ref submission.Ref) (r submission.Result, ev submission.Evidence) {
+	t.Helper()
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Errorf("Poll panicked: %v", rec)
+		}
+	}()
+	r, ev = a.Poll(ctx, ref)
+	return
+}
+
+// maPending type-asserts a Pending, mirroring maAccepted / maRetryable.
+func maPending(t *testing.T, label string, r submission.Result) submission.Pending {
+	t.Helper()
+	v, ok := r.(submission.Pending)
+	if !ok {
+		t.Fatalf("%s: Result is %T (%v), want submission.Pending", label, r, r)
+	}
+	return v
+}
+
+// maSubmitPending drives the pending trigger once and returns the first Pending plus the wire it
+// came from, so the convergence specs all start from the same, real, adapter-issued handle.
+func maSubmitPending(t *testing.T, a *submission.MockAdapter, invoiceNumber string) (submission.Pending, submission.Wire) {
+	t.Helper()
+	w := maWireFor(t, a, maTINPending, invoiceNumber)
+	r, ev := maSubmit(t, a, context.Background(), w, "idem-"+invoiceNumber)
+	p := maPending(t, "Submit(pending trigger)", r)
+	if ev.HTTPStatus == nil || *ev.HTTPStatus != 202 {
+		t.Fatalf("Submit(pending trigger): HTTPStatus = %v, want 202", ev.HTTPStatus)
+	}
+	return p, w
+}
+
+// The sentinel identifiers S21/S22/S27/S29 mint into hand-built refs. They exist NOWHERE else in
+// the repository: no wire transforms to them, no sha256 yields them. An implementation that
+// recomputes the identifiers from anything, or returns a constant, cannot produce them.
+const (
+	maSentinelIRN  = "IRN-SENTINEL-A"
+	maSentinelCSID = "CSID-SENTINEL-A"
+	maSentinelQR   = "QR-SENTINEL-A"
+)
+
+// ---------------------------------------------------------------------------------------
+// S19 (AC-1) -- the first ref carries n = 2.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_PendingTriggerReturnsPending (S19, AC-1).
+//
+// HONEST LABEL: this spec is GREEN the moment it compiles. M5-03-03 shipped Submit's pending
+// branch, and S4/S15 above already pin Pending + the ref prefix + a non-zero PollAfter + status
+// 202 + data.reference. Its ONE piece of new content is `N == 2` -- the precondition that makes
+// S20's expected chain length non-arbitrary rather than a number pulled out of the air.
+//
+// It also does something the other specs cannot: it validates the TRANSCRIBED CODEC against the
+// shipped encoder. If maDecodeRef's field names ever drift from mock_script.go's, this spec fails
+// first and points at the transcription rather than at Poll.
+func TestMockAdapter_PendingTriggerReturnsPending(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	p, _ := maSubmitPending(t, a, "INV-PENDING-N")
+
+	if p.Ref == "" {
+		t.Fatalf("Pending.Ref is empty (L09)")
+	}
+	if p.PollAfter.IsZero() {
+		t.Errorf("Pending.PollAfter is zero (L09)")
+	}
+
+	payload := maDecodeRef(t, p.Ref)
+	if payload.N != 2 {
+		t.Errorf("the first ref carries n = %d, want 2 -- mockPendingPolls is 2 and n means "+
+			"\"polls still required, INCLUDING this one\" ([poll-consumes-one-then-tests]). "+
+			"S20's two-poll arc is written to this number", payload.N)
+	}
+	for _, f := range []struct{ name, value string }{
+		{"irn", payload.IRN},
+		{"csid", payload.CSID},
+		{"qr", payload.QR},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			t.Errorf("the first ref carries a blank %q -- the ref is the ONLY place the deferred "+
+				"verdict lives ([ref-carries-the-verdict]), and a blank irn would mint an "+
+				"L07-violating Accepted on convergence", f.name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+// S20 (AC-2) -- the two-poll convergence arc, and the stale-ref negative control.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_PendingConvergesAfterTwoPolls (S20, AC-2, RED-FIRST).
+//
+// The arc, per [poll-consumes-one-then-tests]:
+//
+//	Submit(pending TIN) -> Pending{ref n=2}, 202
+//	Poll #1  (ref n=2)  -> remaining 1 -> Pending{ref n=1}, 202
+//	Poll #2  (ref n=1)  -> remaining 0 -> Accepted, 200
+//
+// THE STALE-REF NEGATIVE CONTROL AT THE BOTTOM IS THE KILLER SPEC OF THIS SUBTASK. After
+// converging, the ORIGINAL n=2 ref is polled five more times and must return the SAME Pending,
+// with the SAME n=1 successor ref and a BYTE-IDENTICAL body, every single time -- never Accepted.
+//
+// That is two things at once. It is the M5-04 hand-off contract made executable: the caller must
+// persist the ref carried by EACH Pending, because a stale ref never converges. And it is the one
+// assertion in this file that fails an implementation which "fixes" convergence with an
+// in-process `map[Ref]int` counter -- such an implementation would happily converge the stale ref
+// on its second or third visit, and would make the adapter stateful, which AC-8 forbids.
+func TestMockAdapter_PendingConvergesAfterTwoPolls(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	p0, _ := maSubmitPending(t, a, "INV-CONVERGE-1")
+	ref0 := maDecodeRef(t, p0.Ref)
+
+	// ---- POLL #1: consumes one, one remains, still pending.
+	start := time.Now()
+	r1, ev1 := maPoll(t, a, ctx, p0.Ref)
+	p1 := maPending(t, "poll-1", r1)
+
+	if p1.Ref == p0.Ref {
+		t.Errorf("poll-1 returned the SAME ref it was given (%q) -- each Pending must carry a "+
+			"FRESH ref with a decremented count, or the caller can never converge", p1.Ref)
+	}
+	ref1 := maDecodeRef(t, p1.Ref)
+	if ref1.N != 1 {
+		t.Errorf("poll-1 returned a ref with n = %d, want 1 -- Poll consumes one poll per call "+
+			"(remaining = %d - 1) ([poll-consumes-one-then-tests])", ref1.N, ref0.N)
+	}
+	if ref1.IRN != ref0.IRN || ref1.CSID != ref0.CSID || ref1.QR != ref0.QR {
+		t.Errorf("poll-1's successor ref carries different identifiers from the one it decremented:\n"+
+			"  in: %+v\n out: %+v\nthe pending branch must RE-ENCODE the identifiers unchanged, "+
+			"never regenerate them", ref0, ref1)
+	}
+	if p1.PollAfter.IsZero() {
+		t.Errorf("poll-1: Pending.PollAfter is zero (L09)")
+	}
+	if !p1.PollAfter.After(start) {
+		t.Errorf("poll-1: Pending.PollAfter = %v, want after the call started (%v)", p1.PollAfter, start)
+	}
+	if ev1.HTTPStatus == nil || *ev1.HTTPStatus != 202 {
+		t.Errorf("poll-1: HTTPStatus = %v, want 202 -- a still-pending poll is another 202", ev1.HTTPStatus)
+	}
+	body1 := maBody(t, "poll-1", ev1)
+	if got := maField(t, "poll-1", body1, "code"); got != maCodePending {
+		t.Errorf("poll-1: body code = %q, want %q", got, maCodePending)
+	}
+	if got := maField(t, "poll-1", body1, "data", "reference"); got != string(p1.Ref) {
+		t.Errorf("poll-1: 202 body data.reference = %q, want the NEW Pending.Ref %q -- the caller "+
+			"who polls and the caller who reads the archive must not see two different handles",
+			got, p1.Ref)
+	}
+
+	// ---- POLL #2: the last one remaining is consumed, so it converges.
+	r2, ev2 := maPoll(t, a, ctx, p1.Ref)
+	if _, stillPending := r2.(submission.Pending); stillPending {
+		t.Fatalf("poll-2 returned Pending again -- the arc must converge on the SECOND poll: the " +
+			"first ref carries n = 2, poll #1 leaves 1, poll #2 leaves 0 " +
+			"([poll-consumes-one-then-tests], AC-2's \"twice in total\")")
+	}
+	acc := maAccepted(t, "poll-2", r2)
+	if acc.IRN != ref0.IRN || acc.CSID != ref0.CSID || acc.QRPayload != ref0.QR {
+		t.Errorf("poll-2 converged on identifiers that are not the ones the ORIGINAL ref encoded:\n"+
+			"  ref: irn=%q csid=%q qr=%q\n  got: irn=%q csid=%q qr=%q",
+			ref0.IRN, ref0.CSID, ref0.QR, acc.IRN, acc.CSID, acc.QRPayload)
+	}
+	if ev2.HTTPStatus == nil || *ev2.HTTPStatus != 200 {
+		t.Errorf("poll-2: HTTPStatus = %v, want 200 -- convergence is the ordinary accepted response",
+			ev2.HTTPStatus)
+	}
+	if got := maField(t, "poll-2", maBody(t, "poll-2", ev2), "code"); got != maCodeAccepted {
+		t.Errorf("poll-2: body code = %q, want %q", got, maCodeAccepted)
+	}
+
+	// ---- THE NEGATIVE CONTROL. Re-poll the now-STALE original ref five more times.
+	//
+	// A ref is not a subscription and the adapter is not counting: n lives in the handle, so the
+	// stale n=2 ref decrements to 1 on every visit, forever. If ANY of these converges, the
+	// adapter is keeping state between calls -- which AC-8 forbids and which would make a worker
+	// restart, or a second replica, converge at a different time (Core AC-2).
+	if ev1.ResponseBody == nil {
+		t.Fatalf("poll-1 recorded no response body; the stale-ref control needs it to compare against")
+	}
+	firstBody := *ev1.ResponseBody
+	for i := 0; i < 5; i++ {
+		t.Run(fmt.Sprintf("stale-ref-repoll-%d", i+1), func(t *testing.T) {
+			rs, evs := maPoll(t, a, ctx, p0.Ref)
+			if _, converged := rs.(submission.Accepted); converged {
+				t.Fatalf("re-polling the STALE ref converged to Accepted on visit %d -- the adapter "+
+					"is counting polls somewhere other than in the ref (an in-process map, a "+
+					"counter field). The ref carries the verdict AND the countdown "+
+					"([ref-carries-the-verdict]); a caller who does not persist each new ref must "+
+					"NEVER converge", i+1)
+			}
+			ps := maPending(t, "stale-repoll", rs)
+			if got := maDecodeRef(t, ps.Ref); got.N != 1 {
+				t.Errorf("re-polling the stale n=%d ref returned n = %d, want 1 every time -- the "+
+					"result is a pure function of the ref handed in", ref0.N, got.N)
+			}
+			if ps.Ref != p1.Ref {
+				t.Errorf("re-polling the stale ref returned a different successor ref:\n got %q\nwant %q",
+					ps.Ref, p1.Ref)
+			}
+			if evs.ResponseBody == nil {
+				t.Fatalf("stale re-poll recorded no response body")
+			}
+			if *evs.ResponseBody != firstBody {
+				t.Errorf("re-polling the stale ref synthesized a DIFFERENT body:\n got %s\nwant %s",
+					*evs.ResponseBody, firstBody)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+// S21 (AC-3) -- the converged Accepted comes straight out of the ref.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_ConvergedAcceptMatchesTheRef (S21, AC-3, RED-FIRST), in three parts.
+//
+// (a) THE ANTI-RECOMPUTE / ANTI-CONSTANT ORACLE. Refs are MINTED carrying sentinel identifiers
+// that exist nowhere else -- no wire transforms to them, no sha256 produces them. Poll has no
+// wire to synthesize from, so an implementation that recomputes the identifiers, or returns a
+// constant, or drops them and regenerates, cannot return them. This is what an in-package spec
+// calling decodeMockRef could never test ([test-transcribes-the-published-ref-codec]).
+//
+// (b) A DIFFERENT ADAPTER INSTANCE converges identically -- the property a worker restarted
+// between polls, or a second replica, actually depends on.
+//
+// (c) THE IRN IS IDENTITY-KEYED, NOT CONTENT-KEYED ([irn-is-identity-keyed-not-content-keyed]):
+// the converged IRN must EQUAL the direct accept path's IRN for the same invoice number and issue
+// date, even though the two wires differ (their buyer TINs are different trigger values). The
+// CSIDs must DIFFER, because they are keyed on the WHOLE wire -- and that differ-half is the
+// negative control proving (c) is not vacuously comparing two things that are equal for the
+// boring reason that everything is.
+func TestMockAdapter_ConvergedAcceptMatchesTheRef(t *testing.T) {
+	ctx := context.Background()
+
+	// ---- (a) minted sentinels.
+	t.Run("minted-sentinels-are-returned-verbatim", func(t *testing.T) {
+		a := submission.NewMockAdapter(submission.MockConfig{})
+
+		for _, n := range []int{0, 1} {
+			t.Run(fmt.Sprintf("n=%d-converges-immediately", n), func(t *testing.T) {
+				ref := maMintRef(t, maRefPayload{N: n, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+				r, ev := maPoll(t, a, ctx, ref)
+				acc := maAccepted(t, fmt.Sprintf("minted-n=%d", n), r)
+
+				for _, f := range []struct{ name, got, want string }{
+					{"IRN", acc.IRN, maSentinelIRN},
+					{"CSID", acc.CSID, maSentinelCSID},
+					{"QRPayload", acc.QRPayload, maSentinelQR},
+				} {
+					if f.got != f.want {
+						t.Errorf("Accepted.%s = %q, want the sentinel %q carried by the ref -- the "+
+							"converged verdict is READ OUT of the ref, never recomputed (Poll has no "+
+							"wire to recompute from)", f.name, f.got, f.want)
+					}
+				}
+
+				if ev.HTTPStatus == nil || *ev.HTTPStatus != 200 {
+					t.Fatalf("HTTPStatus = %v, want 200", ev.HTTPStatus)
+				}
+				body := maBody(t, "minted", ev)
+				for _, f := range []struct {
+					path []string
+					want string
+				}{
+					{[]string{"data", "irn"}, maSentinelIRN},
+					{[]string{"data", "csid"}, maSentinelCSID},
+					{[]string{"data", "qr"}, maSentinelQR},
+				} {
+					if got := maField(t, "minted", body, f.path...); got != f.want {
+						t.Errorf("200 body %v = %q, want %q -- the archived body and the returned "+
+							"Result must tell the same story", f.path, got, f.want)
+					}
+				}
+			})
+		}
+
+		// n = 2 takes the PENDING branch, which must RE-ENCODE the same identifiers with n = 1.
+		t.Run("n=2-re-encodes-the-same-sentinels", func(t *testing.T) {
+			ref := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+			r, ev := maPoll(t, a, ctx, ref)
+			p := maPending(t, "minted-n=2", r)
+
+			got := maDecodeRef(t, p.Ref)
+			want := maRefPayload{N: 1, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR}
+			if got != want {
+				t.Errorf("the successor ref decodes to %+v, want %+v -- the pending branch must "+
+					"re-encode the identifiers it was handed, not regenerate them", got, want)
+			}
+			if ev.HTTPStatus == nil || *ev.HTTPStatus != 202 {
+				t.Errorf("HTTPStatus = %v, want 202", ev.HTTPStatus)
+			}
+		})
+	})
+
+	// ---- (b) a DIFFERENT instance converges identically.
+	t.Run("a-different-instance-converges-identically", func(t *testing.T) {
+		a1 := submission.NewMockAdapter(submission.MockConfig{})
+		// A different Latency on purpose: configuration must not reach the synthesized verdict.
+		a2 := submission.NewMockAdapter(submission.MockConfig{Latency: time.Millisecond})
+
+		p0, _ := maSubmitPending(t, a1, "INV-CROSS-INSTANCE")
+		want := maDecodeRef(t, p0.Ref)
+
+		r1, _ := maPoll(t, a2, ctx, p0.Ref)
+		p1 := maPending(t, "cross-instance-poll-1", r1)
+		r2, _ := maPoll(t, a2, ctx, p1.Ref)
+		acc := maAccepted(t, "cross-instance-poll-2", r2)
+
+		if acc.IRN != want.IRN || acc.CSID != want.CSID || acc.QRPayload != want.QR {
+			t.Errorf("an adapter instance that never saw the Submit converged on different "+
+				"identifiers:\n  ref: irn=%q csid=%q qr=%q\n  got: irn=%q csid=%q qr=%q\n"+
+				"a worker restarted between polls must converge identically (Core AC-2)",
+				want.IRN, want.CSID, want.QR, acc.IRN, acc.CSID, acc.QRPayload)
+		}
+	})
+
+	// ---- (c) the IRN is identity-keyed; the CSID is content-keyed.
+	t.Run("irn-equals-the-direct-accept-path-but-csid-differs", func(t *testing.T) {
+		a := submission.NewMockAdapter(submission.MockConfig{})
+		const invoiceNumber = "INV-IRN-IDENTITY-1"
+
+		// The direct accept path, same invoice number and (via maCanonical) same issue date.
+		rAcc, _ := maSubmit(t, a, ctx, maWireFor(t, a, maTINAccept, invoiceNumber), "idem-direct-accept")
+		direct := maAccepted(t, "direct-accept", rAcc)
+
+		// The pending path, converged.
+		p0, _ := maSubmitPending(t, a, invoiceNumber)
+		r1, _ := maPoll(t, a, ctx, p0.Ref)
+		p1 := maPending(t, "irn-poll-1", r1)
+		r2, _ := maPoll(t, a, ctx, p1.Ref)
+		converged := maAccepted(t, "irn-poll-2", r2)
+
+		if converged.IRN != direct.IRN {
+			t.Errorf("converged IRN = %q, want the direct accept path's %q -- the IRN reads exactly "+
+				"two envelope fields (ID and IssueDate) and is STABLE across a change to any other "+
+				"byte, including the buyer TIN ([irn-is-identity-keyed-not-content-keyed])",
+				converged.IRN, direct.IRN)
+		}
+
+		// THE NEGATIVE CONTROL. Without this, the equality above could be satisfied by an
+		// implementation for which every identifier is the same everywhere.
+		if converged.CSID == direct.CSID {
+			t.Errorf("converged CSID = %q, the SAME as the direct accept path's -- the CSID is "+
+				"base64url(sha256(WHOLE WIRE)) and the two wires differ by their buyer TIN, so the "+
+				"two CSIDs MUST differ. Equal CSIDs mean the identifiers are not content-keyed at all",
+				converged.CSID)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------------------
+// S22 (AC-4) -- an unreadable handle is Retryable, never a verdict, never a panic.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_PollUnknownRefIsRetryable (S22, AC-4, RED-FIRST): every class decodeMockRef
+// rejects -- a wrong or missing prefix (including "" and the contract suite's own probe ref), bad
+// base64, bad JSON (where a truncated ref lands), and the two INVARIANT violations, a negative
+// poll count and a blank IRN ([ref-enforces-its-own-invariants]).
+//
+// THE POSITIVE CONTROL AT THE BOTTOM IS MANDATORY. Without it, a Poll that returns
+// Retryable{ErrMockUnknownRef} for absolutely everything -- which is precisely the shipped stub --
+// passes this entire table.
+//
+// The blank-IRN row carries its own weight beyond "the codec rejects it": it proves Poll does not
+// BYPASS decodeMockRef and mint an Accepted straight from a hand-parsed payload, which would
+// produce a blank Accepted.IRN and violate L07 (contract_test.go:480).
+func TestMockAdapter_PollUnknownRefIsRetryable(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	// A real, adapter-issued ref, truncated -- the class a caller actually hits when a ref is
+	// stored in a column that silently truncates.
+	real0, _ := maSubmitPending(t, a, "INV-TRUNCATION-SOURCE")
+	truncated := submission.Ref(string(real0.Ref)[:len(string(real0.Ref))-7])
+	// The same payload under a version prefix this adapter does not issue.
+	wrongPrefix := submission.Ref("mockapp-v2." + strings.TrimPrefix(string(real0.Ref), maRefPrefix))
+
+	for _, tc := range []struct {
+		name string
+		ref  submission.Ref
+	}{
+		{"empty-ref", submission.Ref("")},
+		{"contract-suite-never-issued-ref", submission.Ref("contract-suite-never-issued-ref")},
+		{"prefix-only", submission.Ref(maRefPrefix)},
+		{"wrong-version-prefix", wrongPrefix},
+		{"not-base64", submission.Ref(maRefPrefix + "!!!not base64!!!")},
+		{"base64-but-not-json", submission.Ref(maRefPrefix + base64.RawURLEncoding.EncodeToString([]byte("not json")))},
+		{"truncated-real-ref", truncated},
+		{"negative-poll-count", maMintRef(t, maRefPayload{N: -1, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})},
+		{"blank-irn", maMintRef(t, maRefPayload{N: 0, IRN: "", CSID: maSentinelCSID, QR: maSentinelQR})},
+		{"whitespace-only-irn", maMintRef(t, maRefPayload{N: 0, IRN: "   ", CSID: maSentinelCSID, QR: maSentinelQR})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ev := maPoll(t, a, ctx, tc.ref)
+
+			// Never a verdict: an unreadable handle is a transport-level failure, not the
+			// authority deciding anything ([errors-never-verdicts]).
+			switch r.(type) {
+			case submission.Accepted, submission.Rejected, submission.Pending:
+				t.Fatalf("%s: Poll returned %T -- an unreadable handle must never become a verdict "+
+					"([errors-never-verdicts])", tc.name, r)
+			}
+			rt := maRetryable(t, tc.name, r)
+			if !errors.Is(rt.Err, submission.ErrMockUnknownRef) {
+				t.Errorf("%s: Retryable.Err = %v, want it to wrap ErrMockUnknownRef -- M5-03-05 "+
+					"branches on errors.Is, not on message text", tc.name, rt.Err)
+			}
+			// The decoder's error already carries exactly one "submission: " prefix; a second
+			// fmt.Errorf around it would double the prefix (the defect QA fixed in M5-03-01).
+			if got := strings.Count(rt.Err.Error(), "submission: "); got != 1 {
+				t.Errorf("%s: Retryable.Err = %q contains %d %q prefixes, want exactly 1 -- the "+
+					"decoder's error must travel UNWRAPPED", tc.name, rt.Err, got, "submission: ")
+			}
+
+			if ev.ReachedWire {
+				t.Errorf("%s: ReachedWire = true, want false -- a handle we cannot READ is a call "+
+					"we never MADE", tc.name)
+			}
+			if ev.HTTPStatus != nil {
+				t.Errorf("%s: HTTPStatus = %d, want nil (L11)", tc.name, *ev.HTTPStatus)
+			}
+			if ev.ResponseBody != nil {
+				t.Errorf("%s: ResponseBody = %q, want nil (L11)", tc.name, *ev.ResponseBody)
+			}
+			if len(ev.ResponseHeaders) != 0 {
+				t.Errorf("%s: ResponseHeaders = %v, want empty (L11)", tc.name, ev.ResponseHeaders)
+			}
+			if ev.RequestBody != nil {
+				t.Errorf("%s: RequestBody = %q, want nil -- a poll sends no document, ever",
+					tc.name, *ev.RequestBody)
+			}
+			if ev.LatencyMS == nil {
+				t.Errorf("%s: LatencyMS is nil -- the decode ran, so the attempt WAS measured; only "+
+					"the pre-cancelled row is unmeasured", tc.name)
+			}
+
+			rec := &lawRecorder{}
+			CheckResult(rec, tc.name, r)
+			CheckEvidence(rec, tc.name, ev, "")
+			if len(rec.messages) != 0 {
+				t.Errorf("%s: CheckResult/CheckEvidence recorded %d contract failure(s): %v",
+					tc.name, len(rec.messages), rec.messages)
+			}
+		})
+	}
+
+	// THE POSITIVE CONTROL. A real minted ref must NOT be rejected -- without this row an
+	// always-Retryable Poll (the shipped stub) passes the whole table above.
+	t.Run("readable-ref-control", func(t *testing.T) {
+		ref := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+		r, ev := maPoll(t, a, ctx, ref)
+		p := maPending(t, "readable-ref-control", r)
+		if p.Ref == "" {
+			t.Errorf("readable-ref-control: Pending.Ref is empty (L09)")
+		}
+		if !ev.ReachedWire {
+			t.Errorf("readable-ref-control: ReachedWire = false, want true -- a readable handle IS " +
+				"a call we made")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------------------
+// S23 (AC-5) -- the context check runs BEFORE the decode.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_PollHonoursCancelledContext (S23, AC-5, RED-FIRST).
+//
+// `LatencyMS == nil` IS THE ORDERING ORACLE. Every other assertion in this spec passes under BOTH
+// orderings -- decode-then-check-ctx also returns Retryable with ReachedWire false and nil
+// response fields. Only the unmeasured latency says "nothing ran at all", which is the row the
+// evidence matrix reserves for a call that never started. The unreadable-ref row makes the same
+// point from the other side: with the ctx checked FIRST, the error is ctx.Err(), never
+// ErrMockUnknownRef.
+//
+// The LIVE-CONTEXT POSITIVE CONTROL is mandatory: without it an always-Retryable Poll passes.
+func TestMockAdapter_PollHonoursCancelledContext(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancelExpired()
+
+	validRef := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context
+		ref     submission.Ref
+		wantErr error
+	}{
+		{"already-cancelled-valid-ref", cancelled, validRef, context.Canceled},
+		{"already-expired-valid-ref", expired, validRef, context.DeadlineExceeded},
+		// The ORDERING row: an unreadable ref AND a dead context. Both orderings return
+		// Retryable; only WHICH error, and the nil latency, tell them apart.
+		{"already-cancelled-unreadable-ref", cancelled, submission.Ref("contract-suite-never-issued-ref"), context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ev := maPoll(t, a, tc.ctx, tc.ref)
+			rt := maRetryable(t, tc.name, r)
+
+			if !errors.Is(rt.Err, tc.wantErr) {
+				t.Errorf("%s: Retryable.Err = %v, want it to wrap %v -- the context check runs "+
+					"FIRST, so the context's own error is what travels upward (L16)",
+					tc.name, rt.Err, tc.wantErr)
+			}
+			if errors.Is(rt.Err, submission.ErrMockUnknownRef) {
+				t.Errorf("%s: Retryable.Err wraps ErrMockUnknownRef -- the ref was DECODED before "+
+					"the context was consulted. L16's check must be the first thing Poll does", tc.name)
+			}
+
+			// THE ORDERING ORACLE.
+			if ev.LatencyMS != nil {
+				t.Errorf("%s: LatencyMS = %d, want nil -- this is the ONE row of Poll's evidence "+
+					"matrix where nothing ran and nothing was measured. A non-nil value here means "+
+					"the decode happened before the context check", tc.name, *ev.LatencyMS)
+			}
+
+			if ev.ReachedWire {
+				t.Errorf("%s: ReachedWire = true, want false -- the context check runs before the "+
+					"connect phase (L16, [two-phase-wire])", tc.name)
+			}
+			if ev.HTTPStatus != nil {
+				t.Errorf("%s: HTTPStatus = %d, want nil (L11)", tc.name, *ev.HTTPStatus)
+			}
+			if ev.ResponseBody != nil {
+				t.Errorf("%s: ResponseBody = %q, want nil (L11)", tc.name, *ev.ResponseBody)
+			}
+			if len(ev.ResponseHeaders) != 0 {
+				t.Errorf("%s: ResponseHeaders = %v, want empty (L11)", tc.name, ev.ResponseHeaders)
+			}
+			if ev.RequestBody != nil {
+				t.Errorf("%s: RequestBody = %q, want nil", tc.name, *ev.RequestBody)
+			}
+
+			// The request headers ARE recorded even here: they describe the call we were ABOUT to
+			// make, exactly as Submit's pre-cancelled row does.
+			if got := ev.RequestHeaders.Get("Content-Type"); got != maContentTypeJSON {
+				t.Errorf("%s: RequestHeaders Content-Type = %q, want %q -- the headers are built "+
+					"BEFORE the context check", tc.name, got, maContentTypeJSON)
+			}
+		})
+	}
+
+	// POSITIVE CONTROL. Without this an always-Retryable Poll passes every row above.
+	t.Run("live-context-control", func(t *testing.T) {
+		r, ev := maPoll(t, a, context.Background(), validRef)
+		maPending(t, "live-context-control", r)
+		if !ev.ReachedWire {
+			t.Errorf("live-context-control: ReachedWire = false, want true")
+		}
+		if ev.LatencyMS == nil {
+			t.Errorf("live-context-control: LatencyMS is nil, want a measurement")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------------------
+// S24 (AC-6) -- Poll's request headers, and the Idempotency-Key it must never set.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_PollSetsNoIdempotencyKey (S24, AC-6, RED-FIRST).
+//
+// CheckEvidence(rec, ..., "") ALONE WOULD BE A WEAK SPEC and is not the oracle here: L13 is
+// VACUOUS when the header is absent (contract_test.go's own doc comment says so), so that call
+// passes for an adapter that sets NO headers at all -- including the shipped stub, whose Evidence
+// is entirely zero. The teeth are the three EXACT header values plus `len(RequestHeaders) == 3`:
+// exactly three names, no more (a fourth would also be smuggled scope) and no fewer.
+//
+// The NEGATIVE CONTROL is a Submit with a real idemKey on the SAME adapter instance. Without it,
+// "no Idempotency-Key" is satisfied by an adapter that cannot set one at all, and the spec would
+// not be testing [poll-sets-no-idempotency-key] -- it would be testing nothing.
+//
+// This is also the L13 TRAP the task description names: the contract suite calls
+// CheckEvidence(..., "") for BOTH of its Poll drives (contract_test.go:304 and :340), so any
+// Idempotency-Key Poll sets -- even an empty-valued one, which idempotencyKeyValue reports as
+// PRESENT -- fails L13 there.
+func TestMockAdapter_PollSetsNoIdempotencyKey(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pendingRef := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+	convergingRef := maMintRef(t, maRefPayload{N: 1, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		ref  submission.Ref
+	}{
+		{"still-pending", context.Background(), pendingRef},
+		{"converging", context.Background(), convergingRef},
+		{"unreadable-ref", context.Background(), submission.Ref("contract-suite-never-issued-ref")},
+		{"pre-cancelled", cancelled, pendingRef},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ev := maPoll(t, a, tc.ctx, tc.ref)
+
+			for _, h := range []struct{ name, want string }{
+				{"Content-Type", maContentTypeJSON},
+				{"Accept", maContentTypeJSON},
+				{"User-Agent", maUserAgent},
+			} {
+				if got := ev.RequestHeaders.Get(h.name); got != h.want {
+					t.Errorf("%s: RequestHeaders.Get(%q) = %q, want %q -- the three unconditional "+
+						"request headers are recorded on EVERY Poll path, including this one",
+						tc.name, h.name, got, h.want)
+				}
+			}
+
+			// EXACTLY three. A fourth is smuggled scope; a fifth named Idempotency-Key is an L13
+			// failure in the contract suite.
+			if len(ev.RequestHeaders) != 3 {
+				t.Errorf("%s: RequestHeaders has %d names, want exactly 3 (Content-Type, Accept, "+
+					"User-Agent) -- got %v", tc.name, len(ev.RequestHeaders), ev.RequestHeaders)
+			}
+			if maHeaderPresent(ev.RequestHeaders, "Idempotency-Key") {
+				t.Errorf("%s: Poll set an Idempotency-Key (%v) -- a poll is not an idempotent write "+
+					"and carries no key. The contract suite calls CheckEvidence(..., \"\") for both "+
+					"of its Poll drives, so ANY value here -- including an empty one, which "+
+					"idempotencyKeyValue reports as PRESENT -- fails L13 "+
+					"([poll-sets-no-idempotency-key])", tc.name, ev.RequestHeaders)
+			}
+
+			// Every name Poll records must survive the write-time scrub, or it would be silently
+			// absent from the customer-downloadable M5-07 archive.
+			if !reflect.DeepEqual(submission.ScrubHeaders(ev.RequestHeaders), ev.RequestHeaders) {
+				t.Errorf("%s: ScrubHeaders dropped or altered a Poll request header\n before: %v\n  after: %v",
+					tc.name, ev.RequestHeaders, submission.ScrubHeaders(ev.RequestHeaders))
+			}
+
+			rec := &lawRecorder{}
+			CheckEvidence(rec, tc.name, ev, "")
+			if len(rec.messages) != 0 {
+				t.Errorf("%s: CheckEvidence(..., \"\") recorded %d contract failure(s): %v",
+					tc.name, len(rec.messages), rec.messages)
+			}
+		})
+	}
+
+	// THE NEGATIVE CONTROL, on the SAME adapter: Submit with a key DOES carry it. Without this,
+	// "Poll sets no Idempotency-Key" is satisfied by an adapter that can never set one.
+	t.Run("submit-on-the-same-adapter-does-carry-a-key", func(t *testing.T) {
+		const idemKey = "k"
+		_, ev := maSubmit(t, a, context.Background(), maWire(t, a, maTINAccept), idemKey)
+		if got := ev.RequestHeaders.Get("Idempotency-Key"); got != idemKey {
+			t.Errorf("Submit's Idempotency-Key = %q, want %q -- the control proves the absence on "+
+				"the Poll rows is a DECISION, not an inability", got, idemKey)
+		}
+		if len(ev.RequestHeaders) != 4 {
+			t.Errorf("Submit's RequestHeaders has %d names, want 4: %v", len(ev.RequestHeaders), ev.RequestHeaders)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------------------
+// S25 (AC-7) -- Poll's evidence matrix.
+// ---------------------------------------------------------------------------------------
+
+// TestMockAdapter_PollEvidence (S25, AC-7, RED-FIRST): the five-row Poll evidence matrix from
+// task-227's plan.
+//
+// TWO ASSERTIONS CARRY THIS SPEC BEYOND "202 then 200":
+//
+//  1. `RequestBody == nil` ON EVERY ROW. A poll is GET /submissions/{ref}: there is no document to
+//     send. Stuffing `string(ref)` in there is the PLAUSIBLE WRONG IMPLEMENTATION -- it is the
+//     only input Poll has -- and it would claim in the archive that we sent a document we did
+//     not. exchange.go:213-221 preserves nil as SQL NULL distinctly from "" as an empty string,
+//     so `request_body IS NULL` on a poll row IS the evidence.
+//  2. `len(ResponseHeaders) == 1`. Content-Type and nothing else. This is red against the most
+//     likely construction shortcut: copy-pasting Submit's response-synthesis block, which carries
+//     a Retry-After on its 503 branch.
+func TestMockAdapter_PollEvidence(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+
+	p0, _ := maSubmitPending(t, a, "INV-POLL-EVIDENCE")
+	r1, _ := maPoll(t, a, ctx, p0.Ref)
+	p1 := maPending(t, "evidence-setup", r1)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name        string
+		ctx         context.Context
+		ref         submission.Ref
+		wantStatus  *int
+		wantCode    string // "" means there must be no response body at all
+		wantReached bool
+		wantLatency bool
+	}{
+		{
+			name: "still-pending", ctx: ctx, ref: p0.Ref, wantStatus: intPtr(202),
+			wantCode: maCodePending, wantReached: true, wantLatency: true,
+		},
+		{
+			name: "converged", ctx: ctx, ref: p1.Ref, wantStatus: intPtr(200),
+			wantCode: maCodeAccepted, wantReached: true, wantLatency: true,
+		},
+		{
+			name: "unreadable-ref", ctx: ctx, ref: submission.Ref("contract-suite-never-issued-ref"),
+			wantStatus: nil, wantCode: "", wantReached: false, wantLatency: true,
+		},
+		{
+			name: "pre-cancelled", ctx: cancelled, ref: p0.Ref,
+			wantStatus: nil, wantCode: "", wantReached: false, wantLatency: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ev := maPoll(t, a, tc.ctx, tc.ref)
+
+			if ev.ReachedWire != tc.wantReached {
+				t.Errorf("%s: ReachedWire = %t, want %t", tc.name, ev.ReachedWire, tc.wantReached)
+			}
+			switch {
+			case tc.wantStatus == nil && ev.HTTPStatus != nil:
+				t.Errorf("%s: HTTPStatus = %d, want nil", tc.name, *ev.HTTPStatus)
+			case tc.wantStatus != nil && ev.HTTPStatus == nil:
+				t.Errorf("%s: HTTPStatus is nil, want %d", tc.name, *tc.wantStatus)
+			case tc.wantStatus != nil && *ev.HTTPStatus != *tc.wantStatus:
+				t.Errorf("%s: HTTPStatus = %d, want %d -- 202 while pending, 200 on convergence",
+					tc.name, *ev.HTTPStatus, *tc.wantStatus)
+			}
+
+			// (1) NIL ON EVERY ROW, without exception.
+			if ev.RequestBody != nil {
+				t.Errorf("%s: RequestBody = %q, want nil -- a poll asks, it does not SEND. Putting "+
+					"the ref here would claim in the M5-07 archive that we transmitted a document "+
+					"we never transmitted", tc.name, *ev.RequestBody)
+			}
+
+			if got := ev.LatencyMS != nil; got != tc.wantLatency {
+				t.Errorf("%s: (LatencyMS != nil) = %t, want %t -- only the PRE-cancelled row is "+
+					"unmeasured", tc.name, got, tc.wantLatency)
+			}
+			if ev.LatencyMS != nil && *ev.LatencyMS < 0 {
+				t.Errorf("%s: LatencyMS = %d, want >= 0 (L12, app_exchange CHECK)", tc.name, *ev.LatencyMS)
+			}
+
+			if tc.wantCode == "" {
+				if ev.ResponseBody != nil {
+					t.Errorf("%s: ResponseBody = %q, want nil (L11)", tc.name, *ev.ResponseBody)
+				}
+				if len(ev.ResponseHeaders) != 0 {
+					t.Errorf("%s: ResponseHeaders = %v, want empty (L11)", tc.name, ev.ResponseHeaders)
+				}
+			} else {
+				body := maBody(t, tc.name, ev)
+				if got := maField(t, tc.name, body, "code"); got != tc.wantCode {
+					t.Errorf("%s: response body code = %q, want %q", tc.name, got, tc.wantCode)
+				}
+				if got := maField(t, tc.name, body, "message"); strings.TrimSpace(got) == "" {
+					t.Errorf("%s: response body message is blank -- the archive must carry something "+
+						"a human can read", tc.name)
+				}
+				if got := ev.ResponseHeaders.Get("Content-Type"); got != maContentTypeJSON {
+					t.Errorf("%s: response Content-Type = %q, want %q", tc.name, got, maContentTypeJSON)
+				}
+				// (2) EXACTLY ONE response header.
+				if len(ev.ResponseHeaders) != 1 {
+					t.Errorf("%s: ResponseHeaders has %d names, want exactly 1 (Content-Type) -- got "+
+						"%v. A Retry-After here means Submit's 503 branch was copy-pasted into Poll",
+						tc.name, len(ev.ResponseHeaders), ev.ResponseHeaders)
+				}
+				if maHeaderPresent(ev.ResponseHeaders, "Retry-After") {
+					t.Errorf("%s: Poll set a Retry-After -- a pending poll carries Pending.PollAfter, "+
+						"and mockRetryAfterSeconds means \"when to RE-SUBMIT\", a different question",
+						tc.name)
+				}
+			}
+
+			rec := &lawRecorder{}
+			CheckEvidence(rec, tc.name, ev, "")
+			if len(rec.messages) != 0 {
+				t.Errorf("%s: CheckEvidence recorded %d contract failure(s): %v",
+					tc.name, len(rec.messages), rec.messages)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+// S26 (AC-8) -- the adapter holds no state between polls.
+// ---------------------------------------------------------------------------------------
+
+// maAssertImmutableType recurses a type looking for anything that could hold mutable state
+// between calls. RECURSION IS THE POINT: a flat one-level walk over MockAdapter's fields would
+// pass a future `cfg MockConfig` that had itself grown a `seen map[Ref]int` sibling field.
+func maAssertImmutableType(t *testing.T, path string, typ reflect.Type) {
+	t.Helper()
+	switch typ.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Pointer, reflect.UnsafePointer, reflect.Interface:
+		t.Errorf("%s is a %s (%s) -- MockAdapter must hold NO mutable state between calls. The "+
+			"pending countdown lives in the Ref and nowhere else ([ref-carries-the-verdict]); a "+
+			"map, slice, pointer or channel field is how a poll counter gets smuggled in",
+			path, typ.Kind(), typ)
+	case reflect.Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			maAssertImmutableType(t, path+"."+f.Name, f.Type)
+		}
+	case reflect.Array:
+		maAssertImmutableType(t, path+"[]", typ.Elem())
+	}
+}
+
+// TestMockAdapter_HasNoMutableState (S26, AC-8).
+//
+// (a) IS A GUARD, NOT A RED-FIRST SPEC -- honestly labelled, in the same spirit as S16 and
+// TestMockAdapter_NegativeLatencyBehavesLikeZeroConfig above. MockAdapter already holds exactly
+// one immutable MockConfig, so the reflection walk passes the moment it compiles. It earns its
+// place because `map[Ref]int` is the single most likely WRONG implementation of this subtask, and
+// a structural assertion catches it at the type level before any behavioural spec has to.
+//
+// (b) IS THE GENUINELY RED-FIRST HALF: polling the SAME ref twice on ONE instance must return two
+// identical Pendings. A stateful adapter returns something different the second time.
+func TestMockAdapter_HasNoMutableState(t *testing.T) {
+	// ---- (a) the structural guard.
+	adapterType := reflect.TypeOf(*submission.NewMockAdapter(submission.MockConfig{Latency: time.Second}))
+	if adapterType.Kind() != reflect.Struct {
+		t.Fatalf("MockAdapter is a %s, want a struct", adapterType.Kind())
+	}
+	maAssertImmutableType(t, "MockAdapter", adapterType)
+
+	// ---- (b) the behavioural half.
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	ctx := context.Background()
+	p0, _ := maSubmitPending(t, a, "INV-NO-STATE")
+
+	rA, evA := maPoll(t, a, ctx, p0.Ref)
+	rB, evB := maPoll(t, a, ctx, p0.Ref)
+	pA := maPending(t, "poll-A", rA)
+	pB := maPending(t, "poll-B", rB)
+
+	if pA.Ref != pB.Ref {
+		t.Errorf("polling the SAME ref twice on ONE instance returned different successor refs:\n"+
+			" first: %q\nsecond: %q\nPoll is a pure function of the ref -- the adapter remembers "+
+			"nothing between calls", pA.Ref, pB.Ref)
+	}
+	if evA.ResponseBody == nil || evB.ResponseBody == nil {
+		t.Fatalf("a pending poll must carry a synthesized 202 body: %v / %v", evA.ResponseBody, evB.ResponseBody)
+	}
+	if *evA.ResponseBody != *evB.ResponseBody {
+		t.Errorf("polling the same ref twice synthesized different bodies:\n first: %s\nsecond: %s",
+			*evA.ResponseBody, *evB.ResponseBody)
+	}
+	if evA.HTTPStatus == nil || evB.HTTPStatus == nil || *evA.HTTPStatus != *evB.HTTPStatus {
+		t.Errorf("polling the same ref twice returned different statuses: %v / %v",
+			evA.HTTPStatus, evB.HTTPStatus)
+	}
+
+	// And a FRESH instance, which never saw the Submit, agrees with both.
+	fresh := submission.NewMockAdapter(submission.MockConfig{})
+	rC, _ := maPoll(t, fresh, ctx, p0.Ref)
+	pC := maPending(t, "poll-C-fresh-instance", rC)
+	if pC.Ref != pA.Ref {
+		t.Errorf("a freshly constructed adapter returned a different successor ref for the same "+
+			"input ref:\n  same instance: %q\n fresh instance: %q", pA.Ref, pC.Ref)
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+// S27/S28/S29 (AC-9) -- Poll's mid-flight cancellation oracle.
+// ---------------------------------------------------------------------------------------
+
+// maPollCancelInFlight runs the one experiment S27 and S28 both read: a 5-second in-flight wait
+// interrupted by a 250ms context deadline. Shared so S28 pins the SAME evidence S27 measured,
+// mirroring maCancelInFlight above.
+//
+// THE REF IS MINTED BY HAND, NEVER OBTAINED THROUGH Submit. A Submit on a 5s adapter would burn a
+// SECOND five-second window before the measurement even starts, doubling the spec's worst case
+// for no gain: Poll's input is a ref, and a minted one is as real as an issued one.
+//
+// The numbers -- 5s latency / 250ms deadline / a 2s bound -- are copied verbatim from the shipped
+// S17 and are load-bearing for the same reason: a ~12x margin over the entry-check race, while
+// still failing a time.Sleep(5s) implementation by three full seconds.
+func maPollCancelInFlight(t *testing.T) (elapsed time.Duration, r submission.Result, ev submission.Evidence, a *submission.MockAdapter) {
+	t.Helper()
+
+	a = submission.NewMockAdapter(submission.MockConfig{Latency: 5 * time.Second})
+	ref := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	r, ev = maPoll(t, a, ctx, ref)
+	elapsed = time.Since(start)
+	return elapsed, r, ev, a
+}
+
+// TestMockAdapter_PollAbortsTheInFlightWaitOnCancellation (S27, AC-9, RED-FIRST).
+//
+// THE ELAPSED BOUND IS THE ENTIRE ORACLE. Every other assertion below is ALSO satisfied by a
+// `time.Sleep(d)` in Poll -- with or without a post-wake ctx.Err() re-check -- which returns
+// exactly this Retryable, reports ReachedWire true and leaves the response fields nil. It just
+// takes the full five seconds to do it, and M5-04's retry budget is what pays for that. Do not
+// weaken this bound and do not raise it.
+//
+// This spec is SEPARATE from S17 rather than folded into it because a time.Sleep can be
+// introduced in Poll ALONE, leaving Submit's shared-helper route intact and S17 green
+// ([cancellation-is-observable-in-the-wait]).
+func TestMockAdapter_PollAbortsTheInFlightWaitOnCancellation(t *testing.T) {
+	const bound = 2 * time.Second
+	elapsed, r, ev, _ := maPollCancelInFlight(t)
+
+	// THE ORACLE.
+	if elapsed >= bound {
+		t.Errorf("Poll returned after %v, want under %v -- the in-flight wait did NOT observe the "+
+			"cancelled context. Poll must route through the SAME shared mockWait Submit uses, not "+
+			"its own sleep ([cancellation-is-observable-in-the-wait])", elapsed, bound)
+	}
+
+	switch r.(type) {
+	case submission.Accepted, submission.Pending:
+		t.Fatalf("Poll returned %T -- the wait completed and a verdict was synthesized despite the "+
+			"context dying in flight", r)
+	}
+	rt := maRetryable(t, "poll-in-flight-cancel", r)
+	if !errors.Is(rt.Err, context.DeadlineExceeded) {
+		t.Errorf("Retryable.Err = %v, want it to wrap context.DeadlineExceeded -- the wait returns "+
+			"ctx.Err(), not a mock sentinel", rt.Err)
+	}
+
+	// ReachedWire TRUE: the ref was readable and the request left the process before the wait
+	// began ([two-phase-wire]). This is what separates this row from the PRE-cancelled one.
+	if !ev.ReachedWire {
+		t.Errorf("Evidence.ReachedWire = false, want true -- ReachedWire is set BEFORE the in-flight " +
+			"wait, so a poll cancelled mid-flight may well have reached the APP")
+	}
+	if ev.HTTPStatus != nil {
+		t.Errorf("Evidence.HTTPStatus = %d, want nil -- no response was synthesized", *ev.HTTPStatus)
+	}
+	if ev.ResponseBody != nil {
+		t.Errorf("Evidence.ResponseBody = %q, want nil", *ev.ResponseBody)
+	}
+	if len(ev.ResponseHeaders) != 0 {
+		t.Errorf("Evidence.ResponseHeaders = %v, want empty", ev.ResponseHeaders)
+	}
+	if ev.RequestBody != nil {
+		t.Errorf("Evidence.RequestBody = %q, want nil -- a poll sends no document", *ev.RequestBody)
+	}
+	if ev.LatencyMS == nil {
+		t.Errorf("Evidence.LatencyMS is nil -- this path got well past the context check and was " +
+			"measured; only the PRE-cancelled row is unmeasured")
+	} else if *ev.LatencyMS < 0 {
+		t.Errorf("Evidence.LatencyMS = %d, want >= 0 (L12)", *ev.LatencyMS)
+	}
+}
+
+// TestMockAdapter_PollInFlightCancellationRecordsSent (S28, AC-9, RED-FIRST): the evidence S27
+// measured, run through the shipped bridge. A poll cancelled in flight may well have reached the
+// APP, which is exactly why M5-01 kept "sent" and "connection_failed" apart.
+//
+// THE PRE-CANCELLED CONTRAST ROW IS MANDATORY: without it, an implementation that reported
+// ReachedWire true on every Poll path passes. The unreadable-ref row is the second contrast --
+// a handle we could not read is a call we never made.
+func TestMockAdapter_PollInFlightCancellationRecordsSent(t *testing.T) {
+	_, _, ev, a := maPollCancelInFlight(t)
+
+	if got := submission.ExchangeFor(a, submission.OpPoll, 1, "job", "inv", ev).Outcome; got != submission.OutcomeSent {
+		t.Errorf("ctx died in flight: ExchangeFor(...).Outcome = %q, want %q -- the request had "+
+			"already left the process ([two-phase-wire])", got, submission.OutcomeSent)
+	}
+
+	instant := submission.NewMockAdapter(submission.MockConfig{})
+	ref := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	// CONTRAST ROW 1: the PRE-cancelled poll, which never reached the connect phase at all.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, preEv := maPoll(t, instant, cancelled, ref)
+	if got := submission.ExchangeFor(instant, submission.OpPoll, 1, "job", "inv", preEv).Outcome; got != submission.OutcomeConnectionFailed {
+		t.Errorf("pre-cancelled poll: ExchangeFor(...).Outcome = %q, want %q -- L16's check runs "+
+			"BEFORE the connect phase, so nothing left the process", got, submission.OutcomeConnectionFailed)
+	}
+
+	// CONTRAST ROW 2: an unreadable handle. Semantically imprecise (nothing failed to CONNECT --
+	// we never tried), but ExchangeFor derives outcome solely from ReachedWire and M5-01's
+	// five-value vocabulary is sealed; ReachedWire = true would be the worse lie. Flagged in
+	// task-227's plan, owned by M5-05 if it ever wants its own value.
+	_, badEv := maPoll(t, instant, context.Background(), submission.Ref("contract-suite-never-issued-ref"))
+	if got := submission.ExchangeFor(instant, submission.OpPoll, 1, "job", "inv", badEv).Outcome; got != submission.OutcomeConnectionFailed {
+		t.Errorf("unreadable ref: ExchangeFor(...).Outcome = %q, want %q", got, submission.OutcomeConnectionFailed)
+	}
+
+	// POSITIVE CONTRAST: an ordinary, completed poll records "sent".
+	_, okEv := maPoll(t, instant, context.Background(), ref)
+	if got := submission.ExchangeFor(instant, submission.OpPoll, 1, "job", "inv", okEv).Outcome; got != submission.OutcomeSent {
+		t.Errorf("completed poll: ExchangeFor(...).Outcome = %q, want %q", got, submission.OutcomeSent)
+	}
+}
+
+// TestMockAdapter_PollWaitsTheConfiguredLatency (S29, AC-9, RED-FIRST).
+//
+// S29 IS MANDATORY OR S27 IS VACUOUSLY GREEN. A Poll that never waits at all trivially satisfies
+// S27's `elapsed < 2s` bound -- it returns in microseconds. This spec is the POSITIVE CONTROL
+// proving there IS a wait for S27's deadline to abort: at Latency 40ms a completed poll must take
+// at LEAST 40ms.
+//
+// A LOWER bound only, deliberately, for the same reason S13 gives: an upper bound on a 40ms
+// baseline under a loaded CI runner is a flake generator. The MockConfig{} control below is the
+// upper-bound half done safely -- the zero value means instant.
+func TestMockAdapter_PollWaitsTheConfiguredLatency(t *testing.T) {
+	const baseline = 40 * time.Millisecond
+	ctx := context.Background()
+	ref := maMintRef(t, maRefPayload{N: 2, IRN: maSentinelIRN, CSID: maSentinelCSID, QR: maSentinelQR})
+
+	slow := submission.NewMockAdapter(submission.MockConfig{Latency: baseline})
+	start := time.Now()
+	r, _ := maPoll(t, slow, ctx, ref)
+	elapsed := time.Since(start)
+
+	maPending(t, "configured-latency", r)
+	if elapsed < baseline {
+		t.Errorf("MockConfig{Latency: %v}: Poll returned after %v, want at least %v -- Poll must "+
+			"route through the shared in-flight wait. Without this bound, S27's `elapsed < 2s` is "+
+			"satisfied by a Poll that never waits at all, and S27 proves nothing",
+			baseline, elapsed, baseline)
+	}
+
+	instant := submission.NewMockAdapter(submission.MockConfig{})
+	start = time.Now()
+	maPoll(t, instant, ctx, ref)
+	if elapsed := time.Since(start); elapsed >= baseline {
+		t.Errorf("MockConfig{}: Poll returned after %v, want well under %v -- the zero value means "+
+			"instant ([one-latency-knob]), which is what keeps the contract suite fast", elapsed, baseline)
 	}
 }

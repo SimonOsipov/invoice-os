@@ -9,56 +9,52 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
-// errPortNotImplemented is the RED-stage stub body Canonical/HasFiscalOutcome/
-// MarkSubmitted/MarkFailed/getTx return below (M5-04-03, Mode A / RALPH Stage
-// 2.5): the real bodies (getTx extracted out of Store.Get, Canonical wrapping
-// getTx+SubmissionCanonical, HasFiscalOutcome's `irn IS NOT NULL` read,
-// MarkSubmitted/MarkFailed as thin forwards onto 02's MarkSubmittedTx/
-// MarkFailedTx) land in this subtask's Mode B (Executor, Stage 3) pass. It
-// returns (rather than panics) so submission_port_test.go's T03-2..T03-5
-// specs reach their assertions and fail for the right reason (this
-// sentinel), not a compile error. Mirrors the errActorNotImplemented
-// precedent from M5-04-02's own RED commit (e13e753, actor.go).
-var errPortNotImplemented = errors.New("invoice: submission port not implemented")
-
 // var _ submission.InvoicePort = (*Store)(nil) proves *Store satisfies
-// submission.InvoicePort at compile time (T03-1, AC#1) — true the moment
-// this file and internal/submission/invoice_port.go both exist, independent
-// of whether the method bodies below are real or stubbed.
+// submission.InvoicePort at compile time (T03-1, AC#1).
 var _ submission.InvoicePort = (*Store)(nil)
 
-// Canonical will hydrate invoiceID inside tx via getTx and project it onto
-// submission.Canonical via SubmissionCanonical (Stage 3,
-// [canonical-is-05-owned]). Stubbed here only so it compiles; body is
-// Stage 3's.
+// Canonical hydrates invoiceID inside tx via getTx (store.go) and projects
+// it onto submission.Canonical via the existing pure SubmissionCanonical
+// mapper ([canonical-is-05-owned]) -- never reimplemented here. getTx must
+// be used (not a lighter read) because SubmissionCanonical requires a
+// hydrated invoice (non-nil LineItems); a List-sourced invoice would
+// silently map to zero lines (submission_canonical.go's header hazard).
 func (s *Store) Canonical(ctx context.Context, tx pgx.Tx, invoiceID string) (submission.Canonical, error) {
-	return submission.Canonical{}, errPortNotImplemented
+	inv, err := getTx(ctx, tx, invoiceID)
+	if err != nil {
+		return submission.Canonical{}, err
+	}
+	return SubmissionCanonical(inv), nil
 }
 
-// HasFiscalOutcome will report invoices.irn IS NOT NULL for invoiceID
-// (Stage 3). Stubbed here only so it compiles; body is Stage 3's.
+// HasFiscalOutcome reports invoices.irn IS NOT NULL for invoiceID -- irn
+// only, never csid (no CHECK correlates the two columns). Cross-tenant /
+// absent id: RLS 0-rows -> pgx.ErrNoRows -> (false, nil), not an error.
 func (s *Store) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error) {
-	return false, errPortNotImplemented
+	var has bool
+	err := tx.QueryRow(ctx,
+		`SELECT irn IS NOT NULL FROM invoices WHERE id = $1`, invoiceID,
+	).Scan(&has)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return has, err
 }
 
-// MarkSubmitted will be a thin 1:1 forward onto MarkSubmittedTx (Stage 3) --
-// never a reimplementation of markTerminalTx's lock/idempotency/transition
-// sequence. Stubbed here only so it compiles; body is Stage 3's.
+// MarkSubmitted is a thin 1:1 forward onto 02's already-tested
+// MarkSubmittedTx (actor.go) -- NOT a reimplementation of markTerminalTx's
+// lock/idempotency/transition sequence. A private markTerminal helper here
+// would be a second independent implementation of that sequence, exactly
+// the drift risk 02's transition_adversarial_test.go warns about for
+// oracle maps.
 func (s *Store) MarkSubmitted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	return errPortNotImplemented
+	_, err := s.MarkSubmittedTx(ctx, tx, invoiceID, tenantID)
+	return err
 }
 
 // MarkFailed is MarkSubmitted's sibling, a thin forward onto MarkFailedTx
-// (Stage 3). Stubbed here only so it compiles; body is Stage 3's.
+// (actor.go).
 func (s *Store) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	return errPortNotImplemented
-}
-
-// getTx will be Store.Get's tx-scoped body, extracted verbatim out of
-// store.go:216-275 with byte-identical observable behaviour preserved
-// (Stage 3, T03-2's regression proof). Stubbed here only so it compiles;
-// Store.Get itself is UNTOUCHED by this subtask — getTx is a new,
-// independent, not-yet-wired function.
-func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
-	return Invoice{}, errPortNotImplemented
+	_, err := s.MarkFailedTx(ctx, tx, invoiceID, tenantID)
+	return err
 }

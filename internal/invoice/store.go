@@ -216,61 +216,76 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 func (s *Store) Get(ctx context.Context, id string) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := scanInvoice(tx.QueryRow(ctx,
-			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
-		), &inv); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			if pgCode(err) == "22P02" {
-				return ErrValidation
-			}
-			return err
-		}
-
-		rows, err := tx.Query(ctx,
-			`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, inv.ID,
-		)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var item LineItem
-			if err := scanLineItem(rows, &item); err != nil {
-				return err
-			}
-			inv.LineItems = append(inv.LineItems, item)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		// Resolve the human-facing rule_set_versions.version int onto the
-		// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
-		// a correlated scalar SELECT, not a join (a join would make the bare
-		// `id` column ambiguous against invoiceColumns/scanInvoice, shared by
-		// six other writers). Nil when rule_set_version_id IS NULL (never
-		// validated); rule_set_versions is a global table with GRANT SELECT
-		// TO invoice_app, so this is RLS-safe inside the app-pool tx.
-		if inv.RuleSetVersionID != nil {
-			var v int
-			if err := tx.QueryRow(ctx,
-				`SELECT version FROM rule_set_versions WHERE id = $1`, *inv.RuleSetVersionID,
-			).Scan(&v); err != nil {
-				if !errors.Is(err, pgx.ErrNoRows) {
-					return err
-				}
-			} else {
-				inv.RuleSetVersion = &v
-			}
-		}
-
-		return nil
+		var err error
+		inv, err = getTx(ctx, tx, id)
+		return err
 	})
 	if err != nil {
 		return Invoice{}, err
 	}
+	return inv, nil
+}
+
+// getTx is Get's tx-scoped body, extracted verbatim (M5-04-03,
+// [invoice-port-in-05]) so submission's InvoicePort.Canonical can hydrate an
+// invoice inside a caller-supplied tx (e.g. the worker's own
+// db.WithinTenantTx, with no request identity) without opening a second,
+// nested transaction. Get itself is now a thin wrapper around this plus its
+// own db.WithinRequestTenantTx. Byte-identical observable behaviour to the
+// pre-extraction Get, incl. line_no ordering and the rule_set_version
+// subselect (T03-2).
+func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
+	var inv Invoice
+	if err := scanInvoice(tx.QueryRow(ctx,
+		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, id,
+	), &inv); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return Invoice{}, ErrValidation
+		}
+		return Invoice{}, err
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, inv.ID,
+	)
+	if err != nil {
+		return Invoice{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item LineItem
+		if err := scanLineItem(rows, &item); err != nil {
+			return Invoice{}, err
+		}
+		inv.LineItems = append(inv.LineItems, item)
+	}
+	if err := rows.Err(); err != nil {
+		return Invoice{}, err
+	}
+
+	// Resolve the human-facing rule_set_versions.version int onto the
+	// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
+	// a correlated scalar SELECT, not a join (a join would make the bare
+	// `id` column ambiguous against invoiceColumns/scanInvoice, shared by
+	// six other writers). Nil when rule_set_version_id IS NULL (never
+	// validated); rule_set_versions is a global table with GRANT SELECT
+	// TO invoice_app, so this is RLS-safe inside the app-pool tx.
+	if inv.RuleSetVersionID != nil {
+		var v int
+		if err := tx.QueryRow(ctx,
+			`SELECT version FROM rule_set_versions WHERE id = $1`, *inv.RuleSetVersionID,
+		).Scan(&v); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return Invoice{}, err
+			}
+		} else {
+			inv.RuleSetVersion = &v
+		}
+	}
+
 	return inv, nil
 }
 

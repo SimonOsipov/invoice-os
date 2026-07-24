@@ -1,6 +1,6 @@
 // verdict_audit.go: the shared 08 audit write for SubmitWorker/PollWorker's terminal Accepted
-// and Rejected branches (System Design §6). M5-05-04 (task-240) adds this for SubmitWorker's
-// two synchronous branches; PollWorker's own Accepted/Rejected wiring is M5-05-05.
+// and Rejected branches (System Design §6). M5-05-04 (task-240) added this for SubmitWorker's
+// two synchronous branches; PollWorker's own Accepted/Rejected wiring is M5-05-05 (task-241).
 package submission
 
 import (

@@ -35,13 +35,15 @@ var allStatuses = []Status{
 }
 
 // wantLegalEdge is a HARD-CODED, independent restatement of the story's
-// 8-edge table (System Design / Test Specs, M4-02-02, extended by M5-04-02's
-// queued->failed dead-letter edge) -- deliberately NOT derived from
-// canTransition/legalTransitions in store.go. If the matrix test below
-// instead asked canTransition for the expected outcome, a future edit that
-// silently added or dropped an edge in legalTransitions would make the
-// oracle drift in lockstep with the bug and the test would never catch it --
-// exactly the regression this file exists to catch.
+// 11-edge table (System Design / Test Specs, M4-02-02, extended by
+// M5-04-02's queued->failed dead-letter edge and by M5-05-01's (task-237)
+// queued->accepted, queued->rejected, rejected->draft edges) --
+// deliberately NOT derived from canTransition/legalTransitions in store.go.
+// If the matrix test below instead asked canTransition for the expected
+// outcome, a future edit that silently added or dropped an edge in
+// legalTransitions would make the oracle drift in lockstep with the bug and
+// the test would never catch it -- exactly the regression this file exists
+// to catch.
 var wantLegalEdge = map[[2]Status]bool{
 	{StatusDraft, StatusValidated}:    true,
 	{StatusValidated, StatusQueued}:   true,
@@ -51,6 +53,9 @@ var wantLegalEdge = map[[2]Status]bool{
 	{StatusSubmitted, StatusFailed}:   true,
 	{StatusValidated, StatusDraft}:    true,
 	{StatusQueued, StatusFailed}:      true,
+	{StatusQueued, StatusAccepted}:    true,
+	{StatusQueued, StatusRejected}:    true,
+	{StatusRejected, StatusDraft}:     true,
 }
 
 // seedInvoiceAtStatus creates a normal draft invoice (via seedInvoice) then,
@@ -161,31 +166,38 @@ func TestTransition_ExhaustiveMatrixLocksLegalEdgeTable(t *testing.T) {
 		}
 	}
 
-	if legalCount != 8 {
-		t.Errorf("classified as legal = %d, want 8", legalCount)
+	if legalCount != 11 {
+		t.Errorf("classified as legal = %d, want 11", legalCount)
 	}
 	if redundantCount != 7 {
 		t.Errorf("classified as redundant (self-edge) = %d, want 7", redundantCount)
 	}
-	if illegalCount != 34 {
-		t.Errorf("classified as illegal = %d, want 34", illegalCount)
+	if illegalCount != 31 {
+		t.Errorf("classified as illegal = %d, want 31", illegalCount)
 	}
 }
 
 // TestTransition_TerminalStatesHaveNoLegalOutgoingEdges explicitly pins the
-// terminal-state invariant (AC-1): accepted/rejected/failed have ZERO legal
-// outgoing edges -- every non-self target from each of the 3 terminals ->
+// terminal-state invariant (AC-1): accepted/failed have ZERO legal outgoing
+// edges -- every non-self target from each of these 2 terminals ->
 // ErrIllegalTransition, status left unchanged. This is already implied,
 // pair-by-pair, by TestTransition_ExhaustiveMatrixLocksLegalEdgeTable above;
-// it is pinned here as its own explicitly-named, minimal case (18 = 3
+// it is pinned here as its own explicitly-named, minimal case (12 = 2
 // terminals x 6 non-self targets) matching the terminal invariant the story
 // calls out separately from general illegal-edge coverage.
+//
+// M5-05-01 (task-237, AC#4) removes rejected from the terminal set -- it
+// gains exactly ONE legal outgoing edge, rejected->draft (the rework path).
+// Rather than silently deleting rejected's coverage here, the sibling
+// subtest below pins that shape directly through the real Store.Transition:
+// rejected->draft succeeds, every other non-self target from rejected still
+// resolves to ErrIllegalTransition.
 func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	store := NewStore(app)
 
-	terminals := []Status{StatusAccepted, StatusRejected, StatusFailed}
+	terminals := []Status{StatusAccepted, StatusFailed}
 	attempts, illegalCount := 0, 0
 
 	for _, from := range terminals {
@@ -220,12 +232,44 @@ func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 		}
 	}
 
-	if attempts != 18 {
-		t.Fatalf("attempts = %d, want 18 (3 terminals x 6 non-self targets)", attempts)
+	if attempts != 12 {
+		t.Fatalf("attempts = %d, want 12 (2 terminals x 6 non-self targets)", attempts)
 	}
 	if illegalCount != attempts {
 		t.Errorf("illegal-classified = %d, want all %d attempts", illegalCount, attempts)
 	}
+
+	// M5-05-01 sibling assertion (AC#4): rejected is NOT a terminal -- it
+	// has exactly ONE legal outgoing edge, ->draft. Driven through the real
+	// Store.Transition (not canTransition directly -- that DB-free pin is
+	// TestTransition_RejectedHasExactlyOneOutgoingEdge, transition_test.go),
+	// so this also proves the edge is reachable end to end, not merely
+	// present in legalTransitions.
+	t.Run("rejected has exactly one outgoing edge", func(t *testing.T) {
+		for _, target := range allStatuses {
+			if target == StatusRejected {
+				continue // self-edge is INV-SM-03's redundant case, not this invariant
+			}
+			target := target
+			name := "rejected->" + string(target)
+			t.Run(name, func(t *testing.T) {
+				tenantID := seedTenant(t, super, "REJECTED-EDGE "+name+" tenant")
+				entityID := seedEntity(t, super, tenantID, "REJECTED-EDGE entity")
+				c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+				invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "REJECTED-EDGE-"+name, StatusRejected)
+
+				_, err := store.Transition(c, invID, target)
+				if target == StatusDraft {
+					if err != nil {
+						t.Fatalf("%s: err = %v, want success (rejected's sole legal outgoing edge, AC#4)", name, err)
+					}
+				} else if !errors.Is(err, ErrIllegalTransition) {
+					t.Fatalf("%s: err = %v, want ErrIllegalTransition (rejected has exactly ONE outgoing edge: ->draft)", name, err)
+				}
+			})
+		}
+	})
 }
 
 // TestTransition_MultiHopHistoryIntegrityChain drives one invoice through the

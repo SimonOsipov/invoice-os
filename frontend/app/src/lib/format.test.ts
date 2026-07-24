@@ -23,3 +23,25 @@ describe('fmtDateTime', () => {
     expect(fmtDateTime('not-a-date')).toBe('—')
   })
 })
+
+// --- QA Mode B (task-253): adversarial coverage on top of F-1 above. F-1 is untouched. ---
+
+describe('fmtDateTime: additional guards (adversarial)', () => {
+  it('F-2: a date-only ISO string (no explicit time) still renders a time component, never the em-dash fallback', () => {
+    const rendered = fmtDateTime('2026-07-01')
+    expect(rendered).not.toBe('—')
+    expect(rendered).toContain(':')
+  })
+
+  it('F-3: a valid RFC3339 timestamp with milliseconds renders normally', () => {
+    const rendered = fmtDateTime('2026-07-01T14:32:07.123Z')
+    expect(rendered).not.toBe('—')
+    expect(rendered).toContain(':')
+  })
+
+  it('F-4: whitespace-only input falls back to the em-dash, same as empty string', () => {
+    // '  ' is truthy (fails the `!iso` guard) but `new Date('  ')` is Invalid Date --
+    // exercises the isNaN(getTime()) branch specifically, not the falsy-string branch.
+    expect(fmtDateTime('   ')).toBe('—')
+  })
+})

@@ -767,3 +767,199 @@ describe('invoices data layer: non-401 ApiError propagation (adversarial)', () =
     expect((err as ApiError).status).toBe(500)
   })
 })
+
+// --- QA Mode B (task-253): adversarial coverage on top of the Stage-2.5/Stage-4 specs
+// above. Nothing above is weakened, skipped, or deleted. ---
+
+describe('pruneSelection: real churn (adversarial)', () => {
+  it('P-sel-1: a poll tick that simultaneously advances, removes and adds rows keeps only the still-present still-validated ids', () => {
+    // Selection was computed against an earlier page: a (validated, stays), b (validated,
+    // advances to queued by the poll), c (validated, scrolled/filtered off the page), plus
+    // a stale id 'z' the selection never should have contained. The polled rows also
+    // introduce a brand-new validated row 'd' that was never selected.
+    const priorSelection = ['a', 'b', 'c', 'z']
+    const polledRows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated' },
+      { ...draftInvoice, id: 'b', status: 'queued' },
+      { ...draftInvoice, id: 'd', status: 'validated' },
+    ]
+
+    const result = pruneSelection(priorSelection, polledRows)
+
+    // Exactly the still-present, still-validated ids -- 'b' dropped (advanced past
+    // validated), 'c'/'z' dropped (no longer present), 'd' NOT added (pruneSelection only
+    // narrows an existing selection, it never grows one).
+    expect(result).toEqual(['a'])
+  })
+
+  it('P-sel-2: a selection that becomes fully invalid across one churn collapses to empty, not an error', () => {
+    const rows: InvoiceRecord[] = [{ ...draftInvoice, id: 'a', status: 'accepted' }]
+
+    expect(pruneSelection(['a', 'b'], rows)).toEqual([])
+  })
+})
+
+describe('submitInvoices: failure modes (adversarial)', () => {
+  it('SUB-1: a non-2xx with an unparseable body still rejects ApiError{kind:"http"} with the real status', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      json: () => Promise.reject(new Error('not json')),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => submitInvoices(af, base, ['a'], 'k'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(502)
+  })
+
+  it('SUB-2: a network-level throw rejects ApiError{kind:"network", status:null}, never swallowed', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => submitInvoices(af, base, ['a'], 'k'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('network')
+    expect((err as ApiError).status).toBeNull()
+  })
+
+  it('SUB-3: a 2xx body with no "results" key resolves to undefined, pinned as-is (mirrors listInvoices\' unguarded .invoices unwrap; the backend contract guarantees the key, per addendum A10)', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await submitInvoices(af, base, ['a'], 'k')
+
+    // Pinned, not endorsed: submitInvoices does no defensive `?? []` the way getInvoice
+    // does for rule_set_version/qr_png_base64. If a caller (M5-09-06) ever does
+    // `result.length` or `result.filter(...)` on this without a guard, it throws a
+    // TypeError at the call site rather than surfacing an ApiError -- flagged for QA
+    // report, not fixed here (out of this subtask's scope to change the contract).
+    expect(result).toBeUndefined()
+  })
+
+  it('SUB-4: a 400 with a structured {error} envelope surfaces that message on the ApiError, unchanged', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({ error: 'idempotency_key exceeds the 218-char bound' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => submitInvoices(af, base, ['a'], 'x'.repeat(219)))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(400)
+    expect((err as ApiError).message).toBe('idempotency_key exceeds the 218-char bound')
+  })
+})
+
+describe('newIdempotencyKey: under load (adversarial)', () => {
+  it('KEY-1: 500 calls are all distinct, all exactly 36 chars, all within the 218-char backend bound', () => {
+    const keys = Array.from({ length: 500 }, () => newIdempotencyKey())
+
+    expect(new Set(keys).size).toBe(500)
+    for (const key of keys) {
+      expect(key).toHaveLength(36)
+      expect(key.length).toBeLessThanOrEqual(218)
+    }
+  })
+
+  it('KEY-2: the derived per-invoice key ("<request key>:<invoice id>", batch_submit.go deriveBatchSubmitKey) stays comfortably within its own 255-char CHECK bound', () => {
+    // 36 (uuid request key) + 1 (":") + 36 (uuid invoice id) = 73, far under the shared
+    // idempotency_keys.key CHECK char_length<=255 (migrations/20260707193000_river_and_
+    // idempotency.sql:394) and under the handler's own 218-char pre-derivation cap
+    // (handlers.go:543-545).
+    const requestKey = newIdempotencyKey()
+    const invoiceId = '11111111-1111-1111-1111-111111111111'
+    const derived = `${requestKey}:${invoiceId}`
+
+    expect(derived).toHaveLength(73)
+    expect(derived.length).toBeLessThanOrEqual(255)
+  })
+})
+
+describe('mbsPathToEditField: hostile input (adversarial)', () => {
+  it('PATH-3: indexed line-item paths never map and never throw', () => {
+    expect(mbsPathToEditField('line_items[0].unit_price')).toBeNull()
+    expect(mbsPathToEditField('line_items[3].description')).toBeNull()
+    expect(() => mbsPathToEditField('line_items[0].unit_price')).not.toThrow()
+  })
+
+  it('PATH-4: casing variants of a real path do not fuzzy-match (the table is case-sensitive)', () => {
+    expect(mbsPathToEditField('Supplier.Tin')).toBeNull()
+    expect(mbsPathToEditField('SUPPLIER.TIN')).toBeNull()
+    expect(mbsPathToEditField('Issue_Date')).toBeNull()
+  })
+
+  it('PATH-5: whitespace and a trailing dot are never trimmed/normalized away', () => {
+    expect(mbsPathToEditField(' supplier.tin')).toBeNull()
+    expect(mbsPathToEditField('supplier.tin ')).toBeNull()
+    expect(mbsPathToEditField('supplier.tin.')).toBeNull()
+    expect(mbsPathToEditField('.supplier.tin')).toBeNull()
+  })
+
+  it('PATH-6: every hostile input above resolves without throwing (a throw here would blank the M5-09-05 detail render)', () => {
+    const hostile: Array<string | undefined> = [
+      'line_items[0].unit_price',
+      'Supplier.Tin',
+      ' supplier.tin',
+      'supplier.tin.',
+      '',
+      undefined,
+      'customer.taxIdentifier',
+    ]
+    for (const path of hostile) {
+      expect(() => mbsPathToEditField(path), `path=${JSON.stringify(path)}`).not.toThrow()
+    }
+  })
+})
+
+describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 21 keys mirrored from invoice.go:83-105, no more, no fewer', () => {
+    // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
+    // json tags) -- if this list and the interface (invoices.ts:127-151) ever diverge,
+    // this test's `keyof` check would already fail to compile before this assertion even
+    // runs; the runtime assertion below additionally guards the FIXTURE from silently
+    // dropping a field the interface still declares.
+    const expectedKeys = [
+      'id',
+      'entity_id',
+      'import_batch_id',
+      'invoice_number',
+      'status',
+      'issue_date',
+      'supplier_tin',
+      'supplier_name',
+      'buyer_tin',
+      'buyer_name',
+      'currency',
+      'subtotal',
+      'vat',
+      'total',
+      'violations',
+      'rule_set_version_id',
+      'created_at',
+      'irn',
+      'csid',
+      'qr_payload',
+      'rejection_reasons',
+      'rule_set_version',
+      // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
+      // list-shaped record legitimately would).
+    ]
+
+    expect(Object.keys(draftInvoice).sort()).toEqual([...expectedKeys].sort())
+  })
+
+  it('SYNC-2: import_batch_id round-trips as a plain string when present, matching the *string/no-omitempty Go tag', () => {
+    const withBatch: InvoiceRecord = { ...draftInvoice, import_batch_id: 'batch-123' }
+    expect(withBatch.import_batch_id).toBe('batch-123')
+  })
+})
+

@@ -41,10 +41,11 @@
 //     SubmitArgs no longer exists when ensureSubmissionJob's INSERT first runs: the composite
 //     FK (submission_jobs_tenant_invoice_fk) refuses the row, tx1 rolls back, Work returns a
 //     plain error (River retries normally), and no submission_jobs row is left behind.
-//  8. TestSubmitWorker_AcceptedWithBlankIRNStillMovesInvoiceToSubmitted -- the worker itself
-//     never reads Accepted.IRN (persisting it is M5-05's job); a law-violating (blank) IRN
-//     from a misbehaving adapter still drives job/invoice state exactly like any other
-//     Accepted, since the worker has nothing to validate.
+//  8. TestSubmitWorker_AcceptedWithBlankIRNStillMovesInvoiceToAccepted -- the worker itself
+//     never validates Accepted.IRN's content (that is the adapter contract's job, L07, and
+//     the invoice-side writer's, M5-05-03); a law-violating (blank) IRN from a misbehaving
+//     adapter still drives job/invoice state exactly like any other Accepted, now including
+//     the verdict routing and 08 audit write M5-05-04 (task-240) adds.
 package submission_test
 
 import (
@@ -139,6 +140,15 @@ func TestSubmitWorker_PendingSetsPollRefAndMovesInvoiceToSubmitted(t *testing.T)
 	exchanges := wjExchanges(t, f, tenantID, wj.id)
 	if len(exchanges) != 1 || exchanges[0].outcome != "sent" {
 		t.Errorf("app_exchange rows = %+v, want exactly one 'sent' row", exchanges)
+	}
+
+	// M5-05-04 (task-240): the 08 audit event is only written on a TERMINAL (Accepted/
+	// Rejected) verdict -- Pending defers the verdict, so neither row exists yet.
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 0 {
+		t.Errorf("submission.accepted audit rows after a Pending outcome = %d, want 0", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != 0 {
+		t.Errorf("submission.rejected audit rows after a Pending outcome = %d, want 0", n)
 	}
 }
 
@@ -303,6 +313,12 @@ func TestSubmitWorker_RecordExchangeFailureMidTx2RollsBackAndIsRerunnable(t *tes
 	if inv.status != "queued" {
 		t.Errorf("invoice status after the failed RecordExchange = %q, want unchanged \"queued\"", inv.status)
 	}
+	// M5-05-04 (task-240): the whole tx2 rolling back must take the new audit write with it
+	// too -- a leaked audit row here would mean recordVerdictAudit ran outside the aborted
+	// transaction, which the design forbids.
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 0 {
+		t.Errorf("submission.accepted audit rows after the failed RecordExchange = %d, want 0", n)
+	}
 
 	// Re-run with corrected evidence, same job.ID: this only proves anything if the marker
 	// genuinely rolled back above -- a leaked marker would make this attempt a silent no-op.
@@ -325,8 +341,12 @@ func TestSubmitWorker_RecordExchangeFailureMidTx2RollsBackAndIsRerunnable(t *tes
 		t.Errorf("app_exchange rows after re-run = %d, want exactly 1", n)
 	}
 	inv2 := wiRead(t, f, tenantID, invoiceID)
-	if inv2.status != "submitted" {
-		t.Errorf("invoice status after re-run = %q, want \"submitted\"", inv2.status)
+	if inv2.status != "accepted" {
+		t.Errorf("invoice status after re-run = %q, want \"accepted\"", inv2.status)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted audit rows after re-run = %d, want exactly 1 -- the rolled-"+
+			"back first attempt must not have left a stray row for the successful re-run to add to", n)
 	}
 }
 
@@ -421,6 +441,13 @@ func TestSubmitWorker_ConcurrentRedeliveryBothReachSubmit(t *testing.T) {
 	if len(hist) != 1 {
 		t.Errorf("invoice_status_history rows after concurrent redelivery = %d, want exactly 1", len(hist))
 	}
+	// M5-05-04 (task-240), AC#5: the audit write is the closure's own LAST statement inside
+	// OncePerJob, so it must be exactly-once under the same race the exchange/history rows
+	// already prove -- not a second, unguarded write appended after OncePerJob returns.
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted audit rows after concurrent redelivery = %d, want exactly 1 -- "+
+			"OncePerJob must have absorbed the loser's audit write too", n)
+	}
 }
 
 // --- 7: invoice deleted before the job row is ever created ---------------------------------
@@ -465,9 +492,9 @@ func TestSubmitWorker_InvoiceDeletedBeforeFirstAttemptFailsClosed(t *testing.T) 
 	}
 }
 
-// --- 8: Accepted with a blank IRN -- the worker doesn't validate it (M5-05's job) ----------
+// --- 8: Accepted with a blank IRN -- the worker doesn't validate IRN content (M5-05-04) ---
 
-func TestSubmitWorker_AcceptedWithBlankIRNStillMovesInvoiceToSubmitted(t *testing.T) {
+func TestSubmitWorker_AcceptedWithBlankIRNStillMovesInvoiceToAccepted(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
@@ -491,8 +518,8 @@ func TestSubmitWorker_AcceptedWithBlankIRNStillMovesInvoiceToSubmitted(t *testin
 		t.Errorf("job state = %q, want \"accepted\" -- the worker does not validate IRN content", wj.state)
 	}
 	inv := wiRead(t, f, tenantID, invoiceID)
-	if inv.status != "submitted" {
-		t.Errorf("invoice status = %q, want \"submitted\"", inv.status)
+	if inv.status != "accepted" {
+		t.Errorf("invoice status = %q, want \"accepted\"", inv.status)
 	}
 	if inv.irn != nil {
 		t.Errorf("invoices.irn = %q, want NULL -- this worker never writes it regardless of IRN content", *inv.irn)

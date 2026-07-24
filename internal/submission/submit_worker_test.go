@@ -34,9 +34,9 @@
 // Spec-to-test map (task-230's Test Specs table):
 //
 //	T05-1  TestSubmitWorker_JobRowCreatedOnceAndReusedAcrossAttempts
-//	T05-2  TestSubmitWorker_AcceptedMovesInvoiceToSubmitted (+ AC#1's call-count orphan)
-//	T05-3  TestSubmitWorker_AcceptedDoesNotSmuggleM505Scope
-//	T05-4  TestSubmitWorker_RejectedDoesNotMoveInvoiceToRejected
+//	T05-2  TestSubmitWorker_AcceptedMovesInvoiceToAccepted (+ AC#1's call-count orphan; inverted M5-05-04/task-240)
+//	T05-3  TestSubmitWorker_AcceptedRoutesVerdictAndAudits (repurposed M5-05-04/task-240)
+//	T05-4  TestSubmitWorker_RejectedMovesInvoiceToRejected (inverted M5-05-04/task-240)
 //	T05-5  TestSubmitWorker_RetryableMidBudgetRetriesWithoutTouchingInvoice
 //	T05-6  TestSubmitWorker_DeadLetterOnFinalAttempt
 //	T05-7  TestSubmitWorker_TransformFailureIsTerminalAndCheap
@@ -49,12 +49,18 @@
 //	T05-14 TestRLS_SubmitWorkerCannotTouchAnotherTenant
 //	T05-15 TestSubmitWorker_AdapterNotCalledUnderTransaction
 //
+// M5-05-04 (task-240): T05-2/T05-3/T05-4 above are register #11-13's inversions (renamed
+// accordingly); TestSubmitWorker_RejectedWritesExactlyOneSubmissionRejectedAuditRow is new
+// audit-event coverage this subtask adds. See submit_worker_adversarial_test.go's own header
+// for registers #14-16/#30.
+//
 // Local run: `DEV_DB_PORT=5433 make test-queue` from this worktree, or export DATABASE_URL /
 // DATABASE_MIGRATION_URL and run `go test ./internal/submission/... -run 'SubmitWorker|RLS_SubmitWorker'`.
 package submission_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -397,6 +403,56 @@ func wjExchanges(t *testing.T, f *effectsFixture, tenantID, jobID string) []wjEx
 	return rows
 }
 
+// --- the 08 audit event read-back helpers ----------------------------------------------
+//
+// Duplicated (not imported) from internal/invoice/store_test.go's own auditCount/auditActor
+// and adversarial_test.go's own auditPayload -- [mapper-lives-in-03] forbids importing
+// internal/invoice from this package, the same duplicate-never-import precedent as every
+// other double/helper in this file. Added by M5-05-04 (task-240) for the AC#7 audit-row
+// assertions across this file and submit_worker_adversarial_test.go.
+
+// auditCount counts audit_log rows for tenantID+event, scoped via db.WithinTenantTx
+// (FORCE RLS + tenant_isolation) exactly like every other read-back helper in this file.
+func auditCount(t *testing.T, f *effectsFixture, tenantID, event string) int {
+	t.Helper()
+	ctx := context.Background()
+	var n int
+	if err := db.WithinTenantTx(ctx, f.app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE event = $1`, event).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count audit_log (tenant=%s event=%s): %v", tenantID, event, err)
+	}
+	return n
+}
+
+// auditPayload returns the jsonb payload of the MOST RECENT audit_log row for tenantID+event.
+func auditPayload(t *testing.T, f *effectsFixture, tenantID, event string) json.RawMessage {
+	t.Helper()
+	ctx := context.Background()
+	var payload json.RawMessage
+	if err := db.WithinTenantTx(ctx, f.app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT payload FROM audit_log WHERE event = $1 ORDER BY created_at DESC LIMIT 1`, event,
+		).Scan(&payload)
+	}); err != nil {
+		t.Fatalf("read audit_log payload (tenant=%s event=%s): %v", tenantID, event, err)
+	}
+	return payload
+}
+
+// auditPayloadMap decodes auditPayload's jsonb into a map, so a caller can assert a key is
+// ABSENT (via the two-value map index form) rather than merely empty -- [audit-reference-is-
+// the-irn]'s "reference key absent on Rejected" claim needs exactly this, not a string check.
+func auditPayloadMap(t *testing.T, f *effectsFixture, tenantID, event string) map[string]any {
+	t.Helper()
+	raw := auditPayload(t, f, tenantID, event)
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal audit_log payload for event %q: %v", event, err)
+	}
+	return m
+}
+
 // --- scripted adapter (thin wrapper around refAdapter) --------------------------------
 
 // scriptedOutcome is one Submit call's programmed (Result, Evidence) pair.
@@ -561,8 +617,9 @@ func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, ten
 // widened submission.InvoicePort (a hard compile dependency: this is the
 // package's only external-test-package double, so a missing method here
 // breaks the whole internal/submission test binary). accepted/rejected are
-// not yet driven by worker.go's own routing (that lands in a later M5-05
-// subtask) -- these exist purely for the interface to keep compiling.
+// now driven by worker.go's own routing (M5-05-04, task-240) -- see
+// TestSubmitWorker_AcceptedRoutesVerdictAndAudits and
+// TestSubmitWorker_RejectedMovesInvoiceToRejected below.
 func (testInvoicePort) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
 	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "accepted")
 }
@@ -575,15 +632,15 @@ var _ submission.InvoicePort = testInvoicePort{}
 
 // tipLegalTransitions mirrors internal/invoice/store.go's own legalTransitions
 // (store.go:658-663) for the two source states this double's callers can reach: queued
-// (SubmitWorker's MarkSubmitted/MarkFailed) and submitted (PollWorker's dead-letter path,
-// M5-04-06/T06-8, AC-5 -- "moves the invoice submitted -> failed via the existing edge").
-// Widened by M5-05-03 (task-239, register #10) to add queued->accepted, queued->rejected,
-// submitted->accepted, submitted->rejected -- the real store already allows all four edges
-// (store.go:661-662), so this map must track them or the fake silently diverges from
-// production; accepted/rejected are not yet driven by worker.go's own routing (a later M5-05
-// subtask), MarkAccepted/MarkRejected above exist only so testInvoicePort keeps compiling
-// against the widened interface. Duplicated, not imported ([mapper-lives-in-03]) -- the same
-// duplicate-never-import precedent as every other double in this file.
+// (SubmitWorker's MarkSubmitted/MarkFailed/MarkAccepted/MarkRejected) and submitted
+// (PollWorker's dead-letter path, M5-04-06/T06-8, AC-5 -- "moves the invoice submitted ->
+// failed via the existing edge"). Widened by M5-05-03 (task-239, register #10) to add
+// queued->accepted, queued->rejected, submitted->accepted, submitted->rejected -- the real
+// store already allows all four edges (store.go:661-662), so this map must track them or the
+// fake silently diverges from production; accepted/rejected are now driven by worker.go's own
+// routing (M5-05-04, task-240) via SubmitWorker's tx2. Duplicated, not imported
+// ([mapper-lives-in-03]) -- the same duplicate-never-import precedent as every other double
+// in this file.
 var tipLegalTransitions = map[string]map[string]bool{
 	"queued":    {"submitted": true, "failed": true, "accepted": true, "rejected": true},
 	"submitted": {"failed": true, "accepted": true, "rejected": true},
@@ -671,9 +728,9 @@ func TestSubmitWorker_JobRowCreatedOnceAndReusedAcrossAttempts(t *testing.T) {
 	}
 }
 
-// --- T05-2 -------------------------------------------------------------------------------
+// --- T05-2, inverted by M5-05-04 (task-240, register #11) --------------------------------
 
-func TestSubmitWorker_AcceptedMovesInvoiceToSubmitted(t *testing.T) {
+func TestSubmitWorker_AcceptedMovesInvoiceToAccepted(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
@@ -701,8 +758,8 @@ func TestSubmitWorker_AcceptedMovesInvoiceToSubmitted(t *testing.T) {
 		t.Errorf("job state = %q, want \"accepted\"", wj.state)
 	}
 	inv := wiRead(t, f, tenantID, invoiceID)
-	if inv.status != "submitted" {
-		t.Errorf("invoice status = %q, want \"submitted\"", inv.status)
+	if inv.status != "accepted" {
+		t.Errorf("invoice status = %q, want \"accepted\"", inv.status)
 	}
 	hist := wiHistory(t, f, tenantID, invoiceID)
 	if len(hist) != 1 {
@@ -711,17 +768,27 @@ func TestSubmitWorker_AcceptedMovesInvoiceToSubmitted(t *testing.T) {
 	if hist[0].fromStatus == nil || *hist[0].fromStatus != "queued" {
 		t.Errorf("history from_status = %v, want \"queued\"", hist[0].fromStatus)
 	}
-	if hist[0].toStatus != "submitted" {
-		t.Errorf("history to_status = %q, want \"submitted\"", hist[0].toStatus)
+	if hist[0].toStatus != "accepted" {
+		t.Errorf("history to_status = %q, want \"accepted\"", hist[0].toStatus)
 	}
 	if hist[0].actor != "system" {
 		t.Errorf("history actor = %q, want \"system\"", hist[0].actor)
 	}
 }
 
-// --- T05-3 -------------------------------------------------------------------------------
+// --- T05-3, repurposed by M5-05-04 (task-240, register #12) ------------------------------
+//
+// TestSubmitWorker_AcceptedDoesNotSmuggleM505Scope's original premise -- "the worker must NOT
+// write the outcome" -- is now OBSOLETE: routing the verdict through InvoicePort.MarkAccepted
+// and writing the submission.accepted audit row IS this subtask's own job (System Design §6).
+// Repurposed into a POSITIVE proof of that behaviour: on Accepted, the worker lands the
+// invoice on "accepted" AND writes exactly one submission.accepted audit row whose payload
+// "reference" equals the scripted IRN -- proving the worker forwarded the REAL adapter
+// verdict (r), not a hardcoded literal. Column persistence itself (irn/csid/qr in the
+// invoices row) is M5-05-03's own proof (internal/invoice/system_actor_test.go) -- this test
+// cannot see those columns at all, see this package's testInvoicePort doc comment.
 
-func TestSubmitWorker_AcceptedDoesNotSmuggleM505Scope(t *testing.T) {
+func TestSubmitWorker_AcceptedRoutesVerdictAndAudits(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
@@ -735,27 +802,47 @@ func TestSubmitWorker_AcceptedDoesNotSmuggleM505Scope(t *testing.T) {
 	w := newTestWorker(f.app, adapter)
 	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
 
-	// A t.Fatalf (not Errorf) here is load-bearing: without it, an unimplemented Work simply
-	// leaves irn/rejection_reasons untouched and this test would PASS VACUOUSLY throughout
-	// RALPH Stage 2.5 -- exactly the M5-05-scope smuggling bug this spec exists to catch,
-	// undetected, if Work "fails" for an unrelated reason instead of succeeding and
-	// (wrongly) writing the IRN.
+	beforeAccepted := auditCount(t, f, tenantID, "submission.accepted")
+	beforeRejected := auditCount(t, f, tenantID, "submission.rejected")
+
+	// A t.Fatalf (not Errorf) here is load-bearing: every assertion below reads state Work
+	// itself must have written, so a failed Work makes the rest meaningless.
 	if err := w.Work(ctx, job); err != nil {
 		t.Fatalf("Work on an Accepted outcome: %v", err)
 	}
 
 	inv := wiRead(t, f, tenantID, invoiceID)
-	if inv.irn != nil {
-		t.Errorf("invoices.irn = %q, want NULL -- storing IRN is M5-05's job, not this worker's", *inv.irn)
+	if inv.status != "accepted" {
+		t.Errorf("invoice status = %q, want \"accepted\"", inv.status)
 	}
-	if inv.rejectionReasons != "[]" {
-		t.Errorf("invoices.rejection_reasons = %s, want \"[]\" -- this worker never writes it", inv.rejectionReasons)
+
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != beforeAccepted+1 {
+		t.Errorf("submission.accepted audit rows = %d, want %d (exactly one new row)", n, beforeAccepted+1)
+	}
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != beforeRejected {
+		t.Errorf("submission.rejected audit rows = %d, want unchanged %d -- an Accepted outcome must never write a rejected row", n, beforeRejected)
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	payload := auditPayloadMap(t, f, tenantID, "submission.accepted")
+	if payload["invoice_id"] != invoiceID {
+		t.Errorf("submission.accepted payload invoice_id = %v, want %q", payload["invoice_id"], invoiceID)
+	}
+	if payload["submission_job_id"] != wj.id {
+		t.Errorf("submission.accepted payload submission_job_id = %v, want %q", payload["submission_job_id"], wj.id)
+	}
+	if payload["outcome"] != "accepted" {
+		t.Errorf("submission.accepted payload outcome = %v, want \"accepted\"", payload["outcome"])
+	}
+	if payload["reference"] != "NG-1" {
+		t.Errorf("submission.accepted payload reference = %v, want %q (the scripted IRN) -- "+
+			"proves the worker forwarded the real adapter verdict, not a hardcoded literal", payload["reference"], "NG-1")
 	}
 }
 
-// --- T05-4 -------------------------------------------------------------------------------
+// --- T05-4, inverted by M5-05-04 (task-240, register #13) ---------------------------------
 
-func TestSubmitWorker_RejectedDoesNotMoveInvoiceToRejected(t *testing.T) {
+func TestSubmitWorker_RejectedMovesInvoiceToRejected(t *testing.T) {
 	f := requireExchangeDB(t)
 	ctx := context.Background()
 	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
@@ -777,9 +864,59 @@ func TestSubmitWorker_RejectedDoesNotMoveInvoiceToRejected(t *testing.T) {
 		t.Errorf("job state = %q, want \"rejected\"", wj.state)
 	}
 	inv := wiRead(t, f, tenantID, invoiceID)
-	if inv.status != "submitted" {
-		t.Errorf("invoice status = %q, want \"submitted\" -- [reaching-the-app-means-a-verdict]: "+
-			"Rejected still reached the APP", inv.status)
+	if inv.status != "rejected" {
+		t.Errorf("invoice status = %q, want \"rejected\" -- [reaching-the-app-means-a-verdict]: "+
+			"Rejected moves the invoice to rejected, not left in limbo", inv.status)
+	}
+}
+
+// --- new: the 08 audit event, Rejected branch -----------------------------------------
+//
+// M5-05-04 (task-240), AC#2/#7: reference is ABSENT (not empty-string) per
+// [audit-reference-is-the-irn] -- Rejected carries no IRN to report.
+
+func TestSubmitWorker_RejectedWritesExactlyOneSubmissionRejectedAuditRow(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Rejected{Reasons: []submission.Reason{{Code: "E1", Message: "bad TIN"}}},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	beforeRejected := auditCount(t, f, tenantID, "submission.rejected")
+	beforeAccepted := auditCount(t, f, tenantID, "submission.accepted")
+
+	if err := w.Work(ctx, job); err != nil {
+		t.Fatalf("Work on a Rejected outcome: %v", err)
+	}
+
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != beforeRejected+1 {
+		t.Errorf("submission.rejected audit rows = %d, want %d (exactly one new row)", n, beforeRejected+1)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != beforeAccepted {
+		t.Errorf("submission.accepted audit rows = %d, want unchanged %d -- a Rejected outcome must never write an accepted row", n, beforeAccepted)
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	payload := auditPayloadMap(t, f, tenantID, "submission.rejected")
+	if payload["invoice_id"] != invoiceID {
+		t.Errorf("submission.rejected payload invoice_id = %v, want %q", payload["invoice_id"], invoiceID)
+	}
+	if payload["submission_job_id"] != wj.id {
+		t.Errorf("submission.rejected payload submission_job_id = %v, want %q", payload["submission_job_id"], wj.id)
+	}
+	if payload["outcome"] != "rejected" {
+		t.Errorf("submission.rejected payload outcome = %v, want \"rejected\"", payload["outcome"])
+	}
+	if _, ok := payload["reference"]; ok {
+		t.Errorf("submission.rejected payload carries a \"reference\" key (value %v), want it ABSENT -- "+
+			"[audit-reference-is-the-irn]: Rejected has no IRN", payload["reference"])
 	}
 }
 

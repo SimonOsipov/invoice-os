@@ -3,6 +3,9 @@ import { APPS } from './apps'
 
 // One smoke test per deployed SPA: the main mock view renders and the page logs
 // no console errors or uncaught exceptions during load.
+//
+// (no-op touch: spins an ephemeral PR environment for a manual feature-inventory
+// walkthrough of the deployed app — this PR is not intended to merge.)
 for (const app of APPS) {
   test(`${app.name}: main view renders with no console errors`, async ({ page }) => {
     const errors: string[] = []

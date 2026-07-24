@@ -418,7 +418,7 @@ func TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate(t *testing.T) {
 	}
 }
 
-// TestRLS_InvoicesEditRejectedCrossTenantRefused (M5-05-01, task-237, QA
+// TestRLS_InvoicesEditRejectedCrossTenantRefused (task-237, QA
 // adversarial): the widened rejected->draft rework path on Store.Edit cannot
 // mutate -- or even see -- another tenant's invoice. RLS's lock+read 0-rows
 // for a cross-tenant id, which Edit maps to ErrNotFound; tenant B's status,
@@ -428,7 +428,7 @@ func TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate(t *testing.T) {
 //
 // This refusal is NOT specific to the rejected leg -- Store.Edit's RLS-scoped
 // lock+read (step 2) fails identically regardless of before.Status, so this
-// test passes vacuously both before and after M5-05-01's widening. It is
+// test passes vacuously both before and after task-237's widening. It is
 // still worth pinning explicitly: the story lives on RLS isolation proofs
 // per invoice/state (cross_tenant_integration_test.go's own convention), and
 // a future change to Store.Edit's read ordering could regress this

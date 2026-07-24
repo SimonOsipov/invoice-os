@@ -1826,10 +1826,10 @@ func TestEditHandler_MalformedBody400(t *testing.T) {
 }
 
 // TestEditHandler_NotFixable409 (Core AC #1): the store returning
-// ErrNotFixable must map to 409 -- the edit surface is restricted to three
-// fixable states (draft, validated, rejected -- M5-05-01, task-237), and
-// this is the HTTP-layer proof of that guard's error mapping. The test body
-// itself is unaffected by the widening (it stubs the store), so this is a
+// ErrNotFixable must map to 409 -- the edit surface accepts three fixable
+// statuses (draft, validated, rejected -- task-237), and this is the
+// HTTP-layer proof of that guard's error mapping. The test body itself is
+// unaffected by the widening (it stubs the store), so this is a
 // comment-only inversion.
 func TestEditHandler_NotFixable409(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}

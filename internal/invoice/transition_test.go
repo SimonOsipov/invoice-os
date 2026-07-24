@@ -63,12 +63,12 @@ var legalEdges = []legalEdgeCase{
 	{"submitted->rejected", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusRejected},
 	{"submitted->failed", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusFailed},
 	{"validated->draft", []Status{StatusValidated}, StatusValidated, StatusDraft},
-	// M5-05-01 (task-237, AC#3): the synchronous-verdict edges -- a
+	// task-237 (AC#3): the synchronous-verdict edges -- a
 	// worker that gets an immediate accept/reject from the APP reaches its
 	// final state without ever passing through submitted.
 	{"queued->accepted", []Status{StatusValidated, StatusQueued}, StatusQueued, StatusAccepted},
 	{"queued->rejected", []Status{StatusValidated, StatusQueued}, StatusQueued, StatusRejected},
-	// M5-05-01 (AC#4): the rework edge -- a rejected invoice can be
+	// task-237 (AC#4): the rework edge -- a rejected invoice can be
 	// demoted back to draft for correction.
 	{"rejected->draft", []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusRejected}, StatusRejected, StatusDraft},
 }
@@ -167,10 +167,10 @@ var illegalEdges = []illegalEdgeCase{
 	{"draft->submitted", nil, StatusDraft, StatusSubmitted},
 	{"validated->submitted", []Status{StatusValidated}, StatusValidated, StatusSubmitted},
 	{"validated->accepted", []Status{StatusValidated}, StatusValidated, StatusAccepted},
-	// M5-05-01: queued->accepted and rejected->draft moved OUT of this
+	// task-237: queued->accepted and rejected->draft moved OUT of this
 	// table -- they are now legal (see legalEdges above / wantLegalEdge in
 	// transition_adversarial_test.go). failed->queued stays illegal
-	// ([failed-invoices] -- M5-05-01 does NOT add this edge).
+	// ([failed-invoices] -- task-237 does NOT add this edge).
 	{"submitted->draft", []Status{StatusValidated, StatusQueued, StatusSubmitted}, StatusSubmitted, StatusDraft},
 	{"failed->queued", []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusFailed}, StatusFailed, StatusQueued},
 	{"accepted->validated", []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted}, StatusAccepted, StatusValidated},
@@ -607,11 +607,11 @@ func TestTransition_ValidatedToDraftLegalityUnit(t *testing.T) {
 // Mirrors TestTransition_ValidatedToDraftLegalityUnit's shape (a direct
 // canTransition pin, independent of and narrower than the DB-backed
 // TestTransition_ExhaustiveMatrixLocksLegalEdgeTable's full 49-pair sweep).
-// M5-05-01 (task-237) extends this same pin with its own three edges:
+// task-237 extends this same pin with its own three edges:
 // queued->accepted/rejected (AC#3, the synchronous-verdict shortcuts around
 // submitted) and rejected->draft (AC#4, the rework edge) all flip to legal.
 // failed->queued stays illegal -- [failed-invoices] is enforced, not merely
-// documented: M5-05-01 adds exactly three edges, not four, so a change that
+// documented: task-237 adds exactly three edges, not four, so a change that
 // widened canTransition across the board (or, distinctly, one that added
 // failed->queued specifically) would not pass this test by accident.
 func TestTransition_QueuedToFailedLegalityUnit(t *testing.T) {
@@ -619,21 +619,21 @@ func TestTransition_QueuedToFailedLegalityUnit(t *testing.T) {
 		t.Errorf("canTransition(queued, failed) = false, want true (M5-04-02 dead-letter edge)")
 	}
 	if !canTransition(StatusQueued, StatusAccepted) {
-		t.Errorf("canTransition(queued, accepted) = false, want true (M5-05-01's synchronous-verdict edge, AC#3)")
+		t.Errorf("canTransition(queued, accepted) = false, want true (task-237's synchronous-verdict edge, AC#3)")
 	}
 	if !canTransition(StatusQueued, StatusRejected) {
-		t.Errorf("canTransition(queued, rejected) = false, want true (M5-05-01's synchronous-verdict edge, AC#3)")
+		t.Errorf("canTransition(queued, rejected) = false, want true (task-237's synchronous-verdict edge, AC#3)")
 	}
 	if canTransition(StatusFailed, StatusQueued) {
-		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, M5-05-01 does not add this edge)")
+		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, task-237 does not add this edge)")
 	}
 	if !canTransition(StatusRejected, StatusDraft) {
-		t.Errorf("canTransition(rejected, draft) = false, want true (M5-05-01's rework edge, AC#4)")
+		t.Errorf("canTransition(rejected, draft) = false, want true (task-237's rework edge, AC#4)")
 	}
 }
 
 // TestTransition_RejectedHasExactlyOneOutgoingEdge is a DB-free unit pin:
-// M5-05-01 (task-237, AC#4) adds exactly ONE outgoing edge from rejected --
+// task-237 (AC#4) adds exactly ONE outgoing edge from rejected --
 // rejected->draft, the rework path -- every other non-self target stays
 // illegal. This is independent of (and narrower than) the DB-backed sibling
 // assertion in TestTransition_TerminalStatesHaveNoLegalOutgoingEdges
@@ -641,7 +641,7 @@ func TestTransition_QueuedToFailedLegalityUnit(t *testing.T) {
 // real Store.Transition rather than canTransition directly.
 func TestTransition_RejectedHasExactlyOneOutgoingEdge(t *testing.T) {
 	if !canTransition(StatusRejected, StatusDraft) {
-		t.Errorf("canTransition(rejected, draft) = false, want true (M5-05-01's rework edge, AC#4)")
+		t.Errorf("canTransition(rejected, draft) = false, want true (task-237's rework edge, AC#4)")
 	}
 	for _, target := range []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted, StatusFailed} {
 		if canTransition(StatusRejected, target) {
@@ -651,16 +651,16 @@ func TestTransition_RejectedHasExactlyOneOutgoingEdge(t *testing.T) {
 }
 
 // TestTransition_FailedToQueuedStaysIllegal pins [failed-invoices]: unlike
-// rejected, failed stays a true terminal after M5-05-01 -- failed->queued is
+// rejected, failed stays a true terminal after task-237 -- failed->queued is
 // explicitly NOT one of the three edges this subtask adds (queued->accepted,
 // queued->rejected, rejected->draft). Passes vacuously today (canTransition
-// already returns false here, before M5-05-01 touches legalTransitions at
+// already returns false here, before task-237 touches legalTransitions at
 // all) -- it exists as its own explicitly-named regression guard, distinct
 // from TestTransition_QueuedToFailedLegalityUnit's spot-check of the same
 // fact, so a future change that widens failed's map entry trips a
 // purpose-built test rather than only a side-assertion buried in another.
 func TestTransition_FailedToQueuedStaysIllegal(t *testing.T) {
 	if canTransition(StatusFailed, StatusQueued) {
-		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, M5-05-01 does not add this edge)")
+		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, task-237 does not add this edge)")
 	}
 }

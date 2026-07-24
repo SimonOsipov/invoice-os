@@ -699,9 +699,9 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 	}
 }
 
-// --- M5-05-01 (task-237): the widened rejected leg of the fix loop --------
+// --- task-237: the widened rejected leg of the fix loop --------------------
 //
-// Spec-to-test map (Test Specs table, M5-05-01 / task-237):
+// Spec-to-test map (Test Specs table, task-237):
 //
 //	AC#3 TestStoreEdit_RejectedContentChangeDemotesAndClearsReasons
 //	AC#4 TestStoreEdit_RejectedNoOpKeepsStatusAndReasons
@@ -873,7 +873,7 @@ func TestStoreEdit_RejectedNoOpKeepsStatusAndReasons(t *testing.T) {
 	}
 }
 
-// EDIT-15/AC#5 (QA adversarial): after M5-05-01 widens Store.Edit's fixable
+// EDIT-15/AC#5 (QA adversarial): after task-237 widens Store.Edit's fixable
 // set to include rejected, an ACCEPTED invoice must still refuse with
 // ErrNotFixable -- the widened path stops at rejected, it does not silently
 // swallow the rest of the terminal/in-flight states. Passes vacuously today

@@ -255,11 +255,11 @@ var (
 	ErrStaleValidation = errors.New("invoice: stale validation")
 
 	// ErrNotFixable is Store.Edit's own precondition sentinel (M4-05-02,
-	// architect [A2]): the edit surface is restricted to the two fixable
-	// states (draft, validated, [A1]/System Design §4 step 3) -- any other
-	// status (queued/submitted/accepted/rejected/failed) is refused with
-	// NOTHING written. A 409 in statusForErr (M4-05-03), like ErrNotDraft/
-	// ErrStaleValidation.
+	// architect [A2]; widened by task-237 to a third status): the edit
+	// surface accepts three fixable statuses -- draft, validated, and
+	// rejected ([A1]/System Design §4 step 3) -- any other status
+	// (queued/submitted/accepted/failed) is refused with NOTHING written. A
+	// 409 in statusForErr (M4-05-03), like ErrNotDraft/ErrStaleValidation.
 	//
 	// Deliberately NOT ErrIllegalTransition (that names a state-machine EDGE,
 	// which is the wrong vocabulary here -- Edit's guard reads the CURRENT

@@ -72,18 +72,48 @@
 //     CSID/QR/reasons-array leak, and 05 (app_exchange) + 08 (audit_log) both fire from the
 //     SAME poll verdict.
 //  10. TestPollWorker_ConcurrentPollsForSameJobBothNoOpCleanly (extended) -- the existing
-//      OncePerJob concurrent-redelivery case above (case 3) now also asserts the audit write
-//      stays exactly-once under the same race, mirroring
-//      TestSubmitWorker_ConcurrentRedeliveryBothReachSubmit's own audit assertion
-//      (submit_worker_adversarial_test.go).
+//     OncePerJob concurrent-redelivery case above (case 3) now also asserts the audit write
+//     stays exactly-once under the same race, mirroring
+//     TestSubmitWorker_ConcurrentRedeliveryBothReachSubmit's own audit assertion
+//     (submit_worker_adversarial_test.go).
 //  11. TestPollWorker_PendingHopWritesNoVerdictAudit -- a poll hop that comes back Pending
-//      again (not yet terminal) must write ZERO submission.accepted/submission.rejected rows
-//      and leave the invoice at 'submitted' -- the audit write is scoped to the
-//      Accepted/Rejected branches only, never Pending.
+//     again (not yet terminal) must write ZERO submission.accepted/submission.rejected rows
+//     and leave the invoice at 'submitted' -- the audit write is scoped to the
+//     Accepted/Rejected branches only, never Pending.
 //
 // All of M5-05-05 (task-241)'s own doc-comment gate sites (register rows #17-#20) are
 // resolved in this file's edits above; worker.go's own stale sentence (:394-395) is the
 // executor's Stage-3 rewrite, out of scope here.
+//
+// QA Mode B (this pass) adds five more cases, closing gaps the register/Test Specs table
+// did not already cover:
+//
+//  12. TestPollWorker_AcceptedHistoryRowIsSubmittedToAccepted -- source-state specificity:
+//     the poll verdict's own invoice_status_history row must read submitted->accepted, not
+//     queued->accepted -- the one behavioral difference from SubmitWorker's own synchronous
+//     path (which transitions FROM queued).
+//  13. TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant -- mirrors
+//     TestRLS_SubmitWorkerAuditRowNotVisibleToAnotherTenant's own pattern
+//     (submit_worker_adversarial_test.go): audit_log's tenant_isolation policy hides tenant
+//     A's poll-verdict audit row from tenant B.
+//  14. TestPollWorker_AcceptedWritesBothAuditRowAndPollExchangeRow -- explicit, standalone
+//     05+08 coexistence check: one poll Accepted verdict leaves BOTH exactly one
+//     operation='poll' app_exchange row AND exactly one submission.accepted audit_log row.
+//  15. TestPollWorker_SubmitToPollContinuityTwoHistoryRowsOneAuditRow -- the full
+//     submit-Pending -> poll-Accepted arc (AC#3): exactly two invoice_status_history rows
+//     (queued->submitted from the submit hop, submitted->accepted from the poll hop) and
+//     exactly one submission.accepted audit row -- the submit hop's own Pending branch
+//     writes none.
+//  16. TestPollWorker_BlankIRNChecksViolationRollsBackTx2Whole -- QA Mode B mutation-testing
+//     (this pass) found, by mutation, that swallowing w.InvoicePort.MarkAccepted's error
+//     entirely on the POLL side goes JUST AS undetected as M5-05-04's own QA (task-240)
+//     found on the submit side: testInvoicePort's MarkAccepted never writes irn and the
+//     "submitted" source status is always a legal transition, so nothing in the corpus ever
+//     drives it into an error. rawIRNInvoicePort (submit_worker_adversarial_test.go, same
+//     package) binds irn RAW -- exactly what the real *invoice.Store.MarkAcceptedTx does --
+//     so a blank IRN trips the same invoices_irn_check constraint end-to-end through
+//     PollWorker.Work, proving the poll path's tx2 is atomic just like the submit path's own
+//     (case 9 there).
 package submission_test
 
 import (
@@ -821,5 +851,273 @@ func TestPollWorker_PendingHopWritesNoVerdictAudit(t *testing.T) {
 	}
 	if n := auditCount(t, f, tenantID, "submission.rejected"); n != beforeRejected {
 		t.Errorf("submission.rejected audit rows = %d, want unchanged %d -- a Pending hop is not a verdict", n, beforeRejected)
+	}
+}
+
+// --- 12: source-state specificity -- the history row reads submitted->accepted, never ------
+// --- queued->accepted (the one behavioral difference from SubmitWorker's own sync path) -----
+
+func TestPollWorker_AcceptedHistoryRowIsSubmittedToAccepted(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Accepted{IRN: "NG-HIST-1", CSID: "C", QRPayload: "Q"}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	if err := pw.Work(ctx, newPollJob(10, 1, 8, submission.PollArgs{
+		TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1,
+	})); err != nil {
+		t.Fatalf("poll to Accepted: %v", err)
+	}
+
+	hist := wiHistory(t, f, tenantID, invoiceID)
+	if len(hist) != 2 {
+		t.Fatalf("invoice_status_history rows = %d, want exactly 2 (queued->submitted, submitted->accepted): %+v", len(hist), hist)
+	}
+	// hist[0] is the submit hop's own queued->submitted row (precondition for this spec's
+	// own target, hist[1]); the source-state-specificity claim under test is hist[1].
+	if hist[1].fromStatus == nil || *hist[1].fromStatus != "submitted" {
+		t.Errorf("poll verdict's history from_status = %v, want \"submitted\" -- NOT \"queued\", "+
+			"the one behavioral difference from SubmitWorker's own synchronous path", hist[1].fromStatus)
+	}
+	if hist[1].toStatus != "accepted" {
+		t.Errorf("poll verdict's history to_status = %q, want \"accepted\"", hist[1].toStatus)
+	}
+}
+
+// --- 13: the poll audit row lands under the acting tenant, invisible to another -------------
+// (mirrors TestRLS_SubmitWorkerAuditRowNotVisibleToAnotherTenant, submit_worker_adversarial_test.go)
+
+func TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantA, invoiceA, cleanupA := seedQueuedInvoice(t, f)
+	defer cleanupA()
+	tenantB := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantB)
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceA
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantA, InvoiceID: invoiceA, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantA, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Accepted{IRN: "NG-RLS-POLL-1", CSID: "C", QRPayload: "Q"}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	if err := pw.Work(ctx, newPollJob(10, 1, 8, submission.PollArgs{
+		TenantID: tenantA, InvoiceID: invoiceA, SubmissionJobID: wj.id, Sequence: 1,
+	})); err != nil {
+		t.Fatalf("poll to Accepted: %v", err)
+	}
+
+	if n := auditCount(t, f, tenantA, "submission.accepted"); n < 1 {
+		t.Fatalf("tenant A's own submission.accepted audit rows = %d, want at least 1 -- "+
+			"precondition for the isolation check below", n)
+	}
+	if n := auditCount(t, f, tenantB, "submission.accepted"); n != 0 {
+		t.Errorf("tenant B's view of submission.accepted audit rows = %d, want 0 -- "+
+			"RLS must hide tenant A's poll-verdict row from tenant B", n)
+	}
+}
+
+// --- 14: one poll Accepted leaves BOTH the app_exchange (05) and audit_log (08) rows --------
+// (explicit, standalone coexistence check -- previously only an incidental side-assertion of
+// the strict-summary cases above)
+
+func TestPollWorker_AcceptedWritesBothAuditRowAndPollExchangeRow(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Accepted{IRN: "NG-COEXIST-1", CSID: "C", QRPayload: "Q"}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	if err := pw.Work(ctx, newPollJob(10, 1, 8, submission.PollArgs{
+		TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1,
+	})); err != nil {
+		t.Fatalf("poll to Accepted: %v", err)
+	}
+
+	rows := pjPollExchanges(t, f, tenantID, wj.id)
+	var pollRows int
+	for _, r := range rows {
+		if r.operation == "poll" {
+			pollRows++
+		}
+	}
+	if pollRows != 1 {
+		t.Errorf("app_exchange rows with operation='poll' = %d, want exactly 1", pollRows)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted audit rows = %d, want exactly 1 -- both 05 (app_exchange) "+
+			"and 08 (audit_log) must exist for the SAME poll verdict", n)
+	}
+}
+
+// --- 15: submit->poll continuity -- a coherent 2-row history chain, exactly one audit row ---
+// (AC#3: "A submit-Pending -> poll-Accepted sequence produces exactly two history rows
+// (queued->submitted, submitted->accepted) and exactly one submission.accepted audit row.")
+
+func TestPollWorker_SubmitToPollContinuityTwoHistoryRowsOneAuditRow(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+
+	beforeAccepted := auditCount(t, f, tenantID, "submission.accepted")
+
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	// The submit hop's own Pending branch must write NO submission.accepted row -- only the
+	// eventual poll verdict does.
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != beforeAccepted {
+		t.Fatalf("submission.accepted audit rows right after the submit-Pending hop = %d, want unchanged %d "+
+			"-- the Pending branch is not a verdict", n, beforeAccepted)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Accepted{IRN: "NG-CONTINUITY-1", CSID: "C", QRPayload: "Q"}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	if err := pw.Work(ctx, newPollJob(10, 1, 8, submission.PollArgs{
+		TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1,
+	})); err != nil {
+		t.Fatalf("poll to Accepted: %v", err)
+	}
+
+	hist := wiHistory(t, f, tenantID, invoiceID)
+	if len(hist) != 2 {
+		t.Fatalf("invoice_status_history rows = %d, want exactly 2: %+v", len(hist), hist)
+	}
+	if hist[0].fromStatus == nil || *hist[0].fromStatus != "queued" || hist[0].toStatus != "submitted" {
+		t.Errorf("history row 0 = (from=%v, to=%s), want (queued, submitted) -- the submit hop's own edge",
+			hist[0].fromStatus, hist[0].toStatus)
+	}
+	if hist[1].fromStatus == nil || *hist[1].fromStatus != "submitted" || hist[1].toStatus != "accepted" {
+		t.Errorf("history row 1 = (from=%v, to=%s), want (submitted, accepted) -- the poll hop's own edge",
+			hist[1].fromStatus, hist[1].toStatus)
+	}
+
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != beforeAccepted+1 {
+		t.Errorf("submission.accepted audit rows after the full submit->poll arc = %d, want %d "+
+			"(exactly one new row -- the submit hop wrote none, only the poll verdict did)", n, beforeAccepted+1)
+	}
+}
+
+// --- 16: a REAL invoices_irn_check violation on the POLL side's MarkAccepted rolls back -----
+// --- the WHOLE tx2 (closes the QA Mode B mutation gap -- see this file's own header) --------
+
+func TestPollWorker_BlankIRNChecksViolationRollsBackTx2Whole(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	submitAdapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, submitAdapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	beforeAccepted := auditCount(t, f, tenantID, "submission.accepted")
+	beforeExchangeRows := exCountRows(t, f, tenantID, wj.id) // 1: the submit hop's own row
+
+	// Law-violating (L07): blank IRN. Reuses submitAdapter's own pollQueue -- a fresh
+	// newScriptedAdapter's Result argument only seeds submitQueue, which Poll never reads, so
+	// the SAME adapter instance must back both hops, mirroring every other two-hop spec in
+	// this file (e.g. TestPollWorker_ThreeHopConvergence). Routed through rawIRNInvoicePort
+	// (submit_worker_adversarial_test.go, same package) rather than newTestPollWorker/
+	// testInvoicePort so the write actually reaches the constrained column -- mirrors
+	// TestSubmitWorker_BlankIRNChecksViolationRollsBackTx2Whole's own rationale exactly, for
+	// the poll side's own MarkAccepted call.
+	submitAdapter.pollQueue = []scriptedOutcome{
+		{result: submission.Accepted{IRN: "", CSID: "C", QRPayload: "Q"}, evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := &submission.PollWorker{
+		Pool:        f.app,
+		Adapter:     submitAdapter,
+		InvoicePort: rawIRNInvoicePort{},
+		Queue:       newQueueClient(f.app),
+	}
+	job := newPollJob(10, 1, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1})
+
+	err := pw.Work(ctx, job)
+	if err == nil {
+		t.Fatal("Work with a blank-IRN Accepted poll verdict returned nil, want the invoices_irn_check violation (23514) surfaced")
+	}
+	if code := exPgCode(err); code != "23514" {
+		t.Errorf("Work error SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	wj2 := wjRequire(t, f, tenantID, idemKey)
+	if wj2.state != "pending" {
+		t.Errorf("job state after the failed poll MarkAccepted = %q, want unchanged \"pending\" -- "+
+			"the whole tx2, including the OncePerJob marker, must have rolled back", wj2.state)
+	}
+	if n := exCountRows(t, f, tenantID, wj.id); n != beforeExchangeRows {
+		t.Errorf("app_exchange rows after the failed poll MarkAccepted = %d, want unchanged %d "+
+			"(only the submit hop's own row -- the poll's own row must have rolled back too)", n, beforeExchangeRows)
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "submitted" {
+		t.Errorf("invoice status after the failed poll MarkAccepted = %q, want unchanged \"submitted\"", inv.status)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != beforeAccepted {
+		t.Errorf("submission.accepted audit rows after the failed poll MarkAccepted = %d, want unchanged %d -- "+
+			"the audit write must roll back with everything else, since it never even runs "+
+			"(recordVerdictAudit sits after MarkAccepted in the same OncePerJob closure)", n, beforeAccepted)
 	}
 }

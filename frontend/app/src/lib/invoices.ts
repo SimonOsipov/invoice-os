@@ -47,10 +47,13 @@
 // (ErrNotFixable, invoice.go:261-273, [A1]/System Design §4 step 3): true for
 // draft/validated/rejected, false for every other status. M5-05-01 (task-237) widened
 // the BACKEND precondition to this third fixable status (rejected, the rework path);
-// M5-09-03 (task-253, Core AC #4) is where this mirror re-syncs to match
-// ([spa-untouched] closes here). RED: the body below is deliberately left at the old
-// draft/validated-only rule so invoices.test.ts's I3 fails on the widened assertion
-// (not a throw) — the executor flips it in Stage 3.
+// M5-09-03 (task-253, Core AC #4) re-synced this mirror to match, closing
+// [spa-untouched]. Widening to `rejected` also turns Re-validate on for a rejected
+// invoice (InvoiceDetail.tsx's "Fix & re-validate" card) -- correct for the edit form
+// (Store.Edit accepts draft/validated/rejected, store.go:592-594), but the validate
+// gate itself stays draft-only (gate.go:162 -> ErrNotDraft -> 409), so clicking
+// Re-validate before any edit 409s and is caught/surfaced by the existing handler, the
+// same known wrinkle already documented for `validated`.
 //
 // verdictStatus(staleSinceEdit, inv) is the within-session fix-loop indicator (Core AC
 // #7) plus the on-load demoted-draft derivation (Core AC #5, task-188 item 4): 'stale'
@@ -58,9 +61,12 @@
 // AND no violation has severity==='error') — a draft the gate blocked, then edited,
 // stamps rule_set_version_id/error-violations that survive the demotion (store.go
 // never clears them on Edit), so this is what tells a demoted-and-since-edited draft
-// apart from a demoted-but-untouched one on reload. RED: the body below still ignores
-// `inv`, so I5b fails on the widened assertion — the executor implements the full rule
-// in Stage 3.
+// apart from a demoted-but-untouched one on reload. Named residual (accepted, not a
+// bug): a draft the gate BLOCKED (error violations + rule_set_version_id stamped) and
+// then edited stays 'draft' and reports 'current' on reload -- undetectable
+// client-side, since the wire carries no content fingerprint or validated_at.
+// `staleSinceEdit` still covers it within the same session; I5d pins this residual
+// deliberately so it isn't misread as a bug later.
 //
 // shouldFetchInvoices/invoicesViewState are pure render-decision helpers, mirroring
 // shouldFetchEntities/clientsViewState in portfolio.ts: the no-gateway zero-network
@@ -237,7 +243,7 @@ export async function listInvoices(
 
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
-  return { ...res, rule_set_version: res.rule_set_version ?? null }
+  return { ...res, rule_set_version: res.rule_set_version ?? null, qr_png_base64: res.qr_png_base64 ?? null }
 }
 
 export async function getInvoiceHistory(
@@ -272,19 +278,20 @@ export async function revalidateInvoice(
 // so this unwraps `.results` unconditionally, mirroring listInvoices' `.invoices`
 // unwrap. Non-2xx rejects with the underlying ApiError unchanged.
 //
-// STUB (M5-09-03, task-253, Mode A): throws so submitInvoices.test's specs fail on the
-// not-implemented throw rather than a compile error -- the executor implements the body
-// in Stage 3. NOTE for Stage 3: apiFetch JSON.stringifies the body object as-is, so its
-// key order follows object-literal insertion order -- I-submit-1 pins the exact wire
-// string with `invoice_ids` declared before `idempotency_key`; build the body object in
-// that order.
+// apiFetch JSON.stringifies the body object as-is, so its key order follows
+// object-literal insertion order -- `invoice_ids` is declared before `idempotency_key`
+// below to match the exact wire string I-submit-1 pins.
 export async function submitInvoices(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _invoiceIds: string[],
-  _idempotencyKey: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  invoiceIds: string[],
+  idempotencyKey: string,
 ): Promise<BatchSubmitResultItem[]> {
-  throw new Error('not implemented')
+  const res = await authedFetch<{ results: BatchSubmitResultItem[] }>(
+    `${base}/api/invoice/v1/invoices/submissions`,
+    { method: 'POST', body: { invoice_ids: invoiceIds, idempotency_key: idempotencyKey } },
+  )
+  return res.results
 }
 
 // crypto.randomUUID() -- present in this runtime with no polyfill (lib: DOM,
@@ -292,10 +299,8 @@ export async function submitInvoices(
 // only; verified against node v25.2.1 / vitest 4.1.10, M5-09-03 addendum A10). Every
 // submit path calls this once per batch-submit attempt to derive the idempotency key
 // (Core AC #3).
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
 export function newIdempotencyKey(): string {
-  throw new Error('not implemented')
+  return crypto.randomUUID()
 }
 
 // Total-in-practice mapping over the 7 canonical states (typed Partial, mirroring
@@ -322,11 +327,14 @@ export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
 }
 
 export function isFixable(status: InvoiceStatus): boolean {
-  return status === 'draft' || status === 'validated'
+  return status === 'draft' || status === 'validated' || status === 'rejected'
 }
 
-export function verdictStatus(staleSinceEdit: boolean, _inv: InvoiceRecord): 'stale' | 'current' {
-  return staleSinceEdit ? 'stale' : 'current'
+export function verdictStatus(staleSinceEdit: boolean, inv: InvoiceRecord): 'stale' | 'current' {
+  if (staleSinceEdit) return 'stale'
+  const demotedSinceValidation =
+    inv.status === 'draft' && inv.rule_set_version_id != null && !inv.violations.some((v) => v.severity === 'error')
+  return demotedSinceValidation ? 'stale' : 'current'
 }
 
 // A total mapper over the APP's dotted MBS payload vocabulary (MBSPayload,
@@ -338,70 +346,86 @@ export function verdictStatus(staleSinceEdit: boolean, _inv: InvoiceRecord): 'st
 // (handlers.go:70-80), so there is no field to flag; `line_items[...]` and any APP-only
 // vocabulary (e.g. `customer.taxIdentifier`, which appears only in the synthesized
 // error body) likewise have no SPA edit-form counterpart.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function mbsPathToEditField(_path: string | undefined): EditFieldKey | null {
-  throw new Error('not implemented')
+const MBS_PATH_TO_EDIT_FIELD: Record<string, EditFieldKey> = {
+  issue_date: 'issue_date',
+  currency: 'currency',
+  subtotal: 'subtotal',
+  vat: 'vat',
+  total: 'total',
+  'supplier.tin': 'supplier_tin',
+  'supplier.name': 'supplier_name',
+  'buyer.tin': 'buyer_tin',
+  'buyer.name': 'buyer_name',
+}
+
+export function mbsPathToEditField(path: string | undefined): EditFieldKey | null {
+  if (path == null) return null
+  return MBS_PATH_TO_EDIT_FIELD[path] ?? null
 }
 
 // not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason
 // values (batchSubmitReasonNotValidated/batchSubmitReasonDuplicate, handlers.go) --
 // anything else passes through verbatim rather than being swallowed, so an unknown
 // future reason still surfaces something to the operator.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function skipReasonLabel(_reason: string): string {
-  throw new Error('not implemented')
+const SKIP_REASON_LABELS: Record<string, string> = {
+  not_validated: 'Not validated — validate it first',
+  duplicate_request: 'Already submitted with this request',
+}
+
+export function skipReasonLabel(reason: string): string {
+  return SKIP_REASON_LABELS[reason] ?? reason
 }
 
 // Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`
 // invoices can be batch-submitted (Store.ApplyValidation is the only path into
 // `queued`), so selection is scoped to that one status throughout.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function isRowSelectable(_status: InvoiceStatus): boolean {
-  throw new Error('not implemented')
+export function isRowSelectable(status: InvoiceStatus): boolean {
+  return status === 'validated'
 }
 
-export function selectableIds(_rows: InvoiceRecord[]): string[] {
-  throw new Error('not implemented')
+export function selectableIds(rows: InvoiceRecord[]): string[] {
+  return rows.filter((row) => isRowSelectable(row.status)).map((row) => row.id)
 }
 
-export function toggleSelection(_sel: string[], _id: string): string[] {
-  throw new Error('not implemented')
+export function toggleSelection(sel: string[], id: string): string[] {
+  return sel.includes(id) ? sel.filter((s) => s !== id) : [...sel, id]
 }
 
 // Keeps only ids that are both still present in `rows` (didn't scroll/filter away) AND
 // still `validated` (didn't get submitted/edited/re-validated out from under a stale
 // selection since it was last computed).
-export function pruneSelection(_sel: string[], _rows: InvoiceRecord[]): string[] {
-  throw new Error('not implemented')
+export function pruneSelection(sel: string[], rows: InvoiceRecord[]): string[] {
+  const selectable = new Set(selectableIds(rows))
+  return sel.filter((id) => selectable.has(id))
 }
 
 // The list header checkbox's tri-state (task-257). LOAD-BEARING EDGE: `every()` over an
 // empty array is vacuously true, so a naive `selected.length === selectableIds(rows)
 // .length` (or an unguarded `.every()`) implementation renders a CHECKED select-all on a
-// page with zero selectable rows -- must resolve to 'none' instead.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function selectAllState(_selected: string[], _rows: InvoiceRecord[]): 'none' | 'some' | 'all' {
-  throw new Error('not implemented')
+// page with zero selectable rows -- guarded below by checking `selectable.length === 0`
+// first and never using `.every()`; a stale id in `selected` that isn't in `selectable`
+// also can't inflate the intersection count into a false 'all'.
+export function selectAllState(selected: string[], rows: InvoiceRecord[]): 'none' | 'some' | 'all' {
+  const selectable = selectableIds(rows)
+  if (selectable.length === 0) return 'none'
+  const selectedSet = new Set(selected)
+  const matched = selectable.filter((id) => selectedSet.has(id)).length
+  if (matched === 0) return 'none'
+  return matched === selectable.length ? 'all' : 'some'
 }
 
 // Live-refresh gate (M5-09-07's useLiveRefresh hook consumes these; every decision it
 // makes is one of these pure predicates, tested here since the hook itself isn't).
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function isInFlight(_status: InvoiceStatus): boolean {
-  throw new Error('not implemented')
+export function isInFlight(status: InvoiceStatus): boolean {
+  return status === 'queued' || status === 'submitted'
 }
 
-export function shouldPollInvoice(_status: InvoiceStatus, _visible: boolean): boolean {
-  throw new Error('not implemented')
+export function shouldPollInvoice(status: InvoiceStatus, visible: boolean): boolean {
+  return isInFlight(status) && visible
 }
 
-export function shouldPollList(_rows: InvoiceRecord[], _visible: boolean): boolean {
-  throw new Error('not implemented')
+export function shouldPollList(rows: InvoiceRecord[], visible: boolean): boolean {
+  return rows.some((row) => isInFlight(row.status)) && visible
 }
 
 export const LIVE_POLL_MS = 2000
@@ -410,35 +434,29 @@ export const LIVE_POLL_MS = 2000
 // [history-refresh-predicate]): true only on a real change from a KNOWN previous
 // status. `prev === null` covers the very first observation, which the initial
 // `history.run()` on mount already handles -- firing here too would double-fetch.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function shouldRefreshHistory(_prev: InvoiceStatus | null, _next: InvoiceStatus): boolean {
-  throw new Error('not implemented')
+export function shouldRefreshHistory(prev: InvoiceStatus | null, next: InvoiceStatus): boolean {
+  return prev !== null && prev !== next
 }
 
 // Detail rejection-card visibility + provenance label (task-251 ACs #3/#4/#7).
 // `status !== 'accepted'` in shouldShowRejectionCard is a BACKSTOP against a
 // server-side bug (AC #7) -- an accepted invoice should never carry rejection_reasons,
 // but the card must not show one if it somehow does.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function shouldShowRejectionCard(_inv: Pick<InvoiceRecord, 'status' | 'rejection_reasons'>): boolean {
-  throw new Error('not implemented')
+export function shouldShowRejectionCard(inv: Pick<InvoiceRecord, 'status' | 'rejection_reasons'>): boolean {
+  return inv.rejection_reasons.length > 0 && inv.status !== 'accepted'
 }
 
 // 'current' iff the invoice is presently `rejected` (this IS the live verdict);
 // 'historical' for everything else, including a demoted draft whose rejection_reasons
 // are carried over from before the rejected->draft demotion (M5-09-02).
-export function rejectionProvenance(_status: InvoiceStatus): 'current' | 'historical' {
-  throw new Error('not implemented')
+export function rejectionProvenance(status: InvoiceStatus): 'current' | 'historical' {
+  return status === 'rejected' ? 'current' : 'historical'
 }
 
 // Fiscal-record card visibility (task-251 AC #1): only an accepted invoice that
 // actually has an IRN has a fiscal record to show.
-//
-// STUB (Mode A): throws -- implemented in Stage 3.
-export function shouldShowFiscalRecord(_inv: Pick<InvoiceRecord, 'status' | 'irn'>): boolean {
-  throw new Error('not implemented')
+export function shouldShowFiscalRecord(inv: Pick<InvoiceRecord, 'status' | 'irn'>): boolean {
+  return inv.status === 'accepted' && inv.irn != null
 }
 
 export function shouldFetchInvoices(base: string | null): boolean {

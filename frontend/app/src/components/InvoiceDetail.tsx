@@ -369,12 +369,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       history.run()
     }
 
-    // isFixable(inv.status) gates this button on for both draft AND validated (see
+    // isFixable(inv.status) gates this button on for draft, validated AND rejected (see
     // below) so it stays visible when nothing has been edited yet -- clicking it on an
-    // untouched 'validated' invoice hits Store.ApplyValidation's draft-only gate
-    // ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught + surfaced here (mirrors
-    // InvoiceEditForm's formError) rather than left as an unhandled rejection with no
-    // user feedback.
+    // untouched 'validated' OR 'rejected' invoice hits Store.ApplyValidation's
+    // draft-only gate ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught +
+    // surfaced here (mirrors InvoiceEditForm's formError) rather than left as an
+    // unhandled rejection with no user feedback; the operator must edit first (which
+    // demotes rejected/validated -> draft), then re-validate.
     const handleRevalidate = async () => {
       if (revalidating) return
       setRevalidating(true)

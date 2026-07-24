@@ -543,13 +543,16 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //  8. demotes to draft when before.Status is validated OR rejected, via
 //     transitionTx(before.Status -> draft) on THIS same tx -- the real
 //     source status, never a hardcoded literal, so the history row's
-//     from_status stays truthful (task-237). A rejected `before` also has
-//     its stale rejection_reasons cleared first, in the SAME tx
-//     ([reason-lifecycle]). Either way the content write and the demotion
-//     are one atomic unit -- a failure at either step (including this
-//     audit's own actor CHECK) rolls back the whole edit, never a partial
-//     one (ContentAuditFailureRollsBackWholeEdit). A draft `before` has
-//     nothing to demote from and stays draft.
+//     from_status stays truthful (task-237). A rejected `before`'s
+//     rejection_reasons are RETAINED across the demotion, not cleared
+//     ([reason-lifecycle], reversed by M5-09-02/task-255) -- the only
+//     remaining clear lives in transitionTx itself, gated on
+//     target == accepted, because POST /transitions {"target":"accepted"}
+//     bypasses MarkAcceptedTx entirely and must clear too. Either way the
+//     content write and the demotion are one atomic unit -- a failure at
+//     either step (including this audit's own actor CHECK) rolls back the
+//     whole edit, never a partial one (ContentAuditFailureRollsBackWholeEdit).
+//     A draft `before` has nothing to demote from and stays draft.
 //  9. return `after` -- draft (demoted) after a validated content change,
 //     the demoted row's OWN state after a draft content change, or the
 //     no-op return from step 6 (a validated no-op stays validated).
@@ -615,15 +618,11 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 		}
 
 		// 8. demote when before.Status is validated or rejected -- a draft
-		// has nothing to demote from. A rejected invoice also has its stale
-		// rejection_reasons cleared before the transition, so transitionTx's
-		// RETURNING already reflects the clear ([reason-lifecycle]).
+		// has nothing to demote from. A rejected invoice's rejection_reasons
+		// are RETAINED across the demotion (reversed by M5-09-02/task-255,
+		// [reason-lifecycle]) -- the only remaining clear lives in
+		// transitionTx, gated on target == accepted.
 		if before.Status == StatusValidated || before.Status == StatusRejected {
-			if before.Status == StatusRejected {
-				if _, err := tx.Exec(ctx, `UPDATE invoices SET rejection_reasons = '[]' WHERE id = $1`, id); err != nil {
-					return err
-				}
-			}
 			if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
 				return err
 			}
@@ -745,9 +744,9 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // status change could diverge on a crash, breaking M4's "every transition
 // writes audit 08 in the same transaction".)
 //
-// It has exactly FIVE callers today — Store.Transition (store.go:726),
-// Store.ApplyValidation (store.go:940), Store.Edit's demotion branch
-// (store.go:625), Submitter.BatchSubmit (batch_submit.go:215), and
+// It has exactly FIVE callers today — Store.Transition (store.go:727),
+// Store.ApplyValidation (store.go:968), Store.Edit's demotion branch
+// (store.go:626), Submitter.BatchSubmit (batch_submit.go:215), and
 // markTerminalTx (actor.go:94, shared by MarkSubmittedTx/MarkFailedTx) —
 // and remains the SINGLE writer of invoices.status, with legalTransitions/
 // canTransition still the single source of truth for what is legal. That is
@@ -781,9 +780,36 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 		return Invoice{}, ErrIllegalTransition
 	}
 
+	// [reason-lifecycle] (M5-09-02/task-255, reversing M5-05's wipe-on-
+	// demotion): accepted is the only status whose entry clears
+	// rejection_reasons, and this is the ONLY place that still does so, now
+	// that Store.Edit's rejected->draft demotion retains them. It has to
+	// live HERE rather than in MarkAcceptedTx's outcome closure (actor.go)
+	// because accepted has a second live writer that never calls
+	// MarkAcceptedTx: POST /transitions {"target":"accepted"} on a queued
+	// invoice (legalTransitions[StatusQueued], unguarded by
+	// TransitionHandler, which refuses only validated). Riding the same
+	// UPDATE ... RETURNING keeps the clear atomic with the status write for
+	// BOTH callers -- no second statement, so a rolled-back transition never
+	// leaves an observable partial clear. '[]' is a SQL literal, not a bind
+	// parameter, so it does not renumber $2 (id).
+	//
+	// Deliberately NOT symmetric with rejected, even though the same
+	// reasoning applies there too (a residual risk recorded, not coded
+	// around, in M5-09-02's Stage-1 architecture validation, finding F3):
+	// rejected's two writers are MarkRejectedTx's outcome closure and the
+	// identical {"target":"rejected"} handler path, and markTerminalTx runs
+	// the outcome callback BEFORE transitionTx (actor.go) -- so clearing on
+	// rejected here would wipe the reasons MarkRejectedTx had just written
+	// moments earlier in the SAME tx, destroying every APP rejection reason.
+	setClause := "status = $1"
+	if target == StatusAccepted {
+		setClause = "status = $1, rejection_reasons = '[]'"
+	}
+
 	var inv Invoice
 	if err := scanInvoice(tx.QueryRow(ctx,
-		`UPDATE invoices SET status = $1 WHERE id = $2 RETURNING `+invoiceColumns,
+		`UPDATE invoices SET `+setClause+` WHERE id = $2 RETURNING `+invoiceColumns,
 		string(target), id,
 	), &inv); err != nil {
 		return Invoice{}, err

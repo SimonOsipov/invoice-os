@@ -108,7 +108,13 @@ func (s *Store) markTerminalTx(ctx context.Context, tx pgx.Tx, id, tenantID stri
 	if inv.Status == target {
 		// Idempotent no-op: already at the terminal state. The outcome write
 		// below is skipped -- an already-stored outcome must not be clobbered
-		// by a replayed call's (possibly different) arguments.
+		// by a replayed call's (possibly different) arguments. This also
+		// means a replayed MarkAcceptedTx on an already-accepted invoice
+		// never re-enters transitionTx, so its [reason-lifecycle] clear
+		// (store.go) never re-runs here -- harmless (rejection_reasons is
+		// already '[]' from the first pass) but not self-healing: it will
+		// not retroactively clear an accepted row that predates this
+		// subtask's change.
 		return inv, nil
 	}
 

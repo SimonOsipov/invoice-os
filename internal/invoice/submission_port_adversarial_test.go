@@ -405,3 +405,120 @@ func TestInvoicePort_CanonicalMissingRuleSetVersionRowDoesNotError(t *testing.T)
 		t.Errorf("port.Canonical (dangling rule_set_version_id): InvoiceID = %q, want %q", got.InvoiceID, invoiceID)
 	}
 }
+
+// --- M5-05-03 (task-239) -- port-level RED tests for MarkAccepted/MarkRejected ----------
+//
+// Written BEFORE the real implementation exists: MarkAcceptedTx/MarkRejectedTx
+// (actor.go) are Stage 2.5 stubs that unconditionally return
+// errOutcomeNotImplemented, so both tests below fail on that sentinel error
+// propagating through the thin port forwards, not a compile error.
+
+// TestInvoicePort_MarkAcceptedBindsInvoiceIDAndTenantIDCorrectly drives
+// port.MarkAccepted (never MarkAcceptedTx directly) end to end and asserts
+// BOTH the resulting invoice row (status + irn/csid/qr_payload) AND the
+// invoice_status_history row's tenant_id/invoice_id/actor -- the same
+// argument-transposition trap TestInvoicePort_MarkSubmittedBindsInvoiceIDAndTenantIDCorrectly
+// above guards for MarkSubmitted, applied to the new pair.
+func TestInvoicePort_MarkAcceptedBindsInvoiceIDAndTenantIDCorrectly(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T03-ADV MarkAccepted tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-ADV MarkAccepted entity")
+	invoiceID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-ADV-MA", StatusQueued)
+
+	var port submission.InvoicePort = NewStore(app)
+
+	out := submission.Accepted{IRN: "IRN-T03-ADV-MA", CSID: "CSID-T03-ADV-MA", QRPayload: "QR-T03-ADV-MA"}
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return port.MarkAccepted(ctx, tx, invoiceID, tenantID, out)
+	})
+	if err != nil {
+		t.Fatalf("port.MarkAccepted(invoiceID, tenantID, out): %v (want nil -- a transposed forward would 404 here)", err)
+	}
+
+	var status string
+	var gotIRN, gotCSID, gotQR *string
+	if err := super.QueryRow(ctx,
+		`SELECT status, irn, csid, qr_payload FROM invoices WHERE id = $1`, invoiceID,
+	).Scan(&status, &gotIRN, &gotCSID, &gotQR); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if status != string(StatusAccepted) {
+		t.Errorf("invoice status after port.MarkAccepted = %q, want %q", status, StatusAccepted)
+	}
+	if gotIRN == nil || *gotIRN != out.IRN {
+		t.Errorf("irn = %v, want %q", gotIRN, out.IRN)
+	}
+	if gotCSID == nil || *gotCSID != out.CSID {
+		t.Errorf("csid = %v, want %q", gotCSID, out.CSID)
+	}
+	if gotQR == nil || *gotQR != out.QRPayload {
+		t.Errorf("qr_payload = %v, want %q", gotQR, out.QRPayload)
+	}
+
+	var histTenant, histInvoice, actor, toStatus string
+	if err := super.QueryRow(ctx,
+		`SELECT tenant_id, invoice_id, actor, to_status FROM invoice_status_history WHERE invoice_id = $1`,
+		invoiceID,
+	).Scan(&histTenant, &histInvoice, &actor, &toStatus); err != nil {
+		t.Fatalf("read back invoice_status_history row: %v", err)
+	}
+	if histTenant != tenantID {
+		t.Errorf("invoice_status_history.tenant_id = %q, want %q (tenantID must land in the tenant_id column, not invoice_id)", histTenant, tenantID)
+	}
+	if histInvoice != invoiceID {
+		t.Errorf("invoice_status_history.invoice_id = %q, want %q (invoiceID must land in the invoice_id column, not tenant_id)", histInvoice, invoiceID)
+	}
+	if actor != "system" {
+		t.Errorf("invoice_status_history.actor = %q, want %q", actor, "system")
+	}
+	if toStatus != string(StatusAccepted) {
+		t.Errorf("invoice_status_history.to_status = %q, want %q", toStatus, StatusAccepted)
+	}
+}
+
+// TestInvoicePort_RolledBackTxLeavesNoOutcomeWrites: port.MarkAccepted writes
+// (invoices.status + irn/csid/qr_payload + invoice_status_history) inside a
+// tx whose caller ultimately rolls back must NOT persist -- the outcome
+// write shares the caller's tx fate, exactly like
+// TestInvoicePort_RolledBackTxLeavesNoPartialWrites above proves for
+// MarkSubmitted.
+func TestInvoicePort_RolledBackTxLeavesNoOutcomeWrites(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T03-ADV rollback-outcome tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-ADV rollback-outcome entity")
+	invoiceID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-ADV-RBO", StatusQueued)
+
+	var port submission.InvoicePort = NewStore(app)
+
+	sentinel := errors.New("T03-ADV: force rollback after MarkAccepted")
+	out := submission.Accepted{IRN: "IRN-T03-ADV-RBO", CSID: "CSID-T03-ADV-RBO", QRPayload: "QR-T03-ADV-RBO"}
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		if err := port.MarkAccepted(ctx, tx, invoiceID, tenantID, out); err != nil {
+			return err
+		}
+		return sentinel // force rollback of everything MarkAccepted just wrote
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("db.WithinTenantTx: err = %v, want the sentinel (confirms the tx was actually rolled back on purpose, not committed)", err)
+	}
+
+	var status string
+	var gotIRN *string
+	if err := super.QueryRow(ctx, `SELECT status, irn FROM invoices WHERE id = $1`, invoiceID).Scan(&status, &gotIRN); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if status != string(StatusQueued) {
+		t.Errorf("invoice status after rolled-back port.MarkAccepted = %q, want unchanged %q", status, StatusQueued)
+	}
+	if gotIRN != nil {
+		t.Errorf("irn after rolled-back port.MarkAccepted = %q, want still NULL (the outcome write must share the caller's tx fate)", *gotIRN)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invoiceID); n != 0 {
+		t.Errorf("invoice_status_history rows after rolled-back port.MarkAccepted = %d, want 0", n)
+	}
+}

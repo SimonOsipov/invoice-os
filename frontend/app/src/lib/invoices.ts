@@ -40,8 +40,12 @@
 // -> muted fallback (total mapping, mirrors severityStyle's `?? MUTED_STYLE`).
 //
 // isFixable(status) is the edit-surface guard mirror of Store.Edit's own precondition
-// (ErrNotFixable, invoice.go:257-269, [A1]/System Design §4 step 3): true for
-// draft/validated only, false for every other status.
+// (ErrNotFixable, invoice.go:261-273, [A1]/System Design §4 step 3): true for
+// draft/validated only, false for every other status. M5-05-01 (task-237) widened the
+// BACKEND precondition to a third fixable status (rejected, the rework path) — this
+// mirror deliberately does NOT follow ([spa-untouched]): isFixable('rejected') stays
+// false here (invoices.test.ts I4), so the reject/fix/resubmit loop has no SPA edit
+// surface yet. M5-09 owns re-syncing this mirror to the widened 3-state precondition.
 //
 // verdictStatus(staleSinceEdit) is the within-session fix-loop indicator (Core AC #7):
 // 'stale' once the currently-displayed validation verdict no longer describes the

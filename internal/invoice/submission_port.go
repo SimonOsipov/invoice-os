@@ -58,3 +58,18 @@ func (s *Store) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID s
 	_, err := s.MarkFailedTx(ctx, tx, invoiceID, tenantID)
 	return err
 }
+
+// MarkAccepted is a thin 1:1 forward onto MarkAcceptedTx (actor.go, real
+// implementation shipped by M5-05-03/task-239) -- same "no reimplementation"
+// rule as MarkSubmitted/MarkFailed above.
+func (s *Store) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
+	_, err := s.MarkAcceptedTx(ctx, tx, invoiceID, tenantID, out.IRN, out.CSID, out.QRPayload)
+	return err
+}
+
+// MarkRejected is MarkAccepted's sibling, a thin forward onto MarkRejectedTx
+// (actor.go).
+func (s *Store) MarkRejected(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, verdict submission.Rejected) error {
+	_, err := s.MarkRejectedTx(ctx, tx, invoiceID, tenantID, verdict.Reasons)
+	return err
+}

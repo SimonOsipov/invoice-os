@@ -9,11 +9,11 @@
 //     a *queue.Client is available for the ReArm cases to call the real EnqueueTx outbox
 //     through.
 //
-// GATING. Three DSNs — DATABASE_URL (invoice_app, the role Scan/ReArmPoll/audit actually
+// GATING. Four DSNs — DATABASE_URL (invoice_app, the role Scan/ReArmPoll/audit actually
 // run as in production), DATABASE_MIGRATION_URL (unused directly here but kept for parity
-// with `make test-rls`/`make test-queue` invocations) and DATABASE_SUPERUSER_URL (fixture
-// seeding + cross-check reads). No DATABASE_READER_URL: M5-06-01..04 never enumerates
-// tenants across the reader role — that lands with M5-06-05's SweepOnce.
+// with `make test-rls`/`make test-queue` invocations), DATABASE_SUPERUSER_URL (fixture
+// seeding + cross-check reads), and — added in Round B (M5-06-05/06) — DATABASE_READER_URL
+// (invoice_tenant_reader: SweepOnce's tenant-enumeration role, sweep_test.go).
 //
 // Every case in this package is named TestRLS_* per [[rls-testing-convention]] /
 // [reconciliation-ci-registration] (M5-06 story, Decisions), so the CI `queue` job's
@@ -26,6 +26,7 @@
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5433/invoice_os?sslmode=disable" \
 //	DATABASE_MIGRATION_URL="postgres://invoice_migrator:migrator@localhost:5433/invoice_os?sslmode=disable" \
 //	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5433/invoice_os?sslmode=disable" \
+//	DATABASE_READER_URL="postgres://invoice_tenant_reader:reader@localhost:5433/invoice_os?sslmode=disable" \
 //	go test -count=1 ./internal/reconciliation/...
 package reconciliation
 
@@ -34,6 +35,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -65,10 +68,11 @@ var errNoDB = errors.New("reconciliation: DATABASE_* env not set")
 // harness holds one pool per role plus an insert-only queue.Client on the app pool — the
 // exact shape `cmd/reconciliation` builds (M5-06 System Design).
 type harness struct {
-	super *pgxpool.Pool // superuser: BYPASSRLS, seeds fixtures + cross-checks river_job/audit_log
-	mig   *pgxpool.Pool // invoice_migrator: schema owner, used only for the pg_indexes checks
-	app   *pgxpool.Pool // invoice_app: the role Scan/ReArmPoll/audit.Record actually run as
-	queue *queue.Client // insert-only client on the app pool (ReArmPoll's EnqueueTx target)
+	super  *pgxpool.Pool // superuser: BYPASSRLS, seeds fixtures + cross-checks river_job/audit_log
+	mig    *pgxpool.Pool // invoice_migrator: schema owner, used only for the pg_indexes checks
+	app    *pgxpool.Pool // invoice_app: the role Scan/ReArmPoll/audit.Record actually run as
+	reader *pgxpool.Pool // invoice_tenant_reader: SweepOnce's tenant-enumeration role (Round B)
+	queue  *queue.Client // insert-only client on the app pool (ReArmPoll's EnqueueTx target)
 }
 
 var h *harness
@@ -96,7 +100,8 @@ func setupHarness(ctx context.Context) (*harness, error) {
 	appURL := os.Getenv("DATABASE_URL")
 	migURL := os.Getenv("DATABASE_MIGRATION_URL")
 	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
-	if appURL == "" || migURL == "" || superURL == "" {
+	readerURL := os.Getenv("DATABASE_READER_URL")
+	if appURL == "" || migURL == "" || superURL == "" || readerURL == "" {
 		return nil, errNoDB
 	}
 
@@ -109,6 +114,7 @@ func setupHarness(ctx context.Context) (*harness, error) {
 		{&hh.super, superURL, "superuser"},
 		{&hh.mig, migURL, "migrator"},
 		{&hh.app, appURL, "app"},
+		{&hh.reader, readerURL, "reader"},
 	} {
 		pool, err := pgxpool.New(ctx, c.url)
 		if err != nil {
@@ -132,6 +138,7 @@ func setupHarness(ctx context.Context) (*harness, error) {
 }
 
 func (h *harness) teardown(_ context.Context) {
+	h.reader.Close()
 	h.app.Close()
 	h.mig.Close()
 	h.super.Close()
@@ -141,8 +148,8 @@ func (h *harness) teardown(_ context.Context) {
 func requireHarness(t *testing.T) *harness {
 	t.Helper()
 	if h == nil {
-		t.Skip("reconciliation suite skipped: set DATABASE_URL, DATABASE_MIGRATION_URL and " +
-			"DATABASE_SUPERUSER_URL (the same three `make test-queue` / `make test-rls` use)")
+		t.Skip("reconciliation suite skipped: set DATABASE_URL, DATABASE_MIGRATION_URL, " +
+			"DATABASE_SUPERUSER_URL and DATABASE_READER_URL (the same four `make test-rls` uses)")
 	}
 	return h
 }
@@ -343,5 +350,32 @@ func rcSeedRiverJob(t *testing.T, h *harness, kind, state string, args map[strin
 
 	return id, func() {
 		_, _ = h.super.Exec(context.Background(), `DELETE FROM river_job WHERE id = $1`, id)
+	}
+}
+
+// --- M5-06-05/06 sweep helpers (Round B) ------------------------------------------------
+
+// rcConfig mirrors rcThresholds (above) as a Config — a built Reconciler's Cfg carries the
+// same three Scan thresholds plus a ticker Interval that SweepOnce itself never reads
+// (only Sweeper does; sweeper_test.go's pure suite covers the ticker separately with its
+// own short fake intervals).
+var rcConfig = Config{
+	Interval:         time.Minute,
+	PollOverdueGrace: rcThresholds.Grace,
+	MaxPendingAge:    rcThresholds.MaxPendingAge,
+	HopCeiling:       rcThresholds.HopCeiling,
+}
+
+// rcReconciler builds the Reconciler shape production wires — the harness's own pools and
+// queue client plus rcConfig — with a silent JSON logger so a real Logger call in the
+// eventual implementation never panics against a nil field (mirrors
+// internal/platform/middleware_test.go's silent-logger helper).
+func rcReconciler(h *harness) *Reconciler {
+	return &Reconciler{
+		ReaderPool: h.reader,
+		AppPool:    h.app,
+		Queue:      h.queue,
+		Cfg:        rcConfig,
+		Logger:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 }

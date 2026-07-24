@@ -58,3 +58,20 @@ func (s *Store) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID s
 	_, err := s.MarkFailedTx(ctx, tx, invoiceID, tenantID)
 	return err
 }
+
+// MarkAccepted is a thin 1:1 forward onto MarkAcceptedTx (actor.go) -- same
+// "no reimplementation" rule as MarkSubmitted/MarkFailed above. Stage 2.5
+// SCAFFOLDING for M5-05-03 (task-239): MarkAcceptedTx is currently a stub
+// (errOutcomeNotImplemented), so this forward returns that error
+// unconditionally until Stage 3 replaces the stub body.
+func (s *Store) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
+	_, err := s.MarkAcceptedTx(ctx, tx, invoiceID, tenantID, out.IRN, out.CSID, out.QRPayload)
+	return err
+}
+
+// MarkRejected is MarkAccepted's sibling, a thin forward onto MarkRejectedTx
+// (actor.go). Same Stage 2.5 scaffolding note applies.
+func (s *Store) MarkRejected(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, verdict submission.Rejected) error {
+	_, err := s.MarkRejectedTx(ctx, tx, invoiceID, tenantID, verdict.Reasons)
+	return err
+}

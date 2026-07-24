@@ -22,10 +22,29 @@
 //	T02-7 TestMarkSubmittedTx_CalledTwiceIsIdempotentNoOp
 //	T02-8 TestTransition_AtomicityRollsBackOnActorCheckFailure (transition_test.go:354,
 //	      UNMODIFIED -- confirmed still green by this subtask, not re-authored here)
+//
+// M5-05-03 (task-239) QA Mode A adds the store-layer half of its own Test
+// Specs table below -- MarkAcceptedTx/MarkRejectedTx, the outcome-writing
+// twins of MarkSubmittedTx/MarkFailedTx. Written BEFORE the real
+// implementation exists (RED against actor.go's Stage 2.5 stubs, which
+// always return errOutcomeNotImplemented and write nothing: every assertion
+// below fails for that reason, not a compile error).
+//
+//	TestMarkAcceptedTx_WritesOutcomeAndTransitionsInOneTx
+//	TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx
+//	TestMarkAcceptedTx_BlankIRNRaises23514AndWritesNothing
+//	TestMarkAcceptedTx_BlankCSIDAndQRBecomeNull
+//	TestMarkRejectedTx_NilReasonsStoresEmptyArrayNotJSONNull
+//	TestMarkAcceptedTx_IdempotentReplayDoesNotRewriteOutcomeOrHistory
+//	TestMarkRejectedTx_IllegalFromDraftReturnsErrIllegalTransition
+//	TestRLS_MarkAcceptedTxCrossTenantIsNotFound
 package invoice
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -33,6 +52,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // T02-3: MarkFailedTx, called inside a db.WithinTenantTx whose ctx carries NO
@@ -259,5 +279,456 @@ func TestMarkSubmittedTx_CalledTwiceIsIdempotentNoOp(t *testing.T) {
 	}
 	if Status(status) != StatusSubmitted {
 		t.Errorf("invoice status after two MarkSubmittedTx calls = %q, want %q", status, StatusSubmitted)
+	}
+}
+
+
+// --- M5-05-03 (task-239) -- MarkAcceptedTx/MarkRejectedTx store-layer RED tests ---------
+
+// TestMarkAcceptedTx_WritesOutcomeAndTransitionsInOneTx (task-239's own Test
+// Specs table, AC#1/#2): MarkAcceptedTx moves an invoice to accepted from
+// EITHER legal source state -- queued and, in a separate subtest, submitted
+// (both edges are legal, legalTransitions store.go:661-662) -- writing
+// irn/csid/qr_payload verbatim on the SAME tx as the transition, plus
+// exactly one invoice_status_history row (actor "system") and one
+// invoice.transitioned audit row. Asserted via BOTH the returned Invoice and
+// a superuser re-read of the columns. Modelled on
+// TestMarkFailedTx_RecordsSystemActorInHistoryAndAudit's history/audit shape
+// above.
+//
+// RED today: MarkAcceptedTx is a Stage 2.5 stub (actor.go) that
+// unconditionally returns errOutcomeNotImplemented and writes nothing --
+// this fails on that sentinel error, not a compile error.
+func TestMarkAcceptedTx_WritesOutcomeAndTransitionsInOneTx(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	cases := []struct {
+		name string
+		from Status
+	}{
+		{"queued source", StatusQueued},
+		{"submitted source", StatusSubmitted},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID := seedTenant(t, super, "T03-1 tenant "+tc.name)
+			entityID := seedEntity(t, super, tenantID, "T03-1 entity")
+			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-1-"+string(tc.from), tc.from)
+
+			beforeAudit := auditCount(t, app, tenantID, "invoice.transitioned")
+
+			irn, csid, qrPayload := "IRN-T03-1", "CSID-T03-1", "QR-T03-1"
+			var got Invoice
+			err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+				var err error
+				got, err = store.MarkAcceptedTx(ctx, tx, invID, tenantID, irn, csid, qrPayload)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("MarkAcceptedTx (%s->accepted): %v (want nil)", tc.from, err)
+			}
+
+			if got.Status != StatusAccepted {
+				t.Errorf("returned Invoice.Status = %q, want %q", got.Status, StatusAccepted)
+			}
+			if got.IRN == nil || *got.IRN != irn {
+				t.Errorf("returned Invoice.IRN = %v, want %q", got.IRN, irn)
+			}
+			if got.CSID == nil || *got.CSID != csid {
+				t.Errorf("returned Invoice.CSID = %v, want %q", got.CSID, csid)
+			}
+			if got.QRPayload == nil || *got.QRPayload != qrPayload {
+				t.Errorf("returned Invoice.QRPayload = %v, want %q", got.QRPayload, qrPayload)
+			}
+
+			var status string
+			var gotIRN, gotCSID, gotQR *string
+			if err := super.QueryRow(context.Background(),
+				`SELECT status, irn, csid, qr_payload FROM invoices WHERE id = $1`, invID,
+			).Scan(&status, &gotIRN, &gotCSID, &gotQR); err != nil {
+				t.Fatalf("read back invoice row: %v", err)
+			}
+			if Status(status) != StatusAccepted {
+				t.Errorf("invoice status = %q, want %q", status, StatusAccepted)
+			}
+			if gotIRN == nil || *gotIRN != irn {
+				t.Errorf("irn = %v, want %q", gotIRN, irn)
+			}
+			if gotCSID == nil || *gotCSID != csid {
+				t.Errorf("csid = %v, want %q", gotCSID, csid)
+			}
+			if gotQR == nil || *gotQR != qrPayload {
+				t.Errorf("qr_payload = %v, want %q", gotQR, qrPayload)
+			}
+
+			if n := mustCount(t, super,
+				`SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = $2 AND to_status = 'accepted'`,
+				invID, string(tc.from),
+			); n != 1 {
+				t.Errorf("invoice_status_history rows (%s->accepted) = %d, want 1", tc.from, n)
+			}
+			var historyActor string
+			if err := super.QueryRow(context.Background(),
+				`SELECT actor FROM invoice_status_history WHERE invoice_id = $1 ORDER BY changed_at DESC LIMIT 1`, invID,
+			).Scan(&historyActor); err != nil {
+				t.Fatalf("read newest history actor: %v", err)
+			}
+			if historyActor != "system" {
+				t.Errorf("invoice_status_history.actor = %q, want %q", historyActor, "system")
+			}
+
+			if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != beforeAudit+1 {
+				t.Errorf("audit_log invoice.transitioned rows = %d, want %d (+1)", n, beforeAudit+1)
+			}
+			if got := auditActor(t, app, tenantID, "invoice.transitioned"); got != "system" {
+				t.Errorf("audit_log.actor for invoice.transitioned = %q, want %q", got, "system")
+			}
+		})
+	}
+}
+
+// TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx (task-239's Test
+// Specs table, AC#2): MarkRejectedTx moves an invoice to rejected from
+// EITHER legal source state -- queued and submitted -- writing
+// rejection_reasons as a jsonb array matching the input []submission.Reason
+// verbatim (order + content), on the SAME tx as the transition.
+//
+// RED today: MarkRejectedTx is a Stage 2.5 stub that unconditionally returns
+// errOutcomeNotImplemented and writes nothing.
+func TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	reasons := []submission.Reason{
+		{Code: "APP-ERR-0417", Message: "Supplier TIN not registered", Path: "supplier_tin"},
+		{Code: "APP-ERR-0501", Message: "Currency mismatch"},
+	}
+
+	cases := []struct {
+		name string
+		from Status
+	}{
+		{"queued source", StatusQueued},
+		{"submitted source", StatusSubmitted},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID := seedTenant(t, super, "T03-2 tenant "+tc.name)
+			entityID := seedEntity(t, super, tenantID, "T03-2 entity")
+			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-2-"+string(tc.from), tc.from)
+
+			var got Invoice
+			err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+				var err error
+				got, err = store.MarkRejectedTx(ctx, tx, invID, tenantID, reasons)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("MarkRejectedTx (%s->rejected): %v (want nil)", tc.from, err)
+			}
+			if got.Status != StatusRejected {
+				t.Errorf("returned Invoice.Status = %q, want %q", got.Status, StatusRejected)
+			}
+
+			var status, reasonsText string
+			if err := super.QueryRow(context.Background(),
+				`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+			).Scan(&status, &reasonsText); err != nil {
+				t.Fatalf("read back invoice row: %v", err)
+			}
+			if Status(status) != StatusRejected {
+				t.Errorf("invoice status = %q, want %q", status, StatusRejected)
+			}
+
+			var gotReasons []submission.Reason
+			if err := json.Unmarshal([]byte(reasonsText), &gotReasons); err != nil {
+				t.Fatalf("unmarshal rejection_reasons: %v (raw = %s)", err, reasonsText)
+			}
+			if !reflect.DeepEqual(gotReasons, reasons) {
+				t.Errorf("rejection_reasons = %+v, want %+v (order + content must match verbatim)", gotReasons, reasons)
+			}
+
+			if n := mustCount(t, super,
+				`SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = $2 AND to_status = 'rejected'`,
+				invID, string(tc.from),
+			); n != 1 {
+				t.Errorf("invoice_status_history rows (%s->rejected) = %d, want 1", tc.from, n)
+			}
+		})
+	}
+}
+
+// TestMarkAcceptedTx_BlankIRNRaises23514AndWritesNothing (task-239 AC#4): irn
+// binds RAW, never NULLIF'd -- a blank IRN trips
+// invoices' `CHECK (irn IS NULL OR char_length(irn) > 0)`
+// (migrations/20260722083015_invoices_fiscal_outcome.sql), raising SQLSTATE
+// 23514, and the whole write (including the transition) must not land.
+func TestMarkAcceptedTx_BlankIRNRaises23514AndWritesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T03-3 tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-3 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-3", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, "", "CSID-T03-3", "QR-T03-3")
+		return err
+	})
+	if err == nil {
+		t.Fatal("MarkAcceptedTx with blank IRN succeeded, want a CHECK violation (SQLSTATE 23514, irn is bound RAW, never NULLIF'd)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("MarkAcceptedTx with blank IRN: pgCode = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	var status string
+	var gotIRN *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, irn FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &gotIRN); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if Status(status) != StatusQueued {
+		t.Errorf("invoice status after refused blank-IRN write = %q, want unchanged %q", status, StatusQueued)
+	}
+	if gotIRN != nil {
+		t.Errorf("irn after refused blank-IRN write = %q, want still NULL", *gotIRN)
+	}
+}
+
+// TestMarkAcceptedTx_BlankCSIDAndQRBecomeNull (task-239 AC#4): unlike IRN,
+// csid/qr_payload bind via NULLIF($n, '') -- a blank string means "the
+// authority returned none" (result.go's own doc on submission.Accepted) and
+// must land as SQL NULL, not the empty string.
+func TestMarkAcceptedTx_BlankCSIDAndQRBecomeNull(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T03-4 tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-4 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-4", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, "IRN-T03-4", "", "")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkAcceptedTx (blank csid/qr_payload): %v (want nil)", err)
+	}
+
+	var gotCSID, gotQR *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT csid, qr_payload FROM invoices WHERE id = $1`, invID,
+	).Scan(&gotCSID, &gotQR); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if gotCSID != nil {
+		t.Errorf("csid = %q, want SQL NULL (blank input must NULLIF, not store '')", *gotCSID)
+	}
+	if gotQR != nil {
+		t.Errorf("qr_payload = %q, want SQL NULL", *gotQR)
+	}
+}
+
+// TestMarkRejectedTx_NilReasonsStoresEmptyArrayNotJSONNull (task-239 AC#5,
+// the M4-16 write-side trap): a nil Go slice marshals to JSON `null`, which
+// binds successfully to a `jsonb NOT NULL` column and poisons it --
+// MarkRejectedTx must normalise nil/empty reasons to the literal `[]`
+// before the write.
+func TestMarkRejectedTx_NilReasonsStoresEmptyArrayNotJSONNull(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T03-5 tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-5 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-5", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkRejectedTx(ctx, tx, invID, tenantID, nil) // nil Go slice, deliberately
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkRejectedTx (nil reasons): %v (want nil)", err)
+	}
+
+	var reasonsText, typeofResult string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rejection_reasons::text, jsonb_typeof(rejection_reasons) FROM invoices WHERE id = $1`, invID,
+	).Scan(&reasonsText, &typeofResult); err != nil {
+		t.Fatalf("read back rejection_reasons: %v", err)
+	}
+	if reasonsText != "[]" {
+		t.Errorf("rejection_reasons::text = %q, want %q (a nil Go slice must normalise to the empty array, never JSON null)", reasonsText, "[]")
+	}
+	if typeofResult != "array" {
+		t.Errorf("jsonb_typeof(rejection_reasons) = %q, want %q", typeofResult, "array")
+	}
+}
+
+// TestMarkAcceptedTx_IdempotentReplayDoesNotRewriteOutcomeOrHistory
+// (task-239 AC#6): calling MarkAcceptedTx twice on the same invoice -- e.g.
+// a replayed job after a crash between commit and the queue's ack -- must
+// take the idempotent no-op branch on the second call: no second history
+// row, and the ALREADY-STORED irn/csid/qr_payload must not be clobbered by
+// whatever the second call's (different) arguments were. Modelled on
+// TestMarkSubmittedTx_CalledTwiceIsIdempotentNoOp above.
+func TestMarkAcceptedTx_IdempotentReplayDoesNotRewriteOutcomeOrHistory(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T03-6 tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-6 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-6", StatusQueued)
+
+	markOnce := func(irn, csid, qr string) error {
+		return db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+			_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, irn, csid, qr)
+			return err
+		})
+	}
+
+	if err := markOnce("IRN-FIRST", "CSID-FIRST", "QR-FIRST"); err != nil {
+		t.Fatalf("first MarkAcceptedTx (queued->accepted): %v", err)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'accepted'`, invID); n != 1 {
+		t.Fatalf("history rows (to_status=accepted) after first call = %d, want 1", n)
+	}
+
+	// Second call, DIFFERENT irn/csid/qr -- a broken implementation that
+	// skips the idempotent short-circuit would clobber the stored outcome.
+	if err := markOnce("IRN-SECOND-SHOULD-NOT-LAND", "CSID-SECOND", "QR-SECOND"); err != nil {
+		t.Fatalf("second MarkAcceptedTx (already accepted, must be an idempotent no-op): %v", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'accepted'`, invID); n != 1 {
+		t.Errorf("history rows (to_status=accepted) after second (idempotent) call = %d, want still 1 (no second row)", n)
+	}
+
+	var status string
+	var gotIRN, gotCSID, gotQR *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, irn, csid, qr_payload FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &gotIRN, &gotCSID, &gotQR); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if Status(status) != StatusAccepted {
+		t.Errorf("invoice status after two MarkAcceptedTx calls = %q, want %q", status, StatusAccepted)
+	}
+	if gotIRN == nil || *gotIRN != "IRN-FIRST" {
+		t.Errorf("irn after idempotent replay = %v, want unchanged %q (the outcome must not be rewritten)", gotIRN, "IRN-FIRST")
+	}
+	if gotCSID == nil || *gotCSID != "CSID-FIRST" {
+		t.Errorf("csid after idempotent replay = %v, want unchanged %q", gotCSID, "CSID-FIRST")
+	}
+	if gotQR == nil || *gotQR != "QR-FIRST" {
+		t.Errorf("qr_payload after idempotent replay = %v, want unchanged %q", gotQR, "QR-FIRST")
+	}
+}
+
+// TestMarkRejectedTx_IllegalFromDraftReturnsErrIllegalTransition
+// (task-239 AC#7's "sole-sequence gate" corollary): markTerminalTx's shared
+// legality guard still applies to the new outcome writers -- there is no
+// draft->rejected edge (legalTransitions store.go:659), so MarkRejectedTx on
+// a draft invoice must return ErrIllegalTransition and leave the row
+// completely unchanged (status AND rejection_reasons), because the outcome
+// write and the transition share one tx: the caller's db.WithinTenantTx
+// rolls back the whole attempt on a non-nil return.
+func TestMarkRejectedTx_IllegalFromDraftReturnsErrIllegalTransition(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T03-7 tenant")
+	entityID := seedEntity(t, super, tenantID, "T03-7 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T03-7", StatusDraft)
+
+	reasons := []submission.Reason{{Code: "APP-ERR-0000", Message: "should never land"}}
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkRejectedTx(ctx, tx, invID, tenantID, reasons)
+		return err
+	})
+	if !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("MarkRejectedTx (draft->rejected): err = %v, want ErrIllegalTransition (there is no draft->rejected edge)", err)
+	}
+
+	var status, reasonsText string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &reasonsText); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("invoice status after refused illegal MarkRejectedTx = %q, want unchanged %q", status, StatusDraft)
+	}
+	if reasonsText != "[]" {
+		t.Errorf("rejection_reasons after refused illegal MarkRejectedTx = %q, want unchanged default %q", reasonsText, "[]")
+	}
+}
+
+// TestRLS_MarkAcceptedTxCrossTenantIsNotFound (task-239 Test Specs table --
+// "the port is RLS-scoped like its four siblings"): both MarkAcceptedTx and
+// MarkRejectedTx, driven from tenant B's tx against tenant A's invoice id,
+// must fail closed via RLS's 0-rows -> pgx.ErrNoRows -> ErrNotFound mapping
+// (markTerminalTx's existing behaviour), writing nothing.
+func TestRLS_MarkAcceptedTxCrossTenantIsNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantA := seedTenant(t, super, "T03-8 tenant A")
+	tenantB := seedTenant(t, super, "T03-8 tenant B")
+	entityA := seedEntity(t, super, tenantA, "T03-8 entity A")
+	invoiceA := seedInvoiceAtStatus(t, super, tenantA, entityA, "T03-8", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantB, func(tx pgx.Tx) error {
+		_, err := store.MarkAcceptedTx(ctx, tx, invoiceA, tenantB, "IRN-T03-8", "CSID-T03-8", "QR-T03-8")
+		return err
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("MarkAcceptedTx (tenant B tx, tenant A's invoice): err = %v, want ErrNotFound (RLS must 0-row this)", err)
+	}
+
+	var status string
+	var gotIRN *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, irn FROM invoices WHERE id = $1`, invoiceA,
+	).Scan(&status, &gotIRN); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if Status(status) != StatusQueued {
+		t.Errorf("invoice status after refused cross-tenant MarkAcceptedTx = %q, want unchanged %q", status, StatusQueued)
+	}
+	if gotIRN != nil {
+		t.Errorf("irn after refused cross-tenant MarkAcceptedTx = %q, want still NULL", *gotIRN)
+	}
+
+	reasons := []submission.Reason{{Code: "APP-ERR-0000", Message: "should never land"}}
+	err = db.WithinTenantTx(ctx, app, tenantB, func(tx pgx.Tx) error {
+		_, err := store.MarkRejectedTx(ctx, tx, invoiceA, tenantB, reasons)
+		return err
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("MarkRejectedTx (tenant B tx, tenant A's invoice): err = %v, want ErrNotFound (RLS must 0-row this)", err)
+	}
+
+	var reasonsText string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invoiceA,
+	).Scan(&reasonsText); err != nil {
+		t.Fatalf("read back rejection_reasons: %v", err)
+	}
+	if reasonsText != "[]" {
+		t.Errorf("rejection_reasons after refused cross-tenant MarkRejectedTx = %q, want unchanged default %q", reasonsText, "[]")
 	}
 }

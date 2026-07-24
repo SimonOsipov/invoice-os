@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // Actor identifies who is driving a status transition: either the verified
@@ -92,4 +93,34 @@ func (s *Store) markTerminalTx(ctx context.Context, tx pgx.Tx, id, tenantID stri
 	}
 
 	return transitionTx(ctx, tx, id, inv.Status, target, SystemActor(tenantID))
+}
+
+// --- Stage 2.5 SCAFFOLDING for M5-05-03 (task-239) -- QA Mode A -----------
+//
+// MarkAcceptedTx/MarkRejectedTx below exist ONLY so the widened
+// submission.InvoicePort (invoice_port.go) compiles against *Store (the
+// var _ assertion in submission_port.go) and so submission_port.go's
+// MarkAccepted/MarkRejected forwards have something to call. NEITHER body is
+// real: both return errOutcomeNotImplemented unconditionally and write
+// nothing. Stage 3 (the executor) REPLACES both bodies with real ones that
+// route through markTerminalTx (given an extra
+// outcome func(context.Context, pgx.Tx) error parameter, per the Stage-1
+// architect's locked design) -- NOT a second, parallel implementation of the
+// lock/idempotency/transition sequence markTerminalTx already owns alone --
+// the repo's sole-sequence call-count gate (AC#7) must stay unchanged by
+// this scaffolding and by Stage 3's real rewrite alike.
+// Locked signatures, dual-citation M5-05-03 (task-239):
+//
+//	func (s *Store) MarkAcceptedTx(ctx context.Context, tx pgx.Tx, id, tenantID, irn, csid, qrPayload string) (Invoice, error)
+//	func (s *Store) MarkRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID string, reasons []submission.Reason) (Invoice, error)
+var errOutcomeNotImplemented = errors.New("invoice: MarkAcceptedTx/MarkRejectedTx not implemented [M5-05-03]")
+
+// MarkAcceptedTx is a Stage 2.5 stub -- see the scaffolding note above.
+func (s *Store) MarkAcceptedTx(ctx context.Context, tx pgx.Tx, id, tenantID, irn, csid, qrPayload string) (Invoice, error) {
+	return Invoice{}, errOutcomeNotImplemented
+}
+
+// MarkRejectedTx is a Stage 2.5 stub -- see the scaffolding note above.
+func (s *Store) MarkRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID string, reasons []submission.Reason) (Invoice, error) {
+	return Invoice{}, errOutcomeNotImplemented
 }

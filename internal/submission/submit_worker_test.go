@@ -556,17 +556,37 @@ func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, ten
 	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "failed")
 }
 
+// MarkAccepted/MarkRejected mirror MarkSubmitted/MarkFailed above -- added by
+// M5-05-03 (task-239, register #10) so testInvoicePort keeps satisfying the
+// widened submission.InvoicePort (a hard compile dependency: this is the
+// package's only external-test-package double, so a missing method here
+// breaks the whole internal/submission test binary). accepted/rejected are
+// not yet driven by worker.go's own routing (that lands in a later M5-05
+// subtask) -- these exist purely for the interface to keep compiling.
+func (testInvoicePort) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "accepted")
+}
+
+func (testInvoicePort) MarkRejected(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, verdict submission.Rejected) error {
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "rejected")
+}
+
 var _ submission.InvoicePort = testInvoicePort{}
 
-// tipLegalTransitions mirrors the SLICE of internal/invoice/store.go's own legalTransitions
-// (store.go:639-643) this double's two callers actually drive: queued (SubmitWorker's
-// MarkSubmitted/MarkFailed) and submitted (PollWorker's dead-letter path, M5-04-06/T06-8,
-// AC-5 -- "moves the invoice submitted -> failed via the existing edge"). Duplicated, not
-// imported ([mapper-lives-in-03]) -- the same duplicate-never-import precedent as every other
-// double in this file.
+// tipLegalTransitions mirrors internal/invoice/store.go's own legalTransitions
+// (store.go:658-663) for the two source states this double's callers can reach: queued
+// (SubmitWorker's MarkSubmitted/MarkFailed) and submitted (PollWorker's dead-letter path,
+// M5-04-06/T06-8, AC-5 -- "moves the invoice submitted -> failed via the existing edge").
+// Widened by M5-05-03 (task-239, register #10) to add queued->accepted, queued->rejected,
+// submitted->accepted, submitted->rejected -- the real store already allows all four edges
+// (store.go:661-662), so this map must track them or the fake silently diverges from
+// production; accepted/rejected are not yet driven by worker.go's own routing (a later M5-05
+// subtask), MarkAccepted/MarkRejected above exist only so testInvoicePort keeps compiling
+// against the widened interface. Duplicated, not imported ([mapper-lives-in-03]) -- the same
+// duplicate-never-import precedent as every other double in this file.
 var tipLegalTransitions = map[string]map[string]bool{
-	"queued":    {"submitted": true, "failed": true},
-	"submitted": {"failed": true},
+	"queued":    {"submitted": true, "failed": true, "accepted": true, "rejected": true},
+	"submitted": {"failed": true, "accepted": true, "rejected": true},
 }
 
 // tipMarkTerminal is MarkSubmitted/MarkFailed's shared tail: lock+read the current status,

@@ -23,6 +23,13 @@ type Sweeper struct {
 	// wiring and its in-package TestSweeper* set it directly — every test in this suite is
 	// `package reconciliation`, not an external `_test` package (fixture_test.go:30).
 	sweepFn func(context.Context) error
+
+	// cancel stops the ticker loop's context; done closes once that loop has returned.
+	// Both are set by Start and read only by Stop, which is only ever called after Start
+	// has returned (the BackgroundWorker contract) — no mutex needed for that
+	// happens-before ordering.
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 var _ platform.BackgroundWorker = (*Sweeper)(nil)
@@ -32,18 +39,45 @@ var _ platform.BackgroundWorker = (*Sweeper)(nil)
 // again (single-flight) — the following tick's sweep runs only once the current one
 // finishes.
 //
-// TODO(M5-06-06): executor — time.Ticker(s.Interval) goroutine calling s.sweepFn,
-// single-flight guard, stop the loop when Stop cancels it.
+// single-flight falls out of the loop shape itself rather than a separate busy flag: the
+// ticker's channel is buffered at 1 and the runtime drops a tick that arrives while nothing
+// is receiving, so a tick that fires while sweepFn is still running (synchronously, in this
+// same goroutine) is simply coalesced away — the next tick after sweepFn returns is the
+// earliest it can run again.
 func (s *Sweeper) Start(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.done = make(chan struct{})
+
+	go func() {
+		defer close(s.done)
+		ticker := time.NewTicker(s.Interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				_ = s.sweepFn(runCtx)
+			}
+		}
+	}()
 	return nil
 }
 
 // Stop halts the ticker loop: no further tick starts a new sweepFn call once Stop
 // returns. Blocks until any in-flight sweep finishes or ctx (the shutdown-window
 // deadline) expires (BackgroundWorker contract).
-//
-// TODO(M5-06-06): executor — cancel the ticker loop, wait for an in-flight sweepFn call
-// to finish or ctx to expire.
 func (s *Sweeper) Stop(ctx context.Context) error {
-	return nil
+	if s.cancel == nil || s.done == nil {
+		return nil // Stop called without a prior Start — nothing to drain.
+	}
+	s.cancel()
+
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

@@ -54,8 +54,11 @@ func main() {
 	}
 	defer readerPool.Close()
 
-	// /readyz now reflects the DB dependency the sweep carries.
+	// /readyz reflects BOTH DB dependencies the sweep carries: the app pool (every
+	// ReArmPoll enqueue + audit write) and the reader pool (tenant enumeration). A
+	// reader-role outage must surface as not-ready, not a silently-failing sweep.
 	app.Ready("database", appPool.Ping)
+	app.Ready("reader-database", readerPool.Ping)
 
 	// Insert-only queue client: this service only ever enqueues submission_poll jobs via
 	// ReArmPoll's transactional outbox, it never fetches or runs them, so it must NOT be

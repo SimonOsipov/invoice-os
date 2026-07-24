@@ -27,13 +27,34 @@ import {
   invoiceStatusStyle,
   invoicesViewState,
   isFixable,
+  isInFlight,
+  isRowSelectable,
+  LIVE_POLL_MS,
   listInvoices,
+  mbsPathToEditField,
+  newIdempotencyKey,
+  pruneSelection,
+  rejectionProvenance,
   revalidateInvoice,
+  selectableIds,
+  selectAllState,
   shouldFetchInvoices,
+  shouldPollInvoice,
+  shouldPollList,
+  shouldRefreshHistory,
+  shouldShowFiscalRecord,
+  shouldShowRejectionCard,
+  skipReasonLabel,
+  submitInvoices,
+  toggleSelection,
   verdictStatus,
+  type BatchSubmitResultItem,
+  type EditFieldKey,
+  type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceRecord,
   type InvoiceStatus,
+  type RejectionReason,
   type StatusChange,
 } from './invoices'
 
@@ -71,6 +92,7 @@ const base = 'https://gw'
 const draftInvoice: InvoiceRecord = {
   id: 'inv-1',
   entity_id: 'e1',
+  import_batch_id: null,
   invoice_number: 'INV-001',
   status: 'draft',
   issue_date: '2026-07-01T00:00:00Z',
@@ -85,6 +107,10 @@ const draftInvoice: InvoiceRecord = {
   violations: [],
   rule_set_version_id: null,
   created_at: '2026-07-01T00:00:00Z',
+  irn: null,
+  csid: null,
+  qr_payload: null,
+  rejection_reasons: [],
   rule_set_version: null,
 }
 
@@ -119,13 +145,19 @@ describe('invoiceStatusStyle', () => {
 })
 
 describe('isFixable', () => {
-  it('I3: draft and validated are fixable', () => {
+  // Updated (M5-09-03, task-253, Core AC #4): M5-05-01 (task-237) widened
+  // Store.Edit's own precondition to accept `rejected` (the reject/fix/resubmit rework
+  // path) -- this mirror re-syncs to match, closing [spa-untouched]. Deliberately
+  // updated, not deleted: 'rejected' moves OUT of the not-fixable set below and INTO
+  // this one.
+  it('I3: draft, validated and rejected are fixable', () => {
     expect(isFixable('draft')).toBe(true)
     expect(isFixable('validated')).toBe(true)
+    expect(isFixable('rejected')).toBe(true)
   })
 
-  it('I4: queued/submitted/accepted/rejected/failed are not fixable', () => {
-    const nonFixable: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'rejected', 'failed']
+  it('I4: queued/submitted/accepted/failed are not fixable', () => {
+    const nonFixable: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'failed']
 
     for (const status of nonFixable) {
       expect(isFixable(status)).toBe(false)
@@ -134,9 +166,37 @@ describe('isFixable', () => {
 })
 
 describe('verdictStatus', () => {
-  it('I5: true -> "stale", false -> "current"', () => {
-    expect(verdictStatus(true)).toBe('stale')
-    expect(verdictStatus(false)).toBe('current')
+  // Updated (M5-09-03, task-253, Core AC #5): verdictStatus gains a second parameter,
+  // the invoice itself, and a new on-load derivation for the demoted-draft case
+  // (task-188 item 4) -- split I5 into four cases (a-d) rather than one, since the new
+  // rule has four independently meaningful branches.
+  it('I5a: session staleness still wins', () => {
+    const validated: InvoiceRecord = { ...draftInvoice, status: 'validated', rule_set_version_id: 'rsv-1', rule_set_version: 1 }
+
+    expect(verdictStatus(true, validated)).toBe('stale')
+  })
+
+  it('I5b: a demoted draft is stale on load', () => {
+    const demoted: InvoiceRecord = { ...draftInvoice, status: 'draft', rule_set_version_id: 'rsv-1', violations: [] }
+
+    expect(verdictStatus(false, demoted)).toBe('stale')
+  })
+
+  it('I5c: a never-validated draft is current', () => {
+    const fresh: InvoiceRecord = { ...draftInvoice, status: 'draft', rule_set_version_id: null }
+
+    expect(verdictStatus(false, fresh)).toBe('current')
+  })
+
+  it('I5d: a draft holding an error violation is current', () => {
+    const blocked: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'draft',
+      rule_set_version_id: 'rsv-1',
+      violations: [{ rule_key: 'supplier-tin-required', severity: 'error', message: 'Supplier TIN is required' }],
+    }
+
+    expect(verdictStatus(false, blocked)).toBe('current')
   })
 })
 
@@ -209,6 +269,40 @@ describe('getInvoice', () => {
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1')
   })
+
+  it('I-fiscal-1: getInvoice surfaces irn/csid/qr_payload/rejection_reasons verbatim', async () => {
+    const reasons: RejectionReason[] = [{ code: 'invalid_tin', message: 'TIN failed validation', path: 'buyer.tin' }]
+    const fiscalInvoice: InvoiceDetailRecord = {
+      ...draftInvoice,
+      status: 'accepted',
+      irn: 'IRN-001',
+      csid: 'CSID-001',
+      qr_payload: 'payload-string',
+      rejection_reasons: reasons,
+      rule_set_version: 1,
+      qr_png_base64: 'aGVsbG8=',
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.irn).toBe('IRN-001')
+    expect(result.csid).toBe('CSID-001')
+    expect(result.qr_payload).toBe('payload-string')
+    expect(result.rejection_reasons).toEqual(reasons)
+  })
+
+  it('I-fiscal-2: getInvoice normalizes a missing qr_png_base64 to null', async () => {
+    const detailInvoice: InvoiceDetailRecord = { ...draftInvoice, rule_set_version: 1, qr_png_base64: 'aGVsbG8=' }
+    const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.qr_png_base64).toBeNull()
+  })
 })
 
 describe('getInvoiceHistory', () => {
@@ -259,6 +353,257 @@ describe('revalidateInvoice', () => {
     expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1/validate')
     expect(init.method).toBe('POST')
     expect(init.body).toBeUndefined()
+  })
+})
+
+describe('submitInvoices', () => {
+  it('I-submit-1: submitInvoices posts ids + key and unwraps results', async () => {
+    const results: BatchSubmitResultItem[] = [
+      { invoice_id: 'a', enqueued: true, status: 'queued' },
+      { invoice_id: 'b', enqueued: false, status: 'validated', reason: 'not_validated' },
+    ]
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ results }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await submitInvoices(af, base, ['a', 'b'], 'k')
+
+    expect(result).toEqual(results)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/submissions')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ invoice_ids: ['a', 'b'], idempotency_key: 'k' }))
+
+    // BatchSubmitResultItem's keys, pinned (addendum A3): `reason` is `omitempty` on the
+    // Go side -- genuinely ABSENT (undefined) on an enqueued item, never "".
+    const enqueuedItem = result[0]
+    expect(Object.keys(enqueuedItem).sort()).toEqual(['enqueued', 'invoice_id', 'status'])
+    expect(enqueuedItem.invoice_id).toBe('a')
+    expect(enqueuedItem.enqueued).toBe(true)
+    expect(enqueuedItem.status).toBe('queued')
+    expect(enqueuedItem.reason).toBeUndefined()
+  })
+
+  it('I-submit-2: submitInvoices propagates ApiError unchanged', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({ error: 'invoice_ids is required' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => submitInvoices(af, base, [], 'k'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(400)
+  })
+})
+
+describe('newIdempotencyKey', () => {
+  it('I-key-1: newIdempotencyKey returns a fresh 36-char uuid', () => {
+    const a = newIdempotencyKey()
+    const b = newIdempotencyKey()
+
+    expect(a).toHaveLength(36)
+    expect(b).toHaveLength(36)
+    expect(a.length).toBeLessThanOrEqual(218)
+    expect(a).not.toBe(b)
+  })
+})
+
+describe('mbsPathToEditField', () => {
+  it('I-path-1: the nine MBS paths map to their edit fields', () => {
+    const table: Array<[string, EditFieldKey]> = [
+      ['issue_date', 'issue_date'],
+      ['currency', 'currency'],
+      ['subtotal', 'subtotal'],
+      ['vat', 'vat'],
+      ['total', 'total'],
+      ['supplier.tin', 'supplier_tin'],
+      ['supplier.name', 'supplier_name'],
+      ['buyer.tin', 'buyer_tin'],
+      ['buyer.name', 'buyer_name'],
+    ]
+
+    for (const [path, field] of table) {
+      expect(mbsPathToEditField(path), `path=${path}`).toBe(field)
+    }
+  })
+
+  it('I-path-2: unmapped and absent paths return null, never swallow the reason', () => {
+    expect(mbsPathToEditField('invoice_number')).toBeNull()
+    expect(mbsPathToEditField('line_items[0].unit_price')).toBeNull()
+    expect(mbsPathToEditField('')).toBeNull()
+    expect(mbsPathToEditField(undefined)).toBeNull()
+    // The APP's own vocabulary (synthesized error body only) must never appear in the
+    // mapping table.
+    expect(mbsPathToEditField('customer.taxIdentifier')).toBeNull()
+  })
+})
+
+describe('skipReasonLabel', () => {
+  it('I-skip-1: skipReasonLabel maps both reachable reasons and passes others through', () => {
+    expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
+    expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
+    expect(skipReasonLabel('wat')).toBe('wat')
+  })
+})
+
+describe('selection helpers', () => {
+  it('I-sel-1: only validated rows are selectable', () => {
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+    const rows: InvoiceRecord[] = statuses.map((status, i) => ({ ...draftInvoice, id: `inv-${i}`, status }))
+
+    expect(selectableIds(rows)).toEqual(['inv-1'])
+    for (const row of rows) {
+      expect(isRowSelectable(row.status), `status=${row.status}`).toBe(row.status === 'validated')
+    }
+  })
+
+  it('I-sel-2: toggleSelection adds then removes', () => {
+    const afterAdd = toggleSelection([], 'a')
+    expect(afterAdd).toEqual(['a'])
+
+    const afterRemove = toggleSelection(afterAdd, 'a')
+    expect(afterRemove).toEqual([])
+  })
+
+  it('I-sel-3: pruneSelection drops departed and no-longer-validated ids', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated' },
+      { ...draftInvoice, id: 'b', status: 'queued' },
+    ]
+
+    expect(pruneSelection(['a', 'b', 'c'], rows)).toEqual(['a'])
+  })
+})
+
+describe('selectAllState', () => {
+  it('S-1: no selectable rows renders none, never a vacuously-checked all', () => {
+    // LOAD-BEARING EDGE (addendum A9a): Array.prototype.every() over an empty array is
+    // vacuously true, so a naive selectAllState would render a CHECKED select-all on a
+    // page with zero selectable rows.
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'draft' },
+      { ...draftInvoice, id: 'b', status: 'queued' },
+    ]
+
+    expect(selectAllState([], rows)).toBe('none')
+  })
+
+  it('S-2: every selectable id selected is all', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated' },
+      { ...draftInvoice, id: 'b', status: 'validated' },
+    ]
+
+    expect(selectAllState(['a', 'b'], rows)).toBe('all')
+  })
+
+  it('S-3: a strict non-empty subset is some', () => {
+    const rows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'validated' },
+      { ...draftInvoice, id: 'b', status: 'validated' },
+    ]
+
+    expect(selectAllState(['a'], rows)).toBe('some')
+  })
+
+  it('S-4: a selection holding only a stale id is never all, even when lengths coincidentally match', () => {
+    const rows: InvoiceRecord[] = [{ ...draftInvoice, id: 'a', status: 'validated' }]
+
+    expect(selectAllState(['stale-id'], rows)).not.toBe('all')
+  })
+})
+
+describe('live-refresh predicates', () => {
+  it('I-poll-1: isInFlight is true for exactly queued and submitted', () => {
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of statuses) {
+      expect(isInFlight(status), `status=${status}`).toBe(status === 'queued' || status === 'submitted')
+    }
+  })
+
+  it('I-poll-2: shouldPollInvoice requires in-flight AND visible', () => {
+    expect(shouldPollInvoice('queued', true)).toBe(true)
+    expect(shouldPollInvoice('queued', false)).toBe(false)
+    expect(shouldPollInvoice('accepted', true)).toBe(false)
+  })
+
+  it('I-poll-3: shouldPollList polls when any row is in flight', () => {
+    const terminalRows: InvoiceRecord[] = [
+      { ...draftInvoice, id: 'a', status: 'accepted' },
+      { ...draftInvoice, id: 'b', status: 'rejected' },
+    ]
+    expect(shouldPollList(terminalRows, true)).toBe(false)
+
+    const withQueued: InvoiceRecord[] = [...terminalRows, { ...draftInvoice, id: 'c', status: 'queued' }]
+    expect(shouldPollList(withQueued, true)).toBe(true)
+    expect(shouldPollList(withQueued, false)).toBe(false)
+  })
+
+  it('LIVE_POLL_MS is 2000', () => {
+    expect(LIVE_POLL_MS).toBe(2000)
+  })
+})
+
+describe('shouldRefreshHistory', () => {
+  it('I-hist-1: shouldRefreshHistory fires only on a real change', () => {
+    expect(shouldRefreshHistory('queued', 'accepted')).toBe(true)
+    expect(shouldRefreshHistory('queued', 'queued')).toBe(false)
+  })
+
+  it('I-hist-2: shouldRefreshHistory is false on first observation', () => {
+    // The initial history.run() on mount already covers the first load -- firing here
+    // too would double-fetch.
+    expect(shouldRefreshHistory(null, 'queued')).toBe(false)
+  })
+})
+
+describe('shouldShowRejectionCard', () => {
+  it('R-1: empty reasons never shows the card', () => {
+    expect(shouldShowRejectionCard({ status: 'rejected', rejection_reasons: [] })).toBe(false)
+  })
+
+  it('R-2: non-empty reasons on a rejected invoice shows the card', () => {
+    expect(shouldShowRejectionCard({ status: 'rejected', rejection_reasons: [{ code: 'invalid_tin', message: 'bad tin' }] })).toBe(true)
+  })
+
+  it('R-3: non-empty reasons on a demoted draft still shows the card', () => {
+    expect(shouldShowRejectionCard({ status: 'draft', rejection_reasons: [{ code: 'invalid_tin', message: 'bad tin' }] })).toBe(true)
+  })
+
+  it('R-4: non-empty reasons on an accepted invoice never shows the card (server-bug backstop)', () => {
+    // task-251 AC #7: an accepted invoice should never carry rejection_reasons, but the
+    // card must not show one if it somehow does -- an untested backstop is not a
+    // backstop.
+    expect(shouldShowRejectionCard({ status: 'accepted', rejection_reasons: [{ code: 'invalid_tin', message: 'bad tin' }] })).toBe(false)
+  })
+})
+
+describe('rejectionProvenance', () => {
+  it('P-1: rejectionProvenance is total and correct over all seven statuses', () => {
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of statuses) {
+      expect(rejectionProvenance(status), `status=${status}`).toBe(status === 'rejected' ? 'current' : 'historical')
+    }
+  })
+})
+
+describe('shouldShowFiscalRecord (optional helper)', () => {
+  it('F-fiscal-1: accepted with an irn shows the fiscal record', () => {
+    expect(shouldShowFiscalRecord({ status: 'accepted', irn: 'IRN-1' })).toBe(true)
+  })
+
+  it('F-fiscal-2: accepted without an irn does not', () => {
+    expect(shouldShowFiscalRecord({ status: 'accepted', irn: null })).toBe(false)
+  })
+
+  it('F-fiscal-3: non-accepted status does not, even with an irn present', () => {
+    expect(shouldShowFiscalRecord({ status: 'draft', irn: 'IRN-1' })).toBe(false)
   })
 })
 

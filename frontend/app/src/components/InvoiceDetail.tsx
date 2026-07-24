@@ -14,6 +14,7 @@ import { fiscalRecord, Qr } from '../lib/qr'
 import { detailTarget } from '../lib/importReport'
 import {
   editInvoice,
+  EDIT_FIELD_KEYS,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
@@ -21,6 +22,7 @@ import {
   revalidateInvoice,
   shouldFetchInvoices,
   verdictStatus,
+  type EditFieldKey,
   type InvoiceEditInput,
   type InvoiceRecord,
   type StatusChange,
@@ -266,19 +268,6 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // calling useAsync/useState after that return would break the rules of hooks. Mirrors
 // ClientsView/ValidationView: gatewayBase() + useAsync + a Loading/ErrorState/ready
 // ladder, zero network when no gateway is configured.
-const EDIT_FIELD_KEYS = [
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-] as const
-
-type EditFieldKey = (typeof EDIT_FIELD_KEYS)[number]
 type EditFormState = Record<EditFieldKey, string>
 
 function formFromInvoice(inv: InvoiceRecord): EditFormState {
@@ -368,7 +357,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const subtotal = inv.subtotal != null ? Number(inv.subtotal) : null
     const vat = inv.vat != null ? Number(inv.vat) : null
     const total = inv.total != null ? Number(inv.total) : null
-    const verdict = verdictStatus(staleSinceEdit)
+    const verdict = verdictStatus(staleSinceEdit, inv)
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
     // (established by the `if (base == null)` branch above) does not survive into a

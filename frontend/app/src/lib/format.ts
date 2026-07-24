@@ -24,6 +24,14 @@ export function fmtDate(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-NG')
 }
 
+// Date + HH:MM:SS via toLocaleString('en-NG') (the same idiom fmt/fmtPlain already use),
+// mirroring fmtDate's null/empty/NaN guard exactly (M5-09-03, task-253).
+//
+// STUB (Mode A): throws -- implemented in Stage 3.
+export function fmtDateTime(_iso: string | null | undefined): string {
+  throw new Error('not implemented')
+}
+
 export function amount(items: LineItem[]): number {
   return items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0)
 }

@@ -170,18 +170,26 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 }
 
 // getResponse is the GET /v1/invoices/{id} response body: Invoice embedded
-// (keeping every existing field's name/type/position), plus one additive
-// sibling key, rule_set_version -- mirrors validateResponse below (M4-09-01,
-// [read-shape-getresponse-wrapper]). Not added to the Invoice domain struct
-// itself: Invoice is shared by List, which must NOT gain this key.
+// (keeping every existing field's name/type/position), plus two additive
+// sibling keys, rule_set_version and qr_png_base64 -- mirrors validateResponse
+// below (M4-09-01, [read-shape-getresponse-wrapper]). Neither is added to the
+// Invoice domain struct itself: Invoice is shared by List, which must NOT
+// gain either key.
 //
 // RuleSetVersion is a *int with NO omitempty: it must render an explicit
 // JSON null when the invoice was never validated (Store.Get's zero-value
 // convention) -- never omitted, never a false 0
 // (TestGetHandler_RuleSetVersionMarshalsNull).
+//
+// QRPNGBase64 (M5-09-01, task-250) is likewise a *string with NO omitempty --
+// explicit null when absent (TestGetHandler_QRPNGBase64MarshalsNull). GetHandler
+// does NOT populate it yet (Stage 2, QA Mode A compile-enabling stub): the
+// executor wires `qrcode.RenderBase64(*inv.QRPayload)` when inv.QRPayload is
+// non-nil, logging (never 5xxing) a render failure, per Core AC #3/#5.
 type getResponse struct {
 	Invoice
-	RuleSetVersion *int `json:"rule_set_version"`
+	RuleSetVersion *int    `json:"rule_set_version"`
+	QRPNGBase64    *string `json:"qr_png_base64"`
 }
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
@@ -208,6 +216,10 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			return
 		}
 
+		// QRPNGBase64 is deliberately left nil here (M5-09-01, task-250, Stage 2
+		// QA Mode A stub): rendering `*inv.QRPayload` via qrcode.RenderBase64 is
+		// Stage 3 (executor) work. Left nil, it marshals to explicit JSON null
+		// via getResponse's no-omitempty tag.
 		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion})
 	}
 }

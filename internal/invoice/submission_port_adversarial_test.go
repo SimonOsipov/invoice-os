@@ -406,7 +406,6 @@ func TestInvoicePort_CanonicalMissingRuleSetVersionRowDoesNotError(t *testing.T)
 	}
 }
 
-
 // --- M5-05-03 (task-239) -- port-level RED tests for MarkAccepted/MarkRejected ----------
 //
 // Written BEFORE the real implementation exists: MarkAcceptedTx/MarkRejectedTx

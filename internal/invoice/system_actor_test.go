@@ -282,7 +282,6 @@ func TestMarkSubmittedTx_CalledTwiceIsIdempotentNoOp(t *testing.T) {
 	}
 }
 
-
 // --- M5-05-03 (task-239) -- MarkAcceptedTx/MarkRejectedTx store-layer RED tests ---------
 
 // TestMarkAcceptedTx_WritesOutcomeAndTransitionsInOneTx (task-239's own Test
@@ -730,5 +729,341 @@ func TestRLS_MarkAcceptedTxCrossTenantIsNotFound(t *testing.T) {
 	}
 	if reasonsText != "[]" {
 		t.Errorf("rejection_reasons after refused cross-tenant MarkRejectedTx = %q, want unchanged default %q", reasonsText, "[]")
+	}
+}
+
+// --- QA Mode B (task-239) -- adversarial / edge coverage added AFTER the RED
+// specs above, during the post-implementation verify pass. ------------------
+//
+// Closes four gaps the RED Test Specs table left open:
+//
+//  1. TestMarkAcceptedTx_WritesOutcomeAndTransitionsInOneTx and
+//     TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx already prove the
+//     submitted->{accepted,rejected} edges (their "submitted source"
+//     subtests) -- so the PollWorker-path edges are already covered and are
+//     NOT re-tested here.
+//  2. TestMarkRejectedTx_IllegalFromDraftReturnsErrIllegalTransition only
+//     asserts rejection_reasons at the column level on an illegal source --
+//     there was no equivalent column-level assertion on the ACCEPT side
+//     (irn/csid/qr_payload). TestMarkAcceptedTx_IllegalFromDraftReturnsErrIllegalTransitionAndWritesNothing
+//     closes that.
+//  3. The existing round-trip test (TestMarkRejectedTx_WritesReasonsAndTransitionsInOneTx)
+//     unmarshals rejection_reasons back into []submission.Reason and compares
+//     via reflect.DeepEqual -- that passes whether or not Reason.Path's
+//     `omitempty` actually elides the JSON key for a zero-value Path (both
+//     an omitted key and a `"path":""` key unmarshal to Path=="").
+//     TestMarkRejectedTx_ReasonsRoundTripExactJSONKeyShape inspects the RAW
+//     jsonb text instead, proving the omitted-Path element truly has no
+//     "path" key at all, not merely an empty one.
+//  4. Two cross-subtask compositions that only exist once BOTH halves are
+//     real: TestStoreEdit_ComposesWithRealMarkRejectedTxWrite drives 03's
+//     MarkRejectedTx (real write, not a raw SQL seed) followed by 01's
+//     Store.Edit demotion, proving the two halves compose; and
+//     TestHasFiscalOutcome_GoesLiveAfterMarkAcceptedTx drives 03's real
+//     MarkAcceptedTx followed by submission_port.go's HasFiscalOutcome
+//     (dead code before 03 shipped -- irn was never written by anything),
+//     proving it now reflects reality end to end through production code on
+//     both sides.
+
+// TestMarkAcceptedTx_IllegalFromDraftReturnsErrIllegalTransitionAndWritesNothing
+// mirrors TestMarkRejectedTx_IllegalFromDraftReturnsErrIllegalTransition
+// above, but on the accept side: draft has no legal edge to accepted
+// (legalTransitions store.go:661 only reaches accepted from queued/
+// submitted), so the outcome UPDATE inside markTerminalTx's outcome
+// callback runs, then transitionTx refuses the illegal (draft, accepted)
+// pair -- the whole attempt must roll back together (same tx), leaving
+// irn/csid/qr_payload ALL still NULL, not just the status unchanged.
+func TestMarkAcceptedTx_IllegalFromDraftReturnsErrIllegalTransitionAndWritesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "QA-239-1 tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-239-1 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "QA-239-1", StatusDraft)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, "IRN-QA-239-1", "CSID-QA-239-1", "QR-QA-239-1")
+		return err
+	})
+	if !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("MarkAcceptedTx (draft->accepted): err = %v, want ErrIllegalTransition", err)
+	}
+
+	var status string
+	var gotIRN, gotCSID, gotQR *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, irn, csid, qr_payload FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &gotIRN, &gotCSID, &gotQR); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("invoice status after refused illegal MarkAcceptedTx = %q, want unchanged %q", status, StatusDraft)
+	}
+	if gotIRN != nil {
+		t.Errorf("irn after refused illegal MarkAcceptedTx = %q, want still NULL (the outcome UPDATE must roll back with the failed transition)", *gotIRN)
+	}
+	if gotCSID != nil {
+		t.Errorf("csid after refused illegal MarkAcceptedTx = %q, want still NULL", *gotCSID)
+	}
+	if gotQR != nil {
+		t.Errorf("qr_payload after refused illegal MarkAcceptedTx = %q, want still NULL", *gotQR)
+	}
+}
+
+// TestMarkRejectedTx_ReasonsRoundTripExactJSONKeyShape (task-239 AC#5's
+// omitempty corollary): a Reason with Path set must marshal three keys
+// (code/message/path); a Reason with Path left at its zero value must
+// marshal exactly TWO keys -- "path" must be ABSENT from the jsonb, not
+// present as "". Inspects the raw jsonb text/keys directly rather than
+// round-tripping through []submission.Reason, which cannot distinguish
+// "path omitted" from "path present as empty string" (both unmarshal to
+// Path=="").
+func TestMarkRejectedTx_ReasonsRoundTripExactJSONKeyShape(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "QA-239-2 tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-239-2 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "QA-239-2", StatusQueued)
+
+	reasons := []submission.Reason{
+		{Code: "APP-ERR-0417", Message: "Supplier TIN not registered", Path: "supplier_tin"},
+		{Code: "APP-ERR-0501", Message: "Currency mismatch"}, // Path deliberately left zero-value
+	}
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkRejectedTx(ctx, tx, invID, tenantID, reasons)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkRejectedTx: %v (want nil)", err)
+	}
+
+	var reasonsText string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+	).Scan(&reasonsText); err != nil {
+		t.Fatalf("read back rejection_reasons: %v", err)
+	}
+
+	var elements []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(reasonsText), &elements); err != nil {
+		t.Fatalf("unmarshal rejection_reasons into raw key maps: %v (raw = %s)", err, reasonsText)
+	}
+	if len(elements) != 2 {
+		t.Fatalf("rejection_reasons has %d elements, want 2 (raw = %s)", len(elements), reasonsText)
+	}
+
+	if len(elements[0]) != 3 {
+		t.Errorf("element[0] keys = %v (%d keys), want exactly 3 (code, message, path)", keysOf(elements[0]), len(elements[0]))
+	}
+	if pathVal, ok := elements[0]["path"]; !ok {
+		t.Errorf("element[0] is missing the \"path\" key entirely, want present with value %q", "supplier_tin")
+	} else if string(pathVal) != `"supplier_tin"` {
+		t.Errorf("element[0][\"path\"] = %s, want %q", pathVal, `"supplier_tin"`)
+	}
+
+	if len(elements[1]) != 2 {
+		t.Errorf("element[1] keys = %v (%d keys), want exactly 2 (code, message)", keysOf(elements[1]), len(elements[1]))
+	}
+	if _, ok := elements[1]["path"]; ok {
+		t.Errorf("element[1] has a \"path\" key = %s, want ABSENT entirely (omitempty on a zero-value Path must elide the key, not emit \"\")", elements[1]["path"])
+	}
+}
+
+// TestMarkRejectedTx_IdempotentReplayDoesNotRewriteReasons (task-239 AC#6's
+// missing reject-side half): AC#6 requires BOTH MarkAcceptedTx and
+// MarkRejectedTx to be idempotent no-ops that do not rewrite the stored
+// outcome. TestMarkAcceptedTx_IdempotentReplayDoesNotRewriteOutcomeOrHistory
+// above proves the accept side; MarkRejectedTx shares the exact same
+// markTerminalTx sequence, but nothing directly proved the reject side until
+// now -- a second MarkRejectedTx call with DIFFERENT reasons must not
+// clobber the already-stored rejection_reasons.
+func TestMarkRejectedTx_IdempotentReplayDoesNotRewriteReasons(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "QA-239-5 tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-239-5 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "QA-239-5", StatusQueued)
+
+	markOnce := func(reasons []submission.Reason) error {
+		return db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+			_, err := store.MarkRejectedTx(ctx, tx, invID, tenantID, reasons)
+			return err
+		})
+	}
+
+	firstReasons := []submission.Reason{{Code: "APP-ERR-FIRST", Message: "first reasons"}}
+	if err := markOnce(firstReasons); err != nil {
+		t.Fatalf("first MarkRejectedTx (queued->rejected): %v", err)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'rejected'`, invID); n != 1 {
+		t.Fatalf("history rows (to_status=rejected) after first call = %d, want 1", n)
+	}
+
+	// Second call, DIFFERENT reasons -- a broken implementation that skips
+	// the idempotent short-circuit would clobber the stored reasons.
+	secondReasons := []submission.Reason{{Code: "APP-ERR-SECOND-SHOULD-NOT-LAND", Message: "second reasons"}}
+	if err := markOnce(secondReasons); err != nil {
+		t.Fatalf("second MarkRejectedTx (already rejected, must be an idempotent no-op): %v", err)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'rejected'`, invID); n != 1 {
+		t.Errorf("history rows (to_status=rejected) after second (idempotent) call = %d, want still 1 (no second row)", n)
+	}
+
+	var status, reasonsText string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &reasonsText); err != nil {
+		t.Fatalf("read back invoice row: %v", err)
+	}
+	if Status(status) != StatusRejected {
+		t.Errorf("invoice status after two MarkRejectedTx calls = %q, want %q", status, StatusRejected)
+	}
+
+	var gotReasons []submission.Reason
+	if err := json.Unmarshal([]byte(reasonsText), &gotReasons); err != nil {
+		t.Fatalf("unmarshal rejection_reasons: %v (raw = %s)", err, reasonsText)
+	}
+	if !reflect.DeepEqual(gotReasons, firstReasons) {
+		t.Errorf("rejection_reasons after idempotent replay = %+v, want unchanged %+v (the second call's DIFFERENT reasons must not land)", gotReasons, firstReasons)
+	}
+}
+
+// keysOf is a small t.Errorf formatting helper for
+// TestMarkRejectedTx_ReasonsRoundTripExactJSONKeyShape above.
+func keysOf(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestStoreEdit_ComposesWithRealMarkRejectedTxWrite (cross-subtask
+// integration, task-239 + task-236/M5-05-01): MarkRejectedTx (03) writes
+// rejection_reasons via the REAL production write path (not a raw SQL
+// seed, unlike every other Edit-clears-reasons test in edit_test.go), then
+// Store.Edit (01) demotes rejected->draft on a content change and clears
+// them -- proving 03's write and 01's clear compose correctly end to end,
+// through two independently-shipped subtasks' production code.
+func TestStoreEdit_ComposesWithRealMarkRejectedTxWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "QA-239-3 tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-239-3 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "QA-239-3", StatusQueued)
+
+	reasons := []submission.Reason{{Code: "APP-ERR-0417", Message: "Supplier TIN not registered", Path: "supplier_tin"}}
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkRejectedTx(ctx, tx, invID, tenantID, reasons)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkRejectedTx (queued->rejected, real write): %v (want nil)", err)
+	}
+
+	// Sanity: the real write actually landed non-empty before Edit touches it.
+	var seededReasons string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+	).Scan(&seededReasons); err != nil {
+		t.Fatalf("read back rejection_reasons after MarkRejectedTx: %v", err)
+	}
+	if seededReasons == "[]" {
+		t.Fatalf("rejection_reasons after MarkRejectedTx = %q, want non-empty (the real write must have landed before Edit's clear is a meaningful test)", seededReasons)
+	}
+
+	subject := uuid.NewString()
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+	newVAT := "9.50"
+	got, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	if err != nil {
+		t.Fatalf("Edit (content change on rejected invoice): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+
+	var dbStatus, clearedReasons string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+	).Scan(&dbStatus, &clearedReasons); err != nil {
+		t.Fatalf("read back status/rejection_reasons after Edit: %v", err)
+	}
+	if Status(dbStatus) != StatusDraft {
+		t.Errorf("invoices.status after Edit = %q, want %q", dbStatus, StatusDraft)
+	}
+	if clearedReasons != "[]" {
+		t.Errorf("invoices.rejection_reasons after Edit = %q, want %q (03's real write cleared by 01's real demotion)", clearedReasons, "[]")
+	}
+
+	if n := mustCount(t, super,
+		`SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'queued' AND to_status = 'rejected'`,
+		invID,
+	); n != 1 {
+		t.Errorf("history rows (queued->rejected, from MarkRejectedTx) = %d, want 1", n)
+	}
+	if n := mustCount(t, super,
+		`SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'rejected' AND to_status = 'draft'`,
+		invID,
+	); n != 1 {
+		t.Errorf("history rows (rejected->draft, from Edit) = %d, want 1", n)
+	}
+}
+
+// TestHasFiscalOutcome_GoesLiveAfterMarkAcceptedTx: submission_port.go's
+// HasFiscalOutcome (irn IS NOT NULL) was dead code before this subtask --
+// nothing wrote irn. Drives BOTH real production methods (never a raw SQL
+// seed): false before MarkAcceptedTx, true immediately after, on the same
+// invoice.
+func TestHasFiscalOutcome_GoesLiveAfterMarkAcceptedTx(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "QA-239-4 tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-239-4 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "QA-239-4", StatusQueued)
+
+	var before bool
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		before, err = store.HasFiscalOutcome(ctx, tx, invID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("HasFiscalOutcome (before MarkAcceptedTx): %v (want nil)", err)
+	}
+	if before {
+		t.Fatalf("HasFiscalOutcome (before MarkAcceptedTx) = true, want false (nothing has written irn yet)")
+	}
+
+	err = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, "IRN-QA-239-4", "CSID-QA-239-4", "QR-QA-239-4")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkAcceptedTx: %v (want nil)", err)
+	}
+
+	var after bool
+	err = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		after, err = store.HasFiscalOutcome(ctx, tx, invID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("HasFiscalOutcome (after MarkAcceptedTx): %v (want nil)", err)
+	}
+	if !after {
+		t.Errorf("HasFiscalOutcome (after MarkAcceptedTx) = false, want true (irn was just written -- HasFiscalOutcome must reflect it, no longer dead code)")
 	}
 }

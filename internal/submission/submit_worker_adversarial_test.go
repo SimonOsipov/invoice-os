@@ -6,7 +6,8 @@
 // file. No new writer function, no testify, no t.Skip beyond requireExchangeDB's established
 // gate.
 //
-// Eight cases, motivated by the mutation-testing pass in task-230's Mode B QA report:
+// Nine cases, motivated by the mutation-testing pass in task-230's Mode B QA report (1-8)
+// and task-240's own Mode B QA report (9):
 //
 //  1. TestSubmitWorker_PendingSetsPollRefAndMovesInvoiceToSubmitted -- the Pending branch had
 //     ZERO test coverage anywhere in the suite (grep confirmed: no T05 spec, and
@@ -45,7 +46,21 @@
 //     never validates Accepted.IRN's content (that is the adapter contract's job, L07, and
 //     the invoice-side writer's, M5-05-03); a law-violating (blank) IRN from a misbehaving
 //     adapter still drives job/invoice state exactly like any other Accepted, now including
-//     the verdict routing and 08 audit write M5-05-04 (task-240) adds.
+//     the verdict routing and 08 audit write M5-05-04 (task-240) adds. This proves testInvoicePort's
+//     OWN leniency (it never writes irn at all, so it cannot observe blank-IRN content) --
+//     it does NOT prove AC#6 ("a law-violating blank IRN rolls tx2 back whole (23514)"),
+//     which is a claim about the REAL invoices_irn_check constraint. See case 9.
+//  9. TestSubmitWorker_BlankIRNChecksViolationRollsBackTx2Whole -- QA Mode B (task-240) found,
+//     by mutation, that swallowing w.InvoicePort.MarkAccepted's error entirely (no propagation
+//     at all) leaves EVERY existing case in this file and submit_worker_test.go green: nothing
+//     in the corpus ever drives MarkAccepted into an error, because testInvoicePort's own
+//     MarkAccepted (case 8's double) never writes irn and the "queued" source status is
+//     always a legal transition. rawIRNInvoicePort below closes that gap AND proves AC#6 with
+//     a genuine SQLSTATE 23514: it binds irn RAW (unwrapped, matching the real
+//     *invoice.Store.MarkAcceptedTx exactly, [blank-irn-is-the-databases-to-refuse]) against
+//     the SAME invoices_irn_check the real Store answers to -- still not importing
+//     internal/invoice ([mapper-lives-in-03]), just one more raw UPDATE against the physical
+//     table every double in this file already touches.
 package submission_test
 
 import (
@@ -523,5 +538,222 @@ func TestSubmitWorker_AcceptedWithBlankIRNStillMovesInvoiceToAccepted(t *testing
 	}
 	if inv.irn != nil {
 		t.Errorf("invoices.irn = %q, want NULL -- this worker never writes it regardless of IRN content", *inv.irn)
+	}
+}
+
+// --- 9: a REAL invoices_irn_check violation on MarkAccepted rolls back the WHOLE tx2 -------
+//
+// See this file's own header for the full rationale (case 9). rawIRNInvoicePort wraps
+// testInvoicePort but makes MarkAccepted bind irn RAW to the invoices row -- exactly what
+// the real *invoice.Store.MarkAcceptedTx (actor.go) does, deliberately never NULLIF'd
+// ([blank-irn-is-the-databases-to-refuse]) -- so a blank IRN trips the SAME
+// invoices_irn_check CHECK constraint (migrations/20260722083015_invoices_fiscal_outcome.sql)
+// a real law-violating adapter would, without reimplementing any of the Store's own logic
+// or importing internal/invoice.
+type rawIRNInvoicePort struct {
+	testInvoicePort
+}
+
+func (rawIRNInvoicePort) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
+	_, err := tx.Exec(ctx, `UPDATE invoices SET irn = $1 WHERE id = $2`, out.IRN, invoiceID)
+	return err
+}
+
+func TestSubmitWorker_BlankIRNChecksViolationRollsBackTx2Whole(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	// Law-violating (L07): blank IRN. Routed through rawIRNInvoicePort (not
+	// testInvoicePort/newTestWorker) so the write actually reaches the constrained column.
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Accepted{IRN: "", CSID: "C", QRPayload: "Q"},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := &submission.SubmitWorker{
+		Pool:        f.app,
+		Adapter:     adapter,
+		InvoicePort: rawIRNInvoicePort{},
+		Limiter:     submission.NewRateLimiter(),
+		RateLimit:   60,
+		Queue:       newQueueClient(f.app),
+	}
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	beforeAccepted := auditCount(t, f, tenantID, "submission.accepted")
+
+	err := w.Work(ctx, job)
+	if err == nil {
+		t.Fatal("Work with a blank-IRN Accepted verdict returned nil, want the invoices_irn_check violation (23514) surfaced")
+	}
+	if code := exPgCode(err); code != "23514" {
+		t.Errorf("Work error SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "submitting" {
+		t.Errorf("job state after the failed MarkAccepted = %q, want unchanged \"submitting\" -- "+
+			"the whole tx2, including the OncePerJob marker, must have rolled back", wj.state)
+	}
+	if n := exCountRows(t, f, tenantID, wj.id); n != 0 {
+		t.Errorf("app_exchange rows after the failed MarkAccepted = %d, want 0", n)
+	}
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "queued" {
+		t.Errorf("invoice status after the failed MarkAccepted = %q, want unchanged \"queued\"", inv.status)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != beforeAccepted {
+		t.Errorf("submission.accepted audit rows after the failed MarkAccepted = %d, want unchanged %d -- "+
+			"the audit write must roll back with everything else, since it never even runs "+
+			"(recordVerdictAudit sits after MarkAccepted in the same OncePerJob closure)", n, beforeAccepted)
+	}
+}
+
+// --- 10: the audit payload is a strict summary, both directions, plus 05+08 coexistence ----
+//
+// M5-05-04 (task-240) QA Mode B: TestSubmitWorker_AcceptedRoutesVerdictAndAudits and
+// TestSubmitWorker_RejectedWritesExactlyOneSubmissionRejectedAuditRow (submit_worker_test.go)
+// already assert each wanted key's VALUE, but neither asserts the payload's key SET is
+// exhaustive -- a leak of Accepted's CSID/QRPayload or Rejected's full reasons array (the
+// wire payload app_exchange already owns, [audit-payloads]) would slip past a
+// value-only check. These two cases close that with an exact key-count + key-membership
+// assertion, and reconfirm 05 (app_exchange) and 08 (audit_log) both fire from the SAME
+// verdict -- the audit write is IN ADDITION to, not instead of, the exchange evidence.
+
+func TestSubmitWorker_AcceptedAuditPayloadIsStrictSummaryNoWireLeak(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	const distinctIRN = "IRN-ZZZ-42" // distinctive, not the "NG-1" every other case reuses --
+	// guards against a coincidental match to a hardcoded/constant reference.
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Accepted{IRN: distinctIRN, CSID: "CSID-ZZZ", QRPayload: "QR-ZZZ-BLOB"},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err != nil {
+		t.Fatalf("Work on an Accepted outcome: %v", err)
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	// 05 (app_exchange) and 08 (audit_log) must BOTH exist -- the audit row is additional
+	// evidence, not a replacement for the exchange row.
+	if n := exCountRows(t, f, tenantID, wj.id); n != 1 {
+		t.Errorf("app_exchange rows = %d, want exactly 1", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.accepted"); n != 1 {
+		t.Errorf("submission.accepted audit rows = %d, want exactly 1", n)
+	}
+
+	payload := auditPayloadMap(t, f, tenantID, "submission.accepted")
+	wantKeys := map[string]bool{"invoice_id": true, "submission_job_id": true, "outcome": true, "reference": true}
+	if len(payload) != len(wantKeys) {
+		t.Errorf("submission.accepted payload has %d keys (%v), want exactly the 4 in %v -- "+
+			"a wire-payload leak (csid/qr_payload) would show up as extra keys here", len(payload), payload, wantKeys)
+	}
+	for k := range payload {
+		if !wantKeys[k] {
+			t.Errorf("submission.accepted payload has unexpected key %q (full payload %v) -- "+
+				"want the strict summary set only, no wire-payload leak", k, payload)
+		}
+	}
+	if payload["reference"] != distinctIRN {
+		t.Errorf("submission.accepted payload reference = %v, want %q verbatim", payload["reference"], distinctIRN)
+	}
+	if _, ok := payload["csid"]; ok {
+		t.Errorf("submission.accepted payload carries a csid key -- the full wire payload must never leak into audit_log")
+	}
+	if _, ok := payload["qr_payload"]; ok {
+		t.Errorf("submission.accepted payload carries a qr_payload key -- the full wire payload must never leak into audit_log")
+	}
+}
+
+func TestSubmitWorker_RejectedAuditPayloadIsStrictSummaryNoWireLeak(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result: submission.Rejected{Reasons: []submission.Reason{
+			{Code: "E1", Message: "bad TIN"},
+			{Code: "E2", Message: "bad currency", Path: "currency"},
+		}},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err != nil {
+		t.Fatalf("Work on a Rejected outcome: %v", err)
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if n := exCountRows(t, f, tenantID, wj.id); n != 1 {
+		t.Errorf("app_exchange rows = %d, want exactly 1", n)
+	}
+	if n := auditCount(t, f, tenantID, "submission.rejected"); n != 1 {
+		t.Errorf("submission.rejected audit rows = %d, want exactly 1", n)
+	}
+
+	payload := auditPayloadMap(t, f, tenantID, "submission.rejected")
+	wantKeys := map[string]bool{"invoice_id": true, "submission_job_id": true, "outcome": true}
+	if len(payload) != len(wantKeys) {
+		t.Errorf("submission.rejected payload has %d keys (%v), want exactly the 3 in %v -- "+
+			"a wire-payload leak (the reasons array) would show up as extra keys here", len(payload), payload, wantKeys)
+	}
+	for k := range payload {
+		if !wantKeys[k] {
+			t.Errorf("submission.rejected payload has unexpected key %q (full payload %v) -- "+
+				"want the strict summary set only, no wire-payload leak", k, payload)
+		}
+	}
+	if _, ok := payload["reasons"]; ok {
+		t.Errorf("submission.rejected payload carries a reasons key -- the full reasons array must never leak into audit_log (that is app_exchange's job)")
+	}
+}
+
+// --- 11: the audit row lands under the acting tenant and is invisible to another --------
+//
+// Mirrors TestRLS_SubmitWorkerCannotTouchAnotherTenant's own pattern (submit_worker_test.go):
+// audit_log's own tenant_isolation policy (migrations/20260708062657_audit_log.sql) has no
+// FOR clause, so it governs SELECT identically to INSERT -- a tenant-scoped read under
+// tenant B must see none of tenant A's rows, regardless of the shared event name.
+
+func TestRLS_SubmitWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantA, invoiceA, cleanupA := seedQueuedInvoice(t, f)
+	defer cleanupA()
+	tenantB := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantB)
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceA
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Accepted{IRN: "NG-RLS-1", CSID: "C", QRPayload: "Q"},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantA, InvoiceID: invoiceA, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err != nil {
+		t.Fatalf("Work on an Accepted outcome: %v", err)
+	}
+
+	if n := auditCount(t, f, tenantA, "submission.accepted"); n < 1 {
+		t.Fatalf("tenant A's own submission.accepted audit rows = %d, want at least 1 -- "+
+			"precondition for the isolation check below", n)
+	}
+	if n := auditCount(t, f, tenantB, "submission.accepted"); n != 0 {
+		t.Errorf("tenant B's view of submission.accepted audit rows = %d, want 0 -- "+
+			"RLS must hide tenant A's row from tenant B", n)
 	}
 }

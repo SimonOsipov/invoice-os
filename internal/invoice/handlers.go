@@ -20,6 +20,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
 )
 
 // --- wire request/response types --------------------------------------------
@@ -182,9 +183,8 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // (TestGetHandler_RuleSetVersionMarshalsNull).
 //
 // QRPNGBase64 (M5-09-01, task-250) is likewise a *string with NO omitempty --
-// explicit null when absent (TestGetHandler_QRPNGBase64MarshalsNull). GetHandler
-// does NOT populate it yet (Stage 2, QA Mode A compile-enabling stub): the
-// executor wires `qrcode.RenderBase64(*inv.QRPayload)` when inv.QRPayload is
+// explicit null when absent (TestGetHandler_QRPNGBase64MarshalsNull).
+// GetHandler calls qrcode.RenderBase64(*inv.QRPayload) when inv.QRPayload is
 // non-nil, logging (never 5xxing) a render failure, per Core AC #3/#5.
 type getResponse struct {
 	Invoice
@@ -216,11 +216,22 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			return
 		}
 
-		// QRPNGBase64 is deliberately left nil here (M5-09-01, task-250, Stage 2
-		// QA Mode A stub): rendering `*inv.QRPayload` via qrcode.RenderBase64 is
-		// Stage 3 (executor) work. Left nil, it marshals to explicit JSON null
-		// via getResponse's no-omitempty tag.
-		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion})
+		// QRPNGBase64 stays nil (-> explicit JSON null via getResponse's
+		// no-omitempty tag) when the invoice has no qr_payload, or when
+		// rendering it fails. A render failure is logged, never turned into a
+		// non-200: a corrupt/oversized qr_payload must not make an otherwise
+		// viewable invoice inaccessible (Core AC #3/#5, M5-09-01, task-250).
+		var qrPNGBase64 *string
+		if inv.QRPayload != nil {
+			rendered, err := qrcode.RenderBase64(*inv.QRPayload)
+			if err != nil {
+				log.ErrorContext(r.Context(), "invoice: render qr", slog.Any("err", err))
+			} else {
+				qrPNGBase64 = &rendered
+			}
+		}
+
+		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion, QRPNGBase64: qrPNGBase64})
 	}
 }
 

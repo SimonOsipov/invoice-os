@@ -710,10 +710,17 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 //	AC#3/#5 TestStoreEdit_ClearingIsAtomicWithTheDemotion
 //
 // seedInvoiceAtStatus is defined in transition_adversarial_test.go (same
-// package). rejection_reasons has no Go-side field on Invoice (invoiceColumns/
-// scanInvoice deliberately does not project it, store.go) -- every assertion
-// below reads it back with a raw `::text` SELECT, mirroring
-// internal/platform/db/invoices_fiscal_rls_test.go's own convention.
+// package). As of this commit, rejection_reasons still has no Go-side field
+// on Invoice (invoiceColumns/scanInvoice deliberately does not project it,
+// store.go) -- every assertion below reads it back with a raw `::text`
+// SELECT, mirroring internal/platform/db/invoices_fiscal_rls_test.go's own
+// convention. M5-05-02 (task-238) adds that field (RejectionReasons
+// json.RawMessage) and projects it, but does NOT change any assertion in
+// this file: these task-237 tests seed state directly via the superuser
+// pool (bypassing Store.ApplyValidation/Store.Transition, the only real
+// writers), and reading through Store.Edit's projection instead would only
+// prove 02's read path, not this file's own write/clear behavior under
+// test -- so the raw `::text` reads stay, unchanged, even after 02 lands.
 
 // EDIT-13/AC#3: a content-changing Edit on a REJECTED invoice demotes it to
 // draft, clears rejection_reasons back to '[]', and writes exactly one

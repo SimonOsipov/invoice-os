@@ -123,6 +123,11 @@ type lineItemWire struct {
 // RuleSetVersion can't distinguish JSON null from an absent key (both
 // decode to nil *int) -- TestValidateHandler_NilVersionMarshalsNull checks
 // raw bytes instead, for that reason.
+//
+// IRN/CSID/QRPayload/RejectionReasons (M5-05-02, task-238, Stage 1 Part 3
+// recommendation) are likewise additive, ahead of the production Invoice
+// type actually carrying them -- they decode as zero values (nil/nil) until
+// then, same as the trio above.
 type invoiceBody struct {
 	ID               string          `json:"id"`
 	EntityID         string          `json:"entity_id"`
@@ -132,6 +137,10 @@ type invoiceBody struct {
 	RuleSetVersionID *string         `json:"rule_set_version_id"`
 	RuleSetVersion   *int            `json:"rule_set_version"`
 	LineItems        []lineItemWire  `json:"line_items"`
+	IRN              *string         `json:"irn"`
+	CSID             *string         `json:"csid"`
+	QRPayload        *string         `json:"qr_payload"`
+	RejectionReasons json.RawMessage `json:"rejection_reasons"`
 	Error            string          `json:"error"`
 }
 
@@ -1331,6 +1340,18 @@ func TestValidateHandler_ExposesRuleSetVersion(t *testing.T) {
 // TestValidateHandler_ResponseIsAdditive (#2): decoding into the existing
 // Invoice type must still succeed with every field matching exactly -- the
 // new rule_set_version sibling key must not rename or move anything.
+//
+// M5-05-02 (task-238) forward note, Test-Inversion Register #8: once
+// RejectionReasons lands on Invoice (json.RawMessage, no omitempty), this
+// fixture's `want` below MUST set RejectionReasons: json.RawMessage(`[]`) --
+// else the zero-value nil marshals a real "null", decodes back into a
+// non-nil RawMessage("null") (json.RawMessage's UnmarshalJSON always runs,
+// even on a null literal), and reflect.DeepEqual(got, want) at :1361 breaks.
+// Left un-editable here today: the field doesn't exist yet, so a literal
+// referencing it wouldn't compile -- see
+// TestValidateHandler_ResponseCarriesRejectionReasonsEmptyArray
+// (fiscal_outcome_projection_test.go) for the compile-safe RED proof of the
+// underlying wire behavior this fixture will depend on.
 func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1496,6 +1517,12 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
 		"vat", "total", "violations", "rule_set_version_id", "created_at", "line_items",
 		"rule_set_version",
+		// M5-05-02 (task-238), Test-Inversion Register #9: +4 -- irn/csid/
+		// qr_payload/rejection_reasons join Invoice as direct top-level
+		// siblings once Stage 3 lands (AC#6), same flattened-embed shape as
+		// every other Invoice field here. FAILS today (19 raw keys vs. this
+		// slice's 23) since none of the four exist on Invoice yet.
+		"irn", "csid", "qr_payload", "rejection_reasons",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {

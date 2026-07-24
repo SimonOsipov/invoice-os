@@ -19,7 +19,7 @@ name: Dev Env (deploy full fleet + verify)
 #    or if any deployment trigger appears. See docs/deploy-model.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
-#  - Railway Watch Paths empty on all 11 non-Postgres services, or `railway up`
+#  - Railway Watch Paths empty on all 12 non-Postgres services, or `railway up`
 #    silently skips untouched services and a torn-down fleet never recovers.
 #    prepare-env asserts this at runtime. Re-clear if a service is recreated.
 #  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
@@ -233,7 +233,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
 
-      - name: Assert Watch Paths are empty on all 11 non-Postgres services (M3-16 invariant)
+      - name: Assert Watch Paths are empty on all 12 non-Postgres services (M3-16 invariant)
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
@@ -268,7 +268,7 @@ jobs:
             exit 1
           fi
 
-          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","landing","app","ops-console"]'
+          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","landing","app","ops-console"]'
 
           missing=$(echo "$resp" | jq -r --argjson names "$expected_json" '
             ([.data.environment.serviceInstances.edges[]?.node.serviceName]) as $present
@@ -290,16 +290,16 @@ jobs:
             echo "$offenders"
             exit 1
           fi
-          echo "All 11 non-Postgres service instances report empty Watch Paths."
+          echo "All 12 non-Postgres service instances report empty Watch Paths."
 
       # M4-22-FU, the LOWER-VALUE half: the fork inherits development's
       # variables, which the step above the seam already checked, so this only
       # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
-      # earlier: that step queries all 11 service names and hard-fails if any is
-      # missing, which is what proves the 7 context services have materialised.
+      # earlier: that step queries all 12 service names and hard-fails if any is
+      # missing, which is what proves the 8 context services have materialised.
       # settle_fork is NOT a sufficient barrier — it checks only the 5 service
       # ids reconcile-fork acts on (railway-env.sh:~788-792), which excludes the
-      # 7 contexts.
+      # 8 contexts.
       #
       # Skipped on workflow_dispatch like the seam steps, and for the same
       # reason (dev-env.yml:204-208): railway-env.sh authenticates
@@ -461,7 +461,7 @@ jobs:
             exit 1
           fi
 
-  # 3. Deploy the seven context services, only after the gateway is healthy.
+  # 3. Deploy the eight context services, only after the gateway is healthy.
   #    They boot against the already-migrated schema and never run
   #    migrations. Skipped for draft PRs.
   deploy-context:
@@ -473,7 +473,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications]
+        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications, reconciliation]
     steps:
       - uses: actions/checkout@v4
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the

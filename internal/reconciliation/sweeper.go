@@ -34,6 +34,12 @@ type Sweeper struct {
 
 var _ platform.BackgroundWorker = (*Sweeper)(nil)
 
+// NewSweeper builds a Sweeper that invokes fn on each interval tick. Production
+// wiring (cmd/reconciliation) passes a built Reconciler's SweepOnce as fn.
+func NewSweeper(interval time.Duration, fn func(context.Context) error) *Sweeper {
+	return &Sweeper{Interval: interval, sweepFn: fn}
+}
+
 // Start launches the ticker loop and returns promptly (BackgroundWorker contract): every
 // Interval, sweepFn runs; a sweep still in flight when the next tick fires is NOT started
 // again (single-flight) — the following tick's sweep runs only once the current one

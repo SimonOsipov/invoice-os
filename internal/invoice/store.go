@@ -46,7 +46,8 @@ type scanner interface {
 const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, ` +
 	`issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name, ` +
 	`currency, subtotal::text, vat::text, total::text, ` +
-	`violations, rule_set_version_id, created_at`
+	`violations, rule_set_version_id, created_at, ` +
+	`irn, csid, qr_payload, rejection_reasons`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -54,6 +55,7 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.IssueDate, &inv.SupplierTIN, &inv.SupplierName, &inv.BuyerTIN, &inv.BuyerName,
 		&inv.Currency, &inv.Subtotal, &inv.VAT, &inv.Total,
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
+		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
 	)
 }
 
@@ -511,9 +513,10 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 	return inv, changedFields, nil
 }
 
-// Edit is M4-05-02's fix-loop orchestrator (System Design §4): the edit +
-// validated->draft demotion sequence over the fixable states (draft,
-// validated), composed with Store.ApplyValidation's template ([A2]: one
+// Edit is M4-05-02's fix-loop orchestrator (System Design §4; widened by
+// task-237 to a third fixable status): the edit + demote-to-draft sequence
+// over draft, validated, and rejected, composed with Store.ApplyValidation's
+// template ([A2]: one
 // WithinRequestTenantTx, lock-then-recheck, propagate raw errors so their
 // SQLSTATE survives). Inside ONE db.WithinRequestTenantTx:
 //
@@ -522,10 +525,10 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //  2. lock+read `before`: SELECT <invoiceColumns> ... FOR UPDATE, same lock
 //     and error mapping as ApplyValidation/Transition (pgx.ErrNoRows ->
 //     ErrNotFound; 22P02 -> ErrValidation).
-//  3. fixable-state guard -- before.Status is neither draft nor validated ->
-//     ErrNotFixable, NOTHING written. This runs BEFORE the content write, so
-//     a not-fixable status wins over a malformed numeric in the same call
-//     ([A8], GuardBeforeContentValidation).
+//  3. fixable-state guard -- before.Status must be draft, validated, or
+//     rejected, else ErrNotFixable, NOTHING written. This runs BEFORE the
+//     content write, so a not-fixable status wins over a malformed numeric
+//     in the same call ([A8], GuardBeforeContentValidation).
 //  4. preFP := contentFingerprint(before) -- taken on the LOCKED row, so it
 //     is authoritative under concurrency the same way ApplyValidation's
 //     re-check is.
@@ -537,12 +540,16 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     "100.00"->"100.0") -- return `after` with no audit, no demotion, no
 //     history row ([A6]: idempotence applies to draft AND validated).
 //  7. audit.Record("invoice.updated") -- a real content change, always.
-//  8. demote iff `before` was validated: transitionTx(validated->draft) on
-//     THIS same tx, so the content write and the demotion are one atomic
-//     unit -- a failure at either step (including this audit's own actor
-//     CHECK) rolls back the whole edit, never a partial one
-//     (ContentAuditFailureRollsBackWholeEdit). A draft `before` has nothing
-//     to demote from and stays draft.
+//  8. demotes to draft when before.Status is validated OR rejected, via
+//     transitionTx(before.Status -> draft) on THIS same tx -- the real
+//     source status, never a hardcoded literal, so the history row's
+//     from_status stays truthful (task-237). A rejected `before` also has
+//     its stale rejection_reasons cleared first, in the SAME tx
+//     ([reason-lifecycle]). Either way the content write and the demotion
+//     are one atomic unit -- a failure at either step (including this
+//     audit's own actor CHECK) rolls back the whole edit, never a partial
+//     one (ContentAuditFailureRollsBackWholeEdit). A draft `before` has
+//     nothing to demote from and stays draft.
 //  9. return `after` -- draft (demoted) after a validated content change,
 //     the demoted row's OWN state after a draft content change, or the
 //     no-op return from step 6 (a validated no-op stays validated).
@@ -579,7 +586,7 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 
 		// 3. fixable-state guard -- BEFORE the content write, so it wins over
 		// a malformed numeric ([A8]).
-		if before.Status != StatusDraft && before.Status != StatusValidated {
+		if before.Status != StatusDraft && before.Status != StatusValidated && before.Status != StatusRejected {
 			return ErrNotFixable
 		}
 
@@ -607,10 +614,17 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 			return err
 		}
 
-		// 8. demote iff `before` was validated -- a draft has nothing to
-		// demote from.
-		if before.Status == StatusValidated {
-			if after, err = transitionTx(ctx, tx, id, StatusValidated, StatusDraft, actorFromContext(ctx)); err != nil {
+		// 8. demote when before.Status is validated or rejected -- a draft
+		// has nothing to demote from. A rejected invoice also has its stale
+		// rejection_reasons cleared before the transition, so transitionTx's
+		// RETURNING already reflects the clear ([reason-lifecycle]).
+		if before.Status == StatusValidated || before.Status == StatusRejected {
+			if before.Status == StatusRejected {
+				if _, err := tx.Exec(ctx, `UPDATE invoices SET rejection_reasons = '[]' WHERE id = $1`, id); err != nil {
+					return err
+				}
+			}
+			if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
 				return err
 			}
 		}
@@ -633,14 +647,20 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 // queued->failed -- 8 edges now -- the dead-letter path for a background
 // worker that gives up on an invoice before it ever reaches submitted; unlike
 // validated->draft this is a forward FAILURE edge, not a recovery edge (it
-// has no reverse). Remaining recovery/retry edges (e.g. rejected->draft,
-// failed->queued) are added by the consumer stories that DRIVE them (M5-05),
-// never speculatively here.
+// has no reverse). task-237 adds the final three: queued->accepted and
+// queued->rejected (the synchronous-verdict shortcuts a worker takes when
+// the APP answers immediately, bypassing submitted entirely) and
+// rejected->draft (the second recovery edge, mirroring validated->draft) --
+// rejected is therefore no longer a terminal, gaining exactly ONE outgoing
+// edge. 11 edges total; accepted and failed remain the only true terminals.
+// [failed-invoices] deliberately excludes failed->queued: a dead-lettered
+// invoice is never auto-retried back into the queue.
 var legalTransitions = map[Status][]Status{
 	StatusDraft:     {StatusValidated},
 	StatusValidated: {StatusQueued, StatusDraft},
-	StatusQueued:    {StatusSubmitted, StatusFailed},
+	StatusQueued:    {StatusSubmitted, StatusFailed, StatusAccepted, StatusRejected},
 	StatusSubmitted: {StatusAccepted, StatusRejected, StatusFailed},
+	StatusRejected:  {StatusDraft},
 }
 
 // canTransition reports whether target is a legal next state from from, per
@@ -725,12 +745,15 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // status change could diverge on a crash, breaking M4's "every transition
 // writes audit 08 in the same transaction".)
 //
-// It has exactly TWO callers — Store.Transition and Store.ApplyValidation —
+// It has exactly FIVE callers today — Store.Transition (store.go:726),
+// Store.ApplyValidation (store.go:940), Store.Edit's demotion branch
+// (store.go:625), Submitter.BatchSubmit (batch_submit.go:215), and
+// markTerminalTx (actor.go:94, shared by MarkSubmittedTx/MarkFailedTx) —
 // and remains the SINGLE writer of invoices.status, with legalTransitions/
 // canTransition still the single source of truth for what is legal. That is
 // what PRESERVES the M4 gate's "illegal state transitions are rejected by the
-// single transition function" across the extraction: no edge is added, and
-// neither caller can reach the UPDATE without passing canTransition.
+// single transition function" no matter how many callers accrue: none of
+// them can reach the UPDATE without passing canTransition.
 //
 // The CALLER owns the FOR UPDATE lock and the redundancy check
 // (current == target -> ErrRedundantTransition, [D4] — checked before

@@ -417,3 +417,77 @@ func TestRLS_InvoiceHistory_GenesisOnlyImmediatelyAfterCreate(t *testing.T) {
 		t.Errorf("got[0].Actor = %q, want %q", got[0].Actor, subject)
 	}
 }
+
+// TestRLS_InvoicesEditRejectedCrossTenantRefused (M5-05-01 (task-237), QA
+// adversarial): the widened rejected->draft rework path on Store.Edit cannot
+// mutate -- or even see -- another tenant's invoice. RLS's lock+read 0-rows
+// for a cross-tenant id, which Edit maps to ErrNotFound; tenant B's status,
+// rejection_reasons, and content are all left completely untouched, re-read
+// under B's OWN GUC (not just the superuser bypass) -- mirrors
+// TestRLS_InvoicesTransitionCrossTenantRefused's shape for this new edge.
+//
+// This refusal is NOT specific to the rejected leg -- Store.Edit's RLS-scoped
+// lock+read (step 2) fails identically regardless of before.Status, so this
+// test passes vacuously both before and after M5-05-01 (task-237)'s widening. It is
+// still worth pinning explicitly: the story lives on RLS isolation proofs
+// per invoice/state (cross_tenant_integration_test.go's own convention), and
+// a future change to Store.Edit's read ordering could regress this
+// specifically for the newly-widened rejected state without regressing the
+// existing draft/validated cross-tenant coverage (EDIT-10,
+// TestStoreEdit_NotFoundAndCrossTenant) at all.
+func TestRLS_InvoicesEditRejectedCrossTenantRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "EDIT-RLS tenant A")
+	tenantB := seedTenant(t, super, "EDIT-RLS tenant B")
+	entityB := seedEntity(t, super, tenantB, "EDIT-RLS B entity")
+
+	store := NewStore(app)
+	invB := seedInvoiceAtStatus(t, super, tenantB, entityB, "EDIT-RLS-B", StatusRejected)
+	reasonsJSON := `[{"code":"TIN_MISMATCH","message":"supplier TIN does not match","path":"supplier_tin"}]`
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, reasonsJSON, invB,
+	); err != nil {
+		t.Fatalf("seed rejection_reasons: %v", err)
+	}
+
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+	newVAT := "9.50"
+	if _, err := store.Edit(cA, invB, UpdateInput{VAT: &newVAT}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Edit(tenant B's rejected invoice) as tenant A err = %v, want ErrNotFound", err)
+	}
+
+	// Re-read under tenant B's OWN GUC (not the superuser bypass) -- proves
+	// the refusal left B's row genuinely untouched from B's own vantage, not
+	// merely invisible to A.
+	err := db.WithinTenantTx(ctx, app, tenantB, func(tx pgx.Tx) error {
+		var status, reasons string
+		var vat *string
+		if e := tx.QueryRow(ctx,
+			`SELECT status, rejection_reasons::text, vat::text FROM invoices WHERE id = $1`, invB,
+		).Scan(&status, &reasons, &vat); e != nil {
+			return e
+		}
+		if status != string(StatusRejected) {
+			t.Errorf("tenant B's invoice status after refused cross-tenant Edit = %q, want unchanged %q", status, StatusRejected)
+		}
+		if reasons == "[]" {
+			t.Errorf("tenant B's rejection_reasons after refused cross-tenant Edit = %q, want unchanged (still populated)", reasons)
+		}
+		if vat != nil {
+			t.Errorf("tenant B's invoice vat after refused cross-tenant Edit = %v, want unchanged NULL", *vat)
+		}
+		var n int
+		if e := tx.QueryRow(ctx, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invB).Scan(&n); e != nil {
+			return e
+		}
+		if n != 0 {
+			t.Errorf("invoice_status_history rows for tenant B's invoice = %d, want 0 (seedInvoiceAtStatus writes no genesis row, and the refused Edit must write nothing)", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx (tenant B visibility check): %v", err)
+	}
+}

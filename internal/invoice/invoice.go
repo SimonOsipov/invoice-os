@@ -98,6 +98,10 @@ type Invoice struct {
 	Violations       json.RawMessage `json:"violations"`
 	RuleSetVersionID *string         `json:"rule_set_version_id"`
 	CreatedAt        time.Time       `json:"created_at"`
+	IRN              *string         `json:"irn"`
+	CSID             *string         `json:"csid"`
+	QRPayload        *string         `json:"qr_payload"`
+	RejectionReasons json.RawMessage `json:"rejection_reasons"`
 	LineItems        []LineItem      `json:"line_items,omitempty"`
 
 	// RuleSetVersion is the human-facing integer resolved from

@@ -202,7 +202,7 @@ func TestGetHandler_FiscalOutcomeKeysAreTopLevelSiblings(t *testing.T) {
 func TestGetHandler_EmptyRejectionReasonsMarshalsEmptyArrayNotNull(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`)}
+	want := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`), RejectionReasons: json.RawMessage(`[]`)}
 	get := func(ctx context.Context, gotID string) (Invoice, error) {
 		return want, nil
 	}
@@ -440,7 +440,7 @@ func TestListHandler_RealStore_SeededOutcomeRendersVerbatim(t *testing.T) {
 func TestValidateHandler_ResponseCarriesRejectionReasonsEmptyArray(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	want := Invoice{ID: invoiceID, Status: StatusValidated, Violations: json.RawMessage(`[]`)}
+	want := Invoice{ID: invoiceID, Status: StatusValidated, Violations: json.RawMessage(`[]`), RejectionReasons: json.RawMessage(`[]`)}
 	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
 		return want, 2, nil
 	}

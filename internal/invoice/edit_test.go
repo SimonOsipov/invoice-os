@@ -700,9 +700,9 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 	}
 }
 
-// --- task-237: the widened rejected leg of the fix loop --------------------
+// --- M5-05-01 (task-237): the widened rejected leg of the fix loop --------------------
 //
-// Spec-to-test map (Test Specs table, task-237):
+// Spec-to-test map (Test Specs table, M5-05-01 (task-237)):
 //
 //	AC#3 TestStoreEdit_RejectedContentChangeDemotesAndClearsReasons
 //	AC#4 TestStoreEdit_RejectedNoOpKeepsStatusAndReasons
@@ -716,7 +716,7 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 // SELECT, mirroring internal/platform/db/invoices_fiscal_rls_test.go's own
 // convention. M5-05-02 (task-238) adds that field (RejectionReasons
 // json.RawMessage) and projects it, but does NOT change any assertion in
-// this file: these task-237 tests seed state directly via the superuser
+// this file: these M5-05-01 (task-237) tests seed state directly via the superuser
 // pool (bypassing Store.ApplyValidation/Store.Transition, the only real
 // writers), and reading through Store.Edit's projection instead would only
 // prove 02's read path, not this file's own write/clear behavior under
@@ -881,7 +881,7 @@ func TestStoreEdit_RejectedNoOpKeepsStatusAndReasons(t *testing.T) {
 	}
 }
 
-// EDIT-15/AC#5 (QA adversarial): after task-237 widens Store.Edit's fixable
+// EDIT-15/AC#5 (QA adversarial): after M5-05-01 (task-237) widens Store.Edit's fixable
 // set to include rejected, an ACCEPTED invoice must still refuse with
 // ErrNotFixable -- the widened path stops at rejected, it does not silently
 // swallow the rest of the terminal/in-flight states. Passes vacuously today
@@ -1002,7 +1002,7 @@ func TestStoreEdit_ClearingIsAtomicWithTheDemotion(t *testing.T) {
 	})
 }
 
-// --- task-237 (QA Mode B adversarial, Stage 4): additional coverage beyond
+// --- M5-05-01 (task-237) (QA Mode B adversarial, Stage 4): additional coverage beyond
 // the Test Specs table -- concurrency, a genuinely-after-the-clear failure,
 // and cross-tenant refusal (the last already lives in
 // cross_tenant_integration_test.go as TestRLS_InvoicesEditRejectedCrossTenantRefused).

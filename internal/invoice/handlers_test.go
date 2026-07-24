@@ -1341,17 +1341,14 @@ func TestValidateHandler_ExposesRuleSetVersion(t *testing.T) {
 // Invoice type must still succeed with every field matching exactly -- the
 // new rule_set_version sibling key must not rename or move anything.
 //
-// M5-05-02 (task-238) forward note, Test-Inversion Register #8: once
-// RejectionReasons lands on Invoice (json.RawMessage, no omitempty), this
-// fixture's `want` below MUST set RejectionReasons: json.RawMessage(`[]`) --
-// else the zero-value nil marshals a real "null", decodes back into a
-// non-nil RawMessage("null") (json.RawMessage's UnmarshalJSON always runs,
-// even on a null literal), and reflect.DeepEqual(got, want) at :1361 breaks.
-// Left un-editable here today: the field doesn't exist yet, so a literal
-// referencing it wouldn't compile -- see
+// M5-05-02 (task-238), Test-Inversion Register #8: `want` below sets
+// RejectionReasons: json.RawMessage(`[]`) -- else the zero-value nil
+// marshals a real "null", decodes back into a non-nil RawMessage("null")
+// (json.RawMessage's UnmarshalJSON always runs, even on a null literal),
+// and reflect.DeepEqual(got, want) at :1361 breaks. See
 // TestValidateHandler_ResponseCarriesRejectionReasonsEmptyArray
 // (fiscal_outcome_projection_test.go) for the compile-safe RED proof of the
-// underlying wire behavior this fixture will depend on.
+// underlying wire behavior this fixture depends on.
 func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -1365,6 +1362,7 @@ func TestValidateHandler_ResponseIsAdditive(t *testing.T) {
 		Status:           StatusValidated,
 		Violations:       json.RawMessage(`[]`),
 		RuleSetVersionID: &versionID,
+		RejectionReasons: json.RawMessage(`[]`),
 		LineItems:        []LineItem{{ID: uuid.NewString(), LineNo: 1, Description: &desc}},
 	}
 	validate := func(ctx context.Context, gotID string) (Invoice, int, error) {
@@ -1854,7 +1852,7 @@ func TestEditHandler_MalformedBody400(t *testing.T) {
 
 // TestEditHandler_NotFixable409 (Core AC #1): the store returning
 // ErrNotFixable must map to 409 -- the edit surface accepts three fixable
-// statuses (draft, validated, rejected -- task-237), and this is the
+// statuses (draft, validated, rejected -- M5-05-01 (task-237)), and this is the
 // HTTP-layer proof of that guard's error mapping. The test body itself is
 // unaffected by the widening (it stubs the store), so this is a
 // comment-only inversion.

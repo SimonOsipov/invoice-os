@@ -46,7 +46,8 @@ type scanner interface {
 const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, ` +
 	`issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name, ` +
 	`currency, subtotal::text, vat::text, total::text, ` +
-	`violations, rule_set_version_id, created_at`
+	`violations, rule_set_version_id, created_at, ` +
+	`irn, csid, qr_payload, rejection_reasons`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -54,6 +55,7 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.IssueDate, &inv.SupplierTIN, &inv.SupplierName, &inv.BuyerTIN, &inv.BuyerName,
 		&inv.Currency, &inv.Subtotal, &inv.VAT, &inv.Total,
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
+		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
 	)
 }
 

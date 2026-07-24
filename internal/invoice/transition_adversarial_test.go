@@ -36,7 +36,7 @@ var allStatuses = []Status{
 
 // wantLegalEdge is a HARD-CODED, independent restatement of the story's
 // 11-edge table (System Design / Test Specs, M4-02-02, extended by
-// M5-04-02's queued->failed dead-letter edge and by task-237's
+// M5-04-02's queued->failed dead-letter edge and by M5-05-01 (task-237)'s
 // queued->accepted, queued->rejected, rejected->draft edges) --
 // deliberately NOT derived from canTransition/legalTransitions in store.go.
 // If the matrix test below instead asked canTransition for the expected
@@ -186,7 +186,7 @@ func TestTransition_ExhaustiveMatrixLocksLegalEdgeTable(t *testing.T) {
 // terminals x 6 non-self targets) matching the terminal invariant the story
 // calls out separately from general illegal-edge coverage.
 //
-// task-237 (AC#4) removes rejected from the terminal set -- it
+// M5-05-01 (task-237) (AC#4) removes rejected from the terminal set -- it
 // gains exactly ONE legal outgoing edge, rejected->draft (the rework path).
 // Rather than silently deleting rejected's coverage here, the sibling
 // subtest below pins that shape directly through the real Store.Transition:
@@ -239,7 +239,7 @@ func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 		t.Errorf("illegal-classified = %d, want all %d attempts", illegalCount, attempts)
 	}
 
-	// task-237 sibling assertion (AC#4): rejected is NOT a terminal -- it
+	// M5-05-01 (task-237) sibling assertion (AC#4): rejected is NOT a terminal -- it
 	// has exactly ONE legal outgoing edge, ->draft. Driven through the real
 	// Store.Transition (not canTransition directly -- that DB-free pin is
 	// TestTransition_RejectedHasExactlyOneOutgoingEdge, transition_test.go),

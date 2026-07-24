@@ -241,13 +241,18 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				if err := markJobAccepted(ctx, tx, jobID, newAttempts); err != nil {
 					return err
 				}
-				return w.InvoicePort.MarkSubmitted(ctx, tx, args.InvoiceID, args.TenantID)
+				if err := w.InvoicePort.MarkAccepted(ctx, tx, args.InvoiceID, args.TenantID, r); err != nil {
+					return err
+				}
+				// M5-05-04 (task-240): the 08 audit event. Must stay the closure's LAST
+				// statement so OncePerJob's exactly-once guarantee covers it too (AC#5).
+				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "accepted", r.IRN)
 			})
 			return err
 
 		case Rejected:
-			// [reaching-the-app-means-a-verdict]: Rejected still moves the invoice to
-			// submitted -- the invoice was read and refused, not left in limbo.
+			// [reaching-the-app-means-a-verdict]: Rejected moves the invoice to rejected --
+			// the invoice was read and refused, not left in limbo.
 			ex := ExchangeFor(w.Adapter, OpSubmit, newAttempts, jobID, args.InvoiceID, evidence)
 			_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
 				if err := RecordExchange(ctx, tx, ex); err != nil {
@@ -256,7 +261,12 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				if err := markJobRejected(ctx, tx, jobID, newAttempts); err != nil {
 					return err
 				}
-				return w.InvoicePort.MarkSubmitted(ctx, tx, args.InvoiceID, args.TenantID)
+				if err := w.InvoicePort.MarkRejected(ctx, tx, args.InvoiceID, args.TenantID, r); err != nil {
+					return err
+				}
+				// M5-05-04 (task-240): the 08 audit event, no reference on Rejected
+				// ([audit-reference-is-the-irn] -- Rejected has no IRN field to pass).
+				return recordVerdictAudit(ctx, tx, args.InvoiceID, jobID, "rejected", "")
 			})
 			return err
 

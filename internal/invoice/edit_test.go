@@ -704,10 +704,10 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 //
 // Spec-to-test map (Test Specs table, M5-05-01 (task-237)):
 //
-//	AC#3 TestStoreEdit_RejectedContentChangeDemotesAndClearsReasons
+//	AC#3 TestStoreEdit_RejectedContentChangeDemotesAndRetainsReasons (M5-09-02/task-255 rename)
 //	AC#4 TestStoreEdit_RejectedNoOpKeepsStatusAndReasons
 //	AC#5 TestStoreEdit_AcceptedStaysNotFixable
-//	AC#3/#5 TestStoreEdit_ClearingIsAtomicWithTheDemotion
+//	AC#3/#5 TestStoreEdit_RejectedLegContentAuditFailureRollsBackWholeEdit (M5-09-02/task-255 rename)
 //
 // seedInvoiceAtStatus is defined in transition_adversarial_test.go (same
 // package). As of this commit, rejection_reasons still has no Go-side field
@@ -722,11 +722,14 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 // prove 02's read path, not this file's own write/clear behavior under
 // test -- so the raw `::text` reads stay, unchanged, even after 02 lands.
 
-// EDIT-13/AC#3: a content-changing Edit on a REJECTED invoice demotes it to
-// draft, clears rejection_reasons back to '[]', and writes exactly one
-// (rejected,draft) history row plus one invoice.transitioned + one
-// invoice.updated audit row, all in the SAME transaction -- mirrors
-// TestStoreEdit_ValidatedContentChangeDemotes's shape for the widened leg.
+// EDIT-13/AC#3 (M5-09-02/task-255: RE-BASELINED -- deliberately reverses
+// M5-05's [reason-lifecycle] wipe-on-demotion, NOT a weakened test, see
+// story Decision [rejection-history]): a content-changing Edit on a REJECTED
+// invoice demotes it to draft and RETAINS rejection_reasons byte-identical
+// to what was seeded, and writes exactly one (rejected,draft) history row
+// plus one invoice.transitioned + one invoice.updated audit row, all in the
+// SAME transaction -- mirrors TestStoreEdit_ValidatedContentChangeDemotes's
+// shape for the widened leg.
 //
 // The history row's from_status is asserted explicitly against StatusRejected
 // (never StatusValidated) -- transitionTx's `current` parameter is used BOTH
@@ -738,7 +741,7 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 // history row claiming the invoice came from validated. This assertion is
 // what catches that specific bug; a byte-value check on from_status, not
 // merely "a history row exists".
-func TestStoreEdit_RejectedContentChangeDemotesAndClearsReasons(t *testing.T) {
+func TestStoreEdit_RejectedContentChangeDemotesAndRetainsReasons(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	store := NewStore(app)
@@ -754,6 +757,14 @@ func TestStoreEdit_RejectedContentChangeDemotesAndClearsReasons(t *testing.T) {
 		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, reasonsJSON, invID,
 	); err != nil {
 		t.Fatalf("seed rejection_reasons: %v", err)
+	}
+	// jsonb's ::text output is not byte-identical to the literal above (it
+	// normalizes whitespace) -- read back the DB's own rendering right after
+	// the seed and compare against THAT, mirroring the byte-identity idiom
+	// already used below for the failure-rollback siblings.
+	var seededReasons string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&seededReasons); err != nil {
+		t.Fatalf("read back seeded rejection_reasons: %v", err)
 	}
 
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
@@ -778,8 +789,8 @@ func TestStoreEdit_RejectedContentChangeDemotesAndClearsReasons(t *testing.T) {
 	if Status(dbStatus) != StatusDraft {
 		t.Errorf("invoices.status after Edit = %q, want %q", dbStatus, StatusDraft)
 	}
-	if reasons != "[]" {
-		t.Errorf("invoices.rejection_reasons after Edit = %q, want %q (cleared)", reasons, "[]")
+	if reasons != seededReasons {
+		t.Errorf("invoices.rejection_reasons after Edit = %q, want byte-identical to the seed %q (retained, not cleared)", reasons, seededReasons)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory+1 {
@@ -924,16 +935,20 @@ func TestStoreEdit_AcceptedStaysNotFixable(t *testing.T) {
 	}
 }
 
-// EDIT-16 (QA adversarial): a crafted caller Subject that fails the
-// content-write audit CHECK at step 7 -- which precedes BOTH the
-// rejection_reasons clear and the demotion at step 8, in the SAME
+// EDIT-16 (M5-09-02/task-255: RENAMED from TestStoreEdit_ClearingIsAtomicWithTheDemotion
+// -- its original premise, that a rejection_reasons CLEAR rolls back
+// atomically with the demotion, no longer applies: M5-09-02 removes that
+// clear from Store.Edit's rejected leg entirely, so there is nothing left on
+// this path to clear -- this re-baseline reverses the premise, it does not
+// weaken the test). What survives is the rejected-leg mirror of
+// TestStoreEdit_ContentAuditFailureRollsBackWholeEdit's injection shape,
+// re-framed: a crafted caller Subject that fails the content-write audit
+// CHECK at step 7 -- which precedes the demotion at step 8, in the SAME
 // WithinRequestTenantTx -- rolls back the WHOLE edit: rejection_reasons is
-// left BYTE-UNCHANGED (never observably cleared to '[]'), status stays
-// rejected, no new history row, no new audit row. Mirrors
-// TestStoreEdit_ContentAuditFailureRollsBackWholeEdit's injection shape for
-// the widened rejected leg -- proves the clear is not a separate, unguarded
-// write that could survive a later rollback in the same transaction.
-func TestStoreEdit_ClearingIsAtomicWithTheDemotion(t *testing.T) {
+// left BYTE-UNCHANGED and still populated, status stays rejected, no new
+// history row, no new audit row. Proves retention holds across a
+// rolled-back edit too, not just a successful one.
+func TestStoreEdit_RejectedLegContentAuditFailureRollsBackWholeEdit(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	store := NewStore(app)
@@ -978,10 +993,10 @@ func TestStoreEdit_ClearingIsAtomicWithTheDemotion(t *testing.T) {
 			t.Errorf("status after failed Edit = %q, want unchanged %q", afterStatus, StatusRejected)
 		}
 		if afterReasons != beforeReasons {
-			t.Errorf("rejection_reasons after failed Edit = %q, want byte-unchanged %q (the clear must roll back too)", afterReasons, beforeReasons)
+			t.Errorf("rejection_reasons after failed Edit = %q, want byte-unchanged %q (retention holds across a rolled-back edit too)", afterReasons, beforeReasons)
 		}
 		if afterReasons == "[]" {
-			t.Errorf("rejection_reasons after failed Edit = %q, a rolled-back edit must never observably clear it", afterReasons)
+			t.Errorf("rejection_reasons after failed Edit = %q, want still populated (nothing on this path ever touches rejection_reasons, successful or not)", afterReasons)
 		}
 		if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
 			t.Errorf("invoice_status_history rows = %d, want unchanged %d", n, beforeHistory)
@@ -1025,11 +1040,12 @@ func TestStoreEdit_ClearingIsAtomicWithTheDemotion(t *testing.T) {
 // so this is a DETERMINISTIC, order-independent assertion, not a race:
 //   - exactly ONE (rejected,draft) demotion row -- only the very first
 //     lock-holder observes before.Status == rejected; every later holder
-//     observes draft and skips step 8 entirely ([reason-lifecycle] the clear
-//     therefore also fires exactly once)
+//     observes draft and skips step 8 entirely
 //   - exactly N invoice.updated audit rows -- every call writes a genuine
 //     content change relative to ITS OWN before-snapshot
-//   - final rejection_reasons stays '[]' -- cleared once, never repopulated
+//   - final rejection_reasons stays byte-identical to the seed (M5-09-02:
+//     retained, not cleared -- nothing on this path touches the column,
+//     concurrently or otherwise)
 //   - final status is draft
 func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -1046,6 +1062,10 @@ func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *tes
 		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, reasonsJSON, invID,
 	); err != nil {
 		t.Fatalf("seed rejection_reasons: %v", err)
+	}
+	var seededReasons string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&seededReasons); err != nil {
+		t.Fatalf("read back seeded rejection_reasons: %v", err)
 	}
 
 	// Original seeded VAT is NULL (seedInvoiceAtStatus doesn't set one) --
@@ -1081,8 +1101,8 @@ func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *tes
 	if Status(status) != StatusDraft {
 		t.Errorf("status after concurrent Edits = %q, want %q", status, StatusDraft)
 	}
-	if reasons != "[]" {
-		t.Errorf("rejection_reasons after concurrent Edits = %q, want %q", reasons, "[]")
+	if reasons != seededReasons {
+		t.Errorf("rejection_reasons after concurrent Edits = %q, want byte-identical to the seed %q (retained, never cleared)", reasons, seededReasons)
 	}
 
 	if hn := mustCount(t, super,
@@ -1098,95 +1118,13 @@ func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *tes
 	}
 }
 
-// TestStoreEdit_FailureAfterReasonsClearStillRollsBack (QA Mode B
-// adversarial): closes the literal gap TestStoreEdit_ClearingIsAtomicWithTheDemotion
-// leaves open. That sibling test's own doc comment concedes its crafted-actor
-// fault fires at step 7 (audit.Record("invoice.updated")) -- which PRECEDES
-// BOTH the rejection_reasons clear and transitionTx at step 8 -- so it never
-// actually exercises the clear statement at all before rolling back. This is
-// provable by inspection: step 7's callerID.Subject and step 8's
-// actorFromContext(ctx).Subject both resolve auth.IdentityFromContext(ctx)
-// against the SAME immutable ctx (store.go:568/619), so any actor value that
-// trips audit_log's char_length CHECK trips it at step 7 first -- there is no
-// actor value that passes step 7 but fails only at step 8's audit insert,
-// since both audit inserts share the identical actor and the identical CHECK
-// constraint (audit_actor_length).
-//
-// To land a failure strictly AFTER the clear (store.go:621) but still inside
-// the same transaction, this test instead trips transitionTx's LEGALITY
-// guard (`!canTransition(current, target)` -> ErrIllegalTransition,
-// store.go:~774) -- a check that only runs INSIDE transitionTx, called
-// AFTER the clear already executed. It does this by temporarily emptying
-// legalTransitions[StatusRejected] (package-level var, restored via defer
-// before this function returns; safe because this package's test files
-// never call t.Parallel(), confirmed by grep, so no other test can observe
-// the mutated map). With the rejected->draft edge gone, the widened guard at
-// step 3 still admits the rejected invoice (canTransition is not consulted
-// there), step 5-7 all still run normally, the clear at step 8 executes and
-// WOULD be durable if nothing else failed -- then transitionTx's own
-// canTransition check now fails, returning ErrIllegalTransition, and the
-// whole WithinRequestTenantTx rolls back. If the clear were a separate,
-// unguarded write outside this transaction (a latent bug this test would
-// catch), rejection_reasons would end up durably cleared despite the overall
-// Edit failing; this asserts it is NOT.
-func TestStoreEdit_FailureAfterReasonsClearStillRollsBack(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-	store := NewStore(app)
-
-	tenantID := seedTenant(t, super, "EDIT-17 tenant")
-	entityID := seedEntity(t, super, tenantID, "EDIT-17 entity")
-	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
-
-	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "EDIT-17", StatusRejected)
-	reasonsJSON := `[{"code":"TIN_MISMATCH","message":"supplier TIN does not match","path":"supplier_tin"}]`
-	if _, err := super.Exec(ctx,
-		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, reasonsJSON, invID,
-	); err != nil {
-		t.Fatalf("seed rejection_reasons: %v", err)
-	}
-
-	var beforeReasons string
-	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&beforeReasons); err != nil {
-		t.Fatalf("read back rejection_reasons (before): %v", err)
-	}
-	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
-	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
-	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
-
-	origRejectedEdges := legalTransitions[StatusRejected]
-	legalTransitions[StatusRejected] = nil
-	defer func() { legalTransitions[StatusRejected] = origRejectedEdges }()
-
-	newVAT := "9.50"
-	_, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
-	if !errors.Is(err, ErrIllegalTransition) {
-		t.Fatalf("Edit with rejected->draft edge removed: err = %v, want ErrIllegalTransition", err)
-	}
-
-	var afterStatus, afterReasons string
-	if err := super.QueryRow(ctx,
-		`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
-	).Scan(&afterStatus, &afterReasons); err != nil {
-		t.Fatalf("read back status/rejection_reasons (after): %v", err)
-	}
-	if Status(afterStatus) != StatusRejected {
-		t.Errorf("status after rolled-back Edit = %q, want unchanged %q", afterStatus, StatusRejected)
-	}
-	if afterReasons != beforeReasons {
-		t.Errorf("rejection_reasons after rolled-back Edit = %q, want byte-unchanged %q -- the clear executed inside the tx but must not survive the LATER legality failure", afterReasons, beforeReasons)
-	}
-	if afterReasons == "[]" {
-		t.Errorf("rejection_reasons after rolled-back Edit = %q, a rolled-back edit must never observably clear it", afterReasons)
-	}
-
-	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
-		t.Errorf("invoice_status_history rows = %d, want unchanged %d", n, beforeHistory)
-	}
-	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated {
-		t.Errorf("audit_log invoice.updated rows = %d, want unchanged %d (step 7's audit ALSO rolls back, even though it committed no error itself)", n, beforeUpdated)
-	}
-	if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != beforeTransitioned {
-		t.Errorf("audit_log invoice.transitioned rows = %d, want unchanged %d", n, beforeTransitioned)
-	}
-}
+// TestStoreEdit_FailureAfterReasonsClearStillRollsBack was RETIRED by
+// M5-09-02 (task-255): it existed to prove a rejection_reasons CLEAR inside
+// Store.Edit's rejected-leg demotion rolled back atomically with a LATER
+// (post-clear) legality failure. M5-09-02 removes that clear entirely --
+// Store.Edit no longer touches rejection_reasons on any path -- so the
+// premise this test was built to protect no longer exists. Its replacement,
+// TestStoreTransition_AcceptedClearFailureStillRollsBack (transition_test.go),
+// re-premises the identical atomicity shape onto the clear's new home: the
+// conditional `rejection_reasons = '[]'` clause transitionTx's UPDATE gains
+// for target == StatusAccepted.

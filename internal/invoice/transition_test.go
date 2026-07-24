@@ -17,6 +17,11 @@
 //	INV-SM-07 TestTransition_HistoryAndAuditActorMatchCallerSubject
 //	(sole-writer, optional) TestTransition_RejectedTransitionLeavesStatusByteIdentical
 //
+// M5-09-02 (task-255) adds two more, at the bottom of this file:
+//
+//	AC-3 TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons
+//	AC-4 TestStoreTransition_AcceptedClearFailureStillRollsBack
+//
 // TestRLS_InvoicesTransitionCrossTenantRefused lives in
 // cross_tenant_integration_test.go, alongside M4-02-01's
 // TestRLS_InvoicesStoreChildWritesTenantScoped.
@@ -662,5 +667,129 @@ func TestTransition_RejectedHasExactlyOneOutgoingEdge(t *testing.T) {
 func TestTransition_FailedToQueuedStaysIllegal(t *testing.T) {
 	if canTransition(StatusFailed, StatusQueued) {
 		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, M5-05-01 (task-237) does not add this edge)")
+	}
+}
+
+// --- M5-09-02 (task-255): the clear moves into transitionTx -----------------
+
+// TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons
+// (M5-09-02/task-255, AC-3): `accepted` has TWO live writers -- the worker's
+// MarkAcceptedTx (proved by TestMarkAcceptedTx_ClearsRejectionReasons,
+// outcome_loop_test.go) and THIS one, a direct POST /v1/invoices/{id}/
+// transitions {"target":"accepted"} on a queued invoice, which
+// TransitionHandler refuses nothing for (it guards only StatusValidated,
+// handlers.go:372-374) and cmd/invoice/main.go:60 wires production-reachable.
+// This test drives Store.Transition directly and NEVER calls MarkAcceptedTx
+// -- so it is deliberately blind to whatever MarkAcceptedTx's own outcome
+// closure does. It FAILS if the clear is placed in MarkAcceptedTx instead of
+// transitionTx: that placement would leave THIS path's invoice accepted with
+// its rejection_reasons still populated, which M5-09-05's detail surface
+// would then render as a rejection card sitting on an accepted invoice --
+// exactly the regression this subtask's design note names as load-bearing.
+func TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "TR-ACC-CLR tenant")
+	entityID := seedEntity(t, super, tenantID, "TR-ACC-CLR entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TR-ACC-CLR", StatusQueued)
+	seededReasons := `[{"code":"APP-ERR-0417","message":"Supplier TIN not registered","path":"supplier_tin"}]`
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, seededReasons, invID,
+	); err != nil {
+		t.Fatalf("seed rejection_reasons: %v", err)
+	}
+
+	got, err := store.Transition(c, invID, StatusAccepted)
+	if err != nil {
+		t.Fatalf("Transition(queued->accepted): %v (want nil)", err)
+	}
+	if got.Status != StatusAccepted {
+		t.Errorf("Transition returned status = %q, want %q", got.Status, StatusAccepted)
+	}
+
+	var reasons, typeofReasons string
+	if err := super.QueryRow(ctx,
+		`SELECT rejection_reasons::text, jsonb_typeof(rejection_reasons) FROM invoices WHERE id = $1`, invID,
+	).Scan(&reasons, &typeofReasons); err != nil {
+		t.Fatalf("read back rejection_reasons: %v", err)
+	}
+	if reasons != "[]" {
+		t.Errorf("rejection_reasons after Transition(->accepted) = %q, want %q (this path bypasses MarkAcceptedTx entirely -- the clear must live in transitionTx, not MarkAcceptedTx's outcome closure)", reasons, "[]")
+	}
+	if typeofReasons != "array" {
+		t.Errorf("jsonb_typeof(rejection_reasons) after Transition(->accepted) = %q, want %q (never JSON null)", typeofReasons, "array")
+	}
+}
+
+// TestStoreTransition_AcceptedClearFailureStillRollsBack (M5-09-02/task-255,
+// AC-4; REPLACES the retired TestStoreEdit_FailureAfterReasonsClearStillRollsBack,
+// edit_test.go, re-premised onto the clear's new home): a queued invoice
+// with populated rejection_reasons, transitioned to accepted under a
+// 256-char actor Subject -- passes invoice_status_history's actor CHECK (no
+// upper bound) but fails audit_log's (char_length <= 255), 23514, aborting
+// the whole db.WithinRequestTenantTx. Mirrors
+// TestTransition_AtomicityRollsBackOnActorCheckFailure's 256-char-actor case
+// (above): the conditional `rejection_reasons = '[]'` clause riding on
+// transitionTx's single UPDATE ... RETURNING must roll back together with
+// the status change it shares one statement with -- no second, separately
+// committed write.
+func TestStoreTransition_AcceptedClearFailureStillRollsBack(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "TR-ACC-RB tenant")
+	entityID := seedEntity(t, super, tenantID, "TR-ACC-RB entity")
+
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "TR-ACC-RB", StatusQueued)
+	seededReasons := `[{"code":"APP-ERR-0417","message":"Supplier TIN not registered","path":"supplier_tin"}]`
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, seededReasons, invID,
+	); err != nil {
+		t.Fatalf("seed rejection_reasons: %v", err)
+	}
+	var beforeReasons string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&beforeReasons); err != nil {
+		t.Fatalf("read back seeded rejection_reasons: %v", err)
+	}
+
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
+	beforeAudit := auditCount(t, app, tenantID, "invoice.transitioned")
+
+	longSubject := strings.Repeat("a", 256)
+	cCrafted := auth.WithIdentity(ctx, auth.Identity{Subject: longSubject, Role: "authenticated", TenantID: tenantID})
+	_, err := store.Transition(cCrafted, invID, StatusAccepted)
+	if err == nil {
+		t.Fatal("Transition(queued->accepted) with a 256-char actor succeeded, want an audit_log actor CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("Transition with a 256-char actor: pgCode = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	var status, afterReasons string
+	if err := super.QueryRow(ctx,
+		`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &afterReasons); err != nil {
+		t.Fatalf("read back status/rejection_reasons: %v", err)
+	}
+	if Status(status) != StatusQueued {
+		t.Errorf("status after rolled-back Transition = %q, want unchanged %q", status, StatusQueued)
+	}
+	if afterReasons != beforeReasons {
+		t.Errorf("rejection_reasons after rolled-back Transition = %q, want byte-unchanged %q (the clear rides the same UPDATE as the status change -- it must roll back with it, not survive as a separate write)", afterReasons, beforeReasons)
+	}
+	if afterReasons == "[]" {
+		t.Errorf("rejection_reasons after rolled-back Transition = %q, a rolled-back Transition must never observably clear it", afterReasons)
+	}
+
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
+		t.Errorf("invoice_status_history rows = %d, want unchanged %d", n, beforeHistory)
+	}
+	if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != beforeAudit {
+		t.Errorf("audit_log invoice.transitioned rows = %d, want unchanged %d", n, beforeAudit)
 	}
 }

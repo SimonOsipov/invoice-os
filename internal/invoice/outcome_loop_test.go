@@ -53,11 +53,16 @@ import (
 )
 
 // TestOutcomeLoop_RejectFixRevalidateResubmitAccept (M5-05-06/task-242, AC#4
-// spine + AC#2's history-chain/actor shape): drives ONE invoice through
-// queued -> rejected -> draft -> validated -> queued -> accepted using only
-// real, shipped Store/Submitter methods, asserting the observable state
-// after every hop plus the invoice_status_history chain's exact ordered
-// (from,to,actor) sequence at the end.
+// spine + AC#2's history-chain/actor shape; M5-09-02/task-255 RE-BASELINED
+// the reasons checkpoints below -- deliberately reverses M5-05's
+// [reason-lifecycle] wipe-on-demotion, not a weakened test): drives ONE
+// invoice through queued -> rejected -> draft -> validated -> queued ->
+// accepted using only real, shipped Store/Submitter methods, asserting the
+// observable state after every hop plus the invoice_status_history chain's
+// exact ordered (from,to,actor) sequence at the end. Under M5-09-02,
+// rejection_reasons is populated at reject, RETAINED byte-identical through
+// edit/re-validate/resubmit, and cleared to '[]' ONLY at the final
+// MarkAcceptedTx hop -- the single remaining writer of that invariant.
 func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -104,8 +109,9 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	}
 
 	// Step 3: Store.Edit under an authenticated ctx, a REAL content change ->
-	// demotes rejected -> draft AND resets rejection_reasons to '[]' in the
-	// SAME tx ([reason-lifecycle]).
+	// demotes rejected -> draft and RETAINS rejection_reasons byte-identical
+	// to what MarkRejectedTx wrote in step 2 (M5-09-02: the demotion no
+	// longer clears it, [reason-lifecycle] reversed).
 	newVAT := "12.34"
 	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
 	if err != nil {
@@ -121,8 +127,8 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	).Scan(&reasonsAfterEdit, &typeofAfterEdit); err != nil {
 		t.Fatalf("read back rejection_reasons after Edit: %v", err)
 	}
-	if reasonsAfterEdit != "[]" {
-		t.Errorf("rejection_reasons after Edit = %q, want %q ([reason-lifecycle]: the demotion clears the stale rejection)", reasonsAfterEdit, "[]")
+	if reasonsAfterEdit != reasonsAfterReject {
+		t.Errorf("rejection_reasons after Edit = %q, want byte-identical to what MarkRejectedTx wrote %q (M5-09-02: the demotion RETAINS the rejection, it no longer clears it)", reasonsAfterEdit, reasonsAfterReject)
 	}
 	if typeofAfterEdit != "array" {
 		t.Errorf("jsonb_typeof(rejection_reasons) after Edit = %q, want %q (never JSON null)", typeofAfterEdit, "array")
@@ -139,6 +145,16 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	}
 	if validated.Status != StatusValidated {
 		t.Fatalf("ApplyValidation returned status = %q, want %q", validated.Status, StatusValidated)
+	}
+
+	// AC#2: re-validating the demoted draft must not touch rejection_reasons
+	// -- ApplyValidation only ever stamps violations/rule_set_version_id.
+	var reasonsAfterRevalidate string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&reasonsAfterRevalidate); err != nil {
+		t.Fatalf("read back rejection_reasons after ApplyValidation: %v", err)
+	}
+	if reasonsAfterRevalidate != reasonsAfterReject {
+		t.Errorf("rejection_reasons after ApplyValidation = %q, want byte-identical %q (re-validating a demoted draft must not touch rejection_reasons)", reasonsAfterRevalidate, reasonsAfterReject)
 	}
 
 	// Step 5: Submitter.BatchSubmit with a FRESH idempotency key (never
@@ -162,11 +178,19 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	if Status(statusAfterResubmit) != StatusQueued {
 		t.Fatalf("status after BatchSubmit = %q, want %q", statusAfterResubmit, StatusQueued)
 	}
+	var reasonsAfterResubmit string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&reasonsAfterResubmit); err != nil {
+		t.Fatalf("read back rejection_reasons after BatchSubmit: %v", err)
+	}
+	if reasonsAfterResubmit != reasonsAfterReject {
+		t.Errorf("rejection_reasons after BatchSubmit = %q, want byte-identical %q (resubmitting must not touch rejection_reasons either -- per-status truth table row queued/submitted: populated)", reasonsAfterResubmit, reasonsAfterReject)
+	}
 
 	// Step 6: MarkAcceptedTx (queued -> accepted), irn/csid/qr_payload
 	// written verbatim; rejection_reasons must be STILL '[]' -- not stale
 	// from step 2's original rejection ([reason-lifecycle] holds across the
-	// WHOLE loop, not just at the clearing hop).
+	// WHOLE loop; MarkAcceptedTx, via transitionTx, is now the SOLE clearing
+	// hop -- M5-09-02 removed the OTHER one Step 3 used to be).
 	err = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
 		_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, "NG-LOOP-1", "CSID-1", "QR-1")
 		return err
@@ -249,6 +273,123 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 
 	if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != 5 {
 		t.Errorf("audit_log invoice.transitioned rows = %d, want 5 (one per hop)", n)
+	}
+}
+
+// TestStoreEdit_RetainedReasonsSurviveRevalidate (M5-09-02/task-255, AC-2):
+// the demoted draft produced by an AC-1-shaped Edit on a rejected invoice,
+// once re-validated (draft->validated), must still carry rejection_reasons
+// byte-identical to the seed -- ApplyValidation only ever stamps
+// violations/rule_set_version_id, so retention must survive this SECOND hop
+// too, not merely the demotion hop that first produces it.
+func TestStoreEdit_RetainedReasonsSurviveRevalidate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "REVAL-RETAIN tenant")
+	entityID := seedEntity(t, super, tenantID, "REVAL-RETAIN entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "REVAL-RETAIN", StatusRejected)
+	reasonsJSON := `[{"code":"TIN_MISMATCH","message":"supplier TIN does not match","path":"supplier_tin"}]`
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, reasonsJSON, invID,
+	); err != nil {
+		t.Fatalf("seed rejection_reasons: %v", err)
+	}
+	var seededReasons string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&seededReasons); err != nil {
+		t.Fatalf("read back seeded rejection_reasons: %v", err)
+	}
+
+	newVAT := "4.20"
+	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	if err != nil {
+		t.Fatalf("Edit (content change on rejected invoice): %v (want nil)", err)
+	}
+	if edited.Status != StatusDraft {
+		t.Fatalf("Edit returned status = %q, want %q (demoted)", edited.Status, StatusDraft)
+	}
+	var reasonsAfterEdit string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&reasonsAfterEdit); err != nil {
+		t.Fatalf("read back rejection_reasons after Edit: %v", err)
+	}
+	if reasonsAfterEdit != seededReasons {
+		t.Fatalf("rejection_reasons after Edit = %q, want byte-identical to the seed %q (AC-1's own retention, a precondition for this test)", reasonsAfterEdit, seededReasons)
+	}
+
+	freshFP := contentFingerprint(edited)
+	versionID := seedRuleSetVersionID(t, super)
+	validated, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP)
+	if err != nil {
+		t.Fatalf("ApplyValidation (re-validate after demotion): %v (want nil)", err)
+	}
+	if validated.Status != StatusValidated {
+		t.Fatalf("ApplyValidation returned status = %q, want %q", validated.Status, StatusValidated)
+	}
+
+	var reasonsAfterRevalidate string
+	if err := super.QueryRow(ctx, `SELECT rejection_reasons::text FROM invoices WHERE id = $1`, invID).Scan(&reasonsAfterRevalidate); err != nil {
+		t.Fatalf("read back rejection_reasons after ApplyValidation: %v", err)
+	}
+	if reasonsAfterRevalidate != seededReasons {
+		t.Errorf("rejection_reasons after re-validate = %q, want byte-identical to the seed %q (ApplyValidation must never touch rejection_reasons)", reasonsAfterRevalidate, seededReasons)
+	}
+}
+
+// TestMarkAcceptedTx_ClearsRejectionReasons (M5-09-02/task-255, AC-3): an
+// invoice at queued carrying rejection_reasons from an EARLIER rejection
+// cycle -- MarkAcceptedTx must clear them to '[]' on acceptance. This is
+// the worker's direct-write path, the sibling of
+// TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons
+// (transition_test.go), which proves the SAME invariant through the OTHER
+// live writer of accepted (the POST /transitions handler path). Both must
+// hold because the clear lives in transitionTx -- which markTerminalTx
+// (and therefore MarkAcceptedTx) calls on the SAME tx as the outcome write
+// -- not in MarkAcceptedTx's own outcome closure (actor.go:146-152, which
+// writes only irn/csid/qr_payload and is left unmodified).
+func TestMarkAcceptedTx_ClearsRejectionReasons(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "MATX-CLR tenant")
+	entityID := seedEntity(t, super, tenantID, "MATX-CLR entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "MATX-CLR", StatusQueued)
+
+	staleReasons := `[{"code":"APP-ERR-0417","message":"Supplier TIN not registered","path":"supplier_tin"}]`
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET rejection_reasons = $1::jsonb WHERE id = $2`, staleReasons, invID,
+	); err != nil {
+		t.Fatalf("seed stale rejection_reasons: %v", err)
+	}
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkAcceptedTx(ctx, tx, invID, tenantID, "IRN-MATX-CLR", "CSID-MATX-CLR", "QR-MATX-CLR")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkAcceptedTx: %v (want nil)", err)
+	}
+
+	var status, reasons, typeofReasons, irn string
+	if err := super.QueryRow(ctx,
+		`SELECT status, rejection_reasons::text, jsonb_typeof(rejection_reasons), irn FROM invoices WHERE id = $1`, invID,
+	).Scan(&status, &reasons, &typeofReasons, &irn); err != nil {
+		t.Fatalf("read back after MarkAcceptedTx: %v", err)
+	}
+	if Status(status) != StatusAccepted {
+		t.Fatalf("status after MarkAcceptedTx = %q, want %q", status, StatusAccepted)
+	}
+	if reasons != "[]" {
+		t.Errorf("rejection_reasons after MarkAcceptedTx = %q, want %q (stale reasons from an earlier cycle must be cleared)", reasons, "[]")
+	}
+	if typeofReasons != "array" {
+		t.Errorf("jsonb_typeof(rejection_reasons) after MarkAcceptedTx = %q, want %q (never JSON null)", typeofReasons, "array")
+	}
+	if irn != "IRN-MATX-CLR" {
+		t.Errorf("irn after MarkAcceptedTx = %q, want %q", irn, "IRN-MATX-CLR")
 	}
 }
 

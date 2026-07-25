@@ -150,6 +150,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [live, setLive] = useState<InvoiceDetailRecord | null>(null)
   const inv = live ?? detail.data
 
+  // `gen` closes the in-flight-tick race ([poll-overlay-not-rerun], mirrors InvoicesList's
+  // own runId idiom, packages/api-client/src/async-state.ts:89/92/96). isFixable
+  // (draft/validated/rejected) and isInFlight (queued/submitted) are disjoint, so
+  // Save/Re-validate can't be clicked while a NEW tick gets scheduled -- but clearInterval
+  // only stops FUTURE ticks; it does not cancel a tick's getInvoice() promise that was
+  // already in flight. Reachable sequence: a tick fires while `queued`, a LATER tick
+  // observes `rejected` and polling stops, the operator clicks Save or Re-validate, then
+  // the first tick's promise finally resolves and would overwrite the fresh result with
+  // the stale `queued` record. Bumped wherever the overlay is invalidated (handleSaved,
+  // handleRevalidate), alongside the existing setLive(null).
+  const gen = useRef(0)
+
   // shouldRefreshHistory's `prev` (M5-09-03 predicate, [history-refresh-predicate]) --
   // seeded from the loaded record so the FIRST observed transition isn't silently
   // dropped: shouldRefreshHistory(null, x) === false (I-hist-2), and the mock's default
@@ -167,9 +179,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   useLiveRefresh(
     () => {
       if (base == null) return
+      const g = gen.current
       getInvoice(ctx.authedFetch, base, invoiceId)
         .then((fresh) => {
-          setLive(fresh)
+          if (g === gen.current) setLive(fresh)
           if (shouldRefreshHistory(prevStatus.current, fresh.status)) history.run()
           prevStatus.current = fresh.status
         })
@@ -221,6 +234,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       // (isFixable is draft/validated/rejected only, never queued/submitted -- see A2),
       // but required for the queued->rejected->edit path, where `live` still holds the
       // rejected record from polling that has since stopped.
+      // gen bump: invalidates any tick whose getInvoice() promise was ALREADY in flight
+      // when the rejected->edit transition happened -- clearInterval stopped it from
+      // scheduling again, but not from resolving later and clobbering this fresh result
+      // with the stale record it fetched (QA finding, [poll-overlay-not-rerun]).
+      gen.current++
       setLive(null)
       detail.run()
       history.run()
@@ -240,6 +258,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       try {
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
+        gen.current++ // see handleSaved above -- invalidate any already-in-flight tick too
         setLive(null) // see handleSaved above -- clear the overlay before the real refresh
         detail.run()
         history.run()

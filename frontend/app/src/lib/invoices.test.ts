@@ -172,7 +172,7 @@ describe('verdictStatus', () => {
   // (task-188 item 4) -- split I5 into four cases (a-d) rather than one, since the new
   // rule has four independently meaningful branches.
   it('I5a: session staleness still wins', () => {
-    const validated: InvoiceRecord = { ...draftInvoice, status: 'validated', rule_set_version_id: 'rsv-1', rule_set_version: 1 }
+    const validated: InvoiceRecord = { ...draftInvoice, status: 'validated', rule_set_version_id: 'rsv-1', rule_set_version: 2 }
 
     expect(verdictStatus(true, validated)).toBe('stale')
   })
@@ -280,7 +280,7 @@ describe('getInvoice', () => {
       csid: 'CSID-001',
       qr_payload: 'payload-string',
       rejection_reasons: reasons,
-      rule_set_version: 1,
+      rule_set_version: 2,
       qr_png_base64: 'aGVsbG8=',
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
@@ -295,7 +295,7 @@ describe('getInvoice', () => {
   })
 
   it('I-fiscal-2: getInvoice normalizes a missing qr_png_base64 to null', async () => {
-    const detailInvoice: InvoiceDetailRecord = { ...draftInvoice, rule_set_version: 1, qr_png_base64: 'aGVsbG8=' }
+    const detailInvoice: InvoiceDetailRecord = { ...draftInvoice, rule_set_version: 2, qr_png_base64: 'aGVsbG8=' }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
     const af = createAuthedFetch(() => 'tok', vi.fn())

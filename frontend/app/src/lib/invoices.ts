@@ -363,6 +363,24 @@ export function mbsPathToEditField(path: string | undefined): EditFieldKey | nul
   return MBS_PATH_TO_EDIT_FIELD[path] ?? null
 }
 
+// Field-flag map for the edit form (task-251 AC #3/#5; extracted from InvoiceDetail.tsx
+// in response to a QA finding so this decision has a test oracle). Reduces a rejection
+// list to editable-field -> reason code, one entry per field that some reason's MBS path
+// maps to. When two or more reasons map to the SAME field, the FIRST one (in `reasons`
+// order) wins -- a deliberate tie-break, not an accident: the flag only needs to point
+// the operator at the field, and the reason list above it already shows every reason in
+// full, so which of several colliding codes gets shown on the flag itself is cosmetic. A
+// reason with an unmapped (or absent) path contributes no entry; it is never swallowed,
+// just not flagged -- it still renders in full on the rejection card.
+export function reasonFieldFlags(reasons: RejectionReason[]): Map<EditFieldKey, string> {
+  const flags = new Map<EditFieldKey, string>()
+  for (const reason of reasons) {
+    const field = mbsPathToEditField(reason.path)
+    if (field != null && !flags.has(field)) flags.set(field, reason.code)
+  }
+  return flags
+}
+
 // not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason
 // values (batchSubmitReasonNotValidated/batchSubmitReasonDuplicate, handlers.go) --
 // anything else passes through verbatim rather than being swallowed, so an unknown

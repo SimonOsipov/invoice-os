@@ -20,7 +20,7 @@ import {
   getInvoiceHistory,
   invoiceStatusStyle,
   isFixable,
-  mbsPathToEditField,
+  reasonFieldFlags,
   rejectionProvenance,
   revalidateInvoice,
   shouldFetchInvoices,
@@ -451,12 +451,10 @@ function InvoiceEditForm({
   // of this form's editable fields, carrying the reason's code — so the operator sees
   // which field the APP's rejection actually pointed at. A reason with an unmapped (or
   // absent) path is never swallowed here; it's still listed in full on the rejection card
-  // above, just without a field flag.
-  const fieldFlags = new Map<EditFieldKey, string>()
-  for (const reason of inv.rejection_reasons) {
-    const field = mbsPathToEditField(reason.path)
-    if (field != null && !fieldFlags.has(field)) fieldFlags.set(field, reason.code)
-  }
+  // above, just without a field flag. Extracted to lib/invoices.ts's reasonFieldFlags (QA
+  // follow-up to task-251) -- the first-reason-wins collision rule now has a test oracle
+  // there instead of living unspecified in this component.
+  const fieldFlags = reasonFieldFlags(inv.rejection_reasons)
 
   // Rendered as a SIBLING between the label div and the input — never merged into the
   // label's own text node, never wrapping the label+input pair in a new container.

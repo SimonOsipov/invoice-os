@@ -34,6 +34,7 @@ import {
   mbsPathToEditField,
   newIdempotencyKey,
   pruneSelection,
+  reasonFieldFlags,
   rejectionProvenance,
   revalidateInvoice,
   selectableIds,
@@ -960,6 +961,137 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
   it('SYNC-2: import_batch_id round-trips as a plain string when present, matching the *string/no-omitempty Go tag', () => {
     const withBatch: InvoiceRecord = { ...draftInvoice, import_batch_id: 'batch-123' }
     expect(withBatch.import_batch_id).toBe('batch-123')
+  })
+})
+
+// --- QA follow-up (task-251): reasonFieldFlags was extracted from InvoiceDetail.tsx's
+// InvoiceEditForm (commit 5968178) specifically because its first-reason-wins collision
+// rule had zero test oracle inline. Nothing above is weakened, skipped, or deleted. ---
+
+function reason(path: string | undefined, code: string, message = 'm'): RejectionReason {
+  return { path, code, message }
+}
+
+describe('reasonFieldFlags', () => {
+  it('FLAG-1: each of the nine mapped MBS paths produces its edit-field key with that reason\'s code', () => {
+    const table: Array<[string, EditFieldKey]> = [
+      ['issue_date', 'issue_date'],
+      ['currency', 'currency'],
+      ['subtotal', 'subtotal'],
+      ['vat', 'vat'],
+      ['total', 'total'],
+      ['supplier.tin', 'supplier_tin'],
+      ['supplier.name', 'supplier_name'],
+      ['buyer.tin', 'buyer_tin'],
+      ['buyer.name', 'buyer_name'],
+    ]
+    const reasons = table.map(([path], i) => reason(path, `code-${i}`))
+
+    const flags = reasonFieldFlags(reasons)
+
+    expect(flags.size).toBe(9)
+    for (const [path, field] of table) {
+      const i = table.findIndex(([p]) => p === path)
+      expect(flags.get(field), `path=${path}`).toBe(`code-${i}`)
+    }
+  })
+
+  // LOAD-BEARING: this is the decision that had no oracle inline (QA finding 2 on
+  // task-251) -- when two reasons map to the SAME field, the FIRST one (in `reasons`
+  // order) must win, deterministically. Mutation-tested: flipping the implementation's
+  // `!flags.has(field)` guard to let the LAST reason win instead turns this red (see
+  // task-251 implementation notes for the verbatim failure).
+  it('FLAG-2: two reasons mapping to the same field keep the FIRST reason\'s code, not the last', () => {
+    const first = reason('supplier.tin', 'first_code', 'first message')
+    const second = reason('supplier.tin', 'second_code', 'second message')
+
+    const flags = reasonFieldFlags([first, second])
+
+    expect(flags.size).toBe(1)
+    expect(flags.get('supplier_tin')).toBe('first_code')
+    expect(flags.get('supplier_tin')).not.toBe('second_code')
+  })
+
+  it('FLAG-3: unmapped, empty, or undefined paths contribute no map entry, and the input reasons are never mutated', () => {
+    const reasons: RejectionReason[] = [
+      reason('invoice_number', 'unmapped_field'),
+      reason('', 'empty_path'),
+      reason(undefined, 'no_path'),
+    ]
+    const reasonsSnapshot = JSON.parse(JSON.stringify(reasons)) as RejectionReason[]
+
+    const flags = reasonFieldFlags(reasons)
+
+    expect(flags.size).toBe(0)
+    // The helper only ever narrows to a field->code Map; it must not reach back into the
+    // caller's reason objects/array (the full reason list is still rendered in full by
+    // the rejection card above the field flags, per the source comment at invoices.ts).
+    expect(reasons).toEqual(reasonsSnapshot)
+    expect(reasons).toHaveLength(3)
+  })
+
+  it('FLAG-4: an empty reasons array yields an empty Map, not undefined or a throw', () => {
+    expect(() => reasonFieldFlags([])).not.toThrow()
+
+    const flags = reasonFieldFlags([])
+
+    expect(flags).toBeInstanceOf(Map)
+    expect(flags.size).toBe(0)
+    expect(flags).not.toBeUndefined()
+  })
+
+  it('FLAG-5: a mixed realistic set (some mapped, some not, one duplicate field) produces exactly the expected map', () => {
+    const reasons: RejectionReason[] = [
+      reason('supplier.tin', 'invalid_tin', 'Supplier TIN failed checksum'), // mapped
+      reason('invoice_number', 'unmapped_invoice_number'), // unmapped -> no entry
+      reason('buyer.name', 'missing_buyer_name'), // mapped
+      reason('supplier.tin', 'duplicate_supplier_tin_reason'), // same field as #1 -> loses
+      reason(undefined, 'no_path_reason'), // undefined -> no entry
+      reason('total', 'total_mismatch'), // mapped
+    ]
+
+    const flags = reasonFieldFlags(reasons)
+
+    expect(flags.size).toBe(3)
+    expect(flags.get('supplier_tin')).toBe('invalid_tin')
+    expect(flags.get('buyer_name')).toBe('missing_buyer_name')
+    expect(flags.get('total')).toBe('total_mismatch')
+    expect(flags.has('issue_date')).toBe(false)
+  })
+})
+
+describe('reasonFieldFlags: hostile input (adversarial)', () => {
+  it('FLAG-6: the APP\'s own foreign vocabulary, indexed line-item paths, whitespace, and a trailing dot all contribute no entry and never throw', () => {
+    const reasons: RejectionReason[] = [
+      reason('customer.taxIdentifier', 'app_only_vocab'),
+      reason('line_items[0].unit_price', 'indexed_path'),
+      reason('line_items[3].description', 'indexed_path_2'),
+      reason(' supplier.tin', 'leading_whitespace'),
+      reason('supplier.tin ', 'trailing_whitespace'),
+      reason('supplier.tin.', 'trailing_dot'),
+      reason('', 'empty_string'),
+    ]
+
+    expect(() => reasonFieldFlags(reasons)).not.toThrow()
+
+    const flags = reasonFieldFlags(reasons)
+
+    expect(flags.size).toBe(0)
+  })
+
+  it('FLAG-7: a large batch of exclusively-unmapped/hostile reasons still resolves to an empty map without throwing (guards a render-blanking regression)', () => {
+    const hostilePaths: Array<string | undefined> = [
+      'customer.taxIdentifier',
+      'line_items[0].unit_price',
+      undefined,
+      '',
+      'Supplier.Tin',
+      '.supplier.tin',
+    ]
+    const reasons = hostilePaths.map((path, i) => reason(path, `code-${i}`))
+
+    expect(() => reasonFieldFlags(reasons)).not.toThrow()
+    expect(reasonFieldFlags(reasons).size).toBe(0)
   })
 })
 

@@ -11,15 +11,40 @@
 // ([server-side-needs-attention]). Row click routes through the existing
 // selectImported/importedInvoiceId/detailTarget->'imported' seam with the real invoice
 // UUID ([reuse-imported-seam]); rename deferred.
+//
+// M5-09-06 (task-257, Core AC #1) adds the selection model + batch submit below without
+// touching any of the above: per-row/select-all checkboxes, a selection bar, and a
+// results panel over `POST /invoices/submissions`. Selection logic itself is not
+// reimplemented here — every decision (which rows are selectable, the header
+// tri-state, pruning a stale selection, the skip-reason copy) lives in the pure,
+// unit-tested helpers in lib/invoices.ts (M5-09-03); this component is markup and hook
+// plumbing over them.
 
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, gatewayBase, Loading, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
-import { invoiceStatusStyle, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
+import {
+  invoiceStatusStyle,
+  invoicesViewState,
+  isRowSelectable,
+  listInvoices,
+  newIdempotencyKey,
+  pruneSelection,
+  selectableIds,
+  selectAllState,
+  shouldFetchInvoices,
+  skipReasonLabel,
+  submitInvoices,
+  toggleSelection,
+  type BatchSubmitResultItem,
+  type InvoiceRecord,
+} from '../lib/invoices'
 import type { PlatformCtx } from '../types'
+
+const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 130px'
 
 export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
@@ -32,6 +57,109 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
     { immediate: shouldFetchInvoices(base), deps: [needsAttention] },
   )
   const state = invoicesViewState(base, list)
+
+  // The single row source for the whole component (replaces the old inline `(list.data
+  // ?? []).map`). MUST be memoized: `list.data ?? []` as a bare expression allocates a
+  // fresh `[]` on every render even when `list.data` itself hasn't changed, which would
+  // make the prune effect below re-run every render forever. M5-09-07 widens this to
+  // `live ?? list.data ?? []` (adding its poll-overlay `live` state to the deps) — its
+  // overlay tick never calls `list.run()`, so `list.data` alone would never change on a
+  // poll and the prune effect would never fire for a row that advances past `validated`
+  // between polls; `live` in the memo is what makes that work without touching the
+  // effect itself.
+  const rows = useMemo(() => list.data ?? [], [list.data])
+
+  const [selected, setSelected] = useState<string[]>([])
+
+  // Drops any selected id that fell out of `rows` (paged/filtered away) or is no longer
+  // `validated` (submitted, edited, or re-validated out from under a stale selection)
+  // whenever `rows` changes — e.g. a live-refresh poll tick (M5-09-07) that advances a
+  // selected row to `queued` mid-selection. `rows` is a fresh array reference on every
+  // render even when its contents are identical, so the updater must return the SAME
+  // `sel` instance when nothing actually changed; otherwise every render would produce a
+  // new `selected` array, which would re-trigger this effect on the next render and
+  // React 19 would hard-throw "Maximum update depth exceeded".
+  useEffect(() => {
+    setSelected((sel) => {
+      const next = pruneSelection(sel, rows)
+      return next.length === sel.length ? sel : next
+    })
+  }, [rows])
+
+  const allState = selectAllState(selected, rows)
+
+  // One result item plus the invoice number it resolves to, captured from `rows` at
+  // submit time (see submitSelection) rather than looked up live at render time: the
+  // success path calls `list.run()` right after, which nulls `list.data` for the
+  // duration of the refetch, so a live `rows.find` would flicker every row to its raw
+  // UUID until the refetch lands.
+  const [results, setResults] = useState<{ item: BatchSubmitResultItem; invoiceNumber: string }[] | null>(null)
+  const [submitError, setSubmitError] = useState<ApiError | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  // Ref guard mirrors App.tsx's `reqInFlight` (App.tsx:106-113): React batches state
+  // updates, so a fast double-click on Submit can fire this handler a second time before
+  // `submitting` re-renders the button as `disabled`. The ref is checked and set
+  // synchronously, before anything async, so it can't lose that race the way `disabled`
+  // alone would. `submitting` stays alongside it purely to drive the visible
+  // disabled/opacity state — mutating a ref never triggers a re-render on its own.
+  const submitInFlight = useRef(false)
+
+  function toggleAll() {
+    setSelected(allState === 'all' ? [] : selectableIds(rows))
+    setSubmitError(null) // stale error from a previous, now-superseded selection
+  }
+
+  // Every submit mints a brand-new idempotency key (never reused across clicks or
+  // renders). The batch-submit endpoint's own concurrency control (a `SELECT ... FOR
+  // UPDATE` over invoice status) already makes a fast double-click or two concurrent
+  // requests for the SAME selection safe regardless of the key — the real reason to mint
+  // fresh every time is the resubmit-after-rejection leg (Core AC #5): an invoice
+  // submitted with key K, rejected by the APP, fixed and re-validated back to
+  // `validated`. Resubmitting with a REUSED K derives the identical per-invoice
+  // dedupe key, the enqueue is skipped as a duplicate, and no status transition runs —
+  // the invoice silently strands at `validated` while the results panel reads
+  // "Already submitted with this request" as if it succeeded.
+  //
+  // No client-side 200-id cap check: `listInvoices` sends no `limit` param, so every
+  // page is bounded by `ListHandler`'s server-side default of 50 rows — well under the
+  // batch-submit endpoint's 200-id cap, so a full-page selection can never exceed it. If
+  // the list client ever starts sending its own `limit`, this argument (and the missing
+  // clamp) needs revisiting.
+  async function submitSelection() {
+    if (base == null) return
+    if (submitInFlight.current) return
+    submitInFlight.current = true
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      const res = await submitInvoices(ctx.authedFetch, base, selected, newIdempotencyKey())
+      // submitInvoices returns `res.results` unguarded (invoices.test.ts SUB-3 pins a
+      // malformed 2xx body resolving to `undefined` and names this call site as the
+      // guard) — normalize once, here, so `results !== null` below can never see
+      // `undefined` and throw out of `.map` with no error boundary to catch it.
+      const items = res ?? []
+      // Resolve invoice numbers from `rows` NOW, before `list.run()` below nulls
+      // `list.data` for the duration of the refetch (see the `results` state comment).
+      const numbersById = new Map(rows.map((row) => [row.id, row.invoice_number]))
+      setResults(items.map((item) => ({ item, invoiceNumber: numbersById.get(item.invoice_id) ?? item.invoice_id })))
+      setSelected([])
+      // Badges are never derived from this response — batch_submit.go's
+      // duplicate-request branch hard-codes a known-wrong "queued" status (M5-11).
+      // Re-fetching the list is the only trustworthy source for the new badges.
+      list.run()
+    } catch (err) {
+      // An unknown or cross-tenant invoice id hard-fails the WHOLE batch with a single
+      // 404 rather than producing a per-item skip result (pruneSelection narrows this
+      // window — it can't close it, since an id can go stale between a poll tick and the
+      // click). Leave the selection intact so the operator can retry without re-picking
+      // rows; skip the refetch and results panel, since there is no results array to
+      // show for a request-level failure.
+      setSubmitError(toApiError(err))
+    } finally {
+      submitInFlight.current = false
+      setSubmitting(false)
+    }
+  }
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
@@ -65,6 +193,31 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </button>
       </div>
 
+      {/* Rendered independent of both `selected.length > 0` (submit clears the
+          selection, which would unmount a panel nested under that condition the instant
+          it should appear) and `state === 'ready'` (list.run()'s refetch flips `state`
+          away from 'ready' while data:null, which would blow the panel away mid-read). */}
+      {results !== null && (
+        <div data-testid="batch-submit-results" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: 22 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
+            <span className="label">Invoice #</span>
+            <span className="label">Result</span>
+          </div>
+          {results.map(({ item: r, invoiceNumber }, i) => {
+            // reason is optional and enqueued is a plain boolean, not a discriminant, so
+            // `!r.enqueued` alone doesn't narrow `r.reason` — guard explicitly before
+            // calling skipReasonLabel (a required string).
+            const resultLabel = r.enqueued ? 'Queued' : r.reason != null ? skipReasonLabel(r.reason) : 'Not queued'
+            return (
+              <div key={`${r.invoice_id}-${i}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                <span className="mono" style={{ fontSize: 12.5, fontWeight: 500 }}>{invoiceNumber}</span>
+                <span style={{ fontSize: 12.5, color: r.enqueued ? 'var(--status-green-text)' : 'var(--fg-3)' }}>{resultLabel}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {state === 'loading' && <Loading label="Loading invoices…" />}
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
@@ -81,44 +234,92 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && (
-        <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
-          <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: '150px 1fr 140px 120px 130px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
-            <span className="label">Invoice #</span>
-            <span className="label">Buyer</span>
-            <span className="label" style={{ textAlign: 'right' }}>Amount</span>
-            <span className="label">Date</span>
-            <span className="label">Status</span>
-          </div>
-          {(list.data ?? []).map((r) => {
-            const st = invoiceStatusStyle(r.status)
-            return (
-              <div
-                key={r.id}
-                onClick={() => ctx.openImportedInvoice(r.id)}
-                data-testid="invoice-row"
-                className="pf-row pf-list-row"
-                style={{ display: 'grid', gridTemplateColumns: '150px 1fr 140px 120px 130px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+        <>
+          {selected.length > 0 && (
+            <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '11px 18px', marginBottom: 14 }}>
+              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{selected.length} selected</span>
+              <button
+                data-testid="batch-submit"
+                onClick={submitSelection}
+                disabled={submitting}
+                className="v2-btn v2-btn-primary pf-btn"
+                style={{ height: 34, fontSize: 13, opacity: submitting ? 0.5 : 1, cursor: submitting ? 'not-allowed' : 'pointer' }}
               >
-                <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
-                  <span className="mono" style={{ fontSize: 11, color: r.buyer_tin ? 'var(--fg-3)' : 'var(--status-red-text)' }}>{r.buyer_tin ?? 'TIN MISSING'}</span>
-                </span>
-                <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
-                <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>
-                <span>
-                  <span
-                    data-testid="invoice-status-badge"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}
-                  >
-                    <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-                    <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
+                {submitting ? 'Submitting…' : 'Submit'}
+              </button>
+            </div>
+          )}
+
+          {selected.length > 0 && submitError && (
+            <div style={{ marginBottom: 14 }}>
+              <ErrorState error={submitError} onRetry={submitSelection} />
+            </div>
+          )}
+
+          <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+            <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: INVOICE_GRID_COLUMNS, gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                data-testid="invoice-select-all"
+                // React has no `indeterminate` prop (it's a DOM-only property, not a
+                // reflected HTML attribute) — a ref callback is the only way to set it.
+                // Braces are required: `RefCallback` returns `void | (() => void)`, so an
+                // implicit-return arrow here is a `tsc --noEmit` error under `strict`.
+                ref={(el) => { if (el) el.indeterminate = allState === 'some' }}
+                checked={allState === 'all'}
+                onChange={toggleAll}
+              />
+              <span className="label">Invoice #</span>
+              <span className="label">Buyer</span>
+              <span className="label" style={{ textAlign: 'right' }}>Amount</span>
+              <span className="label">Date</span>
+              <span className="label">Status</span>
+            </div>
+            {rows.map((r) => {
+              const st = invoiceStatusStyle(r.status)
+              return (
+                <div
+                  key={r.id}
+                  onClick={() => ctx.openImportedInvoice(r.id)}
+                  data-testid="invoice-row"
+                  className="pf-row pf-list-row"
+                  style={{ display: 'grid', gridTemplateColumns: INVOICE_GRID_COLUMNS, gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="invoice-select"
+                    checked={selected.includes(r.id)}
+                    disabled={!isRowSelectable(r.status)}
+                    // Both handlers stop propagation — the row's own onClick (whole-row
+                    // navigation) must never fire from a checkbox interaction.
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      setSelected((sel) => toggleSelection(sel, r.id))
+                      setSubmitError(null) // stale error from a previous, now-superseded selection
+                    }}
+                  />
+                  <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
+                    <span className="mono" style={{ fontSize: 11, color: r.buyer_tin ? 'var(--fg-3)' : 'var(--status-red-text)' }}>{r.buyer_tin ?? 'TIN MISSING'}</span>
                   </span>
-                </span>
-              </div>
-            )
-          })}
-        </div>
+                  <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>
+                  <span>
+                    <span
+                      data-testid="invoice-status-badge"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}
+                    >
+                      <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
+                      <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
+                    </span>
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
     </div>
   )

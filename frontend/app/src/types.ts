@@ -256,6 +256,5 @@ export type PlatformCtx = {
   saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
   openXml: () => void
   closeXml: () => void
-  transmit: () => void
   signOut: () => void
 }

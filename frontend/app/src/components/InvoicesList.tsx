@@ -2,8 +2,9 @@
 // tenant's real invoices from the invoice service and renders them with per-row 7-state
 // status badges, replacing the mock `active.invoices` feed + mock 5-label `statusStyle`
 // for this surface only (Obsidian M4-09 System Design §4). Ported shell from
-// Platform.dc.html ~L343-387; the mock generators (genInvoices/buildClients) are left
-// intact — deletion is M4-10.
+// Platform.dc.html ~L343-387. M5-09-04 removed the mock invoice-DETAIL branch
+// (InvoiceDetail.tsx) — the mock generators used here (genInvoices/buildClients) are a
+// separate concern and stay intact; they still feed Reports/Customers/Sidebar/Header.
 //
 // The "Needs attention" toggle re-fetches server-side (`needs_attention=true` via
 // `deps:[needsAttention]`) rather than re-deriving the predicate in the browser

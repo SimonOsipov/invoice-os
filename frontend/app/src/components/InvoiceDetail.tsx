@@ -1,15 +1,17 @@
 // Invoice detail dispatcher: for an imported invoice, mounts the live detail surface
-// (status pill, line items + totals, compliance/violations panel, fix-and-revalidate
-// form, status history) fetched from the gateway; otherwise renders an honest EmptyState
-// ("No invoice selected"). The Platform.dc.html-ported mock detail branch — fabricated
-// fiscal record (IRN/CSID/QR), the "Transmit to FIRS" affordance, synthesized audit
-// trail, and mock validation/totals — was removed in M5-09-04 ([mock-branch-fully-removed]).
+// (status pill, line items + totals, compliance/violations panel, fiscal record, APP
+// rejection reasons, fix-and-revalidate form, failed dead end, status history) fetched
+// from the gateway; otherwise renders an honest EmptyState ("No invoice selected"). The
+// Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
+// the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
+// — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
+// rejection cards below (M5-09-05) render only server-sourced data.
 
 import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { fmt, fmtDate, fmtPlain } from '../lib/format'
+import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
   editInvoice,
@@ -18,10 +20,15 @@ import {
   getInvoiceHistory,
   invoiceStatusStyle,
   isFixable,
+  mbsPathToEditField,
+  rejectionProvenance,
   revalidateInvoice,
   shouldFetchInvoices,
+  shouldShowFiscalRecord,
+  shouldShowRejectionCard,
   verdictStatus,
   type EditFieldKey,
+  type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceRecord,
   type StatusChange,
@@ -120,7 +127,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView/ValidationView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
-  const detail = useAsync<InvoiceRecord>(
+  const detail = useAsync<InvoiceDetailRecord>(
     () => (base ? getInvoice(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
@@ -257,6 +264,50 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {inv.status === 'failed' && (
+              <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>Submission failed</span>
+                </div>
+                <div style={{ padding: 16, fontSize: 12.5, color: 'var(--fg-2)' }}>
+                  This submission failed and is terminal — it cannot be re-driven from this screen.
+                </div>
+              </div>
+            )}
+
+            {shouldShowFiscalRecord(inv) && (
+              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>Fiscal record</span>
+                </div>
+                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div>
+                    <div className="label" style={{ marginBottom: 3 }}>IRN</div>
+                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5 }}>{inv.irn}</div>
+                  </div>
+                  <div>
+                    <div className="label" style={{ marginBottom: 3 }}>CSID</div>
+                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5 }}>{inv.csid ?? '—'}</div>
+                  </div>
+                  {inv.qr_png_base64 != null && (
+                    // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
+                    // regardless of theme, so this one swatch deliberately does not follow
+                    // a design token (story §6 / task-251 Stage-1 correction K).
+                    <div style={{ background: '#fff', borderRadius: 'var(--radius-lg)', padding: 12, display: 'flex', justifyContent: 'center' }}>
+                      <img
+                        data-testid="fiscal-qr"
+                        src={`data:image/png;base64,${inv.qr_png_base64}`}
+                        alt="FIRS QR code"
+                        width={132}
+                        height={132}
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Compliance</span>
@@ -284,6 +335,28 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 )}
               </div>
             </div>
+
+            {shouldShowRejectionCard(inv) && (
+              <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>
+                    {rejectionProvenance(inv.status) === 'current' ? 'The tax authority rejected this invoice' : 'Last APP rejection'}
+                  </span>
+                </div>
+                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {inv.rejection_reasons.map((reason, i) => (
+                    <div
+                      key={i}
+                      data-testid="rejection-reason-row"
+                      style={{ padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+                    >
+                      <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {isFixable(inv.status) && (
               <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
@@ -328,7 +401,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <div style={{ fontSize: 13, fontWeight: 500 }}>
                           {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
                         </div>
-                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{h.actor} · {h.changed_at}</div>
+                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{h.actor} · {fmtDateTime(h.changed_at)}</div>
                       </div>
                     </div>
                   ))}
@@ -374,6 +447,46 @@ function InvoiceEditForm({
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
+  // Field flags (task-251 AC #3/#5): one per rejection reason whose MBS path maps to one
+  // of this form's editable fields, carrying the reason's code — so the operator sees
+  // which field the APP's rejection actually pointed at. A reason with an unmapped (or
+  // absent) path is never swallowed here; it's still listed in full on the rejection card
+  // above, just without a field flag.
+  const fieldFlags = new Map<EditFieldKey, string>()
+  for (const reason of inv.rejection_reasons) {
+    const field = mbsPathToEditField(reason.path)
+    if (field != null && !fieldFlags.has(field)) fieldFlags.set(field, reason.code)
+  }
+
+  // Rendered as a SIBLING between the label div and the input — never merged into the
+  // label's own text node, never wrapping the label+input pair in a new container.
+  // e2e/topology/invoice-surfaces.spec.ts locates each input via
+  // `.//div[normalize-space(text())="<Label>"]/following-sibling::input`; that XPath axis
+  // matches ANY following sibling named `input`, so an extra sibling in between is safe.
+  function fieldFlag(key: EditFieldKey): ReactNode {
+    const code = fieldFlags.get(key)
+    if (code == null) return null
+    return (
+      <span
+        data-testid="field-flag"
+        className="mono"
+        style={{
+          display: 'inline-block',
+          fontSize: 10,
+          fontWeight: 600,
+          color: 'var(--status-red-text)',
+          background: 'var(--status-red-bg)',
+          border: '1px solid var(--status-red-border)',
+          borderRadius: 999,
+          padding: '1px 6px',
+          marginBottom: 5,
+        }}
+      >
+        {code}
+      </span>
+    )
+  }
+
   function updateField(field: EditFieldKey, value: string) {
     setForm((f) => ({ ...f, [field]: value }))
   }
@@ -405,38 +518,47 @@ function InvoiceEditForm({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Issue date</div>
+          {fieldFlag('issue_date')}
           <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
+          {fieldFlag('currency')}
           <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier name</div>
+          {fieldFlag('supplier_name')}
           <input className="pf-input" type="text" value={form.supplier_name} onChange={(e) => updateField('supplier_name', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier TIN</div>
+          {fieldFlag('supplier_tin')}
           <input className="pf-input" type="text" value={form.supplier_tin} onChange={(e) => updateField('supplier_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>
+          {fieldFlag('buyer_name')}
           <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer TIN</div>
+          {fieldFlag('buyer_tin')}
           <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Subtotal</div>
+          {fieldFlag('subtotal')}
           <input className="pf-input" type="text" value={form.subtotal} onChange={(e) => updateField('subtotal', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>VAT</div>
+          {fieldFlag('vat')}
           <input className="pf-input" type="text" value={form.vat} onChange={(e) => updateField('vat', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Total</div>
+          {fieldFlag('total')}
           <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} disabled={submitting} />
         </div>
       </div>

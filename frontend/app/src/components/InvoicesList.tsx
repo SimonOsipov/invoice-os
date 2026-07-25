@@ -30,18 +30,21 @@ import {
   invoiceStatusStyle,
   invoicesViewState,
   isRowSelectable,
+  LIVE_POLL_MS,
   listInvoices,
   newIdempotencyKey,
   pruneSelection,
   selectableIds,
   selectAllState,
   shouldFetchInvoices,
+  shouldPollList,
   skipReasonLabel,
   submitInvoices,
   toggleSelection,
   type BatchSubmitResultItem,
   type InvoiceRecord,
 } from '../lib/invoices'
+import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import type { PlatformCtx } from '../types'
 
 const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 130px'
@@ -58,16 +61,35 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   )
   const state = invoicesViewState(base, list)
 
+  // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) — a poll tick never calls
+  // list.run() (THE LOAD-BEARING TRAP: that dispatches useAsync's 'start' action, nulls
+  // `data`, and flashes <Loading/> every 2s), so it writes here instead. Declared before
+  // the `rows` memo below, which layers `live` over `list.data`.
+  const [live, setLive] = useState<InvoiceRecord[] | null>(null)
+  // `gen` closes the in-flight-tick race: a tick's GET that was already in flight when
+  // `list.data` changed (any of submitSelection's list.run(), the retry list.run(), or
+  // the deps-driven refetch on `needsAttention`) must not resolve afterwards and
+  // re-install a stale overlay over the new filter's rows. Mirrors useAsync's own
+  // runId idiom (packages/api-client/src/async-state.ts:89/92/96).
+  const gen = useRef(0)
+  // Single place that covers all THREE `list.run()` call sites (submitSelection below,
+  // the ErrorState retry, and the deps:[needsAttention] refetch that has no explicit
+  // call site of its own — it lives inside useAsync's mount/deps effect) — `list.data`
+  // changes identity on every one of them (null on 'start', a new array on 'success'),
+  // and a tick never touches `list.data` itself, so this fires only on genuine runs.
+  useEffect(() => {
+    gen.current++
+    setLive(null)
+  }, [list.data])
+
   // The single row source for the whole component (replaces the old inline `(list.data
-  // ?? []).map`). MUST be memoized: `list.data ?? []` as a bare expression allocates a
-  // fresh `[]` on every render even when `list.data` itself hasn't changed, which would
-  // make the prune effect below re-run every render forever. M5-09-07 widens this to
-  // `live ?? list.data ?? []` (adding its poll-overlay `live` state to the deps) — its
-  // overlay tick never calls `list.run()`, so `list.data` alone would never change on a
-  // poll and the prune effect would never fire for a row that advances past `validated`
-  // between polls; `live` in the memo is what makes that work without touching the
-  // effect itself.
-  const rows = useMemo(() => list.data ?? [], [list.data])
+  // ?? []).map`). MUST be memoized: `live ?? list.data ?? []` as a bare expression
+  // allocates a fresh `[]` on every render even when neither input changed, which would
+  // make the prune effect below re-run every render forever. `live` MUST be in the deps
+  // — the overlay tick never calls `list.run()`, so `list.data` alone would never change
+  // on a poll and the prune effect would never fire for a row that advances past
+  // `validated` between polls.
+  const rows = useMemo(() => live ?? list.data ?? [], [live, list.data])
 
   const [selected, setSelected] = useState<string[]>([])
 
@@ -103,6 +125,24 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // alone would. `submitting` stays alongside it purely to drive the visible
   // disabled/opacity state — mutating a ref never triggers a re-render on its own.
   const submitInFlight = useRef(false)
+
+  // M5-09-07 live-refresh poll ([poll-interval-2s]): gated on any row being in-flight
+  // AND the tab being visible — both from the tested predicate, never re-derived inline.
+  const visible = useDocumentVisible()
+  const active = shouldPollList(rows, visible)
+  useLiveRefresh(
+    () => {
+      if (base == null) return
+      const g = gen.current
+      listInvoices(ctx.authedFetch, base, { needsAttention })
+        .then((freshRows) => {
+          if (g === gen.current) setLive(freshRows)
+        })
+        .catch(() => {}) // a transient blip is silent -- the next tick retries (AC-6)
+    },
+    active,
+    LIVE_POLL_MS,
+  )
 
   function toggleAll() {
     setSelected(allState === 'all' ? [] : selectableIds(rows))

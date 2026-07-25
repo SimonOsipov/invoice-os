@@ -7,7 +7,7 @@
 // — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
 // rejection cards below (M5-09-05) render only server-sourced data.
 
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -20,10 +20,13 @@ import {
   getInvoiceHistory,
   invoiceStatusStyle,
   isFixable,
+  LIVE_POLL_MS,
   reasonFieldFlags,
   rejectionProvenance,
   revalidateInvoice,
   shouldFetchInvoices,
+  shouldPollInvoice,
+  shouldRefreshHistory,
   shouldShowFiscalRecord,
   shouldShowRejectionCard,
   verdictStatus,
@@ -31,8 +34,10 @@ import {
   type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceRecord,
+  type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
+import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ViolationsTable } from './ViolationsTable'
 import type { PlatformCtx } from '../types'
 
@@ -135,6 +140,45 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     () => (base ? getInvoiceHistory(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
+
+  // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) -- HOISTED above the status
+  // ladder below: hooks can't be called from inside a conditional branch, and `inv` (the
+  // ladder's rendered record) now has to exist before the ladder decides what to render.
+  // A poll tick NEVER calls detail.run() (THE LOAD-BEARING TRAP -- that would dispatch
+  // useAsync's 'start' action, null `data`, and flash <Loading/> every 2s); it writes
+  // this overlay instead, and `inv` layers it over detail.data.
+  const [live, setLive] = useState<InvoiceDetailRecord | null>(null)
+  const inv = live ?? detail.data
+
+  // shouldRefreshHistory's `prev` (M5-09-03 predicate, [history-refresh-predicate]) --
+  // seeded from the loaded record so the FIRST observed transition isn't silently
+  // dropped: shouldRefreshHistory(null, x) === false (I-hist-2), and the mock's default
+  // (non-reserved-TIN) path converges queued -> accepted in ~800ms of adapter latency
+  // plus near-immediate River pickup, so a detail opened at `queued` can legitimately see
+  // `accepted` on its very first tick. Updated inside the tick strictly AFTER the
+  // shouldRefreshHistory comparison, never before.
+  const prevStatus = useRef<InvoiceStatus | null>(null)
+  useEffect(() => {
+    if (detail.data) prevStatus.current = detail.data.status
+  }, [detail.data])
+
+  const visible = useDocumentVisible()
+  const active = inv != null && shouldPollInvoice(inv.status, visible)
+  useLiveRefresh(
+    () => {
+      if (base == null) return
+      getInvoice(ctx.authedFetch, base, invoiceId)
+        .then((fresh) => {
+          setLive(fresh)
+          if (shouldRefreshHistory(prevStatus.current, fresh.status)) history.run()
+          prevStatus.current = fresh.status
+        })
+        .catch(() => {}) // a transient blip is silent -- the next tick retries (AC-6)
+    },
+    active,
+    LIVE_POLL_MS,
+  )
+
   // Within-session fix-loop indicator (Core AC #7 / [stale-violations-honest] /
   // [stale-is-session-state]): set on a successful edit, cleared on Re-validate. On
   // initial load this stays false, so the stored verdict renders WITHOUT a stale banner
@@ -155,10 +199,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     content = <Loading label="Loading invoice…" />
   } else if (detail.status === 'error') {
     content = detail.error ? <ErrorState error={detail.error} onRetry={detail.run} /> : null
-  } else if (detail.status !== 'ready' || !detail.data) {
+  } else if (inv == null) {
     content = <EmptyState title="Invoice not found" message="This invoice could not be loaded." />
   } else {
-    const inv = detail.data
     const st = invoiceStatusStyle(inv.status)
     const items = inv.line_items ?? []
     const subtotal = inv.subtotal != null ? Number(inv.subtotal) : null
@@ -172,6 +215,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // hoisted — but does survive into a closure/arrow function.
     const handleSaved = () => {
       setStaleSinceEdit(true)
+      // M5-09-07: clear the poll overlay BEFORE detail.run(), so this user-initiated
+      // refresh's own result -- success or error -- is what renders next, never a stale
+      // `live` value ([poll-overlay-not-rerun]). Unreachable while a tick is in flight
+      // (isFixable is draft/validated/rejected only, never queued/submitted -- see A2),
+      // but required for the queued->rejected->edit path, where `live` still holds the
+      // rejected record from polling that has since stopped.
+      setLive(null)
       detail.run()
       history.run()
     }
@@ -190,6 +240,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       try {
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
+        setLive(null) // see handleSaved above -- clear the overlay before the real refresh
         detail.run()
         history.run()
       } catch (err) {
@@ -382,6 +433,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
+            {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge
+                above, not this card): on the one poll tick where shouldRefreshHistory
+                fires, history.run() dispatches useAsync's 'start' action and this card
+                drops to <Loading/> before returning at N+1 rows -- a real, accepted
+                flash. Not overlaid like `inv`/`live` above: this card is the ONE render
+                path that is allowed to show its async state honestly, the flash is
+                confined to a single card (never the badge or invoice body), and
+                M5-09-08's oracle already asserts the post-flip count with an
+                auto-retrying toHaveCount(N+1), not a point-in-time read across the
+                window. Overlaying history too would duplicate the runId/live-clearing
+                machinery above for a card whose own oracle tolerates the dip. */}
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Status history</span>

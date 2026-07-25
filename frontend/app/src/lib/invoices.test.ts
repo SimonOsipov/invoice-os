@@ -922,12 +922,13 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 21 keys mirrored from invoice.go:83-105, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 22 keys mirrored from invoice.go:83-105, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
-    // json tags) -- if this list and the interface (invoices.ts:127-151) ever diverge,
-    // this test's `keyof` check would already fail to compile before this assertion even
-    // runs; the runtime assertion below additionally guards the FIXTURE from silently
-    // dropping a field the interface still declares.
+    // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
+    // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
+    // fail to compile if the two ever diverged -- the runtime assertion below is the ONLY
+    // guard, both against this list drifting from the Go struct and against the fixture
+    // silently dropping a field the interface still declares.
     const expectedKeys = [
       'id',
       'entity_id',

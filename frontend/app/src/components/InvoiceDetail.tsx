@@ -162,6 +162,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // handleRevalidate), alongside the existing setLive(null).
   const gen = useRef(0)
 
+  // CodeRabbit fix cycle 2, finding 4: overlapping ticks. useLiveRefresh's interval
+  // fires unconditionally (it holds no data and makes no decisions -- see
+  // lib/useLiveRefresh.ts), so a round-trip slower than LIVE_POLL_MS leaves two
+  // getInvoice() calls in flight under the SAME `gen`; the older can resolve last and
+  // re-install stale data for one visible tick before the next tick self-heals it. `gen`
+  // alone doesn't close this -- it only guards against a tick that survived an
+  // invalidation (Save/Re-validate), not two ticks racing each other under one
+  // invalidation epoch. Same re-entrancy-ref idiom as App.tsx's `reqInFlight`
+  // (App.tsx:106-113) and InvoicesList's `submitInFlight`: checked and set synchronously
+  // before the async call, so a fast-firing second tick can't lose the race the way a
+  // state flag would.
+  const tickInFlight = useRef(false)
+
   // shouldRefreshHistory's `prev` (M5-09-03 predicate, [history-refresh-predicate]) --
   // seeded from the loaded record so the FIRST observed transition isn't silently
   // dropped: shouldRefreshHistory(null, x) === false (I-hist-2), and the mock's default
@@ -179,14 +192,26 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   useLiveRefresh(
     () => {
       if (base == null) return
+      if (tickInFlight.current) return // finding 4: previous tick's GET hasn't resolved yet
+      tickInFlight.current = true
       const g = gen.current
       getInvoice(ctx.authedFetch, base, invoiceId)
         .then((fresh) => {
-          if (g === gen.current) setLive(fresh)
+          // CodeRabbit fix cycle 2, finding 1: the whole resolved body now lives inside
+          // this guard, not just setLive. A discarded tick (g !== gen.current, e.g. the
+          // operator hit Save/Re-validate while this GET was in flight) must have NO side
+          // effects. Invoice statuses only advance monotonically, so a stale `fresh.status`
+          // can never equal the next genuine transition's status -- the history refresh
+          // was never actually at risk of being silently skipped. The real bug is a
+          // discarded tick still calling history.run() and flashing the timeline card for
+          // a transition the UI is about to discard anyway.
+          if (g !== gen.current) return
+          setLive(fresh)
           if (shouldRefreshHistory(prevStatus.current, fresh.status)) history.run()
           prevStatus.current = fresh.status
         })
         .catch(() => {}) // a transient blip is silent -- the next tick retries (AC-6)
+        .finally(() => { tickInFlight.current = false })
     },
     active,
     LIVE_POLL_MS,

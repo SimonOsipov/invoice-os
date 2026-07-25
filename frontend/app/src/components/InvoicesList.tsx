@@ -130,15 +130,24 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // AND the tab being visible — both from the tested predicate, never re-derived inline.
   const visible = useDocumentVisible()
   const active = shouldPollList(rows, visible)
+  // CodeRabbit fix cycle 2, finding 4: overlapping ticks. useLiveRefresh's interval fires
+  // unconditionally, so a round-trip slower than LIVE_POLL_MS leaves two listInvoices()
+  // calls in flight under the same `gen`; the older can resolve last and re-install stale
+  // rows for one visible tick before the next tick self-heals it. Same re-entrancy-ref
+  // idiom as `submitInFlight` above / App.tsx's `reqInFlight`.
+  const tickInFlight = useRef(false)
   useLiveRefresh(
     () => {
       if (base == null) return
+      if (tickInFlight.current) return
+      tickInFlight.current = true
       const g = gen.current
       listInvoices(ctx.authedFetch, base, { needsAttention })
         .then((freshRows) => {
           if (g === gen.current) setLive(freshRows)
         })
         .catch(() => {}) // a transient blip is silent -- the next tick retries (AC-6)
+        .finally(() => { tickInFlight.current = false })
     },
     active,
     LIVE_POLL_MS,
@@ -301,6 +310,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               <input
                 type="checkbox"
                 data-testid="invoice-select-all"
+                aria-label="Select all validated invoices"
                 // React has no `indeterminate` prop (it's a DOM-only property, not a
                 // reflected HTML attribute) — a ref callback is the only way to set it.
                 // Braces are required: `RefCallback` returns `void | (() => void)`, so an
@@ -318,6 +328,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             {rows.map((r) => {
               const st = invoiceStatusStyle(r.status)
               return (
+                // Click-only row (no keyboard affordance) predates this story --
+                // CodeRabbit fix cycle 2 flagged it alongside the checkbox aria-label gap,
+                // but no AC here covers row keyboard-reachability. Deferred as a follow-up
+                // rather than expanded into this fix's scope.
                 <div
                   key={r.id}
                   onClick={() => ctx.openImportedInvoice(r.id)}
@@ -328,6 +342,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                   <input
                     type="checkbox"
                     data-testid="invoice-select"
+                    aria-label={`Select invoice ${r.invoice_number}`}
                     checked={selected.includes(r.id)}
                     disabled={!isRowSelectable(r.status)}
                     // Both handlers stop propagation — the row's own onClick (whole-row

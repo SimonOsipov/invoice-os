@@ -8,8 +8,10 @@
 // every scenario below creates its OWN entity + invoice(s) via e2e/api/client.ts
 // BEFORE driving the UI -- the same "own entity per test" discipline as
 // import-wizard.spec.ts (no-duplicate-invoice-number is scoped per entity, and
-// this suite runs fullyParallel with retries:1 in CI, against the same shared
-// firm-persona tenant every other topology spec also drives).
+// this suite runs serially -- fullyParallel:false, workers:1
+// (playwright.topology.config.ts, [topology-config-conforms-workers-1] since
+// M4-14-01) -- with retries:1 in CI, against the same shared firm-persona
+// tenant every other topology spec also drives).
 //
 // Fixture data mirrors e2e/api/fixtures.ts's badInvoice/validInvoice shapes
 // (verified against the seeded v1+v2 rule set, migrations/
@@ -20,7 +22,7 @@
 // .../validate round-trips the identical verdict fixtures.ts's BAD_INVOICE_KEYS
 // pins for the nested path.
 import { test, expect, type Page } from '@playwright/test'
-import { login, createEntity, createInvoice, validateInvoice, PERSONAS } from '../api/client'
+import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv } from '../importFixtures'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
@@ -107,6 +109,72 @@ function cleanInvoiceFields(invoiceNumber: string) {
     total: '1075',
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   }
+}
+
+// M5-09-08 (task-256): outcome control for the submission surface below. The mock APP
+// adapter keys its scripted response off the BUYER TIN in the reserved, Luhn-invalid
+// 99999999-#### block (internal/submission/mock_script.go's mockAllocations) -- every
+// allocated value also matches the shipped buyer-tin-format rule
+// (^[0-9]{8}-[0-9]{4}$), so it passes validation and actually reaches submission.
+// cleanInvoiceFields()'s own buyer TIN (a fixed, unrelated constant) is never reused for
+// these fixtures -- submittableInvoiceFields() overrides it instead of forking the whole
+// shape, keeping supplier_tin/subtotal/vat identical (freshTin() + the same
+// vat-standard-rate-clean 1000/75 pair) so nothing incidental fires.
+const MOCK_TIN_ACCEPT = '99999999-0001'
+const MOCK_TIN_REJECT = '99999999-0002'
+// Pending -- mockPendingPolls=2 x mockPollAfterSeconds=5s (mock_adapter.go) holds the
+// invoice in `submitted` for >=10s, the window C1's non-vacuous history-refresh oracle
+// needs. -0001/-0002 both converge synchronously (~800ms) and can't prove live refresh at
+// all -- see the reject/resubmit test below.
+const MOCK_TIN_PENDING = '99999999-0003'
+
+function submittableInvoiceFields(invoiceNumber: string, buyerTin: string) {
+  return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin }
+}
+
+// invoiceRowByNumber(): the row-index idiom's simpler sibling for these tests -- every
+// fixture below gets its own Date.now()-suffixed invoice_number, so an exact-text filter
+// on the row is unambiguous without needing to capture and index into the list response
+// (unlike the Day-60 arc, which reuses a FIXED recurring number across every run).
+// filter({ has }) — not { hasText }, which is a substring match and could collide across
+// two Date.now() calls landing in the same millisecond.
+function invoiceRowByNumber(page: Page, invoiceNumber: string) {
+  return page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
+}
+
+// submitSelected(): clicks batch-submit and waits for the POST .../invoices/submissions
+// response. Unlike a list GET, this URL is unambiguous -- a poll tick never POSTs
+// ([waitForResponse-on-the-list-is-poll-ambiguous] only applies to the list's GET) -- so
+// this needs none of that care. Shared by every submit click below: the happy-path
+// test's only submit, and the reject test's initial submit and its resubmit leg.
+async function submitSelected(page: Page): Promise<void> {
+  const resp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions'),
+  )
+  await page.getByTestId('batch-submit').click()
+  await resp
+}
+
+// assertFiscalRecord(): the C8-strength proof this isn't a stub. A `data:image/png;base64,`
+// prefix plus a present <img> is not proof of a RENDERED image -- expect.poll on
+// naturalWidth survives decode latency a bare evaluate() wouldn't. And "IRN != invoice
+// number" passes trivially: mockIdentifiersFor (mock_script.go) builds the IRN as
+// mockDocRef(env.ID, digest) + "-FBMOCK01-" + YYYYMMDD, and env.ID IS
+// Canonical.InvoiceNumber (mock_wire.go:53) -- the IRN always CONTAINS the (possibly
+// truncated) invoice number, so the inequality alone is guaranteed by the suffix, not by
+// the number being genuinely absent. The real proof is the deterministic suffix shape.
+async function assertFiscalRecord(page: Page, invoiceNumber: string): Promise<void> {
+  const irn = page.getByTestId('fiscal-irn')
+  await expect(irn).toBeVisible()
+  const irnText = (await irn.textContent())?.trim() ?? ''
+  expect(irnText.length, 'fiscal-irn must be non-empty').toBeGreaterThan(0)
+  expect(irnText, 'the IRN must not equal the bare invoice number').not.toBe(invoiceNumber)
+  expect(irnText, 'IRN shape <sanitised id>-FBMOCK01-YYYYMMDD (mock_script.go mockIdentifiersFor)').toMatch(/-FBMOCK01-\d{8}$/)
+
+  const qr = page.getByTestId('fiscal-qr')
+  await expect(qr).toBeVisible()
+  await expect(qr).toHaveAttribute('src', /^data:image\/png;base64,/)
+  await expect.poll(() => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
 }
 
 test('list surface: real rows render with real status badges, and Needs attention re-fetches server-side', async ({ page }) => {
@@ -462,6 +530,221 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // rollup refetch settles.
   await page.getByRole('button', { name: /Clients/ }).click()
   await expect(clientRow, 'fresh entity health pill must flip to ALL CLEAR once its only violation is fixed').toContainText('ALL CLEAR')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// M5-09-08 (task-256): the M5 milestone gate itself -- both demonstrations Core AC #5
+// requires, entirely from the browser, extending this capability flow rather than adding
+// a dated spec ([capability-not-date], docs/e2e-convention.md; Stage-1 correction C12).
+// The detail surface carries NO submit control in any status ([detail-submit-single]
+// dropped) -- every submit below goes through the list's batch-select-and-submit path
+// (invoice-select + batch-submit, M5-09-06), reused for BOTH the first submit and the
+// resubmit leg.
+//
+// Row 1-3 of the story's Test Specs table ("batch-select and submit", "badge advances",
+// "shows a real IRN and rendered QR") are folded into ONE test below (Stage-1 correction
+// C13): row 2 says "continuing from the step above" and has no fixture of its own, and
+// this file uses no test.describe.serial / module state that would let three independent
+// test()s share a fixture -- each test() gets a fresh page and a fresh error collector.
+
+test('submission surface: batch-select and submit a validated invoice, badge advances to ACCEPTED, and its detail shows a real IRN and a rendered QR', async ({
+  page,
+}) => {
+  // Cold-fleet headroom, matching this file's own Day-60 precedent (line ~326) -- one
+  // sign-in, one submit, one poll-driven badge flip and one detail round trip is
+  // comfortable well inside the config's 60s default, but not guaranteed on a fleet still
+  // warming up.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M509 accept ${Date.now()}`, tin: freshTin() })
+
+  const invoiceNumber = `INV-M509-ACCEPT-${Date.now()}`
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT),
+  })
+  await validateInvoice(token, inv.id)
+
+  await signInFirm(page)
+  await goToInvoices(page)
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+
+  // AC-3: exactly one POST is what waitForResponse above already pinned (a single click);
+  // the results panel names THIS invoice as queued.
+  await expect(page.getByTestId('batch-submit-results')).toContainText(invoiceNumber)
+  await expect(page.getByTestId('batch-submit-results')).toContainText('Queued')
+
+  // AC-4: the row's own badge, observed on the LIST -- no page.reload() anywhere in this
+  // test. `-0001` converges via the synchronous queued->accepted shortcut
+  // (~800ms adapter latency + near-immediate River pickup, store.go's own doc comment),
+  // well inside the config's default 15s expect timeout -- no override needed here
+  // (Stage-1 correction C4 reserves the explicit 45s timeout for the PENDING path only).
+  await expect(row.getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
+
+  // AC-2/AC-6: open the accepted invoice's detail -- reusing the file's own
+  // openInvoiceRow helper (invoice_number is unique per run, so the plain exact-text
+  // click it uses is unambiguous here).
+  await openInvoiceRow(page, invoiceNumber)
+  await assertFiscalRecord(page, invoiceNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('submission surface: reject → fix → re-validate → resubmit → accept, entirely from the browser', async ({ page }) => {
+  // Longer than every other test in this file: the pending-path resubmit leg alone can
+  // take up to ~22s to converge (Stage-1 correction C4), on top of a reject leg, an
+  // edit+re-validate round trip and two full submit cycles.
+  test.setTimeout(180_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M509 reject ${Date.now()}`, tin: freshTin() })
+
+  // Reject leg: buyer_tin -0002 fires the mock's scripted rejection
+  // (Reason{Code:"NGE-4102", Path:"buyer.tin"}).
+  const invoiceNumber = `INV-M509-REJECT-${Date.now()}`
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
+  })
+  await validateInvoice(token, inv.id)
+
+  await signInFirm(page)
+  await goToInvoices(page)
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+
+  // -0002 also converges synchronously (queued->rejected, same ~800ms shortcut as
+  // -0001's accept) -- default expect timeout is comfortable, no override needed.
+  await expect(row.getByTestId('invoice-status-badge')).toContainText('REJECTED')
+
+  await openInvoiceRow(page, invoiceNumber)
+
+  // AC-7: rejection-reasons carries NGE-4102, and a field-flag sits on the Buyer TIN
+  // input -- rendered as a SIBLING between the label div and the input
+  // (InvoiceEditForm.tsx), the same axis this file's "detail surface" test already uses
+  // for `following-sibling::input`; `following-sibling::*[@data-testid="field-flag"]`
+  // matches the same way.
+  const rejectionCard = page.getByTestId('rejection-reasons')
+  await expect(rejectionCard).toBeVisible()
+  await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
+
+  const form = page.getByTestId('edit-invoice')
+  const buyerTinFlag = form.locator('xpath=.//div[normalize-space(text())="Buyer TIN"]/following-sibling::*[@data-testid="field-flag"]')
+  await expect(buyerTinFlag).toBeVisible()
+  await expect(buyerTinFlag).toContainText('NGE-4102')
+
+  // The fix: retarget buyer_tin at the PENDING trigger, not back at -0001 -- Stage-1
+  // correction C1. -0001/-0002 both converge synchronously, so a resubmit through either
+  // would mount its detail already terminal, shouldPollInvoice would be false from the
+  // first render, no tick would ever fire, and the history-row assertion below would pass
+  // vacuously (confirming M5-09-07's own finding K). -0003 passes buyer-tin-format (the
+  // ONLY buyer-TIN rule -- no Luhn rule exists), so it re-validates clean.
+  await form.locator('xpath=.//div[normalize-space(text())="Buyer TIN"]/following-sibling::input').fill(MOCK_TIN_PENDING)
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  // Editing a rejected invoice demotes it to draft (store.go's second recovery edge) --
+  // and the rejection card is retained (shouldShowRejectionCard excludes only
+  // `accepted`), though its heading flips from the current-verdict wording to the
+  // historical one (rejectionProvenance, Stage-1 correction C14) -- asserted here on the
+  // row's content, never the heading.
+  await expect(page.getByTestId('stale-verdict')).toBeVisible()
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
+  await expect(rejectionCard).toBeVisible()
+  await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
+
+  await page.getByTestId('revalidate').click()
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+
+  // Resubmit leg: back to the list -- the detail surface carries no submit control in any
+  // status, so the ONLY way to resubmit is the same batch-select-and-submit path the
+  // first submit used (AC-3).
+  await page.getByRole('button', { name: '← All invoices' }).click()
+  await expect(row).toBeVisible()
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+
+  // Non-vacuity proof (Stage-1 correction C1), in this EXACT order, with no navigation
+  // after this row click: the pending trigger holds `submitted` for >=10s, so pinning the
+  // detail on that in-flight state, capturing the baseline history count, THEN watching
+  // the badge flip to ACCEPTED and a 9th row appear is what proves the tick actually
+  // drove both -- not a count read at an arbitrary, possibly-already-terminal moment.
+  await openInvoiceRow(page, invoiceNumber)
+  const badge = page.getByTestId('invoice-status-badge')
+  const historyRows = page.getByTestId('status-history-row')
+
+  // 1: Created·draft, 2: draft->validated, 3: validated->queued, 4: queued->rejected,
+  // 5: rejected->draft (edit), 6: draft->validated (revalidate), 7: validated->queued
+  // (resubmit), 8: queued->submitted -- deterministic given this exact fixture lifecycle.
+  await expect(badge).toContainText('SUBMITTED')
+  await expect(historyRows).toHaveCount(8)
+
+  // Stage-1 correction C4: the ONLY assertion in this file that needs an explicit
+  // timeout above the config's 15s default -- pending convergence (adapter latency + two
+  // poll hops + River's own 5s scheduler interval per hop) can run ~11-22s worst case.
+  // No `page.waitForTimeout` anywhere in this test -- only retrying assertions.
+  await expect(badge).toContainText('ACCEPTED', { timeout: 45_000 })
+  // 9: submitted->accepted -- can ONLY have arrived via the tick's own
+  // shouldRefreshHistory -> history.run(), never a user action (none happened between the
+  // two badge assertions above) -- this IS M5-09-07's live-refresh oracle.
+  await expect(historyRows).toHaveCount(9)
+
+  // AC-6, on this SAME mounted view -- no re-navigation needed (Stage-1 correction C1):
+  // the fiscal record renders once the overlay flips the invoice to accepted.
+  await assertFiscalRecord(page, invoiceNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('submission surface: a failed invoice is an honest dead end', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M509 failed ${Date.now()}`, tin: freshTin() })
+
+  // Stage-1 correction C3: the `-0006` timeout trigger is FORBIDDEN, not a fallback -- it
+  // returns Retryable under River's unmodified attempt^4 policy, ~78 minutes before
+  // MarkFailed, which both blows this test's budget and parks a `queued` row that would
+  // turn list polling on for every later topology spec against this same PR environment.
+  // Both edges below are legal (validated->queued, queued->failed) and TransitionHandler
+  // refuses only `target === validated` -- no submission job is ever created, so this
+  // fixture is terminal before the browser even opens.
+  const invoiceNumber = `INV-M509-FAILED-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  await validateInvoice(token, inv.id)
+  await transitionInvoice(token, inv.id, 'queued')
+  await transitionInvoice(token, inv.id, 'failed')
+
+  await signInFirm(page)
+  await goToInvoices(page)
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+
+  // AC-8: a failed row can never be batch-selected -- isRowSelectable is `validated`-only.
+  await expect(row.getByTestId('invoice-select')).toBeDisabled()
+
+  await openInvoiceRow(page, invoiceNumber)
+
+  await expect(page.getByTestId('failed-dead-end')).toBeVisible()
+  await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
+  // "no submit control at all": failed is not `isFixable` (draft/validated/rejected
+  // only), so neither Re-validate nor the edit form renders -- and no button anywhere on
+  // this page matches /submit/i (InvoicesList, the only surface with a Submit button, is
+  // fully unmounted while on the detail view -- App.tsx's view switch is exclusive, never
+  // both mounted at once).
+  await expect(page.getByTestId('revalidate')).toHaveCount(0)
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

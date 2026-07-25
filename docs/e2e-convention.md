@@ -60,5 +60,7 @@ The **tenant-facing `app` SPA** (gateway-wired) is the **only** functional-E2E t
 - `ops-console` (mock) and `landing` (static marketing) get **smoke only** — no live
   backend to exercise.
 - Mock-only `app` surfaces (Customers, Reports, Settings, company switcher, XML/UBL
-  preview, single-document approve/transmit, onboarding dashboard) are **out** — a
-  browser test there asserts nothing real.
+  preview, onboarding dashboard) are **out** — a browser test there asserts nothing real.
+  Submission/transmit is real (M5-09): it is covered via the invoices **list**'s
+  batch-select-and-submit path (`invoice-surfaces.spec.ts`) — the invoice **detail**
+  surface deliberately carries no submit control in any status.

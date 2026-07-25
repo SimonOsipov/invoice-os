@@ -63,8 +63,19 @@ async function goToInvoices(page: Page): Promise<void> {
   await expect(page.getByTestId('invoices-list')).toBeVisible()
 }
 
+// openInvoiceRow(): fix cycle 1 (M5-09-08, task-256) -- the text match is scoped to the
+// `invoices-list` container (InvoicesList.tsx), not the whole page. M5-09-06's
+// batch-submit-results panel ALSO renders the invoice number (per-invoice skip reasons are
+// Core AC #1), so after a submit BOTH the results panel and the row show the same text --
+// a page-wide getByText is a strict-mode violation the moment that's true, and it's real,
+// required product behaviour, not something to design around. Scoping to the container is
+// also what survives InvoicesList's own post-submit refetch: `invoices-list` fully
+// unmounts while list.run()'s GET is in flight (state leaves 'ready', the async hook nulls
+// `data`) -- the scoped locator is driven only through a retrying `.click()`, never a
+// one-shot read, so it waits out that unmount/remount window instead of resolving against
+// a dead node.
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
-  await page.getByText(invoiceNumber, { exact: true }).click()
+  await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
 }
 

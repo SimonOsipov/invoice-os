@@ -41,7 +41,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
         </div>
         <div className="ops-sub-stats" style={{ display: 'flex', gap: 10 }}>
           {subStats.map((s) => (
-            <div key={s.label} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '10px 16px', minWidth: 96 }}>
+            <div key={s.label} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '10px 16px', minWidth: 96 }}>
               <div className="mono" style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', color: s.color }}>
                 {s.value}
               </div>
@@ -62,7 +62,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
             background: 'var(--status-red-bg)',
             border: '1px solid var(--status-red-border)',
             borderLeft: '3px solid var(--status-red-text)',
-            borderRadius: 'var(--radius-lg)',
+            borderRadius: 'var(--radius-md)',
             padding: '12px 16px',
             marginBottom: 16,
           }}
@@ -83,8 +83,8 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
               cursor: 'pointer',
               height: 34,
               padding: '0 14px',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--destructive)',
+              borderRadius: 'var(--radius-input)',
+              background: 'var(--status-red-text)',
               color: 'var(--text-on-dark)',
               fontFamily: 'var(--font-sans)',
               fontSize: 13,
@@ -145,7 +145,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
       </div>
 
       {/* jobs table */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflowX: 'auto', background: 'var(--bg-2)' }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto', background: 'var(--bg-2)' }}>
         <div
           className="ops-jobs-table"
           style={{

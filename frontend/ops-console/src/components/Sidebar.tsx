@@ -49,7 +49,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         {/* client org card */}
         <div
           className="ops-hide-narrow"
-          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}
         >
           <span
             style={{
@@ -103,7 +103,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         })}
         {/* monthly request quota (prototype line 66–75) */}
         <div className="ops-hide-narrow" style={{ marginTop: 'auto', padding: '12px 8px 4px' }}>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 12px', background: 'var(--bg-1)' }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: '11px 12px', background: 'var(--bg-1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <span className="label">Requests this month</span>
               <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)' }}>

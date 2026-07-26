@@ -66,7 +66,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div
             className="ops-header-search"
-            style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', width: 380 }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', background: 'var(--bg-2)', width: 380 }}
           >
             <span style={{ color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
             <span style={{ fontSize: 13, color: 'var(--fg-4)', whiteSpace: 'nowrap' }}>Search invoice # · job ID · IRN · evidence hash</span>
@@ -75,7 +75,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
             </span>
           </div>
           {/* Sandbox / Live switch */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-lg)', padding: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 3 }}>
             <button
               type="button"
               onClick={() => onSetEnv('sandbox')}
@@ -85,7 +85,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
                 cursor: 'pointer',
                 height: 30,
                 padding: '0 14px',
-                borderRadius: 'var(--radius-md)',
+                borderRadius: 'var(--radius-input)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 700,
@@ -109,7 +109,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
                 cursor: 'pointer',
                 height: 30,
                 padding: '0 14px',
-                borderRadius: 'var(--radius-md)',
+                borderRadius: 'var(--radius-input)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 700,

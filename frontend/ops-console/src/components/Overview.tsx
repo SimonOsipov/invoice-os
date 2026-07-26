@@ -129,7 +129,7 @@ const LAT_CHART = lineChart(series(30, 1.55, 0.5, 0.012, 88), 400, 90, 8, 6)
 const CARD: CSSProperties = {
   border: '1px solid var(--line-1)',
   background: 'var(--bg-2)',
-  borderRadius: 'var(--radius-lg)',
+  borderRadius: 'var(--radius-md)',
 }
 
 export function Overview({ range, onRangeChange }: Props) {
@@ -158,11 +158,11 @@ export function Overview({ range, onRangeChange }: Props) {
 
       {/* KPI ROW — prototype 129–142. The grid class carries only @media overrides by
           design (ops.css:128–135), so the base columns are set inline here. */}
-      <div className="ops-kpi-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 16 }}>
+      <div className="ops-kpi-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
         {KPIS.map((k) => (
           <div
             key={k.label}
-            style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '14px 15px', display: 'flex', flexDirection: 'column', minHeight: 122 }}
+            style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '14px 15px', display: 'flex', flexDirection: 'column', minHeight: 122 }}
           >
             <div className="label" style={{ lineHeight: 1.3, marginBottom: 9, minHeight: 24 }}>
               {k.label}
@@ -206,7 +206,7 @@ export function Overview({ range, onRangeChange }: Props) {
               </span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: 3 }}>
             {RANGES.map((r) => {
               const active = range === r
               return (
@@ -290,13 +290,13 @@ export function Overview({ range, onRangeChange }: Props) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 12 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: 'var(--action)' }} />
+              <span style={{ width: 10, height: 10, borderRadius: '2', background: 'var(--action)' }} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                 ACTUAL · 22 DAYS
               </span>
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: 'var(--action-tint)', border: '1px dashed var(--action)' }} />
+              <span style={{ width: 10, height: 10, borderRadius: '2', background: 'var(--action-tint)', border: '1px dashed var(--action)' }} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                 PROJECTED
               </span>
@@ -318,7 +318,7 @@ export function Overview({ range, onRangeChange }: Props) {
           </div>
           <div style={{ display: 'flex', gap: 4, height: 150, alignItems: 'stretch' }}>
             {OUTCOME_COLS.map((c, i) => (
-              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRadius: 'var(--radius-xs)', overflow: 'hidden' }}>
+              <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRadius: '2', overflow: 'hidden' }}>
                 {/* Stack order top→bottom is pend, fail, rej, acc (prototype 203–206) —
                     deliberately NOT the legend order. */}
                 <div style={{ height: c.pend, background: 'var(--status-amber-text)' }} />
@@ -331,7 +331,7 @@ export function Overview({ range, onRangeChange }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12, flexWrap: 'wrap' }}>
             {OUTCOME_LEGEND.map((l) => (
               <span key={l.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 9, height: 9, borderRadius: 'var(--radius-xs)', background: l.color }} />
+                <span style={{ width: 9, height: 9, borderRadius: '2', background: l.color }} />
                 <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                   {l.label}
                 </span>

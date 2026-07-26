@@ -62,7 +62,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
 
       {/* API keys (proto:362-385) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <span className="card-title">API keys</span>
+        <span style={{ fontSize: 15, fontWeight: 600 }}>API keys</span>
         <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
           SECRET KEYS · SERVER-SIDE ONLY
         </span>
@@ -71,7 +71,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
         {API_KEYS.map((k) => {
           const revealed = !!reveal[k.id]
           return (
-            <div key={k.id} style={{ border: '1px solid ' + k.borderColor, background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '16px 18px' }}>
+            <div key={k.id} style={{ border: '1px solid ' + k.borderColor, background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '16px 18px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <span
                   style={{
@@ -99,7 +99,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
                   gap: 8,
                   background: 'var(--bg-1)',
                   border: '1px solid var(--line-1)',
-                  borderRadius: 'var(--radius-md)',
+                  borderRadius: 'var(--radius-input)',
                   padding: '9px 12px',
                   marginBottom: 12,
                 }}
@@ -164,14 +164,14 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
       {/* Webhook endpoints (proto:387-407) — a flex card stack, deliberately carrying no
           grid classname. */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <span className="card-title">Webhook endpoints</span>
+        <span style={{ fontSize: 15, fontWeight: 600 }}>Webhook endpoints</span>
         <button type="button" onClick={onAddWebhook} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 32 }}>
           {PLUS_ICON} Add endpoint
         </button>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 22 }}>
         {WEBHOOKS.map((w) => (
-          <div key={w.url} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '15px 18px' }}>
+          <div key={w.url} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '15px 18px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <span style={{ color: 'var(--action)', display: 'inline-flex', flex: 'none' }}>{LINK_ICON}</span>
               <span
@@ -239,7 +239,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
 
       {/* deliveries + rate limit + request log (proto:409-444) */}
       <div className="ops-api-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', overflow: 'hidden' }}>
+        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
           <div
             style={{
               padding: '12px 16px',
@@ -308,7 +308,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
             minWidth blow out the 1fr track instead of scrolling inside it. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           {/* rate limit (proto:424-430) */}
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', padding: '16px 18px' }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '16px 18px' }}>
             <div className="label" style={{ marginBottom: 12 }}>
               Rate limit · {envWord}
             </div>
@@ -329,7 +329,7 @@ export function ApiWebhooks({ env, reveal, onToggleReveal, onCopyKey, onRotate, 
           </div>
 
           {/* request log (proto:431-442) — title bar only, no column header row. */}
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', overflow: 'hidden', flex: 1 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden', flex: 1 }}>
             <div
               style={{
                 padding: '12px 16px',

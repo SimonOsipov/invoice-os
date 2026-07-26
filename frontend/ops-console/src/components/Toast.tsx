@@ -20,9 +20,9 @@ export function Toast({ toast }: Props) {
         gap: 11,
         background: 'var(--slate-900)',
         color: 'var(--text-on-dark)',
-        borderRadius: 'var(--radius-lg)',
+        borderRadius: 'var(--radius-md)',
         padding: '12px 18px',
-        boxShadow: 'var(--shadow-elegant)',
+        boxShadow: '0 16px 40px -12px oklch(20% .02 210 / 0.5)',
         animation: 'opsToast 200ms ease-out',
       }}
     >

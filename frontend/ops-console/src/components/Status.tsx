@@ -48,7 +48,7 @@ export function Status() {
           gap: 14,
           background: 'var(--status-amber-bg)',
           border: '1px solid var(--status-amber-border)',
-          borderRadius: 'var(--radius-lg)',
+          borderRadius: 'var(--radius-md)',
           padding: '16px 20px',
           marginBottom: 16,
         }}
@@ -58,7 +58,7 @@ export function Status() {
             flex: 'none',
             width: 40,
             height: 40,
-            borderRadius: 'var(--radius-lg)',
+            borderRadius: 'var(--radius-md)',
             background: 'var(--status-amber-text)',
             color: 'var(--text-on-dark)',
             display: 'grid',
@@ -86,7 +86,7 @@ export function Status() {
       </div>
 
       {/* components (proto:549-563) */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
         {STATUS_COMPONENTS.map((c) => {
           const tone = STATUS_TONE[c.tone]
           return (
@@ -143,7 +143,7 @@ export function Status() {
       </div>
 
       {/* incident history (proto:566-577) */}
-      <div className="card-title" style={{ marginBottom: 12 }}>Incident history</div>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Incident history</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {INCIDENTS.map((inc) => {
           const tone = STATUS_TONE[inc.tone]

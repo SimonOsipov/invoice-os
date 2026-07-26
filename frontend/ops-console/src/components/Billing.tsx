@@ -56,7 +56,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
 
       {/* plan + usage (proto:457-488) */}
       <div className="ops-billing-grid" style={{ display: 'grid', gridTemplateColumns: '300px minmax(0,1fr)', gap: 16, marginBottom: 24 }}>
-        <div style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '18px 20px' }}>
+        <div style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
           <div className="label" style={{ marginBottom: 10 }}>
             Current plan
           </div>
@@ -97,7 +97,7 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
         </div>
 
         {/* quota + overage meter (proto:468-487) */}
-        <div style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '18px 20px' }}>
+        <div style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <div className="label">Usage vs included quota · July</div>
             <span
@@ -125,19 +125,19 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
           </div>
           {/* Two flex segments summing to 100%, not a single fill over a track — the
               widths are prototype literals (proto:475-476), see data.tsx's Quota note. */}
-          <div style={{ height: 12, background: 'var(--bg-3)', borderRadius: 'var(--radius-md)', overflow: 'hidden', display: 'flex', marginBottom: 8 }}>
+          <div style={{ height: 12, background: 'var(--bg-3)', borderRadius: 'var(--radius-input)', overflow: 'hidden', display: 'flex', marginBottom: 8 }}>
             <div style={{ width: QUOTA.includedWidth, height: '100%', background: 'var(--action)' }} />
             <div style={{ width: QUOTA.overWidth, height: '100%', background: 'var(--status-amber-text)' }} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 9, height: 9, borderRadius: 'var(--radius-xs)', background: 'var(--action)' }} />
+              <span style={{ width: 9, height: 9, borderRadius: '2', background: 'var(--action)' }} />
               <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
                 {fmt(SCALE_PLAN.includedRequests)} INCLUDED
               </span>
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 9, height: 9, borderRadius: 'var(--radius-xs)', background: 'var(--status-amber-text)' }} />
+              <span style={{ width: 9, height: 9, borderRadius: '2', background: 'var(--status-amber-text)' }} />
               <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
                 {fmt(over)} OVERAGE
               </span>
@@ -176,8 +176,8 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
       </div>
 
       {/* itemized spend (proto:491-508) */}
-      <div className="card-title" style={{ marginBottom: 12 }}>Itemised spend · July 2026</div>
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', overflowX: 'auto', marginBottom: 28 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Itemized spend · July 2026</div>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflowX: 'auto', marginBottom: 28 }}>
         <div
           className="ops-usage-table"
           style={{
@@ -242,8 +242,8 @@ export function Billing({ onManagePlan, onDownloadInvoice }: Props) {
       </div>
 
       {/* past invoices (proto:511-523) */}
-      <div className="card-title" style={{ marginBottom: 12 }}>Invoices from ASComply</div>
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', overflowX: 'auto' }}>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Invoices from ASComply</div>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflowX: 'auto' }}>
         <div
           className="ops-invoice-table"
           style={{

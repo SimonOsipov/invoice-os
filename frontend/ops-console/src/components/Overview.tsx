@@ -110,8 +110,10 @@ const OUTCOME_COLS = buildOutcomeColumns()
 
 const OUTCOME_LEGEND: { label: string; color: string }[] = [
   { label: 'CLEARED', color: 'var(--status-green-text)' },
+  // REJECTED and FAILED share --status-red-text in the prototype too (proto:920-921),
+  // so the four-segment stack renders as three visible bands and the legend shows two
+  // identical swatches. Faithful to spec; flagged as a spec-level readability issue.
   { label: 'REJECTED', color: 'var(--status-red-text)' },
-  // Prototype line 911 — a raw hex, not a design token. Left verbatim.
   { label: 'FAILED', color: 'var(--status-red-text)' },
   { label: 'PENDING', color: 'var(--status-amber-text)' },
 ]

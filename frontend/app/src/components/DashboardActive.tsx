@@ -33,7 +33,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   const state = dashboardViewState(base, roll)
 
   return (
-    <div style={{ padding: '30px 36px 56px' }}>
+    <div style={{ maxWidth: 1280, padding: '30px 36px 56px' }}>
       {/* Firm-wide header — rebound to tenant context ([header-chrome-firmwide]);
           the mock taxpayer pill, "SYNCED …", and "Period to date" chrome are gone. */}
       <div style={{ marginBottom: 26 }}>
@@ -72,7 +72,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         className="pf-dash-row-b"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 18, marginBottom: 18 }}
       >
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 26, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 26, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
             <span className="label">Needs attention</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
@@ -113,7 +113,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
           </button>
         </div>
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 24 }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <span className="card-title">Invoice status</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -131,7 +131,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
                 ))}
               </svg>
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span className="money" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1 }}>
+                <span className="money" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
                   {total}
                 </span>
                 <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
@@ -158,7 +158,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
       </div>
 
       {/* Row 2: top validation failures (firm-wide, de-slugged rule keys) */}
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
           <span className="card-title">Top validation failures</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -180,7 +180,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
                   {f.ruleKey}
                 </span>
                 <div style={{ textAlign: 'right', flex: 'none', width: 54 }}>
-                  <span className="money" style={{ fontSize: 16, fontWeight: 600, color: 'var(--ink)' }}>
+                  <span className="money" style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)' }}>
                     {f.count}
                   </span>
                 </div>

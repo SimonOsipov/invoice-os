@@ -23,7 +23,7 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
         style={{
           background: 'var(--status-green-bg)',
           border: '1px solid var(--status-green-border)',
-          borderRadius: 'var(--radius-lg)',
+          borderRadius: 'var(--radius-md)',
           padding: '14px 18px',
           fontSize: 13.5,
           color: 'var(--status-green-text)',
@@ -35,7 +35,7 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
   }
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ background: 'var(--bg-1)' }}>

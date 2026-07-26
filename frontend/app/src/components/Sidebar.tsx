@@ -56,7 +56,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
             <button
               onClick={ctx.toggleSwitcher}
               className="pf-btn"
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-md)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-input)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
             >
               <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
@@ -66,7 +66,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
               <span style={{ flex: 'none', color: 'var(--fg-3)', transform: switcherOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}>{chevDownGlyph}</span>
             </button>
             {switcherOpen && (
-              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-soft)', overflow: 'hidden', animation: 'popIn 140ms ease-out' }}>
+              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 16px 40px -16px oklch(20% .02 210 / 0.28)', overflow: 'hidden', animation: 'popIn 140ms ease-out' }}>
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
@@ -94,7 +94,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
 
         {/* in-house mode: single company, no switching */}
         {isInhouse && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}>
             <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{active.short}</span>

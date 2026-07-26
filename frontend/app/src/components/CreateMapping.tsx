@@ -100,7 +100,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <span className="card-title">Map fields to columns · {active.short}</span>
           {allPlaced ? (
@@ -110,7 +110,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
           )}
         </div>
         <div style={{ padding: '14px 20px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 12px', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 12px', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', marginBottom: 14 }}>
             <span style={{ flex: 'none', color: 'var(--fg-3)', marginTop: 1 }}>{shieldGlyph}</span>
             <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>
               Drag each field onto the column that holds its data — or click a field, then a column. One spreadsheet row is a single line item; rows group into invoices by the column mapped to{' '}
@@ -140,7 +140,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                   onDragEnd={() => ctx.endDrag()}
                   onClick={() => ctx.armField(c.key)}
                   className="pf-btn"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'grab', fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', padding: '8px 12px', borderRadius: 'var(--radius-md)', background: c.bg, border: `1px solid ${c.border}`, color: c.color }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'grab', fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', padding: '8px 12px', borderRadius: 'var(--radius-input)', background: c.bg, border: `1px solid ${c.border}`, color: c.color }}
                 >
                   <span style={{ display: 'inline-flex', opacity: 0.6 }}>{gripGlyph}</span>
                   {c.key}
@@ -152,7 +152,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8.5, fontWeight: 700 }}>{fileExt}</span>
@@ -234,7 +234,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '14px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '14px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20, minWidth: 0 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
             <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Rows to import</span>

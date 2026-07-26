@@ -107,7 +107,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; entity?: Entity } | null>(null)
 
   return (
-    <div style={{ padding: '30px 36px 56px' }}>
+    <div style={{ maxWidth: 1280, padding: '30px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>
@@ -134,7 +134,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && (
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div
             className="pf-list-head"
             style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
@@ -157,7 +157,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-input)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
                     {initials(e.name)}
                   </span>
                   <span style={{ minWidth: 0 }}>

@@ -39,13 +39,13 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
 
   if (av.length === 0) {
     return (
-      <div style={{ padding: '30px 36px 56px' }}>
+      <div style={{ maxWidth: 1280, padding: '30px 36px 56px' }}>
         <div style={{ marginBottom: 22 }}>
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Reports &amp; analytics</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · tax summary, period to date · June 2026</p>
         </div>
-        <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-lg)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-          <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-lg)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
+        <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+          <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No data to report yet</div>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: '0 0 20px', maxWidth: 340 }}>Reports populate once {active.short} has validated invoices in the period.</p>
           <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
@@ -64,7 +64,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
       </div>
       <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
         {reportKpis.map((k) => (
-          <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '18px 20px' }}>
+          <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
             <div className="label" style={{ marginBottom: 12 }}>
               {k.label}
             </div>
@@ -75,7 +75,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
         ))}
       </div>
       <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gap: 20, marginBottom: 20 }}>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
             <span className="card-title">Top customers by value</span>
           </div>
@@ -93,7 +93,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
             ))}
           </div>
         </div>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span className="card-title">Validation summary</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--status-green-text)' }}>
@@ -102,13 +102,13 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
           <div style={{ padding: '18px 20px' }}>
             <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-              <div style={{ flex: 1, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+              <div style={{ flex: 1, background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-input)', padding: '12px 14px' }}>
                 <div className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-green-text)' }}>{repPassed}</div>
                 <div className="label" style={{ marginTop: 2 }}>
                   Passed
                 </div>
               </div>
-              <div style={{ flex: 1, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+              <div style={{ flex: 1, background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-input)', padding: '12px 14px' }}>
                 <div className="money" style={{ fontSize: 22, fontWeight: 700, color: 'var(--status-red-text)' }}>{repFail}</div>
                 <div className="label" style={{ marginTop: 2 }}>
                   Failing
@@ -129,7 +129,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
           </div>
         </div>
       </div>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '18px 20px' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <span className="card-title">Export &amp; filings</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>

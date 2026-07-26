@@ -66,7 +66,7 @@ export function ValidationView({ ctx }: { ctx: PlatformCtx }) {
         ))}
       </div>
 
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 20, marginBottom: 20 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 20, marginBottom: 20 }}>
         <div className="label" style={{ marginBottom: 12 }}>
           Invoice
         </div>

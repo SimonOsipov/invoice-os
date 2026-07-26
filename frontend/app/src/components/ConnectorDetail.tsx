@@ -15,7 +15,7 @@ import { fmtPlain } from '../lib/format'
 import { backGlyph, refreshGlyph, warnTriGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
-const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)' }
+const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }
 const CARD_HEAD: React.CSSProperties = { padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }
 
 // Faint = the connector doing its own housekeeping (a scheduled pull, a poll); the
@@ -24,8 +24,8 @@ const DOT_COLOR: Record<SyncEventKind, string> = {
   transmitted: 'var(--status-green-text)',
   validated: 'var(--status-green-text)',
   held: 'var(--status-red-text)',
-  scheduled: 'var(--line-3)',
-  pull: 'var(--line-3)',
+  scheduled: 'var(--fg-4)',
+  pull: 'var(--fg-4)',
 }
 
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
@@ -57,7 +57,7 @@ function FunnelStep({ n, label, sub }: { n: number; label: string; sub: string }
 
 function Arrow() {
   return (
-    <span className="mono" style={{ fontSize: 15, color: 'var(--line-3)', alignSelf: 'start', paddingTop: 8 }} aria-hidden="true">
+    <span className="mono" style={{ fontSize: 15, color: 'var(--fg-4)', alignSelf: 'start', paddingTop: 8 }} aria-hidden="true">
       →
     </span>
   )
@@ -96,7 +96,7 @@ export function ConnectorDetail({
 
       {/* Header */}
       <div style={{ ...CARD, padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 15, marginBottom: 16 }}>
-        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-lg)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
+        <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{def.mono}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <span className="card-title">{def.name}</span>
@@ -199,7 +199,7 @@ export function ConnectorDetail({
             {mapping.map((m, i) => (
               <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.85fr) 12px minmax(0, 1.15fr)', gap: 8, alignItems: 'baseline', padding: '10px 0', borderBottom: '1px solid var(--line-1)' }}>
                 <code className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)', overflowWrap: 'anywhere' }}>{m.erp}</code>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--line-3)' }} aria-hidden="true">
+                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-4)' }} aria-hidden="true">
                   →
                 </span>
                 <code className="mono" style={{ fontSize: 11.5, color: 'var(--action)', overflowWrap: 'anywhere' }}>{m.ubl}</code>

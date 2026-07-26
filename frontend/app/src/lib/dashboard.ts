@@ -26,7 +26,7 @@ import type { AuthedFetch } from './portfolio'
 import type { DonutSeg } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 
-import { invoiceStatusStyle, type InvoiceStatus } from './invoices'
+import type { InvoiceStatus } from './invoices'
 
 // The 7-state count bucket (dashboard.go Bucket.Counts), no omitempty on the wire — a
 // zero state still serializes as an explicit 0.
@@ -77,8 +77,8 @@ export async function getRollup(authedFetch: AuthedFetch, base: string): Promise
 
 // Canonical 7-state order for the donut and any other verbatim state listing. Keys are the
 // lowercase InvoiceStatus (== the rollup's Counts keys); the human label is the key with
-// its first letter capitalized (Draft, Validated, …), and the segment colour reuses the
-// canonical per-state palette via invoiceStatusStyle(state).text.
+// its first letter capitalized (Draft, Validated, …), and the segment colour comes from
+// DONUT_COLOR below — deliberately NOT the badge palette, see its comment.
 const CANONICAL_STATES: InvoiceStatus[] = [
   'draft',
   'validated',
@@ -88,6 +88,26 @@ const CANONICAL_STATES: InvoiceStatus[] = [
   'rejected',
   'failed',
 ]
+
+// The donut needs seven distinguishable arcs, but the badge palette collapses the
+// seven states onto four colours — and it puts the duplicates ADJACENT (queued
+// beside submitted, rejected beside failed), so contiguous arcs of the same fill
+// merged into one band and the legend showed duplicate swatches.
+//
+// The prototype solves exactly this with a lightness ramp inside one hue rather
+// than a separator or a gap (proto:1740 pairs deep --status-green-text with light
+// --teal-400). This applies the same idea across all three families, so no two
+// neighbouring arcs share a fill. Badges are unaffected — they keep
+// invoiceStatusStyle, where a shared colour is fine because each pill is labelled.
+const DONUT_COLOR: Record<InvoiceStatus, string> = {
+  draft: 'var(--status-muted-border)',
+  validated: 'var(--teal-400)',
+  queued: 'var(--accent)',
+  submitted: 'var(--status-amber-text)',
+  accepted: 'var(--status-green-text)',
+  rejected: 'var(--status-red-text)',
+  failed: 'var(--destructive)',
+}
 
 export function donutSegments(counts: Counts): DonutSeg[] {
   const total = CANONICAL_STATES.reduce((sum, state) => sum + counts[state], 0) || 1
@@ -99,7 +119,7 @@ export function donutSegments(counts: Counts): DonutSeg[] {
     const len = (count / total) * C
     const seg: DonutSeg = {
       label: state[0].toUpperCase() + state.slice(1),
-      color: invoiceStatusStyle(state).text,
+      color: DONUT_COLOR[state],
       count: String(count),
       pct: Math.round((count / total) * 100) + '%',
       dash: len.toFixed(1) + ' ' + (C - len).toFixed(1),

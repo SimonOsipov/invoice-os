@@ -95,8 +95,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
             {CONNECTOR_DEFS.map((c) => {
               const on = !!connectors[c.id]
               return (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '16px 18px' }}>
-                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-lg)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 15, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 18px' }}>
+                  <span style={{ flex: 'none', width: 42, height: 42, borderRadius: 'var(--radius-md)', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em' }}>{c.mono}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                       <span style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</span>
@@ -136,18 +136,18 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
       {/* API & webhooks */}
       {settingsTab === 'api' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '18px 20px' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
             <div className="label" style={{ marginBottom: 10 }}>
               Base URL
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <code className="mono" style={{ flex: 1, fontSize: 13, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '9px 12px' }}>{API_BASE}</code>
+              <code className="mono" style={{ flex: 1, fontSize: 13, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: '9px 12px' }}>{API_BASE}</code>
               <button className="pf-btn" style={{ flex: 'none', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
                 {copyGlyph} Copy
               </button>
             </div>
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
               <span className="card-title">API keys</span>
             </div>
@@ -169,7 +169,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               )
             })}
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
               <span className="card-title">Endpoints</span>
             </div>
@@ -186,7 +186,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
               )
             })}
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span className="card-title">Webhooks</span>
               <button className="pf-btn" style={{ height: 30, padding: '0 11px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5 }}>
@@ -211,9 +211,9 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
       {settingsTab === 'signing' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {CERTS.map((c) => (
-            <div key={c.name} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+            <div key={c.name} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 11 }}>
-                <span style={{ flex: 'none', width: 36, height: 36, borderRadius: 'var(--radius-lg)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{shieldGlyph}</span>
+                <span style={{ flex: 'none', width: 36, height: 36, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{shieldGlyph}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14.5, fontWeight: 600 }}>{c.name}</div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>

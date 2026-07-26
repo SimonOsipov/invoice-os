@@ -247,7 +247,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           it should appear) and `state === 'ready'` (list.run()'s refetch flips `state`
           away from 'ready' while data:null, which would blow the panel away mid-read). */}
       {results !== null && (
-        <div data-testid="batch-submit-results" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 22 }}>
+        <div data-testid="batch-submit-results" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 22 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
             <span className="label">Invoice #</span>
             <span className="label">Result</span>
@@ -285,7 +285,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       {state === 'ready' && (
         <>
           {selected.length > 0 && (
-            <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '11px 18px', marginBottom: 14 }}>
+            <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}>
               <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{selected.length} selected</span>
               <button
                 data-testid="batch-submit"
@@ -305,7 +305,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             </div>
           )}
 
-          <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: INVOICE_GRID_COLUMNS, gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', alignItems: 'center' }}>
               <input
                 type="checkbox"

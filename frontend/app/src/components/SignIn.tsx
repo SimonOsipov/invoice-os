@@ -42,7 +42,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
         .si-persona:disabled { cursor: default; opacity: 0.6; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
@@ -68,7 +68,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
                   className="si-persona"
                   disabled={busy}
                   onClick={() => onPick(p)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
                   <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>
                     {p.initials}
@@ -114,7 +114,7 @@ export function SignInLoading({ persona }: { persona: Persona }) {
         .si-spin { animation: siSpin 0.7s linear infinite; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>

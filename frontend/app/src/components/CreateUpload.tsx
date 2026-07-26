@@ -46,7 +46,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span className="card-title">Import a spreadsheet</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -142,7 +142,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
       <div className="label">Or import a single document</div>
 
       <div className="pf-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span className="card-title">Import a document · {active.short}</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
@@ -150,8 +150,8 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             </span>
           </div>
           <div style={{ padding: 20 }}>
-            <div style={{ border: '1.5px dashed var(--line-3)', borderRadius: 'var(--radius-lg)', padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: 'var(--bg-1)', marginBottom: 22 }}>
-              <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-lg)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{importGlyph}</span>
+            <div style={{ border: '1.5px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: 'var(--bg-1)', marginBottom: 22 }}>
+              <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{importGlyph}</span>
               <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>Drag a file here, or pick a sample below</div>
               <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
                 The parser extracts buyer details, line items and totals, then pre-fills the invoice for validation.
@@ -168,9 +168,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                     key={f.id}
                     onClick={() => ctx.selectFile(f.id)}
                     className="pf-upcard"
-                    style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`, background: sel ? 'var(--action-tint)' : 'var(--bg-2)', borderRadius: 'var(--radius-lg)', width: '100%' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`, background: sel ? 'var(--action-tint)' : 'var(--bg-2)', borderRadius: 'var(--radius-md)', width: '100%' }}
                   >
-                    <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: f.iconBg, color: f.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.02em' }}>{f.ext}</span>
+                    <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: f.iconBg, color: f.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.02em' }}>{f.ext}</span>
                     <div style={{ flex: 1, textAlign: 'left' }}>
                       <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--fg-1)' }}>{f.name}</div>
                       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
@@ -184,13 +184,13 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             </div>
           </div>
         </div>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 20, position: 'sticky', top: 0 }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 20, position: 'sticky', top: 0 }}>
           <div className="label" style={{ marginBottom: 14 }}>
             Selected file
           </div>
           {hasFile && selFile && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 12, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-1)', marginBottom: 18 }}>
-              <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', background: selFile.iconBg, color: selFile.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700 }}>{selFile.ext}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 12, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)', marginBottom: 18 }}>
+              <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-input)', background: selFile.iconBg, color: selFile.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700 }}>{selFile.ext}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selFile.name}</div>
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', marginTop: 2 }}>

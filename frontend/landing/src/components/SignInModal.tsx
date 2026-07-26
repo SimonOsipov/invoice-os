@@ -89,7 +89,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="if-v2"
+      className="asc-app"
       onClick={onClose}
       role="dialog"
       aria-modal="true"

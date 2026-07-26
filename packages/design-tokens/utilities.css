@@ -1,0 +1,31 @@
+/* ============================================================
+   ASComply — semantic type + surface helpers.
+   Opt-in classes. Components use the tokens directly.
+   ============================================================ */
+
+.t-h1 { font-family: var(--font-display); font-size: var(--fs-h1); font-weight: var(--fw-medium); line-height: var(--lh-display); letter-spacing: var(--tracking-display); font-variation-settings: 'opsz' var(--opsz-display); color: var(--text-heading); }
+.t-h2 { font-family: var(--font-display); font-size: var(--fs-h2); font-weight: var(--fw-medium); line-height: var(--lh-heading); letter-spacing: var(--tracking-tight); font-variation-settings: 'opsz' var(--opsz-heading); color: var(--text-heading); }
+.t-h3 { font-family: var(--font-display); font-size: var(--fs-h3); font-weight: var(--fw-medium); line-height: var(--lh-snug); letter-spacing: var(--tracking-tight); font-variation-settings: 'opsz' var(--opsz-text); color: var(--text-heading); }
+.t-em { font-style: italic; color: var(--primary); }
+.t-body { font-family: var(--font-sans); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: var(--lh-body); color: var(--text-muted); }
+.t-body-sm { font-family: var(--font-sans); font-size: var(--fs-body-sm); font-weight: var(--fw-regular); line-height: var(--lh-body); color: var(--text-muted); }
+.t-ui { font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: var(--fw-medium); line-height: var(--lh-ui); color: var(--text-body); }
+.t-caption { font-family: var(--font-sans); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: var(--lh-ui); color: var(--text-muted); }
+.t-eyebrow { font-family: var(--font-sans); font-size: var(--fs-eyebrow); font-weight: var(--fw-semibold); line-height: 1; letter-spacing: var(--tracking-eyebrow); text-transform: uppercase; color: var(--text-eyebrow); }
+
+.band-cream { background: var(--surface-page); color: var(--text-body); }
+.band-dark { background: var(--surface-dark); color: var(--text-on-dark); }
+.band-gradient { background: var(--gradient-hero); color: var(--text-on-dark); }
+.band-dark .t-h1, .band-dark .t-h2, .band-dark .t-h3,
+.band-gradient .t-h1, .band-gradient .t-h2, .band-gradient .t-h3 { color: var(--text-on-dark); }
+.band-dark .t-body, .band-gradient .t-body { color: var(--on-dark-70); }
+.band-dark .t-eyebrow, .band-gradient .t-eyebrow { color: var(--text-eyebrow-dark); }
+
+.card { background: var(--surface-card); border: 1px solid var(--border-hairline); border-radius: var(--radius-md); box-shadow: var(--shadow-card); }
+.card-lg { background: var(--surface-card); border: 1px solid var(--border-hairline); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
+.card-on-dark { background: var(--on-dark-5); border: 1px solid var(--border-on-dark); border-radius: var(--radius-md); }
+
+.container { width: 100%; max-width: var(--container); margin: 0 auto; padding-inline: var(--gutter); }
+
+a { color: var(--primary); text-decoration: none; }
+a:hover { color: var(--accent); }

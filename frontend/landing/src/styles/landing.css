@@ -1,6 +1,6 @@
 /* Local page styles — ported verbatim from the ASComply Africa prototype's
    inline <style> block. Keyframes for the hero product mock + hover transitions.
-   Token vars (--accent, --bg-2, --line-3) resolve via inheritance from .if-v2. */
+   Token vars (--accent, --bg-2, --line-3) resolve via inheritance from .asc-app. */
 
 * {
   box-sizing: border-box;

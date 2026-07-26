@@ -1,0 +1,23 @@
+/* ============================================================
+   ASComply — entry stylesheet
+   Import THIS file to pull in the whole system in the right order.
+
+   Layers, in order:
+     1. tokens/    — :root custom properties (the design system proper)
+     2. utilities  — opt-in .t-* / .band-* / .card helpers
+     3. app-layer  — .asc-app product surfaces (inputs, rows, status,
+                     mono role) + the legacy Base token vocabulary
+                     bridged onto the tokens above
+
+   tokens/ and utilities.css are vendored VERBATIM from the Claude Design
+   project "ASComply Design System" (999b7034-9f23-43d4-9229-51af7dde9f62);
+   app-layer.css verbatim from the prototype project's ascomply-app.css.
+   Edit them there and re-pull — do not patch them here.
+   ============================================================ */
+
+@import url('./tokens/typography.css');
+@import url('./tokens/colors.css');
+@import url('./tokens/spacing.css');
+@import url('./tokens/hero-grid.css');
+@import url('./utilities.css');
+@import url('./app-layer.css');

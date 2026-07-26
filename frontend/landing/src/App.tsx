@@ -13,7 +13,7 @@ import { Pricing } from './components/Pricing'
 import { DemoCta } from './components/DemoCta'
 import { Footer } from './components/Footer'
 
-// The whole page lives under `.if-v2` — that scope defines the design-system
+// The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
 // .mono, .grid-bg, .dot-bg) that every section relies on.
 export default function App() {
@@ -22,7 +22,7 @@ export default function App() {
   const onBookDemo = () => setDemoOpen(true)
   return (
     <div
-      className="if-v2"
+      className="asc-app"
       style={{
         minHeight: '100vh',
         background: 'var(--bg-1)',

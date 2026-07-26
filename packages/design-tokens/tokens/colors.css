@@ -1,0 +1,65 @@
+/* ============================================================
+   ASComply — Color
+   Authored in OKLCH, shadcn token names. Warm cream page,
+   deep teal primary, amber accent, two dark bands.
+   ============================================================ */
+
+:root {
+  /* ---------- CORE (verbatim from source :root) ---------- */
+  --background: oklch(98.5% .008 85); /* warm cream page bg */
+  --foreground: oklch(18% .02 200);
+  --ink: oklch(16% .03 210); /* heading black-teal */
+  --card: oklch(100% 0 0);
+  --card-foreground: oklch(18% .02 200);
+  --popover: oklch(100% 0 0);
+  --popover-foreground: oklch(18% .02 200);
+  --primary: oklch(32% .06 200); /* deep teal-green */
+  --primary-foreground: oklch(98.5% .008 85);
+  --accent: oklch(72% .15 65); /* amber / ochre */
+  --accent-foreground: oklch(18% .02 200);
+  --secondary: oklch(94% .015 190);
+  --secondary-foreground: oklch(22% .04 200);
+  --muted: oklch(95.5% .012 90);
+  --muted-foreground: oklch(45% .02 210);
+  --surface: oklch(22% .04 210); /* dark section bg */
+  --surface-foreground: oklch(97% .01 85);
+  --destructive: oklch(55% .2 25);
+  --destructive-foreground: oklch(98% 0 0);
+  --border: oklch(90% .012 190);
+  --input: oklch(90% .012 190);
+  --ring: oklch(72% .15 65); /* focus ring = accent */
+
+  /* ---------- TINTS (the icon-tile / hover layer) ---------- */
+  --primary-10: oklch(32% .06 200 / .1); /* icon tiles on light */
+  --primary-20: oklch(32% .06 200 / .2);
+  --primary-90: oklch(32% .06 200 / .9); /* button hover */
+  --accent-10: oklch(72% .15 65 / .1); /* amber icon tiles */
+  --accent-20: oklch(72% .15 65 / .2);
+  --on-dark-5: oklch(100% 0 0 / .05); /* card fill on dark bands */
+  --on-dark-10: oklch(100% 0 0 / .1); /* hairline on dark bands */
+  --on-dark-20: oklch(100% 0 0 / .2);
+  --on-dark-70: oklch(100% 0 0 / .7); /* body copy on dark bands */
+
+  /* ---------- SEMANTIC ALIASES ---------- */
+  --text-heading: var(--ink);
+  --text-body: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --text-on-dark: var(--surface-foreground);
+  --text-eyebrow: var(--primary);
+  --text-eyebrow-dark: var(--accent);
+  --surface-page: var(--background);
+  --surface-card: var(--card);
+  --surface-tinted: var(--muted);
+  --surface-dark: var(--surface);
+  --border-hairline: var(--border);
+  --border-on-dark: var(--on-dark-10);
+
+  /* ---------- GRADIENTS ---------- */
+  --gradient-hero: linear-gradient(135deg, oklch(28% .06 205) 0%, oklch(35% .08 195) 55%, oklch(42% .09 180) 100%); /* @kind color */
+  --gradient-accent: linear-gradient(135deg, oklch(78% .16 70) 0%, oklch(68% .17 45) 100%); /* @kind color */
+
+  /* ---------- SHADOWS ---------- */
+  --shadow-elegant: 0 20px 50px -20px oklab(32% -.0563816 -.0205212 / .4); /* @kind shadow */ /* hero image, big panels */
+  --shadow-soft: 0 4px 20px -8px oklab(18% -.0187939 -.0068404 / .15); /* @kind shadow */ /* floating chips */
+  --shadow-card: 0 1px 2px oklab(18% -.0187939 -.0068404 / .06); /* @kind shadow */ /* resting cards */
+}

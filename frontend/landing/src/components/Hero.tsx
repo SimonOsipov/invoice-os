@@ -2,7 +2,7 @@ import { HERO_CHECKS } from '../data'
 
 export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
   return (
-    <section id="top" className="grid-bg" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
+    <section id="top" className="hero-grid hero-grid-fade" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
       <div
         className="ios-grid ios-2"
         style={{

@@ -15,6 +15,10 @@ export const warnGlyph = <Icon paths={['M12 9v4M12 17h.01']} size={12} strokeWid
 export const plusGlyph = <Icon paths={['M12 5v14M5 12h14']} size={15} strokeWidth={2} />
 export const searchGlyph = <Icon paths={['M21 21l-4.3-4.3', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z']} size={15} />
 export const shieldGlyph = <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={16} />
+// Env-banner pair, both at 15 so the two states swap without shifting the row
+// (mirrors ops-console TopBar.tsx's SHIELD_ICON / SANDBOX_ICON).
+export const shieldGlyph15 = <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={15} />
+export const flaskGlyph = <Icon paths={['M9 3h6M10 3v6.5L5.5 17a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 9.5V3', 'M7.5 14h9']} size={15} />
 export const importGlyph = <Icon paths={['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']} size={14} />
 export const downloadGlyph = <Icon paths={['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']} size={15} />
 export const sendGlyph = <Icon paths={['M22 2 11 13', 'M22 2l-7 20-4-9-9-4 20-7Z']} size={15} />

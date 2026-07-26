@@ -98,7 +98,8 @@ export const MODULES: Module[] = [
 
 export type Rule = { title: string; body: string; glyph: ReactNode }
 
-const rg = (paths: string[]) => <Icon paths={paths} size={13} />
+// Rule-list glyphs sit in 36px icon tiles, so they render at the DS's 18px rung.
+const rg = (paths: string[]) => <Icon paths={paths} size={18} />
 
 export const RULES: Rule[] = [
   { title: 'TIN & VAT identifier checks', body: 'Format, presence, and buyer/seller match validated automatically.', glyph: rg(['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']) },

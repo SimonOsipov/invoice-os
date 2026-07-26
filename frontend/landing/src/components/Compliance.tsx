@@ -39,14 +39,13 @@ export function Compliance() {
                 <span
                   style={{
                     flex: 'none',
-                    width: 22,
-                    height: 22,
+                    width: 36,
+                    height: 36,
                     borderRadius: 'var(--radius-sm)',
-                    background: 'var(--action-tint)',
+                    background: 'var(--primary-10)',
                     color: 'var(--action)',
                     display: 'grid',
                     placeItems: 'center',
-                    marginTop: 1,
                   }}
                 >
                   {r.glyph}

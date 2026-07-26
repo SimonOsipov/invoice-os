@@ -388,7 +388,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
                     // regardless of theme, so this one swatch deliberately does not follow
                     // a design token (story §6 / task-251 Stage-1 correction K).
-                    <div style={{ background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', justifyContent: 'center' }}>
                       <img
                         data-testid="fiscal-qr"
                         src={`data:image/png;base64,${inv.qr_png_base64}`}

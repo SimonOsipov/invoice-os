@@ -60,8 +60,8 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
             alignItems: 'center',
             gap: 14,
             background: 'var(--status-red-bg)',
-            border: '1px solid #E59A8F',
-            borderLeft: '3px solid #A12822',
+            border: '1px solid var(--status-red-border)',
+            borderLeft: '3px solid var(--status-red-text)',
             borderRadius: 'var(--radius-lg)',
             padding: '12px 16px',
             marginBottom: 16,
@@ -70,7 +70,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
           <span style={{ flex: 'none', color: 'var(--status-red-text)', display: 'inline-flex' }}>{ALERT_ICON}</span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--status-red-text)' }}>{dlCount} submissions in the dead-letter queue</div>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--destructive)', marginTop: 1 }}>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', marginTop: 1 }}>
               Max retries exhausted · oldest {dlAges.length ? dlAges[dlAges.length - 1] : '—'} · review before re-driving
             </div>
           </div>

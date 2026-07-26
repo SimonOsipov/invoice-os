@@ -29,12 +29,15 @@ export function Icon({ paths, size = 16, strokeWidth = 1.6 }: IconProps) {
   )
 }
 
-// Four-square brand mark. currentColor drives the three lighter squares so it
-// adapts to its context; the anchor square stays teal-600.
+// Four-square brand mark. Placeholder: the design system's mark is a RASTER
+// (assets/logo-mark.png) and must never be redrawn — this SVG is a stand-in until
+// that file lands in the repo. currentColor throughout so it adapts to context;
+// the anchor square previously carried #26735A, an emerald from the retired Base
+// system that no token can reach inside an SVG presentation attribute.
 export function BrandMark({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden="true">
-      <rect x="0" y="0" width="9" height="9" rx="1.5" fill="#26735A" />
+      <rect x="0" y="0" width="9" height="9" rx="1.5" fill="currentColor" />
       <rect x="11" y="0" width="9" height="9" rx="1.5" fill="currentColor" opacity="0.82" />
       <rect x="0" y="11" width="9" height="9" rx="1.5" fill="currentColor" opacity="0.82" />
       <rect x="11" y="11" width="9" height="9" rx="1.5" fill="currentColor" opacity="0.82" />

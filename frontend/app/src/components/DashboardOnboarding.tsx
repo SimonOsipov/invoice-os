@@ -9,7 +9,7 @@ export function DashboardOnboarding({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
 
   return (
-    <div style={{ maxWidth: 1280, padding: '30px 36px 56px' }}>
+    <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ marginBottom: 26 }}>
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           COMPLIANCE OVERVIEW

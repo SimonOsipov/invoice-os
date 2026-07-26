@@ -33,7 +33,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   const state = dashboardViewState(base, roll)
 
   return (
-    <div style={{ maxWidth: 1280, padding: '30px 36px 56px' }}>
+    <div style={{ padding: '30px 36px 56px' }}>
       {/* Firm-wide header — rebound to tenant context ([header-chrome-firmwide]);
           the mock taxpayer pill, "SYNCED …", and "Period to date" chrome are gone. */}
       <div style={{ marginBottom: 26 }}>

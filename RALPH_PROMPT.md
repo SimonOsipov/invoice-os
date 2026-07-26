@@ -88,16 +88,26 @@ Design references (for UI stories): the Claude Design **prototype** project `626
 
 ### Phase 0: Story Resolution
 
-1. **Validate the story arg.** `/ralph` requires exactly one build-plan task ID (e.g., `M3-04`). Error and exit if missing.
-2. **Read the Obsidian user story file**:
-   - `mcp__obsidian-mcp-tools__get_vault_file` matching `Simon Vault/Projects/ASComply Africa/User Stories/<Mn>/<STORY-ID>*.md` (use `list_vault_files` against `.../User Stories/<Mn>/` to disambiguate; also check `.../User Stories/Archive/<Mn>/`).
+1. **Validate the story arg.** `/ralph` requires exactly one story reference. Two forms are accepted:
+   - a **sysmap feature** — `F-192`, or its slug (`notifications.notice-failure`). **One feature = one story = one branch = one PR.** This is the current form; a feature is where new work is decided (`/pm-review` step 6.5), so it is the unit `/ralph` builds.
+   - a **build-plan task ID** — `M3-04`. The historical form, kept because stories M1–M5 shipped under it and their Obsidian files are the record.
+
+   Error and exit if missing. If the arg resolves as **both** a feature and a build-plan row, prefer the feature and say so — the map is the live record.
+2. **Read the story source.** *Feature form:*
+   - `mcp__sysmap__sysmap_feature_show {"feature": "<ARG>"}`. This IS a **basic** story and needs no Obsidian file: the feature's `name` + `description` are the Objective, its **acceptance criteria are the Core ACs**, its `screen` says where the surface lives, and `depends_on` names what must already exist. Set `PLANNING_REQUIRED=true` and `STORY_SOURCE=sysmap`.
+   - Refuse to build a feature whose status is not `planned` or `building` — anything else already has code, and `/ralph` would be re-implementing it. Say which status you found.
+   - Set its status to `building` before Phase 1 (`sysmap_feature_status_set`), so a concurrent invocation and the queue both see it is in flight.
+
+   *Build-plan form:*
+   - `mcp__obsidian-mcp-tools__get_vault_file` matching `Simon Vault/Projects/ASComply Africa/User Stories/<Mn>/<STORY-ID>*.md` (use `list_vault_files` against `.../User Stories/<Mn>/` to disambiguate; also check `.../User Stories/Archive/<Mn>/`). Set `STORY_SOURCE=obsidian`.
    - If no Obsidian story exists yet, fall back to the build plan: read `Simon Vault/Projects/ASComply Africa/Build Plan — 0 to MVP.html`, find the `<STORY-ID>` row (Task / Layer / Size / Depends / the milestone's "Ships when true"), and treat that row + the milestone goal as a **basic** story (set `PLANNING_REQUIRED=true`).
-3. **Derive the branch slug.** If the story has a `## Branch Strategy` section, use it. Otherwise synthesize `BRANCH=feature/<lowercase-story-id>-<kebab-title>` (e.g. `feature/m3-04-validation-v1`).
+3. **Derive the branch slug.** If the story has a `## Branch Strategy` section, use it. Otherwise synthesize `BRANCH=feature/<lowercase-story-id>-<kebab-title>` (e.g. `feature/m3-04-validation-v1`). For a feature, the id is its tag lower-cased and the title is its name: `F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`.
 4. **Query Backlog for subtasks**:
    ```
    mcp__backlog__task_list({ labels: ["story:<lowercase-story-id>"], status: "To Do" })
    ```
 5. **Classify the story state**:
+   - **`STORY_SOURCE=sysmap`** → always **BASIC**. A feature carries intent (name, description, acceptance criteria) and never subtasks — sysmap is not a task tracker. Its Backlog subtasks, if any, are labelled `story:f-192`.
    - **Zero subtasks + Objective/Core ACs present (or build-plan fallback)** → **BASIC** → set `PLANNING_REQUIRED=true`; topo-sort + plan-logging happen at the end of Phase 0.6.
    - **Subtasks returned (or an architect-level Obsidian story with a Subtasks section)** → **PRE-PLANNED** → topo-sort by `dependencies` → linear execution order, log the plan, skip Phase 0.6.
    - **Neither** → error: "story <ID> is neither basic (no Objective/Core ACs, not in the build plan) nor pre-planned (no Backlog subtasks) — run /pm-review first."
@@ -274,7 +284,7 @@ After the FINAL subtask's Stage 4 completes:
 
 Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This is the second, story-altitude pass: it verifies the *assembled feature against the original objective*, not per-subtask diffs. It is **not** an agent-driven browsing pass with a lease/label handshake — `dev-env.yml` fires automatically when the PR is marked ready and deploys the whole coherent fleet to the PR's own ephemeral Railway environment, running smoke + topology (and any milestone demo script) E2E in CI.
 
-1. **Read the original acceptance criteria** from the Obsidian parent story (the original objective — NOT the possibly-edited subtask ACs), plus the milestone's "Ships when true" bullets from the build plan.
+1. **Read the original acceptance criteria** — NOT the possibly-edited subtask ACs. `STORY_SOURCE=sysmap`: the feature's acceptance criteria from `sysmap_feature_show`, which are standing invariants and are exactly what must hold on the deployed fleet. `STORY_SOURCE=obsidian`: the Obsidian parent story's original objective, plus the milestone's "Ships when true" bullets from the build plan.
 2. **Ensure the deploy gate fires.** Marking the PR ready (Phase 2 FINAL) triggers `dev-env.yml` (event `ready_for_review`). If it didn't fire (e.g. the PR was already ready), re-trigger by pushing a commit, or dispatch manually:
    ```bash
    BRANCH="$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD)"
@@ -310,7 +320,7 @@ Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This i
 
 ### Phase 4: Worktree Cleanup
 
-After the PR merges (manual, or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY-ID>` — it removes the worktree + branch, marks subtasks Done in Backlog, and archives the story in Obsidian (`User Stories/Archive/<Mn>/`). Or manually:
+After the PR merges (manual, or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY-ID>` — it removes the worktree + branch, marks subtasks Done in Backlog, archives the story in Obsidian (`User Stories/Archive/<Mn>/`), and in step 8 rescans sysmap and moves the feature off `building`. That status move is what advances a `/ralph-goal` loop to its next step, so **a goal loop does not progress until post-merge has run.** Or manually:
 
 ```bash
 git -C "$MAIN_CHECKOUT" worktree remove "$WORKTREE_PATH"

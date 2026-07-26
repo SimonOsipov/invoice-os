@@ -20,7 +20,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
   const d = buildSubmissionDrawer(job, env, naira(job.raw), CHECK_ICON, CLOSE_ICON)
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(20,23,26,0.32)', animation: 'opsFade 160ms ease-out' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.32)', animation: 'opsFade 160ms ease-out' }} />
       <div
         className="ops-drawer"
         style={{
@@ -33,7 +33,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           maxWidth: '94vw',
           background: 'var(--bg-1)',
           borderLeft: '1px solid var(--line-2)',
-          boxShadow: '-24px 0 48px -24px rgba(20,23,26,0.3)',
+          boxShadow: '-24px 0 48px -24px oklch(20% .02 210 / 0.3)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'opsDrawer 200ms ease-out',
@@ -63,7 +63,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onClose}
             className="ops-btn"
-            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-lg)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
+            style={{ border: 0, background: 'var(--bg-3)', cursor: 'pointer', width: 30, height: 30, borderRadius: 'var(--radius-input)', color: 'var(--fg-2)', display: 'grid', placeItems: 'center' }}
           >
             {CLOSE_ICON}
           </button>
@@ -71,7 +71,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>
           {/* meta grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: 22 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 22 }}>
             <div style={{ background: 'var(--bg-2)', padding: '12px 14px' }}>
               <div className="label">Idempotency key</div>
               <div className="mono" style={{ fontSize: 12, fontWeight: 600, marginTop: 4 }}>
@@ -102,7 +102,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           <div className="label" style={{ marginBottom: 10 }}>
             Validation result
           </div>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 22 }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 22 }}>
             {d.checks.map((c) => (
               <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ color: c.color, display: 'inline-flex' }}>{c.icon}</span>
@@ -143,7 +143,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           {/* payloads */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <span className="label">Request payload</span>
-            <button type="button" onClick={onToggleReq} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--accent)' }}>
+            <button type="button" onClick={onToggleReq} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--action)' }}>
               {reqOpen ? 'COLLAPSE' : 'EXPAND'}
             </button>
           </div>
@@ -154,7 +154,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
           )}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <span className="label">Tax-authority exchange</span>
-            <button type="button" onClick={onToggleRes} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--accent)' }}>
+            <button type="button" onClick={onToggleRes} className="ops-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: 'var(--action)' }}>
               {resOpen ? 'COLLAPSE' : 'EXPAND'}
             </button>
           </div>
@@ -173,7 +173,7 @@ export function JobDrawer({ job, env, reqOpen, resOpen, onToggleReq, onToggleRes
             type="button"
             onClick={onCancel}
             className="ops-btn"
-            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, color: 'var(--status-red-text)' }}
+            style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 40, padding: '0 16px', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, color: 'var(--status-red-text)' }}
           >
             Cancel
           </button>

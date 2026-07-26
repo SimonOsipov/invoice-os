@@ -28,18 +28,18 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
   return (
     <div
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(20,23,26,0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="Edit field mapping"
-        style={{ width: 620, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ width: 620, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: '0 24px 60px -20px oklch(20% .02 210 / 0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 600 }}>Edit field mapping</div>
+            <div className="card-title">Edit field mapping</div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 3 }}>
               ERP FIELD → FIRS UBL PATH
             </div>
@@ -49,7 +49,7 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
             onClick={onClose}
             className="pf-btn"
             aria-label="Close"
-            style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+            style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
           >
             {closeGlyph}
           </button>
@@ -65,14 +65,14 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
                   </div>
                   <input className="pf-input" value={r.erp} onChange={(e) => updateRow(i, 'erp', e.target.value)} style={{ ...MONO_INPUT, color: 'var(--fg-1)' }} />
                 </label>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--line-3)', paddingBottom: 10, textAlign: 'center' }} aria-hidden="true">
+                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-4)', paddingBottom: 10, textAlign: 'center' }} aria-hidden="true">
                   →
                 </span>
                 <label style={{ minWidth: 0 }}>
                   <div className="label" style={{ marginBottom: 5 }}>
                     FIRS UBL target
                   </div>
-                  <input className="pf-input" value={r.ubl} onChange={(e) => updateRow(i, 'ubl', e.target.value)} style={{ ...MONO_INPUT, color: 'var(--accent)' }} />
+                  <input className="pf-input" value={r.ubl} onChange={(e) => updateRow(i, 'ubl', e.target.value)} style={{ ...MONO_INPUT, color: 'var(--action)' }} />
                 </label>
               </div>
             </div>

@@ -75,7 +75,8 @@ export const STEPS: Step[] = [
 
 export type Module = { title: string; body: string; glyph: ReactNode }
 
-const mg = (paths: string[]) => <Icon paths={paths} size={22} />
+// Module glyphs render bare (no tile) on the gradient band at the DS 20px rung.
+const mg = (paths: string[]) => <Icon paths={paths} size={20} />
 
 export const MODULES: Module[] = [
   { title: 'Business profile', body: 'Multi-tenant setup, tax details, numbering, currency, branches.', glyph: mg(['M3 21h18', 'M5 21V7l8-4v18', 'M19 21V11l-6-4']) },
@@ -98,7 +99,8 @@ export const MODULES: Module[] = [
 
 export type Rule = { title: string; body: string; glyph: ReactNode }
 
-const rg = (paths: string[]) => <Icon paths={paths} size={13} />
+// Rule-list glyphs sit in 36px icon tiles, so they render at the DS's 18px rung.
+const rg = (paths: string[]) => <Icon paths={paths} size={18} />
 
 export const RULES: Rule[] = [
   { title: 'TIN & VAT identifier checks', body: 'Format, presence, and buyer/seller match validated automatically.', glyph: rg(['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']) },
@@ -192,7 +194,8 @@ export const APPROVALS: Approval[] = [
 export type AudienceFeature = { title: string; body: string; glyph: ReactNode }
 export type AudienceStat = { value: string; label: string; color: string }
 
-const fg = (paths: string[]) => <Icon paths={paths} size={14} />
+// Feature-list glyphs sit in 36px icon tiles, so they render at the DS's 18px rung.
+const fg = (paths: string[]) => <Icon paths={paths} size={18} />
 const tg = (paths: string[]) => <Icon paths={paths} size={15} />
 
 export type Audience = {
@@ -216,10 +219,10 @@ export const FIRM: Audience = {
     { title: 'White-glove client onboarding', body: 'Templates and imports to set up new books fast.', glyph: fg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M19 8v6', 'M22 11h-6']) },
   ],
   stats: [
-    { value: '1 login', label: 'All client companies, switch instantly.', color: 'var(--fg-1)' },
-    { value: '25%', label: 'Recurring partner revenue share.', color: 'var(--accent)' },
+    { value: '1 login', label: 'Every client company, switched instantly.', color: 'var(--fg-1)' },
+    { value: '25%', label: 'Recurring revenue share per client.', color: 'var(--accent)' },
   ],
-  cta: 'Book a demo',
+  cta: 'Join the partner program',
 }
 
 export const INHOUSE: Audience = {
@@ -234,11 +237,48 @@ export const INHOUSE: Audience = {
     { title: 'Month-end close reports', body: 'VAT/WHT summaries and exception reports on demand.', glyph: fg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8', 'M16 17H8']) },
   ],
   stats: [
-    { value: '4 roles', label: 'Creator, reviewer, approver & admin built in.', color: 'var(--fg-1)' },
-    { value: '1 company', label: 'Full control of your own compliance.', color: 'var(--accent)' },
+    { value: '4 roles', label: 'Creator, reviewer, approver, admin.', color: 'var(--fg-1)' },
+    { value: '1 company', label: 'Full control of your compliance.', color: 'var(--accent)' },
   ],
-  cta: 'Book a demo',
+  cta: 'Book a team demo',
 }
+
+export const FINTECH: Audience = {
+  tabIcon: tg(['m18 16 4-4-4-4', 'm6 8-4 4 4 4', 'm14.5 4-5 16']),
+  headline: 'Sell compliance to your merchants as a feature.',
+  body:
+    'Call one REST endpoint and every merchant on your platform gets validated, archived and transmitted invoices. Scoped keys per tenant, signed webhooks for clearance events, and a sandbox adapter to certify against.',
+  features: [
+    { title: 'One REST endpoint', body: 'POST an invoice, get a transmit-ready payload.', glyph: fg(['m18 16 4-4-4-4', 'm6 8-4 4 4 4', 'm14.5 4-5 16']) },
+    { title: 'Per-merchant tenancy', body: 'Isolated books and scoped keys per merchant.', glyph: fg(['M3 21h18', 'M5 21V7l8-4v18', 'M19 21V11l-6-4']) },
+    {
+      title: 'Signed webhooks',
+      body: 'Clearance and CSID events pushed as they land.',
+      glyph: fg(['M12 2v4', 'm16.2 7.8 2.9-2.9', 'M18 12h4', 'm16.2 16.2 2.9 2.9', 'M12 18v4', 'm4.9 19.1 2.9-2.9', 'M2 12h4', 'm4.9 4.9 2.9 2.9']),
+    },
+    {
+      title: 'Sandbox MBS adapter',
+      body: 'Certify against the test adapter first.',
+      glyph: fg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'm9 15 2 2 4-4']),
+    },
+    { title: 'Embed or white-label', body: 'Ship compliance under your own brand.', glyph: fg(['M7 7h10v10H7z', 'M3 3h18v18H3z']) },
+  ],
+  stats: [
+    { value: '1 API', label: 'Validate, archive and transmit it all.', color: 'var(--fg-1)' },
+    { value: 'Unlimited', label: 'Merchant tenants, one integration.', color: 'var(--accent)' },
+  ],
+  cta: 'Request API access',
+}
+
+/* Merchant-tenant table behind the fintech segment (prototype `apiTenants`). */
+export type ApiTenant = { name: string; calls: string; pass: string; state: string; ok: boolean }
+
+export const API_TENANTS: ApiTenant[] = [
+  { name: 'Paystack merchants', calls: '18,204', pass: '99.2%', state: 'LIVE', ok: true },
+  { name: 'Flutterwave collections', calls: '11,876', pass: '98.7%', state: 'LIVE', ok: true },
+  { name: 'Moniepoint POS', calls: '7,431', pass: '97.4%', state: 'LIVE', ok: true },
+  { name: 'Kuda business', calls: '2,190', pass: '—', state: 'SANDBOX', ok: false },
+]
 
 /* ------------------------------------------------------------------ */
 /* Developers — API points                                             */
@@ -259,7 +299,7 @@ export const API_POINTS: ApiPoint[] = [
 /* Pricing — plans (monthly / annual)                                  */
 /* ------------------------------------------------------------------ */
 
-export type PlanVariant = 'light' | 'dark'
+export type PlanVariant = 'light' | 'featured'
 
 export type Plan = {
   name: string
@@ -299,7 +339,7 @@ export const PLANS: Plan[] = [
     metaMonthly: 'BILLED MONTHLY · UP TO 5 TENANTS',
     metaAnnual: 'BILLED ANNUALLY · UP TO 5 TENANTS',
     cta: 'Book a demo',
-    variant: 'dark',
+    variant: 'featured',
     features: ['Up to 25,000 invoices / mo', 'API v1 + signed webhooks', 'Approval workflows & roles', 'Live MBS/FIRS transmission', 'ERP connectors', 'Priority support'],
   },
   {
@@ -338,17 +378,20 @@ export const PLAN_COLORS: Record<PlanVariant, {
     btnBg: 'transparent',
     btnFg: 'var(--fg-1)',
     btnBorder: 'var(--line-2)',
-    checkColor: 'var(--accent)',
+    checkColor: 'var(--action)',
   },
-  dark: {
-    cardBg: 'var(--slate-900)',
-    cardBorder: 'var(--slate-900)',
-    titleColor: '#fff',
-    subColor: 'var(--slate-400)',
-    featColor: 'var(--slate-200)',
+  /* The featured tier, ported from the prototype: a --gradient-hero card with a
+     transparent border and an amber CTA. On light cards the checks are teal
+     (action); on this dark card they are amber, per the prototype. */
+  featured: {
+    cardBg: 'var(--gradient-hero)',
+    cardBorder: 'transparent',
+    titleColor: 'var(--surface-foreground)',
+    subColor: 'oklch(100% 0 0 / .62)',
+    featColor: 'oklch(100% 0 0 / .84)',
     btnBg: 'var(--accent)',
-    btnFg: '#fff',
+    btnFg: 'var(--ink)',
     btnBorder: 'var(--accent)',
-    checkColor: 'var(--teal-300)',
+    checkColor: 'var(--accent)',
   },
 }

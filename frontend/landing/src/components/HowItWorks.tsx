@@ -16,22 +16,22 @@ export function HowItWorks() {
           }}
         >
           <div>
-            <div className="label" style={{ marginBottom: 14 }}>
-              / 01 — HOW IT WORKS
+            <div className="eyebrow" style={{ marginBottom: 14 }}>
+              HOW IT WORKS
             </div>
             <h2 style={{ fontSize: 40, lineHeight: 1.08, letterSpacing: '-0.03em', fontWeight: 600, margin: 0, maxWidth: 600 }}>
               From your accounting system to a compliant invoice in three steps.
             </h2>
           </div>
-          <div style={{ maxWidth: 340, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '20px 22px' }}>
+          <div style={{ maxWidth: 340, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
               <span
                 style={{
                   flex: 'none',
                   width: 26,
                   height: 26,
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--accent-tint)',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--action-tint)',
                   color: 'var(--accent)',
                   display: 'grid',
                   placeItems: 'center',
@@ -47,35 +47,47 @@ export function HowItWorks() {
             </p>
           </div>
         </div>
+        {/* The three steps sit in a single 24px --gradient-hero panel, cells
+            divided by --on-dark-10 hairlines — not light cards on cream. */}
         <div
           className="ios-grid ios-3"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(3, 1fr)',
             gap: 1,
-            background: 'var(--line-1)',
-            border: '1px solid var(--line-1)',
+            background: 'var(--on-dark-10)',
+            backgroundImage: 'var(--gradient-hero)',
             borderRadius: 'var(--radius-xl)',
             overflow: 'hidden',
+            boxShadow: 'var(--shadow-elegant)',
           }}
         >
           {STEPS.map((s) => (
-            <div key={s.num} style={{ background: 'var(--bg-2)', padding: '32px 28px 36px', display: 'flex', flexDirection: 'column' }}>
+            <div
+              key={s.num}
+              style={{
+                background: 'var(--on-dark-5)',
+                padding: '36px 30px 40px',
+                display: 'flex',
+                flexDirection: 'column',
+                borderRight: '1px solid var(--on-dark-10)',
+              }}
+            >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 28 }}>
                 <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
                   {s.num}
                 </span>
-                <span style={{ color: 'var(--fg-3)' }}>{s.glyph}</span>
+                <span style={{ color: 'var(--on-dark-70)' }}>{s.glyph}</span>
               </div>
-              <h3 style={{ fontSize: 21, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 10px' }}>{s.title}</h3>
-              <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 0 18px', flex: 1 }}>{s.body}</p>
+              <h3 style={{ fontSize: 21, letterSpacing: '-0.02em', margin: '0 0 10px', color: 'var(--surface-foreground)' }}>{s.title}</h3>
+              <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--on-dark-70)', margin: '0 0 18px', flex: 1 }}>{s.body}</p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {s.points.map((p) => (
                   <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--accent)', flex: 'none' }}>
-                      <Icon paths={['M20 6 9 17l-5-5']} />
+                    <span style={{ color: 'var(--accent)', flex: 'none', display: 'inline-flex' }}>
+                      <Icon paths={['M20 6 9 17l-5-5']} size={14} strokeWidth={2} />
                     </span>
-                    <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{p}</span>
+                    <span style={{ fontSize: 13, color: 'var(--on-dark-70)' }}>{p}</span>
                   </div>
                 ))}
               </div>

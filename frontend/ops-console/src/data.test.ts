@@ -154,7 +154,7 @@ describe('RATE_LIMIT', () => {
       current: '58',
       limit: '100',
       width: '58%',
-      color: 'var(--accent)',
+      color: 'var(--action)',
       detail: 'Sandbox throughput · resets each second',
     })
   })
@@ -214,7 +214,7 @@ describe('PAST_INVOICES', () => {
 
   it('past_invoices_open_row_is_FB_2026_07_and_its_amount_is_computed_via_spendTotals_proj_not_a_literal', () => {
     const open = PAST_INVOICES.find((p) => p.kind === 'open')!
-    expect(open.id).toBe('FB-2026-07')
+    expect(open.id).toBe('ASC-2026-07')
     expect(open.amount).toBe(nairaC(spendTotals().proj))
     expect(open.amount).toBe('₦5.08M')
   })

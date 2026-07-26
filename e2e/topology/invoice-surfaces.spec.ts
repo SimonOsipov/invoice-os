@@ -530,7 +530,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // every run, so only the overview label + a rendered "<N> TOTAL" donut total are
   // asserted, never a specific N.
   await page.getByRole('button', { name: /Overview/ }).click()
-  await expect(page.getByText('/ COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
   await expect(page.getByText(/^\d+ TOTAL$/)).toBeVisible()
 
   // 7b. Post-fix Clients health pill -- the deterministic per-entity rollup-updated

@@ -143,8 +143,8 @@ export const API_KEYS: ApiKey[] = [
     id: 'live',
     tag: 'LIVE',
     name: 'Production secret',
-    full: 'fb_live_sk_9f2a71c4d8e0b6a3f19c72e4',
-    mask: 'fb_live_sk_' + '·'.repeat(20) + '72e4',
+    full: 'asc_live_sk_9f2a71c4d8e0b6a3f19c72e4',
+    mask: 'asc_live_sk_' + '·'.repeat(20) + '72e4',
     tagBg: 'var(--status-green-bg)',
     tagBorder: 'var(--status-green-border)',
     tagText: 'var(--status-green-text)',
@@ -156,8 +156,8 @@ export const API_KEYS: ApiKey[] = [
     id: 'sandbox',
     tag: 'SANDBOX',
     name: 'Sandbox secret',
-    full: 'fb_test_sk_4c71a90f2b8e6d13c05a9f4c',
-    mask: 'fb_test_sk_' + '·'.repeat(20) + '9f4c',
+    full: 'asc_test_sk_4c71a90f2b8e6d13c05a9f4c',
+    mask: 'asc_test_sk_' + '·'.repeat(20) + '9f4c',
     tagBg: 'var(--status-amber-bg)',
     tagBorder: 'var(--status-amber-border)',
     tagText: 'var(--status-amber-text)',
@@ -216,13 +216,13 @@ export const REQ_LOG: ApiRequest[] = [
 // bar is pinned at '68%' even though 341/500 is 68.2%, so deriving the width from
 // current/limit would drift from the design. Do not compute it.
 export const RATE_LIMIT: Record<Env, RateLimit> = {
-  sandbox: { current: '58', limit: '100', width: '58%', color: 'var(--accent)', detail: 'Sandbox throughput · resets each second' },
-  live: { current: '341', limit: '500', width: '68%', color: 'var(--accent)', detail: 'Production throughput · burst to 750 req·s' },
+  sandbox: { current: '58', limit: '100', width: '58%', color: 'var(--action)', detail: 'Sandbox throughput · resets each second' },
+  live: { current: '341', limit: '500', width: '68%', color: 'var(--action)', detail: 'Production throughput · burst to 750 req·s' },
 }
 
 // proto:1014-1015. Two-entry lookup maps kept beside the seed they colour.
-export const METHOD_BG: Record<string, string> = { POST: 'var(--accent-tint)', GET: 'var(--status-muted-bg)' }
-export const METHOD_FG: Record<string, string> = { POST: 'var(--accent)', GET: 'var(--fg-2)' }
+export const METHOD_BG: Record<string, string> = { POST: 'var(--action-tint)', GET: 'var(--status-muted-bg)' }
+export const METHOD_FG: Record<string, string> = { POST: 'var(--action)', GET: 'var(--fg-2)' }
 
 /* ------------------------------------------------------------------ */
 /* Usage & billing (proto:1029-1041)                                   */
@@ -258,10 +258,10 @@ export const BILL_ITEMS: BillItem[] = [
 // proto:1036-1040. Keyed on `id` at render — never on `amount`, which mixes a computed
 // compact figure with three literals and would collide on a seed change.
 export const PAST_INVOICES: PastInvoice[] = [
-  { id: 'FB-2026-07', period: 'Jul 2026 · due Aug 5', amount: nairaC(spendTotals().proj), kind: 'open' },
-  { id: 'FB-2026-06', period: 'Jun 2026', amount: '₦3,184,200', kind: 'paid' },
-  { id: 'FB-2026-05', period: 'May 2026', amount: '₦2,940,500', kind: 'paid' },
-  { id: 'FB-2026-04', period: 'Apr 2026', amount: '₦2,712,300', kind: 'paid' },
+  { id: 'ASC-2026-07', period: 'Jul 2026 · due Aug 5', amount: nairaC(spendTotals().proj), kind: 'open' },
+  { id: 'ASC-2026-06', period: 'Jun 2026', amount: '₦3,184,200', kind: 'paid' },
+  { id: 'ASC-2026-05', period: 'May 2026', amount: '₦2,940,500', kind: 'paid' },
+  { id: 'ASC-2026-04', period: 'Apr 2026', amount: '₦2,712,300', kind: 'paid' },
 ]
 
 // proto:1035's `invSt(kind)` — a two-entry lookup map, same shape as METHOD_BG/METHOD_FG

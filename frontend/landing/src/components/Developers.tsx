@@ -2,7 +2,11 @@ import { API_POINTS } from '../data'
 
 export function Developers() {
   return (
-    <section id="developers" style={{ background: 'var(--slate-900)', color: '#fff', borderBottom: '1px solid var(--slate-800)' }}>
+    <section
+      id="developers"
+      className="band-dark"
+      style={{ background: 'var(--surface)', color: 'var(--text-on-dark)', borderBottom: '1px solid var(--border-on-dark)' }}
+    >
       <div
         className="ios-grid ios-2"
         style={{
@@ -16,13 +20,10 @@ export function Developers() {
         }}
       >
         <div>
-          <div
-            className="mono"
-            style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--teal-300)', marginBottom: 14, textTransform: 'uppercase' }}
-          >
-            / 05 — API &amp; INTEGRATIONS
+          <div className="eyebrow eyebrow-dark" style={{ marginBottom: 14 }}>
+            API &amp; INTEGRATIONS
           </div>
-          <h2 style={{ fontSize: 38, lineHeight: 1.1, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 18px', color: '#fff' }}>
+          <h2 style={{ fontSize: 38, lineHeight: 1.1, letterSpacing: '-0.03em', margin: '0 0 18px', color: 'var(--text-on-dark)' }}>
             Compliance as an API. Drop it into any ERP.
           </h2>
           <p style={{ fontSize: 16, lineHeight: 1.65, color: 'var(--slate-300)', margin: '0 0 28px' }}>
@@ -31,29 +32,50 @@ export function Developers() {
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 30 }}>
             {API_POINTS.map((a, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                <span style={{ color: 'var(--teal-300)' }}>{a.glyph}</span>
-                <span style={{ fontSize: 14, color: 'var(--slate-200)' }}>{a.text}</span>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span
+                  style={{
+                    flex: 'none',
+                    width: 36,
+                    height: 36,
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--on-dark-10)',
+                    color: 'var(--text-on-dark)',
+                    display: 'grid',
+                    placeItems: 'center',
+                  }}
+                >
+                  {a.glyph}
+                </span>
+                <span style={{ fontSize: 14, color: 'var(--on-dark-70)' }}>{a.text}</span>
               </div>
             ))}
           </div>
-          <a href="#demo" className="v2-btn" style={{ background: '#fff', color: 'var(--slate-900)', height: 44, padding: '0 20px' }}>
+          <a
+            href="#demo"
+            className="v2-btn"
+            style={{ background: 'var(--accent)', color: 'var(--accent-foreground)', height: 44, padding: '0 20px' }}
+          >
             Request API access
           </a>
         </div>
 
         {/* code block */}
-        <div style={{ background: '#0c0e10', border: '1px solid var(--slate-800)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--slate-800)' }}>
-            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />
-            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />
-            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#3a3e40' }} />
+        <div style={{ background: 'var(--on-dark-5)', border: '1px solid var(--border-on-dark)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--border-on-dark)' }}>
+            {/* macOS traffic lights. These three stay literal rather than tokenised:
+                they depict another product's window chrome, the way a screenshot
+                would, so they are reference colours and not part of this palette.
+                Tokenising them would make the code block read as ASComply UI. */}
+            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#FF5F57' }} />
+            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#FEBC2E' }} />
+            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#28C840' }} />
             <span className="mono" style={{ fontSize: 11, color: 'var(--slate-400)', marginLeft: 8 }}>
               POST /v1/invoices/validate
             </span>
           </div>
           <pre className="mono" style={{ margin: 0, padding: 20, fontSize: 12.5, lineHeight: 1.75, color: 'var(--slate-200)', overflowX: 'auto' }}>
-            <span style={{ color: 'var(--slate-500)' }}># Validate an invoice against Nigeria MBS rules</span>
+            <span style={{ color: 'var(--slate-400)' }}># Validate an invoice against Nigeria MBS rules</span>
             {'\ncurl https://api.ascomply.africa/v1/invoices/validate \\\n  -H '}
             <span style={{ color: 'var(--teal-300)' }}>"Authorization: Bearer sk_live_…"</span>
             {' \\\n  -d '}
@@ -61,21 +83,21 @@ export function Developers() {
               {'\'{ "buyer_tin": "12345678-0001",\n        "currency": "NGN",\n        "vat_rate": 7.5,\n        "lines": […] }\''}
             </span>
             {'\n\n'}
-            <span style={{ color: 'var(--slate-500)' }}># ← 200 OK</span>
+            <span style={{ color: 'var(--slate-400)' }}># ← 200 OK</span>
             {'\n{\n  '}
-            <span style={{ color: '#8fd3bb' }}>"status"</span>
+            <span style={{ color: 'var(--teal-300)' }}>"status"</span>
             {': '}
-            <span style={{ color: '#e6b673' }}>"validated"</span>
+            <span style={{ color: 'var(--accent)' }}>"validated"</span>
             {',\n  '}
-            <span style={{ color: '#8fd3bb' }}>"ready_to_transmit"</span>
+            <span style={{ color: 'var(--teal-300)' }}>"ready_to_transmit"</span>
             {': '}
-            <span style={{ color: '#e6b673' }}>true</span>
+            <span style={{ color: 'var(--accent)' }}>true</span>
             {',\n  '}
-            <span style={{ color: '#8fd3bb' }}>"errors"</span>
+            <span style={{ color: 'var(--teal-300)' }}>"errors"</span>
             {': [],\n  '}
-            <span style={{ color: '#8fd3bb' }}>"firs_reference"</span>
+            <span style={{ color: 'var(--teal-300)' }}>"firs_reference"</span>
             {': '}
-            <span style={{ color: '#e6b673' }}>"CSID-pending"</span>
+            <span style={{ color: 'var(--accent)' }}>"CSID-pending"</span>
             {'\n}'}
           </pre>
         </div>

@@ -151,21 +151,26 @@ describe('donutSegments', () => {
 })
 
 describe('deslug', () => {
-  it('DASH-T8: hyphens become spaces, each word Title-Cased', () => {
-    expect(deslug('supplier-tin-format')).toBe('Supplier Tin Format')
+  it('DASH-T8: hyphens become spaces, sentence case, and TIN stays an acronym', () => {
+    expect(deslug('supplier-tin-format')).toBe('Supplier TIN format')
   })
 
-  it('DASH-T9: underscores become spaces, each word Title-Cased', () => {
-    expect(deslug('vat_standard_rate')).toBe('Vat Standard Rate')
+  it('DASH-T9: underscores become spaces, sentence case, and VAT stays an acronym', () => {
+    expect(deslug('vat_standard_rate')).toBe('VAT standard rate')
   })
 
-  it('DASH-T10: an already-spaced/capitalized key passes through unchanged', () => {
-    expect(deslug('Already Clean')).toBe('Already Clean')
+  it('DASH-T10: an already-spaced key is normalised to sentence case', () => {
+    expect(deslug('Already Clean')).toBe('Already clean')
   })
 
-  it('DASH-T11: a single lowercase word Title-Cases; an empty string stays empty', () => {
+  it('DASH-T11: a single lowercase word capitalises; an empty string stays empty', () => {
     expect(deslug('single')).toBe('Single')
     expect(deslug('')).toBe('')
+  })
+
+  it('DASH-T11b: a non-leading acronym is uppercased wherever it appears', () => {
+    expect(deslug('buyer-tin-required')).toBe('Buyer TIN required')
+    expect(deslug('mbs-transmission-failed')).toBe('MBS transmission failed')
   })
 })
 
@@ -181,8 +186,8 @@ describe('topFailures', () => {
     ])
 
     expect(result).toEqual([
-      { label: 'Supplier Tin Format', ruleKey: 'supplier-tin-format', count: 3, bar: '100%' },
-      { label: 'Vat Standard Rate', ruleKey: 'vat-standard-rate', count: 1, bar: '33%' },
+      { label: 'Supplier TIN format', ruleKey: 'supplier-tin-format', count: 3, bar: '100%' },
+      { label: 'VAT standard rate', ruleKey: 'vat-standard-rate', count: 1, bar: '33%' },
     ])
   })
 })
@@ -267,12 +272,12 @@ describe('deslug — QA adversarial', () => {
   it('QA-D1: consecutive separators (double hyphen or double underscore) collapse to a single space', () => {
     // deslug splits on a run of separators (/[-_\s]+/) and drops empty tokens, so a
     // doubled separator does not leak a second space into the rendered label.
-    expect(deslug('a--b')).toBe('A B')
-    expect(deslug('a__b')).toBe('A B')
+    expect(deslug('a--b')).toBe('A b')
+    expect(deslug('a__b')).toBe('A b')
   })
 
-  it('QA-D2: mixed hyphen/underscore in the same key deslugs to single-spaced Title Case, same as either alone', () => {
-    expect(deslug('a-b_c')).toBe('A B C')
+  it('QA-D2: mixed hyphen/underscore in the same key deslugs to single-spaced sentence case, same as either alone', () => {
+    expect(deslug('a-b_c')).toBe('A b c')
   })
 
   it('QA-D3: a leading or trailing separator is trimmed away (no edge space)', () => {
@@ -281,7 +286,7 @@ describe('deslug — QA adversarial', () => {
   })
 
   it('QA-D4: a numeric segment is left untouched (no crash on a digit-only "word")', () => {
-    expect(deslug('rule-2-check')).toBe('Rule 2 Check')
+    expect(deslug('rule-2-check')).toBe('Rule 2 check')
   })
 })
 
@@ -309,15 +314,15 @@ describe('topFailures — QA adversarial', () => {
     ])
 
     expect(result).toEqual([
-      { label: 'Rule A', ruleKey: 'rule-a', count: 2, bar: '100%' },
-      { label: 'Rule B', ruleKey: 'rule-b', count: 2, bar: '100%' },
+      { label: 'Rule a', ruleKey: 'rule-a', count: 2, bar: '100%' },
+      { label: 'Rule b', ruleKey: 'rule-b', count: 2, bar: '100%' },
     ])
   })
 
   it('QA-TF2: a single-element list bars its only rule at 100%', () => {
     const result = topFailures([{ rule_key: 'only-rule', invoices: 7 }])
 
-    expect(result).toEqual([{ label: 'Only Rule', ruleKey: 'only-rule', count: 7, bar: '100%' }])
+    expect(result).toEqual([{ label: 'Only rule', ruleKey: 'only-rule', count: 7, bar: '100%' }])
   })
 })
 

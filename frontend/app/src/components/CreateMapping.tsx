@@ -47,12 +47,12 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
       ...col,
       field: fk,
       isAuto,
-      colBg: fk ? (isAuto ? 'rgba(38,115,90,0.05)' : 'var(--accent-tint)') : 'var(--bg-2)',
-      tagBg: isAuto ? 'var(--status-green-bg)' : 'var(--accent-tint)',
-      tagBorder: isAuto ? 'var(--status-green-border)' : 'var(--accent)',
-      tagColor: isAuto ? 'var(--status-green-text)' : 'var(--accent)',
-      dropBorder: dropHot && !fk ? 'var(--accent)' : 'var(--line-2)',
-      dropBg: dropHot && !fk ? 'var(--accent-tint)' : 'transparent',
+      colBg: fk ? (isAuto ? 'var(--action-tint)' : 'var(--action-tint)') : 'var(--bg-2)',
+      tagBg: isAuto ? 'var(--status-green-bg)' : 'var(--action-tint)',
+      tagBorder: isAuto ? 'var(--status-green-border)' : 'var(--action)',
+      tagColor: isAuto ? 'var(--status-green-text)' : 'var(--action)',
+      dropBorder: dropHot && !fk ? 'var(--action)' : 'var(--line-2)',
+      dropBg: dropHot && !fk ? 'var(--action-tint)' : 'transparent',
     }
   })
 
@@ -69,9 +69,9 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     return {
       key: c.key,
       required: !!c.required,
-      bg: armed ? 'var(--accent)' : c.required ? 'var(--status-red-bg)' : 'var(--bg-2)',
-      border: armed ? 'var(--accent)' : c.required ? 'var(--status-red-border)' : 'var(--line-2)',
-      color: armed ? '#fff' : c.required ? 'var(--status-red-text)' : 'var(--fg-1)',
+      bg: armed ? 'var(--action)' : c.required ? 'var(--status-red-bg)' : 'var(--bg-2)',
+      border: armed ? 'var(--action)' : c.required ? 'var(--status-red-border)' : 'var(--line-2)',
+      color: armed ? 'var(--text-on-dark)' : c.required ? 'var(--status-red-text)' : 'var(--fg-1)',
     }
   })
 
@@ -92,17 +92,17 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
       ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
       : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
   const continueBtn = {
-    bg: invNumMapped ? 'var(--accent)' : 'var(--bg-3)',
-    color: invNumMapped ? '#fff' : 'var(--fg-4)',
+    bg: invNumMapped ? 'var(--action)' : 'var(--bg-3)',
+    color: invNumMapped ? 'var(--text-on-dark)' : 'var(--fg-4)',
     cursor: invNumMapped ? 'pointer' : 'not-allowed',
     label: invNumMapped ? `Import ${preview.rows_total} rows` : 'Map invoice number to continue',
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>Map fields to columns · {active.short}</span>
+          <span className="card-title">Map fields to columns · {active.short}</span>
           {allPlaced ? (
             <span className="mono" style={{ fontSize: 11, color: 'var(--status-green-text)' }}>ALL FIELDS PLACED</span>
           ) : (
@@ -110,7 +110,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
           )}
         </div>
         <div style={{ padding: '14px 20px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 12px', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 12px', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', marginBottom: 14 }}>
             <span style={{ flex: 'none', color: 'var(--fg-3)', marginTop: 1 }}>{shieldGlyph}</span>
             <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>
               Drag each field onto the column that holds its data — or click a field, then a column. One spreadsheet row is a single line item; rows group into invoices by the column mapped to{' '}
@@ -140,7 +140,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                   onDragEnd={() => ctx.endDrag()}
                   onClick={() => ctx.armField(c.key)}
                   className="pf-btn"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'grab', fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', padding: '8px 12px', borderRadius: 'var(--radius-lg)', background: c.bg, border: `1px solid ${c.border}`, color: c.color }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'grab', fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', padding: '8px 12px', borderRadius: 'var(--radius-input)', background: c.bg, border: `1px solid ${c.border}`, color: c.color }}
                 >
                   <span style={{ display: 'inline-flex', opacity: 0.6 }}>{gripGlyph}</span>
                   {c.key}
@@ -152,10 +152,10 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-lg)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8.5, fontWeight: 700 }}>{fileExt}</span>
+            <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8.5, fontWeight: 700 }}>{fileExt}</span>
             <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{importFile.name}</span>
           </span>
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{mapFacts}</span>
@@ -186,7 +186,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                 <div style={{ padding: '8px 9px', borderBottom: '1px solid var(--line-1)', minHeight: 66 }}>
                   <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 6 }}>{col.header}</div>
                   {!col.mappable ? (
-                    <div style={{ display: 'grid', placeItems: 'center', height: 30, border: '1px dashed var(--line-2)', borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ display: 'grid', placeItems: 'center', height: 30, border: '1px dashed var(--line-2)', borderRadius: 'var(--radius-sm)' }}>
                       <span style={{ fontSize: 10, color: 'var(--fg-4)', textAlign: 'center', lineHeight: 1.3 }}>unnamed — not mappable</span>
                     </div>
                   ) : col.field ? (
@@ -201,7 +201,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                         }
                         ctx.setDrag(col.field as string)
                       }}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%', cursor: 'grab', background: col.tagBg, border: `1px solid ${col.tagBorder}`, borderRadius: 'var(--radius-md)', padding: '3px 6px' }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%', cursor: 'grab', background: col.tagBg, border: `1px solid ${col.tagBorder}`, borderRadius: 'var(--radius-sm)', padding: '3px 6px' }}
                     >
                       <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: col.tagColor, letterSpacing: '0.01em', textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.field}</span>
                       {col.isAuto && (
@@ -218,7 +218,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                       </span>
                     </span>
                   ) : (
-                    <div style={{ display: 'grid', placeItems: 'center', height: 30, border: `1px dashed ${col.dropBorder}`, borderRadius: 'var(--radius-md)', background: col.dropBg }}>
+                    <div style={{ display: 'grid', placeItems: 'center', height: 30, border: `1px dashed ${col.dropBorder}`, borderRadius: 'var(--radius-sm)', background: col.dropBg }}>
                       <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>drop field</span>
                     </div>
                   )}
@@ -234,11 +234,11 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '14px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '14px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20, minWidth: 0 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
             <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Rows to import</span>
-            <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>{preview.rows_total}</span>
+            <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--action)' }}>{preview.rows_total}</span>
           </span>
           {importError ? (
             <span style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>{importError.message}</span>
@@ -256,13 +256,13 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             (percent !== null ? (
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 90, height: 5, borderRadius: 99, background: 'var(--bg-3)', overflow: 'hidden' }}>
-                  <span style={{ display: 'block', height: '100%', width: `${percent}%`, background: 'var(--accent)' }} />
+                  <span style={{ display: 'block', height: '100%', width: `${percent}%`, background: 'var(--action)' }} />
                 </span>
                 <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{percent}%</span>
               </span>
             ) : (
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--bg-3)', borderTopColor: 'var(--accent)', display: 'block', animation: 'spin 0.7s linear infinite' }} />
+                <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--bg-3)', borderTopColor: 'var(--action)', display: 'block', animation: 'spin 0.7s linear infinite' }} />
                 <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>Working…</span>
               </span>
             ))}

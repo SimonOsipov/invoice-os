@@ -16,7 +16,7 @@ const navBtnStyle = (active: boolean): CSSProperties => ({
   width: '100%',
   border: 0,
   cursor: 'pointer',
-  borderRadius: 'var(--radius-md)',
+  borderRadius: 'var(--radius-sm)',
   padding: '9px 10px',
   textAlign: 'left',
   fontFamily: 'var(--font-sans)',
@@ -41,7 +41,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
           </span>
           <span
             className="mono ops-nav-label"
-            style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.07em', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' }}
+            style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.07em', color: 'var(--action)', border: '1px solid var(--action)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' }}
           >
             DEV
           </span>
@@ -49,16 +49,16 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         {/* client org card */}
         <div
           className="ops-hide-narrow"
-          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--accent-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-lg)', padding: '8px 10px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}
         >
           <span
             style={{
               flex: 'none',
               width: 26,
               height: 26,
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--accent)',
-              color: '#fff',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--action)',
+              color: 'var(--text-on-dark)',
               display: 'grid',
               placeItems: 'center',
               fontSize: 10,
@@ -68,8 +68,8 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             ZP
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--accent-soft)' }}>Zephyr Pay</span>
-            <span className="mono" style={{ display: 'block', fontSize: 9, color: 'var(--accent)', letterSpacing: '0.05em' }}>
+            <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--action-soft)' }}>Zephyr Pay</span>
+            <span className="mono" style={{ display: 'block', fontSize: 9, color: 'var(--action)', letterSpacing: '0.05em' }}>
               SCALE PLAN · ORG_ZP001
             </span>
           </span>
@@ -85,8 +85,8 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
           const badge = n.key === 'submissions' && deadLetterCount ? String(deadLetterCount) : ''
           return (
             <button key={n.key} type="button" onClick={() => onNavigate(n.key)} className="ops-nav" style={navBtnStyle(active)}>
-              <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 'var(--radius-xs)', background: active ? 'var(--accent)' : 'transparent' }} />
-              <span style={{ color: active ? 'var(--accent)' : 'var(--fg-3)', display: 'inline-flex' }}>{n.glyph}</span>
+              <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 'var(--radius-xs)', background: active ? 'var(--action)' : 'transparent' }} />
+              <span style={{ color: active ? 'var(--action)' : 'var(--fg-3)', display: 'inline-flex' }}>{n.glyph}</span>
               <span className="ops-nav-label" style={{ flex: 1 }}>
                 {n.label}
               </span>
@@ -103,7 +103,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         })}
         {/* monthly request quota (prototype line 66–75) */}
         <div className="ops-hide-narrow" style={{ marginTop: 'auto', padding: '12px 8px 4px' }}>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '11px 12px', background: 'var(--bg-1)' }}>
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', padding: '11px 12px', background: 'var(--bg-1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <span className="label">Requests this month</span>
               <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)' }}>
@@ -122,7 +122,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
 
       <div style={{ padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
         <span
-          style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}
+          style={{ flex: 'none', width: 30, height: 30, borderRadius: 99, background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}
         >
           AO
         </span>

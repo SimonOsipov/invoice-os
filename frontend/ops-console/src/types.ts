@@ -36,7 +36,7 @@ export type ToastState = { msg: string; tag: string; tone: ToastTone } | null
 /* ------------------------------------------------------------------ */
 
 // proto:992-995. `full` and `mask` are BOTH literal seed strings — the mask is
-// 'fb_live_sk_' + 20 x U+00B7 MIDDLE DOT + the last four chars, built by the
+// 'asc_live_sk_' + 20 x U+00B7 MIDDLE DOT + the last four chars, built by the
 // prototype at seed time, not derived from `full` at render.
 export type ApiKey = {
   id: string

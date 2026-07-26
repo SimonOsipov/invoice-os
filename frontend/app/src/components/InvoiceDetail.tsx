@@ -310,7 +310,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         </div>
 
         <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
             <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
                 <div>
@@ -323,7 +323,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{inv.buyer_tin ?? '—'}</div>
                 </div>
               </div>
-              <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+              <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="label">Description</span>
                   <span className="label" style={{ textAlign: 'right' }}>Qty</span>
@@ -360,9 +360,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {inv.status === 'failed' && (
-              <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+              <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Submission failed</span>
+                  <span className="card-title">Submission failed</span>
                 </div>
                 <div style={{ padding: 16, fontSize: 12.5, color: 'var(--fg-2)' }}>
                   This submission failed and is terminal — it cannot be re-driven from this screen.
@@ -371,9 +371,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             )}
 
             {shouldShowFiscalRecord(inv) && (
-              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Fiscal record</span>
+                  <span className="card-title">Fiscal record</span>
                 </div>
                 <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div>
@@ -388,7 +388,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
                     // regardless of theme, so this one swatch deliberately does not follow
                     // a design token (story §6 / task-251 Stage-1 correction K).
-                    <div style={{ background: '#fff', borderRadius: 'var(--radius-lg)', padding: 12, display: 'flex', justifyContent: 'center' }}>
+                    <div style={{ background: 'var(--bg-2)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', justifyContent: 'center' }}>
                       <img
                         data-testid="fiscal-qr"
                         src={`data:image/png;base64,${inv.qr_png_base64}`}
@@ -403,15 +403,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>Compliance</span>
+                <span className="card-title">Compliance</span>
               </div>
               <div style={{ padding: 16 }}>
                 {verdict === 'stale' && (
                   <div
                     data-testid="stale-verdict"
-                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
+                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
                   >
                     Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.
                   </div>
@@ -423,7 +423,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 ) : (
                   <div
                     data-testid="not-validated"
-                    style={{ padding: '12px 14px', borderRadius: 'var(--radius-lg)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
+                    style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
                   >
                     Not yet validated — run Re-validate to check compliance.
                   </div>
@@ -432,9 +432,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </div>
 
             {shouldShowRejectionCard(inv) && (
-              <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+              <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>
+                  <span className="card-title">
                     {rejectionProvenance(inv.status) === 'current' ? 'The tax authority rejected this invoice' : 'Last APP rejection'}
                   </span>
                 </div>
@@ -443,7 +443,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     <div
                       key={i}
                       data-testid="rejection-reason-row"
-                      style={{ padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+                      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
                     >
                       <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
                       <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
@@ -454,9 +454,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             )}
 
             {isFixable(inv.status) && (
-              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Fix &amp; re-validate</span>
+                  <span className="card-title">Fix &amp; re-validate</span>
                   <button
                     type="button"
                     onClick={handleRevalidate}
@@ -469,7 +469,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   </button>
                 </div>
                 {revalidateError && (
-                  <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+                  <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
                     {revalidateError}
                   </div>
                 )}
@@ -488,9 +488,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 auto-retrying toHaveCount(N+1), not a point-in-time read across the
                 window. Overlaying history too would duplicate the runId/live-clearing
                 machinery above for a card whose own oracle tolerates the dip. */}
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>Status history</span>
+                <span className="card-title">Status history</span>
               </div>
               <div data-testid="status-history" style={{ padding: '16px 18px' }}>
                 {history.status === 'loading' && <Loading label="Loading history…" />}
@@ -615,7 +615,7 @@ function InvoiceEditForm({
   return (
     <form data-testid="edit-invoice" onSubmit={handleSubmit} style={{ padding: 16 }}>
       {formError && (
-        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
           {formError}
         </div>
       )}

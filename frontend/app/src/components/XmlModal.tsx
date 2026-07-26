@@ -15,13 +15,13 @@ export function XmlModal({ ctx }: { ctx: PlatformCtx }) {
   const xmlText = ublXml(detailInv)
 
   return (
-    <div onClick={ctx.closeXml} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(20,23,26,0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 760, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div onClick={ctx.closeXml} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(16% .03 210 / .42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 760, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-elegant)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{docGlyph2}</span>
+            <span style={{ color: 'var(--action)', display: 'inline-flex' }}>{docGlyph2}</span>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>UBL 2.1 document</div>
+              <div className="card-title">UBL 2.1 document</div>
               <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
                 PEPPOL BIS 3.0 · {detailInv.number}
               </div>
@@ -31,7 +31,7 @@ export function XmlModal({ ctx }: { ctx: PlatformCtx }) {
             <button className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, fontSize: 13 }}>
               <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> Download .xml
             </button>
-            <button onClick={ctx.closeXml} className="pf-btn" style={{ width: 34, height: 34, borderRadius: 'var(--radius-lg)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+            <button onClick={ctx.closeXml} className="pf-btn" style={{ width: 34, height: 34, borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
               {closeGlyph}
             </button>
           </div>

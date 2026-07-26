@@ -19,10 +19,10 @@ export function Toast({ toast }: Props) {
         alignItems: 'center',
         gap: 11,
         background: 'var(--slate-900)',
-        color: '#fff',
-        borderRadius: 'var(--radius-xl)',
+        color: 'var(--text-on-dark)',
+        borderRadius: 'var(--radius-lg)',
         padding: '12px 18px',
-        boxShadow: '0 16px 40px -12px rgba(20,23,26,0.5)',
+        boxShadow: 'var(--shadow-elegant)',
         animation: 'opsToast 200ms ease-out',
       }}
     >

@@ -1,4 +1,4 @@
-import { Icon } from '../icons'
+import { CircleCheck, Icon } from '../icons'
 import { STEPS } from '../data'
 
 export function HowItWorks() {
@@ -16,23 +16,23 @@ export function HowItWorks() {
           }}
         >
           <div>
-            <div className="label" style={{ marginBottom: 14 }}>
-              / 01 — HOW IT WORKS
+            <div className="eyebrow" style={{ marginBottom: 14 }}>
+              01 — HOW IT WORKS
             </div>
             <h2 style={{ fontSize: 40, lineHeight: 1.08, letterSpacing: '-0.03em', fontWeight: 600, margin: 0, maxWidth: 600 }}>
               From your accounting system to a compliant invoice in three steps.
             </h2>
           </div>
-          <div style={{ maxWidth: 340, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '20px 22px' }}>
+          <div style={{ maxWidth: 340, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
               <span
                 style={{
                   flex: 'none',
                   width: 26,
                   height: 26,
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--accent-tint)',
-                  color: 'var(--accent)',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--action-tint)',
+                  color: 'var(--action)',
                   display: 'grid',
                   placeItems: 'center',
                 }}
@@ -55,7 +55,7 @@ export function HowItWorks() {
             gap: 1,
             background: 'var(--line-1)',
             border: '1px solid var(--line-1)',
-            borderRadius: 'var(--radius-xl)',
+            borderRadius: 'var(--radius-lg)',
             overflow: 'hidden',
           }}
         >
@@ -72,8 +72,8 @@ export function HowItWorks() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {s.points.map((p) => (
                   <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--accent)', flex: 'none' }}>
-                      <Icon paths={['M20 6 9 17l-5-5']} />
+                    <span style={{ color: 'var(--accent)', flex: 'none', display: 'inline-flex' }}>
+                      <CircleCheck />
                     </span>
                     <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{p}</span>
                   </div>

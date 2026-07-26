@@ -38,7 +38,7 @@ const layer = (visible: boolean): CSSProperties => ({
 
 function FirmMock() {
   return (
-    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
       <div
         style={{
           display: 'flex',
@@ -49,7 +49,7 @@ function FirmMock() {
         }}
       >
         <span className="label">Client portfolio · 6 companies</span>
-        <span className="mono" style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--action)', fontWeight: 600 }}>
           + ADD CLIENT
         </span>
       </div>
@@ -70,9 +70,9 @@ function FirmMock() {
               flex: 'none',
               width: 30,
               height: 30,
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--accent-tint)',
-              color: 'var(--accent)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--action-tint)',
+              color: 'var(--action)',
               display: 'grid',
               placeItems: 'center',
               fontSize: 12,
@@ -120,7 +120,7 @@ function FirmMock() {
 
 function InhouseMock() {
   return (
-    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
       <div
         style={{
           display: 'flex',
@@ -176,8 +176,8 @@ function InhouseMock() {
               width: 26,
               height: 26,
               borderRadius: 99,
-              background: 'var(--accent-tint)',
-              color: 'var(--accent)',
+              background: 'var(--action-tint)',
+              color: 'var(--action)',
               display: 'grid',
               placeItems: 'center',
               fontSize: 10,
@@ -225,14 +225,13 @@ function AudienceCopy({ data, onBookDemo }: { data: AudienceData; onBookDemo: ()
             <span
               style={{
                 flex: 'none',
-                width: 24,
-                height: 24,
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--accent-tint)',
-                color: 'var(--accent)',
+                width: 36,
+                height: 36,
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--primary-10)',
+                color: 'var(--action)',
                 display: 'grid',
                 placeItems: 'center',
-                marginTop: 1,
               }}
             >
               {f.glyph}
@@ -246,7 +245,7 @@ function AudienceCopy({ data, onBookDemo }: { data: AudienceData; onBookDemo: ()
       </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 30 }}>
         {data.stats.map((st) => (
-          <div key={st.label} style={{ flex: 1, minWidth: 150, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '16px 18px' }}>
+          <div key={st.label} style={{ flex: 1, minWidth: 150, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 18px' }}>
             <div className="mono" style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: st.color }}>
               {st.value}
             </div>
@@ -269,8 +268,8 @@ export function Audience({ onBookDemo }: { onBookDemo: () => void }) {
     <section id="accountants" style={{ borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ textAlign: 'center', marginBottom: 8 }}>
-          <div className="label" style={{ marginBottom: 14 }}>
-            / 04 — WHO IT'S FOR
+          <div className="eyebrow" style={{ marginBottom: 14 }}>
+            04 — WHO IT'S FOR
           </div>
           <h2 style={{ fontSize: 40, lineHeight: 1.08, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 14px' }}>
             One platform. Two ways to run compliance.

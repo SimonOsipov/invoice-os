@@ -6,8 +6,9 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
         <div
           className="ios-grid ios-2 ios-demo-card"
           style={{
-            background: 'var(--slate-900)',
+            background: 'var(--gradient-hero)',
             borderRadius: 'var(--radius-xl)',
+            boxShadow: 'var(--shadow-elegant)',
             padding: '64px 56px',
             display: 'grid',
             gridTemplateColumns: '1.2fr 0.8fr',
@@ -18,19 +19,19 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
           }}
         >
           <div>
-            <div className="mono" style={{ fontSize: 11, letterSpacing: '0.08em', color: 'var(--teal-300)', marginBottom: 16 }}>
+            <div className="eyebrow eyebrow-dark" style={{ marginBottom: 16 }}>
               BOOK A DEMO
             </div>
-            <h2 style={{ fontSize: 42, lineHeight: 1.06, letterSpacing: '-0.035em', fontWeight: 600, color: '#fff', margin: '0 0 16px' }}>
+            <h2 style={{ fontSize: 42, lineHeight: 1.06, letterSpacing: '-0.035em', color: 'var(--text-on-dark)', margin: '0 0 16px' }}>
               See your invoices pass
               <br />
               compliance in real time.
             </h2>
-            <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--slate-300)', margin: 0, maxWidth: 440 }}>
+            <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', margin: 0, maxWidth: 440 }}>
               A 20-minute walkthrough with a compliance specialist. Bring a sample invoice file — we'll validate it live.
             </p>
           </div>
-          <div style={{ background: 'var(--bg-2)', borderRadius: 'var(--radius-xl)', padding: 24 }}>
+          <div style={{ background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: 24 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
                 <div className="label" style={{ marginBottom: 6 }}>
@@ -41,7 +42,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                     height: 42,
                     background: 'var(--bg-1)',
                     border: '1px solid var(--line-2)',
-                    borderRadius: 'var(--radius-xl)',
+                    borderRadius: 'var(--radius-input)',
                     display: 'flex',
                     alignItems: 'center',
                     padding: '0 13px',
@@ -61,7 +62,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                     height: 42,
                     background: 'var(--bg-1)',
                     border: '1px solid var(--line-2)',
-                    borderRadius: 'var(--radius-xl)',
+                    borderRadius: 'var(--radius-input)',
                     display: 'flex',
                     alignItems: 'center',
                     padding: '0 13px',
@@ -81,7 +82,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                     height: 42,
                     background: 'var(--bg-1)',
                     border: '1px solid var(--line-2)',
-                    borderRadius: 'var(--radius-xl)',
+                    borderRadius: 'var(--radius-input)',
                     display: 'flex',
                     alignItems: 'center',
                     padding: '0 13px',
@@ -101,7 +102,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                     height: 42,
                     background: 'var(--bg-1)',
                     border: '1px solid var(--line-2)',
-                    borderRadius: 'var(--radius-xl)',
+                    borderRadius: 'var(--radius-input)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
@@ -123,7 +124,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                       height: 42,
                       background: 'var(--bg-1)',
                       border: '1px solid var(--line-2)',
-                      borderRadius: 'var(--radius-xl)',
+                      borderRadius: 'var(--radius-input)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
@@ -144,7 +145,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                       height: 42,
                       background: 'var(--bg-1)',
                       border: '1px solid var(--line-2)',
-                      borderRadius: 'var(--radius-xl)',
+                      borderRadius: 'var(--radius-input)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',

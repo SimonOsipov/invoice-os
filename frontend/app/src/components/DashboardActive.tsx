@@ -37,8 +37,8 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
       {/* Firm-wide header — rebound to tenant context ([header-chrome-firmwide]);
           the mock taxpayer pill, "SYNCED …", and "Period to date" chrome are gone. */}
       <div style={{ marginBottom: 26 }}>
-        <div className="label" style={{ marginBottom: 10 }}>
-          / COMPLIANCE OVERVIEW
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
+          COMPLIANCE OVERVIEW
         </div>
         <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px' }}>
           {ctx.user.tenantName ?? 'Your firm'}
@@ -72,7 +72,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         className="pf-dash-row-b"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 18, marginBottom: 18 }}
       >
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 26, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 26, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
             <span className="label">Needs attention</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
@@ -80,12 +80,26 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
             </span>
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <span
-              className="money"
-              style={{ fontSize: 56, fontWeight: 700, lineHeight: 1, color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)' }}
-            >
-              {needsAttention}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span className="money" style={{ fontSize: 56, fontWeight: 500, lineHeight: 1, color: 'var(--ink)' }}>
+                {needsAttention}
+              </span>
+              <span
+                className="mono"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  padding: '3px 9px',
+                  borderRadius: 'var(--radius-pill)',
+                  background: needsAttention > 0 ? 'var(--status-red-bg)' : 'var(--status-green-bg)',
+                  border: `1px solid ${needsAttention > 0 ? 'var(--status-red-border)' : 'var(--status-green-border)'}`,
+                  color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
+                }}
+              >
+                {needsAttention > 0 ? 'REJECTED / FAILED' : 'ALL CLEAR'}
+              </span>
+            </div>
             <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '14px 0 0' }}>
               Invoices rejected, failed, or blocked by an error-severity validation issue.
             </p>
@@ -99,9 +113,9 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
           </button>
         </div>
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 24 }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Invoice status</span>
+            <span className="card-title">Invoice status</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
               {total} TOTAL
             </span>
@@ -117,7 +131,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
                 ))}
               </svg>
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span className="money" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
+                <span className="money" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1 }}>
                   {total}
                 </span>
                 <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
@@ -144,9 +158,9 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
       </div>
 
       {/* Row 2: top validation failures (firm-wide, de-slugged rule keys) */}
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>Top validation failures</span>
+          <span className="card-title">Top validation failures</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
             FIRM-WIDE
           </span>
@@ -155,18 +169,18 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
           <div>
             {failures.map((f) => (
               <div key={f.ruleKey} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
-                <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', color: 'var(--status-red-text)', display: 'grid', placeItems: 'center' }}>{crossGlyph}</span>
+                <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', color: 'var(--status-red-text)', display: 'grid', placeItems: 'center' }}>{crossGlyph}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{f.label}</div>
                   <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', maxWidth: 240 }}>
-                    <div style={{ width: f.bar, height: '100%', background: 'var(--status-red-text)', opacity: 0.55, borderRadius: 'var(--radius-sm)' }} />
+                    <div style={{ width: f.bar, height: '100%', background: 'var(--action)', borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
                 <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 96 }}>
                   {f.ruleKey}
                 </span>
                 <div style={{ textAlign: 'right', flex: 'none', width: 54 }}>
-                  <span className="money" style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)' }}>
+                  <span className="money" style={{ fontSize: 16, fontWeight: 600, color: 'var(--ink)' }}>
                     {f.count}
                   </span>
                 </div>
@@ -176,7 +190,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         ) : (
           <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
             <span style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>{tickGlyph13}</span>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>No open failures</div>
+            <div className="card-title" style={{ marginBottom: 3 }}>No open failures</div>
             <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Every invoice passed validation.</div>
           </div>
         )}

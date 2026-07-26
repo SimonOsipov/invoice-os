@@ -22,8 +22,8 @@ export function Compliance() {
         }}
       >
         <div>
-          <div className="label" style={{ marginBottom: 14 }}>
-            / 03 — MBS READINESS
+          <div className="eyebrow" style={{ marginBottom: 14 }}>
+            03 — MBS READINESS
           </div>
           <h2 style={{ fontSize: 38, lineHeight: 1.1, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 18px' }}>
             Know exactly how compliant you are — before the auditor does.
@@ -41,9 +41,9 @@ export function Compliance() {
                     flex: 'none',
                     width: 22,
                     height: 22,
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--accent-tint)',
-                    color: 'var(--accent)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--action-tint)',
+                    color: 'var(--action)',
                     display: 'grid',
                     placeItems: 'center',
                     marginTop: 1,
@@ -61,7 +61,7 @@ export function Compliance() {
         </div>
 
         {/* readiness card */}
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <div
             style={{
               display: 'flex',
@@ -94,7 +94,7 @@ export function Compliance() {
                   cy="66"
                   r="58"
                   fill="none"
-                  stroke="var(--accent)"
+                  stroke="var(--action)"
                   strokeWidth="12"
                   strokeLinecap="round"
                   strokeDasharray="364.4"

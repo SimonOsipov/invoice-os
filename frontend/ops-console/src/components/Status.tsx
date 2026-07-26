@@ -30,8 +30,8 @@ export function Status() {
       {/* header (proto:530-536) */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
         <div>
-          <div className="label" style={{ marginBottom: 8 }}>
-            / 06 — API STATUS
+          <div className="eyebrow" style={{ marginBottom: 8 }}>
+            06 — API STATUS
           </div>
           <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>API status</h1>
         </div>
@@ -48,7 +48,7 @@ export function Status() {
           gap: 14,
           background: 'var(--status-amber-bg)',
           border: '1px solid var(--status-amber-border)',
-          borderRadius: 'var(--radius-xl)',
+          borderRadius: 'var(--radius-lg)',
           padding: '16px 20px',
           marginBottom: 16,
         }}
@@ -58,9 +58,9 @@ export function Status() {
             flex: 'none',
             width: 40,
             height: 40,
-            borderRadius: 'var(--radius-xl)',
+            borderRadius: 'var(--radius-lg)',
             background: 'var(--status-amber-text)',
-            color: '#fff',
+            color: 'var(--text-on-dark)',
             display: 'grid',
             placeItems: 'center',
           }}
@@ -86,7 +86,7 @@ export function Status() {
       </div>
 
       {/* components (proto:549-563) */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', overflow: 'hidden', marginBottom: 24 }}>
         {STATUS_COMPONENTS.map((c) => {
           const tone = STATUS_TONE[c.tone]
           return (
@@ -143,7 +143,7 @@ export function Status() {
       </div>
 
       {/* incident history (proto:566-577) */}
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Incident history</div>
+      <div className="card-title" style={{ marginBottom: 12 }}>Incident history</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {INCIDENTS.map((inc) => {
           const tone = STATUS_TONE[inc.tone]
@@ -167,7 +167,7 @@ export function Status() {
                       color: tone.text,
                       background: tone.bg,
                       border: '1px solid ' + tone.border,
-                      borderRadius: 'var(--radius-md)',
+                      borderRadius: 'var(--radius-sm)',
                       padding: '2px 7px',
                     }}
                   >

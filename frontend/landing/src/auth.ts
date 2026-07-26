@@ -34,7 +34,7 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     destLabel: 'Ops Console',
     target: 'ops',
     avBg: 'var(--slate-900)',
-    avColor: '#fff',
+    avColor: 'var(--text-on-dark)',
   },
   {
     id: 'firm',
@@ -46,8 +46,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     access: 'PLATFORM · FIRM',
     destLabel: 'firm workspace',
     target: 'app',
-    avBg: 'var(--accent-tint)',
-    avColor: 'var(--accent)',
+    avBg: 'var(--action-tint)',
+    avColor: 'var(--action)',
   },
   {
     id: 'inhouse',
@@ -59,8 +59,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     access: 'PLATFORM · IN-HOUSE',
     destLabel: 'in-house workspace',
     target: 'app',
-    avBg: 'var(--accent-tint)',
-    avColor: 'var(--accent)',
+    avBg: 'var(--action-tint)',
+    avColor: 'var(--action)',
   },
 ]
 

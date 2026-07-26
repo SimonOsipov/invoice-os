@@ -7,7 +7,7 @@ import { tickGlyph13 } from '../glyphs'
 
 function StepIcon({ state }: { state: 'done' | 'active' | 'pending' }) {
   if (state === 'done') return tickGlyph13
-  if (state === 'active') return <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--bg-3)', borderTopColor: 'var(--accent)', display: 'block', animation: 'spin 0.7s linear infinite' }} />
+  if (state === 'active') return <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--bg-3)', borderTopColor: 'var(--action)', display: 'block', animation: 'spin 0.7s linear infinite' }} />
   return <span style={{ width: 7, height: 7, borderRadius: 99, border: '1.5px solid var(--line-3)', display: 'block' }} />
 }
 
@@ -32,7 +32,7 @@ export function ScanlineSteps({
   const progressPct = Math.min(100, Math.round((idx / labels.length) * 100))
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '44px 20px 52px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '44px 20px 52px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
       <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>{title}</div>
       <div className="mono" style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 24 }}>
         {subtitle}
@@ -53,9 +53,9 @@ export function ScanlineSteps({
           {labels.map((label, i) => {
             const done = i < idx
             const act = i === idx
-            const color = act ? 'var(--accent)' : done ? 'var(--fg-2)' : 'var(--fg-4)'
+            const color = act ? 'var(--action)' : done ? 'var(--fg-2)' : 'var(--fg-4)'
             const weight = act ? 600 : done ? 500 : 400
-            const iconColor = act ? 'var(--accent)' : done ? 'var(--status-green-text)' : 'var(--fg-4)'
+            const iconColor = act ? 'var(--action)' : done ? 'var(--status-green-text)' : 'var(--fg-4)'
             return (
               <div key={label} style={{ height: 30, display: 'flex', alignItems: 'center', gap: 11, padding: '0 16px' }}>
                 <span style={{ flex: 'none', width: 16, height: 16, display: 'grid', placeItems: 'center', color: iconColor }}>
@@ -68,7 +68,7 @@ export function ScanlineSteps({
         </div>
       </div>
       <div style={{ width: 320, maxWidth: '100%', height: 6, borderRadius: 99, background: 'var(--bg-3)', overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: progressPct + '%', borderRadius: 99, background: 'var(--accent)', transition: `width ${widthMs}ms ease-out` }} />
+        <div style={{ height: '100%', width: progressPct + '%', borderRadius: 99, background: 'var(--action)', transition: `width ${widthMs}ms ease-out` }} />
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 12 }}>
         {progressPct}% {unitLabel}

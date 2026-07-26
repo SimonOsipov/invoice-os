@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Icon } from '../icons'
+import { CircleCheck } from '../icons'
 import { PLANS, PLAN_COLORS } from '../data'
 
 const seg = (active: boolean) => ({
@@ -16,8 +16,8 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
     <section id="pricing" style={{ borderBottom: '1px solid var(--line-1)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
-          <div className="label" style={{ marginBottom: 14 }}>
-            / 06 — PRICING
+          <div className="eyebrow" style={{ marginBottom: 14 }}>
+            06 — PRICING
           </div>
           <h2 style={{ fontSize: 40, lineHeight: 1.08, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 14px' }}>
             Priced by compliance need, not seats.
@@ -64,7 +64,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
               }}
             >
               Annual{' '}
-              <span className="mono" style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--accent-tint)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--action)', background: 'var(--action-tint)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>
                 –2 MONTHS
               </span>
             </button>
@@ -78,23 +78,32 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
             return (
               <div
                 key={p.name}
-                className="ios-price"
                 style={{
                   background: c.cardBg,
                   border: `1px solid ${c.cardBorder}`,
-                  borderRadius: 'var(--radius-xl)',
+                  borderRadius: 'var(--radius-lg)',
                   padding: '28px 26px 30px',
                   display: 'flex',
                   flexDirection: 'column',
-                  transition: 'border-color 160ms ease-out',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 16, fontWeight: 600, color: c.titleColor }}>{p.name}</span>
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-display)',
+                      fontSize: 20,
+                      fontWeight: 500,
+                      letterSpacing: '-0.02em',
+                      fontVariationSettings: "'opsz' 24",
+                      color: c.titleColor,
+                    }}
+                  >
+                    {p.name}
+                  </span>
                   {p.featured && (
                     <span
                       className="mono"
-                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--teal-700)', color: '#fff', padding: '3px 8px', borderRadius: 'var(--radius-sm)' }}
+                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--action)', color: 'var(--primary-foreground)', padding: '3px 8px', borderRadius: 'var(--radius-pill)' }}
                     >
                       POPULAR
                     </span>
@@ -102,7 +111,9 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                 </div>
                 <p style={{ fontSize: 13, lineHeight: 1.5, color: c.subColor, margin: '0 0 22px', minHeight: 38 }}>{p.tagline}</p>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
-                  <span style={{ fontSize: 38, fontWeight: 700, letterSpacing: '-0.03em', color: c.titleColor }}>{price}</span>
+                  <span className="money" style={{ fontSize: 38, fontWeight: 500, color: c.titleColor }}>
+                    {price}
+                  </span>
                   <span className="mono" style={{ fontSize: 12, color: c.subColor }}>
                     {p.unit}
                   </span>
@@ -120,8 +131,8 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
                   {p.features.map((f) => (
                     <div key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-                      <span style={{ color: c.checkColor, flex: 'none', marginTop: 1 }}>
-                        <Icon paths={['M20 6 9 17l-5-5']} size={14} strokeWidth={2} />
+                      <span style={{ color: c.checkColor, flex: 'none', marginTop: 1, display: 'inline-flex' }}>
+                        <CircleCheck />
                       </span>
                       <span style={{ fontSize: 13, lineHeight: 1.45, color: c.featColor }}>{f}</span>
                     </div>

@@ -94,7 +94,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-label="Sign in"
-      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(20,23,26,0.44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'siOvIn 160ms ease-out' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'oklch(16% .03 210 / .44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'siOvIn 160ms ease-out' }}
     >
       <style>{`
         @keyframes siOvIn { from { opacity: 0; } to { opacity: 1; } }
@@ -103,19 +103,19 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
         @keyframes siShake { 10%,90%{transform:translateX(-1px);} 20%,80%{transform:translateX(2px);} 30%,50%,70%{transform:translateX(-5px);} 40%,60%{transform:translateX(5px);} }
         .si-shake { animation: siShake 400ms ease-in-out; }
         .si-persona { transition: border-color 120ms ease-out, background 120ms ease-out, transform 90ms; }
-        .si-persona:hover { border-color: var(--accent); background: var(--bg-1); }
+        .si-persona:hover { border-color: var(--action); background: var(--bg-1); }
         .si-persona:active { transform: translateY(1px); }
         .si-otp { transition: border-color 120ms, box-shadow 120ms; }
-        .si-otp:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); outline: none; }
+        .si-otp:focus { border-color: var(--action); box-shadow: 0 0 0 3px var(--action-glow); outline: none; }
         .si-close { transition: background 120ms ease-out, color 120ms ease-out; }
         .si-close:hover { background: var(--bg-3); color: var(--fg-1); }
         .si-link { transition: color 120ms ease-out; cursor: pointer; }
-        .si-link:hover { color: var(--accent); }
+        .si-link:hover { color: var(--action); }
       `}</style>
 
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden', animation: 'siCardIn 200ms var(--ease-out)' }}
+        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden', animation: 'siCardIn 200ms var(--ease-out)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -125,14 +125,14 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               AFRICA
             </span>
           </div>
-          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-lg)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
             <Glyph d="M18 6 6 18M6 6l12 12" size={17} sw={1.8} />
           </button>
         </div>
 
         {step === 'persona' && (
           <div style={{ padding: '22px 20px 20px' }}>
-            <div className="label" style={{ marginBottom: 8 }}>/ SIGN IN</div>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>SIGN IN</div>
             <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>Choose an account</h3>
             <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>Pick a demo profile to continue. Each role opens only the workspace it's allowed to use.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
@@ -141,13 +141,13 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
                   key={p.id}
                   onClick={() => pickPersona(p)}
                   className="si-persona"
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
-                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
+                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{p.name}</span>
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title} · {p.org}</span>
-                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>{p.access}</span>
+                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--action)', background: 'var(--action-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>{p.access}</span>
                   </span>
                   <span style={{ flex: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
                     <Glyph d="m9 18 6-6-6-6" size={16} sw={1.8} />
@@ -160,7 +160,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               <span className="mono" style={{ fontSize: 10, letterSpacing: '0.06em', color: 'var(--fg-3)' }}>SSO · OAUTH2</span>
             </div>
             {forgotNote && (
-              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '10px 12px' }}>
+              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--fg-3)', background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
                 Password reset is disabled in this demo — choose one of the profiles above to sign in.
               </div>
             )}
@@ -173,7 +173,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               <Glyph d="m15 18-6-6 6-6" size={15} sw={1.8} /> Back to accounts
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 18 }}>
-              <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-lg)', background: persona.avBg, color: persona.avColor, display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700 }}>{persona.initials}</span>
+              <span style={{ flex: 'none', width: 40, height: 40, borderRadius: 'var(--radius-md)', background: persona.avBg, color: persona.avColor, display: 'grid', placeItems: 'center', fontSize: 14, fontWeight: 700 }}>{persona.initials}</span>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{persona.name}</div>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{maskedEmail(persona.email)}</div>
@@ -193,7 +193,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
                   inputMode="numeric"
                   maxLength={1}
                   autoComplete="off"
-                  style={{ width: '100%', height: 54, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: 0 }}
+                  style={{ width: '100%', height: 54, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--fg-1)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: 0 }}
                 />
               ))}
             </div>
@@ -206,7 +206,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
             <button onClick={verify} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 18, cursor: 'pointer', gap: 9 }}>
               {loading ? (
                 <>
-                  <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: 99, animation: 'siSpin 0.7s linear infinite' }} />
+                  <span style={{ width: 15, height: 15, border: '2px solid oklch(100% 0 0 / .4)', borderTopColor: 'var(--text-on-dark)', borderRadius: 99, animation: 'siSpin 0.7s linear infinite' }} />
                   Signing in…
                 </>
               ) : (
@@ -214,7 +214,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               )}
             </button>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 }}>
-              <span className="mono" style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 'var(--radius-md)', padding: '4px 8px' }}>DEMO CODE · {DEMO_CODE}</span>
+              <span className="mono" style={{ fontSize: 10, letterSpacing: '0.05em', color: 'var(--action)', background: 'var(--action-tint)', borderRadius: 'var(--radius-sm)', padding: '4px 8px' }}>DEMO CODE · {DEMO_CODE}</span>
               <a href="#" onClick={(e) => e.preventDefault()} className="si-link" style={{ fontSize: 12, color: 'var(--fg-3)' }}>Resend code</a>
             </div>
           </div>

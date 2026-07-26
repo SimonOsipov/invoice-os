@@ -21,7 +21,7 @@ function Spinner() {
   return (
     <span
       className="si-spin"
-      style={{ width: 15, height: 15, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', borderRadius: 99, display: 'inline-block' }}
+      style={{ width: 15, height: 15, border: '2px solid var(--line-2)', borderTopColor: 'var(--action)', borderRadius: 99, display: 'inline-block' }}
     />
   )
 }
@@ -37,12 +37,12 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
         @keyframes siSpin { to { transform: rotate(360deg); } }
         .si-spin { animation: siSpin 0.7s linear infinite; }
         .si-persona { transition: border-color 120ms ease-out, background 120ms ease-out, transform 90ms; }
-        .si-persona:not(:disabled):hover { border-color: var(--accent); background: var(--bg-1); }
+        .si-persona:not(:disabled):hover { border-color: var(--action); background: var(--bg-1); }
         .si-persona:not(:disabled):active { transform: translateY(1px); }
         .si-persona:disabled { cursor: default; opacity: 0.6; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>
@@ -68,9 +68,9 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
                   className="si-persona"
                   disabled={busy}
                   onClick={() => onPick(p)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
-                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>
+                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>
                     {p.initials}
                   </span>
                   <span style={{ flex: 1, minWidth: 0 }}>
@@ -78,7 +78,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {p.title} · {p.org}
                     </span>
-                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--accent)', background: 'var(--accent-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>
+                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--action)', background: 'var(--action-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>
                       {p.access}
                     </span>
                   </span>
@@ -114,7 +114,7 @@ export function SignInLoading({ persona }: { persona: Persona }) {
         .si-spin { animation: siSpin 0.7s linear infinite; }
       `}</style>
 
-      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <BrandMark size={20} />
           <span style={{ fontWeight: 600, fontSize: 14, letterSpacing: '-0.02em' }}>ASComply</span>

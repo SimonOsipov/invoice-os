@@ -16,7 +16,7 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
         position: 'sticky',
         top: 0,
         zIndex: 50,
-        background: 'rgba(247,249,250,0.72)',
+        background: 'oklch(98.5% .008 85 / .82)',
         backdropFilter: 'blur(16px)',
         WebkitBackdropFilter: 'blur(16px)',
         borderBottom: '1px solid var(--line-1)',

@@ -32,7 +32,7 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
         position: 'fixed',
         inset: 0,
         zIndex: 90,
-        background: 'rgba(20,23,26,0.42)',
+        background: 'oklch(16% .03 210 / .42)',
         display: 'grid',
         placeItems: 'center',
         animation: 'opsFade 140ms ease-out',
@@ -45,9 +45,9 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
           maxWidth: '92vw',
           background: 'var(--bg-2)',
           border: '1px solid var(--line-2)',
-          borderRadius: 'var(--radius-xl)',
+          borderRadius: 'var(--radius-lg)',
           overflow: 'hidden',
-          boxShadow: '0 24px 60px -20px rgba(20,23,26,0.4)',
+          boxShadow: 'var(--shadow-elegant)',
           animation: 'opsPop 160ms ease-out',
         }}
       >
@@ -58,7 +58,7 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
                 flex: 'none',
                 width: 36,
                 height: 36,
-                borderRadius: 'var(--radius-xl)',
+                borderRadius: 'var(--radius-lg)',
                 background: 'var(--status-amber-bg)',
                 color: 'var(--status-amber-text)',
                 display: 'grid',
@@ -82,7 +82,7 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
             style={{
               background: 'var(--status-amber-bg)',
               border: '1px solid var(--status-amber-border)',
-              borderRadius: 'var(--radius-lg)',
+              borderRadius: 'var(--radius-md)',
               padding: '10px 12px',
               display: 'flex',
               gap: 9,

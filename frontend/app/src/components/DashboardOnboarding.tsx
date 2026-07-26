@@ -11,15 +11,15 @@ export function DashboardOnboarding({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ marginBottom: 26 }}>
-        <div className="label" style={{ marginBottom: 10 }}>
-          / COMPLIANCE OVERVIEW
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
+          COMPLIANCE OVERVIEW
         </div>
         <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px' }}>{active.name}</h1>
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>Newly added · onboarding in progress</p>
       </div>
-      <div className="pf-onboard-grid" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 48, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48, alignItems: 'center' }}>
+      <div className="pf-onboard-grid" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 48, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48, alignItems: 'center' }}>
         <div>
-          <div style={{ width: 48, height: 48, borderRadius: 'var(--radius-xl)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', marginBottom: 20 }}>{rocketGlyph}</div>
+          <div style={{ width: 48, height: 48, borderRadius: 'var(--radius-lg)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 20 }}>{rocketGlyph}</div>
           <h2 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', margin: '0 0 10px' }}>Let's get {active.short} compliance-ready</h2>
           <p style={{ fontSize: 15, lineHeight: 1.6, color: 'var(--fg-2)', margin: '0 0 24px' }}>
             No invoices yet. Connect a system or import a file, and the validation engine will start scoring readiness against the Nigeria MBS rule pack.
@@ -33,7 +33,7 @@ export function DashboardOnboarding({ ctx }: { ctx: PlatformCtx }) {
             </button>
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           {ONBOARD_STEPS.map((s) => (
             <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px', background: 'var(--bg-2)' }}>
               <span
@@ -42,9 +42,9 @@ export function DashboardOnboarding({ ctx }: { ctx: PlatformCtx }) {
                   width: 26,
                   height: 26,
                   borderRadius: 99,
-                  border: `1px solid ${s.done ? 'var(--accent)' : 'var(--line-2)'}`,
-                  background: s.done ? 'var(--accent)' : 'var(--bg-2)',
-                  color: s.done ? '#fff' : 'var(--fg-3)',
+                  border: `1px solid ${s.done ? 'var(--action)' : 'var(--line-2)'}`,
+                  background: s.done ? 'var(--action)' : 'var(--bg-2)',
+                  color: s.done ? 'var(--text-on-dark)' : 'var(--fg-3)',
                   display: 'grid',
                   placeItems: 'center',
                   fontFamily: 'var(--font-mono)',
@@ -58,7 +58,7 @@ export function DashboardOnboarding({ ctx }: { ctx: PlatformCtx }) {
                 <div style={{ fontSize: 13.5, fontWeight: 500 }}>{s.title}</div>
                 <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{s.body}</div>
               </div>
-              <span style={{ color: 'var(--accent)' }}>{s.done ? tickGlyph11 : ''}</span>
+              <span style={{ color: 'var(--action)' }}>{s.done ? tickGlyph11 : ''}</span>
             </div>
           ))}
         </div>

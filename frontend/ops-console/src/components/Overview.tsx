@@ -99,8 +99,8 @@ const KPIS: Kpi[] = KPI_DEFS.map((k) => {
     sub: k.sub,
     line: sp.line,
     area: sp.area,
-    stroke: k.good === false ? 'var(--status-red-text)' : k.good === null ? 'var(--fg-3)' : 'var(--accent)',
-    fill: k.good === false ? 'var(--status-red-bg)' : k.good === null ? 'var(--bg-3)' : 'var(--accent-tint)',
+    stroke: k.good === false ? 'var(--status-red-text)' : k.good === null ? 'var(--fg-3)' : 'var(--action)',
+    fill: k.good === false ? 'var(--status-red-bg)' : k.good === null ? 'var(--bg-3)' : 'var(--action-tint)',
   }
 })
 
@@ -112,7 +112,7 @@ const OUTCOME_LEGEND: { label: string; color: string }[] = [
   { label: 'CLEARED', color: 'var(--status-green-text)' },
   { label: 'REJECTED', color: 'var(--status-red-text)' },
   // Prototype line 911 — a raw hex, not a design token. Left verbatim.
-  { label: 'FAILED', color: '#8A1F18' },
+  { label: 'FAILED', color: 'var(--status-red-text)' },
   { label: 'PENDING', color: 'var(--status-amber-text)' },
 ]
 
@@ -129,7 +129,7 @@ const LAT_CHART = lineChart(series(30, 1.55, 0.5, 0.012, 88), 400, 90, 8, 6)
 const CARD: CSSProperties = {
   border: '1px solid var(--line-1)',
   background: 'var(--bg-2)',
-  borderRadius: 'var(--radius-xl)',
+  borderRadius: 'var(--radius-lg)',
 }
 
 export function Overview({ range, onRangeChange }: Props) {
@@ -146,8 +146,8 @@ export function Overview({ range, onRangeChange }: Props) {
     <div className="ops-screen-pad">
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24 }}>
         <div>
-          <div className="label" style={{ marginBottom: 8 }}>
-            / 01 — INTEGRATION HEALTH
+          <div className="eyebrow" style={{ marginBottom: 8 }}>
+            01 — INTEGRATION HEALTH
           </div>
           <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Overview</h1>
         </div>
@@ -162,7 +162,7 @@ export function Overview({ range, onRangeChange }: Props) {
         {KPIS.map((k) => (
           <div
             key={k.label}
-            style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-xl)', padding: '14px 15px', display: 'flex', flexDirection: 'column', minHeight: 122 }}
+            style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '14px 15px', display: 'flex', flexDirection: 'column', minHeight: 122 }}
           >
             <div className="label" style={{ lineHeight: 1.3, marginBottom: 9, minHeight: 24 }}>
               {k.label}
@@ -196,7 +196,7 @@ export function Overview({ range, onRangeChange }: Props) {
       <div style={{ ...CARD, padding: '18px 20px 14px', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>API requests over time</div>
+            <div className="card-title" style={{ marginBottom: 3 }}>API requests over time</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
               <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>
                 {reqTotal}
@@ -206,7 +206,7 @@ export function Overview({ range, onRangeChange }: Props) {
               </span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 3 }}>
             {RANGES.map((r) => {
               const active = range === r
               return (
@@ -220,13 +220,13 @@ export function Overview({ range, onRangeChange }: Props) {
                     cursor: 'pointer',
                     height: 26,
                     padding: '0 12px',
-                    borderRadius: 'var(--radius-md)',
+                    borderRadius: 'var(--radius-sm)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 10.5,
                     fontWeight: 700,
                     letterSpacing: '0.04em',
                     background: active ? 'var(--bg-2)' : 'transparent',
-                    color: active ? 'var(--accent)' : 'var(--fg-3)',
+                    color: active ? 'var(--action)' : 'var(--fg-3)',
                   }}
                 >
                   {r.toUpperCase()}
@@ -240,8 +240,8 @@ export function Overview({ range, onRangeChange }: Props) {
           <line x1="0" y1="60" x2="1000" y2="60" vectorEffect="non-scaling-stroke" style={{ stroke: 'var(--line-1)', strokeWidth: 1 }} />
           <line x1="0" y1="120" x2="1000" y2="120" vectorEffect="non-scaling-stroke" style={{ stroke: 'var(--line-1)', strokeWidth: 1 }} />
           <line x1="0" y1="180" x2="1000" y2="180" vectorEffect="non-scaling-stroke" style={{ stroke: 'var(--line-1)', strokeWidth: 1 }} />
-          <path d={reqChart.area} style={{ fill: 'var(--accent-tint)' }} />
-          <path d={reqChart.line} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" style={{ fill: 'none', stroke: 'var(--accent)', strokeWidth: 2 }} />
+          <path d={reqChart.area} style={{ fill: 'var(--action-tint)' }} />
+          <path d={reqChart.line} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" style={{ fill: 'none', stroke: 'var(--action)', strokeWidth: 2 }} />
         </svg>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
           {reqAxis.map((a, i) => (
@@ -256,7 +256,7 @@ export function Overview({ range, onRangeChange }: Props) {
       <div className="ops-overview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 16, marginBottom: 16 }}>
         <div style={{ ...CARD, padding: '18px 20px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Spend over time</div>
+            <div className="card-title">Spend over time</div>
             <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
               ₦ FEES / DAY · JUL
             </span>
@@ -290,13 +290,13 @@ export function Overview({ range, onRangeChange }: Props) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 12 }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: 'var(--accent)' }} />
+              <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: 'var(--action)' }} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                 ACTUAL · 22 DAYS
               </span>
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: 'var(--accent-tint)', border: '1px dashed var(--accent)' }} />
+              <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: 'var(--action-tint)', border: '1px dashed var(--action)' }} />
               <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
                 PROJECTED
               </span>
@@ -307,7 +307,7 @@ export function Overview({ range, onRangeChange }: Props) {
         <div style={{ ...CARD, padding: '18px 20px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16 }}>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>Submission outcomes</div>
+              <div className="card-title" style={{ marginBottom: 3 }}>Submission outcomes</div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 last 24 days · % of daily volume
               </div>
@@ -322,7 +322,7 @@ export function Overview({ range, onRangeChange }: Props) {
                 {/* Stack order top→bottom is pend, fail, rej, acc (prototype 203–206) —
                     deliberately NOT the legend order. */}
                 <div style={{ height: c.pend, background: 'var(--status-amber-text)' }} />
-                <div style={{ height: c.fail, background: '#8A1F18' }} />
+                <div style={{ height: c.fail, background: 'var(--status-red-text)' }} />
                 <div style={{ height: c.rej, background: 'var(--status-red-text)' }} />
                 <div style={{ height: c.acc, background: 'var(--status-green-text)' }} />
               </div>
@@ -345,7 +345,7 @@ export function Overview({ range, onRangeChange }: Props) {
       <div className="ops-overview-grid" style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 16 }}>
         <div style={{ ...CARD, padding: '18px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Top rejection reasons</div>
+            <div className="card-title">Top rejection reasons</div>
             <span className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
               CAUGHT PRE-SUBMISSION
             </span>
@@ -362,8 +362,8 @@ export function Overview({ range, onRangeChange }: Props) {
                     {r.count}
                   </span>
                 </div>
-                <div style={{ height: 7, background: 'var(--bg-3)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-                  <div className="ops-bar" style={{ width: r.width, height: '100%', background: r.color, borderRadius: 'var(--radius-md)' }} />
+                <div style={{ height: 7, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                  <div className="ops-bar" style={{ width: r.width, height: '100%', background: r.color, borderRadius: 'var(--radius-sm)' }} />
                 </div>
               </div>
             ))}
@@ -372,7 +372,7 @@ export function Overview({ range, onRangeChange }: Props) {
 
         <div style={{ ...CARD, padding: '18px 20px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Clearance latency</div>
+            <div className="card-title">Clearance latency</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--status-amber-text)' }} />
               <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--status-amber-text)', letterSpacing: '0.04em' }}>

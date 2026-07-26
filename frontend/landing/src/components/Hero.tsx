@@ -2,10 +2,14 @@ import { HERO_CHECKS } from '../data'
 
 export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
   return (
-    <section id="top" className="hero-grid hero-grid-fade" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
+    <section id="top" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
+      {/* Background-only layer. The grid texture and its fade mask must never sit
+          on the element that carries the content, or the mask fades the content. */}
+      <span className="hero-grid hero-grid-fade" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
       <div
         className="ios-grid ios-2"
         style={{
+          position: 'relative',
           maxWidth: 1280,
           margin: '0 auto',
           padding: '80px 32px 72px',
@@ -42,10 +46,10 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               MBS MANDATE · PHASED ROLLOUT ACTIVE
             </span>
           </div>
-          <h1 className="ios-hero-h1" style={{ fontSize: 58, lineHeight: 1.02, letterSpacing: '-0.04em', fontWeight: 600, margin: '0 0 22px' }}>
+          <h1 className="ios-hero-h1" style={{ fontSize: 58, lineHeight: 1.02, letterSpacing: '-0.04em', margin: '0 0 22px' }}>
             Get e-invoicing ready
             <br />
-            without replacing your
+            <em>without replacing</em> your
             <br />
             accounting system.
           </h1>
@@ -67,8 +71,8 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               <div className="label" style={{ marginBottom: 6 }}>
                 Large taxpayers
               </div>
-              <div style={{ height: 4, background: 'var(--accent)', borderRadius: 'var(--radius-xs)' }} />
-              <div className="mono" style={{ fontSize: 11, color: 'var(--accent)', marginTop: 6, fontWeight: 600 }}>
+              <div style={{ height: 4, background: 'var(--action)', borderRadius: 'var(--radius-xs)' }} />
+              <div className="mono" style={{ fontSize: 11, color: 'var(--action)', marginTop: 6, fontWeight: 600 }}>
                 LIVE
               </div>
             </div>
@@ -101,9 +105,9 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
             style={{
               background: 'var(--bg-2)',
               border: '1px solid var(--line-2)',
-              borderRadius: 'var(--radius-xl)',
+              borderRadius: 'var(--radius-lg)',
               overflow: 'hidden',
-              boxShadow: '0 1px 0 rgba(20,23,26,0.02), 0 24px 48px -24px rgba(20,23,26,0.18)',
+              boxShadow: 'var(--shadow-elegant)',
             }}
           >
             {/* window chrome */}
@@ -148,7 +152,7 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
                   right: 0,
                   top: 0,
                   height: 28,
-                  background: 'linear-gradient(180deg, var(--accent-tint), transparent)',
+                  background: 'linear-gradient(180deg, var(--action-tint), transparent)',
                   pointerEvents: 'none',
                   animation: 'scanline 2.6s var(--ease-out) infinite',
                 }}
@@ -201,11 +205,11 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
               position: 'absolute',
               bottom: -16,
               right: -14,
-              background: 'var(--slate-900)',
-              color: '#fff',
-              borderRadius: 'var(--radius-lg)',
+              background: 'var(--surface)',
+              color: 'var(--text-on-dark)',
+              borderRadius: 'var(--radius-md)',
               padding: '10px 14px',
-              boxShadow: '0 16px 32px -16px rgba(20,23,26,0.5)',
+              boxShadow: 'var(--shadow-soft)',
             }}
           >
             <div className="mono" style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--teal-300)', marginBottom: 2 }}>

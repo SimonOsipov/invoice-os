@@ -229,13 +229,13 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           style={{
             height: 30,
             padding: '0 12px',
-            borderRadius: 'var(--radius-lg)',
+            borderRadius: 'var(--radius-md)',
             fontFamily: 'var(--font-sans)',
             fontSize: 12.5,
             fontWeight: 500,
-            border: `1px solid ${needsAttention ? 'var(--accent)' : 'var(--line-2)'}`,
-            background: needsAttention ? 'var(--accent)' : 'var(--bg-2)',
-            color: needsAttention ? '#fff' : 'var(--fg-2)',
+            border: `1px solid ${needsAttention ? 'var(--action)' : 'var(--line-2)'}`,
+            background: needsAttention ? 'var(--action)' : 'var(--bg-2)',
+            color: needsAttention ? 'var(--text-on-dark)' : 'var(--fg-2)',
           }}
         >
           Needs attention
@@ -247,7 +247,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           it should appear) and `state === 'ready'` (list.run()'s refetch flips `state`
           away from 'ready' while data:null, which would blow the panel away mid-read). */}
       {results !== null && (
-        <div data-testid="batch-submit-results" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: 22 }}>
+        <div data-testid="batch-submit-results" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', marginBottom: 22 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
             <span className="label">Invoice #</span>
             <span className="label">Result</span>
@@ -285,7 +285,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       {state === 'ready' && (
         <>
           {selected.length > 0 && (
-            <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: '11px 18px', marginBottom: 14 }}>
+            <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: '11px 18px', marginBottom: 14 }}>
               <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{selected.length} selected</span>
               <button
                 data-testid="batch-submit"
@@ -305,7 +305,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             </div>
           )}
 
-          <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+          <div data-testid="invoices-list" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
             <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: INVOICE_GRID_COLUMNS, gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)', alignItems: 'center' }}>
               <input
                 type="checkbox"

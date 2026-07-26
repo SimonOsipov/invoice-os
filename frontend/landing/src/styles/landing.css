@@ -1,6 +1,7 @@
 /* Local page styles — ported verbatim from the ASComply Africa prototype's
    inline <style> block. Keyframes for the hero product mock + hover transitions.
-   Token vars (--accent, --bg-2, --line-3) resolve via inheritance from .asc-app. */
+   Token vars (--action, --bg-2, --line-3) resolve via inheritance from .asc-app;
+   --accent is the design system's amber and resolves from :root. */
 
 * {
   box-sizing: border-box;
@@ -47,21 +48,14 @@ body {
   }
 }
 
+/* Links are the one marketing hover the system allows: teal → amber. Cards and
+   rows deliberately have none — they are content, not controls. (Console rows
+   keep their --muted hover; those are controls.) */
 .ios-link {
   transition: color 120ms ease-out;
 }
 .ios-link:hover {
   color: var(--accent) !important;
-}
-.ios-feat {
-  transition: background 160ms ease-out, border-color 160ms ease-out;
-}
-.ios-feat:hover {
-  background: var(--bg-2) !important;
-  border-color: var(--line-3) !important;
-}
-.ios-price:hover {
-  border-color: var(--line-3) !important;
 }
 
 /* ------------------------------------------------------------------

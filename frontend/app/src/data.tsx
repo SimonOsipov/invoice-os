@@ -177,7 +177,7 @@ export type SampleFileDef = {
 
 export const SAMPLE_FILES: SampleFileDef[] = [
   { id: 'pdf', ext: 'PDF', name: 'lagos-freight-INV-0482.pdf', meta: '1 PAGE · 142 KB', iconBg: 'var(--status-red-bg)', iconColor: 'var(--status-red-text)' },
-  { id: 'img', ext: 'JPG', name: 'scan-invoice-0482.jpg', meta: 'IMAGE · 2.1 MB', iconBg: 'var(--accent-tint)', iconColor: 'var(--accent)' },
+  { id: 'img', ext: 'JPG', name: 'scan-invoice-0482.jpg', meta: 'IMAGE · 2.1 MB', iconBg: 'var(--action-tint)', iconColor: 'var(--action)' },
 ]
 
 export const VAL_LABELS: string[] = [
@@ -322,8 +322,8 @@ export type CertDef = {
 }
 
 export const CERTS: CertDef[] = [
-  { name: 'Digital signing certificate', cn: 'CN=ASComply SI · O=Okafor & Partners', issuer: 'FIRS MBS Root CA', serial: '3A:F2:8B:14:9C:02:7D:E1', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--accent)' },
-  { name: 'CSID stamping key', cn: 'RSA-2048 · SHA-256 signature', issuer: 'FIRS APP CA', serial: '7B:11:6E:A0:33:91:C4:4E', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--accent)' },
+  { name: 'Digital signing certificate', cn: 'CN=ASComply SI · O=Okafor & Partners', issuer: 'FIRS MBS Root CA', serial: '3A:F2:8B:14:9C:02:7D:E1', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--action)' },
+  { name: 'CSID stamping key', cn: 'RSA-2048 · SHA-256 signature', issuer: 'FIRS APP CA', serial: '7B:11:6E:A0:33:91:C4:4E', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--action)' },
 ]
 
 export const EXPORTS_LIST: { name: string; fmt: string }[] = [

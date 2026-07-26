@@ -110,11 +110,21 @@ export function donutSegments(counts: Counts): DonutSeg[] {
   })
 }
 
+// Domain acronyms that stay uppercase inside a human label. Everything else is
+// sentence case: rule keys are machine identifiers, and Title-Casing them word
+// by word leaked "Vat Standard Rate" and "Supplier Tin Required" into the UI.
+// The system is sentence case everywhere, with VAT/TIN/MBS/FIRS uppercase.
+const RULE_KEY_ACRONYMS = new Set(['vat', 'tin', 'mbs', 'firs', 'irn', 'csid', 'ngn', 'ubl', 'xml', 'json', 'pdf', 'api', 'erp', 'id'])
+
 export function deslug(ruleKey: string): string {
   return ruleKey
     .split(/[-_\s]+/)
     .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .map((w, i) => {
+      const lower = w.toLowerCase()
+      if (RULE_KEY_ACRONYMS.has(lower)) return lower.toUpperCase()
+      return i === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower
+    })
     .join(' ')
 }
 

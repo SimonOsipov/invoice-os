@@ -17,8 +17,8 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
 
   const seg = (active: boolean, kind: 'sandbox' | 'live') => ({
     bg: active ? (kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)') : 'transparent',
-    color: active ? '#fff' : 'var(--fg-3)',
-    dot: active ? '#fff' : kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)',
+    color: active ? 'var(--text-on-dark)' : 'var(--fg-3)',
+    dot: active ? 'var(--text-on-dark)' : kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)',
   })
   const sbx = seg(sandbox, 'sandbox')
   const liv = seg(!sandbox, 'live')
@@ -33,9 +33,9 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         tag: 'TEST DATA · sk_test',
       }
     : {
-        bg: 'var(--accent-tint)',
+        bg: 'var(--action-tint)',
         border: 'var(--teal-200)',
-        text: 'var(--accent-soft)',
+        text: 'var(--action-soft)',
         icon: SHIELD_ICON,
         msg: 'Live — production keys. Submissions are transmitted to FIRS/MBS and return legally-valid clearance evidence.',
         tag: 'PRODUCTION · sk_live',
@@ -48,7 +48,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
           flex: 'none',
           height: 56,
           borderBottom: '1px solid var(--line-1)',
-          background: 'rgba(247,249,250,0.82)',
+          background: 'oklch(98.5% .008 85 / .82)',
           backdropFilter: 'blur(12px)',
           display: 'flex',
           alignItems: 'center',
@@ -66,7 +66,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div
             className="ops-header-search"
-            style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-2)', width: 380 }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', width: 380 }}
           >
             <span style={{ color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
             <span style={{ fontSize: 13, color: 'var(--fg-4)', whiteSpace: 'nowrap' }}>Search invoice # · job ID · IRN · evidence hash</span>
@@ -75,7 +75,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
             </span>
           </div>
           {/* Sandbox / Live switch */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-xl)', padding: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-lg)', padding: 3 }}>
             <button
               type="button"
               onClick={() => onSetEnv('sandbox')}
@@ -85,7 +85,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
                 cursor: 'pointer',
                 height: 30,
                 padding: '0 14px',
-                borderRadius: 'var(--radius-lg)',
+                borderRadius: 'var(--radius-md)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 700,
@@ -109,7 +109,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
                 cursor: 'pointer',
                 height: 30,
                 padding: '0 14px',
-                borderRadius: 'var(--radius-lg)',
+                borderRadius: 'var(--radius-md)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 700,

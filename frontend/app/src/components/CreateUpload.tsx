@@ -46,9 +46,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>Import a spreadsheet</span>
+          <span className="card-title">Import a spreadsheet</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
             CSV · XLSX · MANY INVOICES
           </span>
@@ -66,19 +66,28 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             )}
             {entityState === 'ready' && (
               <>
-                <select
-                  value={entityId ?? ''}
-                  onChange={(e) => ctx.selectEntity(e.target.value || null)}
-                  style={{ width: '100%', height: 40, padding: '0 10px', background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', color: 'var(--fg-1)', fontSize: 13.5, fontFamily: 'var(--font-sans)' }}
-                >
-                  <option value="">Select an entity…</option>
-                  {entities.map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.name}
-                      {e.status === 'archived' ? ' · archived' : ''}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    className="pf-select"
+                    value={entityId ?? ''}
+                    onChange={(e) => ctx.selectEntity(e.target.value || null)}
+                    style={{ width: '100%', height: 40, padding: '0 10px', border: '1px solid var(--line-2)', fontSize: 13.5 }}
+                  >
+                    <option value="">Select an entity…</option>
+                    {entities.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.name}
+                        {e.status === 'archived' ? ' · archived' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <span
+                    aria-hidden="true"
+                    style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-3)', pointerEvents: 'none', fontSize: 11 }}
+                  >
+                    ▾
+                  </span>
+                </div>
                 <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '7px 0 0', lineHeight: 1.5 }}>
                   Invoices are filed under this entity's TIN. It is never guessed from the workspace you are viewing.
                 </p>
@@ -91,11 +100,18 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               Spreadsheet file
             </div>
             <input
+              id="pf-import-file"
+              className="pf-file"
               type="file"
               accept=".csv,.xlsx"
               onChange={(e) => ctx.selectImportFile(e.target.files?.[0] ?? null)}
-              style={{ width: '100%', fontSize: 13, color: 'var(--fg-2)' }}
             />
+            <label htmlFor="pf-import-file" className="v2-btn v2-btn-ghost" style={{ height: 38, fontSize: 13, cursor: 'pointer' }}>
+              Choose file
+            </label>
+            {!importFile && (
+              <span style={{ fontSize: 12.5, color: 'var(--fg-3)', marginLeft: 10 }}>No file selected</span>
+            )}
             {importFile && !badExtension && (
               <p className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', margin: '8px 0 0' }}>
                 {importFile.name}
@@ -116,7 +132,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             onClick={ctx.readColumns}
             disabled={base == null || !readReady}
             className="v2-btn v2-btn-primary pf-btn"
-            style={{ alignSelf: 'flex-start', height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--accent)' : 'var(--bg-3)', color: readReady ? '#fff' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
+            style={{ alignSelf: 'flex-start', height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
           >
             <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Read columns
           </button>
@@ -126,16 +142,16 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
       <div className="label">Or import a single document</div>
 
       <div className="pf-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Import a document · {active.short}</span>
+            <span className="card-title">Import a document · {active.short}</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
               PDF · IMAGE
             </span>
           </div>
           <div style={{ padding: 20 }}>
-            <div style={{ border: '1.5px dashed var(--line-3)', borderRadius: 'var(--radius-xl)', padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: 'var(--bg-1)', marginBottom: 22 }}>
-              <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-xl)', background: 'var(--accent-tint)', color: 'var(--accent)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{importGlyph}</span>
+            <div style={{ border: '1.5px dashed var(--line-3)', borderRadius: 'var(--radius-lg)', padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: 'var(--bg-1)', marginBottom: 22 }}>
+              <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-lg)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{importGlyph}</span>
               <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>Drag a file here, or pick a sample below</div>
               <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
                 The parser extracts buyer details, line items and totals, then pre-fills the invoice for validation.
@@ -152,29 +168,29 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                     key={f.id}
                     onClick={() => ctx.selectFile(f.id)}
                     className="pf-upcard"
-                    style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', border: `1px solid ${sel ? 'var(--accent)' : 'var(--line-2)'}`, background: sel ? 'var(--accent-tint)' : 'var(--bg-2)', borderRadius: 'var(--radius-xl)', width: '100%' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`, background: sel ? 'var(--action-tint)' : 'var(--bg-2)', borderRadius: 'var(--radius-lg)', width: '100%' }}
                   >
-                    <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-xl)', background: f.iconBg, color: f.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.02em' }}>{f.ext}</span>
+                    <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: f.iconBg, color: f.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.02em' }}>{f.ext}</span>
                     <div style={{ flex: 1, textAlign: 'left' }}>
                       <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--fg-1)' }}>{f.name}</div>
                       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
                         {f.meta}
                       </div>
                     </div>
-                    <span style={{ flex: 'none', color: 'var(--accent)', display: 'inline-flex' }}>{sel ? tickGlyph13 : ''}</span>
+                    <span style={{ flex: 'none', color: 'var(--action)', display: 'inline-flex' }}>{sel ? tickGlyph13 : ''}</span>
                   </button>
                 )
               })}
             </div>
           </div>
         </div>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 20, position: 'sticky', top: 0 }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 20, position: 'sticky', top: 0 }}>
           <div className="label" style={{ marginBottom: 14 }}>
             Selected file
           </div>
           {hasFile && selFile && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 12, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', background: 'var(--bg-1)', marginBottom: 18 }}>
-              <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-lg)', background: selFile.iconBg, color: selFile.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700 }}>{selFile.ext}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 12, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-1)', marginBottom: 18 }}>
+              <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 'var(--radius-md)', background: selFile.iconBg, color: selFile.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700 }}>{selFile.ext}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selFile.name}</div>
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', marginTop: 2 }}>
@@ -189,7 +205,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           <button
             onClick={ctx.parseFile}
             className="v2-btn v2-btn-primary pf-btn"
-            style={{ width: '100%', justifyContent: 'center', height: 42, background: hasFile ? 'var(--accent)' : 'var(--bg-3)', color: hasFile ? '#fff' : 'var(--fg-4)', cursor: hasFile ? 'pointer' : 'not-allowed' }}
+            style={{ width: '100%', justifyContent: 'center', height: 42, background: hasFile ? 'var(--action)' : 'var(--bg-3)', color: hasFile ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: hasFile ? 'pointer' : 'not-allowed' }}
           >
             <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Upload &amp; parse
           </button>

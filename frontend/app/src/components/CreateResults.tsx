@@ -32,21 +32,21 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
   ]
 
   const verdict = hasErr
-    ? { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', iconBg: 'var(--status-red-text)', iconColor: '#fff', glyph: crossGlyph, title: 'Not compliant yet', sub: v.errors.length + ' error' + (v.errors.length > 1 ? 's' : '') + ' must be resolved before approval', titleColor: 'var(--status-red-text)', subColor: 'var(--fg-2)', score: passCount + '/16' }
+    ? { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', iconBg: 'var(--status-red-text)', iconColor: 'var(--text-on-dark)', glyph: crossGlyph, title: 'Not compliant yet', sub: v.errors.length + ' error' + (v.errors.length > 1 ? 's' : '') + ' must be resolved before approval', titleColor: 'var(--status-red-text)', subColor: 'var(--fg-2)', score: passCount + '/16' }
     : hasWarn
-      ? { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', iconBg: 'var(--status-amber-text)', iconColor: '#fff', glyph: warnGlyph, title: 'Review warnings', sub: v.warnings.length + ' warning to confirm before transmission', titleColor: 'var(--status-amber-text)', subColor: 'var(--fg-2)', score: passCount + '/16' }
-      : { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', iconBg: 'var(--status-green-text)', iconColor: '#fff', glyph: tickGlyph11, title: 'Compliant — ready to approve', sub: 'All 16 MBS checks passed. Transmit-ready.', titleColor: 'var(--status-green-text)', subColor: 'var(--fg-2)', score: '16/16' }
+      ? { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', iconBg: 'var(--status-amber-text)', iconColor: 'var(--text-on-dark)', glyph: warnGlyph, title: 'Review warnings', sub: v.warnings.length + ' warning to confirm before transmission', titleColor: 'var(--status-amber-text)', subColor: 'var(--fg-2)', score: passCount + '/16' }
+      : { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', iconBg: 'var(--status-green-text)', iconColor: 'var(--text-on-dark)', glyph: tickGlyph11, title: 'Compliant — ready to approve', sub: 'All 16 MBS checks passed. Transmit-ready.', titleColor: 'var(--status-green-text)', subColor: 'var(--fg-2)', score: '16/16' }
 
   const approveBtn = clear
-    ? { bg: 'var(--accent)', color: '#fff', cursor: 'pointer', label: 'Approve', glyph: shieldGlyph }
+    ? { bg: 'var(--action)', color: 'var(--text-on-dark)', cursor: 'pointer', label: 'Approve', glyph: shieldGlyph }
     : { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Resolve issues first', glyph: lockGlyph }
   const approveHint = clear ? 'Generates PDF + UBL, writes the audit log, and queues for FIRS transmit.' : 'Approval unlocks once all errors and warnings are cleared.'
 
   return (
     <div className="pf-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ background: verdict.bg, border: `1px solid ${verdict.border}`, borderRadius: 'var(--radius-xl)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-xl)', background: verdict.iconBg, color: verdict.iconColor, display: 'grid', placeItems: 'center' }}>{verdict.glyph}</span>
+        <div style={{ background: verdict.bg, border: `1px solid ${verdict.border}`, borderRadius: 'var(--radius-lg)', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-lg)', background: verdict.iconBg, color: verdict.iconColor, display: 'grid', placeItems: 'center' }}>{verdict.glyph}</span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: verdict.titleColor }}>{verdict.title}</div>
             <div style={{ fontSize: 13, color: verdict.subColor }}>{verdict.sub}</div>
@@ -55,23 +55,23 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
         </div>
 
         {issues.length > 0 && (
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
             <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Issues to resolve</span>
+              <span className="card-title">Issues to resolve</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 {issues.length} OPEN
               </span>
             </div>
             {issues.map((e) => (
               <div key={e.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 13, padding: '14px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                <span style={{ flex: 'none', width: 24, height: 24, borderRadius: 'var(--radius-lg)', background: e.iconBg, color: e.iconColor, display: 'grid', placeItems: 'center', marginTop: 1 }}>{e.glyph}</span>
+                <span style={{ flex: 'none', width: 24, height: 24, borderRadius: 'var(--radius-md)', background: e.iconBg, color: e.iconColor, display: 'grid', placeItems: 'center', marginTop: 1 }}>{e.glyph}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 500 }}>{e.label}</div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
                     {e.detail}
                   </div>
                 </div>
-                <button onClick={() => ctx.applyFix(e.patch)} className="v2-btn pf-btn" style={{ flex: 'none', height: 30, padding: '0 12px', fontSize: 12.5, background: 'var(--accent-tint)', color: 'var(--accent)' }}>
+                <button onClick={() => ctx.applyFix(e.patch)} className="v2-btn pf-btn" style={{ flex: 'none', height: 30, padding: '0 12px', fontSize: 12.5, background: 'var(--action-tint)', color: 'var(--action)' }}>
                   {e.fixLabel}
                 </button>
               </div>
@@ -79,9 +79,9 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
           </div>
         )}
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Passed checks</span>
+            <span className="card-title">Passed checks</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--status-green-text)' }}>
               {passCount} / 16 PASSED
             </span>
@@ -99,7 +99,7 @@ export function CreateResults({ ctx }: { ctx: PlatformCtx }) {
           </div>
         </div>
       </div>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', padding: 20, position: 'sticky', top: 0 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', padding: 20, position: 'sticky', top: 0 }}>
         <div className="label" style={{ marginBottom: 14 }}>
           Invoice
         </div>

@@ -27,21 +27,21 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
     { label: 'In flight', value: String(jobs.filter((j) => ['queued', 'submitting', 'pending'].includes(j.state)).length), color: 'var(--fg-1)' },
     { label: 'Cleared 24h', value: '1,204', color: 'var(--status-green-text)' },
     { label: 'Rejected', value: String(jobs.filter((j) => ['rejected', 'failed'].includes(j.state)).length), color: 'var(--status-red-text)' },
-    { label: 'Dead-letter', value: String(dlCount), color: '#8A1F18' },
+    { label: 'Dead-letter', value: String(dlCount), color: 'var(--status-red-text)' },
   ]
 
   return (
     <div className="ops-screen-pad">
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24 }}>
         <div>
-          <div className="label" style={{ marginBottom: 8 }}>
-            / 02 — SUBMISSION JOBS
+          <div className="eyebrow" style={{ marginBottom: 8 }}>
+            02 — SUBMISSION JOBS
           </div>
           <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Submissions</h1>
         </div>
         <div className="ops-sub-stats" style={{ display: 'flex', gap: 10 }}>
           {subStats.map((s) => (
-            <div key={s.label} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-xl)', padding: '10px 16px', minWidth: 96 }}>
+            <div key={s.label} style={{ border: '1px solid var(--line-1)', background: 'var(--bg-2)', borderRadius: 'var(--radius-lg)', padding: '10px 16px', minWidth: 96 }}>
               <div className="mono" style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', color: s.color }}>
                 {s.value}
               </div>
@@ -59,18 +59,18 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
             display: 'flex',
             alignItems: 'center',
             gap: 14,
-            background: '#FBE3DF',
+            background: 'var(--status-red-bg)',
             border: '1px solid #E59A8F',
             borderLeft: '3px solid #A12822',
-            borderRadius: 'var(--radius-xl)',
+            borderRadius: 'var(--radius-lg)',
             padding: '12px 16px',
             marginBottom: 16,
           }}
         >
-          <span style={{ flex: 'none', color: '#8A1F18', display: 'inline-flex' }}>{ALERT_ICON}</span>
+          <span style={{ flex: 'none', color: 'var(--status-red-text)', display: 'inline-flex' }}>{ALERT_ICON}</span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: '#8A1F18' }}>{dlCount} submissions in the dead-letter queue</div>
-            <div className="mono" style={{ fontSize: 11, color: '#A12822', marginTop: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--status-red-text)' }}>{dlCount} submissions in the dead-letter queue</div>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--destructive)', marginTop: 1 }}>
               Max retries exhausted · oldest {dlAges.length ? dlAges[dlAges.length - 1] : '—'} · review before re-driving
             </div>
           </div>
@@ -83,9 +83,9 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
               cursor: 'pointer',
               height: 34,
               padding: '0 14px',
-              borderRadius: 'var(--radius-lg)',
-              background: '#A12822',
-              color: '#fff',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--destructive)',
+              color: 'var(--text-on-dark)',
               fontFamily: 'var(--font-sans)',
               fontSize: 13,
               fontWeight: 600,
@@ -145,7 +145,7 @@ export function Submissions({ jobs, filter, query, onFilterChange, onQueryChange
       </div>
 
       {/* jobs table */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflowX: 'auto', background: 'var(--bg-2)' }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflowX: 'auto', background: 'var(--bg-2)' }}>
         <div
           className="ops-jobs-table"
           style={{

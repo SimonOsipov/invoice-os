@@ -1,7 +1,8 @@
 /* Local page styles — ported verbatim from the ASComply Africa Platform
    prototype's inline <style> block (reset + keyframes + hover/focus/active
    transitions), plus a responsive media-query layer for the app shell.
-   Token vars (--accent, --bg-2, --line-2, …) resolve via inheritance from .asc-app. */
+   Token vars (--action, --bg-2, --line-2, …) resolve via inheritance from .asc-app;
+   --accent is the design system's amber and resolves from :root. */
 
 * {
   box-sizing: border-box;
@@ -62,7 +63,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-input);
   height: 38px;
   padding: 0 12px;
   width: 100%;
@@ -71,7 +72,7 @@ body {
 }
 .pf-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  box-shadow: 0 0 0 2px var(--ring);
 }
 .pf-num {
   font-family: var(--font-mono);
@@ -79,7 +80,7 @@ body {
   color: var(--fg-1);
   background: var(--bg-2);
   border: 1px solid var(--line-2);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-input);
   height: 34px;
   padding: 0 10px;
   width: 100%;
@@ -88,17 +89,16 @@ body {
 }
 .pf-num:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  box-shadow: 0 0 0 2px var(--ring);
 }
+/* No transform on press anywhere — the system doesn't squish. Hover is a
+   fill or brightness change only, never movement and never a shadow change. */
 .pf-btn {
-  transition: background 120ms ease-out, transform 100ms;
-}
-.pf-btn:active {
-  transform: translateY(1px);
+  transition: background 120ms ease-out;
 }
 .pf-signout {
   color: var(--fg-3);
-  transition: color 120ms ease-out, transform 100ms;
+  transition: color 120ms ease-out;
 }
 .pf-signout:hover {
   color: var(--fg-1);
@@ -108,14 +108,11 @@ body {
   cursor: pointer;
 }
 .pf-upcard {
-  transition: border-color 120ms ease-out, background 120ms ease-out, transform 100ms;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
   font-family: var(--font-sans);
 }
 .pf-upcard:hover {
-  border-color: var(--accent) !important;
-}
-.pf-upcard:active {
-  transform: translateY(1px);
+  border-color: var(--action) !important;
 }
 .money {
   font-family: var(--font-sans);

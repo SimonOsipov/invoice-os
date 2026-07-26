@@ -112,8 +112,8 @@ export function buildSpendBars(): SpendBar[] {
     const val = proj ? spAvg : (spSeries[i] as number)
     spendBars.push({
       h: ((val / spMax) * 100).toFixed(1) + '%',
-      fill: proj ? 'var(--accent-tint)' : 'var(--accent)',
-      border: proj ? '1px dashed var(--accent)' : 'none',
+      fill: proj ? 'var(--action-tint)' : 'var(--action)',
+      border: proj ? '1px dashed var(--action)' : 'none',
       proj,
     })
   }
@@ -179,7 +179,7 @@ export function buildRejectionReasons(raw: RejectionInput[]): RejectionBar[] {
     label: r.label,
     count: fmt(r.count),
     width: ((r.count / rejMax) * 100).toFixed(1) + '%',
-    color: i === 0 ? 'var(--status-red-text)' : i < 3 ? 'var(--accent)' : 'var(--fg-3)',
+    color: i === 0 ? 'var(--status-red-text)' : i < 3 ? 'var(--action)' : 'var(--fg-3)',
   }))
 }
 

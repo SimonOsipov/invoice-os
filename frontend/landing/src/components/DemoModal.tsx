@@ -161,14 +161,14 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       role="dialog"
       aria-modal="true"
       aria-label="Book a demo"
-      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(20,23,26,0.44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'dmOvIn 160ms ease-out' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'oklch(16% .03 210 / .44)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'dmOvIn 160ms ease-out' }}
     >
       <style>{`
         @keyframes dmOvIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes dmCardIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
         @keyframes dmSpin { to { transform: rotate(360deg); } }
         .dm-input, .dm-select { transition: border-color 120ms, box-shadow 120ms; }
-        .dm-input:focus, .dm-select:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-glow); outline: none; }
+        .dm-input:focus, .dm-select:focus { border-color: var(--action) !important; box-shadow: 0 0 0 3px var(--action-glow); outline: none; }
         .dm-err { border-color: var(--status-red-text) !important; }
         .dm-select { appearance: none; -webkit-appearance: none; }
         .si-close { transition: background 120ms ease-out, color 120ms ease-out; }
@@ -179,7 +179,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       <div
         onClick={(e) => e.stopPropagation()}
         onKeyDown={trapTab}
-        style={{ width: '100%', maxWidth: 452, maxHeight: 'calc(100dvh - 48px)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', boxShadow: '0 32px 64px -24px rgba(20,23,26,0.42)', overflowY: 'auto', animation: 'dmCardIn 200ms var(--ease-out)' }}
+        style={{ width: '100%', maxWidth: 452, maxHeight: 'calc(100dvh - 48px)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflowY: 'auto', animation: 'dmCardIn 200ms var(--ease-out)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -189,14 +189,14 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
               AFRICA
             </span>
           </div>
-          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-lg)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+          <button onClick={onClose} className="si-close" aria-label="Close" style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', border: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
             <Glyph d="M18 6 6 18M6 6l12 12" size={17} sw={1.8} />
           </button>
         </div>
 
         {(demoStep === 'form' || demoStep === 'submitting') && (
           <form noValidate onSubmit={handleSubmit} style={{ padding: 20 }}>
-            <div className="label" style={{ marginBottom: 8 }}>/ BOOK A DEMO</div>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>BOOK A DEMO</div>
             <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>See your invoices pass compliance in real time.</h3>
             <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '0 0 18px' }}>A 20-minute walkthrough with a compliance specialist. Bring a sample invoice file — we'll validate it live.</p>
 
@@ -217,7 +217,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   aria-invalid={Boolean(errors.name)}
                   aria-describedby={errors.name ? 'dm-name-error' : undefined}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.name && (
                   <div id="dm-name-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
@@ -242,7 +242,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   aria-invalid={Boolean(errors.email)}
                   aria-describedby={errors.email ? 'dm-email-error' : undefined}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.email && (
                   <div id="dm-email-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
@@ -267,7 +267,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   aria-invalid={Boolean(errors.company)}
                   aria-describedby={errors.company ? 'dm-company-error' : undefined}
                   disabled={submitting}
-                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+                  style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
                 />
                 {errors.company && (
                   <div id="dm-company-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
@@ -287,7 +287,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                     value={form.role}
                     onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('role', e.target.value)}
                     disabled={submitting}
-                    style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                    style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                   >
                     <option value="" disabled>Select…</option>
                     {ROLE_OPTIONS.map((opt) => (
@@ -312,7 +312,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                       value={form.size}
                       onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('size', e.target.value)}
                       disabled={submitting}
-                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                     >
                       <option value="" disabled>Select…</option>
                       {SIZE_OPTIONS.map((opt) => (
@@ -335,7 +335,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                       value={form.volume}
                       onChange={(e: ChangeEvent<HTMLSelectElement>) => setField('volume', e.target.value)}
                       disabled={submitting}
-                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-xl)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+                      style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                     >
                       <option value="" disabled>Select…</option>
                       {VOLUME_OPTIONS.map((opt) => (
@@ -353,7 +353,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
             <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 18, cursor: 'pointer', gap: 9 }}>
               {submitting ? (
                 <>
-                  <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: 99, animation: 'dmSpin 0.7s linear infinite' }} />
+                  <span style={{ width: 15, height: 15, border: '2px solid oklch(100% 0 0 / .4)', borderTopColor: 'var(--text-on-dark)', borderRadius: 99, animation: 'dmSpin 0.7s linear infinite' }} />
                   Booking…
                 </>
               ) : (
@@ -366,7 +366,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
 
         {demoStep === 'success' && (
           <div style={{ padding: '32px 22px 24px', textAlign: 'center' }}>
-            <span style={{ width: 48, height: 48, borderRadius: 99, background: 'var(--accent-tint)', color: 'var(--accent)', display: 'inline-grid', placeItems: 'center', marginBottom: 16 }}>
+            <span style={{ width: 48, height: 48, borderRadius: 99, background: 'var(--action-tint)', color: 'var(--action)', display: 'inline-grid', placeItems: 'center', marginBottom: 16 }}>
               <Glyph d="M20 6 9 17l-5-5" size={26} sw={2} />
             </span>
             <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 8px' }}>You're booked</h3>

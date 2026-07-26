@@ -16,12 +16,12 @@ export type StatusStyle = { bg: string; border: string; text: string; label: str
 // drawer timeline's derived final step.
 const JOB_STATE_STYLE: Record<JobState, [string, string, string, string]> = {
   queued: ['var(--status-muted-bg)', 'var(--status-muted-border)', 'var(--status-muted-text)', 'QUEUED'],
-  submitting: ['#E6EEFA', '#AFC9EC', '#1E5AA8', 'SUBMITTING'],
+  submitting: ['var(--status-muted-bg)', 'var(--status-muted-border)', 'var(--status-muted-text)', 'SUBMITTING'],
   pending: ['var(--status-amber-bg)', 'var(--status-amber-border)', 'var(--status-amber-text)', 'PENDING'],
   accepted: ['var(--status-green-bg)', 'var(--status-green-border)', 'var(--status-green-text)', 'CLEARED'],
   rejected: ['var(--status-red-bg)', 'var(--status-red-border)', 'var(--status-red-text)', 'REJECTED'],
   failed: ['var(--status-red-bg)', 'var(--status-red-border)', 'var(--status-red-text)', 'FAILED'],
-  'dead-letter': ['#F7D7D2', '#D98A80', '#8A1F18', 'DEAD-LETTER'],
+  'dead-letter': ['var(--status-red-bg)', 'var(--status-red-border)', 'var(--status-red-text)', 'DEAD-LETTER'],
 }
 
 export function jobStateStyle(state: JobState): StatusStyle {
@@ -104,9 +104,9 @@ function timelineStep(label: string, done: boolean, active: boolean, ts: string,
     ts,
     detail,
     color: active ? 'var(--fg-1)' : done ? 'var(--fg-2)' : 'var(--fg-4)',
-    dotBg: active || done ? 'var(--accent)' : 'var(--bg-3)',
-    dotBorder: active || done ? 'var(--accent)' : 'var(--line-3)',
-    line: done ? 'var(--accent)' : 'var(--line-2)',
+    dotBg: active || done ? 'var(--action)' : 'var(--bg-3)',
+    dotBorder: active || done ? 'var(--action)' : 'var(--line-3)',
+    line: done ? 'var(--action)' : 'var(--line-2)',
   }
 }
 

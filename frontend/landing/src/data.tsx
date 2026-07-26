@@ -192,7 +192,8 @@ export const APPROVALS: Approval[] = [
 export type AudienceFeature = { title: string; body: string; glyph: ReactNode }
 export type AudienceStat = { value: string; label: string; color: string }
 
-const fg = (paths: string[]) => <Icon paths={paths} size={14} />
+// Feature-list glyphs sit in 36px icon tiles, so they render at the DS's 18px rung.
+const fg = (paths: string[]) => <Icon paths={paths} size={18} />
 const tg = (paths: string[]) => <Icon paths={paths} size={15} />
 
 export type Audience = {
@@ -217,7 +218,7 @@ export const FIRM: Audience = {
   ],
   stats: [
     { value: '1 login', label: 'All client companies, switch instantly.', color: 'var(--fg-1)' },
-    { value: '25%', label: 'Recurring partner revenue share.', color: 'var(--accent)' },
+    { value: '25%', label: 'Recurring partner revenue share.', color: 'var(--action)' },
   ],
   cta: 'Book a demo',
 }
@@ -235,7 +236,7 @@ export const INHOUSE: Audience = {
   ],
   stats: [
     { value: '4 roles', label: 'Creator, reviewer, approver & admin built in.', color: 'var(--fg-1)' },
-    { value: '1 company', label: 'Full control of your own compliance.', color: 'var(--accent)' },
+    { value: '1 company', label: 'Full control of your own compliance.', color: 'var(--action)' },
   ],
   cta: 'Book a demo',
 }
@@ -259,7 +260,7 @@ export const API_POINTS: ApiPoint[] = [
 /* Pricing — plans (monthly / annual)                                  */
 /* ------------------------------------------------------------------ */
 
-export type PlanVariant = 'light' | 'dark'
+export type PlanVariant = 'light' | 'featured'
 
 export type Plan = {
   name: string
@@ -299,7 +300,7 @@ export const PLANS: Plan[] = [
     metaMonthly: 'BILLED MONTHLY · UP TO 5 TENANTS',
     metaAnnual: 'BILLED ANNUALLY · UP TO 5 TENANTS',
     cta: 'Book a demo',
-    variant: 'dark',
+    variant: 'featured',
     features: ['Up to 25,000 invoices / mo', 'API v1 + signed webhooks', 'Approval workflows & roles', 'Live MBS/FIRS transmission', 'ERP connectors', 'Priority support'],
   },
   {
@@ -340,15 +341,19 @@ export const PLAN_COLORS: Record<PlanVariant, {
     btnBorder: 'var(--line-2)',
     checkColor: 'var(--accent)',
   },
-  dark: {
-    cardBg: 'var(--slate-900)',
-    cardBorder: 'var(--slate-900)',
-    titleColor: '#fff',
-    subColor: 'var(--slate-400)',
-    featColor: 'var(--slate-200)',
-    btnBg: 'var(--accent)',
-    btnFg: '#fff',
-    btnBorder: 'var(--accent)',
-    checkColor: 'var(--teal-300)',
+  /* The featured tier is distinguished by its POPULAR badge and a brighter
+     hairline — never by inverting to a dark card. The page carries exactly two
+     dark surfaces plus the closing CTA panel; a dark pricing card would be a
+     fourth, and the system permits no such thing. */
+  featured: {
+    cardBg: 'var(--bg-2)',
+    cardBorder: 'var(--line-bright)',
+    titleColor: 'var(--fg-1)',
+    subColor: 'var(--fg-3)',
+    featColor: 'var(--fg-2)',
+    btnBg: 'var(--action)',
+    btnFg: 'var(--primary-foreground)',
+    btnBorder: 'var(--action)',
+    checkColor: 'var(--accent)',
   },
 }

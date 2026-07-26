@@ -26,8 +26,8 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
     <div className="ops-screen-pad">
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24 }}>
         <div>
-          <div className="label" style={{ marginBottom: 8 }}>
-            / 03 — COMPLIANCE EVIDENCE
+          <div className="eyebrow" style={{ marginBottom: 8 }}>
+            03 — COMPLIANCE EVIDENCE
           </div>
           <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', margin: 0 }}>Compliance evidence</h1>
         </div>
@@ -38,7 +38,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             gap: 7,
             background: 'var(--status-muted-bg)',
             border: '1px solid var(--line-2)',
-            borderRadius: 'var(--radius-lg)',
+            borderRadius: 'var(--radius-md)',
             padding: '7px 12px',
           }}
         >
@@ -72,7 +72,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
       </div>
 
       {/* bundle table */}
-      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflowX: 'auto', background: 'var(--bg-2)' }}>
+      <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflowX: 'auto', background: 'var(--bg-2)' }}>
         <div
           className="ops-evidence-table"
           style={{
@@ -109,7 +109,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
             <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
               {e.invoice}
             </span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--accent)' }}>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--action)' }}>
               {e.irn}
             </span>
             <span style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 10 }}>{e.buyer}</span>

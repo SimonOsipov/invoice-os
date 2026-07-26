@@ -1,6 +1,7 @@
 export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
+  // No texture here: the system sanctions exactly one, on the hero band only.
   return (
-    <section id="demo" className="dot-bg" style={{ borderBottom: '1px solid var(--line-1)' }}>
+    <section id="demo" style={{ borderBottom: '1px solid var(--line-1)' }}>
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '96px 32px' }}>
         <div
           className="ios-grid ios-2 ios-demo-card"

@@ -513,7 +513,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   return (
     <div
-      className="if-v2 pf-shell"
+      className="asc-app pf-shell"
       style={{ height: '100vh', display: 'flex', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', overflow: 'hidden' }}
     >
       <Sidebar ctx={ctx} />

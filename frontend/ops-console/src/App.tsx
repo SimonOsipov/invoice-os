@@ -14,7 +14,7 @@ import { Toast } from './components/Toast'
 import { EVIDENCE_DATA, SEED_SUBMISSIONS } from './data'
 import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
 
-// The whole console lives under `.if-v2` — that scope defines the design-system
+// The whole console lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
 // .mono) that every screen relies on. It's a full-height app shell: a fixed
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
@@ -85,7 +85,7 @@ export default function App() {
 
   return (
     <div
-      className="if-v2"
+      className="asc-app"
       style={{
         height: '100vh',
         display: 'flex',

@@ -1,0 +1,226 @@
+/* ============================================================
+   ASComply — product/app layer
+   Bridges the console prototypes onto the ASComply design system.
+   The DS is marketing-derived; this file adds only the app-level
+   surfaces it doesn't define (inputs, tables, tabs, status badges),
+   all built from ASComply tokens. No new hues.
+   Link AFTER the DS token stylesheets. Scope: .asc-app
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+.asc-app {
+  /* Mono is an app-layer role the DS leaves to the system stack;
+     IBM Plex Mono sits with Inter and keeps dense chrome narrow. */
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---------- SURFACES ---------- */
+  --bg-0: oklch(96% .012 88);          /* recessed well */
+  --bg-1: var(--background);           /* cream page ground */
+  --bg-2: var(--card);                 /* white cards */
+  --bg-3: var(--muted);                /* hover */
+  --bg-4: oklch(93% .014 88);          /* pressed */
+  --bg-card: var(--card);
+
+  /* ---------- TEXT ---------- */
+  --fg-1: var(--ink);
+  --fg-2: var(--foreground);
+  --fg-3: var(--muted-foreground);
+  --fg-4: oklch(62% .015 210);
+
+  /* ---------- ACTION (deep teal) ---------- */
+  --accent: var(--primary);
+  --accent-soft: oklch(27% .06 200);
+  --accent-deep: oklch(22% .05 202);
+  --accent-glow: var(--primary-20);
+  --accent-tint: var(--primary-10);
+  /* DS amber, unaliased — Base's --accent means action-teal, the DS's
+     --accent means amber. Use this where amber is what's wanted. */
+  --ds-amber: oklch(72% .15 65);
+
+  /* Teal ramp — light rungs read on dark bands, dark rungs on cream */
+  --teal-200: oklch(88% .04 190);
+  --teal-300: oklch(80% .07 185);
+  --teal-400: oklch(62% .09 190);
+  --teal-500: oklch(40% .07 195);
+  --teal-600: var(--primary);
+  --teal-700: oklch(27% .06 200);
+  --teal-900: var(--surface);
+
+  /* Neutral ramp — 100-500 on cream, 200-400 double as the on-dark text ramp */
+  --slate-100: var(--muted);
+  --slate-200: oklch(100% 0 0 / .82);
+  --slate-300: var(--on-dark-70);
+  --slate-400: oklch(100% 0 0 / .55);
+  --slate-500: var(--muted-foreground);
+  --slate-700: var(--foreground);
+  --slate-800: var(--surface);
+  --slate-900: var(--ink);
+
+  /* ---------- DATA POINTS ---------- */
+  --pop-mint: var(--primary);
+  --pop-yellow: oklch(52% .12 62);
+  --pop-red: oklch(48% .17 25);
+
+  /* ---------- STATUS TRIPLETS ----------
+     Teal = pass, amber = attention, destructive = failure.
+     The system permits no third hue, so success reads teal. */
+  --status-green-bg: oklch(32% .06 200 / .07);
+  --status-green-border: oklch(32% .06 200 / .22);
+  --status-green-text: var(--primary);
+
+  --status-amber-bg: oklch(72% .15 65 / .12);
+  --status-amber-border: oklch(72% .15 65 / .34);
+  --status-amber-text: oklch(50% .12 62);
+
+  --status-red-bg: oklch(55% .2 25 / .07);
+  --status-red-border: oklch(55% .2 25 / .24);
+  --status-red-text: oklch(46% .17 25);
+
+  --status-muted-bg: var(--muted);
+  --status-muted-border: var(--border);
+  --status-muted-text: var(--muted-foreground);
+
+  /* ---------- BORDERS ---------- */
+  --line-1: var(--border);
+  --line-2: oklch(87% .014 190);
+  --line-3: oklch(82% .016 195);
+  --line-bright: var(--primary);
+
+  /* ---------- ON DARK ---------- */
+  --on-dark-teal: oklch(80% .07 185);
+
+  /* ---------- RADII (12 / 16 / pill rhythm) ---------- */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- TYPE ---------- */
+.asc-app h1:not(.mono),
+.asc-app h2:not(.mono),
+.asc-app h3:not(.mono) {
+  font-family: var(--font-display) !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.02em !important;
+  font-variation-settings: 'opsz' 72;
+  color: var(--ink);
+}
+.asc-app h1.mono, .asc-app h2.mono { font-family: var(--font-mono); }
+.asc-app em, .asc-app .emph {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 500;
+  color: var(--primary);
+}
+
+.asc-app .mono { font-family: var(--font-mono); letter-spacing: -0.015em; }
+.asc-app .money { font-family: var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.asc-app .upper { text-transform: uppercase; letter-spacing: 0.12em; }
+
+/* Eyebrow — the DS section marker: uppercase sans, teal, 0.12em */
+.asc-app .label {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.asc-app .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  color: var(--primary);
+}
+.asc-app .ops-tab, .asc-app .dev-tab, .asc-app .pf-tab {
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.asc-app .eyebrow-dark { color: var(--ds-amber); }
+.asc-app .eyebrow::before {
+  content: "";
+  width: 24px;
+  height: 1px;
+  background: currentColor;
+  flex: none;
+}
+
+.asc-app a { color: inherit; text-decoration: none; }
+.asc-app a.lnk { color: var(--primary); transition: color var(--dur-fast) var(--ease-out); }
+.asc-app a.lnk:hover { color: var(--accent); }
+
+/* ---------- BUTTONS — full pill, brightness lift, no movement ---------- */
+.asc-app .v2-btn,
+.asc-app .pf-btn,
+.asc-app .ops-btn,
+.asc-app .dev-btn {
+  border-radius: var(--radius-pill) !important;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              filter var(--dur-fast) var(--ease-out) !important;
+}
+.asc-app .v2-btn:active,
+.asc-app .pf-btn:active,
+.asc-app .ops-btn:active,
+.asc-app .dev-btn:active { transform: none !important; }
+.asc-app .v2-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 20px;
+  font-family: var(--font-sans); font-size: 14px; font-weight: 500;
+  border: 0; cursor: pointer;
+}
+.asc-app .v2-btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.asc-app .v2-btn-primary:hover { background: var(--primary); filter: brightness(1.22); }
+.asc-app .v2-btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+.asc-app .v2-btn-ghost:hover { background: var(--muted); border-color: var(--border); }
+
+/* ---------- INPUTS (app-level; the DS defines none) ---------- */
+.asc-app .pf-input, .asc-app .pf-select, .asc-app .pf-num,
+.asc-app .ops-input, .asc-app .dev-input,
+.asc-app input, .asc-app textarea, .asc-app select {
+  border-radius: 10px !important;
+  font-family: var(--font-sans);
+}
+.asc-app .pf-input, .asc-app .pf-select, .asc-app .pf-num,
+.asc-app .ops-input, .asc-app .dev-input {
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--ink);
+}
+.asc-app .pf-input:focus, .asc-app .pf-select:focus, .asc-app .pf-num:focus,
+.asc-app .ops-input:focus, .asc-app .dev-input:focus,
+.asc-app input:focus, .asc-app textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--ring) !important;
+  outline: none;
+}
+.asc-app ::placeholder { color: var(--muted-foreground); opacity: .8; }
+
+/* ---------- ROWS & NAV ---------- */
+.asc-app .pf-row:hover, .asc-app .ops-row:hover, .asc-app .dev-row:hover { background: var(--muted); }
+.asc-app .pf-nav:hover, .asc-app .ops-nav:hover, .asc-app .dev-nav:hover { background: var(--muted); }
+.asc-app .pf-menu-item:hover { background: var(--muted); }
+
+/* ---------- CHIPS / PILLS ---------- */
+.asc-app .pf-chip, .asc-app .ops-chip, .asc-app .dev-chip { border-radius: var(--radius-pill) !important; }
+
+  /* Design-system components resolve --accent to the DS's AMBER, not the
+   bridged action-teal. Without this, every mounted DS component (Eyebrow
+   tone=dark, ChecklistItem/Icon, NumberedCard numerals) inherits the Base
+   meaning of --accent and goes near-invisible. */
+.asc-app .sc-host-x { --accent: oklch(72% .15 65); }
+
+.asc-app ::selection { background: var(--accent); color: var(--ink); }
+.asc-app ::-webkit-scrollbar { width: 10px; height: 10px; }
+.asc-app ::-webkit-scrollbar-track { background: var(--background); }
+.asc-app ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+.asc-app ::-webkit-scrollbar-thumb:hover { background: oklch(84% .016 195); }

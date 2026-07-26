@@ -18,6 +18,7 @@ import {
   type ImportReport,
   type UploadPhase,
 } from './lib/importApi'
+import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -50,6 +51,30 @@ import type {
 } from './types'
 
 const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false }
+
+// Environment banner under the header, one per state. Adopted from ops-console
+// TopBar.tsx, which states the environment in BOTH states — the app previously
+// showed a banner only in sandbox, so "live" was conveyed by absence. Copy stays in
+// the app's transmission-centric voice rather than the ops console's key-centric one
+// ("sk_live"/"sk_test" are a developer-console concern, not an accountant's).
+const ENV_BANNER = {
+  sandbox: {
+    bg: 'var(--status-amber-bg)',
+    border: 'var(--status-amber-border)',
+    text: 'var(--status-amber-text)',
+    icon: flaskGlyph,
+    msg: 'Sandbox environment — transmissions are simulated against the FIRS test adapter. No live data is sent.',
+    tag: 'TEST DATA · SIMULATED',
+  },
+  live: {
+    bg: 'var(--action-tint)',
+    border: 'var(--teal-200)',
+    text: 'var(--action-soft)',
+    icon: shieldGlyph15,
+    msg: 'Live environment — transmissions are sent to FIRS and return legally-valid clearance evidence.',
+    tag: 'PRODUCTION · FIRS',
+  },
+} as const
 
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
@@ -411,10 +436,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDetailSel(selectImported(id))
   }
 
-  function toggleSandbox() {
-    setSandbox((s) => !s)
-  }
-
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
   }
@@ -502,7 +523,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     approve,
     selectInvoice,
     openImportedInvoice,
-    toggleSandbox,
+    setSandbox,
     setSettingsTab,
     toggleConnector,
     saveConnectorMapping,
@@ -519,17 +540,18 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       <Sidebar ctx={ctx} />
       <main className="pf-main" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Header ctx={ctx} />
-        {sandbox && (
-          <div style={{ flex: 'none', background: 'var(--status-amber-bg)', borderBottom: '1px solid var(--status-amber-border)', padding: '7px 24px', display: 'flex', alignItems: 'center', gap: 9 }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--status-amber-text)', flex: 'none' }}>
-              <path d="M9 3h6M10 3v6.5L5.5 17a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 9.5V3" />
-              <path d="M7.5 14h9" />
-            </svg>
-            <span style={{ fontSize: 12.5, color: 'var(--status-amber-text)', fontWeight: 500 }}>
-              Sandbox environment — transmissions are simulated against the FIRS test adapter. No live data is sent.
-            </span>
-          </div>
-        )}
+        {(() => {
+          const b = ENV_BANNER[sandbox ? 'sandbox' : 'live']
+          return (
+            <div style={{ flex: 'none', background: b.bg, borderBottom: `1px solid ${b.border}`, padding: '7px 24px', display: 'flex', alignItems: 'center', gap: 9 }}>
+              <span style={{ color: b.text, flex: 'none', display: 'inline-flex' }}>{b.icon}</span>
+              <span style={{ fontSize: 12.5, color: b.text, fontWeight: 500 }}>{b.msg}</span>
+              <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, color: b.text, opacity: 0.85, letterSpacing: '0.05em' }}>
+                {b.tag}
+              </span>
+            </div>
+          )
+        })()}
         <div className="pf-scroll" style={{ flex: 1, overflowY: 'auto' }}>
           {view === 'dashboard' && (active.onboarding ? <DashboardOnboarding ctx={ctx} /> : <DashboardActive ctx={ctx} />)}
           {view === 'invoices' && <InvoicesList ctx={ctx} />}

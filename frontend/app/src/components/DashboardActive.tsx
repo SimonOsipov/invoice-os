@@ -1,11 +1,18 @@
 // Dashboard — firm-wide compliance overview. Reads the M4-07 rollup
 // (GET /api/dashboard/v1/rollup) via lib/dashboard.ts and renders honest
-// loading / error / empty / ready states — no mock generator behind it.
+// loading / error / empty / ready states.
 // Structurally mirrors ClientsView.tsx (typed API module + useAsync +
-// no-gateway short-circuit). Ported donut + failures markup from the old
-// mock dashboard (Platform.dc.html ~L147-310); the readiness ring, KPI
-// sparklines, 12-week trend, VAT KPI, and activity feed had no live source
-// and were removed (M4-10 AC-5 / [hide-sourceless]).
+// no-gateway short-circuit). Markup ported from Platform.dc.html ~L147-310.
+//
+// M4-10 stripped this to three live panels because the rest had no backend
+// source ([hide-sourceless]). All nine are restored by explicit product
+// decision; the sourceless ones run on lib/dashboardMock.ts until the rollup
+// grows the fields. Which panel is which:
+//
+//   LIVE (rollup)   needs-attention KPI · invoice-status donut ·
+//                   top validation failures · all four KPI tile VALUES
+//   MOCK            readiness ring + bars · 12-week trend · VAT amount ·
+//                   sparkline shapes · activity feed
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -14,11 +21,12 @@ import {
   dashboardViewState,
   donutSegments,
   getRollup,
-  isEmptyRollup,
   resolveCtaLabel,
   topFailures,
+  type Counts,
   type Rollup,
 } from '../lib/dashboard'
+import { buildMockPanels } from '../lib/dashboardMock'
 import type { PlatformCtx } from '../types'
 
 export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
@@ -28,12 +36,18 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   // build at zero network. Mirrors ClientsView.tsx:38-41.
   const roll = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: base != null, isEmpty: isEmptyRollup },
+    // No isEmpty predicate on purpose. isEmptyRollup (all seven counts zero) used to
+    // classify a fresh workspace as 'empty', and useAsync NULLS data in that state
+    // (async-state.ts:51) — so the tiles could never mount. Six of the nine panels now
+    // carry content regardless of invoice volume, and each live panel has its own zero
+    // treatment, so a zero-count rollup is 'ready', not empty. isEmptyRollup stays
+    // exported and tested for other callers.
+    { immediate: base != null },
   )
   const state = dashboardViewState(base, roll)
 
   return (
-    <div style={{ maxWidth: 1280, padding: '30px 36px 56px' }}>
+    <div style={{ padding: '30px 36px 56px' }}>
       {/* Firm-wide header — rebound to tenant context ([header-chrome-firmwide]);
           the mock taxpayer pill, "SYNCED …", and "Period to date" chrome are gone. */}
       <div style={{ marginBottom: 26 }}>
@@ -50,24 +64,110 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={roll.run} />}
 
-      {(state === 'idle' || state === 'empty') && (
+      {/* 'idle' is the no-gateway build: nothing live to draw, so keep the zero-state. */}
+      {state === 'idle' && (
         <EmptyState title="No invoice activity yet" message="Counts appear once invoices are created." />
       )}
 
-      {state === 'ready' && roll.data && <DashboardTiles data={roll.data} ctx={ctx} />}
+      {state === 'ready' && roll.data && (
+        <DashboardTiles data={roll.data} ctx={ctx} seed={ctx.user.tenantName ?? 'workspace'} />
+      )}
     </div>
   )
 }
 
-function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
+// KPI tile values come off the live counts; only the sparkline SHAPE is mocked, so a
+// tile never contradicts the donut beside it. VAT is the exception — the rollup
+// carries no monetary total, so that one number is fabricated.
+function kpiValues(counts: Counts, needsAttention: number, vatLabel: string) {
+  const total = Object.values(counts).reduce((a, b) => a + b, 0)
+  const transmitted = counts.submitted + counts.accepted
+  const awaiting = counts.draft + counts.validated
+  return [
+    { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
+    { label: 'VAT tracked', value: vatLabel, delta: 'incl. 7.5% VAT', deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
+    { label: 'Failing invoices', value: String(needsAttention), delta: needsAttention ? 'needs fixing' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)', stroke: 'var(--status-red-text)' },
+    { label: 'Awaiting submission', value: String(awaiting), delta: awaiting ? 'not yet sent' : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)', stroke: 'var(--status-amber-text)' },
+  ]
+}
+
+function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; seed: string }) {
   const segments = donutSegments(data.totals.counts)
   const total = Object.values(data.totals.counts).reduce((a, b) => a + b, 0)
   const needsAttention = data.totals.needs_attention
   const failures = topFailures(data.top_violations)
+  const mock = buildMockPanels(seed)
+  const kpis = kpiValues(data.totals.counts, needsAttention, mock.vatLabel)
 
   return (
     <>
-      {/* Row 1: exceptions-first needs-attention KPI + invoice-status donut */}
+      {/* Row A: readiness ring + bars (mock) | four KPI tiles (live values, mock sparks) */}
+      <div
+        className="pf-dash-row-a"
+        style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
+      >
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 26, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+            <span className="label">Readiness score</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
+              SAMPLE
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 22, marginBottom: 24 }}>
+            <div style={{ position: 'relative', width: 116, height: 116, flex: 'none' }}>
+              <svg width="116" height="116" viewBox="0 0 116 116" style={{ transform: 'rotate(-90deg)' }}>
+                <circle cx="58" cy="58" r="50" fill="none" stroke="var(--bg-3)" strokeWidth="11" />
+                <circle cx="58" cy="58" r="50" fill="none" stroke={mock.ring.color} strokeWidth="11" strokeLinecap="round" strokeDasharray={mock.ring.circ} strokeDashoffset={mock.ring.offset} />
+              </svg>
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <span className="money" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>
+                  {mock.score}
+                </span>
+                <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
+                  % READY
+                </span>
+              </div>
+            </div>
+            <p style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>{mock.readinessNote}</p>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 13, paddingTop: 20, borderTop: '1px solid var(--line-1)' }}>
+            {mock.readinessMetrics.map((m) => (
+              <div key={m.label}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                  <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{m.label}</span>
+                  <span className="money mono" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>
+                    {m.pct}
+                  </span>
+                </div>
+                <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                  <div style={{ width: m.pct, height: '100%', background: m.color, borderRadius: 'var(--radius-sm)' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 18 }}>
+          {kpis.map((k, i) => (
+            <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 22, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 138, minWidth: 0 }}>
+              <span className="label">{k.label}</span>
+              <span className="money" style={{ fontSize: 32, fontWeight: 700, margin: '12px 0' }}>
+                {k.value}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+                <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
+                  {k.delta}
+                </span>
+                <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
+                  <path d={mock.sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Row B: exceptions-first needs-attention KPI + invoice-status donut */}
       <div
         className="pf-dash-row-b"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 18, marginBottom: 18 }}
@@ -157,7 +257,40 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         </div>
       </div>
 
-      {/* Row 2: top validation failures (firm-wide, de-slugged rule keys) */}
+      {/* Row C: 12-week readiness trend (mock — the rollup carries no time series) */}
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 24, marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div>
+            <div className="card-title" style={{ marginBottom: 8 }}>Readiness trend</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
+                {mock.chart.now}%
+              </span>
+              <span className="label">{mock.chart.deltaLabel}</span>
+            </div>
+          </div>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+            12 WEEKS · SAMPLE
+          </span>
+        </div>
+        <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+          {mock.chart.grid.map((g) => (
+            <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          ))}
+          <path d={mock.chart.area} fill="var(--action-tint)" />
+          <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+          {mock.chart.months.map((mo) => (
+            <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
+              {mo}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Row D: top validation failures (live) | recent activity (mock) */}
+      <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr)', gap: 18 }}>
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
           <span className="card-title">Top validation failures</span>
@@ -194,6 +327,37 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
             <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Every invoice passed validation.</div>
           </div>
         )}
+      </div>
+
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
+            <span className="card-title">Recent activity</span>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+              SAMPLE
+            </span>
+          </div>
+          <div style={{ padding: '18px 20px 6px' }}>
+            {mock.activity.map((a, i) => (
+              <div key={i} style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: a.dot, marginTop: 4 }} />
+                  <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: a.line }} />
+                </div>
+                <div style={{ paddingBottom: 16, flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, lineHeight: 1.4 }}>
+                    <span style={{ fontWeight: 600 }}>{a.who}</span> <span style={{ color: 'var(--fg-2)' }}>{a.action}</span>{' '}
+                    <span className="mono" style={{ fontSize: 12, color: 'var(--action)' }}>
+                      {a.target}
+                    </span>
+                  </div>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
+                    {a.time}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </>
   )

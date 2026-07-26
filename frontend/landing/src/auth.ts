@@ -28,7 +28,7 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     name: 'Amara Okoye',
     title: 'Support officer',
     org: 'ASComply Operations',
-    email: 'a.okoye@ascomply.africa',
+    email: 'a.okoye@ascomply.com',
     initials: 'AO',
     access: 'OPS CONSOLE',
     destLabel: 'Ops Console',

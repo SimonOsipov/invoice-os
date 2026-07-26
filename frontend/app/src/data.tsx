@@ -283,7 +283,7 @@ export const SETTINGS_TABS: { id: 'connectors' | 'api' | 'signing'; label: strin
   { id: 'signing', label: 'Signing & certificates' },
 ]
 
-export const API_BASE = 'https://api.ascomply.africa/v1'
+export const API_BASE = 'https://api.ascomply.com/v1'
 
 export type ApiKeyDef = { env: 'LIVE' | 'TEST'; envBg: string; envColor: string; key: string; note: string }
 

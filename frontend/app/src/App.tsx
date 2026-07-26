@@ -435,14 +435,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setXmlOpen(false)
   }
 
-  function transmit() {
-    const idx = activeIdx
-    const sel = detailSel.selectedId
-    setClients((cs) =>
-      cs.map((c, i) => (i === idx ? { ...c, invoices: c.invoices.map((inv) => (inv.number === sel ? { ...inv, status: 'Transmitted' as const } : inv)) } : c)),
-    )
-  }
-
   const user: SignedInUser = {
     name: session.persona.name,
     initials: session.persona.initials,
@@ -516,7 +508,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     saveConnectorMapping,
     openXml,
     closeXml,
-    transmit,
     signOut: onSignOut,
   }
 

@@ -255,13 +255,25 @@ export function toggleRule(token: string, key: string, enabled: boolean): Promis
   })
 }
 
+// RejectionReason mirrors internal/submission/result.go's Reason struct (M5-01/M5-03):
+// one invoices.rejection_reasons array element. `path` carries Go's `omitempty` --
+// genuinely absent, never "", when the APP's rejection didn't cite a specific MBS field.
+export interface RejectionReason {
+  code: string
+  message: string
+  path?: string
+}
+
 // Invoice mirrors internal/invoice/invoice.go's Invoice struct exactly (M4-04-08,
 // task-115). violations is Go json.RawMessage on the wire -- always a JSON array in
 // practice (invoices.violations jsonb NOT NULL DEFAULT '[]', migrations/
 // 20260714103137_invoices.sql), so Violation[] is the accurate wire shape, not a raw
 // string. rule_set_version_id is the LIVE-STAMPED uuid ([uuid-stamp]) -- distinct from
 // ValidateResult.rule_set_version above, which is the plain int the /v1/validate route
-// echoes; no route returns both on the same object.
+// echoes; no route returns both on the same object. irn/csid/qr_payload/rejection_reasons
+// (M5-01/M5-03/M5-05) are all `json:"..."` with no `omitempty` on the Go struct
+// (invoice.go:101-104) and all four are in invoiceColumns (store.go:46-50), so they are
+// present -- as an explicit value or explicit null -- on BOTH the list and get wire.
 export interface Invoice {
   id: string
   entity_id: string
@@ -280,6 +292,10 @@ export interface Invoice {
   violations: Violation[]
   rule_set_version_id: string | null
   created_at: string
+  irn: string | null
+  csid: string | null
+  qr_payload: string | null
+  rejection_reasons: RejectionReason[]
   line_items?: unknown[]
 }
 
@@ -306,8 +322,18 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }
 
-export function getInvoice(token: string, id: string): Promise<Invoice> {
-  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { token })
+// GetInvoiceResult is GetHandler's own response shape: Invoice plus getResponse's two
+// GET-only sibling keys (handlers.go's getResponse, handlers.go:189-192, no omitempty on
+// either). NOT added to Invoice itself -- rule_set_version is json:"-" on the shared Go
+// struct (invoice.go:117), so a list item never carries it structurally; only a GET
+// response does.
+export interface GetInvoiceResult extends Invoice {
+  rule_set_version: number | null
+  qr_png_base64: string | null
+}
+
+export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {
+  return apiFetch<GetInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { token })
 }
 
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9

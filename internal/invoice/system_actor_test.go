@@ -756,9 +756,10 @@ func TestRLS_MarkAcceptedTxCrossTenantIsNotFound(t *testing.T) {
 //     jsonb text instead, proving the omitted-Path element truly has no
 //     "path" key at all, not merely an empty one.
 //  4. Two cross-subtask compositions that only exist once BOTH halves are
-//     real: TestStoreEdit_ComposesWithRealMarkRejectedTxWrite drives 03's
-//     MarkRejectedTx (real write, not a raw SQL seed) followed by 01's
-//     Store.Edit demotion, proving the two halves compose; and
+//     real: TestStoreEdit_ComposesWithRealMarkRejectedTxWriteAndRetains
+//     (renamed by M5-09-02/task-255) drives 03's MarkRejectedTx (real write,
+//     not a raw SQL seed) followed by 01's Store.Edit demotion, proving the
+//     two halves compose; and
 //     TestHasFiscalOutcome_GoesLiveAfterMarkAcceptedTx drives 03's real
 //     MarkAcceptedTx followed by submission_port.go's HasFiscalOutcome
 //     (dead code before 03 shipped -- irn was never written by anything),
@@ -945,14 +946,20 @@ func keysOf(m map[string]json.RawMessage) []string {
 	return keys
 }
 
-// TestStoreEdit_ComposesWithRealMarkRejectedTxWrite (cross-subtask
-// integration, task-239 + task-236/M5-05-01): MarkRejectedTx (03) writes
-// rejection_reasons via the REAL production write path (not a raw SQL
-// seed, unlike every other Edit-clears-reasons test in edit_test.go), then
-// Store.Edit (01) demotes rejected->draft on a content change and clears
-// them -- proving 03's write and 01's clear compose correctly end to end,
-// through two independently-shipped subtasks' production code.
-func TestStoreEdit_ComposesWithRealMarkRejectedTxWrite(t *testing.T) {
+// TestStoreEdit_ComposesWithRealMarkRejectedTxWriteAndRetains (M5-09-02/
+// task-255: RENAMED + RE-BASELINED from TestStoreEdit_ComposesWithRealMarkRejectedTxWrite
+// -- reverses M5-05's [reason-lifecycle] wipe-on-demotion, deliberate, not a
+// weakened test) (cross-subtask integration, task-239 + task-236/M5-05-01):
+// MarkRejectedTx (03) writes rejection_reasons via the REAL production write
+// path (not a raw SQL seed, unlike every other reasons-retention test in
+// edit_test.go), then Store.Edit (01, widened by M5-09-02) demotes
+// rejected->draft on a content change and RETAINS them, byte-identical --
+// proving 03's write and 01's (now-retaining) demotion compose correctly end
+// to end, through two independently-shipped subtasks' production code. This
+// is the ONLY test in the package that seeds rejection_reasons through the
+// real MarkRejectedTx write rather than a raw SQL seed, which is exactly why
+// it is worth keeping and re-baselining rather than retiring.
+func TestStoreEdit_ComposesWithRealMarkRejectedTxWriteAndRetains(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	store := NewStore(app)
@@ -978,7 +985,7 @@ func TestStoreEdit_ComposesWithRealMarkRejectedTxWrite(t *testing.T) {
 		t.Fatalf("read back rejection_reasons after MarkRejectedTx: %v", err)
 	}
 	if seededReasons == "[]" {
-		t.Fatalf("rejection_reasons after MarkRejectedTx = %q, want non-empty (the real write must have landed before Edit's clear is a meaningful test)", seededReasons)
+		t.Fatalf("rejection_reasons after MarkRejectedTx = %q, want non-empty (the real write must have landed before Edit's retention is a meaningful test)", seededReasons)
 	}
 
 	subject := uuid.NewString()
@@ -992,17 +999,17 @@ func TestStoreEdit_ComposesWithRealMarkRejectedTxWrite(t *testing.T) {
 		t.Errorf("Edit returned status = %q, want %q (demoted)", got.Status, StatusDraft)
 	}
 
-	var dbStatus, clearedReasons string
+	var dbStatus, afterReasons string
 	if err := super.QueryRow(context.Background(),
 		`SELECT status, rejection_reasons::text FROM invoices WHERE id = $1`, invID,
-	).Scan(&dbStatus, &clearedReasons); err != nil {
+	).Scan(&dbStatus, &afterReasons); err != nil {
 		t.Fatalf("read back status/rejection_reasons after Edit: %v", err)
 	}
 	if Status(dbStatus) != StatusDraft {
 		t.Errorf("invoices.status after Edit = %q, want %q", dbStatus, StatusDraft)
 	}
-	if clearedReasons != "[]" {
-		t.Errorf("invoices.rejection_reasons after Edit = %q, want %q (03's real write cleared by 01's real demotion)", clearedReasons, "[]")
+	if afterReasons != seededReasons {
+		t.Errorf("invoices.rejection_reasons after Edit = %q, want byte-identical to 03's real write %q (01's demotion retains it, no longer clears it)", afterReasons, seededReasons)
 	}
 
 	if n := mustCount(t, super,

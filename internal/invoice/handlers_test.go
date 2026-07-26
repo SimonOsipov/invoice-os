@@ -50,8 +50,11 @@ package invoice
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image/png"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -128,6 +131,10 @@ type lineItemWire struct {
 // recommendation) are likewise additive, ahead of the production Invoice
 // type actually carrying them -- they decode as zero values (nil/nil) until
 // then, same as the trio above.
+//
+// QRPNGBase64 (M5-09-01, task-250) mirrors RuleSetVersion's own addition
+// exactly: additive, ahead of GetHandler actually populating it, decodes as
+// nil until then.
 type invoiceBody struct {
 	ID               string          `json:"id"`
 	EntityID         string          `json:"entity_id"`
@@ -140,6 +147,7 @@ type invoiceBody struct {
 	IRN              *string         `json:"irn"`
 	CSID             *string         `json:"csid"`
 	QRPayload        *string         `json:"qr_payload"`
+	QRPNGBase64      *string         `json:"qr_png_base64"`
 	RejectionReasons json.RawMessage `json:"rejection_reasons"`
 	Error            string          `json:"error"`
 }
@@ -1621,6 +1629,168 @@ func TestListHandler_NoRuleSetVersionKey(t *testing.T) {
 	if strings.Contains(body, `"rule_set_version":`) {
 		t.Errorf("body = %s, List must NOT gain a rule_set_version key on any item -- that field belongs only "+
 			"to the validate response wrapper, never the domain Invoice struct shared by Get/List", body)
+	}
+}
+
+// --- QR PNG tests (M5-09-01, task-250) --------------------------------------
+//
+// RED against the current state: getResponse/invoiceBody already carry
+// qr_png_base64 (Stage 2, QA Mode A widening -- mirrors the rule_set_version
+// precedent exactly), but GetHandler does NOT yet populate it -- that wiring
+// (qrcode.RenderBase64(*inv.QRPayload) when QRPayload != nil) is Stage 3
+// (executor) work. AC-4 (marshals null when absent) and AC-6 (List stays
+// clean) are expected to already be green at this stage, same as this
+// story's own precedent TestListHandler_NoRuleSetVersionKey above -- both are
+// regression guards on behavior the additive-only widening already delivers,
+// not signals of missing executor work. AC-3 (populated when present) and
+// the log half of AC-5 are the two specs that are genuinely RED right now.
+
+// TestGetHandler_QRPNGBase64PopulatedWhenPayloadPresent (AC-3, Core AC #3):
+// an accepted invoice with a non-nil QRPayload must decode-to a valid PNG
+// under qr_png_base64. RED today -- GetHandler never calls
+// qrcode.RenderBase64, so QRPNGBase64 stays nil.
+func TestGetHandler_QRPNGBase64PopulatedWhenPayloadPresent(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	payload := "irn-0001-2026.csid-abc123.mbs-qr-payload-sample-fixture"
+	want := Invoice{ID: invoiceID, Status: StatusAccepted, QRPayload: &payload}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, resp := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.QRPNGBase64 == nil {
+		t.Fatalf("qr_png_base64 = null (body=%s), want a populated base64 PNG -- GetHandler must call "+
+			"qrcode.RenderBase64(*inv.QRPayload) when QRPayload is non-nil", rec.Body.String())
+	}
+	raw, err := base64.StdEncoding.DecodeString(*resp.QRPNGBase64)
+	if err != nil {
+		t.Fatalf("qr_png_base64 = %q does not base64-decode (StdEncoding): %v", *resp.QRPNGBase64, err)
+	}
+	if _, err := png.Decode(bytes.NewReader(raw)); err != nil {
+		t.Fatalf("qr_png_base64 decodes to bytes that are not a valid PNG: %v", err)
+	}
+}
+
+// TestGetHandler_QRPNGBase64MarshalsNull (AC-4): a never-submitted invoice
+// (QRPayload == nil) must render "qr_png_base64":null -- present and
+// explicit, never omitted, never an empty string. Mirrors
+// TestGetHandler_RuleSetVersionMarshalsNull's raw-byte technique exactly.
+// Already GREEN at this stage (see the section doc comment above) -- kept as
+// a permanent regression guard, not evidence of Stage 3 work being done.
+func TestGetHandler_QRPNGBase64MarshalsNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft, QRPayload: nil}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"qr_png_base64":null`) {
+		t.Errorf("body = %s, want the literal \"qr_png_base64\":null (explicit null, not omitted, not an "+
+			"empty string) when the invoice has no qr_payload", body)
+	}
+}
+
+// TestGetHandler_UnrenderableQRPayloadStillReturns200 (AC-5): a QRPayload
+// past QR capacity must still yield HTTP 200 with qr_png_base64: null --
+// never a non-200 response (a corrupt/oversized payload must not make the
+// invoice unviewable). Uses overlongBytePayload's exact fixture shape
+// (4000 lowercase byte-mode chars, NOT all-digits) -- see
+// internal/platform/qrcode/qrcode_test.go's doc comment and Stage 1
+// validation addenda #1 for why an all-digit 4000-char payload would fit
+// comfortably inside QR's numeric-mode capacity and NOT reproduce this case.
+// The 200+null half is already GREEN at this stage (see the section doc
+// comment above); it becomes a real regression guard once GetHandler wires
+// the render call. The "and a logged error" half of AC-5 is NOT asserted
+// here -- see TestGetHandler_UnrenderableQRPayloadIsLogged below, which
+// bypasses doInvoiceGet (it always passes a nil logger, falling back to
+// slog.Default(), unobservable through that helper).
+func TestGetHandler_UnrenderableQRPayloadStillReturns200(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	overlong := strings.Repeat("a", 4000)
+	want := Invoice{ID: invoiceID, Status: StatusAccepted, QRPayload: &overlong}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, resp := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 even when qr_payload is unrenderable (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.QRPNGBase64 != nil {
+		t.Errorf("qr_png_base64 = %q, want null when the payload cannot be rendered as a QR code", *resp.QRPNGBase64)
+	}
+}
+
+// TestGetHandler_UnrenderableQRPayloadIsLogged (AC-5's logging clause,
+// Stage 1 validation addenda #4 -- optional 10th spec): constructs
+// GetHandler directly with a buffer-backed logger (the repo's buffer-logger
+// idiom, internal/platform/log_test.go:13) rather than going through
+// doInvoiceGet, which always passes a nil logger (falling back to
+// slog.Default(), where a real emission would be unobservable here). RED
+// today -- nothing calls qrcode.RenderBase64 yet, so nothing is logged.
+func TestGetHandler_UnrenderableQRPayloadIsLogged(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	overlong := strings.Repeat("a", 4000)
+	want := Invoice{ID: invoiceID, Status: StatusAccepted, QRPayload: &overlong}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+	r.SetPathValue("id", invoiceID)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	GetHandler(get, logger).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if buf.Len() == 0 {
+		t.Error("expected the render failure to be logged via the injected *slog.Logger, but the log buffer is empty")
+	}
+}
+
+// TestListHandler_HasNoQRKey (AC-6): List must stay byte-shape-identical to
+// before this subtask -- no qr_png_base64 key on any item. Clones
+// TestListHandler_NoRuleSetVersionKey's approach exactly (same hazard: every
+// list item already carries "qr_payload":null, so a substring check on "qr"
+// or "qr_p" would pass vacuously -- this asserts the exact literal
+// qr_png_base64). Already GREEN at this stage, same as its precedent; kept
+// as a permanent regression guard.
+func TestListHandler_HasNoQRKey(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invID := uuid.NewString()
+	payload := "irn-0001-2026.csid-abc123.mbs-qr-payload-sample-fixture"
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{{ID: invID, Status: StatusAccepted, QRPayload: &payload}}, 1, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"qr_payload":`) {
+		t.Errorf("body = %s, want qr_payload to stay present on each list item (unaffected by this story)", body)
+	}
+	if strings.Contains(body, `"qr_png_base64"`) {
+		t.Errorf("body = %s, List must NOT gain a qr_png_base64 key on any item -- that field belongs only "+
+			"to the GET response wrapper, never the domain Invoice struct shared by Get/List", body)
 	}
 }
 

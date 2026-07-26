@@ -20,6 +20,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
 )
 
 // --- wire request/response types --------------------------------------------
@@ -170,18 +171,25 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 }
 
 // getResponse is the GET /v1/invoices/{id} response body: Invoice embedded
-// (keeping every existing field's name/type/position), plus one additive
-// sibling key, rule_set_version -- mirrors validateResponse below (M4-09-01,
-// [read-shape-getresponse-wrapper]). Not added to the Invoice domain struct
-// itself: Invoice is shared by List, which must NOT gain this key.
+// (keeping every existing field's name/type/position), plus two additive
+// sibling keys, rule_set_version and qr_png_base64 -- mirrors validateResponse
+// below (M4-09-01, [read-shape-getresponse-wrapper]). Neither is added to the
+// Invoice domain struct itself: Invoice is shared by List, which must NOT
+// gain either key.
 //
 // RuleSetVersion is a *int with NO omitempty: it must render an explicit
 // JSON null when the invoice was never validated (Store.Get's zero-value
 // convention) -- never omitted, never a false 0
 // (TestGetHandler_RuleSetVersionMarshalsNull).
+//
+// QRPNGBase64 (M5-09-01, task-250) is likewise a *string with NO omitempty --
+// explicit null when absent (TestGetHandler_QRPNGBase64MarshalsNull).
+// GetHandler calls qrcode.RenderBase64(*inv.QRPayload) when inv.QRPayload is
+// non-nil, logging (never 5xxing) a render failure, per Core AC #3/#5.
 type getResponse struct {
 	Invoice
-	RuleSetVersion *int `json:"rule_set_version"`
+	RuleSetVersion *int    `json:"rule_set_version"`
+	QRPNGBase64    *string `json:"qr_png_base64"`
 }
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
@@ -208,7 +216,22 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			return
 		}
 
-		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion})
+		// QRPNGBase64 stays nil (-> explicit JSON null via getResponse's
+		// no-omitempty tag) when the invoice has no qr_payload, or when
+		// rendering it fails. A render failure is logged, never turned into a
+		// non-200: a corrupt/oversized qr_payload must not make an otherwise
+		// viewable invoice inaccessible (Core AC #3/#5, M5-09-01, task-250).
+		var qrPNGBase64 *string
+		if inv.QRPayload != nil {
+			rendered, err := qrcode.RenderBase64(*inv.QRPayload)
+			if err != nil {
+				log.ErrorContext(r.Context(), "invoice: render qr", slog.Any("err", err))
+			} else {
+				qrPNGBase64 = &rendered
+			}
+		}
+
+		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion, QRPNGBase64: qrPNGBase64})
 	}
 }
 

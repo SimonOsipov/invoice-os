@@ -1,51 +1,58 @@
-// Invoice detail — fiscal record (IRN/CSID/QR after transmit), status pill, doc-type
-// badge, line items + totals, validation panel, audit trail, and the View-XML / PDF /
-// Transmit actions. Ported from Platform.dc.html ~L598-694 + the detail slice of
-// renderVals() (~L1366-1395).
+// Invoice detail dispatcher: for an imported invoice, mounts the live detail surface
+// (status pill, line items + totals, compliance/violations panel, fiscal record, APP
+// rejection reasons, fix-and-revalidate form, failed dead end, status history) fetched
+// from the gateway; otherwise renders an honest EmptyState ("No invoice selected"). The
+// Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
+// the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
+// — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
+// rejection cards below (M5-09-05) render only server-sourced data.
 
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { amount, fmt, fmtDate, fmtPlain } from '../lib/format'
-import { statusStyle, defaultDraft } from '../lib/clients'
-import { validate } from '../lib/validation'
-import { fiscalRecord, Qr } from '../lib/qr'
+import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
   editInvoice,
+  EDIT_FIELD_KEYS,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
   isFixable,
+  LIVE_POLL_MS,
+  reasonFieldFlags,
+  rejectionProvenance,
   revalidateInvoice,
   shouldFetchInvoices,
+  shouldPollInvoice,
+  shouldRefreshHistory,
+  shouldShowFiscalRecord,
+  shouldShowRejectionCard,
   verdictStatus,
+  type EditFieldKey,
+  type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceRecord,
+  type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
+import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ViolationsTable } from './ViolationsTable'
-import { crossGlyph, docGlyph2, downloadGlyph, sendGlyph, shieldGlyph, tickGlyph13, warnGlyph } from '../glyphs'
-import type { Invoice, PlatformCtx } from '../types'
-
-const DOC_FULL: Record<string, string> = {
-  B2G: 'Business → Government',
-  B2C: 'Business → Consumer',
-  B2B: 'Business → Business',
-}
+import type { PlatformCtx } from '../types'
 
 export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
-  const { active, selectedId } = ctx
+  const { selectedId } = ctx
 
   // Click-through from the import report (M4-08-05, AC7). This MUST return before the
-  // `invList.find(...) || invList[0] || fallback` chain below: an imported invoice is a
-  // real server UUID that matches no mock invoice number, so falling through would render
-  // an UNRELATED mock invoice — someone else's buyer, items and totals — under a real
-  // invoice's id. That is worse than showing nothing ([click-through-honest-placeholder]).
-  // M4-09-05: this branch now mounts the live detail surface (LiveInvoiceDetail, below)
-  // instead of the inert placeholder; the mock (selectMock) fallback chain underneath is
-  // untouched — [mock-detail-branch-left], removal is M4-10.
+  // "no invoice selected" EmptyState below: an imported invoice is a real server UUID,
+  // and rendering the empty state instead would silently drop a valid click-through.
+  // ([click-through-honest-placeholder])
+  // M4-09-05: this branch mounts the live detail surface (LiveInvoiceDetail, below).
+  // M5-09-04: the mock detail branch that used to render beneath this check (fabricated
+  // fiscal record, "Transmit to FIRS", synthesized audit trail) is deleted — selecting no
+  // invoice now renders an honest EmptyState instead of a fabricated one
+  // ([mock-branch-fully-removed]).
   const target = detailTarget({ selectedId, importedInvoiceId: ctx.importedInvoiceId })
   if (target.kind === 'imported') {
     // key={invoiceId}: forces a full remount on invoice SWITCH so the previous invoice's
@@ -56,205 +63,12 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
     return <LiveInvoiceDetail key={target.invoiceId} ctx={ctx} invoiceId={target.invoiceId} />
   }
 
-  const invList = active.invoices
-  // Fall back to a synthesized draft-shaped invoice, mirroring the prototype's guard.
-  const fallback = defaultDraft(active)
-  const detailInv: Invoice =
-    invList.find((i) => i.number === selectedId) ||
-    invList[0] || { ...fallback, status: 'Draft', items: fallback.items }
-
-  const dsub = amount(detailInv.items)
-  const dvat = dsub * 0.075
-  const dval = validate(detailInv)
-  const dErr = dval.errors.length
-  const dWarn = dval.warnings.length
-  const detailValOk = dErr === 0 && dWarn === 0
-
-  const detailChecks: { label: string; bg: string; fg: string; glyph: ReactNode }[] = []
-  dval.errors.forEach((e) => detailChecks.push({ label: e.label, bg: 'var(--status-red-bg)', fg: 'var(--status-red-text)', glyph: crossGlyph }))
-  dval.warnings.forEach((e) => detailChecks.push({ label: e.label, bg: 'var(--status-amber-bg)', fg: 'var(--status-amber-text)', glyph: warnGlyph }))
-  dval.passed.slice(0, 6).forEach((p) => detailChecks.push({ label: p, bg: 'var(--status-green-bg)', fg: 'var(--status-green-text)', glyph: tickGlyph13 }))
-
-  const audit: { event: string; meta: string; dot: string; line: string }[] = [
-    { event: 'Invoice created', meta: 'AMARA OKAFOR · ' + detailInv.date + ' 09:14', dot: 'var(--fg-3)', line: '20px' },
-    { event: 'Validated · ' + dval.passed.length + '/16 checks', meta: 'ENGINE · ' + detailInv.date + ' 09:15', dot: detailValOk ? 'var(--status-green-text)' : 'var(--status-amber-text)', line: '20px' },
-    { event: detailInv.status === 'Rejected' ? 'Rejected — validation failed' : 'Approved for transmission', meta: (detailInv.status === 'Rejected' ? 'I. BELLO · ' : 'T. ADEYEMI · ') + detailInv.date + ' 11:02', dot: detailInv.status === 'Rejected' ? 'var(--status-red-text)' : 'var(--status-green-text)', line: detailInv.status === 'Transmitted' ? '20px' : '0px' },
-  ]
-  if (detailInv.status === 'Transmitted') audit.push({ event: 'Transmitted to FIRS', meta: 'MBS ADAPTER · CSID-' + detailInv.number.slice(-5), dot: 'var(--accent)', line: '0px' })
-
-  const dType = detailInv.docType || 'B2B'
-  const isTransmitted = detailInv.status === 'Transmitted'
-  const detailTransmittable = detailInv.status === 'Approved'
-  const st = statusStyle(detailInv.status)
-  const transmitBtn = isTransmitted
-    ? { bg: 'var(--status-green-bg)', color: 'var(--status-green-text)', cursor: 'default', label: 'Transmitted', glyph: tickGlyph13 }
-    : detailTransmittable
-      ? { bg: 'var(--accent)', color: '#fff', cursor: 'pointer', label: 'Transmit to FIRS', glyph: sendGlyph }
-      : { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Not approved', glyph: sendGlyph }
-
-  const fiscal = isTransmitted ? fiscalRecord(detailInv) : null
-
   return (
     <div style={{ padding: '24px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 22, gap: 24, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-            <h1 className="mono" style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em', margin: 0, whiteSpace: 'nowrap' }}>{detailInv.number}</h1>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '4px 10px' }}>
-              <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
-              <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'var(--bg-3)', border: '1px solid var(--line-2)', borderRadius: 999, padding: '4px 10px' }}>
-              <span className="mono" style={{ fontSize: 10, fontWeight: 700, color: 'var(--fg-2)' }}>{dType}</span>
-              <span style={{ fontSize: 11, color: 'var(--fg-3)', whiteSpace: 'nowrap' }}>{DOC_FULL[dType]}</span>
-            </span>
-          </div>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{detailInv.buyer} · {detailInv.date}</p>
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={ctx.openXml} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36 }}>
-            <span style={{ display: 'inline-flex' }}>{docGlyph2}</span> View UBL/XML
-          </button>
-          <button className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36 }}>
-            <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> PDF
-          </button>
-          <button onClick={ctx.transmit} className="v2-btn pf-btn" style={{ height: 36, background: transmitBtn.bg, color: transmitBtn.color, cursor: transmitBtn.cursor }}>
-            <span style={{ display: 'inline-flex' }}>{transmitBtn.glyph}</span> {transmitBtn.label}
-          </button>
-        </div>
-      </div>
-      <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
-          <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{active.name}</div>
-                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>
-                  TIN {active.tin}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div className="label" style={{ marginBottom: 3 }}>
-                  Bill to
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{detailInv.buyer}</div>
-                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                  {detailInv.buyerTin}
-                </div>
-              </div>
-            </div>
-            <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
-                <span className="label">Description</span>
-                <span className="label" style={{ textAlign: 'right' }}>Qty</span>
-                <span className="label" style={{ textAlign: 'right' }}>Unit</span>
-                <span className="label" style={{ textAlign: 'right' }}>Amount</span>
-              </div>
-              {detailInv.items.map((it, i) => (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span style={{ fontSize: 13 }}>{it.desc}</span>
-                  <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.qty}</span>
-                  <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{fmtPlain(it.price)}</span>
-                  <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{fmt(it.qty * it.price)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
-            <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
-                <span className="money" style={{ fontSize: 13 }}>{fmt(dsub)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT · 7.5%</span>
-                <span className="money" style={{ fontSize: 13 }}>{fmt(dvat)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
-                <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{fmt(dsub + dvat)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {isTransmitted && fiscal && (
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
-              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{shieldGlyph}</span>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>FIRS fiscal record</span>
-              </div>
-              <div style={{ padding: '16px 18px' }}>
-                <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-                  <div style={{ flex: 'none', padding: 7, background: '#fff', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)' }}>
-                    <Qr seed={fiscal.irn} size={116} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 11 }}>
-                    <div>
-                      <div className="label" style={{ marginBottom: 3 }}>
-                        IRN
-                      </div>
-                      <div className="mono" style={{ fontSize: 11.5, fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.4 }}>{fiscal.irn}</div>
-                    </div>
-                    <div>
-                      <div className="label" style={{ marginBottom: 3 }}>
-                        CSID
-                      </div>
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-2)', wordBreak: 'break-all', lineHeight: 1.4 }}>{fiscal.csid}</div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 14, paddingTop: 13, borderTop: '1px solid var(--line-1)' }}>
-                  <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--status-green-text)' }} />
-                  <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-                    SIGNED &amp; STAMPED · {fiscal.stampedAt}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
-            <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Validation</span>
-              <span className="mono" style={{ fontSize: 11, color: detailValOk ? 'var(--status-green-text)' : 'var(--status-red-text)', fontWeight: 600 }}>
-                {detailValOk ? '16/16 PASSED' : dErr + dWarn + ' OPEN'}
-              </span>
-            </div>
-            <div style={{ padding: '8px 0' }}>
-              {detailChecks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 18px' }}>
-                  <span style={{ flex: 'none', width: 16, height: 16, borderRadius: 99, background: c.bg, color: c.fg, display: 'grid', placeItems: 'center' }}>{c.glyph}</span>
-                  <span style={{ flex: 1, fontSize: 12.5, color: 'var(--fg-2)' }}>{c.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
-            <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Audit trail</span>
-            </div>
-            <div style={{ padding: '16px 18px' }}>
-              {audit.map((a, i) => (
-                <div key={i} style={{ display: 'flex', gap: 12 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 99, background: a.dot, marginTop: 4 }} />
-                    <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: a.line }} />
-                  </div>
-                  <div style={{ paddingBottom: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{a.event}</div>
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                      {a.meta}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      <EmptyState title="No invoice selected" />
     </div>
   )
 }
@@ -266,19 +80,6 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // calling useAsync/useState after that return would break the rules of hooks. Mirrors
 // ClientsView/ValidationView: gatewayBase() + useAsync + a Loading/ErrorState/ready
 // ladder, zero network when no gateway is configured.
-const EDIT_FIELD_KEYS = [
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-] as const
-
-type EditFieldKey = (typeof EDIT_FIELD_KEYS)[number]
 type EditFormState = Record<EditFieldKey, string>
 
 function formFromInvoice(inv: InvoiceRecord): EditFormState {
@@ -331,7 +132,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView/ValidationView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
-  const detail = useAsync<InvoiceRecord>(
+  const detail = useAsync<InvoiceDetailRecord>(
     () => (base ? getInvoice(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
@@ -339,6 +140,83 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     () => (base ? getInvoiceHistory(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
+
+  // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) -- HOISTED above the status
+  // ladder below: hooks can't be called from inside a conditional branch, and `inv` (the
+  // ladder's rendered record) now has to exist before the ladder decides what to render.
+  // A poll tick NEVER calls detail.run() (THE LOAD-BEARING TRAP -- that would dispatch
+  // useAsync's 'start' action, null `data`, and flash <Loading/> every 2s); it writes
+  // this overlay instead, and `inv` layers it over detail.data.
+  const [live, setLive] = useState<InvoiceDetailRecord | null>(null)
+  const inv = live ?? detail.data
+
+  // `gen` closes the in-flight-tick race ([poll-overlay-not-rerun], mirrors InvoicesList's
+  // own runId idiom, packages/api-client/src/async-state.ts:89/92/96). isFixable
+  // (draft/validated/rejected) and isInFlight (queued/submitted) are disjoint, so
+  // Save/Re-validate can't be clicked while a NEW tick gets scheduled -- but clearInterval
+  // only stops FUTURE ticks; it does not cancel a tick's getInvoice() promise that was
+  // already in flight. Reachable sequence: a tick fires while `queued`, a LATER tick
+  // observes `rejected` and polling stops, the operator clicks Save or Re-validate, then
+  // the first tick's promise finally resolves and would overwrite the fresh result with
+  // the stale `queued` record. Bumped wherever the overlay is invalidated (handleSaved,
+  // handleRevalidate), alongside the existing setLive(null).
+  const gen = useRef(0)
+
+  // CodeRabbit fix cycle 2, finding 4: overlapping ticks. useLiveRefresh's interval
+  // fires unconditionally (it holds no data and makes no decisions -- see
+  // lib/useLiveRefresh.ts), so a round-trip slower than LIVE_POLL_MS leaves two
+  // getInvoice() calls in flight under the SAME `gen`; the older can resolve last and
+  // re-install stale data for one visible tick before the next tick self-heals it. `gen`
+  // alone doesn't close this -- it only guards against a tick that survived an
+  // invalidation (Save/Re-validate), not two ticks racing each other under one
+  // invalidation epoch. Same re-entrancy-ref idiom as App.tsx's `reqInFlight`
+  // (App.tsx:106-113) and InvoicesList's `submitInFlight`: checked and set synchronously
+  // before the async call, so a fast-firing second tick can't lose the race the way a
+  // state flag would.
+  const tickInFlight = useRef(false)
+
+  // shouldRefreshHistory's `prev` (M5-09-03 predicate, [history-refresh-predicate]) --
+  // seeded from the loaded record so the FIRST observed transition isn't silently
+  // dropped: shouldRefreshHistory(null, x) === false (I-hist-2), and the mock's default
+  // (non-reserved-TIN) path converges queued -> accepted in ~800ms of adapter latency
+  // plus near-immediate River pickup, so a detail opened at `queued` can legitimately see
+  // `accepted` on its very first tick. Updated inside the tick strictly AFTER the
+  // shouldRefreshHistory comparison, never before.
+  const prevStatus = useRef<InvoiceStatus | null>(null)
+  useEffect(() => {
+    if (detail.data) prevStatus.current = detail.data.status
+  }, [detail.data])
+
+  const visible = useDocumentVisible()
+  const active = inv != null && shouldPollInvoice(inv.status, visible)
+  useLiveRefresh(
+    () => {
+      if (base == null) return
+      if (tickInFlight.current) return // finding 4: previous tick's GET hasn't resolved yet
+      tickInFlight.current = true
+      const g = gen.current
+      getInvoice(ctx.authedFetch, base, invoiceId)
+        .then((fresh) => {
+          // CodeRabbit fix cycle 2, finding 1: the whole resolved body now lives inside
+          // this guard, not just setLive. A discarded tick (g !== gen.current, e.g. the
+          // operator hit Save/Re-validate while this GET was in flight) must have NO side
+          // effects. Invoice statuses only advance monotonically, so a stale `fresh.status`
+          // can never equal the next genuine transition's status -- the history refresh
+          // was never actually at risk of being silently skipped. The real bug is a
+          // discarded tick still calling history.run() and flashing the timeline card for
+          // a transition the UI is about to discard anyway.
+          if (g !== gen.current) return
+          setLive(fresh)
+          if (shouldRefreshHistory(prevStatus.current, fresh.status)) history.run()
+          prevStatus.current = fresh.status
+        })
+        .catch(() => {}) // a transient blip is silent -- the next tick retries (AC-6)
+        .finally(() => { tickInFlight.current = false })
+    },
+    active,
+    LIVE_POLL_MS,
+  )
+
   // Within-session fix-loop indicator (Core AC #7 / [stale-violations-honest] /
   // [stale-is-session-state]): set on a successful edit, cleared on Re-validate. On
   // initial load this stays false, so the stored verdict renders WITHOUT a stale banner
@@ -359,16 +237,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     content = <Loading label="Loading invoice…" />
   } else if (detail.status === 'error') {
     content = detail.error ? <ErrorState error={detail.error} onRetry={detail.run} /> : null
-  } else if (detail.status !== 'ready' || !detail.data) {
+  } else if (inv == null) {
     content = <EmptyState title="Invoice not found" message="This invoice could not be loaded." />
   } else {
-    const inv = detail.data
     const st = invoiceStatusStyle(inv.status)
     const items = inv.line_items ?? []
     const subtotal = inv.subtotal != null ? Number(inv.subtotal) : null
     const vat = inv.vat != null ? Number(inv.vat) : null
     const total = inv.total != null ? Number(inv.total) : null
-    const verdict = verdictStatus(staleSinceEdit)
+    const verdict = verdictStatus(staleSinceEdit, inv)
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
     // (established by the `if (base == null)` branch above) does not survive into a
@@ -376,16 +253,29 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // hoisted — but does survive into a closure/arrow function.
     const handleSaved = () => {
       setStaleSinceEdit(true)
+      // M5-09-07: clear the poll overlay BEFORE detail.run(), so this user-initiated
+      // refresh's own result -- success or error -- is what renders next, never a stale
+      // `live` value ([poll-overlay-not-rerun]). Unreachable while a tick is in flight
+      // (isFixable is draft/validated/rejected only, never queued/submitted -- see A2),
+      // but required for the queued->rejected->edit path, where `live` still holds the
+      // rejected record from polling that has since stopped.
+      // gen bump: invalidates any tick whose getInvoice() promise was ALREADY in flight
+      // when the rejected->edit transition happened -- clearInterval stopped it from
+      // scheduling again, but not from resolving later and clobbering this fresh result
+      // with the stale record it fetched (QA finding, [poll-overlay-not-rerun]).
+      gen.current++
+      setLive(null)
       detail.run()
       history.run()
     }
 
-    // isFixable(inv.status) gates this button on for both draft AND validated (see
+    // isFixable(inv.status) gates this button on for draft, validated AND rejected (see
     // below) so it stays visible when nothing has been edited yet -- clicking it on an
-    // untouched 'validated' invoice hits Store.ApplyValidation's draft-only gate
-    // ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught + surfaced here (mirrors
-    // InvoiceEditForm's formError) rather than left as an unhandled rejection with no
-    // user feedback.
+    // untouched 'validated' OR 'rejected' invoice hits Store.ApplyValidation's
+    // draft-only gate ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught +
+    // surfaced here (mirrors InvoiceEditForm's formError) rather than left as an
+    // unhandled rejection with no user feedback; the operator must edit first (which
+    // demotes rejected/validated -> draft), then re-validate.
     const handleRevalidate = async () => {
       if (revalidating) return
       setRevalidating(true)
@@ -393,6 +283,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       try {
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
+        gen.current++ // see handleSaved above -- invalidate any already-in-flight tick too
+        setLive(null) // see handleSaved above -- clear the overlay before the real refresh
         detail.run()
         history.run()
       } catch (err) {
@@ -467,6 +359,50 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {inv.status === 'failed' && (
+              <div data-testid="failed-dead-end" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>Submission failed</span>
+                </div>
+                <div style={{ padding: 16, fontSize: 12.5, color: 'var(--fg-2)' }}>
+                  This submission failed and is terminal — it cannot be re-driven from this screen.
+                </div>
+              </div>
+            )}
+
+            {shouldShowFiscalRecord(inv) && (
+              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>Fiscal record</span>
+                </div>
+                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div>
+                    <div className="label" style={{ marginBottom: 3 }}>IRN</div>
+                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5 }}>{inv.irn}</div>
+                  </div>
+                  <div>
+                    <div className="label" style={{ marginBottom: 3 }}>CSID</div>
+                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5 }}>{inv.csid ?? '—'}</div>
+                  </div>
+                  {inv.qr_png_base64 != null && (
+                    // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
+                    // regardless of theme, so this one swatch deliberately does not follow
+                    // a design token (story §6 / task-251 Stage-1 correction K).
+                    <div style={{ background: '#fff', borderRadius: 'var(--radius-lg)', padding: 12, display: 'flex', justifyContent: 'center' }}>
+                      <img
+                        data-testid="fiscal-qr"
+                        src={`data:image/png;base64,${inv.qr_png_base64}`}
+                        alt="FIRS QR code"
+                        width={132}
+                        height={132}
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Compliance</span>
@@ -495,6 +431,28 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             </div>
 
+            {shouldShowRejectionCard(inv) && (
+              <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
+                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>
+                    {rejectionProvenance(inv.status) === 'current' ? 'The tax authority rejected this invoice' : 'Last APP rejection'}
+                  </span>
+                </div>
+                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {inv.rejection_reasons.map((reason, i) => (
+                    <div
+                      key={i}
+                      data-testid="rejection-reason-row"
+                      style={{ padding: '10px 12px', borderRadius: 'var(--radius-lg)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+                    >
+                      <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {isFixable(inv.status) && (
               <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -519,6 +477,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
+            {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge
+                above, not this card): on the one poll tick where shouldRefreshHistory
+                fires, history.run() dispatches useAsync's 'start' action and this card
+                drops to <Loading/> before returning at N+1 rows -- a real, accepted
+                flash. Not overlaid like `inv`/`live` above: this card is the ONE render
+                path that is allowed to show its async state honestly, the flash is
+                confined to a single card (never the badge or invoice body), and
+                M5-09-08's oracle already asserts the post-flip count with an
+                auto-retrying toHaveCount(N+1), not a point-in-time read across the
+                window. Overlaying history too would duplicate the runId/live-clearing
+                machinery above for a card whose own oracle tolerates the dip. */}
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-xl)', overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Status history</span>
@@ -538,7 +507,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <div style={{ fontSize: 13, fontWeight: 500 }}>
                           {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
                         </div>
-                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{h.actor} · {h.changed_at}</div>
+                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{h.actor} · {fmtDateTime(h.changed_at)}</div>
                       </div>
                     </div>
                   ))}
@@ -584,6 +553,44 @@ function InvoiceEditForm({
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
+  // Field flags (task-251 AC #3/#5): one per rejection reason whose MBS path maps to one
+  // of this form's editable fields, carrying the reason's code — so the operator sees
+  // which field the APP's rejection actually pointed at. A reason with an unmapped (or
+  // absent) path is never swallowed here; it's still listed in full on the rejection card
+  // above, just without a field flag. Extracted to lib/invoices.ts's reasonFieldFlags (QA
+  // follow-up to task-251) -- the first-reason-wins collision rule now has a test oracle
+  // there instead of living unspecified in this component.
+  const fieldFlags = reasonFieldFlags(inv.rejection_reasons)
+
+  // Rendered as a SIBLING between the label div and the input — never merged into the
+  // label's own text node, never wrapping the label+input pair in a new container.
+  // e2e/topology/invoice-surfaces.spec.ts locates each input via
+  // `.//div[normalize-space(text())="<Label>"]/following-sibling::input`; that XPath axis
+  // matches ANY following sibling named `input`, so an extra sibling in between is safe.
+  function fieldFlag(key: EditFieldKey): ReactNode {
+    const code = fieldFlags.get(key)
+    if (code == null) return null
+    return (
+      <span
+        data-testid="field-flag"
+        className="mono"
+        style={{
+          display: 'inline-block',
+          fontSize: 10,
+          fontWeight: 600,
+          color: 'var(--status-red-text)',
+          background: 'var(--status-red-bg)',
+          border: '1px solid var(--status-red-border)',
+          borderRadius: 999,
+          padding: '1px 6px',
+          marginBottom: 5,
+        }}
+      >
+        {code}
+      </span>
+    )
+  }
+
   function updateField(field: EditFieldKey, value: string) {
     setForm((f) => ({ ...f, [field]: value }))
   }
@@ -615,38 +622,47 @@ function InvoiceEditForm({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Issue date</div>
+          {fieldFlag('issue_date')}
           <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
+          {fieldFlag('currency')}
           <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier name</div>
+          {fieldFlag('supplier_name')}
           <input className="pf-input" type="text" value={form.supplier_name} onChange={(e) => updateField('supplier_name', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier TIN</div>
+          {fieldFlag('supplier_tin')}
           <input className="pf-input" type="text" value={form.supplier_tin} onChange={(e) => updateField('supplier_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>
+          {fieldFlag('buyer_name')}
           <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer TIN</div>
+          {fieldFlag('buyer_tin')}
           <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Subtotal</div>
+          {fieldFlag('subtotal')}
           <input className="pf-input" type="text" value={form.subtotal} onChange={(e) => updateField('subtotal', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>VAT</div>
+          {fieldFlag('vat')}
           <input className="pf-input" type="text" value={form.vat} onChange={(e) => updateField('vat', e.target.value)} disabled={submitting} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Total</div>
+          {fieldFlag('total')}
           <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} disabled={submitting} />
         </div>
       </div>

@@ -411,10 +411,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDetailSel(selectImported(id))
   }
 
-  function toggleSandbox() {
-    setSandbox((s) => !s)
-  }
-
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
   }
@@ -502,7 +498,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     approve,
     selectInvoice,
     openImportedInvoice,
-    toggleSandbox,
+    setSandbox,
     setSettingsTab,
     toggleConnector,
     saveConnectorMapping,

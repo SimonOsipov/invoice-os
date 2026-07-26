@@ -1,5 +1,8 @@
-// Top header bar — breadcrumb, search box (static), sandbox toggle, "New invoice" CTA.
-// Ported from Platform.dc.html ~L121-137.
+// Top header bar — breadcrumb, search box (static), env switch, "New invoice" CTA.
+// Ported from Platform.dc.html ~L121-137, except the env control: that is the
+// two-segment SANDBOX|LIVE switch from the ops console (ops-console TopBar.tsx),
+// deliberately adopted here in place of the prototype's single toggling pill so
+// both consoles state the environment the same way.
 
 import { plusGlyph, searchGlyph } from '../glyphs'
 import type { PlatformCtx, View } from '../types'
@@ -16,9 +19,37 @@ const CRUMB_MAP: Record<View, string> = {
   settings: 'Settings',
 }
 
+// Segment colours mirror ops-console TopBar.tsx: the active segment is filled with
+// its status colour and its dot flips to the on-dark text colour; the inactive one
+// stays transparent and keeps a tinted dot.
+function segStyle(active: boolean, kind: 'sandbox' | 'live') {
+  return {
+    bg: active ? (kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)') : 'transparent',
+    color: active ? 'var(--text-on-dark)' : 'var(--fg-3)',
+    dot: active ? 'var(--text-on-dark)' : kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)',
+  }
+}
+
+const SEG_BASE = {
+  border: 0,
+  cursor: 'pointer',
+  height: 28,
+  padding: '0 12px',
+  borderRadius: 'var(--radius-input)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+} as const
+
 export function Header({ ctx }: { ctx: PlatformCtx }) {
   const { active, view, sandbox } = ctx
   const crumb = CRUMB_MAP[view] || 'Overview'
+  const sbx = segStyle(sandbox, 'sandbox')
+  const liv = segStyle(!sandbox, 'live')
 
   return (
     <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'oklch(98.5% .008 85 / .82)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
@@ -34,14 +65,30 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
           <span style={{ color: 'var(--fg-3)' }}>{searchGlyph}</span>
           <span style={{ fontSize: 13, color: 'var(--fg-4)' }}>Search invoices, TINs…</span>
         </div>
-        <button
-          onClick={ctx.toggleSandbox}
-          className="pf-btn"
-          style={{ display: 'flex', alignItems: 'center', gap: 7, height: 34, padding: '0 11px', borderRadius: 'var(--radius-input)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--line-2)'}`, background: sandbox ? 'var(--status-amber-bg)' : 'transparent', color: sandbox ? 'var(--status-amber-text)' : 'var(--fg-3)', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em' }}
-        >
-          <span style={{ width: 6, height: 6, borderRadius: 99, background: sandbox ? 'var(--status-amber-text)' : 'var(--status-green-text)' }} />
-          {sandbox ? 'SANDBOX' : 'LIVE'}
-        </button>
+        {/* Sandbox / Live switch — segment heights (28 + 2px padding + 1px border = 34)
+            keep the control flush with the search box and "New invoice" beside it. */}
+        <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>
+          <button
+            type="button"
+            onClick={() => ctx.setSandbox(true)}
+            aria-pressed={sandbox}
+            className="pf-btn"
+            style={{ ...SEG_BASE, background: sbx.bg, color: sbx.color }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: sbx.dot }} />
+            SANDBOX
+          </button>
+          <button
+            type="button"
+            onClick={() => ctx.setSandbox(false)}
+            aria-pressed={!sandbox}
+            className="pf-btn"
+            style={{ ...SEG_BASE, background: liv.bg, color: liv.color }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: liv.dot }} />
+            LIVE
+          </button>
+        </div>
         <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn" style={{ height: 34, padding: '0 14px' }}>
           <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
         </button>

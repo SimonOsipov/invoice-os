@@ -4,10 +4,6 @@
 // dev/CI it also embeds a mock issuer (mint + JWKS) so a token can be minted and
 // verified end to end with the exact code path used against Supabase GoTrue after
 // M8 — the cutover is then a change to AUTH_ISSUER/AUTH_JWKS_URL, not to code.
-//
-// NOTE: this line is a throwaway edit that exists only to make a PR touch `cmd/**`
-// so dev-env.yml fires and provisions an ephemeral Railway environment. Delete it
-// (and close the PR) once the environment has served its purpose.
 package main
 
 import (

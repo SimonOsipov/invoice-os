@@ -1,0 +1,48 @@
+/* ============================================================
+   ASComply — Spacing, radii, motion, layout
+   ============================================================ */
+
+:root {
+  /* ---------- SPACING (4px base) ---------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-28: 112px;
+  --space-32: 128px;
+
+  /* ---------- SECTION RHYTHM ---------- */
+  --section-y: 96px; /* vertical padding of a band */
+  --section-gap: 64px; /* header block → grid */
+  --grid-gap: 16px; /* between list rows / small cards */
+  --card-gap: 24px; /* between feature cards */
+
+  /* ---------- RADII ---------- */
+  --radius: 8px; /* declared default (source: .5rem) */
+  --radius-sm: 8px; /* icon tiles, small chips */
+  --radius-md: 12px; /* DEFAULT card + list row */
+  --radius-lg: 16px; /* large feature cards, FAQ panel */
+  --radius-xl: 24px; /* big panels (assessment block) */
+  --radius-pill: 9999px; /* buttons, badges, tag pills */
+
+  /* ---------- MOTION ---------- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* @kind other */
+  --dur-fast: 150ms; /* @kind other */
+  --dur-base: 220ms; /* @kind other */
+  --dur-slow: 320ms; /* @kind other */
+
+  /* ---------- LAYOUT ---------- */
+  --container: 1152px; /* content width @1440 */
+  --container-narrow: 768px;
+  --gutter: 24px;
+  --header-h: 65px;
+}

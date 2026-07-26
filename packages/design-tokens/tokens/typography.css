@@ -1,0 +1,62 @@
+/* ============================================================
+   ASComply — Typography
+   Fraunces (variable serif) for display/headings, Inter for body + UI.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&display=swap');
+
+:root {
+  /* ---------- FAMILIES ---------- */
+  --font-display: 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---------- ROLE SIZES (rendered @1440) ---------- */
+  --fs-h1: 68px;
+  --fs-h2: 44px;
+  --fs-h3: 20px;
+  --fs-body: 18px;
+  --fs-body-sm: 16px;
+  --fs-ui: 14px;
+  --fs-eyebrow: 12px;
+  --fs-caption: 13px;
+
+  /* ---------- STEP SCALE ---------- */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 30px;
+  --fs-4xl: 44px;
+  --fs-5xl: 56px;
+  --fs-6xl: 68px;
+  --fs-display: 80px;
+
+  /* ---------- LINE HEIGHTS ---------- */
+  --lh-display: 1.05; /* @kind other */
+  --lh-heading: 1.25; /* @kind other */
+  --lh-snug: 1.4; /* @kind other */
+  --lh-body: 1.625; /* @kind other */
+  --lh-ui: 1.43; /* @kind other */
+
+  /* ---------- WEIGHTS ---------- */
+  --fw-regular: 400; /* @kind other */
+  --fw-medium: 500; /* @kind other */
+  --fw-semibold: 600; /* @kind other */
+  --fw-bold: 700; /* @kind other */
+
+  /* ---------- TRACKING ---------- */
+  --tracking-display: -0.02em; /* @kind other */
+  --tracking-tight: -0.02em; /* @kind other */
+  --tracking-normal: 0; /* @kind other */
+  --tracking-eyebrow: 0.12em; /* @kind other */
+  --tracking-wide: 0.08em; /* @kind other */
+
+  /* ---------- OPTICAL SIZE (Fraunces variable axis) ---------- */
+  --opsz-display: 96; /* @kind other */
+  --opsz-heading: 72; /* @kind other */
+  --opsz-text: 24; /* @kind other */
+}

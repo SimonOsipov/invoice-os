@@ -30,7 +30,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
   const busy = signingIn !== null
   return (
     <div
-      className="if-v2"
+      className="asc-app"
       style={{ minHeight: '100vh', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
     >
       <style>{`
@@ -106,7 +106,7 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
 export function SignInLoading({ persona }: { persona: Persona }) {
   return (
     <div
-      className="if-v2"
+      className="asc-app"
       style={{ minHeight: '100vh', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
     >
       <style>{`

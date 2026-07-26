@@ -1049,13 +1049,15 @@ reconcile_url_variables() {
   upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
 
   verify_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
   verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
   verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
-  echo "All 5 URL variables confirmed by independent re-query."
+  verify_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
+  echo "All 6 URL variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url>

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
-import { APPROVALS, CLIENTS, FIRM, INHOUSE, PIPELINE, type Audience as AudienceData } from '../data'
+import { API_TENANTS, APPROVALS, CLIENTS, FINTECH, FIRM, INHOUSE, PIPELINE, type Audience as AudienceData } from '../data'
 
-type AudienceKey = 'firm' | 'inhouse'
+type AudienceKey = 'firm' | 'inhouse' | 'fintech'
 
 const seg = (active: boolean) => ({
   bg: active ? 'var(--bg-2)' : 'transparent',
@@ -260,6 +260,75 @@ function AudienceCopy({ data, onBookDemo }: { data: AudienceData; onBookDemo: ()
   )
 }
 
+const TENANT_GRID = 'minmax(0,1.4fr) 88px 74px 84px'
+
+function FintechMock() {
+  return (
+    <div style={{ background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid var(--line-1)' }}>
+        <span className="label">Merchant tenants · last 24h</span>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 600 }}>
+          sk_live_····4f2a
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: TENANT_GRID,
+          padding: '9px 18px',
+          borderBottom: '1px solid var(--line-1)',
+          background: 'var(--bg-3)',
+        }}
+      >
+        <span className="label">Tenant</span>
+        <span className="label" style={{ textAlign: 'right' }}>Calls</span>
+        <span className="label" style={{ textAlign: 'right' }}>Pass</span>
+        <span className="label" style={{ textAlign: 'right' }}>Env</span>
+      </div>
+      {API_TENANTS.map((t) => (
+        <div
+          key={t.name}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: TENANT_GRID,
+            alignItems: 'center',
+            padding: '13px 18px',
+            borderBottom: '1px solid var(--line-1)',
+            background: 'var(--bg-2)',
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 10 }}>
+            {t.name}
+          </span>
+          <span className="mono" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>{t.calls}</span>
+          <span className="mono" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right', color: 'var(--primary)' }}>{t.pass}</span>
+          <span style={{ justifySelf: 'end' }}>
+            <span
+              className="mono"
+              style={{
+                fontSize: 9.5,
+                fontWeight: 600,
+                letterSpacing: '0.05em',
+                borderRadius: 999,
+                padding: '3px 9px',
+                background: t.ok ? 'var(--status-green-bg)' : 'var(--status-amber-bg)',
+                border: `1px solid ${t.ok ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`,
+                color: t.ok ? 'var(--status-green-text)' : 'var(--status-amber-text)',
+              }}
+            >
+              {t.state}
+            </span>
+          </span>
+        </div>
+      ))}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 18px', background: 'var(--bg-1)' }}>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>39,701 CALLS · 4 TENANTS</span>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 600 }}>P99 240ms</span>
+      </div>
+    </div>
+  )
+}
+
 export function Audience({ onBookDemo }: { onBookDemo: () => void }) {
   const [audience, setAudience] = useState<AudienceKey>('firm')
   const isFirm = audience === 'firm'
@@ -269,22 +338,25 @@ export function Audience({ onBookDemo }: { onBookDemo: () => void }) {
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ textAlign: 'center', marginBottom: 8 }}>
           <div className="eyebrow" style={{ marginBottom: 14 }}>
-            04 — WHO IT'S FOR
+            WHO IT'S FOR
           </div>
           <h2 style={{ fontSize: 40, lineHeight: 1.08, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 14px' }}>
-            One platform. Two ways to run compliance.
+            One platform. Three ways to run compliance.
           </h2>
           <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--fg-2)', maxWidth: 580, margin: '0 auto 26px' }}>
-            Whether you manage compliance for a roster of clients or own it inside a single finance department, ASComply
-            reshapes the workspace — and the feature set — to fit how you work.
+            Whether you manage compliance for a roster of clients, own it inside a single finance team, or resell it to
+            merchants through our API.
           </p>
           {/* audience toggle */}
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg-3)', borderRadius: 999, padding: 4 }}>
             <button type="button" onClick={() => setAudience('firm')} style={tabStyle(isFirm)}>
               {FIRM.tabIcon} Accounting &amp; tax firms
             </button>
-            <button type="button" onClick={() => setAudience('inhouse')} style={tabStyle(!isFirm)}>
+            <button type="button" onClick={() => setAudience('inhouse')} style={tabStyle(audience === 'inhouse')}>
               {INHOUSE.tabIcon} In-house finance teams
+            </button>
+            <button type="button" onClick={() => setAudience('fintech')} style={tabStyle(audience === 'fintech')}>
+              {FINTECH.tabIcon} Fintech providers
             </button>
           </div>
         </div>
@@ -295,8 +367,11 @@ export function Audience({ onBookDemo }: { onBookDemo: () => void }) {
             <div style={layer(isFirm)} aria-hidden={!isFirm}>
               <FirmMock />
             </div>
-            <div style={layer(!isFirm)} aria-hidden={isFirm}>
+            <div style={layer(audience === 'inhouse')} aria-hidden={audience !== 'inhouse'}>
               <InhouseMock />
+            </div>
+            <div style={layer(audience === 'fintech')} aria-hidden={audience !== 'fintech'}>
+              <FintechMock />
             </div>
           </div>
 
@@ -305,8 +380,11 @@ export function Audience({ onBookDemo }: { onBookDemo: () => void }) {
             <div style={layer(isFirm)} aria-hidden={!isFirm}>
               <AudienceCopy data={FIRM} onBookDemo={onBookDemo} />
             </div>
-            <div style={layer(!isFirm)} aria-hidden={isFirm}>
+            <div style={layer(audience === 'inhouse')} aria-hidden={audience !== 'inhouse'}>
               <AudienceCopy data={INHOUSE} onBookDemo={onBookDemo} />
+            </div>
+            <div style={layer(audience === 'fintech')} aria-hidden={audience !== 'fintech'}>
+              <AudienceCopy data={FINTECH} onBookDemo={onBookDemo} />
             </div>
           </div>
         </div>

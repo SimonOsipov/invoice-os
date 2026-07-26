@@ -29,28 +29,6 @@ export function Icon({ paths, size = 16, strokeWidth = 1.6 }: IconProps) {
   )
 }
 
-// Lucide `circle-check` — the design system's fixed semantic for "capability
-// we provide". It carries confirmation, so it is always amber, never the plain
-// `check` glyph and never teal. 2px stroke per the iconography rules.
-export function CircleCheck({ size = 16 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="10" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  )
-}
-
 // Four-square brand mark. Placeholder: the design system's mark is a RASTER
 // (assets/logo-mark.png) and must never be redrawn — this SVG is a stand-in until
 // that file lands in the repo. currentColor throughout so it adapts to context;

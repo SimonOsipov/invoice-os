@@ -21,7 +21,7 @@ export function Developers() {
       >
         <div>
           <div className="eyebrow eyebrow-dark" style={{ marginBottom: 14 }}>
-            05 — API &amp; INTEGRATIONS
+            API &amp; INTEGRATIONS
           </div>
           <h2 style={{ fontSize: 38, lineHeight: 1.1, letterSpacing: '-0.03em', margin: '0 0 18px', color: 'var(--text-on-dark)' }}>
             Compliance as an API. Drop it into any ERP.
@@ -63,9 +63,13 @@ export function Developers() {
         {/* code block */}
         <div style={{ background: 'var(--on-dark-5)', border: '1px solid var(--border-on-dark)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--border-on-dark)' }}>
-            <span style={{ width: 10, height: 10, borderRadius: 99, background: 'var(--on-dark-20)' }} />
-            <span style={{ width: 10, height: 10, borderRadius: 99, background: 'var(--on-dark-20)' }} />
-            <span style={{ width: 10, height: 10, borderRadius: 99, background: 'var(--on-dark-20)' }} />
+            {/* macOS traffic lights. These three stay literal rather than tokenised:
+                they depict another product's window chrome, the way a screenshot
+                would, so they are reference colours and not part of this palette.
+                Tokenising them would make the code block read as ASComply UI. */}
+            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#FF5F57' }} />
+            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#FEBC2E' }} />
+            <span style={{ width: 10, height: 10, borderRadius: 99, background: '#28C840' }} />
             <span className="mono" style={{ fontSize: 11, color: 'var(--slate-400)', marginLeft: 8 }}>
               POST /v1/invoices/validate
             </span>

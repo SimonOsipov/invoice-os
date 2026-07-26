@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CircleCheck } from '../icons'
+import { Icon } from '../icons'
 import { PLANS, PLAN_COLORS } from '../data'
 
 const seg = (active: boolean) => ({
@@ -17,7 +17,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <div className="eyebrow" style={{ marginBottom: 14 }}>
-            06 — PRICING
+            PRICING
           </div>
           <h2 style={{ fontSize: 40, lineHeight: 1.08, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 14px' }}>
             Priced by compliance need, not seats.
@@ -78,6 +78,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
             return (
               <div
                 key={p.name}
+                className="ios-price"
                 style={{
                   background: c.cardBg,
                   border: `1px solid ${c.cardBorder}`,
@@ -103,7 +104,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                   {p.featured && (
                     <span
                       className="mono"
-                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--action)', color: 'var(--primary-foreground)', padding: '3px 8px', borderRadius: 'var(--radius-pill)' }}
+                      style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', background: 'var(--accent)', color: 'var(--text-on-dark)', padding: '3px 8px', borderRadius: 'var(--radius-sm)' }}
                     >
                       POPULAR
                     </span>
@@ -132,7 +133,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
                   {p.features.map((f) => (
                     <div key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
                       <span style={{ color: c.checkColor, flex: 'none', marginTop: 1, display: 'inline-flex' }}>
-                        <CircleCheck />
+                        <Icon paths={['M20 6 9 17l-5-5']} size={14} strokeWidth={2} />
                       </span>
                       <span style={{ fontSize: 13, lineHeight: 1.45, color: c.featColor }}>{f}</span>
                     </div>

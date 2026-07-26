@@ -16,7 +16,7 @@ export type StatusStyle = { bg: string; border: string; text: string; label: str
 // drawer timeline's derived final step.
 const JOB_STATE_STYLE: Record<JobState, [string, string, string, string]> = {
   queued: ['var(--status-muted-bg)', 'var(--status-muted-border)', 'var(--status-muted-text)', 'QUEUED'],
-  submitting: ['var(--status-muted-bg)', 'var(--status-muted-border)', 'var(--status-muted-text)', 'SUBMITTING'],
+  submitting: ['var(--status-green-bg)', 'var(--status-green-border)', 'var(--status-green-text)', 'SUBMITTING'],
   pending: ['var(--status-amber-bg)', 'var(--status-amber-border)', 'var(--status-amber-text)', 'PENDING'],
   accepted: ['var(--status-green-bg)', 'var(--status-green-border)', 'var(--status-green-text)', 'CLEARED'],
   rejected: ['var(--status-red-bg)', 'var(--status-red-border)', 'var(--status-red-text)', 'REJECTED'],

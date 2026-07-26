@@ -23,7 +23,7 @@ export function Compliance() {
       >
         <div>
           <div className="eyebrow" style={{ marginBottom: 14 }}>
-            03 — MBS READINESS
+            MBS READINESS
           </div>
           <h2 style={{ fontSize: 38, lineHeight: 1.1, letterSpacing: '-0.03em', fontWeight: 600, margin: '0 0 18px' }}>
             Know exactly how compliant you are — before the auditor does.

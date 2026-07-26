@@ -48,14 +48,41 @@ body {
   }
 }
 
-/* Links are the one marketing hover the system allows: teal → amber. Cards and
-   rows deliberately have none — they are content, not controls. (Console rows
-   keep their --muted hover; those are controls.) */
+/* Hover, ported verbatim from the prototype's own <style> block.
+   Links: teal → amber. Feature cards and list rows have none — they are content,
+   not controls. The two exceptions the prototype ships are the pricing card's
+   hairline and the module cells on the dark band. */
 .ios-link {
   transition: color 120ms ease-out;
 }
 .ios-link:hover {
   color: var(--accent) !important;
+}
+.ios-price:hover {
+  border-color: var(--line-3) !important;
+}
+
+/* Modules grid on the gradient band: the fill lifts to --on-dark-10 (the design
+   system's "buttons on dark" behaviour), the amber icon brightens and nudges up,
+   and the body copy brightens. Motion tokens only — no scale, no shadow. */
+.mod-cell {
+  transition: background var(--dur-base) var(--ease-out);
+}
+.mod-cell:hover {
+  background: var(--on-dark-10) !important;
+}
+.mod-cell .mod-icon {
+  transition: filter var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+}
+.mod-cell:hover .mod-icon {
+  filter: brightness(1.25);
+  transform: translateY(-2px);
+}
+.mod-cell .mod-body {
+  transition: color var(--dur-base) var(--ease-out);
+}
+.mod-cell:hover .mod-body {
+  color: oklch(100% 0 0 / 0.88) !important;
 }
 
 /* ------------------------------------------------------------------

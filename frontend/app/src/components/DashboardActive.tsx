@@ -91,6 +91,39 @@ function kpiValues(counts: Counts, needsAttention: number, vatLabel: string) {
   ]
 }
 
+// Every large tile on this page wears the same head: a Fraunces .card-title on the
+// left, mono meta on the right, cut off from the body by a full-bleed hairline.
+// The hairline only reaches both edges if the CARD carries no padding — the head
+// strip and the body each own theirs — hence padding:0 + overflow:hidden here and
+// an explicit padded body inside every tile below.
+const TILE_CARD = {
+  background: 'var(--bg-2)',
+  border: '1px solid var(--line-1)',
+  borderRadius: 'var(--radius-md)',
+  overflow: 'hidden',
+} as const
+
+const TILE_BODY = { padding: '22px 20px 24px' } as const
+
+function TileHead({ title, meta }: { title: string; meta: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '15px 20px',
+        borderBottom: '1px solid var(--line-1)',
+      }}
+    >
+      <span className="card-title">{title}</span>
+      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+        {meta}
+      </span>
+    </div>
+  )
+}
+
 function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; seed: string }) {
   const segments = donutSegments(data.totals.counts)
   const total = Object.values(data.totals.counts).reduce((a, b) => a + b, 0)
@@ -106,44 +139,41 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         className="pf-dash-row-a"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
       >
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 26, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-            <span className="label">Readiness score</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-              SAMPLE
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 22, marginBottom: 24 }}>
-            <div style={{ position: 'relative', width: 116, height: 116, flex: 'none' }}>
-              <svg width="116" height="116" viewBox="0 0 116 116" style={{ transform: 'rotate(-90deg)' }}>
-                <circle cx="58" cy="58" r="50" fill="none" stroke="var(--bg-3)" strokeWidth="11" />
-                <circle cx="58" cy="58" r="50" fill="none" stroke={mock.ring.color} strokeWidth="11" strokeLinecap="round" strokeDasharray={mock.ring.circ} strokeDashoffset={mock.ring.offset} />
-              </svg>
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span className="money" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>
-                  {mock.score}
-                </span>
-                <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
-                  % READY
-                </span>
-              </div>
-            </div>
-            <p style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>{mock.readinessNote}</p>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 13, paddingTop: 20, borderTop: '1px solid var(--line-1)' }}>
-            {mock.readinessMetrics.map((m) => (
-              <div key={m.label}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{m.label}</span>
-                  <span className="money mono" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>
-                    {m.pct}
+        <div style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column' }}>
+          <TileHead title="Readiness score" meta="SAMPLE" />
+          <div style={{ ...TILE_BODY, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 22, marginBottom: 24 }}>
+              <div style={{ position: 'relative', width: 116, height: 116, flex: 'none' }}>
+                <svg width="116" height="116" viewBox="0 0 116 116" style={{ transform: 'rotate(-90deg)' }}>
+                  <circle cx="58" cy="58" r="50" fill="none" stroke="var(--bg-3)" strokeWidth="11" />
+                  <circle cx="58" cy="58" r="50" fill="none" stroke={mock.ring.color} strokeWidth="11" strokeLinecap="round" strokeDasharray={mock.ring.circ} strokeDashoffset={mock.ring.offset} />
+                </svg>
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <span className="money" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>
+                    {mock.score}
+                  </span>
+                  <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
+                    % READY
                   </span>
                 </div>
-                <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                  <div style={{ width: m.pct, height: '100%', background: m.color, borderRadius: 'var(--radius-sm)' }} />
-                </div>
               </div>
-            ))}
+              <p style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>{mock.readinessNote}</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 13, paddingTop: 20, borderTop: '1px solid var(--line-1)' }}>
+              {mock.readinessMetrics.map((m) => (
+                <div key={m.label}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                    <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{m.label}</span>
+                    <span className="money mono" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>
+                      {m.pct}
+                    </span>
+                  </div>
+                  <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                    <div style={{ width: m.pct, height: '100%', background: m.color, borderRadius: 'var(--radius-sm)' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -175,133 +205,119 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         className="pf-dash-row-b"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18, marginBottom: 18 }}
       >
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 26, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-            <span className="label">Needs attention</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-              EXCEPTIONS FIRST
-            </span>
-          </div>
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span className="money" style={{ fontSize: 56, fontWeight: 500, lineHeight: 1, color: 'var(--ink)' }}>
-                {needsAttention}
-              </span>
-              <span
-                className="mono"
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  letterSpacing: '0.06em',
-                  padding: '3px 9px',
-                  borderRadius: 'var(--radius-pill)',
-                  background: needsAttention > 0 ? 'var(--status-red-bg)' : 'var(--status-green-bg)',
-                  border: `1px solid ${needsAttention > 0 ? 'var(--status-red-border)' : 'var(--status-green-border)'}`,
-                  color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
-                }}
-              >
-                {needsAttention > 0 ? 'REJECTED / FAILED' : 'ALL CLEAR'}
-              </span>
-            </div>
-            <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '14px 0 0' }}>
-              Invoices rejected, failed, or blocked by an error-severity validation issue.
-            </p>
-          </div>
-          <button
-            onClick={() => ctx.nav('invoices')}
-            className="v2-btn v2-btn-ghost pf-btn"
-            style={{ height: 38, fontSize: 13, marginTop: 22, justifyContent: 'center' }}
-          >
-            {resolveCtaLabel(needsAttention)}
-          </button>
-        </div>
-
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <span className="card-title">Invoice status</span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              {total} TOTAL
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <div style={{ position: 'relative', width: 128, height: 128 }}>
-              {/* Arc dash/offset in donutSegments are computed for R=49 — the circle
-                  r is hardcoded to 49 to match (donutMeta is gone). */}
-              <svg width="124" height="124" viewBox="0 0 124 124" style={{ transform: 'rotate(-90deg)' }}>
-                <circle cx="62" cy="62" r="49" fill="none" stroke="var(--bg-3)" strokeWidth="13" />
-                {segments.map((d) => (
-                  <circle key={d.label} cx="62" cy="62" r="49" fill="none" stroke={d.color} strokeWidth="13" strokeDasharray={d.dash} strokeDashoffset={d.offset} />
-                ))}
-              </svg>
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span className="money" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
-                  {total}
+        <div style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column' }}>
+          <TileHead title="Needs attention" meta="EXCEPTIONS FIRST" />
+          <div style={{ ...TILE_BODY, flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span className="money" style={{ fontSize: 56, fontWeight: 500, lineHeight: 1, color: 'var(--ink)' }}>
+                  {needsAttention}
                 </span>
-                <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
-                  DOCS
+                <span
+                  className="mono"
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: '0.06em',
+                    padding: '3px 9px',
+                    borderRadius: 'var(--radius-pill)',
+                    background: needsAttention > 0 ? 'var(--status-red-bg)' : 'var(--status-green-bg)',
+                    border: `1px solid ${needsAttention > 0 ? 'var(--status-red-border)' : 'var(--status-green-border)'}`,
+                    color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
+                  }}
+                >
+                  {needsAttention > 0 ? 'REJECTED / FAILED' : 'ALL CLEAR'}
                 </span>
               </div>
+              <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '14px 0 0' }}>
+                Invoices rejected, failed, or blocked by an error-severity validation issue.
+              </p>
             </div>
-            <div style={{ width: '100%', marginTop: 22, display: 'flex', flexDirection: 'column', gap: 11 }}>
-              {segments.map((d) => (
-                <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '10px minmax(0, 1fr) auto auto', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: d.color }} />
-                  <span style={{ fontSize: 13, color: 'var(--fg-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', textAlign: 'right' }}>
-                    {d.pct}
+            <button
+              onClick={() => ctx.nav('invoices')}
+              className="v2-btn v2-btn-ghost pf-btn"
+              style={{ height: 38, fontSize: 13, marginTop: 22, justifyContent: 'center' }}
+            >
+              {resolveCtaLabel(needsAttention)}
+            </button>
+          </div>
+        </div>
+
+        <div style={TILE_CARD}>
+          <TileHead title="Invoice status" meta={`${total} TOTAL`} />
+          <div style={TILE_BODY}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={{ position: 'relative', width: 128, height: 128 }}>
+                {/* Arc dash/offset in donutSegments are computed for R=49 — the circle
+                    r is hardcoded to 49 to match (donutMeta is gone). */}
+                <svg width="124" height="124" viewBox="0 0 124 124" style={{ transform: 'rotate(-90deg)' }}>
+                  <circle cx="62" cy="62" r="49" fill="none" stroke="var(--bg-3)" strokeWidth="13" />
+                  {segments.map((d) => (
+                    <circle key={d.label} cx="62" cy="62" r="49" fill="none" stroke={d.color} strokeWidth="13" strokeDasharray={d.dash} strokeDashoffset={d.offset} />
+                  ))}
+                </svg>
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <span className="money" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
+                    {total}
                   </span>
-                  <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>
-                    {d.count}
+                  <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
+                    DOCS
                   </span>
                 </div>
-              ))}
+              </div>
+              <div style={{ width: '100%', marginTop: 22, display: 'flex', flexDirection: 'column', gap: 11 }}>
+                {segments.map((d) => (
+                  <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '10px minmax(0, 1fr) auto auto', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: d.color }} />
+                    <span style={{ fontSize: 13, color: 'var(--fg-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', textAlign: 'right' }}>
+                      {d.pct}
+                    </span>
+                    <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>
+                      {d.count}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Row C: 12-week readiness trend (mock — the rollup carries no time series) */}
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 24, marginBottom: 18 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
-          <div>
-            <div className="card-title" style={{ marginBottom: 8 }}>Readiness trend</div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
-                {mock.chart.now}%
-              </span>
-              <span className="label">{mock.chart.deltaLabel}</span>
-            </div>
-          </div>
-          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-            12 WEEKS · SAMPLE
-          </span>
-        </div>
-        <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
-          {mock.chart.grid.map((g) => (
-            <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-          ))}
-          <path d={mock.chart.area} fill="var(--action-tint)" />
-          <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-          {mock.chart.months.map((mo) => (
-            <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-              {mo}
+      {/* Row C: 12-week readiness trend (mock — the rollup carries no time series).
+          The headline % used to sit INSIDE the header beside the title; the shared
+          head is a single title/meta line, so it moved down into the body. */}
+      <div style={{ ...TILE_CARD, marginBottom: 18 }}>
+        <TileHead title="Readiness trend" meta="12 WEEKS · SAMPLE" />
+        <div style={TILE_BODY}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
+            <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
+              {mock.chart.now}%
             </span>
-          ))}
+            <span className="label">{mock.chart.deltaLabel}</span>
+          </div>
+          <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+            {mock.chart.grid.map((g) => (
+              <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            ))}
+            <path d={mock.chart.area} fill="var(--action-tint)" />
+            <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+            {mock.chart.months.map((mo) => (
+              <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
+                {mo}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Row D: top validation failures (live) | recent activity (mock). Same
           `calc((100% - 396px) / 2)` narrow column as row B — see there for the 396. */}
       <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18 }}>
-      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
-          <span className="card-title">Top validation failures</span>
-          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-            FIRM-WIDE
-          </span>
-        </div>
+      <div style={TILE_CARD}>
+        <TileHead title="Top validation failures" meta="FIRM-WIDE" />
         {failures.length > 0 ? (
           <div>
             {failures.map((f) => (
@@ -333,13 +349,8 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         )}
       </div>
 
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
-            <span className="card-title">Recent activity</span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              SAMPLE
-            </span>
-          </div>
+        <div style={TILE_CARD}>
+          <TileHead title="Recent activity" meta="SAMPLE" />
           <div style={{ padding: '18px 20px 6px' }}>
             {mock.activity.map((a, i) => (
               <div key={i} style={{ display: 'flex', gap: 12 }}>

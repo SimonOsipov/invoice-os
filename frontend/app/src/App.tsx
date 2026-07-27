@@ -602,10 +602,17 @@ export default function App() {
   // param and lands on landing. Also the 401 handler (makeAuthedFetch → onSignOut):
   // an invalidated session belongs back at the front door, not the in-app picker.
   const signOut = useCallback(() => {
+    // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
+    // localStorage, so without this the invalidated session stayed in React state and
+    // Workspace kept rendering — which is exactly how a 401'd reload left the user parked
+    // on a dead dashboard behind an "unauthorized / HTTP 401" card instead of signed out.
+    // The old comment below claimed this fallback already happened; it did not.
+    setSession(null)
     clearSession()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
-    // The already-cleared session still falls back to the app's own persona-picker.
+    // With it unset we now land on the app's own persona-picker, which is a front door;
+    // the workspace behind an expired token is not.
     const dest = landingBase()
     if (dest) window.location.href = dest
   }, [])

@@ -41,14 +41,13 @@ test('deployed app: validation playground round-trips the live engine', async ({
     errors.push(`pageerror: ${err.message}`)
   })
 
-  const res = await page.goto(APP_URL)
-  expect(res, `no response from ${APP_URL}`).toBeTruthy()
-  expect(res!.ok(), `${APP_URL} returned HTTP ${res!.status()}`).toBeTruthy()
-
-  // Sign in as the firm persona and wait for the /me round trip to finish (same
-  // discriminator as auth.spec.ts) before touching the nav — Validate needs an authed
-  // gateway session.
-  await page.getByRole('button', { name: new RegExp(FIRM_PERSONA.buttonName) }).click()
+  // Sign in as the firm persona via the landing hand-off (?persona=), then wait for the
+  // /me round trip to finish (same discriminator as auth.spec.ts) before touching the nav
+  // — Validate needs an authed gateway session. The app has no picker of its own to click.
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
 
   await page.getByRole('button', { name: /Validation/ }).click()

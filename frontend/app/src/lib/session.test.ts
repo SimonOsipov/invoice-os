@@ -321,29 +321,34 @@ describe('isTokenExpired / resolveBootSession', () => {
     }
   })
 
-  it('S29: resolveBootSession drops an expired session AND reports it, so the caller can redirect rather than silently show the picker', () => {
-    const storage = createMemoryStorage()
-    vi.stubGlobal('localStorage', storage)
+  it('S29: resolveBootSession drops an expired session so the workspace never mounts on a dead token', () => {
+    vi.stubGlobal('localStorage', createMemoryStorage())
     saveSession({ ...firmSession(), token: jwt({ exp: 1000 }) })
 
-    expect(resolveBootSession(2000_000)).toEqual({ session: null, expired: true })
+    expect(resolveBootSession(2000_000)).toBeNull()
   })
 
-  it('S30: resolveBootSession passes a live session through with expired:false', () => {
-    const storage = createMemoryStorage()
-    vi.stubGlobal('localStorage', storage)
+  it('S30: resolveBootSession passes a live session through unchanged', () => {
+    vi.stubGlobal('localStorage', createMemoryStorage())
     const live = { ...firmSession(), token: jwt({ exp: 9_000_000 }) }
     saveSession(live)
 
-    expect(resolveBootSession(1000_000)).toEqual({ session: live, expired: false })
+    expect(resolveBootSession(1000_000)).toEqual(live)
   })
 
-  // "No session" and "expired session" must stay distinguishable — they exit the app by
-  // different doors (picker vs landing), so collapsing them would reintroduce the bug.
-  it('S31: absent storage reports expired:false, not merely session:null', () => {
+  it('S31: absent storage resolves to null', () => {
     vi.stubGlobal('localStorage', createMemoryStorage())
 
-    expect(resolveBootSession(Date.now())).toEqual({ session: null, expired: false })
+    expect(resolveBootSession(Date.now())).toBeNull()
+  })
+
+  // The expiry drop must not be a blanket "any stored session is suspect": a no-gateway
+  // showcase session carries token:null and has to survive a reload.
+  it('S32: a stored no-gateway session (token:null) survives boot', () => {
+    vi.stubGlobal('localStorage', createMemoryStorage())
+    saveSession(noGatewaySession())
+
+    expect(resolveBootSession(Date.now())).toEqual(noGatewaySession())
   })
 })
 

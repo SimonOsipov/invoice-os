@@ -125,16 +125,15 @@ export function isTokenExpired(token: string | null, nowMs: number = Date.now())
   }
 }
 
-// Boot-time session resolution. Deliberately reports "an expired session was here"
-// separately from "no session": the two must leave the app by DIFFERENT doors. A user who
-// never signed in belongs on the picker; a user whose token died while the tab was closed
-// belongs wherever a live 401 would send them (the landing page), because an expired token
-// and a 401'd token are the same condition one request apart, and exiting two different
-// ways for the same condition is the bug this pairs with.
-export function resolveBootSession(now: number = Date.now()): { session: Session | null; expired: boolean } {
+// Boot-time session resolution: a stored session whose token has already expired is NOT a
+// session. Entering the workspace on one only buys a dashboard that 401s a moment later.
+//
+// This deliberately does NOT distinguish "expired" from "never signed in". It used to,
+// because the two left the app by different doors — expired to the landing page, absent to
+// the in-app picker. Now that the landing page is the single front door, every sessionless
+// visit goes there (App.tsx), so the distinction had exactly one consumer and no remaining
+// behavioural difference. Keeping the flag would have meant two mechanisms for one outcome.
+export function resolveBootSession(now: number = Date.now()): Session | null {
   const session = loadSession()
-  if (session !== null && isTokenExpired(session.token, now)) {
-    return { session: null, expired: true }
-  }
-  return { session, expired: false }
+  return session !== null && isTokenExpired(session.token, now) ? null : session
 }

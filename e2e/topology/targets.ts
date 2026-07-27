@@ -46,8 +46,14 @@ export const TENANTS = {
 
 // The firm persona (frontend/app/src/auth.ts) resolves to seeded tenant 1111. Its
 // uppercased backend name is what the verified sidebar renders after the round trip.
+//
+// `param` replaced the old `buttonName`: the app no longer ships its own persona picker
+// (the landing page is the single sign-in front door), so there is no button to click on a
+// deployed build. Signing in is the same ?persona= hand-off the landing performs —
+// landing/src/auth.ts destUrl() — which makes these specs exercise the real entry path
+// rather than a picker only the standalone showcase build still renders.
 export const FIRM_PERSONA = {
-  buttonName: 'Chinedu Okafor',
+  param: 'firm',
   tenantName: 'Okafor & Partners',
 } as const
 

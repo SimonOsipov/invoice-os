@@ -75,14 +75,16 @@ const resolveBase = (v: string | undefined): string | null => {
 const appBase = () => resolveBase(import.meta.env.VITE_APP_URL)
 const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
 
-// destUrl is the SPA the persona's role may open. The Platform app gets ?persona=<id>
-// so it auto-signs-in that persona (reusing M2-13's mint + /me path); the Ops Console
-// is opened directly (its token consumption arrives at M7). Returns null — the
-// documented no-gateway path — when the target SPA's URL isn't configured; callers must
-// not navigate on null.
+// destUrl is the SPA the persona's role may open. BOTH targets now carry ?persona=<id>:
+// the Platform app auto-signs-in that persona (reusing M2-13's mint + /me path), and the
+// Ops Console records it as its sign-in. The console used to be opened with a bare
+// navigation, which is why it had no way to tell a signed-in visitor from a stranger with
+// the URL — it now refuses to render without one and sends you back here.
+// (Its VERIFIED token consumption still arrives at M7; this is routing, not enforcement.)
+// Returns null — the documented unconfigured path — when the target SPA's URL isn't set;
+// callers must not navigate on null.
 export function destUrl(p: LandingPersona): string | null {
-  if (p.target === 'ops') return opsBase()
-  const base = appBase()
+  const base = p.target === 'ops' ? opsBase() : appBase()
   return base ? `${base}?persona=${p.id}` : null
 }
 

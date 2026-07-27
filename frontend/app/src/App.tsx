@@ -576,10 +576,8 @@ export default function App() {
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
   // token already past its `exp` resolves to NO session — entering the workspace on one
-  // only buys a dashboard that 401s a moment later. `boot.expired` remembers that one was
-  // there, so the effect below can send the user out the same door a live 401 would.
-  const [boot] = useState(resolveBootSession)
-  const [session, setSession] = useState<Session | null>(boot.session)
+  // only buys a dashboard that 401s a moment later.
+  const [session, setSession] = useState<Session | null>(() => resolveBootSession())
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
   // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot
   // from the same guard the mount effect below uses: non-null only when boot produced NO
@@ -643,20 +641,33 @@ export default function App() {
     if (autoPersona) void doSignIn(APP_PERSONAS[autoPersona])
   }, [autoPersona, doSignIn])
 
-  // A session that expired while the tab was closed leaves by the same door as a live 401
-  // — the front door, not the in-app picker — so the two halves of one condition don't
-  // exit differently. Suppressed when a ?persona= deep link is present: that hand-off is
-  // ABOUT to mint a fresh token, so bouncing to landing would break landing → app.
+  // The single front door. Any sessionless visit — never signed in, signed out, session
+  // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
+  // page rather than being offered a second place to sign in here.
+  //
+  // Suppressed when a ?persona= deep link is present: that hand-off is ABOUT to mint a
+  // fresh token, so bouncing to landing would break landing → app. Also skipped when no
+  // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (boot.expired && !autoPersona) signOut()
-  }, [boot.expired, autoPersona, signOut])
+    if (session || autoPersona) return
+    const dest = landingBase()
+    if (dest) window.location.href = dest
+  }, [session, autoPersona])
 
   if (!session) {
     // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
     // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
-    // mint → /me round trip resolves. The picker only renders for a direct visit with no
-    // (valid) ?persona= deep link.
-    return autoPersona ? <SignInLoading persona={APP_PERSONAS[autoPersona]} /> : <SignIn signingIn={signingIn} onPick={doSignIn} />
+    // mint → /me round trip resolves.
+    if (autoPersona) return <SignInLoading persona={APP_PERSONAS[autoPersona]} />
+    // No session and no deep link. The landing page is the product's single sign-in front
+    // door, so go there rather than offer a SECOND place to sign in — the effect above has
+    // already started that navigation; render nothing rather than flash a picker the user
+    // is about to be moved off.
+    if (landingBase()) return null
+    // No landing configured (the standalone showcase build). There is nowhere to send
+    // anyone, so the in-app picker stays as the fallback — without it this build would be
+    // a dead end. It is the ONLY path that still renders SignIn.
+    return <SignIn signingIn={signingIn} onPick={doSignIn} />
   }
   return <Workspace session={session} onSignOut={signOut} />
 }

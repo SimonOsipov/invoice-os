@@ -27,7 +27,12 @@ export const APPS: AppTarget[] = [
   },
   {
     name: 'ops-console',
-    url: resolveTarget('OPS_CONSOLE_URL'),
+    // The console now sits behind the landing page's sign-in hand-off: a bare URL is not a
+    // sign-in and redirects to the front door. Arrive the way the landing actually routes
+    // here (destUrl -> ?persona=support) rather than through a test-only backdoor, so this
+    // smoke test still exercises the real entry path. The redirect itself is pinned by its
+    // own spec in smoke.spec.ts.
+    url: `${resolveTarget('OPS_CONSOLE_URL')}?persona=support`,
     assertMainView: async (page) => {
       // Sidebar brand + the default Overview screen heading.
       await expect(page.getByText('ASComply').first()).toBeVisible()

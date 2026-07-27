@@ -21,13 +21,14 @@ test('deployed app: persona mock-login renders the backend-verified tenant ident
     errors.push(`pageerror: ${err.message}`)
   })
 
-  const res = await page.goto(APP_URL)
-  expect(res, `no response from ${APP_URL}`).toBeTruthy()
-  expect(res!.ok(), `${APP_URL} returned HTTP ${res!.status()}`).toBeTruthy()
-
-  // Pick the firm persona to run the sign-in. With VITE_GATEWAY_URL baked into this build,
-  // that triggers the real round trip (mint → /me) rather than the pure client-side mock.
-  await page.getByRole('button', { name: new RegExp(FIRM_PERSONA.buttonName) }).click()
+  // Arrive the way the landing page hands off: ?persona=<id>. The app no longer offers a
+  // picker of its own — landing is the single sign-in front door — so this deep link IS
+  // the sign-in. With VITE_GATEWAY_URL baked into this build it triggers the real round
+  // trip (mint → /me) rather than the pure client-side mock.
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
 
   // The VERIFIED marker (a sidebar span titled "Tenant verified via /v1/me") renders ONLY
   // in the verified branch — when /me resolved the tenant against the live backend. It is
@@ -62,18 +63,32 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
     errors.push(`pageerror: ${err.message}`)
   })
 
-  const res = await page.goto(APP_URL)
-  expect(res, `no response from ${APP_URL}`).toBeTruthy()
-  expect(res!.ok(), `${APP_URL} returned HTTP ${res!.status()}`).toBeTruthy()
-
-  // Sign in as the firm persona and wait for the /me round trip (same discriminator as
-  // the identity test above) — Sign out needs an authed session to exercise the real
-  // App.tsx signOut() path rather than the unauthenticated persona-picker.
-  await page.getByRole('button', { name: new RegExp(FIRM_PERSONA.buttonName) }).click()
+  // Sign in via the landing hand-off and wait for the /me round trip (same discriminator
+  // as the identity test above) — Sign out needs an authed session to exercise the real
+  // App.tsx signOut() path rather than an already-unauthenticated redirect.
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
 
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The single front door. The app used to answer a sessionless visit with a persona picker
+// of its own — a SECOND place to sign in, on a different origin from the landing page's.
+// It now sends that visit to the landing page instead.
+//
+// The picker still exists for exactly one deployment shape: a standalone showcase build
+// with no VITE_LANDING_URL, which would otherwise be a dead end. Deployed builds always
+// bake that variable, so on this fleet the redirect is unconditional — which is what makes
+// it assertable here.
+test('deployed app: a visit with no session redirects to the landing page', async ({ page }) => {
+  await page.goto(APP_URL)
+  await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+
+  expect(page.url(), `expected a redirect from ${APP_URL} to ${LANDING_URL}`).toContain(LANDING_URL)
 })

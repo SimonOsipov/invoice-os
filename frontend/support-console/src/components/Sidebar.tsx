@@ -48,21 +48,28 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             SUPPORT
           </span>
         </a>
-        {/* Cross-tenant indicator (proto:51). This is the one piece of chrome that has no
-            counterpart in either tenant-scoped app: it states, permanently, that nothing
-            on screen is filtered to a single tenant. */}
+        {/* Cross-tenant indicator (proto:51). Same card chrome as the Platform app's
+            workspace card and the developer console's org switcher — one component across
+            four apps — but deliberately NOT a control: there is nothing to switch, because
+            this console is never scoped to a tenant. The globe and the mono caption carry
+            that difference, not a different card.
+
+            The prototype tinted the whole card and filled the tile solid; that made the
+            same slot read as a different component in each app, which is the drift this
+            resolves. Scope is asserted by the environment banner (TopBar), which is amber
+            in sandbox and RED in live — the sidebar does not need to shout it too. */}
         <div
           className="ops-hide-narrow"
-          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}
         >
           <span
-            style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-sm)', background: 'var(--action)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center' }}
+            style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}
           >
             {GLOBE_ICON}
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--action-soft)' }}>All tenants</span>
-            <span className="mono" style={{ display: 'block', fontSize: 9, color: 'var(--action)', letterSpacing: '0.05em' }}>
+            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>All tenants</span>
+            <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               CROSS-TENANT VIEW
             </span>
           </span>

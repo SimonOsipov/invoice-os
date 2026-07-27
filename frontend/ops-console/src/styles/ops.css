@@ -76,6 +76,14 @@ body {
   transition: background 120ms, border-color 120ms, color 120ms;
   cursor: pointer;
 }
+/* Org-switcher menu rows. Mirrors the Platform app's `.pf-menu-item` so the two
+   switchers hover identically. */
+.ops-menu-item {
+  transition: background 110ms ease-out;
+}
+.ops-menu-item:hover {
+  background: var(--bg-3);
+}
 .ops-bar {
   transform-origin: bottom;
   animation: opsGrow 420ms cubic-bezier(0.16, 1, 0.3, 1) both;

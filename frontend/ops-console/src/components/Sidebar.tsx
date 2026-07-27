@@ -1,6 +1,6 @@
-import type { CSSProperties } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { BrandMark, Icon } from '../icons'
-import { NAV_ITEMS } from '../data'
+import { CHEV_DOWN_ICON, DEV_ORGS, NAV_ITEMS, TICK_ICON } from '../data'
 import { landingBase } from '../auth'
 import { clearOpsSession } from '../session'
 import type { Screen } from '../types'
@@ -30,6 +30,14 @@ const navBtnStyle = (active: boolean): CSSProperties => ({
 })
 
 export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
+  // Local, not lifted to App: with one org the selection changes nothing downstream, so
+  // this is presentation only. The Platform app keeps its equivalent in ctx because
+  // switching there re-scopes the whole workspace; here that would be plumbing with no
+  // consumer. Lift it the day a second org actually changes what the console shows.
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [orgId, setOrgId] = useState(DEV_ORGS[0].id)
+  const activeOrg = DEV_ORGS.find((o) => o.id === orgId) ?? DEV_ORGS[0]
+
   return (
     <aside
       className="ops-sidebar"
@@ -48,33 +56,79 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             DEV
           </span>
         </a>
-        {/* client org card */}
-        <div
-          className="ops-hide-narrow"
-          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}
-        >
-          <span
+        {/* Org switcher. Was a static tinted card; it is now the SAME control as the
+            Platform app's company switcher (frontend/app/src/components/Sidebar.tsx) —
+            same chrome, same chevron, same menu — so the slot reads as one component
+            across every app. There is one org today, and the menu still opens: the
+            affordance describes what the control IS, not how much is currently in it. */}
+        <div className="ops-hide-narrow" style={{ position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => setSwitcherOpen((v) => !v)}
+            aria-expanded={switcherOpen}
+            aria-haspopup="menu"
+            className="ops-btn"
             style={{
-              flex: 'none',
-              width: 26,
-              height: 26,
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--action)',
-              color: 'var(--text-on-dark)',
-              display: 'grid',
-              placeItems: 'center',
-              fontSize: 10,
-              fontWeight: 700,
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              background: 'var(--bg-1)',
+              border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`,
+              borderRadius: 'var(--radius-input)',
+              padding: '8px 10px',
+              cursor: 'pointer',
+              textAlign: 'left',
             }}
           >
-            ZP
-          </span>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--action-soft)' }}>Zephyr Pay</span>
-            <span className="mono" style={{ display: 'block', fontSize: 9, color: 'var(--action)', letterSpacing: '0.05em' }}>
-              SCALE PLAN · ORG_ZP001
+            <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>
+              {activeOrg.initials}
             </span>
-          </span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeOrg.name}</span>
+              <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {activeOrg.meta}
+              </span>
+            </span>
+            <span style={{ flex: 'none', color: 'var(--fg-3)', display: 'inline-flex', transform: switcherOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 160ms' }}>{CHEV_DOWN_ICON}</span>
+          </button>
+          {switcherOpen && (
+            <div
+              role="menu"
+              style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 60, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-elegant)', overflow: 'hidden', animation: 'opsPop 140ms ease-out' }}
+            >
+              <div className="label" style={{ padding: '10px 12px 6px' }}>
+                Switch organisation
+              </div>
+              {DEV_ORGS.map((o) => {
+                const active = o.id === activeOrg.id
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setOrgId(o.id)
+                      setSwitcherOpen(false)
+                    }}
+                    className="ops-menu-item"
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, background: active ? 'var(--bg-3)' : 'transparent', cursor: 'pointer', textAlign: 'left', padding: '9px 12px' }}
+                  >
+                    <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>
+                      {o.initials}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.name}</span>
+                      <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
+                        {o.meta}
+                      </span>
+                    </span>
+                    <span style={{ flex: 'none', color: 'var(--action)', display: 'inline-flex' }}>{active ? TICK_ICON : null}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 

@@ -38,6 +38,26 @@ for (const app of APPS) {
 //
 // Not a security assertion — a fabricated localStorage entry still gets in, and there is no
 // backend behind this console to protect (M7/M8 own that). This pins ROUTING.
+// The developer console's org card became a real switcher, matching the Platform app's
+// company switcher rather than being a static label. Pinned here because the repo has no
+// component-test harness (every frontend vitest project runs in `node`, with no DOM), so a
+// browser check is the only place this control can be exercised at all. Asserting the menu
+// OPENS, not merely that a chevron is drawn — the whole point of the change is that the
+// affordance is honest.
+test('ops-console: the org card is a switcher whose menu opens', async ({ page }) => {
+  await page.goto(`${resolveTarget('OPS_CONSOLE_URL')}?persona=developer`)
+
+  const switcher = page.getByRole('button', { expanded: false }).filter({ hasText: 'Zephyr Pay' })
+  await expect(switcher).toBeVisible()
+
+  const menu = page.getByRole('menu')
+  await expect(menu).toBeHidden()
+  await switcher.click()
+  await expect(menu).toBeVisible()
+  await expect(menu.getByText('Switch organisation')).toBeVisible()
+  await expect(menu.getByRole('menuitem')).toHaveCount(1)
+})
+
 for (const [name, target] of [
   ['ops-console', 'OPS_CONSOLE_URL'],
   ['support-console', 'SUPPORT_CONSOLE_URL'],

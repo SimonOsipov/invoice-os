@@ -96,3 +96,44 @@ export function clearSession(): void {
 export function shouldAutoSignIn(bootSession: Session | null, personaParam: string | null): boolean {
   return bootSession === null && (personaParam === 'firm' || personaParam === 'inhouse')
 }
+
+// Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the
+// gateway is the only authority — so this is a courtesy check, not a security control: it
+// exists so a reload on a token the gateway will certainly reject doesn't boot into the
+// workspace just to bounce straight back out of it behind a 401 card.
+//
+// Returns false for anything it cannot read a numeric `exp` out of (null token, opaque
+// token, malformed payload). Never invent an expiry a token does not state — and note a
+// token can be dead while UNEXPIRED: the dev mock issuer generates a fresh signing key and
+// kid on every gateway start (internal/platform/auth/mockissuer.go), so a restart orphans
+// every outstanding token. Those are caught by the 401 handler, which stays the real
+// backstop. Same comparison the gateway makes (internal/platform/auth/claims.go:58).
+export function isTokenExpired(token: string | null, nowMs: number = Date.now()): boolean {
+  if (!token) {
+    return false
+  }
+  const payload = token.split('.')[1]
+  if (!payload) {
+    return false
+  }
+  try {
+    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const claims = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
+    return typeof claims?.exp === 'number' && nowMs >= claims.exp * 1000
+  } catch {
+    return false
+  }
+}
+
+// Boot-time session resolution: a stored session whose token has already expired is NOT a
+// session. Entering the workspace on one only buys a dashboard that 401s a moment later.
+//
+// This deliberately does NOT distinguish "expired" from "never signed in". It used to,
+// because the two left the app by different doors — expired to the landing page, absent to
+// the in-app picker. Now that the landing page is the single front door, every sessionless
+// visit goes there (App.tsx), so the distinction had exactly one consumer and no remaining
+// behavioural difference. Keeping the flag would have meant two mechanisms for one outcome.
+export function resolveBootSession(now: number = Date.now()): Session | null {
+  const session = loadSession()
+  return session !== null && isTokenExpired(session.token, now) ? null : session
+}

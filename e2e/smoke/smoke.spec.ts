@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { APPS } from './apps'
+import { resolveTarget } from '../targets'
 
 // One smoke test per deployed SPA: the main mock view renders and the page logs
 // no console errors or uncaught exceptions during load.
@@ -25,3 +26,24 @@ for (const app of APPS) {
     expect(errors, `console errors on ${app.name}:\n${errors.join('\n')}`).toEqual([])
   })
 }
+
+// The sign-in gate. The Ops Console used to render for anyone who had the URL — it had no
+// session concept at all, so there was nothing to be signed out OF. It now refuses to draw
+// without the landing page's hand-off and sends a bare visit back to the front door.
+//
+// Pinned as its own spec because the APPS entry above deliberately arrives WITH the
+// hand-off: without this, the console could quietly become open again and every smoke test
+// would still pass. Playwright gives each test a fresh context, so the session the entry
+// above persists cannot leak in here.
+//
+// Not a security assertion — a fabricated localStorage entry still gets in, and there is no
+// backend behind this console to protect (M7/M8 own that). This pins ROUTING.
+test('ops-console: a visit with no session redirects to the landing page', async ({ page }) => {
+  const opsUrl = resolveTarget('OPS_CONSOLE_URL')
+  const landingUrl = resolveTarget('LANDING_URL')
+
+  await page.goto(opsUrl)
+  await page.waitForURL((url) => url.href.startsWith(landingUrl), { timeout: 20_000 })
+
+  expect(page.url(), `expected a redirect from ${opsUrl} to ${landingUrl}`).toContain(landingUrl)
+})

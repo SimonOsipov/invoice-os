@@ -2,8 +2,9 @@
   "name": "@invoice-os/design-tokens",
   "version": "0.2.0",
   "private": true,
-  "description": "Shared ASComply design-system CSS. Vendored from the Claude Design project 999b7034-9f23-43d4-9229-51af7dde9f62 (tokens/ + utilities.css) and the prototype project's ascomply-app.css (app-layer.css). Single source of truth, consumed byte-identically by all three frontend apps via styles.css.",
+  "description": "Shared ASComply design-system CSS and brand assets. Vendored from the Claude Design project 999b7034-9f23-43d4-9229-51af7dde9f62 (tokens/ + utilities.css) and the prototype project 6269a212-5677-4abd-b8a9-08aad10b1c65 (ascomply-app.css -> app-layer.css, assets/logo-mark.png). Single source of truth, consumed byte-identically by all three frontend apps.",
   "exports": {
-    "./styles.css": "./styles.css"
+    "./styles.css": "./styles.css",
+    "./assets/logo-mark.png": "./assets/logo-mark.png"
   }
 }

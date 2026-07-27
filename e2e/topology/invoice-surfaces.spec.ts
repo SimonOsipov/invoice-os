@@ -43,10 +43,12 @@ function collectErrors(page: Page): string[] {
 }
 
 async function signInFirm(page: Page): Promise<void> {
-  const res = await page.goto(APP_URL)
-  expect(res, `no response from ${APP_URL}`).toBeTruthy()
-  expect(res!.ok(), `${APP_URL} returned HTTP ${res!.status()}`).toBeTruthy()
-  await page.getByRole('button', { name: new RegExp(FIRM_PERSONA.buttonName) }).click()
+  // The landing page is the single sign-in front door, so the app has no picker to click
+  // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
 }
 

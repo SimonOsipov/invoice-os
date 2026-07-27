@@ -6,7 +6,7 @@ interface ImportMetaEnv {
   // suffix (M4-23), so there is no hardcoded default — unset means destUrl() returns null
   // (see auth.ts) rather than routing to the wrong environment.
   readonly VITE_APP_URL?: string
-  // The ops-console service, which serves the Developer Console.
+  // The ops-console service, which serves the Ops Console.
   readonly VITE_OPS_URL?: string
   // The support-console service — the cross-tenant internal console.
   readonly VITE_SUPPORT_URL?: string

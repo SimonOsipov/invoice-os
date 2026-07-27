@@ -143,6 +143,18 @@ body {
     flex-direction: row !important;
     flex-wrap: wrap !important;
     overflow-x: auto;
+    /* The desktop nav scrolls so the user card stays pinned (Sidebar.tsx). Stacked, the
+       aside is content-height and there is nothing to pin against, so releasing the scroll
+       keeps every group reachable — same release .pf-scroll already does below. */
+    flex: none !important;
+    overflow-y: visible !important;
+  }
+  /* Scope headers stack a hairline above each group; in the wrapped row that border cuts
+     across mid-line, so it is dropped along with the vertical rhythm. */
+  .pf-nav-list > .label {
+    border-top: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 6px !important;
   }
   .pf-main {
     min-height: 0 !important;

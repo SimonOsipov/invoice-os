@@ -104,7 +104,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
       {/* Row A: readiness ring + bars (mock) | four KPI tiles (live values, mock sparks) */}
       <div
         className="pf-dash-row-a"
-        style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
+        style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
       >
         <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 26, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
@@ -147,11 +147,11 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
           </div>
         </div>
 
-        <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 18 }}>
+        <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(140px, 1fr))', gap: 18 }}>
           {kpis.map((k, i) => (
             <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 22, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 138, minWidth: 0 }}>
               <span className="label">{k.label}</span>
-              <span className="money" style={{ fontSize: 32, fontWeight: 700, margin: '12px 0' }}>
+              <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '12px 0', whiteSpace: 'nowrap' }}>
                 {k.value}
               </span>
               <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
@@ -167,10 +167,13 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
       </div>
 
-      {/* Row B: exceptions-first needs-attention KPI + invoice-status donut */}
+      {/* Row B: exceptions-first needs-attention KPI + invoice-status donut.
+          The narrow column is `calc((100% - 396px) / 2)`, not a fixed px: 396 = row A's
+          readiness column (360) + its two 18px gaps, so this resolves to exactly one KPI
+          tile and the gutter below lands under the gutter between the two KPI tiles. */}
       <div
         className="pf-dash-row-b"
-        style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 18, marginBottom: 18 }}
+        style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18, marginBottom: 18 }}
       >
         <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 26, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
@@ -241,7 +244,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
             </div>
             <div style={{ width: '100%', marginTop: 22, display: 'flex', flexDirection: 'column', gap: 11 }}>
               {segments.map((d) => (
-                <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '12px 1fr auto 40px', alignItems: 'center', gap: 10 }}>
+                <div key={d.label} style={{ display: 'grid', gridTemplateColumns: '10px minmax(0, 1fr) auto auto', alignItems: 'center', gap: 8 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 'var(--radius-xs)', background: d.color }} />
                   <span style={{ fontSize: 13, color: 'var(--fg-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</span>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', textAlign: 'right' }}>
@@ -289,8 +292,9 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
       </div>
 
-      {/* Row D: top validation failures (live) | recent activity (mock) */}
-      <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr)', gap: 18 }}>
+      {/* Row D: top validation failures (live) | recent activity (mock). Same
+          `calc((100% - 396px) / 2)` narrow column as row B — see there for the 396. */}
+      <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18 }}>
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 20px', borderBottom: '1px solid var(--line-1)' }}>
           <span className="card-title">Top validation failures</span>

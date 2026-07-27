@@ -24,9 +24,10 @@ export const OPS_SESSION_SCHEMA_VERSION = 1
 // union so the membership check below stays a lookup.
 //
 // This key was `support` (name "Amara Okoye") until the Support Console shipped, which
-// made the label actively wrong: this console renders "Amara Okafor · DEVELOPER · ADMIN"
-// for org "Zephyr Pay" (Sidebar.tsx) and is the customer-facing developer platform, not an
-// internal support tool. The name here now matches the one the sidebar draws.
+// made the label actively wrong: this console renders "Amara Okafor · OPS · ADMIN" for org
+// "Zephyr Pay" (Sidebar.tsx) and is the customer-facing integration platform, not an
+// internal support tool. The key stays `developer` because it is the landing persona's
+// wire value; only the console's DISPLAY name became "Ops Console".
 export const OPS_OPERATORS = {
   developer: { name: 'Amara Okafor', org: 'Zephyr Pay' },
 } as const

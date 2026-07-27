@@ -24,7 +24,7 @@ describe('LANDING_PERSONAS', () => {
     expect(new Set(LANDING_PERSONAS.map((p) => p.id)).size).toBe(LANDING_PERSONAS.length)
   })
 
-  // The four shipped surfaces: two tenant workspaces on the app, the Developer Console on
+  // The four shipped surfaces: two tenant workspaces on the app, the Ops Console on
   // the ops-console service, and the Support Console on its own. A persona pointing at the
   // wrong service is the one bug this list can have that nothing else would catch.
   it('routes each persona to its own console', () => {

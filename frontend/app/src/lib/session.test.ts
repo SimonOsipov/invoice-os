@@ -13,8 +13,10 @@ import {
   SESSION_KEY,
   SESSION_SCHEMA_VERSION,
   clearSession,
+  isTokenExpired,
   loadSession,
   parseStoredSession,
+  resolveBootSession,
   saveSession,
   serializeSession,
   shouldAutoSignIn,
@@ -271,6 +273,77 @@ describe('shouldAutoSignIn deep-link guard', () => {
 
   it('S17: does not auto-sign-in when there is no persona param', () => {
     expect(shouldAutoSignIn(null, null)).toBe(false)
+  })
+})
+
+// Boot-time expiry gate. A reload on a token past its `exp` used to enter the workspace
+// and only discover the problem when the first fetch 401'd, leaving the user on a dead
+// dashboard behind an error card. These pin the pure half of that fix; the redirect half
+// lives in App.tsx and is browser-verified (no component-test harness in this package).
+describe('isTokenExpired / resolveBootSession', () => {
+  const HOUR = 3600_000
+  // Minimal JWT shape: only the payload segment is read, and only its `exp`.
+  function jwt(claims: object): string {
+    const b64 = btoa(JSON.stringify(claims)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    return `header.${b64}.signature`
+  }
+
+  it('S24: a token whose exp is in the past is expired', () => {
+    expect(isTokenExpired(jwt({ exp: 1000 }), 2000_000)).toBe(true)
+  })
+
+  it('S25: a token whose exp is in the future is not expired', () => {
+    // exp 2000s = 2_000_000ms, now = 1_000_000ms → still live.
+    expect(isTokenExpired(jwt({ exp: 2000 }), 1000_000)).toBe(false)
+  })
+
+  it('S25b: exp exactly at now counts as expired (matches the gateway boundary)', () => {
+    expect(isTokenExpired(jwt({ exp: 1000 }), 1000_000)).toBe(true)
+  })
+
+  it('S26: exp is compared in SECONDS, not milliseconds — a token one hour out must not read as expired', () => {
+    const now = 1_700_000_000_000
+    expect(isTokenExpired(jwt({ exp: Math.floor(now / 1000) + 3600 }), now)).toBe(false)
+    expect(isTokenExpired(jwt({ exp: Math.floor((now - HOUR) / 1000) }), now)).toBe(true)
+  })
+
+  // The no-gateway showcase session carries token: null and must survive boot untouched —
+  // treating "no token" as "expired" would sign out every mock build on reload.
+  it('S27: a null token is never expired (the no-gateway showcase session)', () => {
+    expect(isTokenExpired(null, Date.now())).toBe(false)
+  })
+
+  // Never invent an expiry a token does not state: an opaque/garbage token is left to the
+  // 401 handler rather than guessed at here.
+  it('S28: opaque, malformed and exp-less tokens are not treated as expired', () => {
+    for (const t of ['tok', '', 'a.b', 'a.!!!not-base64!!!.c', jwt({ sub: 'x' }), jwt({ exp: 'soon' })]) {
+      expect(isTokenExpired(t, Date.now()), `token ${JSON.stringify(t)}`).toBe(false)
+    }
+  })
+
+  it('S29: resolveBootSession drops an expired session AND reports it, so the caller can redirect rather than silently show the picker', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    saveSession({ ...firmSession(), token: jwt({ exp: 1000 }) })
+
+    expect(resolveBootSession(2000_000)).toEqual({ session: null, expired: true })
+  })
+
+  it('S30: resolveBootSession passes a live session through with expired:false', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const live = { ...firmSession(), token: jwt({ exp: 9_000_000 }) }
+    saveSession(live)
+
+    expect(resolveBootSession(1000_000)).toEqual({ session: live, expired: false })
+  })
+
+  // "No session" and "expired session" must stay distinguishable — they exit the app by
+  // different doors (picker vs landing), so collapsing them would reintroduce the bug.
+  it('S31: absent storage reports expired:false, not merely session:null', () => {
+    vi.stubGlobal('localStorage', createMemoryStorage())
+
+    expect(resolveBootSession(Date.now())).toEqual({ session: null, expired: false })
   })
 })
 

@@ -96,3 +96,45 @@ export function clearSession(): void {
 export function shouldAutoSignIn(bootSession: Session | null, personaParam: string | null): boolean {
   return bootSession === null && (personaParam === 'firm' || personaParam === 'inhouse')
 }
+
+// Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the
+// gateway is the only authority — so this is a courtesy check, not a security control: it
+// exists so a reload on a token the gateway will certainly reject doesn't boot into the
+// workspace just to bounce straight back out of it behind a 401 card.
+//
+// Returns false for anything it cannot read a numeric `exp` out of (null token, opaque
+// token, malformed payload). Never invent an expiry a token does not state — and note a
+// token can be dead while UNEXPIRED: the dev mock issuer generates a fresh signing key and
+// kid on every gateway start (internal/platform/auth/mockissuer.go), so a restart orphans
+// every outstanding token. Those are caught by the 401 handler, which stays the real
+// backstop. Same comparison the gateway makes (internal/platform/auth/claims.go:58).
+export function isTokenExpired(token: string | null, nowMs: number = Date.now()): boolean {
+  if (!token) {
+    return false
+  }
+  const payload = token.split('.')[1]
+  if (!payload) {
+    return false
+  }
+  try {
+    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const claims = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
+    return typeof claims?.exp === 'number' && nowMs >= claims.exp * 1000
+  } catch {
+    return false
+  }
+}
+
+// Boot-time session resolution. Deliberately reports "an expired session was here"
+// separately from "no session": the two must leave the app by DIFFERENT doors. A user who
+// never signed in belongs on the picker; a user whose token died while the tab was closed
+// belongs wherever a live 401 would send them (the landing page), because an expired token
+// and a 401'd token are the same condition one request apart, and exiting two different
+// ways for the same condition is the bug this pairs with.
+export function resolveBootSession(now: number = Date.now()): { session: Session | null; expired: boolean } {
+  const session = loadSession()
+  if (session !== null && isTokenExpired(session.token, now)) {
+    return { session: null, expired: true }
+  }
+  return { session, expired: false }
+}

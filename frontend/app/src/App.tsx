@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { INHOUSE_IDX, PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
-import { loadSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft } from './lib/clients'
@@ -574,8 +574,12 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
-  // no SignIn flash) so a reload / new tab returns straight to the workspace.
-  const [session, setSession] = useState<Session | null>(() => loadSession())
+  // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
+  // token already past its `exp` resolves to NO session — entering the workspace on one
+  // only buys a dashboard that 401s a moment later. `boot.expired` remembers that one was
+  // there, so the effect below can send the user out the same door a live 401 would.
+  const [boot] = useState(resolveBootSession)
+  const [session, setSession] = useState<Session | null>(boot.session)
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
   // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot
   // from the same guard the mount effect below uses: non-null only when boot produced NO
@@ -638,6 +642,14 @@ export default function App() {
   useEffect(() => {
     if (autoPersona) void doSignIn(APP_PERSONAS[autoPersona])
   }, [autoPersona, doSignIn])
+
+  // A session that expired while the tab was closed leaves by the same door as a live 401
+  // — the front door, not the in-app picker — so the two halves of one condition don't
+  // exit differently. Suppressed when a ?persona= deep link is present: that hand-off is
+  // ABOUT to mint a fresh token, so bouncing to landing would break landing → app.
+  useEffect(() => {
+    if (boot.expired && !autoPersona) signOut()
+  }, [boot.expired, autoPersona, signOut])
 
   if (!session) {
     // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona

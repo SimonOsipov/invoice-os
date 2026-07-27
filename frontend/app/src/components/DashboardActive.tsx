@@ -91,11 +91,11 @@ function kpiValues(counts: Counts, needsAttention: number, vatLabel: string) {
   ]
 }
 
-// Every large tile on this page wears the same head: a Fraunces .card-title on the
-// left, mono meta on the right, cut off from the body by a full-bleed hairline.
-// The hairline only reaches both edges if the CARD carries no padding — the head
-// strip and the body each own theirs — hence padding:0 + overflow:hidden here and
-// an explicit padded body inside every tile below.
+// Every tile on this page — the four KPI tiles included — wears the same head: a
+// Fraunces .card-title on the left, optional mono meta on the right, cut off from
+// the body by a full-bleed hairline. The hairline only reaches both edges if the
+// CARD carries no padding — the head strip and the body each own theirs — hence
+// padding:0 + overflow:hidden here and an explicit padded body inside every tile.
 const TILE_CARD = {
   background: 'var(--bg-2)',
   border: '1px solid var(--line-1)',
@@ -105,7 +105,9 @@ const TILE_CARD = {
 
 const TILE_BODY = { padding: '22px 20px 24px' } as const
 
-function TileHead({ title, meta }: { title: string; meta: string }) {
+// meta is optional: the four KPI tiles carry their delta down beside the sparkline,
+// so their head is the title alone. The strip keeps its height either way.
+function TileHead({ title, meta }: { title: string; meta?: string }) {
   return (
     <div
       style={{
@@ -117,9 +119,11 @@ function TileHead({ title, meta }: { title: string; meta: string }) {
       }}
     >
       <span className="card-title">{title}</span>
-      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-        {meta}
-      </span>
+      {meta && (
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+          {meta}
+        </span>
+      )}
     </div>
   )
 }
@@ -179,18 +183,20 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
 
         <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(140px, 1fr))', gap: 18 }}>
           {kpis.map((k, i) => (
-            <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: 22, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 138, minWidth: 0 }}>
-              <span className="label">{k.label}</span>
-              <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '12px 0', whiteSpace: 'nowrap' }}>
-                {k.value}
-              </span>
-              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
-                  {k.delta}
+            <div key={k.label} style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column', minHeight: 138, minWidth: 0 }}>
+              <TileHead title={k.label} />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '18px 20px 20px' }}>
+                <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '0 0 12px', whiteSpace: 'nowrap' }}>
+                  {k.value}
                 </span>
-                <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
-                  <path d={mock.sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+                  <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
+                    {k.delta}
+                  </span>
+                  <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
+                    <path d={mock.sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
               </div>
             </div>
           ))}

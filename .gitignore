@@ -41,6 +41,12 @@ CLAUDE.md
 # RALPH per-worktree orchestration scratch (session state, not repo content).
 # Untracked-but-not-ignored kept getting swept into `git add -A` by agents.
 .claude/handoff.yaml
+# Playwright-MCP screenshot scratch — regenerable captures from browser QA runs,
+# never repo content. Same failure mode as handoff.yaml above: 15 of these were
+# swept into f0cf3bf (a one-line comment fix) by `git add -A` before this rule
+# existed, and /post-merge-cleanup deletes the directory on the documented
+# assumption that it is ignored.
+.playwright-mcp/
 
 # ---- Editor / OS ----
 .DS_Store

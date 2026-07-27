@@ -503,7 +503,7 @@ jobs:
           node-version: 22
       - name: pnpm install (cold, frozen lockfile)
         run: pnpm install --frozen-lockfile
-      - name: pnpm -r build (all three SPAs)
+      - name: pnpm -r build (all four SPAs)
         run: pnpm -r build
 
   # Single always-running gate. Mark THIS check ("CI") required in branch

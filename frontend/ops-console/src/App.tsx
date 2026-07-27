@@ -22,7 +22,7 @@ import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone 
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
 export default function App() {
   // Sign-in gate. The landing page is the single front door: it hands off here as
-  // ?persona=support, which this persists once so the following reload needs no param.
+  // ?persona=developer, which this persists once so the following reload needs no param.
   // Resolved ONCE at boot — a later re-render must not re-read the URL, since the effect
   // below strips the param from it.
   const [session] = useState(() => resolveOpsBootSession(window.location.search))

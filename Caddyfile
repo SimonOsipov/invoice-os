@@ -1,4 +1,4 @@
-# Shared static-SPA server for all three frontend apps (M1-06).
+# Shared static-SPA server for all four frontend apps (M1-06).
 # Each app's Dockerfile copies its built `dist` to /srv and this same Caddyfile
 # to /etc/caddy/Caddyfile, so the serving behaviour is identical across services.
 {

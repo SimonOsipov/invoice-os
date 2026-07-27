@@ -9,7 +9,12 @@
 export const DEMO_CODE = '481920'
 
 export interface LandingPersona {
-  id: 'support' | 'firm' | 'inhouse'
+  // The persona id is the ROLE, and it is what the destination SPA's session gate checks
+  // (`?persona=<id>`). `developer` was called `support` until the real Support Console
+  // landed: the developer console it opens renders "Amara Okafor · DEVELOPER · ADMIN" for
+  // org "Zephyr Pay", so the old label described no one it ever signed in — an artefact of
+  // the M4-20 repositioning. Two consoles now exist and the ids name them apart.
+  id: 'developer' | 'support' | 'firm' | 'inhouse'
   name: string
   title: string
   org: string
@@ -17,22 +22,38 @@ export interface LandingPersona {
   initials: string
   access: string
   destLabel: string
-  target: 'app' | 'ops'
+  // The Railway SERVICE the persona opens. `ops` is the ops-console service (which serves
+  // the Developer Console) and `support` is the support-console service — the id/target
+  // asymmetry is the service names, not a mistake.
+  target: 'app' | 'ops' | 'support'
   avBg: string
   avColor: string
 }
 
 export const LANDING_PERSONAS: LandingPersona[] = [
   {
-    id: 'support',
-    name: 'Amara Okoye',
-    title: 'Support officer',
-    org: 'ASComply Operations',
-    email: 'a.okoye@ascomply.com',
+    id: 'developer',
+    name: 'Amara Okafor',
+    title: 'Integration developer',
+    org: 'Zephyr Pay',
+    email: 'a.okafor@zephyrpay.com',
     initials: 'AO',
-    access: 'OPS CONSOLE',
-    destLabel: 'Ops Console',
+    access: 'DEVELOPER CONSOLE',
+    destLabel: 'Developer Console',
     target: 'ops',
+    avBg: 'var(--slate-900)',
+    avColor: 'var(--text-on-dark)',
+  },
+  {
+    id: 'support',
+    name: 'Emeka Iroha',
+    title: 'Support engineer',
+    org: 'ASComply Operations',
+    email: 'e.iroha@ascomply.com',
+    initials: 'EI',
+    access: 'SUPPORT CONSOLE',
+    destLabel: 'Support Console',
+    target: 'support',
     avBg: 'var(--slate-900)',
     avColor: 'var(--text-on-dark)',
   },
@@ -74,17 +95,24 @@ const resolveBase = (v: string | undefined): string | null => {
 }
 const appBase = () => resolveBase(import.meta.env.VITE_APP_URL)
 const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
+const supportBase = () => resolveBase(import.meta.env.VITE_SUPPORT_URL)
 
-// destUrl is the SPA the persona's role may open. BOTH targets now carry ?persona=<id>:
-// the Platform app auto-signs-in that persona (reusing M2-13's mint + /me path), and the
-// Ops Console records it as its sign-in. The console used to be opened with a bare
-// navigation, which is why it had no way to tell a signed-in visitor from a stranger with
-// the URL — it now refuses to render without one and sends you back here.
-// (Its VERIFIED token consumption still arrives at M7; this is routing, not enforcement.)
+const BASE_BY_TARGET: Record<LandingPersona['target'], () => string | null> = {
+  app: appBase,
+  ops: opsBase,
+  support: supportBase,
+}
+
+// destUrl is the SPA the persona's role may open. EVERY target carries ?persona=<id>:
+// the Platform app auto-signs-in that persona (reusing M2-13's mint + /me path), and both
+// consoles record it as their sign-in. A console used to be opened with a bare navigation,
+// which is why it had no way to tell a signed-in visitor from a stranger with the URL —
+// each now refuses to render without one and sends you back here.
+// (VERIFIED token consumption still arrives at M7; this is routing, not enforcement.)
 // Returns null — the documented unconfigured path — when the target SPA's URL isn't set;
 // callers must not navigate on null.
 export function destUrl(p: LandingPersona): string | null {
-  const base = p.target === 'ops' ? opsBase() : appBase()
+  const base = BASE_BY_TARGET[p.target]()
   return base ? `${base}?persona=${p.id}` : null
 }
 

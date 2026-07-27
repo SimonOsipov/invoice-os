@@ -740,7 +740,7 @@ gql_body() {
 require_fork_ids() {
   local v missing=""
   for v in RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID \
-           RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_POSTGRES_ID; do
+           RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID RAILWAY_SVC_POSTGRES_ID; do
     if [ -z "${!v:-}" ]; then missing="$missing $v"; fi
   done
   if [ -n "$missing" ]; then
@@ -881,7 +881,7 @@ cmd_assert_db_dsns() {
 
 # --- Reconcile B: settle -----------------------------------------------------
 #
-# MEASURED: all 12 service instances materialise IMMEDIATELY after
+# MEASURED: all 13 service instances materialise IMMEDIATELY after
 # environmentCreate. There is NO settle race. This poll is kept as cheap
 # insurance against read-after-write lag only, and is deliberately SHORT (60s)
 # because it is not guarding a race that was ever observed. Do not cite a race
@@ -899,11 +899,11 @@ settle_fork() {
       present=$(echo "$GQL_RESPONSE" | jq -r '.data.environment.serviceInstances.edges[]?.node.serviceId')
       missing=""
       for v in "$RAILWAY_SVC_GATEWAY_ID" "$RAILWAY_SVC_APP_ID" "$RAILWAY_SVC_LANDING_ID" \
-               "$RAILWAY_SVC_OPS_CONSOLE_ID" "$RAILWAY_SVC_POSTGRES_ID"; do
+               "$RAILWAY_SVC_OPS_CONSOLE_ID" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" "$RAILWAY_SVC_POSTGRES_ID"; do
         if ! echo "$present" | grep -qx "$v"; then missing="$missing $v"; fi
       done
       if [ -z "$missing" ]; then
-        echo "All 5 reconciled service instances are present in $env_id (attempt $try)."
+        echo "All 6 reconciled service instances are present in $env_id (attempt $try)."
         return 0
       fi
       echo "  (settle attempt $try) still missing:$missing — retrying in ${SETTLE_INTERVAL}s ..."
@@ -983,11 +983,12 @@ reconcile_domain() {
 
 reconcile_domains() {
   local env_id="$1"
-  echo "Reconciling domains for the 4 public services in $env_id ..."
+  echo "Reconciling domains for the 5 public services in $env_id ..."
   reconcile_domain "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway
   reconcile_domain "$env_id" "$RAILWAY_SVC_APP_ID" app
   reconcile_domain "$env_id" "$RAILWAY_SVC_LANDING_ID" landing
   reconcile_domain "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console
+  reconcile_domain "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console
 }
 
 # --- Reconcile C2: per-environment URL variables ------------------------------
@@ -1035,8 +1036,11 @@ verify_variable() {
 }
 
 reconcile_url_variables() {
-  local env_id="$1" gateway_url="$2" app_url="$3" landing_url="$4" ops_url="$5"
-  local origins="$app_url,$landing_url,$ops_url"
+  local env_id="$1" gateway_url="$2" app_url="$3" landing_url="$4" ops_url="$5" support_url="$6"
+  # Every browser origin that calls the gateway. Omitting one does not fail loudly — the
+  # SPA renders and its fetches are refused by CORS at runtime — so a new SPA MUST be
+  # added here in the same change that creates it.
+  local origins="$app_url,$landing_url,$ops_url,$support_url"
 
   if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
     echo "::error::Refusing to rewrite URL variables in the persistent development environment ($env_id)."
@@ -1050,6 +1054,8 @@ reconcile_url_variables() {
   upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_SUPPORT_URL "$support_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console VITE_LANDING_URL "$landing_url"
 
   verify_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
   verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
@@ -1057,19 +1063,21 @@ reconcile_url_variables() {
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
   verify_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
-  echo "All 6 URL variables confirmed by independent re-query."
+  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_SUPPORT_URL "$support_url"
+  verify_variable "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console VITE_LANDING_URL "$landing_url"
+  echo "All 8 URL variables confirmed by independent re-query."
 }
 
-# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url>
+# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>
 cmd_reconcile_urls() {
-  if [ "$#" -ne 5 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ]; then
-    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url>"
+  if [ "$#" -ne 6 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ]; then
+    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>"
     exit 2
   fi
   require_env
   require_source_env
   require_fork_ids
-  reconcile_url_variables "$1" "$2" "$3" "$4" "$5"
+  reconcile_url_variables "$1" "$2" "$3" "$4" "$5" "$6"
 }
 
 # --- Reconcile D: Postgres bring-up ------------------------------------------

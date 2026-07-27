@@ -43,14 +43,15 @@ function spyConsole() {
 }
 
 describe('operatorFromParam', () => {
-  it('OPS-1: accepts the landing operator persona', () => {
-    expect(operatorFromParam('support')).toBe('support')
+  it('OPS-1: accepts the landing developer persona', () => {
+    expect(operatorFromParam('developer')).toBe('developer')
   })
 
-  // The tenant-scoped personas open the Platform app. Accepting one here would let a
-  // firm-workspace link sign someone into the operations console.
-  it('OPS-2: rejects the Platform personas and unknown values', () => {
-    for (const v of ['firm', 'inhouse', 'admin', '', 'SUPPORT', null]) {
+  // The tenant-scoped personas open the Platform app, and 'support' opens the cross-tenant
+  // Support Console. Accepting any of them here would let a link minted for one surface
+  // sign someone into another.
+  it('OPS-2: rejects the Platform and Support personas and unknown values', () => {
+    for (const v of ['firm', 'inhouse', 'support', 'admin', '', 'DEVELOPER', null]) {
       expect(operatorFromParam(v), `param ${JSON.stringify(v)}`).toBeNull()
     }
   })
@@ -66,9 +67,9 @@ describe('operatorFromParam', () => {
 describe('parseStoredOpsSession', () => {
   it('OPS-4: round-trips a saved session', () => {
     vi.stubGlobal('localStorage', createMemoryStorage())
-    saveOpsSession({ operator: 'support' })
+    saveOpsSession({ operator: 'developer' })
 
-    expect(loadOpsSession()).toEqual({ operator: 'support' })
+    expect(loadOpsSession()).toEqual({ operator: 'developer' })
   })
 
   it('OPS-5: absent storage is the normal signed-out case and warns nothing', () => {
@@ -83,7 +84,7 @@ describe('parseStoredOpsSession', () => {
     for (const raw of [
       'not json',
       '{}',
-      JSON.stringify({ v: OPS_SESSION_SCHEMA_VERSION + 1, operator: 'support' }),
+      JSON.stringify({ v: OPS_SESSION_SCHEMA_VERSION + 1, operator: 'developer' }),
       JSON.stringify({ v: OPS_SESSION_SCHEMA_VERSION, operator: 'firm' }),
       JSON.stringify({ v: OPS_SESSION_SCHEMA_VERSION }),
       JSON.stringify(null),
@@ -113,7 +114,7 @@ describe('parseStoredOpsSession', () => {
     })
 
     expect(loadOpsSession()).toBeNull()
-    expect(() => saveOpsSession({ operator: 'support' })).not.toThrow()
+    expect(() => saveOpsSession({ operator: 'developer' })).not.toThrow()
     expect(() => clearOpsSession()).not.toThrow()
   })
 })
@@ -123,9 +124,9 @@ describe('resolveOpsBootSession', () => {
     const storage = createMemoryStorage()
     vi.stubGlobal('localStorage', storage)
 
-    expect(resolveOpsBootSession('?persona=support')).toEqual({ operator: 'support' })
-    expect(storage.setItem).toHaveBeenCalledWith(OPS_SESSION_KEY, expect.stringContaining('support'))
-    expect(resolveOpsBootSession('')).toEqual({ operator: 'support' })
+    expect(resolveOpsBootSession('?persona=developer')).toEqual({ operator: 'developer' })
+    expect(storage.setItem).toHaveBeenCalledWith(OPS_SESSION_KEY, expect.stringContaining('developer'))
+    expect(resolveOpsBootSession('')).toEqual({ operator: 'developer' })
   })
 
   // The whole point of the gate: a bare URL with nothing stored is NOT a sign-in.
@@ -148,16 +149,16 @@ describe('resolveOpsBootSession', () => {
   it('OPS-11: a deep link wins over a stored session', () => {
     const storage = createMemoryStorage()
     vi.stubGlobal('localStorage', storage)
-    storage.setItem(OPS_SESSION_KEY, JSON.stringify({ v: OPS_SESSION_SCHEMA_VERSION, operator: 'support' }))
+    storage.setItem(OPS_SESSION_KEY, JSON.stringify({ v: OPS_SESSION_SCHEMA_VERSION, operator: 'developer' }))
 
-    expect(resolveOpsBootSession('?persona=support')).toEqual({ operator: 'support' })
+    expect(resolveOpsBootSession('?persona=developer')).toEqual({ operator: 'developer' })
     expect(storage.setItem).toHaveBeenCalledTimes(2)
   })
 
   it('OPS-12: clearOpsSession removes the key, so sign-out does not leave the next visitor signed in', () => {
     const storage = createMemoryStorage()
     vi.stubGlobal('localStorage', storage)
-    saveOpsSession({ operator: 'support' })
+    saveOpsSession({ operator: 'developer' })
 
     clearOpsSession()
 

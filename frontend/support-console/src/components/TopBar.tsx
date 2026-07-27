@@ -1,0 +1,111 @@
+import { ALERT_ICON, CRUMB_BY_SCREEN, SANDBOX_ICON, SEARCH_ICON } from '../data'
+import type { Env, Screen } from '../types'
+
+type Props = {
+  screen: Screen
+  env: Env
+  onSetEnv: (e: Env) => void
+}
+
+export function TopBar({ screen, env, onSetEnv }: Props) {
+  const sandbox = env === 'sandbox'
+
+  const seg = (active: boolean, kind: 'sandbox' | 'live') => ({
+    bg: active ? (kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)') : 'transparent',
+    color: active ? 'var(--text-on-dark)' : 'var(--fg-3)',
+    dot: active ? 'var(--text-on-dark)' : kind === 'live' ? 'var(--status-green-text)' : 'var(--status-amber-text)',
+  })
+  const sbx = seg(sandbox, 'sandbox')
+  const liv = seg(!sandbox, 'live')
+
+  // proto:847. Note this console's LIVE banner is RED, not teal: unlike the tenant apps,
+  // every control on these screens acts across every tenant's production traffic, so live
+  // mode is a warning state rather than a reassurance. The tag states the scope both ways.
+  const envBanner = sandbox
+    ? {
+        bg: 'var(--status-amber-bg)',
+        border: 'var(--status-amber-border)',
+        text: 'var(--status-amber-text)',
+        icon: SANDBOX_ICON,
+        msg: 'Sandbox — operating against the FIRS test adapter. Re-drives and kill-switches affect simulated traffic only.',
+        tag: 'CROSS-TENANT · ALL ENTITIES',
+      }
+    : {
+        bg: 'var(--status-red-bg)',
+        border: 'var(--status-red-border)',
+        text: 'var(--status-red-text)',
+        icon: ALERT_ICON,
+        msg: 'LIVE — actions here transmit to the production Access Point and are written to the immutable audit log.',
+        tag: 'CROSS-TENANT · PRODUCTION',
+      }
+
+  return (
+    <>
+      <header
+        style={{
+          flex: 'none',
+          height: 56,
+          borderBottom: '1px solid var(--line-1)',
+          background: 'oklch(98.5% .008 85 / .82)',
+          backdropFilter: 'blur(12px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 22px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
+            SUPPORT
+          </span>
+          <span style={{ color: 'var(--line-3)' }}>/</span>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>{CRUMB_BY_SCREEN[screen]}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div
+            className="ops-header-search"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', background: 'var(--bg-2)', width: 420 }}
+          >
+            <span style={{ color: 'var(--fg-3)' }}>{SEARCH_ICON}</span>
+            <span style={{ fontSize: 13, color: 'var(--fg-4)', whiteSpace: 'nowrap' }}>Search IRN · invoice # · TIN · job ID · tenant</span>
+            <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--fg-4)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' }}>
+              ⌘K
+            </span>
+          </div>
+          {/* Sandbox / Live switch */}
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: 0, background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 3 }}
+          >
+            <button
+              type="button"
+              onClick={() => onSetEnv('sandbox')}
+              className="ops-btn"
+              style={{ border: 0, cursor: 'pointer', height: 30, padding: '0 14px', borderRadius: 'var(--radius-input)', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.05em', display: 'inline-flex', alignItems: 'center', gap: 6, background: sbx.bg, color: sbx.color }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: 99, background: sbx.dot }} />
+              SANDBOX
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetEnv('live')}
+              className="ops-btn"
+              style={{ border: 0, cursor: 'pointer', height: 30, padding: '0 14px', borderRadius: 'var(--radius-input)', fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.05em', display: 'inline-flex', alignItems: 'center', gap: 6, background: liv.bg, color: liv.color }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: 99, background: liv.dot }} />
+              LIVE
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* environment banner */}
+      <div style={{ flex: 'none', background: envBanner.bg, borderBottom: `1px solid ${envBanner.border}`, padding: '7px 22px', display: 'flex', alignItems: 'center', gap: 9 }}>
+        <span style={{ color: envBanner.text, flex: 'none', display: 'inline-flex' }}>{envBanner.icon}</span>
+        <span style={{ fontSize: 12.5, color: envBanner.text, fontWeight: 500 }}>{envBanner.msg}</span>
+        <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, color: envBanner.text, opacity: 0.85, letterSpacing: '0.05em' }}>
+          {envBanner.tag}
+        </span>
+      </div>
+    </>
+  )
+}

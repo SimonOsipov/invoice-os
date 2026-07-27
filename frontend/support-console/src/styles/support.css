@@ -1,6 +1,12 @@
-/* Local app-shell styles — ported verbatim from the ASComply Africa Ops Console
-   prototype's inline <style> block (keyframes + hover/focus/active/toggle
-   transitions), plus a responsive media-query layer for the app shell. */
+/* Local app-shell styles — ported from the ASComply Africa Support Console
+   prototype's inline <style> block (Support Console.dc.html:17-38: keyframes +
+   hover/focus/active/toggle transitions), plus a responsive media-query layer for
+   the app shell, matching frontend/ops-console/src/styles/ops.css.
+
+   Class prefix stays `ops-` rather than `sup-`: these are the SAME shell primitives
+   the prototype names, and the two consoles are meant to read as one family. The
+   files are separate because the apps are separate bundles, not because the shell
+   diverges. */
 
 * {
   box-sizing: border-box;
@@ -50,14 +56,6 @@ body {
     opacity: 1;
   }
 }
-@keyframes opsGrow {
-  from {
-    transform: scaleY(0.001);
-  }
-  to {
-    transform: scaleY(1);
-  }
-}
 
 .ops-nav {
   transition: background 120ms ease-out, color 120ms ease-out;
@@ -76,22 +74,19 @@ body {
   transition: background 120ms, border-color 120ms, color 120ms;
   cursor: pointer;
 }
-/* Org-switcher menu rows. Mirrors the Platform app's `.pf-menu-item` so the two
-   switchers hover identically. */
-.ops-menu-item {
-  transition: background 110ms ease-out;
-}
-.ops-menu-item:hover {
-  background: var(--bg-3);
-}
-.ops-bar {
-  transform-origin: bottom;
-  animation: opsGrow 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-/* No transform on press — the system doesn't squish. Hover is a fill or
-   brightness change only, never movement and never a shadow change. */
+/* No transform on press — the system doesn't squish. The prototype's
+   `.ops-btn:active { transform: translateY(1px) }` (proto:31) is deliberately NOT
+   carried over: the design-drift handoff calls it out as a P1 defect, and the ops
+   console already dropped it. Hover is a fill or brightness change only. */
 .ops-btn {
   transition: background 120ms ease-out, border-color 120ms;
+}
+.ops-toggle {
+  transition: background 140ms ease-out;
+  cursor: pointer;
+}
+.ops-knob {
+  transition: transform 140ms ease-out;
 }
 .ops-input {
   font-family: var(--font-sans);
@@ -105,6 +100,9 @@ body {
   outline: none;
   transition: border-color 120ms, box-shadow 120ms;
 }
+/* Amber focus at 2px — the design system's ring, not the prototype's 3px teal glow
+   (proto:33 used `--accent-glow` back when `--accent` was aliased to the action teal).
+   Same correction ops.css already carries. */
 .ops-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--ring);
@@ -114,16 +112,6 @@ body {
 }
 .ops-screen-pad {
   padding: 24px 26px 56px;
-}
-/* Incident-history row on the API status screen (prototype line 569). Base rule only,
-   with no breakpoint override on purpose: the second track is `1fr` holding wrapping
-   prose, so at the narrowest breakpoint it still has ~366px and reflows by wrapping.
-   Giving it a min-width or stacking it would create the horizontal scroll the
-   responsive pass forbids. */
-.ops-incident-row {
-  display: grid;
-  grid-template-columns: 70px 1fr;
-  gap: 16px;
 }
 pre.ops-json {
   margin: 0;
@@ -144,7 +132,7 @@ pre.ops-json {
    collapse the sidebar and reflow the multi-column grids so nothing
    is clipped at narrower widths. `!important` is required to override
    the inline grid-template-columns/widths the components set on
-   themselves.
+   themselves. Mirrors ops.css.
    ------------------------------------------------------------------ */
 @media (max-width: 1024px) {
   .ops-sidebar {
@@ -157,13 +145,13 @@ pre.ops-json {
   .ops-sidebar .ops-nav {
     justify-content: center;
   }
-  .ops-overview-grid,
-  .ops-api-grid,
-  .ops-billing-grid {
+  .ops-recon-grid,
+  .ops-rules-grid,
+  .ops-tenants-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
-  .ops-kpi-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  .ops-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 
@@ -174,9 +162,12 @@ pre.ops-json {
   .ops-sub-stats {
     display: none !important;
   }
-  .ops-kpi-strip,
-  .ops-billing-kpis {
+  .ops-health-grid,
+  .ops-tenant-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .ops-tenant-split {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
   .ops-drawer {
     width: 100vw !important;
@@ -192,8 +183,8 @@ pre.ops-json {
   .ops-screen-pad {
     padding: 18px 14px 40px !important;
   }
-  .ops-kpi-strip,
-  .ops-billing-kpis {
+  .ops-health-grid,
+  .ops-tenant-kpis {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }

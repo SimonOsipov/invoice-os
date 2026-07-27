@@ -35,7 +35,7 @@ name: Dev Env (deploy full fleet + verify)
 #    or if any deployment trigger appears. See docs/deploy-model.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
-#  - Railway Watch Paths empty on all 12 non-Postgres services, or `railway up`
+#  - Railway Watch Paths empty on all 13 non-Postgres services, or `railway up`
 #    silently skips untouched services and a torn-down fleet never recovers.
 #    prepare-env asserts this at runtime. Re-clear if a service is recreated.
 #  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
@@ -117,6 +117,7 @@ env:
   RAILWAY_SVC_APP_ID: cb4a38ca-4440-4a0a-892e-c01d8013bb9a
   RAILWAY_SVC_LANDING_ID: 21e62d5d-82c9-48d8-8f6b-b2a53104c046
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
+  RAILWAY_SVC_SUPPORT_CONSOLE_ID: 33a90fdc-a812-4807-837c-9c62593d6f41
   # M4-21-10: the Postgres service id (recorded in docs/migrations.md's provisioning
   # Appendix) — same stable-resource-id pattern as above. No CI job resolves
   # a DSN with it anymore (M4-22-08); railway-env.sh still uses it for the Postgres volume.
@@ -189,7 +190,7 @@ jobs:
   #      hardcoded constant — PREREQUISITES #6) and the create path is
   #      structurally unreachable. Either way, this job also asserts every
   #      non-Postgres service instance still has empty Watch Paths
-  #      (PREREQUISITES #5) and discovers the 4 public URLs fresh (F7) — the
+  #      (PREREQUISITES #5) and discovers the 5 public URLs fresh (F7) — the
   #      hardcoded workflow-level `env:` URLs this superseded are GONE; every
   #      consumer below reads `needs.prepare-env.outputs.*` instead.
   prepare-env:
@@ -222,6 +223,7 @@ jobs:
       app_url: ${{ steps.urls.outputs.app_url }}
       landing_url: ${{ steps.urls.outputs.landing_url }}
       ops_console_url: ${{ steps.urls.outputs.ops_console_url }}
+      support_console_url: ${{ steps.urls.outputs.support_console_url }}
     steps:
       - uses: actions/checkout@v4
       # Still required: `prenv name` is the ONLY environment-name constructor in
@@ -316,7 +318,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
 
-      - name: Assert Watch Paths are empty on all 12 non-Postgres services (M3-16 invariant)
+      - name: Assert Watch Paths are empty on all 13 non-Postgres services (M3-16 invariant)
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
@@ -351,7 +353,7 @@ jobs:
             exit 1
           fi
 
-          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","landing","app","ops-console"]'
+          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","landing","app","ops-console","support-console"]'
 
           missing=$(echo "$resp" | jq -r --argjson names "$expected_json" '
             ([.data.environment.serviceInstances.edges[]?.node.serviceName]) as $present
@@ -373,14 +375,14 @@ jobs:
             echo "$offenders"
             exit 1
           fi
-          echo "All 12 non-Postgres service instances report empty Watch Paths."
+          echo "All 13 non-Postgres service instances report empty Watch Paths."
 
       # M4-22-FU, the LOWER-VALUE half: the fork inherits development's
       # variables, which the step above the seam already checked, so this only
       # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
-      # earlier: that step queries all 12 service names and hard-fails if any is
+      # earlier: that step queries all 13 service names and hard-fails if any is
       # missing, which is what proves the 8 context services have materialised.
-      # settle_fork is NOT a sufficient barrier — it checks only the 5 service
+      # settle_fork is NOT a sufficient barrier — it checks only the 6 service
       # ids reconcile-fork acts on (railway-env.sh:~788-792), which excludes the
       # 8 contexts.
       #
@@ -397,7 +399,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh assert-db-dsns "$ENV_ID"
 
-      - name: Discover the 4 public URLs (never construct — F7)
+      - name: Discover the 5 public URLs (never construct — F7)
         id: urls
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
@@ -444,15 +446,17 @@ jobs:
           app_url=$(fetch_domain "$RAILWAY_SVC_APP_ID" app) || exit 1
           landing_url=$(fetch_domain "$RAILWAY_SVC_LANDING_ID" landing) || exit 1
           ops_console_url=$(fetch_domain "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console) || exit 1
+          support_console_url=$(fetch_domain "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console) || exit 1
 
           {
             echo "gateway_url=$gateway_url"
             echo "app_url=$app_url"
             echo "landing_url=$landing_url"
             echo "ops_console_url=$ops_console_url"
+            echo "support_console_url=$support_console_url"
           } >> "$GITHUB_OUTPUT"
 
-          echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url"
+          echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url support-console=$support_console_url"
 
       # Must run after `urls` (consumes the discovered values) and before any
       # service that bakes or reads them deploys.
@@ -476,9 +480,10 @@ jobs:
           APP_URL: ${{ steps.urls.outputs.app_url }}
           LANDING_URL: ${{ steps.urls.outputs.landing_url }}
           OPS_CONSOLE_URL: ${{ steps.urls.outputs.ops_console_url }}
+          SUPPORT_CONSOLE_URL: ${{ steps.urls.outputs.support_console_url }}
         run: |
           bash scripts/ci/railway-env.sh reconcile-urls \
-            "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL"
+            "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
 
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
@@ -595,7 +600,7 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
-  # 4. Deploy the three SPAs in parallel, only after the gateway is healthy.
+  # 4. Deploy the four SPAs in parallel, only after the gateway is healthy.
   #    Vite bakes VITE_* at BUILD time (frontend/*/Dockerfile), so these images
   #    ship whatever the service variables hold now — pointed at THIS environment
   #    by prepare-env's `reconcile-urls`.
@@ -609,7 +614,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [landing, app, ops-console]
+        service: [landing, app, ops-console, support-console]
     steps:
       - uses: actions/checkout@v4
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
@@ -662,7 +667,7 @@ jobs:
           fi
           echo "All 8 backends green."
 
-  # 7. Post-deploy verification (b): smoke (landing + ops-console render), api
+  # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation) via Playwright,
   #    once the fleet is green and the SPAs are deployed. PR environments only
@@ -689,6 +694,7 @@ jobs:
       APP_URL: ${{ needs.prepare-env.outputs.app_url }}
       LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
+      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -700,7 +706,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Wait for SPA /health
         run: |
-          for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL"; do
+          for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"; do
             echo "Waiting for $url/health ..."
             ok=0
             # 600s (120 x 5s): every environment is now a cold build (M4-23
@@ -717,7 +723,7 @@ jobs:
           done
       - name: Install Chromium
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
-      - name: Smoke (landing + ops-console render)
+      - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke
       - name: API E2E (typed contract suite)
         # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore

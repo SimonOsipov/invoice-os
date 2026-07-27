@@ -37,6 +37,22 @@ export const LINK_ICON = <Icon paths={['M9 17H7A5 5 0 0 1 7 7h2', 'M15 7h2a5 5 0
 export const PLUS_ICON = <Icon paths={['M12 5v14', 'M5 12h14']} size={15} />
 export const ARROW_UP_ICON = <Icon paths={['M12 19V5', 'm5 12 7-7 7 7']} size={13} />
 export const ARROW_DOWN_ICON = <Icon paths={['M12 5v14', 'm19 12-7 7-7-7']} size={13} />
+// Same two glyphs the Platform app's company switcher uses (frontend/app/src/glyphs.tsx)
+// — the org switcher below is deliberately the same control, so it borrows the same marks.
+export const CHEV_DOWN_ICON = <Icon paths={['m6 9 6 6 6-6']} size={16} />
+export const TICK_ICON = <Icon paths={['M20 6 9 17l-5-5']} size={11} strokeWidth={3} />
+
+// The organisations this console can be pointed at. One today — Zephyr Pay is the only
+// seeded developer org — but it is a LIST because the control is a switcher, not a label:
+// a second org must appear in the menu without a component change.
+export interface DevOrg {
+  id: string
+  name: string
+  initials: string
+  meta: string
+}
+
+export const DEV_ORGS: DevOrg[] = [{ id: 'org_zp001', name: 'Zephyr Pay', initials: 'ZP', meta: 'SCALE PLAN · ORG_ZP001' }]
 
 // proto:1204-1213 — the evidence bundle's QR mark. Three 16x16 finder squares plus
 // five 6x6 dots, all hand-placed: it is decorative, not a generated block matrix, so

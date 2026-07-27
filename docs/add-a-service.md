@@ -9,7 +9,7 @@ judgment call, the recipe is broken: fix the recipe, then the service.
 also gets its own ephemeral environment, forked from `development` by `dev-env.yml`'s
 `prepare-env` job, but a new service is never created *in* one of those directly: it is
 created once, here, on `development`, and every subsequent PR fork inherits it. Measured
-(M4-23-04): a fork inherits all 12 service instances with `watchPatterns: []`, the service
+(M4-23-04): a fork inherits all 13 service instances with `watchPatterns: []`, the service
 domains (auto-renamed) and the Postgres TCP proxy. It does **not** inherit a Postgres
 *deployment* (started explicitly), a *volume*, or **sealed variables**.
 `$ENV` throughout this recipe always means `development`'s id below:
@@ -35,9 +35,9 @@ A backend service is one Go binary under `cmd/<svc>/`. Throughout this doc:
 - `<svc>` — the service name, identical in: the `cmd/<svc>` directory, the Railway
   service name, and the private-networking hostname `<svc>.railway.internal`.
   Lowercase, no separators (matches existing `cmd/` dirs: `tenancy`, `portfolio`,
-  `invoice`, `validation`, `submission`, `dashboard`, `notifications`, `opsconsole`;
-  plus `gateway`).
-- `<ctx>` — the service's domain context dir `internal/<ctx>`. For the seven context
+  `invoice`, `validation`, `submission`, `dashboard`, `notifications`, `reconciliation`,
+  `opsconsole`; plus `gateway`).
+- `<ctx>` — the service's domain context dir `internal/<ctx>`. For the eight context
   services `<ctx>` = `<svc>`. The gateway has no context dir — drop that line wherever
   it appears.
 
@@ -150,7 +150,7 @@ nice-to-have:
 
 ### `.env.example`
 
-> **Not adopted for backend services (M2-12 decision).** The seven context services and
+> **Not adopted for backend services (M2-12 decision).** The eight context services and
 > the gateway ship **no** `cmd/<svc>/.env.example`. Each service's variables live in one
 > place — its Railway service variable set (see the M2-12 wiring below and the task
 > record) — and the binaries fail fast on a missing required var, so a committed example
@@ -195,7 +195,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   don't list them in `.env.example`.
 - **Secrets live only in Railway service variables.** Never in the repo, never in
   `railway.json`, never as a real value in `.env.example`.
-- **Public exposure:** only the three SPAs and the gateway get a public domain
+- **Public exposure:** only the four SPAs and the gateway get a public domain
   (runbook step 6). Context services, opsconsole, and Postgres are private-network
   only — for a backend service, *skipping* step 6 is what keeps it private.
 
@@ -292,7 +292,7 @@ returned by step 1.
 
 ## Appendix: static SPA variant (prior art, already live)
 
-The three frontend SPAs predate this recipe and are its reference implementation —
+The frontend SPAs are this recipe's reference implementation —
 same runbook, different config block. Differences:
 
 | | Compute (this recipe) | Static SPA (live) |
@@ -301,7 +301,11 @@ same runbook, different config block. Differences:
 | Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-app `frontend/<app>/Dockerfile` (pnpm build → Caddy) |
 | Health | `/healthz` (in the binary) | `/health` (shared root `Caddyfile`) |
 | Watch patterns | empty (§3) | empty (§3) — same invariant, no per-service-type difference |
-| Public domain | gateway only | yes (all three) |
+| Public domain | gateway only | yes (all four) |
 
-Live services (dev): `landing`, `app`, `ops-console` — see `frontend/*/railway.json`
-and the root `Caddyfile` for the exact serving setup.
+Live services: `landing`, `app`, `ops-console`, `support-console` — see
+`frontend/*/railway.json` and the root `Caddyfile` for the exact serving setup.
+
+`support-console` (added 2026-07-27) is the most recent walk-through of this recipe, and
+confirmed step 1's warning is still live: `serviceCreate` **did** attach a `main` deployment
+trigger, which had to be `deploymentTriggerDelete`d before the invariants workflow would pass.

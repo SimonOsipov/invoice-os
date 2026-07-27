@@ -190,7 +190,7 @@ jobs:
   #      hardcoded constant — PREREQUISITES #6) and the create path is
   #      structurally unreachable. Either way, this job also asserts every
   #      non-Postgres service instance still has empty Watch Paths
-  #      (PREREQUISITES #5) and discovers the 4 public URLs fresh (F7) — the
+  #      (PREREQUISITES #5) and discovers the 5 public URLs fresh (F7) — the
   #      hardcoded workflow-level `env:` URLs this superseded are GONE; every
   #      consumer below reads `needs.prepare-env.outputs.*` instead.
   prepare-env:
@@ -399,7 +399,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh assert-db-dsns "$ENV_ID"
 
-      - name: Discover the 4 public URLs (never construct — F7)
+      - name: Discover the 5 public URLs (never construct — F7)
         id: urls
         env:
           GH_EVENT_NAME: ${{ github.event_name }}

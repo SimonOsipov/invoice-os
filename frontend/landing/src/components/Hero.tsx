@@ -1,6 +1,6 @@
 import { HERO_CHECKS } from '../data'
 
-export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
+export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignIn: () => void }) {
   return (
     <section id="top" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
       {/* Background-only layer. The grid texture and its fade mask must never sit
@@ -61,9 +61,10 @@ export function Hero({ onBookDemo }: { onBookDemo: () => void }) {
             <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
               Book a demo →
             </button>
-            <a href="#" className="v2-btn v2-btn-ghost" style={{ height: 46, padding: '0 22px', fontSize: 15 }}>
+            {/* Same hand-off as the nav CTA: the persona picker → OTP → workspace. */}
+            <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
               Explore the platform
-            </a>
+            </button>
           </div>
           {/* rollout timeline */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 0, maxWidth: 480 }}>

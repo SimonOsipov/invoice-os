@@ -2,15 +2,31 @@ name: Dev Env (deploy full fleet + verify)
 
 # Deploy the whole fleet to one Railway environment, then verify it.
 # A ready PR → its own ephemeral env, which THIS workflow forks from
-# `development` itself (M4-23-03) — not Railway's PR Environments feature, which
-# is OFF and stays OFF. workflow_dispatch → `development` itself
-# (deploy + health-gate + fleet-gate only; M4-22-07 dropped reset-seed/E2E).
+# the persistent environment (M4-23-03) — not Railway's PR Environments feature,
+# which is OFF and stays OFF. push to `main` and workflow_dispatch → the
+# PERSISTENT environment itself (deploy + health-gate + fleet-gate only;
+# M4-22-07 dropped reset-seed/E2E).
 #
-# Auth: PR runs use RAILWAY_API_TOKEN (account-scoped); workflow_dispatch uses
-# RAILWAY_API_DEV_TOKEN (project token, `Project-Access-Token` header). An
-# account token would cover both — collapsing them is an open cleanup.
-# Account tokens carry no implicit scope, so every call names --project /
-# --environment explicitly.
+# THE TARGET DISCRIMINATOR IS `github.event_name == 'pull_request'`, NOT
+# `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and
+# dispatch both target the persistent environment, whose variables and domains
+# are the SOURCE OF TRUTH and must never be reconciled/overwritten. Guarding on
+# `!= workflow_dispatch` would let a push run `reconcile-urls` against the live
+# environment and rewrite VITE_GATEWAY_URL / CORS_ALLOWED_ORIGINS from its
+# custom domains (api./app./www.ascomply.com) to the generated *.up.railway.app
+# ones — `urls` below discovers `serviceDomains`, which excludes custom domains.
+#
+# The persistent environment is addressed by ID, never by name: it was renamed
+# `development` -> `production` on 2026-07-27, which silently broke the
+# dispatch path (`railway up --environment development` -> `Environment
+# "development" not found`). The ID is already the constant that both
+# dev-env-teardown.yml and dev-env-sweeper.yml key their never-delete guards on.
+#
+# Auth: PR and push runs use RAILWAY_API_TOKEN (account-scoped, `Authorization:
+# Bearer`); workflow_dispatch uses RAILWAY_API_DEV_TOKEN (project token,
+# `Project-Access-Token` header). An account token would cover all three —
+# collapsing them is an open cleanup. Account tokens carry no implicit scope, so
+# every call names --project / --environment explicitly.
 #
 # Human-applied prerequisites (see docs/topology-e2e.md):
 #  - Railway PR Environments are OFF and MUST STAY OFF (M4-23-02) — do NOT turn
@@ -50,6 +66,23 @@ on:
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - '.github/workflows/dev-env.yml'
+  # Merging to `main` deploys the persistent environment, so what is live is
+  # what is on `main`. Before this, NOTHING deployed on merge: a PR deployed to
+  # its own ephemeral env, dev-env-teardown.yml deleted that env on close, and
+  # the persistent env kept serving whatever was last dispatched by hand — it
+  # sat 3 merged PRs / 16 commits stale before anyone noticed.
+  #
+  # `paths-ignore`, NOT the `paths` allowlist above, and deliberately: this
+  # trigger's job is to keep the live environment converged on `main`, so its
+  # failure direction must be an unnecessary deploy, never a missed one. A
+  # duplicated 20-entry allowlist would drift from the one above and silently
+  # reintroduce exactly the staleness this trigger exists to prevent.
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'backlog/**'
+      - '**.md'
   workflow_dispatch:
 
 # M4-21-09: each PR now deploys to its OWN ephemeral Railway environment, so
@@ -58,11 +91,14 @@ on:
 # group is keyed by PR number, so it is UNIQUE per PR: two different PRs'
 # numbers never collide (their groups differ → both run at once), and a
 # second push to the SAME PR queues behind (never cancels) an in-flight
-# deploy of that SAME PR. A workflow_dispatch run has no PR number and falls
-# back to `github.ref` — the SAME value on every dispatch run — so dispatch
-# runs against the persistent `development` environment still serialize
-# against each other: two concurrent dispatch runs would both `railway up`
-# the same services into the same shared `development` environment.
+# deploy of that SAME PR. A workflow_dispatch or push run has no PR number and
+# falls back to `github.ref` — `refs/heads/main` for both — so every run that
+# targets the PERSISTENT environment lands in ONE shared group and serializes
+# against the others. That is the desired behaviour, not a limitation: two
+# concurrent runs would otherwise `railway up` the same services into the same
+# environment. With `cancel-in-progress: false`, a burst of merges queues and
+# deploys in order rather than racing, so the live environment converges on the
+# last commit merged instead of on whichever build happened to finish last.
 concurrency:
   group: dev-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
@@ -97,8 +133,23 @@ jobs:
   #    down — CI can take up to ~20m, environment preparation far less now
   #    that it creates the environment instead of waiting for one to appear.
   await-ci:
-    name: Await green CI (PR only; dispatch bypasses)
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    name: Await green CI (PR + push; dispatch bypasses)
+    # Push is gated too, not just PRs. ci.yml also runs on `push: branches:
+    # [main]` with no paths filter, so the check always exists on the merge
+    # commit — and a merge is exactly when a red `main` would otherwise reach the
+    # live environment unattended. workflow_dispatch still bypasses: it is the
+    # deliberate manual override.
+    #
+    # KNOWN EDGE, accepted rather than engineered around: ci.yml sets
+    # cancel-in-progress on `github.ref`, so back-to-back merges cancel the
+    # earlier commit's CI run. This job then reads conclusion `cancelled` and
+    # fails, leaving a red — but SUPERSEDED — dev-env run. The later merge's own
+    # run deploys normally, so the live environment still converges on the last
+    # commit merged. Treating `cancelled` as "skip quietly" would be strictly
+    # worse: it is indistinguishable from a human cancelling a deploy on purpose.
+    if: >-
+      ( github.event_name == 'pull_request' && github.event.pull_request.draft == false ) ||
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -106,7 +157,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          # On push there is no pull_request context; github.sha IS the merge commit.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           echo "Gating deploy on the 'CI' check for $SHA ..."
           for _ in $(seq 1 80); do   # ~20 min (80 × 15s)
@@ -142,9 +194,14 @@ jobs:
   #      consumer below reads `needs.prepare-env.outputs.*` instead.
   prepare-env:
     name: Prepare Railway environment (create-or-reuse + assert Watch Paths + discover URLs)
+    # `push` is named explicitly rather than left to fall through
+    # `github.event.pull_request.draft == false`. On a push that expression is
+    # `null == false`, which GitHub's loose comparison coerces to true — correct
+    # by accident, via a coercion rule no reader should have to know.
     if: >-
       always() &&
       ( github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'push' ||
         github.event.pull_request.draft == false )
     runs-on: ubuntu-latest
     # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume and
@@ -154,8 +211,13 @@ jobs:
     # prevent. A job knob, not a restructure.
     timeout-minutes: 20
     outputs:
+      # `environment` is what `railway up --environment` consumes: a name for an
+      # ephemeral PR fork, the ID for the persistent environment (see `resolve`).
       environment: ${{ steps.resolve.outputs.environment }}
       environment_id: ${{ steps.resolve.outputs.environment_id }}
+      # Display only. Empty on the PR path, where `environment` is already the
+      # readable `pr-<N>`; consumers fall back to it.
+      environment_label: ${{ steps.resolve.outputs.environment_label }}
       gateway_url: ${{ steps.urls.outputs.gateway_url }}
       app_url: ${{ steps.urls.outputs.app_url }}
       landing_url: ${{ steps.urls.outputs.landing_url }}
@@ -178,16 +240,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The workflow_dispatch short-circuit lives HERE, in the YAML, and not in
-          # railway-env.sh, because it is a POLICY statement — `development` is
-          # persistent and must never be created, forked over, or made ephemeral
-          # ([development-not-ephemeral]) — and it belongs at the point a reader
-          # looks for it. On this path the script is never invoked at all, so
-          # environmentCreate is not merely guarded, it is unreachable.
-          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "workflow_dispatch — targeting the persistent development environment; environmentCreate is unreachable on this path."
-            echo "environment=development" >> "$GITHUB_OUTPUT"
-            echo "environment_id=$RAILWAY_DEV_ENVIRONMENT_ID" >> "$GITHUB_OUTPUT"
+          # The persistent-environment short-circuit lives HERE, in the YAML, and
+          # not in railway-env.sh, because it is a POLICY statement — the
+          # persistent environment must never be created, forked over, or made
+          # ephemeral ([development-not-ephemeral]) — and it belongs at the point
+          # a reader looks for it. On this path the script is never invoked at
+          # all, so environmentCreate is not merely guarded, it is unreachable.
+          #
+          # Taken by BOTH push-to-main and workflow_dispatch. Only a PR gets an
+          # ephemeral fork.
+          #
+          # `environment` is emitted as the ID, not the name. It is consumed as
+          # `railway up --environment`, which accepts either (verified against
+          # CLI 4.66.0), and the ID cannot be invalidated by a rename — the name
+          # can, and was: `development` -> `production` on 2026-07-27 turned every
+          # dispatch deploy into `Environment "development" not found`. The
+          # human-readable name is carried separately for display only.
+          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ] || [ "$GH_EVENT_NAME" = "push" ]; then
+            echo "$GH_EVENT_NAME — targeting the persistent environment $RAILWAY_DEV_ENVIRONMENT_ID; environmentCreate is unreachable on this path."
+            {
+              echo "environment=$RAILWAY_DEV_ENVIRONMENT_ID"
+              echo "environment_id=$RAILWAY_DEV_ENVIRONMENT_ID"
+              echo "environment_label=persistent env"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -201,15 +276,18 @@ jobs:
       # missing, so anything that has to make them exist must run before it and
       # after the environment exists. Do not merge these into either neighbour.
       #
-      # Every step in the seam is skipped on workflow_dispatch. Load-bearing, not
-      # cosmetic: on dispatch the target is `development` (nothing to reconcile —
-      # it is not a fork) AND railway-env.sh authenticates with
-      # `Authorization: Bearer`, which the dispatch path's Railway PROJECT token
-      # cannot satisfy. Drop the guard and every dispatch run breaks.
+      # Every step in the seam runs on `pull_request` ONLY — skipped on both push
+      # and workflow_dispatch. Load-bearing, not cosmetic, for two independent
+      # reasons: (1) on those paths the target is the PERSISTENT environment,
+      # which is not a fork and is the thing forks are reconciled *against*, so
+      # reconciling it would rewrite live infrastructure (see the reconcile-urls
+      # step below for the concrete damage); (2) railway-env.sh authenticates
+      # with `Authorization: Bearer`, which the dispatch path's Railway PROJECT
+      # token cannot satisfy. Drop the guard and every dispatch run breaks.
       # ----------------------------------------------------------------------
 
-      - name: Audit sealed variables in development (they do not fork)
-        if: github.event_name != 'workflow_dispatch'
+      - name: Audit sealed variables in the source environment (they do not fork)
+        if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: bash scripts/ci/railway-env.sh audit-sealed-variables
@@ -220,14 +298,19 @@ jobs:
       # materialisation race (the same reason the sealed-variable audit above is
       # safe), and this fails in ~10s rather than behind reconcile-fork's 420s
       # Postgres wait.
-      - name: Assert DB DSNs in development (M4-22 invariant)
-        if: github.event_name != 'workflow_dispatch'
+      - name: Assert DB DSNs in the source environment (M4-22 invariant)
+        if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: bash scripts/ci/railway-env.sh assert-db-dsns --source-only
 
+      # PR ONLY. This mutates the target environment (domains, Postgres volume,
+      # environment record) to make a fresh fork resemble its source. The
+      # persistent environment is not a fork and is the thing being resembled —
+      # reconciling it against itself is at best a no-op and at worst rewrites
+      # live infrastructure.
       - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, environment record)
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
@@ -301,12 +384,14 @@ jobs:
       # ids reconcile-fork acts on (railway-env.sh:~788-792), which excludes the
       # 8 contexts.
       #
-      # Skipped on workflow_dispatch like the seam steps, and for the same
-      # reason (dev-env.yml:204-208): railway-env.sh authenticates
-      # `Authorization: Bearer` only, which the dispatch path's Railway PROJECT
-      # token cannot satisfy. Consequence: a dispatch run gets NO DSN check.
+      # `pull_request` only, like the seam steps and for the same reasons: it
+      # checks FORK fidelity, and railway-env.sh authenticates `Authorization:
+      # Bearer` only, which the dispatch path's Railway PROJECT token cannot
+      # satisfy. Consequence: push and dispatch runs get NO DSN check — acceptable
+      # because neither forks anything, so there is no fork-time rendering fault
+      # to catch.
       - name: Assert DB DSNs in the fork environment (M4-22 invariant)
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
@@ -370,10 +455,20 @@ jobs:
           echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url"
 
       # Must run after `urls` (consumes the discovered values) and before any
-      # service that bakes or reads them deploys. PR path only — the dispatch path
-      # targets `development`, whose variables are the source of truth.
-      - name: Point the fork's URL variables at the fork (never at development)
-        if: github.event_name != 'workflow_dispatch'
+      # service that bakes or reads them deploys.
+      #
+      # PR ONLY, and this is the sharpest edge in the file. The persistent
+      # environment's URL variables are the SOURCE OF TRUTH; `urls` above reads
+      # `serviceDomains`, which returns only Railway-GENERATED domains and
+      # excludes custom ones. Running this against the persistent environment
+      # would therefore rewrite VITE_GATEWAY_URL and CORS_ALLOWED_ORIGINS from
+      # api./app./www.ascomply.com to *.up.railway.app — and because Vite bakes
+      # VITE_* at BUILD time, the very next SPA deploy would ship a bundle
+      # pointing at the wrong origin, with CORS reset to match. Guarding on
+      # `!= workflow_dispatch` instead of `== pull_request` is exactly how a push
+      # trigger would have done that silently on the first merge.
+      - name: Point the fork's URL variables at the fork (never at the source env)
+        if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
@@ -392,22 +487,27 @@ jobs:
   #    CORS_ALLOWED_ORIGINS is set per-environment by prepare-env's
   #    `reconcile-urls`: measured in pr-67, a fork inherits development's list.
   deploy-gateway:
-    name: Deploy gateway → ${{ needs.prepare-env.outputs.environment }}
+    name: Deploy gateway → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [await-ci, prepare-env]
+    # push is gated on await-ci exactly like a PR — a red `main` must not reach
+    # the live environment. Only workflow_dispatch bypasses.
     if: >-
       always() &&
       needs.prepare-env.result == 'success' &&
       ( github.event_name == 'workflow_dispatch' ||
-        ( github.event.pull_request.draft == false && needs.await-ci.result == 'success' ) )
+        ( github.event_name == 'push' && needs.await-ci.result == 'success' ) ||
+        ( github.event_name == 'pull_request' &&
+          github.event.pull_request.draft == false &&
+          needs.await-ci.result == 'success' ) )
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     steps:
       - uses: actions/checkout@v4
-      # PR path — account-scoped token. RAILWAY_TOKEN must be ABSENT, not empty:
+      # PR and push path — account-scoped token. RAILWAY_TOKEN must be ABSENT, not empty:
       # measured 2026-07-19 in ghcr.io/railwayapp/cli:4.66.0, RAILWAY_TOKEN='' alongside a
       # valid RAILWAY_API_TOKEN still fails "Unauthorized", and a ternary cannot omit an
       # env key. Hence two steps rather than one.
-      - name: railway up gateway (PR — account token)
+      - name: railway up gateway (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -465,9 +565,10 @@ jobs:
   #    They boot against the already-migrated schema and never run
   #    migrations. Skipped for draft PRs.
   deploy-context:
-    name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment }}
+    name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [health-gate, prepare-env]
-    if: always() && needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
+    # The draft check applies only where `draft` exists; push and dispatch pass.
+    if: always() && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     strategy:
@@ -479,7 +580,7 @@ jobs:
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
       # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
       # fails too, so the PR path needs the key genuinely absent.
-      - name: railway up ${{ matrix.service }} (PR — account token)
+      - name: railway up ${{ matrix.service }} (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -499,9 +600,10 @@ jobs:
   #    ship whatever the service variables hold now — pointed at THIS environment
   #    by prepare-env's `reconcile-urls`.
   deploy-spas:
-    name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment }}
+    name: Deploy ${{ matrix.service }} → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
     needs: [health-gate, prepare-env]
-    if: always() && needs.health-gate.result == 'success' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
+    # The draft check applies only where `draft` exists; push and dispatch pass.
+    if: always() && needs.health-gate.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
     strategy:
@@ -513,7 +615,7 @@ jobs:
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
       # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
       # fails too, so the PR path needs the key genuinely absent.
-      - name: railway up ${{ matrix.service }} (PR — account token)
+      - name: railway up ${{ matrix.service }} (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -565,6 +667,14 @@ jobs:
   #    + cross-tenant isolation) via Playwright,
   #    once the fleet is green and the SPAs are deployed. PR environments only
   #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
+  #
+  #    EPHEMERAL ENVIRONMENTS ONLY — hence `== 'pull_request'`, which now
+  #    excludes push as well as dispatch. The api suite is not read-only: it
+  #    self-heals rule state in beforeAll and restores it in afterAll, so a run
+  #    against the persistent environment would mutate live data, and a failure
+  #    between the two hooks would leave it mutated. Merging does not lose
+  #    coverage: this exact suite already ran against the PR's own environment,
+  #    on the same commit, as the gate for merging it.
   e2e:
     name: E2E (smoke + api + topology)
     needs: [fleet-gate, deploy-spas, prepare-env]
@@ -572,7 +682,7 @@ jobs:
       always() &&
       needs.fleet-gate.result == 'success' &&
       needs.deploy-spas.result == 'success' &&
-      github.event_name != 'workflow_dispatch'
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}

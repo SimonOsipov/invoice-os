@@ -34,18 +34,46 @@ actually existing: CI now creates, tears down and sweeps them itself.
   > applied to this project (see
   > [Railway PR Environments are OFF](#railway-pr-environments-are-off)). Teardown is
   > **M4-23-05**, below; M4-23-06 is `ShouldReap`, the sweeper's pure reap predicate.
-- **`workflow_dispatch`** → targets the **persistent `development` environment** directly
+- **Merge to `main`** → `dev-env.yml` deploys the **persistent environment**, so what is
+  live is what is on `main`. Gated on the `CI` check for the merge commit (ci.yml runs on
+  `push: branches: [main]` with no paths filter, so the check always exists); deploy +
+  health-gate + fleet-gate, **no E2E** — see the ephemeral-only note below.
+  > **Added 2026-07-27, and it closes a real gap.** Before it, *nothing deployed on
+  > merge*: a PR deployed to its own ephemeral environment, teardown deleted that
+  > environment on close, and the persistent environment kept serving whatever was last
+  > dispatched **by hand**. It had drifted 3 merged PRs / 16 commits behind `main` before
+  > anyone noticed. This is a **GitHub Actions** trigger, not Railway auto-deploy —
+  > Railway's own deployment triggers stay disabled and `railway-invariants.yml` still
+  > fails any PR that reintroduces one (see
+  > [One-time cutover](#one-time-cutover-disable-auto-deploy-from-main) below, which is
+  > about that Railway-side mechanism and remains in force).
+- **`workflow_dispatch`** → targets the **persistent environment** directly
   (never an ephemeral PR environment) — the same fleet-deploy + health-gate + fleet-gate
   flow, without the E2E suites (M4-22-07 dropped the reset/seed job and the
-  dispatch-path E2E run). Its concurrency group is
+  dispatch-path E2E run). Now the deliberate manual override: unlike merge-to-`main`, it
+  **bypasses the CI gate**. Its concurrency group is
   `dev-preview-${{ github.event.pull_request.number || github.ref }}`, so a dispatch run's
-  group is `dev-preview-refs/heads/<branch>` — it serializes only against **other dispatch
-  runs from the same ref**, not across refs.
-- **`development` itself** is a stable, always-up base + demo environment (Decision
-  `[dev-env-status]`) — purely the fork base every PR environment is created from (Decision
+  group is `dev-preview-refs/heads/<branch>` — the same group a `main` push lands in, so
+  dispatches and merge deploys serialize against each other rather than racing.
+- **The persistent environment** is a stable, always-up base + demo environment (Decision
+  `[dev-env-status]`) — the fork base every PR environment is created from (Decision
   `[development-role]`), and it is what live demo calls point at. It is **not** torn down
-  by any automated workflow.
-- **Production** → nothing. The `production` environment stays dormant.
+  by any automated workflow, and as of the bullet above it now tracks `main`.
+
+> **Naming.** This document calls the persistent environment `development` throughout.
+> It was **renamed `production` in Railway on 2026-07-27** (id `6c864094-…`, unchanged)
+> and now serves the custom domains `www.` / `app.` / `ops.` / `api.ascomply.com`. The
+> rename silently broke the dispatch path — `railway up --environment development` →
+> `Environment "development" not found` — so `dev-env.yml` now addresses it **by id**, as
+> `dev-env-teardown.yml` and `dev-env-sweeper.yml` already did for their never-delete
+> guards. Read `development` below as "the persistent environment". Renaming the
+> vocabulary across this doc and `railway-env.sh` is a separate cleanup.
+
+**E2E runs against ephemeral environments only** — on `pull_request`, not on push or
+dispatch. The api suite is not read-only (it self-heals rule state in `beforeAll` and
+restores it in `afterAll`), so running it against the persistent environment would mutate
+live data. No coverage is lost by merging: that suite already ran against the PR's own
+environment, on the same commit, as the gate for merging it.
 
 Each PR's ephemeral environment and its four public URLs (gateway, app, landing,
 ops-console) are **discovered fresh at deploy time** — a Railway-generated domain's suffix
@@ -69,7 +97,14 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
                ephemeral environments ──> environmentDelete ──> confirm by re-query.
                Best-effort; the daily sweeper (M4-23-07) is the authority.
 
-workflow_dispatch ──> targets `development` directly (persistent, never torn down)
+merge to main ──> dev-env.yml (push): await green CI on the merge commit
+                  ──> targets the PERSISTENT environment BY ID (never a fork; the
+                      fork-reconciliation steps are all `== 'pull_request'`)
+                  ──> gateway ──> /healthz gate ──> 7 context + 3 SPAs ──> fleet gate
+                  ──> no E2E (ephemeral environments only)
+
+workflow_dispatch ──> targets the persistent environment directly (never torn down),
+                      bypassing the CI gate — the manual override
                    ──> same deploy + health-gate + fleet-gate flow, no E2E (M4-22-07
                        dropped the reset/seed job and dispatch-path E2E run)
 ```
@@ -82,10 +117,18 @@ every PR queued behind `dev-env.yml`'s single shared concurrency lock, serializi
 deploys. M4-21 designed the constraint away and M4-23 delivered it: each PR forks its own
 environment, so `dev-env.yml`'s concurrency group is now keyed **per-PR**
 (`dev-preview-${{ github.event.pull_request.number || github.ref }}`) — two different PRs'
-groups never collide, so their deploys run **fully in parallel**. A `workflow_dispatch` run
-has no PR number and falls back to `github.ref` (constant across dispatch runs), so
-dispatch runs against `development` still serialize against each other — that matters more
-now, since dispatch is the only path left that resets/seeds shared state.
+groups never collide, so their deploys run **fully in parallel**. A `workflow_dispatch` or
+`push` run has no PR number and falls back to `github.ref` — `refs/heads/main` for both —
+so **every run targeting the persistent environment lands in one shared group** and
+serializes. That is deliberate: concurrent runs would otherwise `railway up` the same
+services into the same environment. With `cancel-in-progress: false`, a burst of merges
+queues and deploys in order, so the environment converges on the last commit merged rather
+than on whichever build happened to finish last.
+
+One accepted rough edge: ci.yml *does* set `cancel-in-progress` on `github.ref`, so
+back-to-back merges cancel the earlier commit's CI run, and that commit's deploy then fails
+at the CI gate with a red — but superseded — run. The later merge deploys normally, so the
+environment still converges on `main`.
 
 A half-deployed environment (SPAs without backends, or backends without an app) still has
 no value: every ready PR (re)deploys its own environment whole, exactly as before.
@@ -183,6 +226,13 @@ Railway auto-deploys the service on `development` outside CI's control, alongsid
 Disabling auto-deploy does **not** affect `railway up` — that uploads a deployment
 directly and keeps working. Only push-triggered auto-deploy stops.
 
+> **Not contradicted by merge-to-`main` deploys.** Since 2026-07-27 a merge to `main` does
+> redeploy the persistent environment — but through `dev-env.yml`, i.e. a `railway up`
+> issued by CI *after* the `CI` check is green and in a known order. What stays banned is
+> **Railway-side** auto-deploy, where Railway reacts to the push itself, outside CI's
+> control, racing whatever `dev-env.yml` is doing and skipping the CI gate entirely. One
+> deploy path, gated and observable, is the whole point; two is the failure mode.
+
 **Done, and now CI-asserted.** M4-23 measured `deploymentTriggers = 0` across every
 environment, and `railway-invariants.yml` re-asserts that on every PR — any trigger
 reappearing fails the build. The procedure below is retained for the case where a service
@@ -195,8 +245,12 @@ For each of the 11 services (gateway, the 7 context services, and `landing`, `ap
 2. Under the GitHub trigger, click **Disable** ("stop deploying automatically on
    new commits"). See [Railway docs — Controlling GitHub Autodeploys](https://docs.railway.com/deployments/github-autodeploys#disable-automatic-deployments).
 
-Verify: push a trivial no-op commit to `main` and confirm no service redeploys
-on `development` (Deployments tab shows nothing new). Open a throwaway PR and confirm
+Verify: push a trivial no-op commit to `main` and confirm the only deployments that appear
+are the ones `dev-env.yml`'s run creates — no service should redeploy *before* that run
+reaches its deploy jobs, or independently of it. (Before the merge-to-`main` trigger
+existed this read "confirm no service redeploys at all"; a Railway-side trigger is now
+distinguished by its *timing and origin*, not by the mere presence of a deployment.)
+Open a throwaway PR and confirm
 `dev-env.yml` deploys + verifies its own ephemeral environment, then close it and confirm
 `dev-env-teardown.yml` ran and the `pr-<N>` environment is gone. Expect
 `railway-invariants.yml` to be **red** on that throwaway PR until the last trigger is gone —

@@ -59,10 +59,10 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
           ))}
         </nav>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* Sign in opens the mock persona picker → OTP → routes to the workspace the
+          {/* Opens the mock persona picker → OTP → routes to the workspace the
               chosen role may open (task-21). */}
           <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 38, cursor: 'pointer' }}>
-            Sign in
+            Explore the platform
           </button>
           <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 38, cursor: 'pointer' }}>
             Book a demo

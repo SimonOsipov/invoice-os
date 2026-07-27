@@ -20,6 +20,7 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
   const onBookDemo = () => setDemoOpen(true)
+  const onSignIn = () => setSignInOpen(true)
   return (
     <div
       className="asc-app"
@@ -31,8 +32,8 @@ export default function App() {
         overflowX: 'hidden',
       }}
     >
-      <Nav onSignIn={() => setSignInOpen(true)} onBookDemo={onBookDemo} />
-      <Hero onBookDemo={onBookDemo} />
+      <Nav onSignIn={onSignIn} onBookDemo={onBookDemo} />
+      <Hero onBookDemo={onBookDemo} onSignIn={onSignIn} />
       <TrustStrip />
       <HowItWorks />
       <Modules />

@@ -46,9 +46,21 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - '.github/workflows/ci.yml'
+            # Gates the "Frontend" job, which is the pnpm workspace job — not just the
+            # SPAs. It runs `pnpm -r typecheck` (all 5 packages, e2e included) and the
+            # e2e seam unit tests, so `e2e/**` belongs here even though the name says
+            # frontend.
+            #
+            # It was missing, and `e2e/**` appears in no other filter, so a commit
+            # touching ONLY e2e/ matched nothing: go skipped, migrations skipped,
+            # frontend skipped, CI green having typechecked and unit-tested nothing.
+            # Its Playwright specs would still have run in dev-env.yml (which does list
+            # e2e/**), but only after a full fleet deploy — so a spec that failed to
+            # COMPILE cost ~20 minutes to discover instead of ~2.
             frontend:
               - 'frontend/**'
               - 'packages/**'
+              - 'e2e/**'
               - 'package.json'
               - 'pnpm-workspace.yaml'
               - 'pnpm-lock.yaml'

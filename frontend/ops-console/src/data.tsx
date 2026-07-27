@@ -1,4 +1,4 @@
-// All Developer Console seed content, re-authored from the prototype's
+// All Ops Console seed content, re-authored from the prototype's
 // support.js state/seed methods (seedJobs, apiKeys, webhooks, …) as typed,
 // static TS constants. Glyphs are pre-built <Icon> nodes so section components
 // stay pure layout.

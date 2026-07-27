@@ -42,7 +42,7 @@ export const APPS: AppTarget[] = [
   },
   {
     name: 'support-console',
-    // Same sign-in hand-off shape as the developer console, with this console's own
+    // Same sign-in hand-off shape as the ops console, with this console's own
     // persona id — the two gates reject each other's links, which is the point.
     url: `${resolveTarget('SUPPORT_CONSOLE_URL')}?persona=support`,
     assertMainView: async (page) => {

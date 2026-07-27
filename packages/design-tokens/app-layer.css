@@ -221,10 +221,14 @@
   border-radius: var(--radius-input) !important;
   font-family: var(--font-sans);
 }
+/* background-COLOR, never the `background` shorthand: the shorthand also resets
+   background-image, and this selector (0,2,0) outranks any component rule that draws a
+   chevron or other affordance into a control's background. Same caution applies to inline
+   styles on these elements. */
 .asc-app .pf-input, .asc-app .pf-select, .asc-app .pf-num,
 .asc-app .ops-input, .asc-app .dev-input {
   border-color: var(--border);
-  background: var(--card);
+  background-color: var(--card);
   color: var(--ink);
 }
 .asc-app .pf-input:focus, .asc-app .pf-select:focus, .asc-app .pf-num:focus,

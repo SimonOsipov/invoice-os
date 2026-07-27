@@ -53,7 +53,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
             className="mono ops-nav-label"
             style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.07em', color: 'var(--action)', border: '1px solid var(--action)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' }}
           >
-            DEV
+            OPS
           </span>
         </a>
         {/* Org switcher. Was a static tinted card; it is now the SAME control as the
@@ -185,7 +185,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         <div className="ops-nav-label" style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 500 }}>Amara Okafor</div>
           <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-            DEVELOPER · ADMIN
+            OPS · ADMIN
           </div>
         </div>
         {/* Sign out. Replaces the decorative gear, following the same call the app made

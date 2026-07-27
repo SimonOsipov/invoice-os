@@ -10,10 +10,10 @@ export const DEMO_CODE = '481920'
 
 export interface LandingPersona {
   // The persona id is the ROLE, and it is what the destination SPA's session gate checks
-  // (`?persona=<id>`). `developer` was called `support` until the real Support Console
-  // landed: the developer console it opens renders "Amara Okafor · DEVELOPER · ADMIN" for
-  // org "Zephyr Pay", so the old label described no one it ever signed in — an artefact of
-  // the M4-20 repositioning. Two consoles now exist and the ids name them apart.
+  // (`?persona=<id>`). It is a WIRE VALUE shared with both consoles' session gates, so it
+  // does not track console display names: `developer` still names the integration-developer
+  // role that opens what is now called the Ops Console. Renaming it would break every
+  // already-minted link and both gates at once.
   id: 'developer' | 'support' | 'firm' | 'inhouse'
   name: string
   title: string
@@ -23,8 +23,9 @@ export interface LandingPersona {
   access: string
   destLabel: string
   // The Railway SERVICE the persona opens. `ops` is the ops-console service (which serves
-  // the Developer Console) and `support` is the support-console service — the id/target
-  // asymmetry is the service names, not a mistake.
+  // the Ops Console) and `support` is the support-console service. The `developer` id
+  // mapping to the `ops` target is the wire-value/display-name split noted above, not a
+  // mistake.
   target: 'app' | 'ops' | 'support'
   avBg: string
   avColor: string
@@ -38,8 +39,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     org: 'Zephyr Pay',
     email: 'a.okafor@zephyrpay.com',
     initials: 'AO',
-    access: 'DEVELOPER CONSOLE',
-    destLabel: 'Developer Console',
+    access: 'OPS CONSOLE',
+    destLabel: 'Ops Console',
     target: 'ops',
     avBg: 'var(--slate-900)',
     avColor: 'var(--text-on-dark)',

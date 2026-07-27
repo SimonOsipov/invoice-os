@@ -67,11 +67,14 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             {entityState === 'ready' && (
               <>
                 <div style={{ position: 'relative' }}>
+                  {/* The `padding` SHORTHAND overrides app-layer.css's `padding-right: 32px`,
+                      so the right value has to clear the chevron here or a long entity name
+                      runs under it. 36px matches the other selects in the fleet. */}
                   <select
                     className="pf-select"
                     value={entityId ?? ''}
                     onChange={(e) => ctx.selectEntity(e.target.value || null)}
-                    style={{ width: '100%', height: 40, padding: '0 10px', border: '1px solid var(--line-2)', fontSize: 13.5 }}
+                    style={{ width: '100%', height: 40, padding: '0 36px 0 12px', border: '1px solid var(--line-2)', fontSize: 13.5 }}
                   >
                     <option value="">Select an entity…</option>
                     {entities.map((e) => (

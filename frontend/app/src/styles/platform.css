@@ -127,6 +127,31 @@ body {
    `!important` is required to beat the inline grid-template-columns the
    sections set on themselves.
    ------------------------------------------------------------------ */
+
+/* The dashboard's three-across row A needs ~1180px to hold together. Its KPI
+   column resolves to `viewport - 702` (sidebar 252 + page padding 72 + readiness
+   360 + two 18px gaps), so it keeps narrowing until the two KPI tiles no longer
+   fit — and the `minmax(140px, 1fr)` floor then makes them OVERFLOW the column
+   rather than shrink, which also drags row A's gutter off the rows B/D gutter
+   that `calc((100% - 396px) / 2)` pins. Measured on the pr-107 deploy: at 924px
+   the KPI grid wanted 298px in a 212px column and the gutters were 43px apart
+   (806 vs 763); 33 elements overflowed. Stacking below 1180 fixes both — 0
+   overflowing elements at 924, and gutters coincide exactly at 1180/1512.
+
+   Bounded BELOW at 861 on purpose: `.pf-dash-row-a > .pf-grid-2` outranks the
+   `.pf-grid-2` rule in the 860 block, so an unbounded version would force two
+   KPI columns back on at phone widths, where that block deliberately sets one. */
+@media (min-width: 861px) and (max-width: 1179px) {
+  .pf-dash-row-a,
+  .pf-dash-row-b,
+  .pf-dash-row-c {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .pf-dash-row-a > .pf-grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
 @media (max-width: 860px) {
   .pf-shell {
     flex-direction: column !important;
@@ -143,6 +168,18 @@ body {
     flex-direction: row !important;
     flex-wrap: wrap !important;
     overflow-x: auto;
+    /* The desktop nav scrolls so the user card stays pinned (Sidebar.tsx). Stacked, the
+       aside is content-height and there is nothing to pin against, so releasing the scroll
+       keeps every group reachable — same release .pf-scroll already does below. */
+    flex: none !important;
+    overflow-y: visible !important;
+  }
+  /* Scope headers stack a hairline above each group; in the wrapped row that border cuts
+     across mid-line, so it is dropped along with the vertical rhythm. */
+  .pf-nav-list > .label {
+    border-top: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 6px !important;
   }
   .pf-main {
     min-height: 0 !important;

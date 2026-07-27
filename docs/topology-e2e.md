@@ -39,7 +39,7 @@ prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
 gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
             ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
-            ──> verify: smoke (landing + ops-console) + api (typed contract suite) +
+            ──> verify: smoke (landing + consoles) + api (typed contract suite) +
                 topology (fleet gate, browser login, isolation)
 ```
 

@@ -1,7 +1,7 @@
 # Dev Deploy Model — per-PR ephemeral environments (M2-14, reworked M4-21, M4-23)
 
-How the full fleet — the gateway, the 7 context services, and the three frontend SPAs
-(`landing`, `app`, `ops-console`) — is deployed to Railway. Adopted in M2-14 (one unified
+How the full fleet — the gateway, the 7 context services, and the four frontend SPAs
+(`landing`, `app`, `ops-console`, `support-console`) — is deployed to Railway. Adopted in M2-14 (one unified
 fleet deploy, superseding the M1-08 split model); reworked in M4-21 to end the shared-
 `development` model, and completed in **M4-23**, which is when per-PR environments started
 actually existing: CI now creates, tears down and sweeps them itself.
@@ -90,7 +90,7 @@ PR opened ──> dev-env.yml:
                              4 URLs
                 gateway ──> gate on /healthz (schema migrated + seeded at boot, M4-21-04)
                 ──> 7 context services + 3 SPAs (app is gateway-wired)
-                ──> verify: smoke (landing + ops-console) + api + topology (app login,
+                ──> verify: smoke (landing + both consoles) + api + topology (app login,
                     cross-tenant isolation, fleet /healthz/fleet gate) + demo
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
@@ -374,7 +374,7 @@ contradict what the docs imply.
 
 | Thing | Carries into a fork? | Consequence for `prepare-env` |
 |---|---|---|
-| Service instances | Yes — all 12, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. The settle poll is insurance only. |
+| Service instances | Yes — all 13, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. The settle poll is insurance only. |
 | Public domains | Yes, auto-renamed `<svc>-pr-<N>.up.railway.app` | Domain reconcile is a **no-op**: one query per service, zero mutations. The create path is insurance. |
 | `targetPort` on those domains | `null` — in the fork **and** in `development` | Null is the NORMAL state (Railway magic-port detection). CI must **not** fail on it, and must not invent `8080`. |
 | Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 7 contexts + 3 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |

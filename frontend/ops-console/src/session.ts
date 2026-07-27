@@ -18,11 +18,17 @@
 export const OPS_SESSION_KEY = 'invoice-os.ops-session'
 export const OPS_SESSION_SCHEMA_VERSION = 1
 
-// The landing's operator persona (LANDING_PERSONAS 'support') is the only identity routed
-// here — the tenant-scoped firm/inhouse personas open the Platform app instead. A record
-// rather than a bare union so the membership check below stays a lookup.
+// The landing's developer persona (LANDING_PERSONAS 'developer') is the only identity
+// routed here — the tenant-scoped firm/inhouse personas open the Platform app, and the
+// cross-tenant support persona opens the Support Console. A record rather than a bare
+// union so the membership check below stays a lookup.
+//
+// This key was `support` (name "Amara Okoye") until the Support Console shipped, which
+// made the label actively wrong: this console renders "Amara Okafor · DEVELOPER · ADMIN"
+// for org "Zephyr Pay" (Sidebar.tsx) and is the customer-facing developer platform, not an
+// internal support tool. The name here now matches the one the sidebar draws.
 export const OPS_OPERATORS = {
-  support: { name: 'Amara Okoye', org: 'ASComply Operations' },
+  developer: { name: 'Amara Okafor', org: 'Zephyr Pay' },
 } as const
 
 export type OpsOperatorId = keyof typeof OPS_OPERATORS

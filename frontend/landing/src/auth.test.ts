@@ -11,11 +11,24 @@ afterEach(() => {
 })
 
 describe('destUrl', () => {
-  it('appBase/opsBase: return null when their VITE_* vars are unset', () => {
-    const firm = LANDING_PERSONAS.find((p) => p.id === 'firm')!
-    const support = LANDING_PERSONAS.find((p) => p.id === 'support')!
+  it('appBase/opsBase/supportBase: return null when their VITE_* vars are unset', () => {
+    // Every persona, so a newly added target can never quietly skip the null contract.
+    for (const p of LANDING_PERSONAS) {
+      expect(destUrl(p), `persona ${p.id}`).toBeNull()
+    }
+  })
+})
 
-    expect(destUrl(firm)).toBeNull()
-    expect(destUrl(support)).toBeNull()
+describe('LANDING_PERSONAS', () => {
+  it('ids are unique and each carries the persona id into the destination', () => {
+    expect(new Set(LANDING_PERSONAS.map((p) => p.id)).size).toBe(LANDING_PERSONAS.length)
+  })
+
+  // The four shipped surfaces: two tenant workspaces on the app, the Developer Console on
+  // the ops-console service, and the Support Console on its own. A persona pointing at the
+  // wrong service is the one bug this list can have that nothing else would catch.
+  it('routes each persona to its own console', () => {
+    const byId = Object.fromEntries(LANDING_PERSONAS.map((p) => [p.id, p.target]))
+    expect(byId).toEqual({ developer: 'ops', support: 'support', firm: 'app', inhouse: 'app' })
   })
 })

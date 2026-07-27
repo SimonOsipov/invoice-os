@@ -38,12 +38,17 @@ for (const app of APPS) {
 //
 // Not a security assertion — a fabricated localStorage entry still gets in, and there is no
 // backend behind this console to protect (M7/M8 own that). This pins ROUTING.
-test('ops-console: a visit with no session redirects to the landing page', async ({ page }) => {
-  const opsUrl = resolveTarget('OPS_CONSOLE_URL')
-  const landingUrl = resolveTarget('LANDING_URL')
+for (const [name, target] of [
+  ['ops-console', 'OPS_CONSOLE_URL'],
+  ['support-console', 'SUPPORT_CONSOLE_URL'],
+] as const) {
+  test(`${name}: a visit with no session redirects to the landing page`, async ({ page }) => {
+    const consoleUrl = resolveTarget(target)
+    const landingUrl = resolveTarget('LANDING_URL')
 
-  await page.goto(opsUrl)
-  await page.waitForURL((url) => url.href.startsWith(landingUrl), { timeout: 20_000 })
+    await page.goto(consoleUrl)
+    await page.waitForURL((url) => url.href.startsWith(landingUrl), { timeout: 20_000 })
 
-  expect(page.url(), `expected a redirect from ${opsUrl} to ${landingUrl}`).toContain(landingUrl)
-})
+    expect(page.url(), `expected a redirect from ${consoleUrl} to ${landingUrl}`).toContain(landingUrl)
+  })
+}

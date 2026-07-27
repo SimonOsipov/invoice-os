@@ -1,0 +1,17 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+
+// Design-system tokens, sourced from the shared @invoice-os/design-tokens workspace
+// package (single source of truth; DS project 999b7034-9f23-43d4-9229-51af7dde9f62).
+// Single entry: tokens -> utilities -> .asc-app product layer.
+import '@invoice-os/design-tokens/styles.css'
+// Local app-shell styles ported from the prototype's inline <style> (keyframes + hovers).
+import './styles/support.css'
+
+import App from './App'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)

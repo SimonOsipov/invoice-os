@@ -19,6 +19,8 @@ ARG VITE_APP_URL
 ENV VITE_APP_URL=$VITE_APP_URL
 ARG VITE_OPS_URL
 ENV VITE_OPS_URL=$VITE_OPS_URL
+ARG VITE_SUPPORT_URL
+ENV VITE_SUPPORT_URL=$VITE_SUPPORT_URL
 RUN pnpm --filter @invoice-os/landing build
 
 # ---- Serve: Caddy static server with SPA fallback + /health ----

@@ -35,9 +35,9 @@ environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway b
 ```
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
-                empty (M3-16 invariant) ──> discover the 4 public URLs fresh
+                empty (M3-16 invariant) ──> discover the 5 public URLs fresh
 gateway     ──> gate on /healthz (schema migrated + DB seeded at boot)
-            ──> deploy 7 context services + 3 SPAs (app is gateway-wired: VITE_GATEWAY_URL
+            ──> deploy 8 context services + 4 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
             ──> verify: smoke (landing + consoles) + api (typed contract suite) +
                 topology (fleet gate, browser login, isolation)
@@ -116,7 +116,7 @@ only unconditional table wipe this repo ever ran.
 The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
 `deploy-spas` are both green — so it depends on every service in the fleet actually coming
 up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Every
-environment is now a **fresh, cold, from-scratch 11-service build** (a new PR fork,
+environment is now a **fresh, cold, from-scratch 13-service build** (a new PR fork,
 or a `workflow_dispatch` run against `development`), so this is the norm on every run, not
 an edge case: each Railway service has a service-level **Watch Paths** filter that makes
 `railway up` skip (no deployment created) when the diff misses the service's watched
@@ -138,7 +138,7 @@ experiments falsified scale-to-0 and diff-driven alternatives).
 
 The gateway `health-gate` window was widened again under M4-21 (360s → 900s) — and
 `fleet-gate` / the e2e SPA `/health` wait (200s → 600s) — since every environment is now a
-cold 11-service build, not the exception a warm redeploy used to be (Decision
+cold 13-service build, not the exception a warm redeploy used to be (Decision
 `[gate-windows-provisional]`).
 
 ## Related

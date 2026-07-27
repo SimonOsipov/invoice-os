@@ -35,9 +35,9 @@ A backend service is one Go binary under `cmd/<svc>/`. Throughout this doc:
 - `<svc>` — the service name, identical in: the `cmd/<svc>` directory, the Railway
   service name, and the private-networking hostname `<svc>.railway.internal`.
   Lowercase, no separators (matches existing `cmd/` dirs: `tenancy`, `portfolio`,
-  `invoice`, `validation`, `submission`, `dashboard`, `notifications`, `opsconsole`;
-  plus `gateway`).
-- `<ctx>` — the service's domain context dir `internal/<ctx>`. For the seven context
+  `invoice`, `validation`, `submission`, `dashboard`, `notifications`, `reconciliation`,
+  `opsconsole`; plus `gateway`).
+- `<ctx>` — the service's domain context dir `internal/<ctx>`. For the eight context
   services `<ctx>` = `<svc>`. The gateway has no context dir — drop that line wherever
   it appears.
 
@@ -150,7 +150,7 @@ nice-to-have:
 
 ### `.env.example`
 
-> **Not adopted for backend services (M2-12 decision).** The seven context services and
+> **Not adopted for backend services (M2-12 decision).** The eight context services and
 > the gateway ship **no** `cmd/<svc>/.env.example`. Each service's variables live in one
 > place — its Railway service variable set (see the M2-12 wiring below and the task
 > record) — and the binaries fail fast on a missing required var, so a committed example

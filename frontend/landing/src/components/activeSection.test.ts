@@ -94,4 +94,42 @@ describe('activeNavHref', () => {
     ]
     expect(activeNavHref(outOfOrderTops, NAV_HREFS, THRESHOLD)).toBe('#modules')
   })
+
+  it('threshold of exactly 0 is honored, not silently swapped for a nonzero default', () => {
+    // Every U1-U7 row uses THRESHOLD (66), so none of them would notice a `threshold ||
+    // someDefault` bug — 0 is the one input value JS truthiness gets wrong. Confirmed by
+    // mutation: a `threshold || 66` implementation passes all of U1-U7 and only fails here.
+    const sections = [
+      { id: 'how', top: 0 },
+      { id: 'modules', top: 1 },
+    ]
+    expect(activeNavHref(sections, NAV_HREFS, 0)).toBe('#how')
+  })
+
+  it('sub-pixel tops are compared exactly, not rounded to the nearest integer', () => {
+    // getBoundingClientRect().top is a float in production (e.g. 65.15625), and every
+    // existing row above uses whole-number tops. A section at threshold + 0.4 must NOT
+    // count as crossed: Math.round(threshold + 0.4) === threshold would wrongly say it has.
+    // Confirmed by mutation: a Math.round(s.top) implementation passes all of U1-U7.
+    const sections = [
+      { id: 'how', top: -12.34 },
+      { id: 'modules', top: THRESHOLD + 0.4 },
+    ]
+    expect(activeNavHref(sections, NAV_HREFS, THRESHOLD)).toBe('#how')
+  })
+
+  it('does not mutate the sections or navHrefs arrays (or their elements) it receives', () => {
+    // The caller's arrays are typed `readonly`; freezing them turns any in-place mutation
+    // (e.g. a `.sort()` on the parameter itself instead of a copy) into a thrown TypeError
+    // rather than a silently-corrupted array the caller might reuse.
+    const sections = [
+      { id: 'how', top: 20 },
+      { id: 'modules', top: -50 },
+    ]
+    const navHrefs = ['#how', '#modules']
+    sections.forEach((s) => Object.freeze(s))
+    Object.freeze(sections)
+    Object.freeze(navHrefs)
+    expect(activeNavHref(sections, navHrefs, THRESHOLD)).toBe('#modules')
+  })
 })

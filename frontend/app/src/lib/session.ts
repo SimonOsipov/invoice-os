@@ -91,10 +91,24 @@ export function clearSession(): void {
   }
 }
 
-// The `?persona=` deep-link guard: auto-sign-in fires ONLY when boot produced no session
-// (a rehydrated session wins over a stale deep-link param) AND the param is a known persona.
-export function shouldAutoSignIn(bootSession: Session | null, personaParam: string | null): boolean {
-  return bootSession === null && (personaParam === 'firm' || personaParam === 'inhouse')
+// The `?persona=` deep-link guard: auto-sign-in fires when the param names a persona this
+// app can open ('firm'/'inhouse' — 'developer'/'support' belong to the consoles).
+//
+// A valid param WINS over a stored session. It used to lose to one, on the reasoning that a
+// param sitting in an already-open workspace's URL is a stale leftover. But the landing page
+// is the app's only front door and lives on a DIFFERENT origin, so it cannot clear this
+// origin's stored session when the user picks a profile — the param is the entire hand-off.
+// Losing to the stored session meant that returning to landing without using the in-app Sign
+// out (Back button, second tab, bookmark) and picking the other accountant silently reopened
+// the previous one's workspace.
+//
+// The "stale leftover" case it used to guard against is now closed at the source: App.tsx
+// strips the param the moment it is consumed, so a reload or Back never re-runs this. Both
+// halves are load-bearing — without the strip, this rule would turn `?persona=firm` sitting
+// in history into a credential-free re-entry that survives Sign out. Matches the rule the
+// two consoles already use (ops-console/src/session.ts resolveOpsBootSession).
+export function shouldAutoSignIn(personaParam: string | null): boolean {
+  return personaParam === 'firm' || personaParam === 'inhouse'
 }
 
 // Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the

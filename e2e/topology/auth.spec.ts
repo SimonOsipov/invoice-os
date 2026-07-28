@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { APP_URL, FIRM_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
@@ -76,6 +76,50 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Regression (persona-switch): the landing page is a DIFFERENT origin from the app, so
+// picking a profile there cannot clear this origin's stored session — the ?persona= hand-off
+// is the entire signal that identity changed. It used to LOSE to a stored session, so
+// reaching landing without the in-app Sign out (Back button, a second tab, a bookmark) and
+// choosing the other accountant silently reopened the PREVIOUS one's workspace, tenant label
+// and all. Asserted on a deployed build because the swap only shows up across a real page
+// load with real localStorage.
+test('deployed app: a persona hand-off switches identity over a live stored session', async ({ page }) => {
+  await page.goto(`${APP_URL}?persona=${FIRM_PERSONA.param}`)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+
+  // Arrive again exactly as landing hands off, WITHOUT signing out — the firm session is
+  // still stored on this origin, which is the whole point of the regression.
+  await page.goto(`${APP_URL}?persona=${INHOUSE_PERSONA.param}`)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  const sidebar = page.locator('aside.pf-sidebar')
+  await expect(sidebar).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
+  // The positive assertion alone would pass while BOTH identities render; the bug's
+  // signature was the firm tenant surviving the switch.
+  await expect(sidebar).not.toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+})
+
+// Regression (one-shot hand-off): ?persona= is a sign-in hand-off, not a standing
+// credential. It used to survive in the address bar, so after Sign out the back button
+// returned to the `?persona=firm` entry and walked straight back into the workspace with no
+// OTP — a logout that did not log out. It is now stripped (replaceState) the moment it is
+// consumed, leaving a bare, sessionless app URL behind the sign-out redirect.
+//
+// This pins the strip itself rather than driving the back button: a bfcache restore would
+// make the navigation assertion answer "did Chromium reuse the page?" instead of "is the
+// param gone?" — and the param is the actual defect.
+test('deployed app: the ?persona= hand-off is consumed and removed from the URL', async ({ page }) => {
+  await page.goto(`${APP_URL}?persona=${FIRM_PERSONA.param}`)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the hand-off at ${page.url()} — the back button would re-sign-in`,
+    })
+    .toBe(false)
 })
 
 // The single front door. The app used to answer a sessionless visit with a persona picker

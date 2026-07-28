@@ -573,22 +573,29 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 // real round trip (mint → GET /v1/me) when a gateway is configured; on failure it enters
 // with the persona's static identity, marked unverified, so the showcase never hard-fails.
 export default function App() {
+  // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot:
+  // non-null when the param names a persona this app can open. A non-null value means an
+  // auto-sign-in is in flight, so the render gate shows a loading splash instead of the
+  // "Choose an account" picker — the landing → app hand-off never flashes that redundant
+  // card before the mint → /me round trip resolves. Declared BEFORE `session` because the
+  // session initializer below reads it.
+  const [autoPersona] = useState<PersonaId | null>(() => {
+    const p = new URLSearchParams(window.location.search).get('persona')
+    return shouldAutoSignIn(p) ? (p as PersonaId) : null
+  })
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
   // token already past its `exp` resolves to NO session — entering the workspace on one
   // only buys a dashboard that 401s a moment later.
-  const [session, setSession] = useState<Session | null>(() => resolveBootSession())
+  //
+  // A deep-link hand-off boots with NO session even when one is stored: the user just chose
+  // a profile on the landing page and that choice wins (see shouldAutoSignIn). Rehydrating
+  // here would render the PREVIOUS persona's workspace for the duration of the mint → /me
+  // round trip — and re-persist it via the mirror effect below — before swapping identity
+  // under the user. Starting empty shows the loading splash for the persona actually being
+  // signed in, and the same mirror effect clears the superseded session on that first pass.
+  const [session, setSession] = useState<Session | null>(() => (autoPersona ? null : resolveBootSession()))
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
-  // Persona to auto-sign-in from a landing deep-link (?persona=), resolved ONCE at boot
-  // from the same guard the mount effect below uses: non-null only when boot produced NO
-  // session AND the param names a known persona. A non-null value means an auto-sign-in
-  // is in flight, so the render gate shows a loading splash instead of the "Choose an
-  // account" picker — the landing → app hand-off never flashes that redundant card
-  // before the mint → /me round trip resolves.
-  const [autoPersona] = useState<PersonaId | null>(() => {
-    const p = new URLSearchParams(window.location.search).get('persona')
-    return shouldAutoSignIn(session, p) ? (p as PersonaId) : null
-  })
 
   // Mirror the session to storage: persist while signed in, wipe on sign out / cleared session.
   useEffect(() => {
@@ -598,11 +605,11 @@ export default function App() {
 
   // Sign out returns the user to the marketing landing page (the real sign-in front
   // door). Nulling React state alone would only swap in the app's own minimal
-  // persona-picker AND leave any `?persona=` deep-link in the URL — so the next reload
-  // would auto-sign the same persona straight back in (see the mount effect below),
-  // defeating the logout. Wiping the persisted session then navigating away drops the
-  // param and lands on landing. Also the 401 handler (makeAuthedFetch → onSignOut):
-  // an invalidated session belongs back at the front door, not the in-app picker.
+  // persona-picker, so wipe the persisted session and navigate away. Also the 401 handler
+  // (makeAuthedFetch → onSignOut): an invalidated session belongs back at the front door,
+  // not the in-app picker. The `?persona=` deep-link is no longer this function's problem —
+  // it is stripped from the URL when consumed at boot, so no history entry behind this
+  // navigation can auto-sign the same persona back in.
   const signOut = useCallback(() => {
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
     // localStorage, so without this the invalidated session stayed in React state and
@@ -634,12 +641,28 @@ export default function App() {
   }, [])
 
   // task-21 hand-off: the landing routes here as ?persona=firm|inhouse; auto-sign-in that
-  // persona. autoPersona already encodes the shouldAutoSignIn guard (boot had no session
-  // AND a known persona param), resolved once at boot, so a rehydrated session wins over a
-  // stale deep-link param and this fires at most once on mount.
+  // persona. autoPersona already encodes the shouldAutoSignIn guard (the param names a
+  // persona this app can open), resolved once at boot, so this fires at most once on mount.
   useEffect(() => {
     if (autoPersona) void doSignIn(APP_PERSONAS[autoPersona])
   }, [autoPersona, doSignIn])
+
+  // Drop the consumed ?persona= from the URL. The param is a one-shot hand-off, and leaving
+  // it behind made it a credential-free sign-in link: after Sign out, Back to the
+  // `?persona=firm` history entry walked straight into the workspace again with no OTP —
+  // which reads as "logging out doesn't work". Stripping it also removes the stale-leftover
+  // case that used to justify letting a stored session beat the param, so a plain reload now
+  // resolves through the stored session instead of re-minting.
+  //
+  // replaceState, not a navigation: it must not add a history entry the back button can
+  // bounce off. Reads the URL directly rather than depending on render state — this is the
+  // only writer, and it runs once. Same treatment as ops-console/src/App.tsx.
+  useEffect(() => {
+    if (!autoPersona) return
+    if (new URLSearchParams(window.location.search).has('persona')) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+    }
+  }, [autoPersona])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing

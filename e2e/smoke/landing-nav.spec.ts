@@ -242,7 +242,7 @@ test('landing nav: scrolling into a section marks exactly that link current', as
 // first or last link. Vacuous against the pre-fix build, where nothing was ever
 // marked current; meaningful now that E7 proves the indicator does appear.
 test('landing nav: no link is marked current outside the six sections', async ({ page }) => {
-  const { errors, nav } = await openLanding(page)
+  const { errors, nav, headerH } = await openLanding(page)
 
   // A count of 0 is trivially true on a page that never rendered, so prove the nav
   // is really there first. Without this, E8 would survive the nav disappearing.
@@ -251,13 +251,30 @@ test('landing nav: no link is marked current outside the six sections', async ({
   // At the top of the page the last-crossed section is the hero, which has no link.
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
 
+  // The two scrolled positions below each carry a scrollY precondition, for the same
+  // reason E4 does: if the document were ever short enough that these scrolls did not
+  // move, the page would still be at the top, the hero would still be the last section
+  // crossed, and the count would still be 0 — passing while testing nothing. The bar is
+  // deliberately loose (both positions sit thousands of pixels down) so it can only
+  // ever fire on a genuinely collapsed document, never on sub-pixel drift.
+
   // In the demo CTA — a section[id] that is deliberately not a nav target.
   await scrollSectionUnderHeader(page, '#demo')
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY), {
+      message: `the page did not scroll to the demo CTA, so this proves nothing`,
+    })
+    .toBeGreaterThan(headerH)
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
 
   // And at the very bottom: the footer is a <footer>, not a section[id], so the demo
   // CTA is still the last section crossed.
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY), {
+      message: `the page did not scroll to the bottom, so this proves nothing`,
+    })
+    .toBeGreaterThan(headerH)
   await expect(nav.locator('[aria-current]')).toHaveCount(0)
 
   expectNoConsoleErrors(errors)

@@ -4,6 +4,7 @@ import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
 import { Hero } from './components/Hero'
 import { TrustStrip } from './components/TrustStrip'
+import { Problem } from './components/Problem'
 import { HowItWorks } from './components/HowItWorks'
 import { Modules } from './components/Modules'
 import { Compliance } from './components/Compliance'
@@ -35,6 +36,7 @@ export default function App() {
       <Nav onSignIn={onSignIn} onBookDemo={onBookDemo} />
       <Hero onBookDemo={onBookDemo} onSignIn={onSignIn} />
       <TrustStrip />
+      <Problem />
       <HowItWorks />
       <Modules />
       <Compliance />

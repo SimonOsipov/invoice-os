@@ -1,4 +1,13 @@
-const TOOLS = ['SAP', 'Oracle NetSuite', 'Sage', 'QuickBooks', 'Zoho Books', 'CSV / XLSX']
+const AUDIENCES = [
+  'Medium taxpayers',
+  'Accounting firms',
+  'ERP consultants',
+  'Distributors',
+  'Manufacturers',
+  'Formal SMEs',
+  'Fintech',
+  'CRMs',
+]
 
 export function TrustStrip() {
   return (
@@ -10,19 +19,17 @@ export function TrustStrip() {
           padding: '22px 32px',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 32,
+          justifyContent: 'center',
+          columnGap: 36,
+          rowGap: 12,
           flexWrap: 'wrap',
         }}
       >
-        <span className="label">Built for the way Nigerian finance already works</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 36, flexWrap: 'wrap' }}>
-          {TOOLS.map((t) => (
-            <span key={t} className="mono" style={{ fontSize: 13, color: 'var(--fg-2)', fontWeight: 500 }}>
-              {t}
-            </span>
-          ))}
-        </div>
+        {AUDIENCES.map((a) => (
+          <span key={a} className="label" style={{ fontSize: 12 }}>
+            {a}
+          </span>
+        ))}
       </div>
     </section>
   )

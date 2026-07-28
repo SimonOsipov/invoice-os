@@ -34,6 +34,22 @@ export const HERO_CHECKS: HeroCheck[] = [
 ]
 
 /* ------------------------------------------------------------------ */
+/* The problem — what breaks today                                     */
+/* ------------------------------------------------------------------ */
+
+// One shared warning glyph for every row, so this stays a plain string list.
+export const PROBLEMS: string[] = [
+  'Missing or incomplete tax fields',
+  'Incorrect customer or supplier information',
+  'Duplicate invoice numbers',
+  'Weak approval workflows',
+  'Poor audit trails',
+  'Manual invoice corrections',
+  'Disconnected accounting and ERP systems',
+  'Lack of readiness for structured e-invoicing requirements',
+]
+
+/* ------------------------------------------------------------------ */
 /* How it works — 3 steps                                              */
 /* ------------------------------------------------------------------ */
 

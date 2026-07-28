@@ -11,7 +11,7 @@ export function Modules() {
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ marginBottom: 44 }}>
           <div className="eyebrow eyebrow-dark" style={{ marginBottom: 14 }}>
-            THE PLATFORM
+            THE SOLUTION
           </div>
           <h2
             style={{
@@ -23,11 +23,15 @@ export function Modules() {
               color: 'var(--surface-foreground)',
             }}
           >
-            One compliance operating layer. Twelve modules.
+            ASComply is your invoice compliance workflow layer.
           </h2>
+          <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', maxWidth: 560, margin: '0 0 12px' }}>
+            ASComply sits between your business, your accounting system, your tax adviser and the regulated e-invoicing
+            infrastructure.
+          </p>
           <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', maxWidth: 560, margin: 0 }}>
-            Everything finance, tax, and engineering teams need to issue audit-ready invoices — and nothing they have to
-            rip out.
+            We help your team validate invoices before they are submitted, manage approvals internally, store
+            audit-ready records and connect to licensed transmission partners where required.
           </p>
         </div>
         <div

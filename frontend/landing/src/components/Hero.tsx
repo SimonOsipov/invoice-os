@@ -21,31 +21,6 @@ export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignI
       >
         {/* left */}
         <div>
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              border: '1px solid var(--status-amber-border)',
-              background: 'var(--status-amber-bg)',
-              borderRadius: 999,
-              padding: '5px 12px 5px 10px',
-              marginBottom: 24,
-            }}
-          >
-            <span
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: 99,
-                background: 'var(--status-amber-text)',
-                animation: 'pulseDot 1.6s ease-in-out infinite',
-              }}
-            />
-            <span className="mono" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--status-amber-text)' }}>
-              MBS MANDATE · PHASED ROLLOUT ACTIVE
-            </span>
-          </div>
           <h1 className="ios-hero-h1" style={{ fontSize: 58, lineHeight: 1.02, letterSpacing: '-0.04em', margin: '0 0 22px' }}>
             Get e-invoicing ready
             <br />

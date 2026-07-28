@@ -64,3 +64,9 @@ The **tenant-facing `app` SPA** (gateway-wired) is the **only** functional-E2E t
   Submission/transmit is real (M5-09): it is covered via the invoices **list**'s
   batch-select-and-submit path (`invoice-surfaces.spec.ts`) — the invoice **detail**
   surface deliberately carries no submit control in any status.
+
+**What "smoke only" covers.** Render checks, plus client-side behaviour that has no other
+harness — these SPAs have no DOM component-test layer (every frontend vitest project runs
+in `node`), so a browser check is the only place a control, a route guard, or a scroll-spy
+can be exercised at all. That is a floor, not a licence for per-screen coverage: *keep the
+browser layer thin* and *functional only — no visual regression* apply here unchanged.

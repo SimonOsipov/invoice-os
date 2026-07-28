@@ -52,39 +52,51 @@ UPDATE rules SET enabled = true WHERE enabled = false;
 -- The 27 curated business_entities rows for the demo tenant (Okafor &
 -- Partners, 21 active + 6 archived, [demo-seed-shape]). DO UPDATE, not DO
 -- NOTHING, so a re-run REPAIRS a row a prior demo hand-edited back to its
--- curated name/status. Conflict target is the partial unique index
+-- curated name/sector/status. Conflict target is the partial unique index
 -- business_entities_tenant_tin_uq -- every row below has a distinct,
 -- non-null TIN, so this always resolves to that index.
-INSERT INTO business_entities (tenant_id, name, tin, status) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'Adeyemi & Sons Trading Ltd',       '10012345-0001', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Chukwu Global Ventures Ltd',       '10023456-0002', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Okonkwo Textiles Nigeria Ltd',     '10034567-0003', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Balogun Agro-Allied Ltd',          '10045678-0004', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Emeka Pharmaceuticals Ltd',        '10056789-0005', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Aliyu Logistics Services Ltd',     '10067890-0006', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ifeoma Fashion House Ltd',         '10078901-0007', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Bello Construction Nigeria Ltd',   '10089012-0008', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Nwosu Foods & Beverages Ltd',      '10090123-0009', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Yakubu Motors Ltd',                '10101234-0010', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Chidinma Cosmetics Ltd',           '10112345-0011', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Obiora Steel Works Ltd',           '10123456-0012', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Funmilayo Catering Services Ltd',  '10134567-0013', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Danjuma Petroleum Ltd',            '10145678-0014', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ngozi Interiors Ltd',              '10156789-0015', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Uche Digital Solutions Ltd',       '10167890-0016', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ibrahim Farms Ltd',                '10178901-0017', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Amara Publishing Ltd',             '10189012-0018', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Tunde Electricals Ltd',            '10190123-0019', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Kemi Beauty Concepts Ltd',         '10201234-0020', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Segun Haulage Ltd',                '10212345-0021', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Olumide Printing Press Ltd',       '10223456-0022', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Chinwe Poultry Farms Ltd',         '10245678-0024', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Musa Hardware Stores Ltd',         '10256789-0025', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Bisi Event Planners Ltd',          '10267890-0026', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Ekene Auto Parts Ltd',             '10278901-0027', 'archived')
+--
+-- sector (persona-handoff-fix step 5, Task B): the column is
+-- nullable free text (migrations/20260709155011_business_entities.sql) with
+-- no dropdown/enum anywhere in the app (lib/entityForm.ts treats it as a
+-- plain string; ClientsView.tsx just renders it) -- these are display-ready,
+-- human-readable values matched to each company's own name, NOT the
+-- frontend's SectorKey mock-generator vocabulary (logistics/foods/oilfield/
+-- trading/manufacturing/textile, types.ts), which would render literally
+-- (lowercase) if reused here. DO UPDATE backfills sector onto rows a
+-- pre-this-story deploy already inserted with sector NULL (the old insert
+-- list was (tenant_id, name, tin, status) only) -- a DO NOTHING here would
+-- leave those NULL forever on every PR/dev env created before this change.
+INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'Adeyemi & Sons Trading Ltd',       '10012345-0001', 'Trading',                  'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Chukwu Global Ventures Ltd',       '10023456-0002', 'Trading',                  'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Okonkwo Textiles Nigeria Ltd',     '10034567-0003', 'Textiles',                 'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Balogun Agro-Allied Ltd',          '10045678-0004', 'Agriculture',              'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Emeka Pharmaceuticals Ltd',        '10056789-0005', 'Pharmaceuticals',          'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Aliyu Logistics Services Ltd',     '10067890-0006', 'Logistics',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Ifeoma Fashion House Ltd',         '10078901-0007', 'Fashion',                  'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Bello Construction Nigeria Ltd',   '10089012-0008', 'Construction',             'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Nwosu Foods & Beverages Ltd',      '10090123-0009', 'Food & Beverage',          'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Yakubu Motors Ltd',                '10101234-0010', 'Automotive',               'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Chidinma Cosmetics Ltd',           '10112345-0011', 'Cosmetics',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Obiora Steel Works Ltd',           '10123456-0012', 'Manufacturing',            'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Funmilayo Catering Services Ltd',  '10134567-0013', 'Catering',                 'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Danjuma Petroleum Ltd',            '10145678-0014', 'Oil & Gas',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Ngozi Interiors Ltd',              '10156789-0015', 'Interior Design',          'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Uche Digital Solutions Ltd',       '10167890-0016', 'Technology',               'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Ibrahim Farms Ltd',                '10178901-0017', 'Agriculture',              'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Amara Publishing Ltd',             '10189012-0018', 'Publishing',               'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Tunde Electricals Ltd',            '10190123-0019', 'Electricals',              'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Kemi Beauty Concepts Ltd',         '10201234-0020', 'Beauty & Personal Care',   'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Segun Haulage Ltd',                '10212345-0021', 'Logistics',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Olumide Printing Press Ltd',       '10223456-0022', 'Printing',                 'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'Retail',                   'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Chinwe Poultry Farms Ltd',         '10245678-0024', 'Agriculture',              'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Musa Hardware Stores Ltd',         '10256789-0025', 'Retail',                   'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Bisi Event Planners Ltd',          '10267890-0026', 'Events',                   'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Ekene Auto Parts Ltd',             '10278901-0027', 'Automotive',               'archived')
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
-    DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status;
+    DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
 
 -- persona-handoff-fix step 4 ([demo-invoice-seed]): a curated invoice history for 6 of
 -- the 27 business_entities above, so the entity-scoped surfaces persona-handoff-fix

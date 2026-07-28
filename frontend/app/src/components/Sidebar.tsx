@@ -14,6 +14,7 @@ import { Fragment } from 'react'
 import { gatewayBase, useAsync } from '@invoice-os/api-client'
 import { BrandMark, Icon } from '../icons'
 import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
+import { visibleEntityIds } from '../lib/portfolio'
 import {
   chevDownGlyph,
   NAV_APPROVALS,
@@ -47,6 +48,15 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
     { immediate: base != null },
   )
   const bucket = rollup.status === 'ready' && rollup.data ? scopedBucket(isInhouse, active.entityId, rollup.data) : null
+
+  // persona-handoff-fix Task A: the switcher lists ACTIVE companies only — an archived
+  // one is retired, and offering to switch INTO one reads as "still open for business".
+  // `clients` itself stays the FULL (unfiltered) roster — App.tsx's `active` resolution
+  // and switchClient() both key off it — only this dropdown's rendered options are
+  // narrowed. `active.entityId` is always included even if archived (visibleEntityIds'
+  // own comment): the workspace currently open must not vanish from its own switcher.
+  const switcherIds = visibleEntityIds(ctx.entities, active.entityId)
+  const switcherClients = clients.filter((c) => c.entityId != null && switcherIds.has(c.entityId))
 
   // "Switch company" dropdown row descriptor. Used to read c.score/c.failing — the SAME
   // fabricated overlay (lib/clients.ts) the two nav badges above just moved off, so a
@@ -136,7 +146,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
-                {clients.map((c) => {
+                {switcherClients.map((c) => {
                   const isActive = c.entityId === active.entityId
                   return (
                     <button

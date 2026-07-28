@@ -108,3 +108,20 @@ export function clientsViewState(base: string | null, asyncState: AsyncState<Ent
   if (base == null) return 'idle'
   return asyncState.status
 }
+
+// [entity-picker] step 5 (persona-handoff-fix Task A): entity ids the workspace switcher
+// (Sidebar.tsx) should OFFER. Active-only, EXCEPT `selectedId` is unconditionally
+// included even when archived — an entity can be archived (by this user, or a teammate
+// from the Clients page in another tab) while it is the CURRENT workspace, and the
+// switcher must never silently evict the company the user is looking at: that would
+// either blank ~15 ctx.active call sites or bounce them onto clients[0] without being
+// asked (App.tsx's own [entity-picker] comment on the same trap, one layer up). Decision:
+// the archived-but-selected company stays visible and selected until the user explicitly
+// switches away through this same dropdown — it is never auto-switched out from under
+// them. CreateUpload's importer picker makes the OPPOSITE call for a DIFFERENT question
+// (see that file's own comment, ~L38) — the two are allowed to disagree.
+export function visibleEntityIds(entities: Entity[], selectedId: string | null): Set<string> {
+  const ids = new Set(entities.filter((e) => e.status === 'active').map((e) => e.id))
+  if (selectedId != null) ids.add(selectedId)
+  return ids
+}

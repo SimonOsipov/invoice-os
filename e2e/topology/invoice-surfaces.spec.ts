@@ -4,8 +4,9 @@
 // verified marker -> drive the live surface). NOT the M4-14 demo script
 // ([focused-e2e-topology], out of scope per the M4-09 story).
 //
-// db/seed.dev.sql seeds zero invoices (only business_entities, M4-22-03), so
-// every scenario below creates its OWN entity + invoice(s) via e2e/api/client.ts
+// db/seed.dev.sql now seeds 27 invoices, but only across 6 of its 27 curated
+// business_entities (persona-handoff-fix step 4, [demo-invoice-seed]) -- every
+// scenario below still creates its OWN entity + invoice(s) via e2e/api/client.ts
 // BEFORE driving the UI -- the same "own entity per test" discipline as
 // import-wizard.spec.ts (no-duplicate-invoice-number is scoped per entity, and
 // this suite runs serially -- fullyParallel:false, workers:1

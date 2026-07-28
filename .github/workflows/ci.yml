@@ -473,6 +473,8 @@ jobs:
         run: pnpm --filter @invoice-os/app test
       - name: Unit tests (ops-console)
         run: pnpm --filter @invoice-os/ops-console test
+      - name: Unit tests (landing)
+        run: pnpm --filter @invoice-os/landing test
       # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
       # until this line. Cheap and deployment-free: they assert local seam logic

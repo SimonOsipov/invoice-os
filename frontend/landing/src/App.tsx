@@ -5,8 +5,8 @@ import { DemoModal } from './components/DemoModal'
 import { Hero } from './components/Hero'
 import { TrustStrip } from './components/TrustStrip'
 import { Problem } from './components/Problem'
-import { HowItWorks } from './components/HowItWorks'
 import { Modules } from './components/Modules'
+import { HowItWorks } from './components/HowItWorks'
 import { Compliance } from './components/Compliance'
 import { Audience } from './components/Audience'
 import { Developers } from './components/Developers'
@@ -37,8 +37,8 @@ export default function App() {
       <Hero onBookDemo={onBookDemo} onSignIn={onSignIn} />
       <TrustStrip />
       <Problem />
-      <HowItWorks />
       <Modules />
+      <HowItWorks />
       <Compliance />
       <Audience onBookDemo={onBookDemo} />
       <Developers />

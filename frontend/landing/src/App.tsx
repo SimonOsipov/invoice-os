@@ -29,7 +29,7 @@ export default function App() {
         background: 'var(--bg-1)',
         fontFamily: 'var(--font-sans)',
         color: 'var(--fg-1)',
-        overflowX: 'hidden',
+        overflowX: 'clip',
       }}
     >
       <Nav onSignIn={onSignIn} onBookDemo={onBookDemo} />

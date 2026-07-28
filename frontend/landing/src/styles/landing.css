@@ -12,6 +12,17 @@ body {
   padding: 0;
 }
 
+/* Anchor clearance under the sticky header. --header-h comes from the design
+   system (packages/design-tokens/tokens/spacing.css) and carries no comment
+   there, so its meaning is pinned here at the point of use: 65px is the total
+   vertical space the landing's sticky header OCCUPIES — Nav's 64px inner row
+   plus its own 1px bottom hairline. Declared once by the design system,
+   consumed here, never redeclared. Three consumers read it: this rule, the Nav
+   inner row, and (from LAND-01-03) the scroll-spy threshold. */
+html {
+  scroll-padding-top: var(--header-h);
+}
+
 @keyframes scanline {
   0% {
     transform: translateY(0);

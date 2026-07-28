@@ -27,7 +27,7 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
           maxWidth: 1280,
           margin: '0 auto',
           padding: '0 32px',
-          height: 64,
+          height: 'calc(var(--header-h) - 1px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',

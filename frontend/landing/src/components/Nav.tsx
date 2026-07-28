@@ -1,4 +1,7 @@
+import { useEffect, useState } from 'react'
+
 import { BrandMark } from '../icons'
+import { activeNavHref } from './activeSection'
 
 const NAV_LINKS = [
   { label: 'How it works', href: '#how' },
@@ -9,7 +12,41 @@ const NAV_LINKS = [
   { label: 'Pricing', href: '#pricing' },
 ]
 
+const NAV_HREFS = NAV_LINKS.map((l) => l.href)
+
 export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo: () => void }) {
+  const [activeHref, setActiveHref] = useState<string | null>(null)
+
+  useEffect(() => {
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      // Header height comes from --header-h, the single source of truth (it also
+      // drives this file's calc() below and landing.css's scroll-padding-top).
+      // No fallback on purpose: if the token ever went missing, parseFloat('') is
+      // NaN, every `top <= NaN` is false and no link lights — the failure is dark,
+      // never wrong. Do not "fix" this with a hardcoded pixel fallback.
+      const threshold =
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h')) + 1
+      const sections = Array.from(document.querySelectorAll('section[id]')).map((el) => ({
+        id: el.id,
+        top: el.getBoundingClientRect().top,
+      }))
+      const next = activeNavHref(sections, NAV_HREFS, threshold)
+      setActiveHref((prev) => (prev === next ? prev : next))
+    }
+    const onScroll = () => {
+      if (frame) return
+      frame = requestAnimationFrame(measure)
+    }
+    measure()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [])
+
   return (
     <header
       style={{
@@ -27,7 +64,7 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
           maxWidth: 1280,
           margin: '0 auto',
           padding: '0 32px',
-          height: 64,
+          height: 'calc(var(--header-h) - 1px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -51,12 +88,32 @@ export function Nav({ onSignIn, onBookDemo }: { onSignIn: () => void; onBookDemo
             AFRICA
           </span>
         </a>
-        <nav className="ios-hide-mobile" style={{ display: 'flex', alignItems: 'center', gap: 30 }}>
-          {NAV_LINKS.map((l) => (
-            <a key={l.href} href={l.href} className="ios-link" style={{ fontSize: 14, color: 'var(--fg-2)' }}>
-              {l.label}
-            </a>
-          ))}
+        <nav aria-label="Primary" className="ios-hide-mobile" style={{ display: 'flex', alignItems: 'center', gap: 30 }}>
+          {NAV_LINKS.map((l) => {
+            const active = l.href === activeHref
+            return (
+              <a
+                key={l.href}
+                href={l.href}
+                className="ios-link"
+                // Must be 'true' | undefined, never a boolean: React passes a
+                // boolean straight to setAttribute for aria-* names, which would
+                // render aria-current="false" on every inactive link.
+                aria-current={active ? 'true' : undefined}
+                style={{
+                  fontSize: 14,
+                  color: active ? 'var(--action)' : 'var(--fg-2)',
+                  borderBottom: `2px solid ${active ? 'var(--action)' : 'transparent'}`,
+                  // 6 above vs 4 + 2px border below keeps the text centred on the
+                  // row alongside the brand lockup and both CTA buttons.
+                  paddingTop: 6,
+                  paddingBottom: 4,
+                }}
+              >
+                {l.label}
+              </a>
+            )
+          })}
         </nav>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {/* Opens the mock persona picker → OTP → routes to the workspace the

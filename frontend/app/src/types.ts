@@ -188,10 +188,11 @@ export type PlatformCtx = {
   clients: Client[]
   active: Client
   // [entity-picker] step 1 of 3: the ONE live portfolio entity fetch, shared by the
-  // workspace switcher (Sidebar), ClientsView and CreateUpload — previously the latter
-  // two each ran their own independent listEntities() call. entities/entitiesState/
-  // entitiesError mirror the AsyncState<Entity[]> shape those two already rendered
-  // against (clientsViewState's AsyncStatus ladder); refetchEntities is useAsync's `run`.
+  // workspace switcher (Sidebar) and ClientsView — previously each ran its own
+  // independent listEntities() call. entities/entitiesState/entitiesError mirror the
+  // AsyncState<Entity[]> shape they already rendered against (clientsViewState's
+  // AsyncStatus ladder); refetchEntities is useAsync's `run`. CreateUpload was a third
+  // consumer until [import-upload-unify] removed its entity <select>.
   entities: Entity[]
   entitiesState: AsyncStatus
   entitiesError: ApiError | null
@@ -218,9 +219,11 @@ export type PlatformCtx = {
 
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two
-  // halves of the flow are two components: the entity + file are chosen in
-  // CreateUpload, which UNMOUNTS when createStep leaves 'upload', while
-  // createImport fires from CreateMapping. Local state would lose both in between.
+  // halves of the flow are two components: the file is chosen in CreateUpload, which
+  // UNMOUNTS when createStep leaves 'upload', while createImport fires from
+  // CreateMapping. Local state would lose it in between. (`entityId` no longer has a
+  // picker of its own since [import-upload-unify] — it mirrors `active` — but it is
+  // read at createImport time, so it must survive that unmount too.)
   entityId: string | null
   importFile: File | null
   preview: ImportPreview | null
@@ -256,7 +259,6 @@ export type PlatformCtx = {
   clickCol: (header: string) => void
   unmap: (header: string) => void
   continueMapping: () => void
-  selectEntity: (id: string | null) => void
   selectImportFile: (f: File | null) => void
   readColumns: () => void
   backToImport: () => void

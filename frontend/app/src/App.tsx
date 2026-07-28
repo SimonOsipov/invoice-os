@@ -94,13 +94,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const importAuth = useMemo(() => makeImportAuth(session, onSignOut), [session, onSignOut])
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
-  // shared by the switcher below, ClientsView and CreateUpload (via ctx.entities/
-  // entitiesState/entitiesError/refetchEntities) — previously each of the latter two ran
-  // its own independent listEntities() call, and the switcher didn't fetch at all (it
-  // read the static buildClients() mock roster), so the three surfaces could each show a
-  // different company list. Same base/shouldFetchEntities/clientsViewState idiom as
-  // ClientsView.tsx/CreateUpload.tsx used individually before (no-gateway build stays at
-  // zero network).
+  // shared by the switcher below and ClientsView (via ctx.entities/entitiesState/
+  // entitiesError/refetchEntities) — previously each ran its own independent
+  // listEntities() call, and the switcher didn't fetch at all (it read the static
+  // buildClients() mock roster), so the surfaces could each show a different company
+  // list. Same base/shouldFetchEntities/clientsViewState idiom as ClientsView.tsx used
+  // individually before (no-gateway build stays at zero network). CreateUpload was a
+  // third consumer until [import-upload-unify] deleted its entity <select> — it now
+  // mirrors `active` and reads none of these.
   const base = gatewayBase()
   const entitiesAsync = useAsync<Entity[]>(
     () => (base ? listEntities(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
@@ -168,12 +169,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [valIdx, setValIdx] = useState(0)
   const [parseIdx, setParseIdx] = useState(0)
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
-  // [entity-picker] step 3 of 3: now DEFAULTS to `active.entityId` (resetImport, below)
-  // — the user already answered "which company" via the switcher, so the import wizard
-  // no longer asks again by default — but it stays independently changeable: picking a
-  // different entity from CreateUpload's dropdown overrides the default, and it is never
-  // silently carried over from a PREVIOUS run in the same session (resetImport reseeds
-  // from `active` every time, not from whatever this state last held).
+  // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
+  // the user already answered "which company" via the switcher, so the import wizard
+  // does not ask again. [import-upload-unify] made that the ONLY source: CreateUpload's
+  // own <select> is gone, so this is now a pure mirror of `active` and the two can no
+  // longer disagree (that dropdown also listed archived entities the switcher hides,
+  // so it could file a LIVE import under a company the switcher would never offer).
+  // Still never carried over from a PREVIOUS run in the same session — resetImport
+  // reseeds from `active` every time, not from whatever this state last held.
   const [entityId, setEntityId] = useState<string | null>(null)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
@@ -203,6 +206,22 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   useEffect(() => clearVal, [])
+
+  // resetImport() snapshots active.entityId at openCreate so a company switch cannot
+  // silently retarget an import already in flight. But that snapshot can be taken
+  // BEFORE the entities fetch resolves — click "New invoice" fast enough (cold fleet,
+  // slow link) and `active` is still emptyClient(), so the snapshot is null. The upload
+  // step reads active.entityId LIVE for its blocked state, so it un-blocks the moment
+  // entities land, while this null entityId persists and canReadColumns stays false —
+  // a dropzone that accepts a file and a Read-columns button that can never enable.
+  // Before [import-upload-unify] the entity <select> was the escape hatch; there is no
+  // longer one, so re-seed on exactly that null -> resolved transition. Confined to the
+  // upload step: past it the columns are already read against the snapshot, and moving
+  // the target then is the retarget resetImport exists to prevent.
+  useEffect(() => {
+    if (createStep !== 'upload' || entityId !== null || active.entityId === null) return
+    setEntityId(active.entityId)
+  }, [createStep, entityId, active.entityId])
 
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
@@ -241,9 +260,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Every piece of import state is per-run: a second import must not inherit the first
   // one's preview, progress, error or report. `entityId` defaults to `active.entityId`
   // ([entity-picker] step 3 of 3) rather than blank — the user already picked this
-  // company via the switcher — but a PREVIOUS run's entity (if the user picked a
-  // different one from the dropdown) is never silently carried into a fresh run: every
-  // open reseeds from the CURRENT `active`, not from whatever this state last held.
+  // company via the switcher. Since [import-upload-unify] there is no in-wizard way to
+  // diverge from it, but the reseed still matters: every open takes the CURRENT
+  // `active`, so switching company between two runs cannot leave the second run filing
+  // under the first run's entity.
   function resetImport() {
     setEntityId(active.entityId)
     setImportFile(null)
@@ -308,11 +328,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   function selectFile(id: string) {
     setUploadFile(id)
-  }
-
-  function selectEntity(id: string | null) {
-    setEntityId(id)
-    setImportError(null)
   }
 
   // Stores whatever the input yielded — the extension rule lives in canReadColumns
@@ -571,7 +586,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clickCol,
     unmap,
     continueMapping,
-    selectEntity,
     selectImportFile,
     readColumns,
     backToImport,

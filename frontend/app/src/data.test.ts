@@ -1,10 +1,13 @@
 // Pins the SAMPLE_FILES invariant that makes M4-08-FU-01's deletion safe (task-177
 // AC#2). CreateForm.tsx:15 and CreateFlow.tsx:24 both map `uploadFile` (only ever set
-// from a SAMPLE_FILES id, App.tsx:237) to a display filename; CreateForm hardcodes the
+// from a SAMPLE_FILES id, App.tsx:314) to a display filename; CreateForm hardcodes the
 // two names as a ternary with NO fallback arm. Adding a third sample file — or renaming
-// one — silently renders '' there and breaks e2e/topology/import-wizard.spec.ts:360's
-// exact-text assertion, which is the only other oracle. Components need jsdom (vitest is
-// environment:'node'), so this pure-data check is the sole unit-level guard.
+// one — silently renders '' there and breaks import-wizard.spec.ts's E2E-08/E2E-10
+// exact-text assertions on 'lagos-freight-INV-0482.pdf'. Since [import-upload-unify]
+// that oracle is weaker than it was: the document card is sandbox-gated, so those
+// assertions only run after the spec toggles SANDBOX, and any future test that forgets
+// the toggle silently asserts against an absent element. Components need jsdom (vitest
+// is environment:'node'), so this pure-data check is the sole unit-level guard.
 
 import { describe, it, expect } from 'vitest'
 import { SAMPLE_FILES } from './data'

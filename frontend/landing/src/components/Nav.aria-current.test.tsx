@@ -40,6 +40,6 @@ describe('Nav SSR (no scroll-spy effect runs under renderToStaticMarkup, so acti
 
   it('the nav landmark carries aria-label="Primary"', () => {
     const html = renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {} }))
-    expect(html).toContain('<nav aria-label="Primary" class="ios-hide-mobile"')
+    expect(html).toMatch(/<nav[^>]*aria-label="Primary"/)
   })
 })

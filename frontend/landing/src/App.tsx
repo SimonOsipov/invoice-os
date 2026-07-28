@@ -29,6 +29,10 @@ export default function App() {
         background: 'var(--bg-1)',
         fontFamily: 'var(--font-sans)',
         color: 'var(--fg-1)',
+        // `clip` is load-bearing, not a typo for `hidden`. `overflow-x: hidden` forces
+        // overflow-y to compute to `auto`, making this div the sticky header's scroll
+        // container — and it never scrolls, so the header rides the page away. `clip`
+        // clips identically but establishes no scroll container. Guarded by e2e/smoke/landing-nav.spec.ts (E4).
         overflowX: 'clip',
       }}
     >

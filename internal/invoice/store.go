@@ -347,38 +347,74 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 
 // List returns the caller's tenant's invoice HEADERS (LineItems left nil, [D7]),
 // ordered created_at DESC, id DESC (deterministic), paginated by f.Limit/f.Offset,
-// plus the total tenant-scoped count for the pagination envelope. RLS (not a
-// manual WHERE tenant_id) scopes both the COUNT and the page. An empty result
-// is []Invoice{}, never a nil slice.
+// plus the total FILTERED count (matching f.EntityID/f.NeedsAttention, ignoring
+// limit/offset) for the pagination envelope. RLS (not a manual WHERE tenant_id)
+// additionally scopes both the COUNT and the page to the caller's tenant. An
+// empty result is []Invoice{}, never a nil slice.
 //
-// f.NeedsAttention (M4-09-02) is the one predicate filter ([D8]): when true, a
-// WHERE clause is applied to BOTH the COUNT and the page query, copied
-// VERBATIM from the dashboard rollup's own count(*) FILTER predicate
-// (internal/dashboard/store.go Rollup, alias dropped -- List has no join) so
-// the two surfaces can never drift apart ([needs-attention-drift-guard],
-// TestStoreList_NeedsAttentionMatchesDashboardRollup). The predicate carries
-// NO bind params of its own, so it does not disturb LIMIT/OFFSET's $1/$2.
-// When false (the zero value / omitted), `where` is empty and both queries
-// are byte-identical to before this filter existed.
+// f.EntityID ([entity-id-restored], regression fix) and f.NeedsAttention
+// (M4-09-02) are Store.List's two predicate filters ([D8]), ANDed together
+// when both are set. EntityID follows portfolio/store.go List's own
+// conditions/args idiom (fmt.Sprintf("entity_id = $%d", len(args)), never
+// string-interpolated) so it narrows the row set BEFORE LIMIT/OFFSET are ever
+// applied -- the fix for the CI-caught regression where the SPA instead
+// fetched a tenant-wide page and filtered it in the browser, dropping an
+// entity's own invoices whenever they weren't inside the newest 50
+// tenant-wide. Because EntityID may consume a bind param, LIMIT/OFFSET's
+// placeholder numbers float (len(args)+1/+2), not the fixed $1/$2 this query
+// used before EntityID existed. A malformed (non-uuid) f.EntityID raises
+// Postgres 22P02 (invalid_text_representation), mapped to ErrValidation --
+// mirrors Get/Update/Transition's own 22P02 handling -- even though
+// ListHandler already rejects a malformed entity_id query param before
+// Store.List is ever called.
+//
+// f.NeedsAttention's WHERE fragment, when true, is copied VERBATIM from the
+// dashboard rollup's own count(*) FILTER predicate (internal/dashboard/
+// store.go Rollup, alias dropped -- List has no join) so the two surfaces can
+// never drift apart ([needs-attention-drift-guard],
+// TestStoreList_NeedsAttentionMatchesDashboardRollup). It carries no bind
+// params of its own. When both filters are false/absent (the zero
+// ListFilter), `where` is empty and both queries are byte-identical to before
+// either filter existed.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		where := ""
+		var conditions []string
+		var args []any
+
+		if f.EntityID != "" {
+			args = append(args, f.EntityID)
+			conditions = append(conditions, fmt.Sprintf("entity_id = $%d", len(args)))
+		}
 		if f.NeedsAttention {
-			where = ` WHERE (status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`
+			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
 		}
 
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM invoices`+where).Scan(&total); err != nil {
+		where := ""
+		if len(conditions) > 0 {
+			where = " WHERE " + strings.Join(conditions, " AND ")
+		}
+
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM invoices`+where, args...).Scan(&total); err != nil {
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
 			return err
 		}
 
-		rows, err := tx.Query(ctx,
+		// No 22P02 check needed on this second query: it shares `args` (and therefore
+		// f.EntityID) byte-for-byte with the COUNT query above, which always runs
+		// FIRST -- a malformed EntityID already raised ErrValidation there and
+		// returned before this ever executes; LIMIT/OFFSET are plain Go ints, which
+		// cannot themselves produce an invalid_text_representation.
+		selectArgs := append(append([]any{}, args...), f.Limit, f.Offset)
+		rows, err := tx.Query(ctx, fmt.Sprintf(
 			`SELECT `+invoiceColumns+`
-			 FROM invoices`+where+`
+			 FROM invoices%s
 			 ORDER BY created_at DESC, id DESC
-			 LIMIT $1 OFFSET $2`, f.Limit, f.Offset,
-		)
+			 LIMIT $%d OFFSET $%d`, where, len(args)+1, len(args)+2,
+		), selectArgs...)
 		if err != nil {
 			return err
 		}

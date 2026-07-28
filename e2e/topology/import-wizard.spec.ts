@@ -44,9 +44,14 @@
 // (the F6 hijack this guards against is session-scoped) -- both live in a single
 // test with two labelled assertion blocks rather than two tests.
 //
-// No production code changes, no data-testid (grep -rn 'data-testid' frontend/
-// packages/ e2e/ -> zero, repo-wide) -- every selector below is role/exact-text,
-// matching the convention every existing spec in this package already uses.
+// No production code changes at authoring time, and no data-testid -- every selector
+// below was role/exact-text, matching the convention every existing spec in this
+// package already used. STALE as of the persona-handoff-fix regression fix
+// ([entity-id-restored]): that story's own steps 1-2 added data-testid="company-switcher"
+// / "company-switcher-option" / "invoices-list" to the app (Sidebar.tsx/
+// InvoicesList.tsx), and this file's own selectEntity() helper (a copy of
+// invoice-surfaces.spec.ts's, see its doc comment) now uses them -- role/exact-text is
+// no longer the exclusive idiom in this file, just the original one.
 import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
@@ -92,6 +97,23 @@ async function signInFirm(page: Page): Promise<void> {
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+}
+
+// selectEntity(): a second copy of invoice-surfaces.spec.ts's own helper of the same
+// name (this package's established convention for small Page-driving helpers -- see
+// this file's own collectErrors/signInFirm doc comment above: "no spec file in this
+// package exports its own helpers today, so this is a third copy, not a new seam").
+// Needed here by the persona-handoff-fix regression fix ([entity-id-restored]):
+// Invoices is a CLIENT-scoped surface now (listInvoices' own `entity_id` param,
+// server-side), so a test that drives it must make ITS OWN fixture entity the active
+// workspace switcher selection first -- signInFirm() alone leaves the switcher on
+// whatever `clients[0]` resolves to (portfolio's List `ORDER BY name ASC, id ASC`),
+// never this test's own Date.now()-suffixed entity. Sidebar.tsx:
+// data-testid="company-switcher" (the toggle button) / "company-switcher-option"
+// (each row in the open dropdown).
+async function selectEntity(page: Page, entityName: string): Promise<void> {
+  await page.getByTestId('company-switcher').click()
+  await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
@@ -214,6 +236,11 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   const entity = await createEntity(token, { name: `M4-08 UI Mixed ${Date.now()}`, tin: freshTin() })
 
   await signInFirm(page)
+  // Invoices is CLIENT-scoped now ([entity-id-restored]) -- make `entity` the active
+  // workspace switcher selection BEFORE anything else, so E2E-09's "← All invoices"
+  // step below actually shows ITS two imported rows, not whichever entity the
+  // switcher defaults to (see selectEntity's own doc comment).
+  await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
@@ -310,10 +337,24 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   // detail's panel title; M4-09-05's live detail names the equivalent panel
   // "Status history" instead, so its absence here is also proof this is the live
   // surface, never the old mock fallback.
+  //
+  // [entity-id-restored] regression fix: Invoices is entity-scoped now (server-side,
+  // via listInvoices' own `entity_id` param), and `selectEntity` above made `entity`
+  // the active workspace selection -- so its scoped list contains EXACTLY the two
+  // invoices this run just imported (INV-UI-MIX-STRUCT never became an invoice at all,
+  // quarantined structurally per buildMixedCsv's own doc comment). The "different
+  // invoice" this test wants is therefore unambiguously INV-UI-MIX-CLEAN, clicked by
+  // name -- not a positional `.pf-list-row.first()`, which (before this fix) depended
+  // on whichever entity happened to be active by DEFAULT and how the shared,
+  // never-reset dev DB's ever-growing invoice set paginated: exactly the CI-caught
+  // filter-after-paginate regression this fix closes (the scoped list would render
+  // EMPTY whenever the default entity's own invoices fell outside the newest-50
+  // tenant-wide window, timing out this very click).
   await page.getByRole('button', { name: '← All invoices' }).click()
-  await page.locator('.pf-list-row').first().click()
+  await page.getByTestId('invoices-list').getByText('INV-UI-MIX-CLEAN', { exact: true }).click()
 
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-CLEAN')
   await expect(page.getByRole('heading', { level: 1 })).not.toHaveText('INV-UI-MIX-VIOLATE')
   await expect(page.getByTestId('status-history')).toBeVisible()
   await expect(page.getByText('Audit trail', { exact: true })).toHaveCount(0)

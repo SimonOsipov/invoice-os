@@ -1,13 +1,14 @@
 // Customers & vendors — buyer master data aggregated from the active client's LIVE,
 // entity-scoped invoices: KPIs + a table with TIN-validity status, or an honest empty
 // state. Ported from Platform.dc.html ~L733-779 + the customers slice of
-// renderVals() (~L1462-1468). persona-handoff-fix step 3 swaps the source off the
+// renderVals() (~L1462-1468). persona-handoff-fix step 3 swapped the source off the
 // fabricated `active.invoices` overlay (attributing invented buyers to the real
-// selected company) onto the SAME live, entity-filtered fetch InvoicesList.tsx already
-// established — see filterByActiveEntity's own doc comment (lib/invoices.ts) for why
-// the filter runs in the browser rather than a query param; this is its own
-// independent fetch ([fetch-per-surface], same posture as ClientsView/DashboardActive/
-// InvoicesList), not a shared cache with InvoicesList.
+// selected company) onto the SAME live fetch InvoicesList.tsx already established; a
+// later regression fix ([entity-id-restored]) moved the actual entity-row filtering
+// server-side, via listInvoices' own `entity_id` param — see gateByActiveEntity's own
+// doc comment (lib/invoices.ts) for what's left client-side. Own independent fetch
+// ([fetch-per-surface], same posture as ClientsView/DashboardActive/InvoicesList), not
+// a shared cache with InvoicesList.
 
 import { useMemo } from 'react'
 
@@ -15,26 +16,36 @@ import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-clie
 
 import { fmt, fmtShort } from '../lib/format'
 import { aggregateCustomers, initials } from '../lib/customers'
-import { filterByActiveEntity, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
+import { gateByActiveEntity, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
 import { docGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
   const base = gatewayBase()
+  // Same in-house/null-entity resolution as InvoicesList.tsx's own `activeEntityId`.
+  const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
   // Same `base ? … : …` narrowing as InvoicesList.tsx:65-68 — `immediate:
-  // shouldFetchInvoices(base)` keeps the no-gateway build at zero network.
+  // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
+  // re-fetches on a company switch ([entity-id-restored]: entity_id is a server-side
+  // param now, so switching companies needs a real refetch, not just a recompute).
   const list = useAsync<InvoiceRecord[]>(
-    () => (base ? listInvoices(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: shouldFetchInvoices(base) },
+    () =>
+      base
+        ? listInvoices(ctx.authedFetch, base, { entityId: activeEntityId })
+        : Promise.reject(new Error('no gateway configured')),
+    { immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
   )
   const state = invoicesViewState(base, list)
 
-  // [dashboard-scope-per-client]: narrowed to the ACTIVE client the same way
-  // InvoicesList.tsx's own `rows` is (filterByActiveEntity) — a buyer's totals here can
-  // never disagree with the invoice rows the Invoices page renders for this client.
+  // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
+  // ([entity-id-restored]); gateByActiveEntity blanks the "not yet resolved" transient
+  // window entirely, and still row-filters otherwise (its own doc comment covers why:
+  // a company switch's pre-refetch frame would otherwise flash the previous client's
+  // buyers) — a buyer's totals here can never disagree with the invoice rows the
+  // Invoices page renders for this client.
   const rows = useMemo(
-    () => filterByActiveEntity(list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    () => gateByActiveEntity(list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
     [list.data, ctx.mode, ctx.active.entityId],
   )
   const custList = aggregateCustomers(rows)
@@ -114,10 +125,11 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {/* Covers the no-gateway build ('idle'), a genuinely empty tenant ('empty'), and
-          the ready-but-filtered-to-zero window — this client has invoices elsewhere but
-          none for THIS one (all 27 seeded entities today) — same three-way union
-          InvoicesList.tsx's own empty rung uses. */}
+      {/* Covers the no-gateway build ('idle'), a genuinely entity-less-of-invoices tenant
+          ('empty', now resolved server-side via `entity_id` — [entity-id-restored]), and
+          the ready-but-gated-to-zero window (entityId not yet resolved,
+          gateByActiveEntity) — same three-way union InvoicesList.tsx's own empty rung
+          uses. */}
       {(state === 'idle' || state === 'empty' || (state === 'ready' && customers.length === 0)) && (
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>

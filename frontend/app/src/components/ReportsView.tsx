@@ -1,12 +1,19 @@
 // Reports & analytics — tax KPIs, top-customers bar list, validation summary, and export
 // buttons; or an honest empty state. Ported from Platform.dc.html ~L780-846 + the
-// reports slice of renderVals() (~L1469-1477). persona-handoff-fix step 3 swaps every
+// reports slice of renderVals() (~L1469-1477). persona-handoff-fix step 3 swapped every
 // number off the fabricated `active.invoices` overlay onto two independent live fetches
 // ([fetch-per-surface], same posture as ClientsView/DashboardActive/InvoicesList/
-// CustomersView): `list` (listInvoices + filterByActiveEntity, same entity-scoped rows
-// CustomersView.tsx now uses) feeds the monetary KPIs + top-customers list, and `roll`
-// (getRollup) feeds the Validation summary card via scopedBucket/topFailures — the SAME
-// helpers DashboardActive.tsx already uses, not a second implementation of either.
+// CustomersView): `list` (listInvoices, same entity-scoped rows CustomersView.tsx uses —
+// entity-scoped server-side since [entity-id-restored]; gateByActiveEntity's own doc
+// comment covers why its row-level check stays too) feeds the monetary KPIs + top-customers list,
+// and `roll` (getRollup) feeds the Validation summary card via scopedBucket/topFailures —
+// the SAME helpers DashboardActive.tsx already uses, not a second implementation of
+// either. NOTE (regression-fix follow-up): the monetary KPIs below sum over `rows`, which
+// is still bounded by listInvoices' un-set `limit` (server default 50, [D8]) — correct
+// for every ENTITY this app seeds/creates today (all comfortably under 50 invoices), but
+// an entity with more than 50 invoices would still under-count here. That's a pre-existing
+// pagination-vs-aggregation gap, not something entity_id introduced or fixes; flagged, not
+// fixed, in this pass.
 //
 // Step 3 DELETED the WHT KPI here instead of SAMPLE-marking it, on the reasoning that a
 // fabricated withholding-tax figure on a tax-reporting screen was worse than a marked
@@ -31,25 +38,35 @@ import { EXPORTS_LIST } from '../data'
 import { fmt, fmtShort } from '../lib/format'
 import { aggregateCustomers } from '../lib/customers'
 import { dashboardViewState, getRollup, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
-import { filterByActiveEntity, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
+import { gateByActiveEntity, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
 import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
   const base = gatewayBase()
+  // Same in-house/null-entity resolution as InvoicesList.tsx's own `activeEntityId`.
+  const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
 
   // Drives the KPI grid + top-customers list + the page's own empty state — same
-  // `base ? … : …` narrowing as InvoicesList.tsx:65-68/CustomersView.tsx.
+  // `base ? … : …` narrowing as InvoicesList.tsx:65-68/CustomersView.tsx. `deps`
+  // re-fetches on a company switch ([entity-id-restored]: entity_id is a server-side
+  // param now, so switching companies needs a real refetch, not just a recompute).
   const list = useAsync<InvoiceRecord[]>(
-    () => (base ? listInvoices(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: shouldFetchInvoices(base) },
+    () =>
+      base
+        ? listInvoices(ctx.authedFetch, base, { entityId: activeEntityId })
+        : Promise.reject(new Error('no gateway configured')),
+    { immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
   )
   const state = invoicesViewState(base, list)
-  // [dashboard-scope-per-client]: same filterByActiveEntity narrowing as
+  // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
+  // ([entity-id-restored]); gateByActiveEntity blanks the "not yet resolved" transient
+  // window entirely and still row-filters otherwise (its own doc comment covers why:
+  // avoids flashing the previous client's KPIs for a frame), same as
   // CustomersView.tsx/InvoicesList.tsx's own `rows`.
   const rows = useMemo(
-    () => filterByActiveEntity(list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    () => gateByActiveEntity(list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
     [list.data, ctx.mode, ctx.active.entityId],
   )
 
@@ -115,9 +132,11 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
-      {/* Covers the no-gateway build ('idle'), a genuinely empty tenant ('empty'), and
-          the ready-but-filtered-to-zero window — same three-way union
-          CustomersView.tsx/InvoicesList.tsx use for their own empty rung. */}
+      {/* Covers the no-gateway build ('idle'), a genuinely entity-less-of-invoices tenant
+          ('empty', resolved server-side via `entity_id` — [entity-id-restored]), and the
+          ready-but-gated-to-zero window (entityId not yet resolved, gateByActiveEntity) —
+          same three-way union CustomersView.tsx/InvoicesList.tsx use for their own empty
+          rung. */}
       {(state === 'idle' || state === 'empty' || (state === 'ready' && rows.length === 0)) && (
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>

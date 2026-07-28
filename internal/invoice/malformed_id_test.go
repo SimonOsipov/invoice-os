@@ -23,10 +23,11 @@ import (
 )
 
 // TestStore_MalformedIDIsValidationError: a non-uuid id string passed to
-// Get/Update/Transition maps to ErrValidation (22P02), not a raw
-// *pgconn.PgError / HTTP 500; Update/Transition persist no writes, and a
-// real baseline invoice for the same tenant is left completely unchanged by
-// either failed call.
+// Get/Update/Transition/History/List (List's f.EntityID, added by the
+// persona-handoff-fix regression fix, [entity-id-restored]) maps to
+// ErrValidation (22P02), not a raw *pgconn.PgError / HTTP 500; Update/
+// Transition persist no writes, and a real baseline invoice for the same
+// tenant is left completely unchanged by any failed call.
 func TestStore_MalformedIDIsValidationError(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -103,6 +104,18 @@ func TestStore_MalformedIDIsValidationError(t *testing.T) {
 		_, err := store.History(c, malformed)
 		if !errors.Is(err, ErrValidation) {
 			t.Fatalf("History(malformed id) err = %v, want ErrValidation (22P02 invalid_text_representation)", err)
+		}
+	})
+
+	// List (persona-handoff-fix regression fix, [entity-id-restored]): a
+	// malformed f.EntityID must map to ErrValidation exactly like every other
+	// id-shaped Store input above -- not a bare 500, and not silently ignored
+	// (which would fall back to a tenant-wide, unfiltered list). Read-only,
+	// same shape as the "Get"/"History" subtests.
+	t.Run("List", func(t *testing.T) {
+		_, _, err := store.List(c, ListFilter{Limit: 50, EntityID: malformed})
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("List(malformed entity_id) err = %v, want ErrValidation (22P02 invalid_text_representation)", err)
 		}
 	})
 }

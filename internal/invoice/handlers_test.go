@@ -25,6 +25,7 @@
 //	INV-HTTP-06 TestListHandler_OffsetNegative400
 //	INV-HTTP-06 TestListHandler_NonIntegerLimit400
 //	M4-09-02 AC#5 TestListHandler_NeedsAttentionParse
+//	[entity-id-restored] TestListHandler_EntityIDParam
 //	INV-HTTP-07 TestTransitionHandler_200
 //	INV-HTTP-08 TestTransitionHandler_Illegal409
 //	INV-HTTP-09 TestTransitionHandler_Redundant409
@@ -771,6 +772,67 @@ func TestListHandler_NeedsAttentionParse(t *testing.T) {
 			return nil, 0, nil
 		}
 		rec, resp := doInvoiceList(t, list, &id, "?needs_attention=maybe")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_EntityIDParam ([entity-id-restored], persona-handoff-fix
+// regression fix): ListHandler parses ?entity_id with uuid.Parse -- absent
+// leaves the captured ListFilter.EntityID at "" (the zero value, unfiltered);
+// a well-formed uuid passes through verbatim; a malformed value 400s BEFORE
+// the store is ever called, mirroring TestListHandler_NeedsAttentionParse's
+// exact shape, just for this param.
+func TestListHandler_EntityIDParam(t *testing.T) {
+	t.Run("absent applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.EntityID != "" {
+			t.Errorf("captured ListFilter.EntityID = %q, want \"\" when ?entity_id is absent", captured.EntityID)
+		}
+	})
+
+	t.Run("well-formed uuid sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		entityID := uuid.NewString()
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?entity_id="+entityID)
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.EntityID != entityID {
+			t.Errorf("captured ListFilter.EntityID = %q, want %q", captured.EntityID, entityID)
+		}
+	})
+
+	t.Run("malformed value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when entity_id is not a well-formed uuid")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?entity_id=not-a-uuid")
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())

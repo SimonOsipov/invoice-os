@@ -242,9 +242,20 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 // needs_attention (M4-09-02, AC #5, [needs-attention-param-strictness]:
 // absent defaults to false/unfiltered; parsed via strconv.ParseBool, so
 // "true"/"false"/"1"/"0"/etc. all work; an unparseable value 400s BEFORE the
-// store is ever called, mirroring the limit/offset 400 contract). No
-// status/entity filters beyond that ([D8], [entity-id-cut]) -- unlike
-// portfolio's ListHandler, there is no q/status parsing here.
+// store is ever called, mirroring the limit/offset 400 contract), entity_id
+// ([entity-id-restored], regression fix reversing [entity-id-cut]): absent
+// applies no filter, tenant-wide, exactly as before this param existed;
+// present is validated with uuid.Parse (same pre-store guard BatchSubmitHandler
+// already uses for invoice_ids, ~L610) and 400s "entity_id must be a
+// well-formed uuid" BEFORE the store is ever called if malformed -- never a
+// silent ignore, never a bare Postgres 500. [entity-id-cut] had reasoned the
+// SPA could narrow to one entity by filtering an already-fetched, still
+// tenant-wide LIMIT-50 page in the browser instead (lib/invoices.ts) -- wrong:
+// that's filter-AFTER-paginate, so an entity's own invoices silently vanished
+// from Invoices/Reports/Customers whenever they weren't inside the newest 50
+// tenant-wide (the CI-caught regression this param fixes). No status filter
+// beyond that -- unlike portfolio's ListHandler, there is no q/status parsing
+// here.
 func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -297,7 +308,15 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			needsAttention = b
 		}
 
-		filter := ListFilter{Limit: limit, Offset: offset, NeedsAttention: needsAttention}
+		entityID := query.Get("entity_id")
+		if entityID != "" {
+			if _, err := uuid.Parse(entityID); err != nil {
+				writeError(w, http.StatusBadRequest, "entity_id must be a well-formed uuid")
+				return
+			}
+		}
+
+		filter := ListFilter{Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention}
 
 		items, total, err := list(r.Context(), filter)
 		if err != nil {

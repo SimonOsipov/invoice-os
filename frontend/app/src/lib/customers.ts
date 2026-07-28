@@ -1,9 +1,11 @@
 // Customer aggregation from a LIVE, entity-scoped invoice list — shared by the
 // Customers and Reports views. Both callers now feed this the SAME already-fetched,
-// filterByActiveEntity'd InvoiceRecord[] (lib/invoices.ts) they use for everything
-// else on their page (persona-handoff-fix step 3) — this used to aggregate the
-// fabricated `active.invoices` overlay (Invoice[], types.ts), attributing invented
-// buyers to real company names. buyer_tin/buyer_name are real invoice columns
+// entity-scoped InvoiceRecord[] (lib/invoices.ts's listInvoices, entity-scoped
+// server-side since [entity-id-restored]; gateByActiveEntity's own doc comment covers
+// what's still client-side) they use for everything else on their page
+// (persona-handoff-fix step 3) — this used to aggregate the fabricated
+// `active.invoices` overlay (Invoice[], types.ts), attributing invented buyers to real
+// company names. buyer_tin/buyer_name are real invoice columns
 // (migrations/20260714103137_invoices.sql:54-55); there is no separate customers
 // table anywhere in the schema, so this aggregation IS the buyer master data, not an
 // approximation of it.

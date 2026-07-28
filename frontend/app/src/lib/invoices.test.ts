@@ -22,7 +22,7 @@ import { ApiError, type AsyncState } from '@invoice-os/api-client'
 import { createAuthedFetch } from './authedFetch'
 import {
   editInvoice,
-  filterByActiveEntity,
+  gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
@@ -238,6 +238,56 @@ describe('listInvoices', () => {
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices')
     expect(url).not.toContain('?')
+  })
+
+  // [entity-id-restored] (persona-handoff-fix regression fix): entity_id moved from a
+  // browser-side re-filter (gateByActiveEntity, née filterByActiveEntity) to a real
+  // server query param, so listInvoices' own query-string construction is now the
+  // load-bearing proof that a company switch actually narrows the request, not just
+  // the in-browser view of it.
+  it('{entityId} builds .../invoices?entity_id=... and unwraps .invoices', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [draftInvoice], pagination: { limit: 50, offset: 0, total: 1 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listInvoices(af, base, { entityId: 'entity-1' })
+
+    expect(result).toEqual([draftInvoice])
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices?entity_id=entity-1')
+  })
+
+  it('{needsAttention:true, entityId} combines both params in one query string', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { needsAttention: true, entityId: 'entity-1' })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url)
+    expect(parsed.searchParams.get('needs_attention')).toBe('true')
+    expect(parsed.searchParams.get('entity_id')).toBe('entity-1')
+  })
+
+  it('entityId omitted (undefined) omits ?entity_id entirely', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { entityId: undefined })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('entity_id')
   })
 })
 
@@ -630,28 +680,34 @@ describe('shouldFetchInvoices / invoicesViewState', () => {
   })
 })
 
-// filterByActiveEntity ([dashboard-scope-per-client], persona-handoff-fix step 2) — added
+// gateByActiveEntity ([dashboard-scope-per-client], persona-handoff-fix step 2; RENAMED
+// from filterByActiveEntity by the step-6 regression fix, [entity-id-restored]) — added
 // alongside the client-scoped Invoices list this story ships, not part of the original
-// I1-I14 architect table.
-describe('filterByActiveEntity', () => {
+// I1-I14 architect table. The AUTHORITATIVE row-level entity_id filtering now happens
+// server-side (listInvoices' own `entity_id` param, covered by the `listInvoices`
+// describe block above); this function's row-level check stays too, now as a
+// render-time invariant against a stale-entity flash rather than the primary filter —
+// see its own doc comment (lib/invoices.ts) for why dropping it would be wrong
+// (product-advisor review caught this pre-commit).
+describe('gateByActiveEntity', () => {
   const other: InvoiceRecord = { ...draftInvoice, id: 'inv-2', entity_id: 'e2', invoice_number: 'INV-002' }
 
   it('firm mode (isInhouse:false) keeps only rows whose entity_id matches the active entity', () => {
-    expect(filterByActiveEntity([draftInvoice, other], false, 'e1')).toEqual([draftInvoice])
+    expect(gateByActiveEntity([draftInvoice, other], false, 'e1')).toEqual([draftInvoice])
   })
 
   it('firm mode with entityId===null (no client resolved yet) returns [], never every row', () => {
-    expect(filterByActiveEntity([draftInvoice, other], false, null)).toEqual([])
+    expect(gateByActiveEntity([draftInvoice, other], false, null)).toEqual([])
   })
 
-  it('in-house (isInhouse:true) bypasses filtering entirely and returns every row unchanged', () => {
-    expect(filterByActiveEntity([draftInvoice, other], true, null)).toEqual([draftInvoice, other])
-    expect(filterByActiveEntity([draftInvoice, other], true, 'e1')).toEqual([draftInvoice, other])
+  it('in-house (isInhouse:true) bypasses the gate entirely and returns every row unchanged', () => {
+    expect(gateByActiveEntity([draftInvoice, other], true, null)).toEqual([draftInvoice, other])
+    expect(gateByActiveEntity([draftInvoice, other], true, 'e1')).toEqual([draftInvoice, other])
   })
 
   it('an empty input list stays empty regardless of scope', () => {
-    expect(filterByActiveEntity([], false, 'e1')).toEqual([])
-    expect(filterByActiveEntity([], true, null)).toEqual([])
+    expect(gateByActiveEntity([], false, 'e1')).toEqual([])
+    expect(gateByActiveEntity([], true, null)).toEqual([])
   })
 })
 

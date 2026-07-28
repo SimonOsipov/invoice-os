@@ -11,7 +11,7 @@ export function Modules() {
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '88px 32px' }}>
         <div style={{ marginBottom: 44 }}>
           <div className="eyebrow eyebrow-dark" style={{ marginBottom: 14 }}>
-            THE PLATFORM
+            THE SOLUTION
           </div>
           <h2
             style={{

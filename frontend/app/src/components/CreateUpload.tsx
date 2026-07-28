@@ -11,32 +11,29 @@
 // a sample file while an entity is selected and expecting a real import. The 5-step vs
 // 3-step wizard header (wizardHeader) already reflects the split; this mirrors it.
 // Ported shell from Platform.dc.html ~L407-448.
+//
+// [entity-picker] step 1 of 3: the entity LIST is no longer this component's own fetch —
+// it now reads ctx.entities/entitiesState/entitiesError/refetchEntities, ONE fetch
+// shared with the workspace switcher (Sidebar) and ClientsView (lifted to App.tsx), so
+// all three surfaces render the same roster. The SELECTION still lives on ctx (entityId,
+// unchanged), because createImport fires from CreateMapping after this component has
+// unmounted — see App.tsx's resetImport() for how it now defaults to `active.entityId`.
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
 import { SAMPLE_FILES } from '../data'
 import { importGlyph, tickGlyph13 } from '../glyphs'
 import { canReadColumns, hasImportableExtension } from '../lib/importFlow'
-import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
-  const { active, uploadFile, entityId, importFile, importError } = ctx
+  const { active, uploadFile, entityId, importFile, importError, entities, entitiesState, entitiesError, refetchEntities } = ctx
   const selFile = SAMPLE_FILES.find((f) => f.id === uploadFile) || null
   const hasFile = !!selFile
 
-  // Entity LIST is local (it is this component's own fetch); the SELECTION lives on ctx,
-  // because createImport fires from CreateMapping after this component has unmounted.
-  // Same useAsync/listEntities idiom as ClientsView.tsx:38-42, including the no-gateway
-  // short-circuit that keeps a gateway-less build at zero network.
+  // `base` still gates the "Read columns" button below (gateway-wide, not entity-fetch
+  // specific) — the entity list itself no longer needs it locally (see file header).
   const base = gatewayBase()
-  const list = useAsync<Entity[]>(
-    () => (base ? listEntities(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: shouldFetchEntities(base) },
-  )
-  const entityState = clientsViewState(base, list)
-  // `list.data ?? []` — asyncReducer nulls `data` on the 'empty' branch (async-state.ts:51).
-  const entities = list.data ?? []
 
   // No active/archived filter: the server accepts any non-empty entity_id it can see
   // under RLS (importer/handlers.go:169-172), so filtering here would be a
@@ -58,13 +55,13 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             <div className="label" style={{ marginBottom: 8 }}>
               Bill under entity
             </div>
-            {entityState === 'loading' && <Loading label="Loading entities…" />}
-            {entityState === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
-            {entityState === 'empty' && <EmptyState title="No entities yet" message="Add a business entity in Clients before importing." />}
-            {entityState === 'idle' && (
+            {entitiesState === 'loading' && <Loading label="Loading entities…" />}
+            {entitiesState === 'error' && entitiesError && <ErrorState error={entitiesError} onRetry={refetchEntities} />}
+            {entitiesState === 'empty' && <EmptyState title="No entities yet" message="Add a business entity in Clients before importing." />}
+            {entitiesState === 'idle' && (
               <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.55 }}>No gateway configured — importing is unavailable in this build.</p>
             )}
-            {entityState === 'ready' && (
+            {entitiesState === 'ready' && (
               <>
                 <div style={{ position: 'relative' }}>
                   {/* The `padding` SHORTHAND overrides app-layer.css's `padding-right: 32px`,
@@ -92,7 +89,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                   </span>
                 </div>
                 <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '7px 0 0', lineHeight: 1.5 }}>
-                  Invoices are filed under this entity's TIN. It is never guessed from the workspace you are viewing.
+                  Invoices are filed under this entity's TIN. Pre-selected to the company you're currently viewing — change it here if you're importing for someone else.
                 </p>
               </>
             )}

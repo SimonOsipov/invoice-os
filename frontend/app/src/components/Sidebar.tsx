@@ -23,7 +23,7 @@ import type { PlatformCtx } from '../types'
 type SidebarNavItem = NavDef & { badge?: string | null }
 
 export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
-  const { user, mode, active, clients, activeIdx, switcherOpen, view, filter } = ctx
+  const { user, mode, active, clients, switcherOpen, view, filter } = ctx
   const isFirm = mode === 'firm'
   const isInhouse = !isFirm
   const orgLabel = isFirm ? 'OKAFOR & PARTNERS' : active.short.toUpperCase() + ' · FINANCE'
@@ -93,23 +93,30 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
-                {clients.map((c, i) => (
-                  <button
-                    key={c.name}
-                    onClick={() => ctx.switchClient(i)}
-                    className="pf-menu-item"
-                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, background: i === activeIdx ? 'var(--bg-3)' : 'transparent', cursor: 'pointer', textAlign: 'left', padding: '9px 12px' }}
-                  >
-                    <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>{c.initials}</span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.short}</span>
-                      <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
-                        {c.score == null ? '—%' : c.score + '%'} ready · {c.onboarding ? '—' : c.failing} failing
+                {clients.map((c) => {
+                  const isActive = c.entityId === active.entityId
+                  return (
+                    <button
+                      key={c.entityId ?? c.name}
+                      // c.entityId is always a real portfolio entity id here — `clients`
+                      // only ever holds buildClients() output, never the in-house/empty
+                      // fallback ([entity-picker] keystone) — the guard is belt-and-
+                      // suspenders against the type's `string | null`, not a real case.
+                      onClick={() => c.entityId && ctx.switchClient(c.entityId)}
+                      className="pf-menu-item"
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, background: isActive ? 'var(--bg-3)' : 'transparent', cursor: 'pointer', textAlign: 'left', padding: '9px 12px' }}
+                    >
+                      <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>{c.initials}</span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.short}</span>
+                        <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
+                          {c.score == null ? '—%' : c.score + '%'} ready · {c.onboarding ? '—' : c.failing} failing
+                        </span>
                       </span>
-                    </span>
-                    <span style={{ flex: 'none', color: 'var(--action)' }}>{i === activeIdx ? tickGlyph11 : ''}</span>
-                  </button>
-                ))}
+                      <span style={{ flex: 'none', color: 'var(--action)' }}>{isActive ? tickGlyph11 : ''}</span>
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>

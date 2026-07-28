@@ -2,9 +2,9 @@
 // (Platform.dc.html, class Component extends DCLogic).
 
 // Type-only import: `portfolio.ts` imports `StatusStyle` from this file, so a runtime
-// import here would form a cycle. `AuthedFetch` is only ever used as a type below.
-import type { AuthedFetch } from './lib/portfolio'
-import type { ApiError } from '@invoice-os/api-client'
+// import here would form a cycle. `AuthedFetch`/`Entity` are only ever used as types below.
+import type { AuthedFetch, Entity } from './lib/portfolio'
+import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
@@ -102,6 +102,10 @@ export type DashboardData = {
 
 // Fully-built client: seed config + generated invoices + precomputed dashboard.
 export type Client = ClientCfg & {
+  // The real portfolio entity this Client is sourced from ([entity-picker] keystone) —
+  // null only for the two synthetic fallbacks (lib/clients.ts's inhouseClient/
+  // emptyClient), neither of which is backed by an actual business_entities row.
+  entityId: string | null
   invoices: Invoice[]
   failing: number | '—'
   pending: number
@@ -183,9 +187,17 @@ export type PlatformCtx = {
   user: SignedInUser
   clients: Client[]
   active: Client
+  // [entity-picker] step 1 of 3: the ONE live portfolio entity fetch, shared by the
+  // workspace switcher (Sidebar), ClientsView and CreateUpload — previously the latter
+  // two each ran their own independent listEntities() call. entities/entitiesState/
+  // entitiesError mirror the AsyncState<Entity[]> shape those two already rendered
+  // against (clientsViewState's AsyncStatus ladder); refetchEntities is useAsync's `run`.
+  entities: Entity[]
+  entitiesState: AsyncStatus
+  entitiesError: ApiError | null
+  refetchEntities: () => void
   mode: Mode
   view: View
-  activeIdx: number
   draft: Draft
   createStep: CreateStep
   validation: ValidationResult | null
@@ -225,7 +237,9 @@ export type PlatformCtx = {
   nav: (id: NavId) => void
   setFilter: (f: string) => void
   toggleSwitcher: () => void
-  switchClient: (i: number) => void
+  // [entity-picker] keystone: takes a real entity id, never an array index — the active
+  // selection is never again "the mock array position the switcher happened to click".
+  switchClient: (entityId: string) => void
   openCreate: () => void
   closeCreate: () => void
   updateDraft: <K extends keyof Draft>(field: K, value: Draft[K]) => void

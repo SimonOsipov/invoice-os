@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { INHOUSE_IDX, PARSE_LABELS } from './data'
+import { PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
-import { gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
+import { gatewayBase, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, defaultDraft } from './lib/clients'
+import { buildClients, defaultDraft, emptyClient, inhouseClient } from './lib/clients'
+import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { validate } from './lib/validation'
 import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
@@ -81,16 +82,65 @@ const ENV_BANNER = {
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App): the persona picks the initial workspace mode.
 function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
-  const initialIdx = session.persona.mode === 'inhouse' ? INHOUSE_IDX : 1
-  const [clients, setClients] = useState<Client[]>(() => buildClients())
   // Workspace type is a property of the authenticated identity, not a user-flippable
   // view: the firm persona gets the firm workspace, the in-house persona the in-house
   // workspace, and there is no in-app switch between them (that would require signing
   // in as the other persona). Under GoTrue (M8) this keys off the token's role/tenant.
   const mode: Mode = session.persona.mode
+
+  const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut), [session, onSignOut])
+  // Same (session, onSignOut) pair, one construction site — the multipart XHR transport
+  // cannot drift from the fetch path on auth or the 401 sign-out (importApi.ts D3).
+  const importAuth = useMemo(() => makeImportAuth(session, onSignOut), [session, onSignOut])
+
+  // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
+  // shared by the switcher below, ClientsView and CreateUpload (via ctx.entities/
+  // entitiesState/entitiesError/refetchEntities) — previously each of the latter two ran
+  // its own independent listEntities() call, and the switcher didn't fetch at all (it
+  // read the static buildClients() mock roster), so the three surfaces could each show a
+  // different company list. Same base/shouldFetchEntities/clientsViewState idiom as
+  // ClientsView.tsx/CreateUpload.tsx used individually before (no-gateway build stays at
+  // zero network).
+  const base = gatewayBase()
+  const entitiesAsync = useAsync<Entity[]>(
+    () => (base ? listEntities(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: shouldFetchEntities(base) },
+  )
+  const entitiesState = clientsViewState(base, entitiesAsync)
+  // Memoized (not a bare `?? []`): a fresh [] literal on every render — while `data`
+  // stays null throughout the loading/idle/error/empty window — would give the sync
+  // effect below a "changed" dependency on every render and loop forever.
+  const entitiesList = useMemo(() => entitiesAsync.data ?? [], [entitiesAsync.data])
+
+  // The switcher roster. Rebuilt whenever the live entity list changes (first load, or a
+  // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge: a
+  // SAMPLE invoice approve() appended to a client's mock list (the single-document path,
+  // untouched by this story) does not survive a refetch triggered elsewhere. That mock
+  // invoice never renders anywhere live anyway — InvoiceDetail's mock branch is fully
+  // retired (M5-09-04); it only ever fed CustomersView/ReportsView/XmlModal, themselves
+  // still-mock surfaces this plan's next step migrates off active.invoices.
+  const [clients, setClients] = useState<Client[]>([])
+  useEffect(() => {
+    setClients(buildClients(entitiesList))
+  }, [entitiesList])
+
+  // [entity-picker] keystone: the active selection is a real entity id, never an index
+  // into a mock array. null until the user (or the fallback below) picks one.
+  const [activeEntityId, setActiveEntityId] = useState<string | null>(null)
+
+  // In-house has ZERO business_entities rows (db/seed.dev.sql seeds the firm tenant
+  // only) — its identity comes from the TENANT, never from this fetch ([entity-picker]
+  // trap 1). Firm mode falls back to `clients[0]` (whichever entity the server returns
+  // first) while `activeEntityId` is unset, and to the "nothing here yet" placeholder for
+  // the loading/error/no-gateway/zero-entities window ([entity-picker] trap 2) — every
+  // one of the ~15 places reading ctx.active needs SOMETHING defined, never `undefined`.
+  const active: Client = useMemo(() => {
+    if (mode === 'inhouse') return inhouseClient(session.me?.tenant.name ?? session.persona.org)
+    return clients.find((c) => c.entityId === activeEntityId) ?? clients[0] ?? emptyClient()
+  }, [mode, clients, activeEntityId, session])
+
   const [view, setView] = useState<View>('dashboard')
-  const [activeIdx, setActiveIdx] = useState(initialIdx)
-  const [draft, setDraft] = useState<Draft>(() => defaultDraft(clients[initialIdx]))
+  const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>('form')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
   const [uploadFile, setUploadFile] = useState<string | null>(null)
@@ -117,10 +167,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [valIdx, setValIdx] = useState(0)
   const [parseIdx, setParseIdx] = useState(0)
-  // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id
-  // chosen by the user — never derived from `active`, which comes from buildClients()
-  // and carries no server id at all, so guessing from it would file invoices under the
-  // wrong supplier TIN ([entity-picker]).
+  // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
+  // [entity-picker] step 3 of 3: now DEFAULTS to `active.entityId` (resetImport, below)
+  // — the user already answered "which company" via the switcher, so the import wizard
+  // no longer asks again by default — but it stays independently changeable: picking a
+  // different entity from CreateUpload's dropdown overrides the default, and it is never
+  // silently carried over from a PREVIOUS run in the same session (resetImport reseeds
+  // from `active` every time, not from whatever this state last held).
   const [entityId, setEntityId] = useState<string | null>(null)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
@@ -151,13 +204,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   useEffect(() => clearVal, [])
 
-  const authedFetch = useMemo(() => makeAuthedFetch(session, onSignOut), [session, onSignOut])
-  // Same (session, onSignOut) pair, one construction site — the multipart XHR transport
-  // cannot drift from the fetch path on auth or the 401 sign-out (importApi.ts D3).
-  const importAuth = useMemo(() => makeImportAuth(session, onSignOut), [session, onSignOut])
-
-  const active = clients[activeIdx]
-
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
     if (id === 'invoices') { setView('invoices'); setFilter('all'); setSwitcherOpen(false); return }
@@ -169,13 +215,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setSwitcherOpen((o) => !o)
   }
 
-  function switchClient(i: number) {
-    setActiveIdx(i)
+  function switchClient(id: string) {
+    setActiveEntityId(id)
     setView('dashboard')
     setDetailSel(clearSelection())
     setFilter('all')
     setSwitcherOpen(false)
-    setDraft(defaultDraft(clients[i]))
+    setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setCreateStep('form')
     setValidation(null)
   }
@@ -184,7 +230,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clearVal()
     setView('create')
     setCreateStep('upload')
-    setDraft(defaultDraft(clients[activeIdx]))
+    setDraft(defaultDraft(active))
     setValidation(null)
     setUploadFile(null)
     setMapping(null)
@@ -193,11 +239,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   // Every piece of import state is per-run: a second import must not inherit the first
-  // one's preview, progress, error or report. `entityId` is deliberately included —
-  // re-picking the entity is one click, and silently carrying the previous choice into
-  // a fresh run is the [entity-picker] hazard in a slower form.
+  // one's preview, progress, error or report. `entityId` defaults to `active.entityId`
+  // ([entity-picker] step 3 of 3) rather than blank — the user already picked this
+  // company via the switcher — but a PREVIOUS run's entity (if the user picked a
+  // different one from the dropdown) is never silently carried into a fresh run: every
+  // open reseeds from the CURRENT `active`, not from whatever this state last held.
   function resetImport() {
-    setEntityId(null)
+    setEntityId(active.entityId)
     setImportFile(null)
     setPreview(null)
     setUploadPhase({ kind: 'idle' })
@@ -418,7 +466,12 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     if (!validation || validation.errors.length > 0 || validation.warnings.length > 0) return
     const d = draft
     const inv = { number: d.number, buyer: d.buyer, buyerTin: d.buyerTin, buyerAddress: d.buyerAddress, date: d.date, items: d.items, status: 'Approved' as const, wht: d.wht, docType: d.docType || 'B2B' }
-    setClients((cs) => cs.map((c, idx) => (idx === activeIdx ? { ...c, invoices: [inv, ...c.invoices] } : c)))
+    // Matched by entityId, not array index ([entity-picker] keystone). A no-op for
+    // in-house/the empty fallback (entityId:null, never a member of `clients`) — this
+    // single-document mock path is untouched by this story, and its only observable
+    // effect (active.invoices) feeds CustomersView/ReportsView/XmlModal, themselves
+    // still-mock surfaces the next step of this plan migrates off it.
+    setClients((cs) => cs.map((c) => (c.entityId === active.entityId ? { ...c, invoices: [inv, ...c.invoices] } : c)))
     setView('detail')
     setDetailSel(selectMock(inv.number))
   }
@@ -468,9 +521,12 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     user,
     clients,
     active,
+    entities: entitiesList,
+    entitiesState,
+    entitiesError: entitiesAsync.error,
+    refetchEntities: entitiesAsync.run,
     mode,
     view,
-    activeIdx,
     draft,
     createStep,
     validation,

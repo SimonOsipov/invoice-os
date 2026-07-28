@@ -25,11 +25,13 @@
 //
 // NOTE (merged from main, M4-22-03): db/seed.dev.sql now seeds 27 curated
 // business_entities into THIS persona's tenant (1111...), where it previously seeded
-// zero. Harmless here and deliberately not compensated for: selectOption matches our
-// own uniquely-named entity by label, freshTin()'s pid-seeded range cannot collide
-// with the curated 10012345-0001..10278901-0027 literals, and listEntities requests
-// ?limit=200 (frontend/app/src/lib/portfolio.ts:73) against 27+1 rows, so our entity
-// cannot fall off the picker's page.
+// zero. Harmless here and deliberately not compensated for: selectEntity() (the
+// workspace-switcher helper, [import-upload-unify] -- CreateUpload's own in-page
+// entity <select> is gone) matches our own uniquely-named entity by label,
+// freshTin()'s pid-seeded range cannot collide with the curated
+// 10012345-0001..10278901-0027 literals, and listEntities requests ?limit=200
+// (frontend/app/src/lib/portfolio.ts:73) against 27+1 rows, so our entity cannot
+// fall off the switcher's page.
 //
 // URLs are gateway-prefixed: the SPA calls POST {base}/api/invoice/v1/imports and
 // .../imports/preview, NOT /v1/imports -- every waitForResponse predicate below
@@ -129,27 +131,26 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   const entity = await createEntity(token, { name: `M4-08 UI ${Date.now()}`, tin: freshTin() })
 
   await signInFirm(page)
+  // [import-upload-unify] CreateUpload no longer renders its own entity <select> --
+  // entityId now mirrors the active workspace switcher selection, so the fresh
+  // entity must be made active there BEFORE "New invoice" opens (this is also now
+  // the fail-fast point: selectEntity times out attributably if the entity never
+  // reached the switcher, e.g. no gateway configured).
+  await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  // Guard: a build with no VITE_GATEWAY_URL renders "No gateway configured..." and
-  // no <select> at all -- fail with an attributable message, not a bare timeout.
-  const select = page.locator('select')
-  await expect(select, 'entity picker <select> not found -- check VITE_GATEWAY_URL is configured for this deployed build').toBeVisible({
-    timeout: 30_000,
-  })
-
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
 
-  // E2E-03: Read columns stays disabled until BOTH an entity and a file are chosen.
-  await expect(readColumnsBtn, 'disabled with neither an entity nor a file selected').toBeDisabled()
-
-  await select.selectOption({ label: entity.name })
-  await expect(readColumnsBtn, 'disabled with only an entity selected').toBeDisabled()
+  // E2E-03: Read columns stays disabled until a file is chosen -- the entity is
+  // already fixed to the active workspace selection on mount, so file choice is now
+  // the only remaining gate (canReadColumns still checks both; there is just no
+  // longer a UI path to a file-only, entity-empty state).
+  await expect(readColumnsBtn, 'disabled with no file selected').toBeDisabled()
 
   const fileInput = page.locator('input[type="file"][accept=".csv,.xlsx"]')
   await fileInput.setInputFiles({ name: 'ui-perf.csv', mimeType: 'text/csv', buffer: Buffer.from(buildPerfCsv(), 'utf8') })
-  await expect(readColumnsBtn, 'enabled only once both an entity and a file are chosen').toBeEnabled()
+  await expect(readColumnsBtn, 'enabled once a file is chosen').toBeEnabled()
 
   const previewResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
@@ -244,12 +245,9 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  const select = page.locator('select')
-  await expect(select, 'entity picker <select> not found -- check VITE_GATEWAY_URL is configured for this deployed build').toBeVisible({
-    timeout: 30_000,
-  })
-  await select.selectOption({ label: entity.name })
-
+  // [import-upload-unify] no more in-page entity <select> -- selectEntity() above
+  // (workspace switcher) already made `entity` the active selection CreateUpload's
+  // entityId mirrors, so there is nothing left to pick here.
   await page
     .locator('input[type="file"][accept=".csv,.xlsx"]')
     .setInputFiles({ name: 'ui-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
@@ -369,12 +367,19 @@ test('E2E-10/E2E-08 (FLOW-07, [scanline-stays-on-doc-path]/F4): the wizard heade
 
   await signInFirm(page)
 
+  // [import-upload-unify] the document-preview card (sample PDF/JPG parse) is now
+  // sandbox-gated -- switch environments once, up front. It stays on for the rest
+  // of this test: ctx.sandbox lives on Workspace state, untouched by openCreate()
+  // (the "New invoice" CTA re-clicked at line ~396 below).
+  await page.getByRole('button', { name: 'SANDBOX' }).click()
+
   const newInvoiceBtn = page.locator('header').getByRole('button', { name: 'New invoice' })
   await newInvoiceBtn.click()
 
   // E2E-10 (discharges J1's deferred layout half; confirming oracle for FLOW-07).
   // Bare 'upload' step with nothing chosen renders the 3-step IMPORT_STEPS strip
-  // (Import/Map/Report).
+  // (Import/Map/Report) -- the header's path resolver (wizardHeader) is unaffected
+  // by sandbox; only the sample file's clickability needed the toggle above.
   await expect(page.getByText('Report', { exact: true }), '3-step IMPORT_STEPS strip expected with nothing chosen').toBeVisible()
   await expect(page.getByText('Build', { exact: true })).toHaveCount(0)
 
@@ -400,9 +405,10 @@ test('E2E-10/E2E-08 (FLOW-07, [scanline-stays-on-doc-path]/F4): the wizard heade
   await newInvoiceBtn.click()
 
   // E2E-08 ([scanline-stays-on-doc-path] / F4 regression guard): the fenced
-  // single-document path must still run byte-for-byte the same upload -> parsing ->
-  // form -> validate -> results flow M4-08-06 could only prove unchanged by git-diff
-  // and code review. This is the only REAL oracle for that claim.
+  // single-document path (now a sandbox-only preview, [import-upload-unify]) must
+  // still run byte-for-byte the same upload -> parsing -> form -> validate ->
+  // results flow M4-08-06 could only prove unchanged by git-diff and code review.
+  // This is the only REAL oracle for that claim.
   await page.getByText('lagos-freight-INV-0482.pdf', { exact: true }).click()
   await page.getByRole('button', { name: 'Upload & parse' }).click()
 
@@ -424,6 +430,52 @@ test('E2E-10/E2E-08 (FLOW-07, [scanline-stays-on-doc-path]/F4): the wizard heade
   // not the point; that a verdict renders at all, unchanged, is).
   await expect(page.getByText(/Not compliant yet|Review warnings|Compliant — ready to approve/)).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText(/\d+\/16/)).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// [import-upload-unify] LIVE-mode guards for the unified upload surface. Three things
+// this change made true that nothing else asserts: the mock document card is
+// sandbox-ONLY (it used to render unconditionally), manual entry survives OUTSIDE that
+// gate (it used to live in the document card's sibling rail -- gating it along with the
+// card would have deleted the only from-scratch creation path in production), and the
+// dropzone accepts a real drop (setInputFiles everywhere else bypasses onDrop entirely).
+test('[import-upload-unify] LIVE: document preview gated, manual entry survives, dropzone accepts a drop', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  await signInFirm(page)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  // The unified card is the only import surface in LIVE. Entity is now static header
+  // text, not a <select> -- this doubles as the assertion that it still renders.
+  await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
+
+  // Sandbox-gated: neither the divider, the card, nor its samples may appear in LIVE.
+  await expect(page.getByText('Or import a single document', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Import a document ·', { exact: false })).toHaveCount(0)
+  await expect(page.getByText('lagos-freight-INV-0482.pdf', { exact: true })).toHaveCount(0)
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
+
+  // Synthetic DataTransfer rather than a real mouse drag: this file already records
+  // (mapping step, ~L171) that real Playwright drag is flaky here. A dispatched event
+  // is deterministic and still exercises the onDrop handler no other test reaches.
+  await page.evaluate(() => {
+    const label = document.querySelector('label[for="pf-import-file"]')
+    if (!label) throw new Error('dropzone label[for="pf-import-file"] not found')
+    const dt = new DataTransfer()
+    dt.items.add(new File(['invoice_number,subtotal\nDROP-1,100\n'], 'dropped.csv', { type: 'text/csv' }))
+    label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  })
+
+  await expect(page.getByText('dropped.csv', { exact: true }), 'dropped filename renders inside the zone').toBeVisible()
+  await expect(readColumnsBtn, 'enabled once a dropped file lands').toBeEnabled()
+
+  // Manual entry must be reachable in LIVE. skipUpload -> createStep 'form'; the build
+  // step's own primary is 'Run validation' (CreateForm), which no earlier step renders.
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable in LIVE').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

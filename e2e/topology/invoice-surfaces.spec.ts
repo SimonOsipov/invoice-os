@@ -443,11 +443,9 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // E2E-04 recipe (select the fresh entity, Read columns, click-map invoice_number +
   // subtotal, Import), reused verbatim rather than re-derived.
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
-  const select = page.locator('select')
-  await expect(select, 'entity picker <select> not found -- check VITE_GATEWAY_URL is configured for this deployed build').toBeVisible({
-    timeout: 30_000,
-  })
-  await select.selectOption({ label: entity.name })
+  // [import-upload-unify] no more in-page entity <select> -- selectEntity() above
+  // (workspace switcher) already made `entity` the active selection CreateUpload's
+  // entityId mirrors, so there is nothing left to pick here.
 
   await page
     .locator('input[type="file"][accept=".csv,.xlsx"]')

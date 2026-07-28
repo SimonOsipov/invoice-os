@@ -65,11 +65,22 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             />
           ) : (
             <>
+              {/* aria-label is load-bearing, not decoration. input[type=file] has an
+                  implicit role of BUTTON, and its accessible name is computed from its
+                  label — which now wraps the whole dropzone, so once a file is chosen
+                  that name would swallow the zone's prose ("…click Read columns
+                  below…"). getByRole('button', {name: 'Read columns'}) substring-matches,
+                  so the input collided with the real Read-columns button and every
+                  import spec died on a strict-mode violation. An explicit aria-label
+                  wins over the label in the accname algorithm: it keeps the name short,
+                  stable and free of any other control's name, and stops a screen reader
+                  announcing a paragraph of prose as the button's name. */}
               <input
                 id="pf-import-file"
                 className="pf-file"
                 type="file"
                 accept=".csv,.xlsx"
+                aria-label="Choose a spreadsheet to import"
                 onChange={(e) => ctx.selectImportFile(e.target.files?.[0] ?? null)}
               />
               <label

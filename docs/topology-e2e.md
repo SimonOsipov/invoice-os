@@ -73,6 +73,16 @@ carried into every PR environment along with the rest of `development`'s variabl
 by the `environmentCreate` fork `prepare-env` issues (not by Railway's PR Environments
 feature, which is off), so the workflow no longer sets any of them per-run.
 
+**New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
+A plain (non-sealed, non-reference) variable, set on `development`'s gateway service
+alongside its existing `GATEWAY_DB_BOOTSTRAP=true` (docs/migrations.md §2) so it forks the
+same way. Safe to set globally, including on `development` itself, DESPITE forking
+verbatim: `db.ResetEnabled` additionally requires `RAILWAY_ENVIRONMENT_NAME` to match a
+Railway PR-environment name shape, and `RAILWAY_ENVIRONMENT_NAME` is Railway-injected
+per-environment (never forked as a value — see "Boot-time seed" below), so the reset stays
+inert on `development`/`production` and on any environment this variable has not yet been
+added to — a missing `GATEWAY_DB_RESET` fails closed (no reset), not open.
+
 **Exception, measured (M4-23-04): sealed variables do NOT fork.** A sealed variable on
 `development` would simply be absent in every PR environment. `prepare-env` therefore fails
 loudly if `development` holds any — do not add one.
@@ -103,13 +113,36 @@ variable that anything reads.
 `db/seed.dev.sql` inserts the canonical fixtures — the isolation pair (`aaaa…`/`bbbb…`)
 plus the persona tenants (`1111…` Okafor & Partners / `2222…` Honeywell Group) — and
 re-enables every validation rule. It runs as part of `internal/platform/db.Provision`
-(bootstrap → migrate → seed) on every gateway boot in an allow-listed environment
+(bootstrap → migrate → reset → seed) on every gateway boot in an allow-listed environment
 (`development` or a Railway PR-environment name), gated behind `BootstrapEnabled`,
 idempotent (upserts, not a table wipe) so re-running never loses data mid-test. A PR's own
 ephemeral Postgres is born empty and is seeded once its gateway first comes up;
-`development`'s Postgres is re-seeded the same way on every redeploy. There is no separate
-reset step anywhere in the repo anymore — M4-22-07 deleted the last one, along with the
-only unconditional table wipe this repo ever ran.
+`development`'s Postgres is re-seeded the same way on every redeploy.
+
+**Boot-time reset, PR environments only (persona-handoff-fix, Decision [pr-only-reset]).**
+Because a PR environment's Postgres is actually a FORK of the persistent environment's live
+volume (M4-23-03), not an empty database, it inherits every row any E2E run has ever left
+behind — measured directly against `pr-110`: 90 `business_entities` (69 of them test
+residue) and ~3,090 `invoices`. `Provision` now runs `internal/platform/db.Reset`
+immediately after `MigrateUp` and before `Seed`, TRUNCATEing the tenant-DATA tables (see
+`reset.go`'s own table-by-table inclusion/exclusion comments) back to empty so `Seed`
+converges the PR environment to EXACTLY the curated 27-entity demo portfolio + its fixture
+invoices, every time. This is gated independently of (and more narrowly than) the seed
+gate above: `ResetEnabled` requires `GATEWAY_DB_RESET=true` (a separate durable Railway
+variable from `GATEWAY_DB_BOOTSTRAP`, forked from `development` the same way
+`GATEWAY_MOCK_ISSUER`/`CORS_ALLOWED_ORIGINS`/`VITE_GATEWAY_URL` already are — see
+"Railway variables" above) AND `RAILWAY_ENVIRONMENT_NAME` — deliberately NOT
+`ENVIRONMENT`, which forks verbatim and reads the literal string `"development"` inside
+every PR fork (see "GitHub secrets" above and `db.ResetEnabled`'s doc comment) — matching
+a Railway PR-environment name, which excludes `"development"`/`"production"` unconditionally.
+This does not reverse M4-22-07 ("dropped reset-seed/E2E"): that removal was scoped to the
+`workflow_dispatch`/push path, whose target is the PERSISTENT environment — resetting that
+would destroy live data with no fork underneath it. The reset here is reachable ONLY for a
+genuine PR fork.
+
+There is still no *manual* reset step anywhere in the repo — M4-22-07 deleted the last one
+of those, along with the only unconditional table wipe this repo ran before this one; the
+reset above is automatic, boot-time, and gated exactly as described.
 
 ## Cold-fleet recovery (M3-16)
 

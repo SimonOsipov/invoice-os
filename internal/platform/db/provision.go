@@ -38,6 +38,17 @@ type ProvisionConfig struct {
 	Environment   string // raw os.Getenv("ENVIRONMENT")
 	BootstrapFlag string // raw os.Getenv("GATEWAY_DB_BOOTSTRAP")
 
+	// RailwayEnvironmentName is the raw os.Getenv("RAILWAY_ENVIRONMENT_NAME") —
+	// deliberately NOT Environment/ENVIRONMENT. See ResetEnabled's doc comment
+	// (reset.go) for why the destructive reset below needs a variable that
+	// actually varies between a PR fork and its persistent source, which
+	// ENVIRONMENT (forked verbatim) cannot provide.
+	RailwayEnvironmentName string
+	// ResetFlag is the raw os.Getenv("GATEWAY_DB_RESET") — a SEPARATE opt-in
+	// from BootstrapFlag/GATEWAY_DB_BOOTSTRAP for the strictly more dangerous
+	// Reset step (reset.go). See ResetEnabled's doc comment.
+	ResetFlag string
+
 	SuperuserDSN string // DATABASE_SUPERUSER_URL; read once per gated step, never retained (QA F3)
 	MigrationDSN string // DATABASE_MIGRATION_URL; always required, guard-independent (unchanged gateway-as-migrator behavior)
 
@@ -141,19 +152,31 @@ func waitForPostgres(ctx context.Context, dsn string, budget time.Duration, logg
 
 // Provision runs the gateway's boot-time provisioning sequence: bootstrap
 // (gated by BootstrapEnabled) → migrate (unconditional — the existing
-// gateway-as-migrator behavior, unchanged) → seed (gated), short-circuiting
-// fatally on the first error so a partially provisioned database is never
-// served. Bootstrap and Seed each open and close their own dedicated superuser
-// connection (bootstrap.go); Provision retains no DSN or connection past the
+// gateway-as-migrator behavior, unchanged) → reset (gated by ResetEnabled,
+// PR-environments only — persona-handoff-fix, Decision [pr-only-reset]) →
+// seed (gated by BootstrapEnabled), short-circuiting fatally on the first
+// error so a partially provisioned database is never served. Bootstrap, Reset
+// and Seed each open/close their own dedicated superuser connection
+// (bootstrap.go, reset.go); Provision retains no DSN or connection past the
 // call that used it.
 //
-// The guard is evaluated exactly once, from cfg.Environment/cfg.BootstrapFlag —
-// never re-read from the process environment — so bootstrap and seed are
-// gated identically even though migrate runs unconditionally between them.
-// When the guard is false, cfg.Passwords/cfg.SuperuserDSN are never even
-// looked at: Bootstrap/Seed are not called at all, so an empty/zero
-// RolePasswords or an unreachable superuser DSN cannot fail a guard-off boot
-// (AC-3).
+// The bootstrap/seed guard is evaluated exactly once, from
+// cfg.Environment/cfg.BootstrapFlag — never re-read from the process
+// environment — so bootstrap and seed are gated identically even though
+// migrate runs unconditionally between them. When the guard is false,
+// cfg.Passwords/cfg.SuperuserDSN are never even looked at: Bootstrap/Seed are
+// not called at all, so an empty/zero RolePasswords or an unreachable
+// superuser DSN cannot fail a guard-off boot (AC-3).
+//
+// Reset's own guard (ResetEnabled, evaluated from
+// cfg.RailwayEnvironmentName/cfg.ResetFlag — see reset.go for why that pair,
+// not cfg.Environment/cfg.BootstrapFlag) is checked ONLY when the bootstrap/
+// seed guard is already on: resetting a database Provision is not otherwise
+// about to (re)seed would leave a PR environment's Postgres empty rather than
+// demo-ready, which is worse than leaving the old residue in place. Every
+// environment ResetEnabled ever permits is a strict subset of what
+// BootstrapEnabled permits (see ResetEnabled's doc comment), so this nesting
+// never silently skips a reset that should have run.
 func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	enabled := BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag)
 
@@ -198,6 +221,17 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	}
 
 	if enabled {
+		// PR-environment-only, gated independently of the bootstrap/seed guard
+		// above (see this function's doc comment and ResetEnabled/reset.go) —
+		// runs AFTER the schema is migrated and BEFORE Seed repopulates it, so
+		// a PR fork's inherited residue is gone before the curated fixtures
+		// land.
+		if ResetEnabled(cfg.RailwayEnvironmentName, cfg.ResetFlag) {
+			if err := Reset(ctx, cfg.SuperuserDSN); err != nil {
+				return fmt.Errorf("db: provision: reset: %w", err)
+			}
+		}
+
 		if err := Seed(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {
 			return fmt.Errorf("db: provision: seed: %w", err)
 		}

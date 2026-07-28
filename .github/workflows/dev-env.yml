@@ -7,6 +7,24 @@ name: Dev Env (deploy full fleet + verify)
 # PERSISTENT environment itself (deploy + health-gate + fleet-gate only;
 # M4-22-07 dropped reset-seed/E2E).
 #
+# persona-handoff-fix, Decision [pr-only-reset]: a PR's forked Postgres inherits
+# development's live data, not an empty schema, so it also inherits every
+# business_entities/invoices row any E2E run has ever left behind (measured on
+# pr-110: 90 companies, ~3,090 invoices, most of it residue). THIS DOES NOT
+# REVERSE M4-22-07 above — that removal was scoped to the push/workflow_dispatch
+# path, whose target is the PERSISTENT environment (resetting it would destroy
+# live data with no fork underneath it). The reset added here is a NEW,
+# separately-gated step invoked from inside the gateway's own boot sequence
+# (internal/platform/db.Provision, between MigrateUp and Seed — no new job in
+# this file), reachable ONLY for a genuine PR fork: it requires
+# RAILWAY_ENVIRONMENT_NAME (Railway-injected, never forked-as-a-value — see
+# docs/topology-e2e.md) to match a PR-environment name, which excludes
+# "development"/"production" unconditionally, AND a dedicated
+# GATEWAY_DB_RESET=true variable set on the gateway service. See
+# db.ResetEnabled's doc comment (internal/platform/db/reset.go) for the full
+# gating rationale, including why it deliberately does NOT reuse ENVIRONMENT/
+# GATEWAY_DB_BOOTSTRAP the way the existing seed gate does.
+#
 # THE TARGET DISCRIMINATOR IS `github.event_name == 'pull_request'`, NOT
 # `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and
 # dispatch both target the persistent environment, whose variables and domains

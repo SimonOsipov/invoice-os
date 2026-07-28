@@ -455,6 +455,15 @@ test('[import-upload-unify] LIVE: document preview gated, manual entry survives,
   await expect(page.getByText('Import a document ·', { exact: false })).toHaveCount(0)
   await expect(page.getByText('lagos-freight-INV-0482.pdf', { exact: true })).toHaveCount(0)
 
+  // Wait for the zone itself, not just the card: until the entities fetch resolves,
+  // active.entityId is null and the card renders its blocked state INSTEAD of the
+  // dropzone. Dropping before that lands would fail in page.evaluate on a missing
+  // label -- and this assertion is also the regression guard for the null -> resolved
+  // re-seed (App.tsx), without which Read columns below can never enable.
+  await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders once the entity resolves').toBeVisible({
+    timeout: 30_000,
+  })
+
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
 

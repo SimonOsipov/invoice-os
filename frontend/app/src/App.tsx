@@ -207,6 +207,22 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   useEffect(() => clearVal, [])
 
+  // resetImport() snapshots active.entityId at openCreate so a company switch cannot
+  // silently retarget an import already in flight. But that snapshot can be taken
+  // BEFORE the entities fetch resolves — click "New invoice" fast enough (cold fleet,
+  // slow link) and `active` is still emptyClient(), so the snapshot is null. The upload
+  // step reads active.entityId LIVE for its blocked state, so it un-blocks the moment
+  // entities land, while this null entityId persists and canReadColumns stays false —
+  // a dropzone that accepts a file and a Read-columns button that can never enable.
+  // Before [import-upload-unify] the entity <select> was the escape hatch; there is no
+  // longer one, so re-seed on exactly that null -> resolved transition. Confined to the
+  // upload step: past it the columns are already read against the snapshot, and moving
+  // the target then is the retarget resetImport exists to prevent.
+  useEffect(() => {
+    if (createStep !== 'upload' || entityId !== null || active.entityId === null) return
+    setEntityId(active.entityId)
+  }, [createStep, entityId, active.entityId])
+
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
     if (id === 'invoices') { setView('invoices'); setFilter('all'); setSwitcherOpen(false); return }

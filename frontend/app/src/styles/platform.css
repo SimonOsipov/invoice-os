@@ -191,6 +191,7 @@ body {
   .pf-grid-2,
   .pf-grid-3,
   .pf-grid-4,
+  .pf-grid-5,
   .pf-dash-row-a,
   .pf-dash-row-b,
   .pf-dash-row-c,
@@ -213,7 +214,8 @@ body {
 
 @media (max-width: 480px) {
   .pf-grid-3,
-  .pf-grid-4 {
+  .pf-grid-4,
+  .pf-grid-5 {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
   .pf-list-row,

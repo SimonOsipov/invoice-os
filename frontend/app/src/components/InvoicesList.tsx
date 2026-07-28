@@ -4,13 +4,23 @@
 // for this surface only (Obsidian M4-09 System Design §4). Ported shell from
 // Platform.dc.html ~L343-387. M5-09-04 removed the mock invoice-DETAIL branch
 // (InvoiceDetail.tsx) — the mock generators used here (genInvoices/buildClients) are a
-// separate concern and stay intact; they still feed Reports/Customers/Sidebar/Header.
+// separate concern and stay intact; they still feed Reports/Customers (Sidebar's own
+// badges moved off them onto the live rollup, [dashboard-scope-per-client] — see
+// Sidebar.tsx).
 //
 // The "Needs attention" toggle re-fetches server-side (`needs_attention=true` via
 // `deps:[needsAttention]`) rather than re-deriving the predicate in the browser
-// ([server-side-needs-attention]). Row click routes through the existing
-// selectImported/importedInvoiceId/detailTarget->'imported' seam with the real invoice
-// UUID ([reuse-imported-seam]); rename deferred.
+// ([server-side-needs-attention]); this list is a CLIENT-scoped surface (Sidebar.tsx's
+// CLIENT nav group), narrowed to the ACTIVE client server-side too, via listInvoices'
+// own `entity_id` param ([entity-id-restored] regression fix -- ListHandler,
+// handlers.go) -- `deps` below also includes `ctx.mode`/`ctx.active.entityId`, so
+// switching companies in the workspace switcher re-fetches rather than leaving a stale,
+// previous-entity page on screen. gateByActiveEntity (lib/invoices.ts) stays as a
+// render-time invariant on TOP of the server-side filter -- see its own doc comment for
+// why (a company switch's pre-refetch frame would otherwise flash the previous client's
+// rows). Row click routes through the existing selectImported/importedInvoiceId/
+// detailTarget->'imported' seam with the real invoice UUID ([reuse-imported-seam]);
+// rename deferred.
 //
 // M5-09-06 (task-257, Core AC #1) adds the selection model + batch submit below without
 // touching any of the above: per-row/select-all checkboxes, a selection bar, and a
@@ -27,6 +37,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, toApiError, useAsync, typ
 import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
+  gateByActiveEntity,
   invoiceStatusStyle,
   invoicesViewState,
   isRowSelectable,
@@ -52,12 +63,23 @@ const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 130px'
 export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [needsAttention, setNeedsAttention] = useState(false)
+  // In-house has no business_entities row ([entity-picker] trap 1) so its one "client"
+  // IS the tenant -- entity_id omitted entirely, same as before this param existed. A
+  // null entityId in firm mode (entities still loading/errored) ALSO omits it -- the
+  // network call is a harmless tenant-wide fetch in that transient window,
+  // gateByActiveEntity is what keeps it from ever rendering (see its own doc comment).
+  const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
   // Same `base ? … : …` narrowing as ClientsView.tsx:38-41 — `immediate:
-  // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps:
-  // [needsAttention]` re-runs the effect (and re-fetches) whenever the toggle flips.
+  // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
+  // re-runs the effect (and re-fetches) whenever the toggle flips OR the active company
+  // changes ([entity-id-restored]: entity_id is now a server-side param, so switching
+  // companies must trigger a real refetch, not just a client-side recompute).
   const list = useAsync<InvoiceRecord[]>(
-    () => (base ? listInvoices(ctx.authedFetch, base, { needsAttention }) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: shouldFetchInvoices(base), deps: [needsAttention] },
+    () =>
+      base
+        ? listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId })
+        : Promise.reject(new Error('no gateway configured')),
+    { immediate: shouldFetchInvoices(base), deps: [needsAttention, ctx.mode, ctx.active.entityId] },
   )
   const state = invoicesViewState(base, list)
 
@@ -89,7 +111,21 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // — the overlay tick never calls `list.run()`, so `list.data` alone would never change
   // on a poll and the prune effect would never fire for a row that advances past
   // `validated` between polls.
-  const rows = useMemo(() => live ?? list.data ?? [], [live, list.data])
+  //
+  // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
+  // ([entity-id-restored]); gateByActiveEntity (see the file-header comment) is the
+  // render-time invariant on top of it — blanks the "not yet resolved" transient
+  // window entirely, and still row-filters otherwise so a company switch that hasn't
+  // finished refetching yet never flashes the previous client's rows for a frame.
+  // Every downstream consumer (selection, the live-poll gate, the empty-state check
+  // below) sees only this client's own rows; there is exactly one `rows` in this
+  // component. `ctx.mode`/`ctx.active.entityId` join the dep list alongside
+  // `live`/`list.data` so that frame is covered immediately, without waiting on the
+  // refetch.
+  const rows = useMemo(
+    () => gateByActiveEntity(live ?? list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    [live, list.data, ctx.mode, ctx.active.entityId],
+  )
 
   const [selected, setSelected] = useState<string[]>([])
 
@@ -135,6 +171,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // calls in flight under the same `gen`; the older can resolve last and re-install stale
   // rows for one visible tick before the next tick self-heals it. Same re-entrancy-ref
   // idiom as `submitInFlight` above / App.tsx's `reqInFlight`.
+  //
+  // `entityId: activeEntityId` here too ([entity-id-restored]) -- a poll tick that
+  // omitted it would silently re-fetch the FULL tenant-wide page every LIVE_POLL_MS and
+  // install it via setLive below, which gateByActiveEntity would then render UNGATED
+  // (entityId is non-null once resolved) -- the exact class of leak this whole fix
+  // exists to close, just on a 2s timer instead of the initial fetch.
   const tickInFlight = useRef(false)
   useLiveRefresh(
     () => {
@@ -142,7 +184,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       if (tickInFlight.current) return
       tickInFlight.current = true
       const g = gen.current
-      listInvoices(ctx.authedFetch, base, { needsAttention })
+      listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId })
         .then((freshRows) => {
           if (g === gen.current) setLive(freshRows)
         })
@@ -274,7 +316,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
-      {(state === 'idle' || state === 'empty') && (
+      {/* `state` now reflects the ENTITY-SCOPED fetch itself ([entity-id-restored]) -- a
+          genuinely invoice-less entity resolves to 'empty' directly, server-side, rather
+          than a non-empty tenant-wide 'ready' result filtered down to zero in the browser.
+          `state === 'ready' && rows.length === 0` still matters for the one window the
+          server can't cover: entityId not yet resolved, where gateByActiveEntity blanks a
+          tenant-wide 'ready' result down to [] -- the SAME honest empty state either way,
+          never a bare table with only a header row. */}
+      {(state === 'idle' || state === 'empty' || (state === 'ready' && rows.length === 0)) && (
         <div data-testid="invoices-empty">
           <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
@@ -285,7 +334,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'ready' && (
+      {state === 'ready' && rows.length > 0 && (
         <>
           {selected.length > 0 && (
             <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}>

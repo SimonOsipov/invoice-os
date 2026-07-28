@@ -18,9 +18,10 @@
 // seam from M3-07-02, src/lib/authedFetch.ts), mirroring listEntities/updateEntity in
 // portfolio.ts. Gateway path prefix confirmed `${base}/api/invoice/v1/…`
 // (importApi.ts:248,263):
-// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?needs_attention=true]`,
-//                       unwraps `.invoices` (ListHandler, handlers.go:223-292,
-//                       [needs-attention-param-strictness]).
+// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?needs_attention=true]
+//                       [&entity_id=...]`, unwraps `.invoices` (ListHandler,
+//                       handlers.go:223-292, [needs-attention-param-strictness],
+//                       [entity-id-restored]).
 // - getInvoice:         GET   `${base}/api/invoice/v1/invoices/{id}`, resolves an
 //                       InvoiceDetailRecord and normalizes a missing/undefined
 //                       `rule_set_version` to `null` (defensive; the backend now sends
@@ -73,6 +74,29 @@
 // short-circuit (a deployed SPA with no backend behind it must make no network calls)
 // means base==null => 'idle' regardless of async status; otherwise the view state
 // mirrors async.status.
+//
+// gateByActiveEntity ([dashboard-scope-per-client], persona-handoff-fix step 2,
+// RENAMED by the step-6 regression fix, [entity-id-restored]): the Invoices/Customers/
+// Reports lists are CLIENT-scoped surfaces (Sidebar.tsx's CLIENT nav group). Step 2
+// originally did the ENTIRE narrowing here, in the browser, over a still-tenant-wide,
+// LIMIT-50 listInvoices() response -- filter-AFTER-paginate, which silently dropped an
+// entity's own invoices whenever they weren't inside the newest 50 tenant-wide (CI
+// caught this, e2e/topology/import-wizard.spec.ts:208). listInvoices now sends
+// `entity_id` itself (ListHandler, handlers.go, [entity-id-restored]) so the AUTHORITATIVE
+// narrowing happens server-side, in SQL, before the limit applies -- but the row-level
+// `row.entity_id === entityId` check STAYS here too, now as a render-time invariant
+// rather than the primary filter: on a company switch, `list.data`/`live` still hold the
+// PREVIOUS entity's rows for at least one committed render before the deps-triggered
+// refetch resolves (useAsync's `start` dispatch is a passive effect, so it runs AFTER
+// that commit) -- without this check that frame would flash the wrong client's
+// invoices/KPIs/buyer names. This can only ever DROP rows, never invent wrong ones, so
+// it cannot mask a server-side entity_id regression (that's what
+// internal/invoice/entity_filter_test.go / TestListHandler_EntityIDParam are for). Also
+// bypassed entirely in-house (no business_entities row, [entity-picker] trap 1) --
+// its one "client" IS the tenant. A null entityId in firm mode (entities still
+// loading/errored, [entity-picker] trap 2) means the active client isn't known yet, so
+// this returns [] rather than whatever the network call happened to fetch (the request
+// itself omits `entity_id` in that window too, so it would otherwise be tenant-wide).
 import type { AuthedFetch } from './portfolio'
 import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
@@ -178,10 +202,13 @@ export interface StatusChange {
   changed_at: string
 }
 
-// listInvoices's only filter today (ListFilter.NeedsAttention, invoice.go:196-201,
-// [needs-attention-bool-true-only]) — absent/false applies no predicate.
+// listInvoices's two filters (ListFilter, invoice.go:200-217): needsAttention
+// ([needs-attention-bool-true-only] — absent/false applies no predicate) and entityId
+// ([entity-id-restored] — absent/undefined applies no filter, tenant-wide). Both AND
+// together server-side when set together.
 export interface ListInvoicesOptions {
   needsAttention?: boolean
+  entityId?: string
 }
 
 // editInvoice's PATCH body: the 9 optional header MBS-content fields (editReq,
@@ -236,7 +263,10 @@ export async function listInvoices(
   base: string,
   opts: ListInvoicesOptions = {},
 ): Promise<InvoiceRecord[]> {
-  const query = opts.needsAttention === true ? '?needs_attention=true' : ''
+  const params = new URLSearchParams()
+  if (opts.needsAttention === true) params.set('needs_attention', 'true')
+  if (opts.entityId) params.set('entity_id', opts.entityId)
+  const query = params.toString() ? `?${params.toString()}` : ''
   const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
   return res.invoices
 }
@@ -484,4 +514,24 @@ export function shouldFetchInvoices(base: string | null): boolean {
 export function invoicesViewState(base: string | null, s: AsyncState<InvoiceRecord[]>): AsyncStatus {
   if (base == null) return 'idle'
   return s.status
+}
+
+// See the file-header comment for why this exists (listInvoices now does the real
+// narrowing server-side, via `entity_id` -- this is a render-time INVARIANT, not the
+// primary filter anymore). isInhouse bypasses it entirely (in-house's "client" is the
+// whole tenant); entityId === null in firm mode (no entity resolved yet) yields [],
+// never every row. The row-level `entity_id === entityId` check stays -- advisor
+// review (product-advisor, pre-commit) caught that dropping it reintroduces a real bug:
+// on a company switch, `list.data`/`live` still hold the PREVIOUS entity's rows for at
+// least one committed render before the deps-triggered refetch (useAsync's `start`
+// dispatch runs in a passive effect, after that commit) resolves -- without this row
+// check, that frame renders the wrong client's invoices/KPIs/buyer names. A client-side
+// filter can only ever DROP rows, never invent wrong ones, so it cannot mask the
+// CI-caught filter-after-paginate regression (entity_filter_test.go's
+// TestStoreList_EntityIDNarrowsBeforeLimit / TestListHandler_EntityIDParam already
+// cover "does the server actually apply entity_id" directly).
+export function gateByActiveEntity(rows: InvoiceRecord[], isInhouse: boolean, entityId: string | null): InvoiceRecord[] {
+  if (isInhouse) return rows
+  if (entityId == null) return []
+  return rows.filter((row) => row.entity_id === entityId)
 }

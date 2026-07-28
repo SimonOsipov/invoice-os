@@ -354,6 +354,25 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 		t.Fatalf("count(rules under v2) = %d, want 19 before running Down [RS-V2-09 precondition]", v2RuleCount)
 	}
 
+	// db/seed.dev.sql now seeds demo invoices (persona-handoff-fix step 4,
+	// [demo-invoice-seed]) that STAMP v2 via rule_set_version_id, whose FK carries no
+	// ON DELETE clause (NO ACTION). Those rows make the Down below raise 23503 before
+	// it can be asserted at all -- exactly the case
+	// migrations/20260716185106_rule_set_v2.sql's [v2-down-is-dev-irreversible] note
+	// calls out ("once any invoice stamps v2 this DELETE raises 23503 ... CI's
+	// reversibility gate runs on a fresh, invoice-less Postgres"). The fixture retired
+	// that premise; clearing the stamped rows restores it.
+	//
+	// This WEAKENS NOTHING: the enclosing tx is rolled back unconditionally (the defer
+	// above), so the seeded invoices outlive the test untouched, and the Down's own
+	// post-conditions below are still asserted against a real v2 delete. Superuser pool,
+	// so FORCE RLS on invoices does not hide rows from the DELETE. line_items and
+	// invoice_status_history follow via ON DELETE CASCADE off invoice_id.
+	// Same reasoning as internal/platform/db's resetInvoicesBeforeFullSchemaReset.
+	if _, err := tx.Exec(ctx, `DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`); err != nil {
+		t.Fatalf("clear rule-set-stamped seed invoices before the simulated Down: %v", err)
+	}
+
 	// The v2 migration's Down, per task-111 §a: delete v2 (rules cascade,
 	// ON DELETE CASCADE) -> reactivate v1 -> re-insert the 2 line-item rules
 	// under v1, params verbatim from migrations/20260715120000_line_rules.sql.

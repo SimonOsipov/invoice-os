@@ -22,10 +22,12 @@ import type { AuthedFetch } from './portfolio'
 import {
   dashboardViewState,
   deslug,
+  EMPTY_BUCKET,
   entityHealth,
   getRollup,
   isEmptyRollup,
   resolveCtaLabel,
+  scopedBucket,
   topFailures,
   donutSegments,
   type Counts,
@@ -260,6 +262,36 @@ describe('entityHealth', () => {
     const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0 }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'clear' })
+  })
+})
+
+// scopedBucket ([dashboard-scope-per-client], persona-handoff-fix step 2) — added
+// alongside the client-scoped Overview/Sidebar this story ships, not part of the
+// architect's original DASH-T1-T23 table.
+describe('scopedBucket', () => {
+  const rollup: Rollup = {
+    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3 },
+    clients: [
+      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1 },
+    ],
+    top_violations: [],
+  }
+
+  it('in-house (isInhouse:true) always resolves rollup.totals, regardless of entityId', () => {
+    expect(scopedBucket(true, null, rollup)).toEqual(rollup.totals)
+    expect(scopedBucket(true, 'e1', rollup)).toEqual(rollup.totals)
+  })
+
+  it('firm mode with a real entityId present in `clients` resolves that entity\'s own bucket, not totals', () => {
+    expect(scopedBucket(false, 'e1', rollup)).toEqual({ counts: counts({ validated: 4 }), needs_attention: 1 })
+  })
+
+  it('firm mode with entityId===null (no client resolved yet) resolves EMPTY_BUCKET, never totals', () => {
+    expect(scopedBucket(false, null, rollup)).toEqual(EMPTY_BUCKET)
+  })
+
+  it('firm mode with an entityId absent from `clients` (zero invoices, INNER JOIN) resolves EMPTY_BUCKET, never totals', () => {
+    expect(scopedBucket(false, 'e-no-invoices', rollup)).toEqual(EMPTY_BUCKET)
   })
 })
 

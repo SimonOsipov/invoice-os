@@ -39,51 +39,70 @@ const honeywellTenantID = "22222222-2222-2222-2222-222222222222"
 
 // entityRow is a business_entities row's presentable identity. id is
 // excluded: entity ids use gen_random_uuid() and aren't part of the fixed
-// curated state.
+// curated state. sector added persona-handoff-fix step 5 (Task B) — the
+// seed's INSERT column list grew from (tenant_id, name, tin, status) to
+// include sector, so the shape this suite pins grows with it.
 type entityRow struct {
 	name   string
 	tin    string
+	sector string
 	status string
 }
 
 // curatedDemoEntities is the 27 curated business_entities rows (21 active,
-// 6 archived) db/seed.dev.sql's UPSERT converges the demo tenant to.
-// Comparisons below sort both sides first, so this literal's declaration
-// order isn't a hidden assumption.
+// 6 archived) db/seed.dev.sql's UPSERT converges the demo tenant to. sector
+// values are copied verbatim from that file — a mismatch here means either
+// this literal or the seed itself drifted. Comparisons below sort both sides
+// first, so this literal's declaration order isn't a hidden assumption.
 var curatedDemoEntities = []entityRow{
-	{name: "Adeyemi & Sons Trading Ltd", tin: "10012345-0001", status: "active"},
-	{name: "Chukwu Global Ventures Ltd", tin: "10023456-0002", status: "active"},
-	{name: "Okonkwo Textiles Nigeria Ltd", tin: "10034567-0003", status: "active"},
-	{name: "Balogun Agro-Allied Ltd", tin: "10045678-0004", status: "active"},
-	{name: "Emeka Pharmaceuticals Ltd", tin: "10056789-0005", status: "active"},
-	{name: "Aliyu Logistics Services Ltd", tin: "10067890-0006", status: "active"},
-	{name: "Ifeoma Fashion House Ltd", tin: "10078901-0007", status: "active"},
-	{name: "Bello Construction Nigeria Ltd", tin: "10089012-0008", status: "active"},
-	{name: "Nwosu Foods & Beverages Ltd", tin: "10090123-0009", status: "active"},
-	{name: "Yakubu Motors Ltd", tin: "10101234-0010", status: "active"},
-	{name: "Chidinma Cosmetics Ltd", tin: "10112345-0011", status: "active"},
-	{name: "Obiora Steel Works Ltd", tin: "10123456-0012", status: "active"},
-	{name: "Funmilayo Catering Services Ltd", tin: "10134567-0013", status: "active"},
-	{name: "Danjuma Petroleum Ltd", tin: "10145678-0014", status: "active"},
-	{name: "Ngozi Interiors Ltd", tin: "10156789-0015", status: "active"},
-	{name: "Uche Digital Solutions Ltd", tin: "10167890-0016", status: "active"},
-	{name: "Ibrahim Farms Ltd", tin: "10178901-0017", status: "active"},
-	{name: "Amara Publishing Ltd", tin: "10189012-0018", status: "active"},
-	{name: "Tunde Electricals Ltd", tin: "10190123-0019", status: "active"},
-	{name: "Kemi Beauty Concepts Ltd", tin: "10201234-0020", status: "active"},
-	{name: "Segun Haulage Ltd", tin: "10212345-0021", status: "active"},
-	{name: "Olumide Printing Press Ltd", tin: "10223456-0022", status: "archived"},
-	{name: "Halima Boutique Ltd", tin: "10234567-0023", status: "archived"},
-	{name: "Chinwe Poultry Farms Ltd", tin: "10245678-0024", status: "archived"},
-	{name: "Musa Hardware Stores Ltd", tin: "10256789-0025", status: "archived"},
-	{name: "Bisi Event Planners Ltd", tin: "10267890-0026", status: "archived"},
-	{name: "Ekene Auto Parts Ltd", tin: "10278901-0027", status: "archived"},
+	{name: "Adeyemi & Sons Trading Ltd", tin: "10012345-0001", sector: "Trading", status: "active"},
+	{name: "Chukwu Global Ventures Ltd", tin: "10023456-0002", sector: "Trading", status: "active"},
+	{name: "Okonkwo Textiles Nigeria Ltd", tin: "10034567-0003", sector: "Textiles", status: "active"},
+	{name: "Balogun Agro-Allied Ltd", tin: "10045678-0004", sector: "Agriculture", status: "active"},
+	{name: "Emeka Pharmaceuticals Ltd", tin: "10056789-0005", sector: "Pharmaceuticals", status: "active"},
+	{name: "Aliyu Logistics Services Ltd", tin: "10067890-0006", sector: "Logistics", status: "active"},
+	{name: "Ifeoma Fashion House Ltd", tin: "10078901-0007", sector: "Fashion", status: "active"},
+	{name: "Bello Construction Nigeria Ltd", tin: "10089012-0008", sector: "Construction", status: "active"},
+	{name: "Nwosu Foods & Beverages Ltd", tin: "10090123-0009", sector: "Food & Beverage", status: "active"},
+	{name: "Yakubu Motors Ltd", tin: "10101234-0010", sector: "Automotive", status: "active"},
+	{name: "Chidinma Cosmetics Ltd", tin: "10112345-0011", sector: "Cosmetics", status: "active"},
+	{name: "Obiora Steel Works Ltd", tin: "10123456-0012", sector: "Manufacturing", status: "active"},
+	{name: "Funmilayo Catering Services Ltd", tin: "10134567-0013", sector: "Catering", status: "active"},
+	{name: "Danjuma Petroleum Ltd", tin: "10145678-0014", sector: "Oil & Gas", status: "active"},
+	{name: "Ngozi Interiors Ltd", tin: "10156789-0015", sector: "Interior Design", status: "active"},
+	{name: "Uche Digital Solutions Ltd", tin: "10167890-0016", sector: "Technology", status: "active"},
+	{name: "Ibrahim Farms Ltd", tin: "10178901-0017", sector: "Agriculture", status: "active"},
+	{name: "Amara Publishing Ltd", tin: "10189012-0018", sector: "Publishing", status: "active"},
+	{name: "Tunde Electricals Ltd", tin: "10190123-0019", sector: "Electricals", status: "active"},
+	{name: "Kemi Beauty Concepts Ltd", tin: "10201234-0020", sector: "Beauty & Personal Care", status: "active"},
+	{name: "Segun Haulage Ltd", tin: "10212345-0021", sector: "Logistics", status: "active"},
+	{name: "Olumide Printing Press Ltd", tin: "10223456-0022", sector: "Printing", status: "archived"},
+	{name: "Halima Boutique Ltd", tin: "10234567-0023", sector: "Retail", status: "archived"},
+	{name: "Chinwe Poultry Farms Ltd", tin: "10245678-0024", sector: "Agriculture", status: "archived"},
+	{name: "Musa Hardware Stores Ltd", tin: "10256789-0025", sector: "Retail", status: "archived"},
+	{name: "Bisi Event Planners Ltd", tin: "10267890-0026", sector: "Events", status: "archived"},
+	{name: "Ekene Auto Parts Ltd", tin: "10278901-0027", sector: "Automotive", status: "archived"},
 }
 
 // resetDemoBusinessEntities clears the demo tenant's business_entities rows
 // so each test starts from empty, without touching other tenants.
+//
+// invoices.entity_id -> business_entities(id) is ON DELETE RESTRICT
+// (migrations/20260714103137_invoices.sql: "an invoice is a durable legal/
+// fiscal record ... must not be silently destroyed by a business_entities
+// hard delete") -- db/seed.dev.sql now also seeds invoices against 6 of the
+// 27 curated entities (persona-handoff-fix step 4, [demo-invoice-seed]), so
+// deleting business_entities first would hit that RESTRICT (23001). Invoices
+// are cleared FIRST -- line_items and invoice_status_history cascade off
+// invoice_id (ON DELETE CASCADE on both) -- so the entities delete below
+// always succeeds regardless of what Seed most recently wrote.
 func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM invoices WHERE tenant_id = $1`, demoTenantID,
+	); err != nil {
+		t.Fatalf("clear demo tenant's invoices (precondition): %v", err)
+	}
 	if _, err := pool.Exec(context.Background(),
 		`DELETE FROM business_entities WHERE tenant_id = $1`, demoTenantID,
 	); err != nil {
@@ -92,11 +111,13 @@ func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 }
 
 // fetchDemoBusinessEntities returns tenantID's business_entities rows as
-// (name, tin, status), ordered by name.
+// (name, tin, sector, status), ordered by name. sector is coalesced to ''
+// like tin — a junk/probe row inserted without one (several tests below)
+// has sector NULL, and entityRow has no room for a NULL.
 func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string) []entityRow {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
-		`SELECT name, coalesce(tin, ''), status FROM business_entities WHERE tenant_id = $1 ORDER BY name`,
+		`SELECT name, coalesce(tin, ''), coalesce(sector, ''), status FROM business_entities WHERE tenant_id = $1 ORDER BY name`,
 		tenantID,
 	)
 	if err != nil {
@@ -107,7 +128,7 @@ func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string
 	var got []entityRow
 	for rows.Next() {
 		var r entityRow
-		if err := rows.Scan(&r.name, &r.tin, &r.status); err != nil {
+		if err := rows.Scan(&r.name, &r.tin, &r.sector, &r.status); err != nil {
 			t.Fatalf("scan business_entities row: %v", err)
 		}
 		got = append(got, r)
@@ -219,42 +240,109 @@ func TestSeedRepairsMutatedDemoEntity(t *testing.T) {
 		t.Fatalf("first Seed (establish curated baseline): %v", err)
 	}
 
-	const curatedTIN = "10012345-0001" // curated row #1: Adeyemi & Sons Trading Ltd, active
+	const curatedTIN = "10012345-0001" // curated row #1: Adeyemi & Sons Trading Ltd, active, sector Trading
 	const curatedName = "Adeyemi & Sons Trading Ltd"
+	const curatedSector = "Trading"
+	// sector mutated too (persona-handoff-fix step 5, Task B): proves the DO UPDATE
+	// clause's `sector = EXCLUDED.sector` repairs a hand-edited NON-NULL sector, not
+	// just name/status. TestSeedBackfillsSectorOntoPreexistingRow below covers the
+	// OTHER sector case — a pre-existing row where sector was never set at all (NULL).
 	if _, err := pool.Exec(ctx,
-		`UPDATE business_entities SET name = 'MUTATED JUNK NAME', status = 'archived' WHERE tenant_id = $1 AND tin = $2`,
+		`UPDATE business_entities SET name = 'MUTATED JUNK NAME', sector = 'MUTATED JUNK SECTOR', status = 'archived' WHERE tenant_id = $1 AND tin = $2`,
 		demoTenantID, curatedTIN,
 	); err != nil {
 		t.Fatalf("mutate curated row (precondition): %v", err)
 	}
 
-	var mutatedName, mutatedStatus string
+	var mutatedName, mutatedSector, mutatedStatus string
 	if err := pool.QueryRow(ctx,
-		`SELECT name, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		`SELECT name, sector, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
 		demoTenantID, curatedTIN,
-	).Scan(&mutatedName, &mutatedStatus); err != nil {
+	).Scan(&mutatedName, &mutatedSector, &mutatedStatus); err != nil {
 		t.Fatalf("read back mutated row (precondition): %v", err)
 	}
-	if mutatedName != "MUTATED JUNK NAME" || mutatedStatus != "archived" {
-		t.Fatalf("precondition: row after mutation = (%q, %q), want (\"MUTATED JUNK NAME\", \"archived\")", mutatedName, mutatedStatus)
+	if mutatedName != "MUTATED JUNK NAME" || mutatedSector != "MUTATED JUNK SECTOR" || mutatedStatus != "archived" {
+		t.Fatalf("precondition: row after mutation = (%q, %q, %q), want (\"MUTATED JUNK NAME\", \"MUTATED JUNK SECTOR\", \"archived\")", mutatedName, mutatedSector, mutatedStatus)
 	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("second Seed (repair): %v", err)
 	}
 
-	var name, status string
+	var name, sector, status string
 	if err := pool.QueryRow(ctx,
-		`SELECT name, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		`SELECT name, sector, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
 		demoTenantID, curatedTIN,
-	).Scan(&name, &status); err != nil {
+	).Scan(&name, &sector, &status); err != nil {
 		t.Fatalf("read back repaired row: %v", err)
 	}
 	if name != curatedName {
 		t.Errorf("name after repair Seed = %q, want curated %q — an ON CONFLICT DO NOTHING upsert would leave the mutated name in place", name, curatedName)
 	}
+	if sector != curatedSector {
+		t.Errorf("sector after repair Seed = %q, want curated %q — a DO UPDATE clause missing `sector = EXCLUDED.sector` would leave the mutated sector in place", sector, curatedSector)
+	}
 	if status != "active" {
 		t.Errorf("status after repair Seed = %q, want curated %q — an ON CONFLICT DO NOTHING upsert would leave the mutated status in place", status, "active")
+	}
+}
+
+// TestSeedBackfillsSectorOntoPreexistingRow: persona-handoff-fix step 5 (Task B).
+// PR/dev environments deployed BEFORE this story have curated business_entities rows
+// with sector left NULL — the seed's own INSERT column list used to be (tenant_id,
+// name, tin, status), sector wasn't in it at all. This simulates that pre-existing
+// state directly (bypassing Seed, inserting the row exactly as an older deploy would
+// have left it) and asserts a Seed run BACKFILLS sector — proving the [demo-seed-shape]
+// UPSERT's `DO UPDATE SET ... sector = EXCLUDED.sector` repairs a NULL, not just a
+// mutated non-NULL value (TestSeedRepairsMutatedDemoEntity above only covers the
+// latter — a DO NOTHING, or a DO UPDATE that omitted sector from its SET list, would
+// both pass that test while still leaving a NULL sector like this one unfixed forever).
+func TestSeedBackfillsSectorOntoPreexistingRow(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	const curatedTIN = "10012345-0001" // curated row #1: Adeyemi & Sons Trading Ltd
+	const curatedName = "Adeyemi & Sons Trading Ltd"
+	const curatedSector = "Trading"
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, $2, $3, 'active')`,
+		demoTenantID, curatedName, curatedTIN,
+	); err != nil {
+		t.Fatalf("seed pre-existing sector-less row (precondition): %v", err)
+	}
+
+	var precondSector *string
+	if err := pool.QueryRow(ctx,
+		`SELECT sector FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, curatedTIN,
+	).Scan(&precondSector); err != nil {
+		t.Fatalf("read back precondition row: %v", err)
+	}
+	if precondSector != nil {
+		t.Fatalf("precondition: sector = %v, want NULL (this row must start exactly as an older, pre-sector deploy would leave it)", *precondSector)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed (sector backfill): %v", err)
+	}
+
+	var sector *string
+	if err := pool.QueryRow(ctx,
+		`SELECT sector FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, curatedTIN,
+	).Scan(&sector); err != nil {
+		t.Fatalf("read back row after Seed: %v", err)
+	}
+	if sector == nil || *sector != curatedSector {
+		got := "NULL"
+		if sector != nil {
+			got = *sector
+		}
+		t.Errorf("sector after Seed = %s, want %q — a DO NOTHING upsert (or a DO UPDATE missing sector from its SET clause) would leave this NULL forever, exactly the state every PR/dev env deployed before this story is in", got, curatedSector)
 	}
 }
 

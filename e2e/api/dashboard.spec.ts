@@ -3,11 +3,12 @@
 // goes through the typed wrappers (createEntity, createInvoice, validateInvoice) +
 // freshTin() (M3-14's isolation convention), exactly like contract-portfolio.spec.ts.
 //
-// The deployed seed (db/seed.dev.sql) creates ONLY tenants + memberships -- zero
-// entities, zero invoices -- so top_violations/needs_attention are EMPTY on a cold
-// DB. Every assertion below is scoped to entities THIS FILE creates (Decision
-// [e2e-relative-assertions]): no absolute firm-wide count is ever asserted, since the
-// deployed DB is shared with every other spec run against this fleet.
+// The deployed seed (db/seed.dev.sql) now curates 27 business_entities, 6 of them with
+// their own seeded invoices too (persona-handoff-fix step 4, [demo-invoice-seed]) -- so
+// top_violations/needs_attention are NOT empty on a fresh DB. Every assertion below is
+// still scoped to entities THIS FILE creates (Decision [e2e-relative-assertions]): no
+// absolute firm-wide count is ever asserted, since the deployed DB is shared with every
+// other spec run against this fleet, the seeded demo fixture now included.
 //
 // POST /v1/invoices with only entity_id + invoice_number (every other field
 // omitted), then validateInvoice, leaves the invoice `draft` and stamps it with

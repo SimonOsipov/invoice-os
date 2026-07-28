@@ -38,25 +38,47 @@ func main() {
 		log.Fatalf("gateway: startup: %v", err)
 	}
 
-	// Bootstrap (gated) -> migrate (unconditional) -> seed (gated), all fatal on
-	// error and all complete before app.Run opens the listener, so a green
-	// /healthz continues to mean "fully provisioned" (task-128). The gateway
-	// remains the fleet's single in-network migrator (docs/migrations.md §2):
-	// migrate is unconditional regardless of the guard below, exactly as before.
+	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
+	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> seed
+	// (gated), all fatal on error and all complete before app.Run opens the
+	// listener, so a green /healthz continues to mean "fully provisioned"
+	// (task-128). The gateway remains the fleet's single in-network migrator
+	// (docs/migrations.md §2): migrate is unconditional regardless of the
+	// guard below, exactly as before.
 	//
-	// The guard reads the RAW os.Getenv("ENVIRONMENT")/os.Getenv("GATEWAY_DB_BOOTSTRAP")
-	// — never app.Config.Environment. internal/platform/config.go:44 substitutes
+	// The bootstrap/seed guard reads the RAW
+	// os.Getenv("ENVIRONMENT")/os.Getenv("GATEWAY_DB_BOOTSTRAP") — never
+	// app.Config.Environment. internal/platform/config.go:44 substitutes
 	// "development" for an unset ENVIRONMENT, which would silently re-open the
 	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
 	// the guard off, none of DATABASE_SUPERUSER_URL / MIGRATOR_PASSWORD /
 	// APP_PASSWORD / READER_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
 	// fallbacks, see resolveRolePassword below) are required — production boots
-	// without any of them set.
+	// without any of them set. The reset guard is separate — see
+	// RailwayEnvironmentName/ResetFlag below and db.ResetEnabled's doc comment.
 	if err := db.Provision(context.Background(), db.ProvisionConfig{
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
-		SuperuserDSN:  os.Getenv("DATABASE_SUPERUSER_URL"),
-		MigrationDSN:  mustEnv("DATABASE_MIGRATION_URL"),
+		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
+		// (db.Reset, gated by db.ResetEnabled) needs a signal that actually
+		// differs between a PR fork and its persistent source. ENVIRONMENT is an
+		// ordinary app variable that forks verbatim, so it reads the literal
+		// string "development" inside every PR environment too
+		// (docs/deploy-model.md "ENVIRONMENT is decorative in a fork") — it
+		// cannot tell the two apart. RAILWAY_ENVIRONMENT_NAME is a Railway-
+		// injected system variable (docs/add-a-service.md; never set manually)
+		// that always reflects the CURRENT environment's real name: "pr-<N>"
+		// inside a fork, whatever the persistent environment is actually named
+		// ("production", post-2026-07-27-rename) on that environment. See
+		// db.ResetEnabled's doc comment for the full reasoning.
+		RailwayEnvironmentName: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),
+		// A SEPARATE opt-in from GATEWAY_DB_BOOTSTRAP: Reset is strictly more
+		// dangerous than Bootstrap/Seed (it destroys data before recreating it),
+		// so it gets its own explicit switch rather than piggybacking on the
+		// existing one.
+		ResetFlag:    os.Getenv("GATEWAY_DB_RESET"),
+		SuperuserDSN: os.Getenv("DATABASE_SUPERUSER_URL"),
+		MigrationDSN: mustEnv("DATABASE_MIGRATION_URL"),
 		Passwords: db.RolePasswords{
 			Migrator: resolveRolePassword("MIGRATOR_PASSWORD", "INVOICE_MIGRATOR_PASSWORD", app.Logger),
 			App:      resolveRolePassword("APP_PASSWORD", "INVOICE_APP_PASSWORD", app.Logger),

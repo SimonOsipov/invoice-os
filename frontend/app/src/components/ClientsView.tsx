@@ -1,22 +1,26 @@
-// Clients / partner portal — live entity list (M3-08-04). Fetches the signed-in
-// tenant's real business entities from the portfolio service and renders them with
-// active/archived status pills, replacing the mock `buildClients()` feed for this
-// surface only (Obsidian M3-08 §1/§3/§4/§5). Ported shell from Platform.dc.html
-// ~L695-732; the KPI grid and the Readiness/VAT/Failing columns have no live source
-// and are removed ([A-d]). Rows are display-only in this subtask — the add/edit
-// modal + its open-state land in M3-08-05 ([A-l]).
+// Clients / partner portal — live entity list (M3-08-04). Renders the signed-in
+// tenant's real business entities with active/archived status pills, replacing the mock
+// `buildClients()` feed for this surface only (Obsidian M3-08 §1/§3/§4/§5). Ported shell
+// from Platform.dc.html ~L695-732; the KPI grid and the Readiness/VAT/Failing columns
+// have no live source and are removed ([A-d]). Rows are display-only in this subtask —
+// the add/edit modal + its open-state land in M3-08-05 ([A-l]).
 //
 // M4-10-03: a second, independent rollup fetch drives a per-row needs-attention health
 // pill, joined to the entity by id — restoring a client-health column now that a live
 // source (the 06 rollup) exists. The pill is computed ONLY when the rollup fetch is
 // 'ready'; loading/error/idle renders a neutral cell, never a false "no invoices yet".
+//
+// [entity-picker] step 1 of 3: the entity list itself is no longer this component's own
+// fetch — it now reads ctx.entities/entitiesState/entitiesError/refetchEntities, ONE
+// fetch shared with the workspace switcher (Sidebar) and CreateUpload's entity picker
+// (lifted to App.tsx), so all three surfaces render the same roster.
 
 import { useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
-import { clientsViewState, entityStatusStyle, listEntities, shouldFetchEntities, type Entity } from '../lib/portfolio'
+import { entityStatusStyle, type Entity } from '../lib/portfolio'
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
@@ -75,19 +79,12 @@ function HealthCell({ health }: { health: EntityHealth | null }) {
 
 export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
-  // The `base ? … : …` narrowing (rather than a `base!` assertion) means the producer
-  // is well-typed without ever trusting a non-null base at the call site; in practice
-  // it never runs when base is null anyway — `immediate: shouldFetchEntities(base)`
-  // (= base != null) keeps the no-gateway build at zero network ([A-e]/[A-m]).
-  const list = useAsync<Entity[]>(
-    () => (base ? listEntities(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: shouldFetchEntities(base) },
-  )
-  const state = clientsViewState(base, list)
+  const { entities, entitiesState: state, entitiesError, refetchEntities } = ctx
 
   // Second, independent rollup fetch (Decision [fetch-per-surface]) driving the per-row
-  // health pill — separate from the entity `list`, which alone gates row visibility. A
-  // slow/failed rollup must NOT block the table; it just leaves the neutral health cell.
+  // health pill — separate from the shared entity list, which alone gates row
+  // visibility. A slow/failed rollup must NOT block the table; it just leaves the
+  // neutral health cell.
   const rollup = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
@@ -98,7 +95,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   // (which an unconditional `rollup.data?.clients ?? []` would produce during the fetch).
   const rollupData = rollup.status === 'ready' ? rollup.data : null
 
-  const count = list.data?.length ?? 0
+  const count = entities.length
   const orgSegment = ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''
 
   // Add/edit form's open/mode/edit-target state ([A-l]) — local, not PlatformCtx: it
@@ -130,7 +127,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'loading' && <Loading label="Loading entities…" />}
 
-      {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
+      {state === 'error' && entitiesError && <ErrorState error={entitiesError} onRetry={refetchEntities} />}
 
       {(state === 'idle' || state === 'empty') && (
         <EmptyState title="No entities yet" message="Add your first business entity to get started." />
@@ -147,7 +144,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             <span className="label">Status</span>
             <span className="label">Health</span>
           </div>
-          {(list.data ?? []).map((e) => {
+          {entities.map((e) => {
             const st = entityStatusStyle(e.status)
             // Join by id (Entity.id === RollupClient.entity_id). null while the rollup is
             // not 'ready' → HealthCell renders a neutral cell (QA finding #1).
@@ -190,7 +187,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           base={base}
           onClose={() => setModal(null)}
           onSuccess={() => {
-            list.run()
+            refetchEntities()
             setModal(null)
           }}
         />

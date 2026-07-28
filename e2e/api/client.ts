@@ -309,11 +309,12 @@ export interface ListInvoicesResponse {
   pagination: Pagination
 }
 
-// listInvoices(): GET /v1/invoices. NO entity/invoice_number/status filter exists
-// ([D8], internal/invoice/handlers.go's ListHandler doc: "No status/entity filters") --
-// only limit/offset, mirroring this file's listEntities shape. Callers that need to find
-// one particular invoice among a tenant's whole history must page and filter
-// client-side (see api/perf.spec.ts's findInvoiceId).
+// listInvoices(): GET /v1/invoices. Only limit/offset here, mirroring this file's
+// listEntities shape -- this test helper deliberately does NOT expose ListHandler's
+// entity_id/needs_attention query params ([D8]/[entity-id-restored],
+// internal/invoice/handlers.go), since no spec in this package needs them yet. Callers
+// that need to find one particular invoice among a tenant's whole history must page
+// and filter client-side (see api/perf.spec.ts's findInvoiceId).
 export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<ListInvoicesResponse> {
   const params = new URLSearchParams()
   if (query?.limit !== undefined) params.set('limit', String(query.limit))

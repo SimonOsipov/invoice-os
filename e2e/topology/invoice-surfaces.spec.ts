@@ -4,8 +4,9 @@
 // verified marker -> drive the live surface). NOT the M4-14 demo script
 // ([focused-e2e-topology], out of scope per the M4-09 story).
 //
-// db/seed.dev.sql seeds zero invoices (only business_entities, M4-22-03), so
-// every scenario below creates its OWN entity + invoice(s) via e2e/api/client.ts
+// db/seed.dev.sql now seeds 27 invoices, but only across 6 of its 27 curated
+// business_entities (persona-handoff-fix step 4, [demo-invoice-seed]) -- every
+// scenario below still creates its OWN entity + invoice(s) via e2e/api/client.ts
 // BEFORE driving the UI -- the same "own entity per test" discipline as
 // import-wizard.spec.ts (no-duplicate-invoice-number is scoped per entity, and
 // this suite runs serially -- fullyParallel:false, workers:1
@@ -79,6 +80,21 @@ async function goToInvoices(page: Page): Promise<void> {
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
   await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
+}
+
+// selectEntity(): [dashboard-scope-per-client] (persona-handoff-fix step 2) made
+// Overview/Invoices CLIENT-scoped surfaces (Sidebar.tsx's CLIENT nav group) -- every
+// fixture entity this file creates via the API seam must become the ACTIVE workspace
+// switcher selection before its own invoices/rollup bucket show up on either surface.
+// signInFirm() alone leaves the switcher's default selection at whatever `clients[0]`
+// resolves to (portfolio's List `ORDER BY name ASC, id ASC`, internal/portfolio/store.go)
+// -- never the fresh entity, which sorts wherever its own Date.now()-suffixed name lands
+// among 25+ others on the shared, never-reset dev DB. Sidebar.tsx:
+// data-testid="company-switcher" (the toggle button) / "company-switcher-option" (each
+// row in the open dropdown).
+async function selectEntity(page: Page, entityName: string): Promise<void> {
+  await page.getByTestId('company-switcher').click()
+  await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
 // A supplier/buyer/line-item shape that fires EXACTLY
@@ -213,6 +229,9 @@ test('list surface: real rows render with real status badges, and Needs attentio
   await validateInvoice(token, clean.id)
 
   await signInFirm(page)
+  // Invoices is CLIENT-scoped now ([dashboard-scope-per-client]) -- see selectEntity's
+  // own doc comment for why this is required, not optional, before goToInvoices.
+  await selectEntity(page, entity.name)
   await goToInvoices(page)
 
   const attnRow = page.getByTestId('invoice-row').filter({ hasText: attnNumber })
@@ -276,6 +295,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   expect(inv.rule_set_version_id, 'a freshly created invoice must start unvalidated').toBeNull()
 
   await signInFirm(page)
+  await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
 
@@ -412,6 +432,12 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   const entity = await createEntity(token, { name: `M4-14 arc ${Date.now()}`, tin: freshTin() })
 
   await signInFirm(page)
+  // Overview/Invoices are CLIENT-scoped surfaces now ([dashboard-scope-per-client]) --
+  // make `entity` the active workspace switcher selection BEFORE anything else, so both
+  // this arc's Invoices step (4) and its dashboard-rollup step (7a) actually show ITS
+  // data rather than whichever entity `clients[0]` happens to default to (see
+  // selectEntity's own doc comment).
+  await selectEntity(page, entity.name)
 
   // 1. Import the mixed batch for the fresh entity -- import-wizard.spec.ts's own proven
   // E2E-04 recipe (select the fresh entity, Read columns, click-map invoice_number +
@@ -453,7 +479,6 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   expect(violateEntry, 'expected an invoice_violations entry for INV-UI-MIX-VIOLATE').toBeTruthy()
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
   expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a real import').toBeTruthy()
-  const violateId = violateEntry!.invoice_id!
 
   // 3. Pre-fix Clients health pill. The import already ran every created row through the
   // validation engine as part of ITS OWN transaction (internal/importer/service.go's
@@ -469,41 +494,23 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
   await expect(clientRow, 'fresh entity row must render on Clients before the fix').toContainText('1 NEEDS ATTENTION')
 
-  // 4. Open the violating invoice's live detail. The Invoices list is TENANT-GLOBAL with
-  // no entity filter ([D8], internal/invoice/handlers.go), and "INV-UI-MIX-VIOLATE" is a
-  // FIXED invoice_number buildMixedCsv() recreates on every run -- including
-  // import-wizard.spec.ts's own E2E-04/05/09, against this SAME shared never-reset dev
-  // DB -- so by the time this arc reaches Invoices, MULTIPLE rows can carry that exact
-  // text. A plain `getByText('INV-UI-MIX-VIOLATE', {exact:true}).click()` hits
-  // Playwright's strict-mode "more than one element" error the moment a second row with
-  // that text exists (guaranteed once this suite has run more than once against the
-  // shared DB). InvoicesList.tsx's List query orders `created_at DESC, id DESC`
-  // (internal/invoice/store.go) and the component maps the fetched array in DOM order
-  // with no client-side re-sort/filter/dedupe -- so row N in the DOM is exactly element N
-  // of the list response's JSON array. Disambiguate by capturing THAT response, finding
-  // the CAPTURED violateId's array index, and clicking the row at that exact index --
-  // deterministic regardless of how many older same-numbered rows exist, rather than by
-  // non-unique visible text. (Not a re-derivation of import-wizard.spec.ts's E2E-05,
+  // 4. Open the violating invoice's live detail. Invoices is a CLIENT-scoped surface now
+  // ([dashboard-scope-per-client]) -- the list narrows to the ACTIVE entity in the
+  // browser (filterByActiveEntity, lib/invoices.ts; the backend endpoint itself stays
+  // tenant-global, [D8], internal/invoice/handlers.go), and `selectEntity` above already
+  // made `entity` the active one. "INV-UI-MIX-VIOLATE" is a FIXED invoice_number
+  // buildMixedCsv() recreates on every run -- including import-wizard.spec.ts's own
+  // E2E-04/05/09 -- but every one of those runs used ITS OWN fresh entity, so THIS
+  // entity's filtered view can only ever contain the two rows this run just imported.
+  // The row-index disambiguation this arc used before entity-scoping existed (capture
+  // the list response, find the imported invoice_id's array index, click that DOM index)
+  // is therefore no longer needed -- a plain exact-text click via this file's own
+  // goToInvoices/openInvoiceRow helpers is unambiguous, the same idiom every other test
+  // in this file already uses. (Not a re-derivation of import-wizard.spec.ts's E2E-05,
   // which additionally proves the click-through-honest-placeholder invariant -- out of
   // scope for this arc's own moment of value, the business flow + dashboard rollup.)
-  const listResp = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
-  )
-  await page.getByRole('button', { name: /Invoices/ }).click()
-  const listBody = (await (await listResp).json()) as { invoices: { id: string }[] }
-  const rowIndex = listBody.invoices.findIndex((inv) => inv.id === violateId)
-  expect(
-    rowIndex,
-    'the freshly-imported INV-UI-MIX-VIOLATE invoice must appear in the default (most-recent-first, limit-50) invoices page',
-  ).toBeGreaterThanOrEqual(0)
-  await expect(page.getByTestId('invoices-list')).toBeVisible()
-
-  const detailResp = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateId}`),
-  )
-  await page.getByTestId('invoice-row').nth(rowIndex).click()
-  await detailResp
-  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await goToInvoices(page)
+  await openInvoiceRow(page, 'INV-UI-MIX-VIOLATE')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
   const violationsTable = page.getByTestId('violations-table')
   await expect(violationsTable).toContainText('vat-standard-rate')
@@ -527,10 +534,13 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
 
-  // 7a. Dashboard rollup ready state (Gap 1) -- existence/ready only, never a tenant-wide
-  // count ([dashboard-ready-not-counted]): the shared dev DB accumulates invoices across
-  // every run, so only the overview label + a rendered "<N> TOTAL" donut total are
-  // asserted, never a specific N.
+  // 7a. Dashboard rollup ready state (Gap 1). [dashboard-scope-per-client] means this
+  // page now shows the ACTIVE entity's OWN scoped total, not the shared dev DB's
+  // ever-growing tenant-wide count ([dashboard-ready-not-counted] is retired by that same
+  // change) -- so the exact value is technically knowable here (2: mix-clean plus the
+  // now-fixed mix-violate), but this stays existence/ready-only rather than coupling this
+  // arc's business-flow assertion to buildMixedCsv's exact row count: only the overview
+  // label + a rendered "<N> TOTAL" donut total are asserted, never a specific N.
   await page.getByRole('button', { name: /Overview/ }).click()
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
   await expect(page.getByText(/^\d+ TOTAL$/)).toBeVisible()
@@ -583,6 +593,7 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   await validateInvoice(token, inv.id)
 
   await signInFirm(page)
+  await selectEntity(page, entity.name)
   await goToInvoices(page)
 
   const row = invoiceRowByNumber(page, invoiceNumber)
@@ -631,6 +642,7 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   await validateInvoice(token, inv.id)
 
   await signInFirm(page)
+  await selectEntity(page, entity.name)
   await goToInvoices(page)
 
   const row = invoiceRowByNumber(page, invoiceNumber)
@@ -739,6 +751,7 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await transitionInvoice(token, inv.id, 'failed')
 
   await signInFirm(page)
+  await selectEntity(page, entity.name)
   await goToInvoices(page)
 
   const row = invoiceRowByNumber(page, invoiceNumber)

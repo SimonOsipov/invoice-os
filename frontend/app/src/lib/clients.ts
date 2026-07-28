@@ -1,16 +1,50 @@
-// Per-company invoice generation + dashboard build, ported exactly from the prototype's
-// `genInvoices`, `buildClients`, `defaultDraft`, `statusStyle` methods
+// Per-company invoice generation + dashboard build, ported (in spirit) from the
+// prototype's `genInvoices`, `buildClients`, `defaultDraft`, `statusStyle` methods
 // (Platform.dc.html ~L1040-1189).
+//
+// [entity-picker] step 1 of 3: buildClients() used to fan out over the static CFG mock
+// roster; it now fans out over the LIVE portfolio entity list (lib/portfolio.ts), so the
+// workspace switcher renders the same companies as the Clients page and the import
+// picker (previously three independent lists, zero overlap). Every field with no backend
+// source (score/readiness/readinessNote/taxpayer/vol/failTarget/sector, and the invoices/
+// dash built from them) is KEPT, per product's explicit call — see the Readiness card's
+// own SAMPLE chip (DashboardActive.tsx) for the existing precedent — but it is now a demo
+// OVERLAY cycled onto each real entity from CFG, not that entity's own data
+// (business_entities carries no sector/score/etc at all, db/seed.dev.sql).
 
 import { CFG, SECTORS } from '../data'
 import { amount, fmtShort, pad2 } from './format'
 import { failuresFrom } from './charts'
+import { initials } from './customers'
 import { hash, mulberry } from './prng'
 import { validate } from './validation'
+import type { Entity } from './portfolio'
 import type { Client, ClientCfg, Draft, Invoice, InvoiceStatus, LineItem, StatusStyle } from '../types'
 
 function mulberrySeed(name: string) {
   return mulberry(hash(name))
+}
+
+// The 5 non-onboarding CFG rows, cycled as the SAMPLE demo profile (sector/score/vol/
+// failTarget/readiness/readinessNote/taxpayer) for every real entity. The 6th row (Kano
+// Textile, onboarding:true) is excluded from the cycle on purpose: cycled in, it would
+// flag an arbitrary real entity as "onboarding" purely by its position in the fetched
+// list — a demo artifact, not a real signal. onboarding now means "no client resolved
+// yet" (see emptyClient below), not "this particular row of a 6-row mock".
+const DEMO_TEMPLATES: ClientCfg[] = CFG.filter((c) => !c.onboarding)
+
+// Reused by inhouseClient() below as the in-house tenant's demo profile — looked up by
+// name, not array position, so it can't silently drift if CFG is reordered/edited.
+const HONEYWELL_TEMPLATE = CFG.find((c) => c.name === 'Honeywell Group')!
+
+// Strips a trailing legal suffix off a real entity's registered name for a shorter
+// display label. The mock CFG shorts were hand-curated (e.g. "Lagos Freight & Logistics
+// Ltd" -> "Lagos Freight" drops more than just the suffix) — a real entity has no such
+// curation available, so this is a plain, honest approximation, not an attempt to
+// replicate it.
+const LEGAL_SUFFIX = /\s+(ltd\.?|limited|plc)$/i
+function shortName(name: string): string {
+  return name.replace(LEGAL_SUFFIX, '').trim() || name
 }
 
 export function statusStyle(s: string): StatusStyle {
@@ -68,27 +102,86 @@ export function genInvoices(client: ClientCfg, rnd: () => number): Invoice[] {
   return out
 }
 
-export function buildClients(): Client[] {
-  return CFG.map((c) => {
-    const rnd = mulberrySeed(c.name)
-    const invoices = genInvoices(c, rnd)
-    const errs = invoices.map((i) => validate(i))
-    const failing = invoices.filter((_i, k) => errs[k].errors.length > 0).length
-    const pending = invoices.filter((i) => i.status === 'Pending').length
-    const vatNum = invoices.reduce((s, i) => s + amount(i.items) * 0.075, 0)
-    const vatLabel = fmtShort(vatNum)
-    const statusCounts: Record<string, number> = {}
-    invoices.forEach((i) => (statusCounts[i.status] = (statusCounts[i.status] || 0) + 1))
-    const head = Object.keys(statusCounts).sort((a, b) => statusCounts[b] - statusCounts[a])[0] || 'Draft'
+// Shared tail of buildClientForEntity/inhouseClient/emptyClient below: generate the
+// SAMPLE invoices off the (possibly synthetic) cfg + compute the same derived dashboard
+// fields the original CFG-driven buildClients always did — unchanged from before this
+// story except that entityId is now threaded through onto the result.
+function finishClient(cfg: ClientCfg, entityId: string | null): Client {
+  const rnd = mulberrySeed(cfg.name)
+  const invoices = genInvoices(cfg, rnd)
 
-    if (c.onboarding) {
-      return { ...c, invoices, failing: 0, pending: 0, vatNum: 0, vatLabel: '₦0', count: 0, head: 'Draft', dash: null }
-    }
+  if (cfg.onboarding) {
+    return { ...cfg, entityId, invoices, failing: 0, pending: 0, vatNum: 0, vatLabel: '₦0', count: 0, head: 'Draft', dash: null }
+  }
 
-    const failures = failuresFrom(invoices, errs)
-    const dash = { failures }
-    return { ...c, invoices, failing, pending, vatNum, vatLabel, count: invoices.length, head, dash }
-  })
+  const errs = invoices.map((i) => validate(i))
+  const failing = invoices.filter((_i, k) => errs[k].errors.length > 0).length
+  const pending = invoices.filter((i) => i.status === 'Pending').length
+  const vatNum = invoices.reduce((s, i) => s + amount(i.items) * 0.075, 0)
+  const vatLabel = fmtShort(vatNum)
+  const statusCounts: Record<string, number> = {}
+  invoices.forEach((i) => (statusCounts[i.status] = (statusCounts[i.status] || 0) + 1))
+  const head = Object.keys(statusCounts).sort((a, b) => statusCounts[b] - statusCounts[a])[0] || 'Draft'
+  const failures = failuresFrom(invoices, errs)
+  return { ...cfg, entityId, invoices, failing, pending, vatNum, vatLabel, count: invoices.length, head, dash: { failures } }
+}
+
+// Builds ONE Client from a real portfolio entity + its cycled demo template. Exported
+// (not just buildClients() below) so a caller can rebuild a single client without
+// regenerating every other one — see App.tsx's entities-sync effect.
+//
+// The template is picked by a hash of the entity's OWN id, not its position in the
+// fetched array: keying by array position would make an entity's SAMPLE score/sector/
+// readiness silently change across refetches whenever the server's list order shifts
+// (e.g. a newly-created entity lands in the middle) — reading as a bug, since nothing
+// about the real entity actually changed. Hashing the id keeps the assignment stable
+// for as long as that entity exists, refetch after refetch.
+export function buildClientForEntity(e: Entity): Client {
+  const template = DEMO_TEMPLATES[hash(e.id) % DEMO_TEMPLATES.length]
+  const cfg: ClientCfg = {
+    ...template,
+    name: e.name,
+    short: shortName(e.name),
+    initials: initials(e.name),
+    tin: e.tin ?? '—',
+    onboarding: false,
+  }
+  return finishClient(cfg, e.id)
+}
+
+export function buildClients(entities: Entity[]): Client[] {
+  return entities.map((e) => buildClientForEntity(e))
+}
+
+// In-house has ZERO business_entities rows (db/seed.dev.sql seeds the firm tenant only)
+// — its identity comes from the TENANT, never from the fetched entity list
+// ([entity-picker] trap 1). entityId stays null: there is no real portfolio entity
+// backing this workspace to file anything under.
+export function inhouseClient(tenantName: string): Client {
+  const cfg: ClientCfg = { ...HONEYWELL_TEMPLATE, name: tenantName, short: shortName(tenantName), initials: initials(tenantName), onboarding: false }
+  return finishClient(cfg, null)
+}
+
+// The window before the live entity list first resolves (loading/error/no-gateway), or a
+// firm tenant with genuinely zero entities ([entity-picker] trap 2) — every one of the
+// ~15 places reading ctx.active needs SOMETHING defined, never `undefined`. onboarding:
+// true reuses the existing "nothing here yet" dashboard rather than inventing a second
+// empty state; entityId stays null since no real entity backs this placeholder either.
+export function emptyClient(): Client {
+  const cfg: ClientCfg = {
+    name: 'No client yet',
+    short: 'No client',
+    initials: '—',
+    tin: '—',
+    taxpayer: 'Small',
+    sector: 'foods',
+    score: null,
+    vol: 0,
+    readiness: [0, 0, 0],
+    readinessNote: '',
+    onboarding: true,
+  }
+  return finishClient(cfg, null)
 }
 
 export function defaultDraft(client: ClientCfg): Draft {

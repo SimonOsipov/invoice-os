@@ -136,8 +136,10 @@ export const CFG: ClientCfg[] = [
   },
 ]
 
-// Honeywell Group — single company with its own finance department (in-house mode).
-export const INHOUSE_IDX = 4
+// Honeywell Group (index 4 above) — single company with its own finance department
+// (in-house mode). Its CFG row is reused as the in-house tenant's SAMPLE demo profile by
+// lib/clients.ts's inhouseClient(), looked up there by name rather than this array
+// position: in-house has no business_entities rows to index into ([entity-picker]).
 
 /* ------------------------------------------------------------------ */
 /* Create-flow static content                                          */

@@ -52,37 +52,314 @@ UPDATE rules SET enabled = true WHERE enabled = false;
 -- The 27 curated business_entities rows for the demo tenant (Okafor &
 -- Partners, 21 active + 6 archived, [demo-seed-shape]). DO UPDATE, not DO
 -- NOTHING, so a re-run REPAIRS a row a prior demo hand-edited back to its
--- curated name/status. Conflict target is the partial unique index
+-- curated name/sector/status. Conflict target is the partial unique index
 -- business_entities_tenant_tin_uq -- every row below has a distinct,
 -- non-null TIN, so this always resolves to that index.
-INSERT INTO business_entities (tenant_id, name, tin, status) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'Adeyemi & Sons Trading Ltd',       '10012345-0001', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Chukwu Global Ventures Ltd',       '10023456-0002', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Okonkwo Textiles Nigeria Ltd',     '10034567-0003', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Balogun Agro-Allied Ltd',          '10045678-0004', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Emeka Pharmaceuticals Ltd',        '10056789-0005', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Aliyu Logistics Services Ltd',     '10067890-0006', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ifeoma Fashion House Ltd',         '10078901-0007', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Bello Construction Nigeria Ltd',   '10089012-0008', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Nwosu Foods & Beverages Ltd',      '10090123-0009', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Yakubu Motors Ltd',                '10101234-0010', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Chidinma Cosmetics Ltd',           '10112345-0011', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Obiora Steel Works Ltd',           '10123456-0012', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Funmilayo Catering Services Ltd',  '10134567-0013', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Danjuma Petroleum Ltd',            '10145678-0014', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ngozi Interiors Ltd',              '10156789-0015', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Uche Digital Solutions Ltd',       '10167890-0016', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ibrahim Farms Ltd',                '10178901-0017', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Amara Publishing Ltd',             '10189012-0018', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Tunde Electricals Ltd',            '10190123-0019', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Kemi Beauty Concepts Ltd',         '10201234-0020', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Segun Haulage Ltd',                '10212345-0021', 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Olumide Printing Press Ltd',       '10223456-0022', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Chinwe Poultry Farms Ltd',         '10245678-0024', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Musa Hardware Stores Ltd',         '10256789-0025', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Bisi Event Planners Ltd',          '10267890-0026', 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Ekene Auto Parts Ltd',             '10278901-0027', 'archived')
+--
+-- sector (persona-handoff-fix step 5, Task B): the column is
+-- nullable free text (migrations/20260709155011_business_entities.sql) with
+-- no dropdown/enum anywhere in the app (lib/entityForm.ts treats it as a
+-- plain string; ClientsView.tsx just renders it) -- these are display-ready,
+-- human-readable values matched to each company's own name, NOT the
+-- frontend's SectorKey mock-generator vocabulary (logistics/foods/oilfield/
+-- trading/manufacturing/textile, types.ts), which would render literally
+-- (lowercase) if reused here. DO UPDATE backfills sector onto rows a
+-- pre-this-story deploy already inserted with sector NULL (the old insert
+-- list was (tenant_id, name, tin, status) only) -- a DO NOTHING here would
+-- leave those NULL forever on every PR/dev env created before this change.
+INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'Adeyemi & Sons Trading Ltd',       '10012345-0001', 'Trading',                  'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Chukwu Global Ventures Ltd',       '10023456-0002', 'Trading',                  'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Okonkwo Textiles Nigeria Ltd',     '10034567-0003', 'Textiles',                 'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Balogun Agro-Allied Ltd',          '10045678-0004', 'Agriculture',              'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Emeka Pharmaceuticals Ltd',        '10056789-0005', 'Pharmaceuticals',          'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Aliyu Logistics Services Ltd',     '10067890-0006', 'Logistics',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Ifeoma Fashion House Ltd',         '10078901-0007', 'Fashion',                  'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Bello Construction Nigeria Ltd',   '10089012-0008', 'Construction',             'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Nwosu Foods & Beverages Ltd',      '10090123-0009', 'Food & Beverage',          'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Yakubu Motors Ltd',                '10101234-0010', 'Automotive',               'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Chidinma Cosmetics Ltd',           '10112345-0011', 'Cosmetics',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Obiora Steel Works Ltd',           '10123456-0012', 'Manufacturing',            'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Funmilayo Catering Services Ltd',  '10134567-0013', 'Catering',                 'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Danjuma Petroleum Ltd',            '10145678-0014', 'Oil & Gas',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Ngozi Interiors Ltd',              '10156789-0015', 'Interior Design',          'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Uche Digital Solutions Ltd',       '10167890-0016', 'Technology',               'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Ibrahim Farms Ltd',                '10178901-0017', 'Agriculture',              'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Amara Publishing Ltd',             '10189012-0018', 'Publishing',               'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Tunde Electricals Ltd',            '10190123-0019', 'Electricals',              'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Kemi Beauty Concepts Ltd',         '10201234-0020', 'Beauty & Personal Care',   'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Segun Haulage Ltd',                '10212345-0021', 'Logistics',                'active'),
+  ('11111111-1111-1111-1111-111111111111', 'Olumide Printing Press Ltd',       '10223456-0022', 'Printing',                 'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'Retail',                   'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Chinwe Poultry Farms Ltd',         '10245678-0024', 'Agriculture',              'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Musa Hardware Stores Ltd',         '10256789-0025', 'Retail',                   'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Bisi Event Planners Ltd',          '10267890-0026', 'Events',                   'archived'),
+  ('11111111-1111-1111-1111-111111111111', 'Ekene Auto Parts Ltd',             '10278901-0027', 'Automotive',               'archived')
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
-    DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status;
+    DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
+
+-- persona-handoff-fix step 4 ([demo-invoice-seed]): a curated invoice history for 6 of
+-- the 27 business_entities above, so the entity-scoped surfaces persona-handoff-fix
+-- steps 1-3 shipped (workspace switcher, Overview, Invoices, Customers, Reports --
+-- 13e55b6/3f60a3b/63b2fbe) have something real to scope TO. Before this block every one
+-- of the 27 entities had zero invoices, so selecting ANY of them rendered an honest but
+-- useless empty state -- the dev/PR environments' only invoice rows were incidental
+-- residue from whichever e2e spec happened to create some as a side effect of its own
+-- assertions.
+--
+-- [default-entity-needs-data]: "Adeyemi & Sons Trading Ltd" (10012345-0001) is not just
+-- one of the six -- it is the alphabetically-first row business_entities returns
+-- (portfolio store.go's List, `ORDER BY name ASC, id ASC`, no status filter on the SPA's
+-- own listEntities call), which makes it `clients[0]` in frontend/app/src/App.tsx's
+-- `active` memo -- the workspace switcher's DEFAULT selection on a fresh sign-in, before
+-- any explicit pick (and what e2e/topology/import-wizard.spec.ts's mixed-fixture test
+-- lands on too, since it never touches the switcher). Leaving it empty would mean the
+-- first-touch view of Overview/Invoices is STILL a blank slate; seeding it is what makes
+-- that default view honest.
+--
+-- Entity ids are GENERATED (see the block above) -- these INSERTs resolve entity_id by
+-- joining business_entities on its stable, curated TIN, never a literal uuid.
+-- rule_set_version_id resolves the same way, via `(SELECT id FROM rule_set_versions
+-- WHERE is_active)` (currently v2, migrations/20260716185106_rule_set_v2.sql) -- never a
+-- literal, so this seed tracks whichever version is active without a hand-maintained
+-- number. `validated` (a seed-only column below, not a real one) gates whether a row
+-- stamps rule_set_version_id at all: false for the 3 invoices left genuinely untouched
+-- since creation (rule_set_version_id stays NULL, matching Store.Create's own invariant
+-- that a fresh invoice starts unvalidated); true for every other row, including the ones
+-- the gate blocked and left `draft` (a blocked validate call stamps rule_set_version_id
+-- too -- internal/invoice/gate.go).
+--
+-- Idempotent DO UPDATE, not DO NOTHING, matching the entities block's own rationale: a
+-- re-run (every deploy, [demo-seed-shape]) REPAIRS a hand-edited demo row rather than
+-- leaving it drifted. Conflict target is invoices_tenant_entity_number_uq (tenant_id,
+-- entity_id, invoice_number) -- every invoice_number below is additionally globally
+-- unique tenant-wide (the DEMO-2026-#### prefix, never reused by any real import or e2e
+-- fixture, which all mint INV-* numbers), so the line_items/history INSERTs further down
+-- can join back on invoice_number alone with no ambiguity.
+--
+-- Violations are hand-picked to fire EXACTLY the rule they are meant to demonstrate, not
+-- a wall of unrelated failures (an all-failing portfolio is as dishonest a demo as an
+-- all-empty one): vat-standard-rate (wrong VAT on an otherwise-clean invoice, x2),
+-- line-items-sum-subtotal (line rows don't reconcile to the stated subtotal, x1),
+-- supplier-tin-format / buyer-tin-format (one malformed TIN on an otherwise-clean
+-- invoice, x1 each) -- all four keys and their exact messages are copied verbatim from
+-- the seeded rule set (migrations/20260711121327_seed_mbs_v1.sql), never invented. The
+-- two `rejected` invoices carry the real mock-adapter rejection shape verbatim
+-- (internal/submission/mock_script.go's mockRejectionReasons: code NGE-4102, message
+-- "Customer tax identifier is not registered with the tax authority.", path
+-- "buyer.tin") -- a real authority-level rejection, not a validation failure, so their
+-- own `violations` stay `[]`.
+--
+-- 27 invoices across 6 entities (Adeyemi/Chukwu/Okonkwo/Balogun/Emeka/Aliyu), comfortably
+-- under listInvoices' server-side default page size of 50 (internal/invoice/handlers.go,
+-- [D8]) -- ReportsView sums over that one page, tenant-wide, so this stays well clear of
+-- the point where its KPIs would silently go partial as other specs' own fixtures
+-- accumulate alongside it. The other 21 entities (15 active + 6 archived) are LEFT EMPTY
+-- on purpose, so "no invoices yet" stays a reachable, honest state on this fleet, not
+-- just a code path nothing ever exercises.
+WITH invoice_seed (
+    tin, invoice_number, status, issue_date, supplier_tin, supplier_name,
+    buyer_tin, buyer_name, subtotal, vat, total, validated, violations, rejection_reasons
+) AS (
+  VALUES
+    -- Adeyemi & Sons Trading Ltd (10012345-0001) -- [default-entity-needs-data]: mostly
+    -- healthy, one flagged invoice, spanning draft -> accepted.
+    ('10012345-0001', 'DEMO-2026-1001', 'accepted',  '2026-06-02', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 500000.00, 37500.00, 537500.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1002', 'accepted',  '2026-06-05', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            220000.00, 16500.00, 236500.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1003', 'validated', '2026-06-10', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 180000.00, 13500.00, 193500.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1004', 'queued',    '2026-06-14', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20033344-0003', 'Kano Agro Distributors',         95000.00,  7125.00,  102125.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-06-18', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            60000.00,  4500.00,  64500.00,  false, '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 75000.00,  5600.00,  80600.00,  true,
+      '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
+
+    -- Chukwu Global Ventures Ltd (10023456-0002) -- clean majority, one late-lifecycle
+    -- failure and one blocked draft.
+    ('10023456-0002', 'DEMO-2026-2001', 'accepted',  '2026-06-03', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    310000.00, 23250.00, 333250.00, true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2002', 'queued',    '2026-06-09', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 128000.00, 9600.00,  137600.00, true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2003', 'submitted', '2026-06-16', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    84000.00,  6300.00,  90300.00,  true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2004', 'failed',    '2026-06-21', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 45000.00,  3375.00,  48375.00,  true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2005', 'draft',     '2026-06-24', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 66000.00,  4800.00,  70800.00,  true,
+      '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
+
+    -- Okonkwo Textiles Nigeria Ltd (10034567-0003) -- one authority rejection.
+    ('10034567-0003', 'DEMO-2026-3001', 'accepted',  '2026-06-04', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 265000.00, 19875.00, 284875.00, true,  '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3002', 'accepted',  '2026-06-08', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20022233-0002', 'Lagos Textiles Mart',            142000.00, 10650.00, 152650.00, true,  '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3003', 'rejected',  '2026-06-13', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd',      88000.00,  6600.00,  94600.00,  true,
+      '[]', '[{"code":"NGE-4102","message":"Customer tax identifier is not registered with the tax authority.","path":"buyer.tin"}]'),
+    ('10034567-0003', 'DEMO-2026-3004', 'validated', '2026-06-19', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20033344-0003', 'Kano Agro Distributors',         51000.00,  3825.00,  54825.00,  true,  '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3005', 'draft',     '2026-06-24', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 39000.00,  2925.00,  41925.00,  false, '[]', '[]'),
+
+    -- Balogun Agro-Allied Ltd (10045678-0004) -- one line-items/subtotal mismatch.
+    ('10045678-0004', 'DEMO-2026-4001', 'accepted',  '2026-06-06', '10045678-0004', 'Balogun Agro-Allied Ltd', '20022233-0002', 'Lagos Textiles Mart',       198000.00, 14850.00, 212850.00, true,  '[]', '[]'),
+    ('10045678-0004', 'DEMO-2026-4002', 'draft',     '2026-06-11', '10045678-0004', 'Balogun Agro-Allied Ltd', '20033344-0003', 'Kano Agro Distributors',    100000.00, 7500.00,  107500.00, true,
+      '[{"rule_key":"line-items-sum-subtotal","severity":"error","message":"Line item amounts must sum to the invoice subtotal."}]', '[]'),
+    ('10045678-0004', 'DEMO-2026-4003', 'validated', '2026-06-17', '10045678-0004', 'Balogun Agro-Allied Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 62000.00,  4650.00,  66650.00,  true,  '[]', '[]'),
+    ('10045678-0004', 'DEMO-2026-4004', 'draft',     '2026-06-22', '10045678-0004', 'Balogun Agro-Allied Ltd', '20022233-0002', 'Lagos Textiles Mart',       40000.00,  3000.00,  43000.00,  false, '[]', '[]'),
+
+    -- Emeka Pharmaceuticals Ltd (10056789-0005) -- deliberately ALL CLEAR (needs_attention:0).
+    ('10056789-0005', 'DEMO-2026-5001', 'accepted',  '2026-06-07', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 145000.00, 10875.00, 155875.00, true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5002', 'accepted',  '2026-06-12', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd',      210000.00, 15750.00, 225750.00, true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5003', 'validated', '2026-06-19', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors',         76000.00,  5700.00,  81700.00,  true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5004', 'queued',    '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 33000.00,  2475.00,  35475.00,  true, '[]', '[]'),
+
+    -- Aliyu Logistics Services Ltd (10067890-0006) -- the problem client: rejected +
+    -- two malformed-TIN blocked drafts (needs_attention:3, the highest of the six).
+    ('10067890-0006', 'DEMO-2026-6001', 'rejected', '2026-06-08', '10067890-0006', 'Aliyu Logistics Services Ltd', '20022233-0002', 'Lagos Textiles Mart', 72000.00, 5400.00, 77400.00, true,
+      '[]', '[{"code":"NGE-4102","message":"Customer tax identifier is not registered with the tax authority.","path":"buyer.tin"}]'),
+    -- Supplier TIN mistyped on THIS invoice only (the entity's own TIN stays correct in
+    -- business_entities above -- store-invalid-faithfully, invoices carry no CHECK on
+    -- this column, migrations/20260714103137_invoices.sql's header).
+    ('10067890-0006', 'DEMO-2026-6002', 'draft', '2026-06-15', 'BADTIN', 'Aliyu Logistics Services Ltd', '20022233-0002', 'Lagos Textiles Mart', 54000.00, 4050.00, 58050.00, true,
+      '[{"rule_key":"supplier-tin-format","severity":"error","message":"Supplier TIN must be in the format NNNNNNNN-NNNN (8 digits, hyphen, 4 digits).","path":"supplier.tin"}]', '[]'),
+    ('10067890-0006', 'DEMO-2026-6003', 'draft', '2026-06-23', '10067890-0006', 'Aliyu Logistics Services Ltd', '12345678', 'Lagos Textiles Mart', 47000.00, 3525.00, 50525.00, true,
+      '[{"rule_key":"buyer-tin-format","severity":"error","message":"Buyer TIN, when present, must be in the format NNNNNNNN-NNNN.","path":"buyer.tin"}]', '[]')
+)
+INSERT INTO invoices (
+    tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
+    buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons
+)
+SELECT
+    '11111111-1111-1111-1111-111111111111', e.id, s.invoice_number, s.status, s.issue_date::date,
+    s.supplier_tin, s.supplier_name, s.buyer_tin, s.buyer_name, 'NGN',
+    s.subtotal::numeric, s.vat::numeric, s.total::numeric, s.violations::jsonb,
+    CASE WHEN s.validated THEN rsv.id ELSE NULL END, s.rejection_reasons::jsonb
+FROM invoice_seed s
+JOIN business_entities e
+  ON e.tenant_id = '11111111-1111-1111-1111-111111111111' AND e.tin = s.tin
+CROSS JOIN (SELECT id FROM rule_set_versions WHERE is_active) rsv
+ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
+    status              = EXCLUDED.status,
+    issue_date          = EXCLUDED.issue_date,
+    supplier_tin        = EXCLUDED.supplier_tin,
+    supplier_name       = EXCLUDED.supplier_name,
+    buyer_tin           = EXCLUDED.buyer_tin,
+    buyer_name          = EXCLUDED.buyer_name,
+    currency            = EXCLUDED.currency,
+    subtotal            = EXCLUDED.subtotal,
+    vat                 = EXCLUDED.vat,
+    total               = EXCLUDED.total,
+    violations          = EXCLUDED.violations,
+    rule_set_version_id = EXCLUDED.rule_set_version_id,
+    rejection_reasons   = EXCLUDED.rejection_reasons;
+
+-- Line items for the invoices above. Conflict target is line_items_invoice_line_no_uq
+-- (invoice_id, line_no); invoice_id is resolved by joining back on invoice_number, which
+-- (see above) is globally unique within this tenant's DEMO-2026-#### range, so the join
+-- is unambiguous with no entity_id needed on this side. Quantity * unit_price = line_total
+-- = subtotal for every invoice EXCEPT DEMO-2026-4002 (Balogun), whose single line
+-- deliberately sums to 90000.00 against a stated subtotal of 100000.00 -- the
+-- line-items-sum-subtotal violation seeded above.
+WITH line_item_seed (invoice_number, line_no, description, quantity, unit_price, line_total) AS (
+  VALUES
+    ('DEMO-2026-1001', 1, 'Consulting services - June retainer',       1,  300000.00, 300000.00),
+    ('DEMO-2026-1001', 2, 'Implementation support - onsite',           1,  200000.00, 200000.00),
+    ('DEMO-2026-1002', 1, 'Fabric rolls - premium cotton',             10, 22000.00,  220000.00),
+    ('DEMO-2026-1003', 1, 'Office equipment supply',                   4,  45000.00,  180000.00),
+    ('DEMO-2026-1004', 1, 'Agro-chemical supply batch',                1,  95000.00,  95000.00),
+    ('DEMO-2026-1005', 1, 'Textile finishing service',                 3,  20000.00,  60000.00),
+    ('DEMO-2026-1006', 1, 'Warehouse rental - June',                   1,  75000.00,  75000.00),
+
+    ('DEMO-2026-2001', 1, 'Generator maintenance contract - Q2',       1,  200000.00, 200000.00),
+    ('DEMO-2026-2001', 2, 'Replacement parts - filters & belts',       2,  55000.00,  110000.00),
+    ('DEMO-2026-2002', 1, 'Packaged consumer goods - assorted',        8,  16000.00,  128000.00),
+    ('DEMO-2026-2003', 1, 'Freight haulage - Lagos-Kano route',        1,  84000.00,  84000.00),
+    ('DEMO-2026-2004', 1, 'Spare parts order',                         5,  9000.00,   45000.00),
+    ('DEMO-2026-2005', 1, 'Bulk beverage crates',                      1,  66000.00,  66000.00),
+
+    ('DEMO-2026-3001', 1, 'Textile bulk order - cotton blend',         2,  100000.00, 200000.00),
+    ('DEMO-2026-3001', 2, 'Express delivery surcharge',                1,  65000.00,  65000.00),
+    ('DEMO-2026-3002', 1, 'Woven fabric supply',                       1,  142000.00, 142000.00),
+    ('DEMO-2026-3003', 1, 'Uniform batch - retail contract',           1,  88000.00,  88000.00),
+    ('DEMO-2026-3004', 1, 'Dye & finishing chemicals',                 1,  51000.00,  51000.00),
+    ('DEMO-2026-3005', 1, 'Sample swatches order',                     1,  39000.00,  39000.00),
+
+    ('DEMO-2026-4001', 1, 'Fertiliser - 50kg bags',                    4,  33000.00,  132000.00),
+    ('DEMO-2026-4001', 2, 'Seed stock - hybrid maize',                 2,  33000.00,  66000.00),
+    ('DEMO-2026-4002', 1, 'Poultry feed - bulk order',                 9,  10000.00,  90000.00),
+    ('DEMO-2026-4003', 1, 'Irrigation pump unit',                      2,  31000.00,  62000.00),
+    ('DEMO-2026-4004', 1, 'Crop storage sacks',                        4,  10000.00,  40000.00),
+
+    ('DEMO-2026-5001', 1, 'Pharmaceutical supply - antibiotics batch', 3,  29000.00,  87000.00),
+    ('DEMO-2026-5001', 2, 'Cold-chain packaging',                      2,  29000.00,  58000.00),
+    ('DEMO-2026-5002', 1, 'Vaccine cold storage order',                3,  70000.00,  210000.00),
+    ('DEMO-2026-5003', 1, 'Generic medicine restock',                  4,  19000.00,  76000.00),
+    ('DEMO-2026-5004', 1, 'Medical consumables order',                 3,  11000.00,  33000.00),
+
+    ('DEMO-2026-6001', 1, 'Freight consignment - Lagos-Abuja',         1,  72000.00,  72000.00),
+    ('DEMO-2026-6002', 1, 'Container handling fee',                    1,  54000.00,  54000.00),
+    ('DEMO-2026-6003', 1, 'Warehousing - monthly',                     1,  47000.00,  47000.00)
+)
+INSERT INTO line_items (tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
+SELECT '11111111-1111-1111-1111-111111111111', i.id, li.line_no, li.description,
+       li.quantity::numeric, li.unit_price::numeric, li.line_total::numeric
+FROM line_item_seed li
+JOIN invoices i
+  ON i.tenant_id = '11111111-1111-1111-1111-111111111111' AND i.invoice_number = li.invoice_number
+ON CONFLICT (invoice_id, line_no) DO UPDATE SET
+    description = EXCLUDED.description,
+    quantity    = EXCLUDED.quantity,
+    unit_price  = EXCLUDED.unit_price,
+    line_total  = EXCLUDED.line_total;
+
+-- A plausible invoice_status_history trail per invoice above -- InvoiceDetail's own
+-- "Status history" panel renders for every live invoice, so one sitting at 'accepted'
+-- with literally zero history rows (impossible via the real Store.Create ->
+-- Gate.Validate -> transitions path) would look broken the moment a demo/dev user
+-- clicks into it. `chains` encodes the exact (from_status, to_status) sequence each
+-- final status implies -- verified against the real transition edges
+-- e2e/topology/invoice-surfaces.spec.ts's own live round trips observe (a blocked
+-- `draft` validate call writes NO row; every other edge writes exactly one). `changed_at`
+-- is an explicit, increasing offset from a fixed anchor, never `now()` -- every
+-- statement in this file runs inside ONE implicit transaction (bootstrap.go's Seed calls
+-- conn.Exec once on the whole file's text), so `now()` is IDENTICAL for every row this
+-- script inserts, and History's own `ORDER BY changed_at ASC, id ASC`
+-- (internal/invoice/store.go) would then tie-break on a random gen_random_uuid(),
+-- scrambling the chain's visible order.
+--
+-- No unique constraint exists on this table to key an ON CONFLICT off (append-only by
+-- GRANT, not by a DB constraint -- migrations/20260714111246_invoice_status_history.sql's
+-- header) -- idempotency is instead a NOT EXISTS guard on the (invoice_id, from_status,
+-- to_status) triple, scoped to this seed's own DEMO-2026-#### invoices only, so a re-run
+-- never duplicates a row this script already inserted and never touches any other
+-- invoice's real history.
+WITH chains (status, ord, from_status, to_status) AS (
+  VALUES
+    ('draft',     1, NULL,        'draft'),
+    ('validated', 1, NULL,        'draft'),
+    ('validated', 2, 'draft',     'validated'),
+    ('queued',    1, NULL,        'draft'),
+    ('queued',    2, 'draft',     'validated'),
+    ('queued',    3, 'validated', 'queued'),
+    ('submitted', 1, NULL,        'draft'),
+    ('submitted', 2, 'draft',     'validated'),
+    ('submitted', 3, 'validated', 'queued'),
+    ('submitted', 4, 'queued',    'submitted'),
+    ('accepted',  1, NULL,        'draft'),
+    ('accepted',  2, 'draft',     'validated'),
+    ('accepted',  3, 'validated', 'queued'),
+    ('accepted',  4, 'queued',    'submitted'),
+    ('accepted',  5, 'submitted', 'accepted'),
+    ('rejected',  1, NULL,        'draft'),
+    ('rejected',  2, 'draft',     'validated'),
+    ('rejected',  3, 'validated', 'queued'),
+    ('rejected',  4, 'queued',    'rejected'),
+    ('failed',    1, NULL,        'draft'),
+    ('failed',    2, 'draft',     'validated'),
+    ('failed',    3, 'validated', 'queued'),
+    ('failed',    4, 'queued',    'failed')
+)
+INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, changed_at)
+SELECT
+    '11111111-1111-1111-1111-111111111111', i.id, c.from_status, c.to_status, 'system',
+    '2026-06-01 08:00:00+00'::timestamptz + make_interval(mins => c.ord * 15)
+FROM invoices i
+JOIN chains c ON c.status = i.status
+WHERE i.tenant_id = '11111111-1111-1111-1111-111111111111'
+  AND i.invoice_number LIKE 'DEMO-2026-%'
+  AND NOT EXISTS (
+    SELECT 1 FROM invoice_status_history h
+     WHERE h.invoice_id = i.id
+       AND h.to_status = c.to_status
+       AND h.from_status IS NOT DISTINCT FROM c.from_status
+  );
 

@@ -7,7 +7,8 @@
 //
 // Open/mode/edit-target state lives in ClientsView's local useState ([A-l]) — this
 // component only renders the form and orchestrates submit; it never fetches the list
-// itself (that's ClientsView's `list.run()`, invoked via onSuccess).
+// itself (that's ctx.refetchEntities(), invoked via onSuccess — the entity list is
+// lifted to App.tsx and shared with the workspace switcher, [entity-picker]).
 //
 // Submit orchestration (Obsidian M3-08 §6):
 // - create: createEntity(ctx.authedFetch, base, toEntityInput(state))
@@ -15,7 +16,7 @@
 //   entirely and just closes (avoids the backend's all-nil 400, [A-k]) — a cleared
 //   optional (e.g. Sector) is sent as '' so the backend clears it (F6/[A-k], GATE
 //   verified against store.go:185-194).
-// - success -> onSuccess() (parent refetches via list.run() + closes)
+// - success -> onSuccess() (parent refetches via ctx.refetchEntities() + closes)
 // - ApiError -> mapSubmitError: {field:'tin', message} shows on the TIN field;
 //   {message} (no field) shows as a form-level banner; null (401) shows nothing — the
 //   authedFetch seam has already called signOut and the surface is unmounting to

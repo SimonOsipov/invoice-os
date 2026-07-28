@@ -2,9 +2,19 @@
 // with badges, user footer. The workspace type is fixed by the signed-in persona (no
 // firm/in-house toggle — see App.tsx), so this renders one workspace, not a switch.
 // Ported from Platform.dc.html ~L40-117 (markup) + slices of `renderVals()` (~L1284-1310).
+//
+// [dashboard-scope-per-client] (persona-handoff-fix step 2): the Invoices/Approvals nav
+// badges used to read active.failing/active.pending — a SAMPLE overlay (lib/clients.ts)
+// with no "SAMPLE" marker a badge could ever carry, so a fabricated count there read as
+// real. Both now come off this component's OWN rollup fetch (Decision [fetch-per-surface],
+// same posture as ClientsView.tsx/DashboardActive.tsx — each live surface fetches
+// independently rather than sharing one ctx-level rollup).
 
 import { Fragment } from 'react'
+import { gatewayBase, useAsync } from '@invoice-os/api-client'
 import { BrandMark, Icon } from '../icons'
+import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
+import { visibleEntityIds } from '../lib/portfolio'
 import {
   chevDownGlyph,
   NAV_APPROVALS,
@@ -23,18 +33,60 @@ import type { PlatformCtx } from '../types'
 type SidebarNavItem = NavDef & { badge?: string | null }
 
 export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
-  const { user, mode, active, clients, activeIdx, switcherOpen, view, filter } = ctx
+  const { user, mode, active, clients, switcherOpen, view, filter } = ctx
   const isFirm = mode === 'firm'
   const isInhouse = !isFirm
   const orgLabel = isFirm ? 'OKAFOR & PARTNERS' : active.short.toUpperCase() + ' · FINANCE'
 
+  // Same `base ? … : …` narrowing + `immediate: base != null` idiom as ClientsView.tsx/
+  // DashboardActive.tsx (no-gateway build stays at zero network). A slow/failed rollup
+  // must not block the sidebar chrome — `bucket` below just stays null (both badges off)
+  // until 'ready', the same neutral posture as ClientsView's HealthCell.
+  const base = gatewayBase()
+  const rollup = useAsync<Rollup>(
+    () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null },
+  )
+  const bucket = rollup.status === 'ready' && rollup.data ? scopedBucket(isInhouse, active.entityId, rollup.data) : null
+
+  // persona-handoff-fix Task A: the switcher lists ACTIVE companies only — an archived
+  // one is retired, and offering to switch INTO one reads as "still open for business".
+  // `clients` itself stays the FULL (unfiltered) roster — App.tsx's `active` resolution
+  // and switchClient() both key off it — only this dropdown's rendered options are
+  // narrowed. `active.entityId` is always included even if archived (visibleEntityIds'
+  // own comment): the workspace currently open must not vanish from its own switcher.
+  const switcherIds = visibleEntityIds(ctx.entities, active.entityId)
+  const switcherClients = clients.filter((c) => c.entityId != null && switcherIds.has(c.entityId))
+
+  // "Switch company" dropdown row descriptor. Used to read c.score/c.failing — the SAME
+  // fabricated overlay (lib/clients.ts) the two nav badges above just moved off, so a
+  // company's own dropdown row still showing a made-up number one line away from that
+  // same company's now-REAL nav badge (once selected) would be a same-screen
+  // contradiction this fix would otherwise leave standing. score has no live source at
+  // all (business_entities carries no readiness concept, db/seed.dev.sql) — rather than
+  // pair one real and one fake figure with nothing to mark which is which, this drops
+  // the score and reuses entityHealth (lib/dashboard.ts), the exact per-entity join
+  // ClientsView.tsx's own health pill already uses, off this component's own rollup
+  // fetch above. Not-yet-ready renders a neutral em dash, never the old numbers.
+  function rowHealthLabel(entityId: string | null): string {
+    if (rollup.status !== 'ready' || !rollup.data || entityId == null) return '—'
+    const health = entityHealth(rollup.data.clients, entityId)
+    if (health.kind === 'no-invoices') return 'no invoices yet'
+    if (health.kind === 'clear') return 'all clear'
+    return `${health.count} needing attention`
+  }
+
   const invoicesItem: SidebarNavItem = {
     ...NAV_INVOICES,
-    badge: active.onboarding ? null : typeof active.failing === 'number' && active.failing > 0 ? String(active.failing) : null,
+    badge: active.onboarding || bucket == null ? null : bucket.needs_attention > 0 ? String(bucket.needs_attention) : null,
   }
   const approvalsItem: SidebarNavItem = {
     ...NAV_APPROVALS,
-    badge: active.onboarding ? null : active.pending ? String(active.pending) : null,
+    // The real 7-state lifecycle has no "awaiting approval" status. `validated` (passed
+    // the gate, not yet batch-submitted) is the closest live equivalent to the old mock's
+    // Pending count — batch-submitting a selection IS the approval action in this
+    // workflow (InvoicesList.tsx), so a validated invoice is exactly one still awaiting it.
+    badge: active.onboarding || bucket == null ? null : bucket.counts.validated > 0 ? String(bucket.counts.validated) : null,
   }
 
   // The nav is GROUPED BY SCOPE, because a flat list gave no signal about which
@@ -78,6 +130,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ position: 'relative' }}>
             <button
               onClick={ctx.toggleSwitcher}
+              data-testid="company-switcher"
               className="pf-btn"
               style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-input)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
             >
@@ -93,23 +146,31 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
-                {clients.map((c, i) => (
-                  <button
-                    key={c.name}
-                    onClick={() => ctx.switchClient(i)}
-                    className="pf-menu-item"
-                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, background: i === activeIdx ? 'var(--bg-3)' : 'transparent', cursor: 'pointer', textAlign: 'left', padding: '9px 12px' }}
-                  >
-                    <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>{c.initials}</span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.short}</span>
-                      <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
-                        {c.score == null ? '—%' : c.score + '%'} ready · {c.onboarding ? '—' : c.failing} failing
+                {switcherClients.map((c) => {
+                  const isActive = c.entityId === active.entityId
+                  return (
+                    <button
+                      key={c.entityId ?? c.name}
+                      // c.entityId is always a real portfolio entity id here — `clients`
+                      // only ever holds buildClients() output, never the in-house/empty
+                      // fallback ([entity-picker] keystone) — the guard is belt-and-
+                      // suspenders against the type's `string | null`, not a real case.
+                      onClick={() => c.entityId && ctx.switchClient(c.entityId)}
+                      data-testid="company-switcher-option"
+                      className="pf-menu-item"
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, background: isActive ? 'var(--bg-3)' : 'transparent', cursor: 'pointer', textAlign: 'left', padding: '9px 12px' }}
+                    >
+                      <span style={{ flex: 'none', width: 26, height: 26, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700 }}>{c.initials}</span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.short}</span>
+                        <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)' }}>
+                          {rowHealthLabel(c.entityId)}
+                        </span>
                       </span>
-                    </span>
-                    <span style={{ flex: 'none', color: 'var(--action)' }}>{i === activeIdx ? tickGlyph11 : ''}</span>
-                  </button>
-                ))}
+                      <span style={{ flex: 'none', color: 'var(--action)' }}>{isActive ? tickGlyph11 : ''}</span>
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>

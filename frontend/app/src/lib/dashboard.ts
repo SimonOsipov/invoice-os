@@ -22,6 +22,13 @@
 //   (R=49, C=2*pi*R, per-seg dash/offset) is ported from donutFrom over the fixed 7 states.
 // - dashboardViewState mirrors invoicesViewState (invoices.ts) — the no-gateway
 //   zero-network short-circuit: base==null => 'idle' regardless of async status.
+// - scopedBucket ([dashboard-scope-per-client], persona-handoff-fix step 2) resolves
+//   which Bucket a CLIENT-scoped surface (DashboardActive's KPIs/donut/needs-attention,
+//   Sidebar's nav badges) renders for the CURRENT selection — in-house to rollup.totals
+//   (its one "client" IS the tenant), firm mode to the selected entity's own `clients` row,
+//   both a null entityId and an entity absent from `clients` (zero invoices, INNER JOIN)
+//   to EMPTY_BUCKET. Reuses entityHealth's own `clients.find` join rather than a second
+//   lookup convention.
 import type { AuthedFetch } from './portfolio'
 import type { DonutSeg } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
@@ -185,4 +192,27 @@ export function entityHealth(clients: RollupClient[], entityId: string): EntityH
   if (!client) return { kind: 'no-invoices' }
   if (client.needs_attention > 0) return { kind: 'needs-attention', count: client.needs_attention }
   return { kind: 'clear' }
+}
+
+// Zero-state bucket for a firm-mode selection with nothing to scope to: no entity
+// resolved yet ([entity-picker] trap 2 — loading/error/no-gateway/zero-entities
+// placeholder) or a real entity with zero invoices (INNER JOIN excludes it from
+// `clients`, dashboard/store.go). Never widened to rollup.totals — that would silently
+// re-show every OTHER client's numbers under this one's name, exactly the bug
+// [dashboard-scope-per-client] replaces.
+const EMPTY_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }
+export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0 }
+
+// Resolves which Bucket a CLIENT-scoped surface renders for the current selection
+// ([dashboard-scope-per-client]). In-house has ZERO business_entities rows
+// (db/seed.dev.sql seeds the firm tenant only, [entity-picker] trap 1) — its one
+// "client" IS the tenant, so rollup.totals is already the correct (and only) scope,
+// never a `clients` lookup keyed by its always-null entityId. Firm mode scopes to the
+// selected entity's own row; `entityId === null` and "entity has no row in `clients`"
+// both fall through to EMPTY_BUCKET rather than rollup.totals.
+export function scopedBucket(isInhouse: boolean, entityId: string | null, rollup: Rollup): RollupBucket {
+  if (isInhouse) return rollup.totals
+  if (entityId == null) return EMPTY_BUCKET
+  const client = rollup.clients.find((c) => c.entity_id === entityId)
+  return client ? { counts: client.counts, needs_attention: client.needs_attention } : EMPTY_BUCKET
 }

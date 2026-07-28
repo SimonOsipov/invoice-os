@@ -191,16 +191,25 @@ type UpdateInput struct {
 }
 
 // ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
-// one predicate filter, NeedsAttention (M4-09-02). No entity_id
-// ([entity-id-cut] — the drift invariant is proven tenant-wide instead, not
-// per-entity). NeedsAttention is a plain bool: true applies the verbatim
-// dashboard predicate (Store.List's doc comment); false/omitted applies no
-// predicate ([needs-attention-bool-true-only] — no "not-needs-attention"
-// branch).
+// two predicate filters, EntityID and NeedsAttention (M4-09-02), ANDed
+// together when both are set. EntityID "" (the zero value) applies no
+// filter -- tenant-wide, byte-identical to every caller before this field
+// existed. It was added by a regression fix ([entity-id-restored], reversing
+// the earlier [entity-id-cut] decision): the SPA had been narrowing to one
+// entity by filtering listInvoices' response IN THE BROWSER, but that
+// response was (and still is, absent EntityID) a tenant-wide LIMIT-50 page --
+// filter-AFTER-paginate, so an entity's own invoices silently vanished
+// whenever they weren't inside the newest 50 tenant-wide (CI caught this on a
+// shared, never-reset dev DB; see ListHandler's doc comment, handlers.go).
+// EntityID fixes it by narrowing BEFORE the limit applies, in SQL.
+// NeedsAttention is a plain bool: true applies the verbatim dashboard
+// predicate (Store.List's doc comment); false/omitted applies no predicate
+// ([needs-attention-bool-true-only] — no "not-needs-attention" branch).
 type ListFilter struct {
 	Limit  int
 	Offset int
 
+	EntityID       string
 	NeedsAttention bool
 }
 

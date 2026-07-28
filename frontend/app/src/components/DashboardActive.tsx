@@ -1,4 +1,4 @@
-// Dashboard — firm-wide compliance overview. Reads the M4-07 rollup
+// Dashboard — compliance overview. Reads the M4-07 rollup
 // (GET /api/dashboard/v1/rollup) via lib/dashboard.ts and renders honest
 // loading / error / empty / ready states.
 // Structurally mirrors ClientsView.tsx (typed API module + useAsync +
@@ -13,6 +13,16 @@
 //                   top validation failures · all four KPI tile VALUES
 //   MOCK            readiness ring + bars · 12-week trend · VAT amount ·
 //                   sparkline shapes · activity feed
+//
+// [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
+// surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
+// SELECTED client's own bucket, not the whole tenant — scopedBucket (lib/dashboard.ts)
+// resolves in-house to the tenant totals (its one "client" IS the tenant) and firm mode
+// to the active entity's own row, or an honest zero bucket when none resolves yet / the
+// entity has never had an invoice. "Top validation failures" is the one exception: the
+// wire carries only ONE tenant-wide RuleCount[] (dashboard.go's Rollup — no per-entity
+// breakdown exists), so it stays tenant-wide regardless of selection; its own
+// "FIRM-WIDE" meta chip already discloses that honestly.
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -22,6 +32,7 @@ import {
   donutSegments,
   getRollup,
   resolveCtaLabel,
+  scopedBucket,
   topFailures,
   type Counts,
   type Rollup,
@@ -48,16 +59,23 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      {/* Firm-wide header — rebound to tenant context ([header-chrome-firmwide]);
-          the mock taxpayer pill, "SYNCED …", and "Period to date" chrome are gone. */}
+      {/* Header identity follows the SAME scope as the tiles below it
+          ([dashboard-scope-per-client]): in-house has one workspace = the tenant, so it
+          keeps the tenant name + "Firm-wide" copy ([header-chrome-firmwide]); firm mode
+          now names the SELECTED CLIENT instead of the firm itself, so this heading can
+          never again disagree with the switcher above it (the original bug this story
+          fixes). The mock taxpayer pill, "SYNCED …", and "Period to date" chrome are
+          still gone, unrelated to this change. */}
       <div style={{ marginBottom: 26 }}>
         <div className="eyebrow" style={{ marginBottom: 10 }}>
           COMPLIANCE OVERVIEW
         </div>
         <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.03em', margin: '0 0 5px' }}>
-          {ctx.user.tenantName ?? 'Your firm'}
+          {ctx.mode === 'inhouse' ? ctx.user.tenantName ?? 'Your firm' : ctx.active.name}
         </h1>
-        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>Firm-wide invoice compliance</p>
+        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+          {ctx.mode === 'inhouse' ? 'Firm-wide invoice compliance' : 'Invoice compliance for this client'}
+        </p>
       </div>
 
       {state === 'loading' && <Loading label="Loading dashboard…" />}
@@ -129,12 +147,18 @@ function TileHead({ title, meta }: { title: string; meta?: string }) {
 }
 
 function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; seed: string }) {
-  const segments = donutSegments(data.totals.counts)
-  const total = Object.values(data.totals.counts).reduce((a, b) => a + b, 0)
-  const needsAttention = data.totals.needs_attention
+  // [dashboard-scope-per-client]: every LIVE number below is the SELECTED client's own
+  // bucket (see the file-header comment) — never data.totals directly in firm mode.
+  const bucket = scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, data)
+  const segments = donutSegments(bucket.counts)
+  const total = Object.values(bucket.counts).reduce((a, b) => a + b, 0)
+  const needsAttention = bucket.needs_attention
+  // top_violations has no per-entity breakdown on the wire — stays tenant-wide
+  // regardless of selection (see the file-header comment); its own "FIRM-WIDE" meta chip
+  // below already discloses that.
   const failures = topFailures(data.top_violations)
   const mock = buildMockPanels(seed)
-  const kpis = kpiValues(data.totals.counts, needsAttention, mock.vatLabel)
+  const kpis = kpiValues(bucket.counts, needsAttention, mock.vatLabel)
 
   return (
     <>

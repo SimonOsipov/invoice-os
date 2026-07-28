@@ -26,6 +26,7 @@ import {
   listEntities,
   shouldFetchEntities,
   updateEntity,
+  visibleEntityIds,
   type Entity,
   type EntityInput,
 } from './portfolio'
@@ -368,5 +369,51 @@ describe('clientsViewState: every branch', () => {
 describe('shouldFetchEntities: strict null-check, not truthiness', () => {
   it('P21: an empty-string base is non-null and falsy — must still return true (base != null, not base ? ... )', () => {
     expect(shouldFetchEntities('')).toBe(true)
+  })
+})
+
+// --- visibleEntityIds (persona-handoff-fix step 5, Task A) --------------------------
+// Sidebar.tsx's workspace switcher offers only these ids: active entities, plus the
+// currently-selected one even when archived (the workspace open right now must never
+// vanish from its own switcher — see the function's own doc comment for the full
+// rationale). `clients` itself (App.tsx's `active` resolution, switchClient()) is NEVER
+// filtered by this — only what Sidebar's dropdown renders.
+describe('visibleEntityIds', () => {
+  const active1: Entity = { ...activeEntity, id: 'e1', status: 'active' }
+  const active2: Entity = { ...activeEntity, id: 'e2', status: 'active' }
+  const archived1: Entity = { ...activeEntity, id: 'e3', status: 'archived' }
+
+  it('V1: active entities are included, archived ones are not, when selectedId is null', () => {
+    const result = visibleEntityIds([active1, active2, archived1], null)
+
+    expect(result).toEqual(new Set(['e1', 'e2']))
+  })
+
+  it('V2: an archived entity IS included when it is the selectedId — the open workspace never disappears from its own switcher', () => {
+    const result = visibleEntityIds([active1, active2, archived1], 'e3')
+
+    expect(result).toEqual(new Set(['e1', 'e2', 'e3']))
+  })
+
+  it('V3: selecting an already-active entity is a no-op on the set (no duplicate/second entry)', () => {
+    const result = visibleEntityIds([active1, active2, archived1], 'e1')
+
+    expect(result).toEqual(new Set(['e1', 'e2']))
+  })
+
+  it('V4: zero active entities + a null selectedId returns an empty set (the caller falls back to clients[0] elsewhere, not here)', () => {
+    const result = visibleEntityIds([archived1], null)
+
+    expect(result).toEqual(new Set())
+  })
+
+  it('V5: a selectedId that matches no entity in the list (e.g. the in-house/empty synthetic fallback, entityId:null never reaches this — but a stale id could) is still added, since this helper trusts its caller rather than re-validating', () => {
+    const result = visibleEntityIds([active1], 'does-not-exist')
+
+    expect(result).toEqual(new Set(['e1', 'does-not-exist']))
+  })
+
+  it('V6: empty entities list + null selectedId returns an empty set', () => {
+    expect(visibleEntityIds([], null)).toEqual(new Set())
   })
 })

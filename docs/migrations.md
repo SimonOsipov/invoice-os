@@ -291,8 +291,11 @@ runs the same suite against the `make dev-db` Postgres.
 ## 7. Per-PR Postgres (M4-23) vs. the always-on `development` Postgres
 
 Since M4-23, each PR gets its **own** ephemeral Railway environment — including its **own**
-Postgres, born empty and bootstrapped + migrated + seeded fresh at gateway boot
-(`internal/platform/db.Provision`, M4-21-04). When the PR closes, merged or not,
+Postgres. That Postgres is a FORK of `development`'s live volume (M4-23-03's
+`reconcile-fork`), not an empty one — it inherits whatever data `development` currently
+holds — and is bootstrapped + migrated + reset + seeded fresh at gateway boot
+(`internal/platform/db.Provision`, M4-21-04; the reset step is persona-handoff-fix,
+Decision [pr-only-reset] — see docs/topology-e2e.md "Boot-time seed"). When the PR closes, merged or not,
 `dev-env-teardown.yml` deletes that whole environment — Postgres included — and the daily
 `dev-env-sweeper.yml` reaps any the close event missed (M4-23). Losing that ephemeral DB's
 state costs nothing; nothing else depends on it once the PR is gone.
@@ -396,7 +399,7 @@ persistent, always-on service (§7). It is a one-time / re-provision runbook, no
 run per-PR: a PR's ephemeral Postgres comes from the `environmentCreate` fork that
 `dev-env.yml`'s `prepare-env` job issues (the *service* is inherited from `development`;
 the fork carries no deployment, so `prepare-env` deploys it explicitly), and is then
-bootstrapped/migrated/seeded by the gateway at boot
+bootstrapped/migrated/reset/seeded by the gateway at boot
 (`db.Provision`, M4-21-04, `[superuser-dsn-on-gateway]` above) — no human runs the steps
 below for it.
 

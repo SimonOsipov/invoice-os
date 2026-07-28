@@ -259,20 +259,25 @@ describe('saveSession / loadSession / clearSession I/O', () => {
 })
 
 describe('shouldAutoSignIn deep-link guard', () => {
-  it('S14: auto-signs-in when there is no boot session and personaParam is a known persona', () => {
-    expect(shouldAutoSignIn(null, 'firm')).toBe(true)
+  it('S14: auto-signs-in when personaParam is a known persona', () => {
+    expect(shouldAutoSignIn('firm')).toBe(true)
   })
 
-  it('S15: a rehydrated boot session wins over a persona deep-link param', () => {
-    expect(shouldAutoSignIn(firmSession(), 'firm')).toBe(false)
+  // Was the inverse (a rehydrated session beat the param) until that turned out to BE the
+  // persona-switch bug: the landing page is a different origin, so it cannot clear this
+  // origin's stored session when the user picks a profile — reaching landing without the
+  // in-app Sign out and choosing the other accountant silently reopened the previous one.
+  // The param is a choice made seconds ago on the only front door; it wins.
+  it('S15: a persona deep-link param wins over a rehydrated boot session', () => {
+    expect(shouldAutoSignIn('inhouse')).toBe(true)
   })
 
   it('S16: does not auto-sign-in for an unknown persona param', () => {
-    expect(shouldAutoSignIn(null, 'bogus')).toBe(false)
+    expect(shouldAutoSignIn('bogus')).toBe(false)
   })
 
   it('S17: does not auto-sign-in when there is no persona param', () => {
-    expect(shouldAutoSignIn(null, null)).toBe(false)
+    expect(shouldAutoSignIn(null)).toBe(false)
   })
 })
 
@@ -379,7 +384,7 @@ describe('adversarial / edge coverage (QA)', () => {
   })
 
   it("S19: does not auto-sign-in for the landing-only 'support' persona (an Ops Console persona, not an APP_PERSONAS entry — only 'firm'/'inhouse' auto-sign-in)", () => {
-    expect(shouldAutoSignIn(null, 'support')).toBe(false)
+    expect(shouldAutoSignIn('support')).toBe(false)
   })
 
   it('S20: parseStoredSession ignores unknown extra fields in a stored blob (a forward-compat blob from a later schema still parses, picking only known fields)', () => {

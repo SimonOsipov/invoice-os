@@ -57,6 +57,14 @@ export const FIRM_PERSONA = {
   tenantName: 'Okafor & Partners',
 } as const
 
+// The in-house persona, resolving to seeded tenant 2222. Proving that a hand-off SWITCHES
+// identity (auth.spec.ts) needs a second persona to switch TO — one whose sidebar shares no
+// tenant label with the firm's, so "switched" and "did not switch" are distinguishable.
+export const INHOUSE_PERSONA = {
+  param: 'inhouse',
+  tenantName: 'Honeywell Group',
+} as const
+
 // The seeded, ACTIVE MBS rule-set that the live gateway evaluates (v2 since M4-04-01 --
 // migrations/20260716185106_rule_set_v2.sql). The "has-violations" preset
 // (invoicePayload.ts PRESETS) fires a subset of these — a robust sample rather than all

@@ -8,15 +8,20 @@
 // (getRollup) feeds the Validation summary card via scopedBucket/topFailures — the SAME
 // helpers DashboardActive.tsx already uses, not a second implementation of either.
 //
-// The old WHT KPI is GONE, not SAMPLE-marked: the mock computed it from a `wht: boolean`
-// flag + an item-description regex, neither of which exists anywhere on a real
-// InvoiceRecord (no wht column on invoices at all, migrations/20260714103137_invoices.sql;
-// line_items aren't even in the list wire shape, [D7]/[D8]) — there is no partial real
-// signal to hang a SAMPLE chip on, and inventing a withholding-tax figure on a
-// TAX REPORTING screen is a materially worse lie than the SAMPLE-marked demo panels
-// elsewhere (DashboardActive's readiness score/trend), which are legibly "exploratory",
-// not a specific number a filing-minded user could copy. The 4th KPI slot is now
-// "Total invoiced" (`total`, a real per-invoice column), not a replacement estimate.
+// Step 3 DELETED the WHT KPI here instead of SAMPLE-marking it, on the reasoning that a
+// fabricated withholding-tax figure on a tax-reporting screen was worse than a marked
+// panel elsewhere. The user was asked directly and overruled that call: restore it,
+// SAMPLE-marked, not silently dropped. That's what the 5th `reportKpis` entry below is —
+// its underlying mock signal (a `wht: boolean` flag + an item-description regex) still
+// doesn't exist on a real InvoiceRecord (no wht column on invoices at all,
+// migrations/20260714103137_invoices.sql; line_items aren't in the list wire shape
+// either, [D7]/[D8]), so it is NOT recomputed from that. It applies the same
+// illustrative 5% rate to the real `taxable` sum that already feeds the first KPI tile —
+// a real base, an invented rate, not a wholly invented number — and it carries the same
+// "SAMPLE" mono chip DashboardActive.tsx's TileHead renders for its own fabricated
+// panels (readiness score/trend, recent activity), so nobody reads it as a computed
+// filing figure. "Total invoiced" (added by step 3 into WHT's old slot) is NOT evicted
+// to make room — the KPI row grows to five tiles instead.
 
 import { useMemo } from 'react'
 
@@ -63,10 +68,19 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const taxable = rows.reduce((s, r) => s + (r.subtotal != null ? Number(r.subtotal) : 0), 0)
   const outVat = rows.reduce((s, r) => s + (r.vat != null ? Number(r.vat) : 0), 0)
   const totalInvoiced = rows.reduce((s, r) => s + (r.total != null ? Number(r.total) : 0), 0)
-  const reportKpis = [
+  // [wht-sample-restore] (persona-handoff-fix step 6, user-directed reversal of step 3's
+  // deletion, see file header): illustrative 5% rate applied to the real `taxable` base
+  // above — not a recomputation of the old mock's wht-flag/description-regex logic,
+  // which has no real-schema equivalent at all.
+  const whtSample = taxable * 0.05
+  const reportKpis: { label: string; value: string; color: string; meta?: string }[] = [
     { label: 'Taxable value', value: fmtShort(taxable), color: 'var(--fg-1)' },
     { label: 'Output VAT', value: fmtShort(outVat), color: 'var(--action)' },
     { label: 'Total invoiced', value: fmtShort(totalInvoiced), color: 'var(--fg-1)' },
+    // Muted fg-3 (not fg-1 like the four real tiles) + a leading `~`: on a filing-adjacent
+    // screen the "SAMPLE" chip alone is easy to miss at a glance — the value itself has to
+    // read as subordinate/illustrative too, not just carry an 11px badge beside it.
+    { label: 'WHT withheld · 5%', value: '~' + fmtShort(whtSample), color: 'var(--fg-3)', meta: 'SAMPLE' },
     { label: 'Invoices in period', value: String(rows.length), color: 'var(--fg-1)' },
   ]
   const tcMax = Math.max(1, ...custList.map((o) => o.totalNum))
@@ -117,11 +131,22 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'ready' && rows.length > 0 && (
         <>
-          <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+          {/* Five tiles now, not four — the restored WHT tile does not evict "Total
+              invoiced" from the slot step 3 put it in. pf-grid-5 mirrors pf-grid-4's own
+              collapse rules (platform.css), just one column wider at desktop width. */}
+          <div className="pf-grid-5" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 20 }}>
             {reportKpis.map((k) => (
               <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
-                <div className="label" style={{ marginBottom: 12 }}>
-                  {k.label}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <div className="label">{k.label}</div>
+                  {/* Same SAMPLE-chip styling TileHead's `meta` renders (DashboardActive.tsx)
+                      — this tile row predates that shared-head refactor and has no header
+                      strip of its own, so the chip sits inline beside the label instead. */}
+                  {k.meta && (
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                      {k.meta}
+                    </span>
+                  )}
                 </div>
                 <span className="money" style={{ fontSize: 25, fontWeight: 700, color: k.color }}>
                   {k.value}

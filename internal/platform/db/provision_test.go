@@ -292,6 +292,7 @@ func TestProvisionFromEmptyDatabase(t *testing.T) {
 		})
 	}
 
+	resetInvoicesBeforeFullSchemaReset(t, ctx)
 	if _, err := provider.DownTo(ctx, 0); err != nil {
 		t.Fatalf("reset to empty (down to 0): %v", err)
 	}
@@ -441,6 +442,7 @@ func TestProvisionSeedFailsIfRunBeforeMigrate(t *testing.T) {
 		})
 	}
 
+	resetInvoicesBeforeFullSchemaReset(t, ctx)
 	if _, err := provider.DownTo(ctx, 0); err != nil {
 		t.Fatalf("reset to empty (down to 0): %v", err)
 	}

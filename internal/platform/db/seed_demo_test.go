@@ -82,8 +82,23 @@ var curatedDemoEntities = []entityRow{
 
 // resetDemoBusinessEntities clears the demo tenant's business_entities rows
 // so each test starts from empty, without touching other tenants.
+//
+// invoices.entity_id -> business_entities(id) is ON DELETE RESTRICT
+// (migrations/20260714103137_invoices.sql: "an invoice is a durable legal/
+// fiscal record ... must not be silently destroyed by a business_entities
+// hard delete") -- db/seed.dev.sql now also seeds invoices against 6 of the
+// 27 curated entities (persona-handoff-fix step 4, [demo-invoice-seed]), so
+// deleting business_entities first would hit that RESTRICT (23001). Invoices
+// are cleared FIRST -- line_items and invoice_status_history cascade off
+// invoice_id (ON DELETE CASCADE on both) -- so the entities delete below
+// always succeeds regardless of what Seed most recently wrote.
 func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM invoices WHERE tenant_id = $1`, demoTenantID,
+	); err != nil {
+		t.Fatalf("clear demo tenant's invoices (precondition): %v", err)
+	}
 	if _, err := pool.Exec(context.Background(),
 		`DELETE FROM business_entities WHERE tenant_id = $1`, demoTenantID,
 	); err != nil {

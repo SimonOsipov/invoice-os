@@ -4,11 +4,17 @@
 // for this surface only (Obsidian M4-09 System Design §4). Ported shell from
 // Platform.dc.html ~L343-387. M5-09-04 removed the mock invoice-DETAIL branch
 // (InvoiceDetail.tsx) — the mock generators used here (genInvoices/buildClients) are a
-// separate concern and stay intact; they still feed Reports/Customers/Sidebar/Header.
+// separate concern and stay intact; they still feed Reports/Customers (Sidebar's own
+// badges moved off them onto the live rollup, [dashboard-scope-per-client] — see
+// Sidebar.tsx).
 //
 // The "Needs attention" toggle re-fetches server-side (`needs_attention=true` via
 // `deps:[needsAttention]`) rather than re-deriving the predicate in the browser
-// ([server-side-needs-attention]). Row click routes through the existing
+// ([server-side-needs-attention]); the fetched page is then narrowed to the ACTIVE
+// client via filterByActiveEntity (lib/invoices.ts) — this list is a CLIENT-scoped
+// surface (Sidebar.tsx's CLIENT nav group), and listInvoices itself stays tenant-global
+// on the wire ([D8]) — see filterByActiveEntity's own doc comment for why the filter
+// lives here instead of a query param. Row click routes through the existing
 // selectImported/importedInvoiceId/detailTarget->'imported' seam with the real invoice
 // UUID ([reuse-imported-seam]); rename deferred.
 //
@@ -27,6 +33,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, toApiError, useAsync, typ
 import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
+  filterByActiveEntity,
   invoiceStatusStyle,
   invoicesViewState,
   isRowSelectable,
@@ -89,7 +96,17 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // — the overlay tick never calls `list.run()`, so `list.data` alone would never change
   // on a poll and the prune effect would never fire for a row that advances past
   // `validated` between polls.
-  const rows = useMemo(() => live ?? list.data ?? [], [live, list.data])
+  //
+  // [dashboard-scope-per-client]: narrowed to the ACTIVE client via filterByActiveEntity
+  // (see the file-header comment) — every downstream consumer (selection, the live-poll
+  // gate, the empty-state check below) sees only this client's own rows; there is
+  // exactly one `rows` in this component, not a raw fetch result plus a scoped view of
+  // it. `ctx.mode`/`ctx.active.entityId` join the dep list alongside `live`/`list.data`
+  // so switching clients re-filters immediately, without waiting on a refetch.
+  const rows = useMemo(
+    () => filterByActiveEntity(live ?? list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    [live, list.data, ctx.mode, ctx.active.entityId],
+  )
 
   const [selected, setSelected] = useState<string[]>([])
 
@@ -274,7 +291,13 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
-      {(state === 'idle' || state === 'empty') && (
+      {/* `state === 'ready'` reflects the RAW (unfiltered, tenant-wide) fetch result, not
+          `rows` — the tenant can have other clients' invoices while this one has none, so
+          a ready-but-filtered-to-zero window needs the SAME honest empty state, not a bare
+          table with only a header row ([dashboard-scope-per-client]: this is the exact
+          "an entity with no invoices" case, never silently widened to show every client's
+          rows instead). */}
+      {(state === 'idle' || state === 'empty' || (state === 'ready' && rows.length === 0)) && (
         <div data-testid="invoices-empty">
           <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
@@ -285,7 +308,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'ready' && (
+      {state === 'ready' && rows.length > 0 && (
         <>
           {selected.length > 0 && (
             <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}>

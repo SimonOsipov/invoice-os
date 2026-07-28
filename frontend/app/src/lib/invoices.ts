@@ -73,6 +73,16 @@
 // short-circuit (a deployed SPA with no backend behind it must make no network calls)
 // means base==null => 'idle' regardless of async status; otherwise the view state
 // mirrors async.status.
+//
+// filterByActiveEntity ([dashboard-scope-per-client], persona-handoff-fix step 2): the
+// Invoices list is a CLIENT-scoped surface (Sidebar.tsx's CLIENT nav group), but
+// listInvoices has no entity query param — [D8]/handlers.go's ListHandler stays
+// deliberately tenant-global on the wire; adding one is a server change, out of scope
+// here. This filters the already-fetched page in the browser instead, mirroring
+// scopedBucket's (dashboard.ts) in-house bypass: in-house has no business_entities row
+// ([entity-picker] trap 1) so its one "client" IS the tenant, and a null entityId in firm
+// mode (no entity resolved yet) returns [] rather than every row — the exact "no client
+// selected shows everyone's invoices" bug this replaces.
 import type { AuthedFetch } from './portfolio'
 import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
@@ -484,4 +494,13 @@ export function shouldFetchInvoices(base: string | null): boolean {
 export function invoicesViewState(base: string | null, s: AsyncState<InvoiceRecord[]>): AsyncStatus {
   if (base == null) return 'idle'
   return s.status
+}
+
+// See the file-header comment for why this exists (no server-side entity filter).
+// isInhouse bypasses filtering entirely (in-house's "client" is the whole tenant);
+// entityId === null in firm mode (no entity resolved yet) yields [], never every row.
+export function filterByActiveEntity(rows: InvoiceRecord[], isInhouse: boolean, entityId: string | null): InvoiceRecord[] {
+  if (isInhouse) return rows
+  if (entityId == null) return []
+  return rows.filter((row) => row.entity_id === entityId)
 }

@@ -22,6 +22,7 @@ import { ApiError, type AsyncState } from '@invoice-os/api-client'
 import { createAuthedFetch } from './authedFetch'
 import {
   editInvoice,
+  filterByActiveEntity,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
@@ -626,6 +627,31 @@ describe('shouldFetchInvoices / invoicesViewState', () => {
     for (const asyncState of cases) {
       expect(invoicesViewState(base, asyncState)).toBe(asyncState.status)
     }
+  })
+})
+
+// filterByActiveEntity ([dashboard-scope-per-client], persona-handoff-fix step 2) — added
+// alongside the client-scoped Invoices list this story ships, not part of the original
+// I1-I14 architect table.
+describe('filterByActiveEntity', () => {
+  const other: InvoiceRecord = { ...draftInvoice, id: 'inv-2', entity_id: 'e2', invoice_number: 'INV-002' }
+
+  it('firm mode (isInhouse:false) keeps only rows whose entity_id matches the active entity', () => {
+    expect(filterByActiveEntity([draftInvoice, other], false, 'e1')).toEqual([draftInvoice])
+  })
+
+  it('firm mode with entityId===null (no client resolved yet) returns [], never every row', () => {
+    expect(filterByActiveEntity([draftInvoice, other], false, null)).toEqual([])
+  })
+
+  it('in-house (isInhouse:true) bypasses filtering entirely and returns every row unchanged', () => {
+    expect(filterByActiveEntity([draftInvoice, other], true, null)).toEqual([draftInvoice, other])
+    expect(filterByActiveEntity([draftInvoice, other], true, 'e1')).toEqual([draftInvoice, other])
+  })
+
+  it('an empty input list stays empty regardless of scope', () => {
+    expect(filterByActiveEntity([], false, 'e1')).toEqual([])
+    expect(filterByActiveEntity([], true, null)).toEqual([])
   })
 })
 

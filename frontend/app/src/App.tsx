@@ -29,6 +29,14 @@ import {
   type CustomRuleStore,
   type Suggestion,
 } from './lib/rules'
+import {
+  newPolicy,
+  removePolicy,
+  replacePolicy,
+  seedPolicies,
+  type Policy,
+  type PolicyStore,
+} from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
@@ -40,6 +48,7 @@ import { InvoiceDetail } from './components/InvoiceDetail'
 import { ClientsView } from './components/ClientsView'
 import { ValidationView } from './components/ValidationView'
 import { RulesView } from './components/RulesView'
+import { WorkflowsView } from './components/WorkflowsView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
@@ -188,6 +197,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
   const rulesKey = customRulesKey(active.entityId)
   const customRules = customRulesFor(customRuleStore, rulesKey)
+  // Approval policies, PER WORKSPACE MODE (lib/workflows.ts) — deliberately NOT per
+  // client the way custom rules above are: the store is keyed firm/inhouse, so
+  // switching company in firm mode does not swap the set. Held here rather than in
+  // WorkflowsView so both the list and a half-built policy survive navigating away and
+  // back. `mode` is fixed by the signed-in persona, so this index is stable for the
+  // whole session.
+  const [policyStore, setPolicyStore] = useState<PolicyStore>(seedPolicies)
+  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null)
+  const policies = policyStore[mode]
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -266,6 +284,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     // Custom rules are per client, so the incoming client has a different set — a
     // drawer left open would keep describing a rule from the company just left.
     setOpenRuleKey(null)
+    // Policies are per workspace, so the SET is unchanged — but the switch lands on the
+    // dashboard, and leaving this set means the next visit to Workflows reopens the
+    // builder mid-edit instead of the policy list the user asked for.
+    setEditingPolicyId(null)
   }
 
   function openCreate() {
@@ -577,6 +599,42 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setOpenRuleKey((k) => (k === key ? null : k))
   }
 
+  // Same one-funnel shape as updateCustomRules above: resolve THIS workspace's policy
+  // list, run the pure reducer from lib/workflows.ts, store it back under the mode key.
+  // Every policy write goes through here, so no caller has to know the store is keyed.
+  function updatePolicies(fn: (list: Policy[]) => Policy[]) {
+    setPolicyStore((store) => ({ ...store, [mode]: fn(store[mode]) }))
+  }
+
+  function openPolicy(id: string) {
+    setEditingPolicyId(id)
+  }
+
+  function closePolicy() {
+    setEditingPolicyId(null)
+  }
+
+  // Creating opens the builder in the same step: a blank "Untitled policy" row appended
+  // to the list with nothing else happening reads as a click that did nothing.
+  function createPolicy() {
+    const p = newPolicy()
+    updatePolicies((list) => [...list, p])
+    setEditingPolicyId(p.id)
+  }
+
+  function deletePolicy(id: string) {
+    updatePolicies((list) => removePolicy(list, id))
+    // The builder is editing the policy that just stopped existing.
+    setEditingPolicyId((cur) => (cur === id ? null : cur))
+  }
+
+  // The ONE write funnel for a policy's contents: the builder composes the next Policy
+  // with the pure reducers and hands the whole object back, so nothing here needs to
+  // know the node tree's shape.
+  function savePolicy(next: Policy) {
+    updatePolicies((list) => replacePolicy(list, next))
+  }
+
   const user: SignedInUser = {
     name: session.persona.name,
     initials: session.persona.initials,
@@ -614,6 +672,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     parseIdx,
     customRules,
     openRuleKey,
+    policies,
+    editingPolicyId,
     entityId,
     importFile,
     preview,
@@ -659,6 +719,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     addSuggestedRule,
     toggleCustomRule,
     removeCustomRule,
+    openPolicy,
+    closePolicy,
+    createPolicy,
+    deletePolicy,
+    savePolicy,
     signOut: onSignOut,
   }
 
@@ -690,6 +755,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
           {view === 'clients' && <ClientsView ctx={ctx} />}
           {view === 'validation' && <ValidationView ctx={ctx} />}
           {view === 'rules' && <RulesView ctx={ctx} />}
+          {view === 'workflows' && <WorkflowsView ctx={ctx} />}
           {view === 'customers' && <CustomersView ctx={ctx} />}
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}

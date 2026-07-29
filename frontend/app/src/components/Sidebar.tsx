@@ -26,6 +26,7 @@ import {
   NAV_RULES,
   NAV_SETTINGS,
   NAV_VALIDATION,
+  NAV_WORKFLOWS,
   tickGlyph11,
   type NavDef,
 } from '../glyphs'
@@ -102,20 +103,26 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   //
   // NAV_RULES is CLIENT-SCOPED in both modes: custom rules are stored per client
   // (lib/rules.ts), so in firm mode it belongs in the group that follows the
-  // switcher, never the firm-wide one. It sits directly after Validation because it
-  // configures the validation engine — see NAV_RULES in glyphs.tsx for why that is
-  // the position the brief's "directly after Workflows" resolves to here.
+  // switcher, never the firm-wide one. It sits directly after Workflows, which is
+  // where the brief places it — see NAV_RULES in glyphs.tsx.
+  //
+  // NAV_WORKFLOWS is the opposite case, and in firm mode it therefore sits in the
+  // FIRM-WIDE group: approval policies are stored PER WORKSPACE, not per client
+  // (lib/workflows.ts's PolicyStore is keyed firm/inhouse), so switching company does
+  // not change them and listing them under the CLIENT scope header would mislabel a
+  // firm-wide dataset as the switched-to client's. This is a deliberate deviation from
+  // the prototype, whose `clientScoped` array includes `workflows`.
   const navGroups: { key: string; label: string; scope: string; items: SidebarNavItem[] }[] = isFirm
     ? [
         { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_RULES, NAV_CUSTOMERS, NAV_REPORTS] },
-        { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_CLIENTS, NAV_SETTINGS] },
+        { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_SETTINGS] },
       ]
     : [
         {
           key: 'workspace',
           label: 'Workspace',
           scope: active.short,
-          items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_SETTINGS],
+          items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_WORKFLOWS, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_SETTINGS],
         },
       ]
   let activeNav: string = view === 'create' || view === 'detail' ? 'invoices' : view

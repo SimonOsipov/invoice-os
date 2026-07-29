@@ -58,7 +58,7 @@ export const firmModeIcon = <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4
 export const lockGlyph = <Icon paths={['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']} size={11} />
 export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 19 12 16.1 6.82 19 8 12.91l-4-3.64 5.91-1.01z']} size={15} />
 
-export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
+export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
 
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
@@ -68,9 +68,17 @@ export const NAV_INVOICES: NavDef = {
 }
 export const NAV_CLIENTS: NavDef = { id: 'clients', label: 'Clients', glyph: firmModeIcon }
 export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation', glyph: shieldGlyph }
-// list-checks. The brief places Rules "directly after Workflows"; this app has no
-// Workflows nav item (see Sidebar.tsx), so it sits directly after Validation — the
-// rules ARE the validation engine's configuration, which makes it the true sibling.
+// git-branch. The approval-policy builder — the prototype's own Workflows glyph,
+// carried over unchanged so the two surfaces read as the same screen.
+export const NAV_WORKFLOWS: NavDef = {
+  id: 'workflows',
+  label: 'Workflows',
+  glyph: <Icon paths={['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']} size={17} />,
+}
+// list-checks. Rules sits directly after Workflows, which is where the brief places
+// it: the Workflows nav item now exists (added with the approval-policy screen), so
+// the old fallback position — directly after Validation, for want of a Workflows
+// item — no longer applies.
 export const NAV_RULES: NavDef = {
   id: 'rules',
   label: 'Rules',

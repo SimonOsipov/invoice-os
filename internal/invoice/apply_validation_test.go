@@ -439,6 +439,61 @@ func TestApplyValidation_QueuedInvoiceRefused(t *testing.T) {
 	assertGateSnapshotUnchanged(t, before, snapshotInvoiceGateState(t, super, inv.ID), "GATE-10")
 }
 
+// TestApplyValidation_NonDraftStatusesRefusedTable (INVED-01-03/task-264,
+// INV-03-T6, widened): an invoice seeded at each of the 6 non-draft statuses
+// refuses Store.ApplyValidation with ErrNotDraft -- NEVER ErrStaleValidation,
+// proving the status re-check (store.go:1038) fires BEFORE the fingerprint
+// re-check (store.go:1052) even though the fingerprint passed in here is the
+// invoice's TRUE, freshly-computed one (so a wrongly-ordered implementation
+// that checked the fingerprint first would not have anything to blame the
+// rejection on). Snapshot (status/violations/rule_set_version_id) and history
+// are unchanged; no invoice.validated audit row is written. Overlaps GATE-09
+// (validated) and GATE-10 (queued) above by design -- this table does not
+// replace them, it adds the genuinely-uncovered submitted/accepted/rejected/
+// failed cases.
+func TestApplyValidation_NonDraftStatusesRefusedTable(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	for _, status := range []Status{
+		StatusValidated, StatusQueued, StatusSubmitted,
+		StatusAccepted, StatusRejected, StatusFailed,
+	} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			tenantID := seedTenant(t, super, "INV-03-T6 "+string(status)+" tenant")
+			entityID := seedEntity(t, super, tenantID, "INV-03-T6 entity")
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "INV-03-T6-"+string(status), status)
+
+			inv, err := store.Get(c, invID)
+			if err != nil {
+				t.Fatalf("Get (to compute the invoice's true fingerprint): %v", err)
+			}
+			versionID := seedRuleSetVersionID(t, super)
+			fp := contentFingerprint(inv, inv.LineItems)
+
+			before := snapshotInvoiceGateState(t, super, invID)
+			beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
+			beforeValidated := auditCount(t, app, tenantID, "invoice.validated")
+
+			if _, err := store.ApplyValidation(c, invID, []Violation{}, versionID, fp); !errors.Is(err, ErrNotDraft) {
+				t.Fatalf("ApplyValidation(%s invoice) err = %v, want ErrNotDraft (never ErrStaleValidation -- the status check must precede the fingerprint check)", status, err)
+			}
+
+			assertGateSnapshotUnchanged(t, before, snapshotInvoiceGateState(t, super, invID), "INV-03-T6 "+string(status))
+			if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
+				t.Errorf("invoice_status_history rows = %d, want unchanged %d", n, beforeHistory)
+			}
+			if n := auditCount(t, app, tenantID, "invoice.validated"); n != beforeValidated {
+				t.Errorf("audit_log invoice.validated rows = %d, want unchanged %d", n, beforeValidated)
+			}
+		})
+	}
+}
+
 // --- GATE-11/12: TOCTOU content staleness -----------------------------------
 
 // GATE-11: content edited (via Store.Update) between when the fingerprint

@@ -937,6 +937,60 @@ func TestStoreEdit_AcceptedStaysNotFixable(t *testing.T) {
 	}
 }
 
+// TestStoreEdit_NonFixableStatesRejectedTable (INVED-01-03/task-264,
+// INV-03-T5, widened): Store.Edit refuses ErrNotFixable, with nothing
+// written, for each of queued/submitted/accepted/failed. Widens
+// TestStoreEdit_NonFixableStateRejected's single queued case and
+// TestStoreEdit_AcceptedStaysNotFixable's single accepted case with the two
+// genuinely-uncovered non-fixable statuses, submitted and failed. This
+// subtask's R0 step only adds stub canEdit/canRevalidate functions --
+// Store.Edit's call site (store.go, the [A8] fixable-state guard) is left
+// UNCHANGED until R2, so this exercises EXISTING, unmodified behaviour and is
+// expected to pass immediately (not go red).
+func TestStoreEdit_NonFixableStatesRejectedTable(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	for _, status := range []Status{StatusQueued, StatusSubmitted, StatusAccepted, StatusFailed} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			tenantID := seedTenant(t, super, "INV-03-T5 "+string(status)+" tenant")
+			entityID := seedEntity(t, super, tenantID, "INV-03-T5 entity")
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "INV-03-T5-"+string(status), status)
+
+			var before Invoice
+			if err := scanInvoice(super.QueryRow(ctx, `SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, invID), &before); err != nil {
+				t.Fatalf("snapshot before: %v", err)
+			}
+			beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
+			beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+
+			newVAT := "9.00"
+			_, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+			if !errors.Is(err, ErrNotFixable) {
+				t.Fatalf("Edit(%s invoice) err = %v, want ErrNotFixable", status, err)
+			}
+
+			var after Invoice
+			if err := scanInvoice(super.QueryRow(ctx, `SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, invID), &after); err != nil {
+				t.Fatalf("snapshot after: %v", err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Errorf("invoices row changed after refused Edit(%s): before %+v, after %+v, want byte-identical", status, before, after)
+			}
+			if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
+				t.Errorf("invoice_status_history rows = %d, want unchanged %d", n, beforeHistory)
+			}
+			if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated {
+				t.Errorf("audit_log invoice.updated rows = %d, want unchanged %d", n, beforeUpdated)
+			}
+		})
+	}
+}
+
 // EDIT-16 (M5-09-02/task-255: RENAMED from TestStoreEdit_ClearingIsAtomicWithTheDemotion
 // -- its original premise, that a rejection_reasons CLEAR rolls back
 // atomically with the demotion, no longer applies: M5-09-02 removes that

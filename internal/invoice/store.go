@@ -763,6 +763,18 @@ func canTransition(from, target Status) bool {
 	return false
 }
 
+// canEdit reports whether an invoice in status s may be edited.
+// STUB (INVED-01-03, R0): always returns false. The real body -- derived
+// from legalTransitions, never a status literal (Core AC 4) -- lands in the
+// R2 step of this subtask.
+func canEdit(s Status) bool { return false }
+
+// canRevalidate reports whether the validation gate may run on status s.
+// STUB (INVED-01-03, R0): always returns false. The real body -- the
+// gate's draft-only literal, s == StatusDraft -- lands in the R2 step of
+// this subtask.
+func canRevalidate(s Status) bool { return false }
+
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
 // (M4-04-05's extraction moved the SOLE-writer-of-invoices.status role down

@@ -182,9 +182,29 @@ export interface InvoiceRecord {
 // `qr_png_base64` has no `omitempty` either (always present, explicit null when there is
 // no qr_payload or rendering failed) -- getInvoice's own `?? null` normalization is
 // defensive-only, the same posture already taken for `rule_set_version`.
+//
+// `can_edit`/`can_revalidate`/`revalidate_blocked_reason` (INVED-01-06, task-267,
+// [gates-on-the-wire]) are the backend-DERIVED per-action availability -- canEdit
+// (draft/validated/rejected) and canRevalidate (draft only), store.go:940/960 -- so the
+// SPA holds no status set of its own. The reason is non-null EXACTLY when
+// `canEdit && !canRevalidate` (validated/rejected), null everywhere else, and its copy
+// is the backend's verbatim ([revalidate-reason-from-backend]) -- the SPA never authors
+// a fallback string.
+//
+// REQUIRED and nullable (no `?`), matching the two keys above: getResponse tags none of
+// the three `omitempty` (handlers.go:214-221, pinned by
+// TestGetHandler_ActionFlagsFalseNotOmitted), so all three are present on every status.
+// An optional `?` would compile just as well, which is exactly why it is wrong -- it
+// lets a consumer read `undefined` and treat "the server did not say" as an open
+// question, the fail-open shape [gates-on-the-wire] exists to remove. They sit on
+// InvoiceDetailRecord ONLY, never InvoiceRecord: ListHandler returns bare Invoice rows,
+// which carry no such keys.
 export interface InvoiceDetailRecord extends InvoiceRecord {
   rule_set_version: number | null
   qr_png_base64: string | null
+  can_edit: boolean
+  can_revalidate: boolean
+  revalidate_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:91-98).
@@ -211,9 +231,29 @@ export interface ListInvoicesOptions {
   entityId?: string
 }
 
+// One entry of editInvoice's optional `line_items` array (lineItemReq,
+// handlers.go:42-48, INVED-01-05). Five nullable strings -- NO `id` and NO `line_no`:
+// line_no is system-assigned 1..N by array POSITION ([line-no-by-position]) and a
+// client-supplied one is silently ignored, so this array's order IS the only line
+// ordering the wire carries.
+export interface LineItemEditInput {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
 // editInvoice's PATCH body: the 9 optional header MBS-content fields (editReq,
 // handlers.go:70-80, [D9]) — identity/lifecycle are not the edit's job. Reuses
 // InvoiceRecord's own field types so the two never drift apart.
+//
+// `line_items` (INVED-01-06) mirrors editReq.LineItems, a POINTER to a slice, so all
+// three states stay distinguishable ([line-items-optional]): key ABSENT -- or set to
+// `undefined`, which JSON.stringify drops -- leaves the stored lines exactly as they
+// are; `[]` removes every line; a populated array replaces the whole set, renumbered
+// 1..N. A type that could not express "absent" would make every header-only save delete
+// all of the invoice's lines.
 export type InvoiceEditInput = Partial<
   Pick<
     InvoiceRecord,
@@ -227,7 +267,9 @@ export type InvoiceEditInput = Partial<
     | 'vat'
     | 'total'
   >
->
+> & {
+  line_items?: LineItemEditInput[]
+}
 
 // The 9 editable header fields (editReq, handlers.go:70-80, [D9]) -- moved here from
 // InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
@@ -409,6 +451,56 @@ export function reasonFieldFlags(reasons: RejectionReason[]): Map<EditFieldKey, 
     if (field != null && !flags.has(field)) flags.set(field, reason.code)
   }
   return flags
+}
+
+// The five MBS content fields of a line, the ONLY thing diffLineItems compares. `id` and
+// `line_no` are deliberately outside this Pick ([fingerprint-excludes-line-ids]).
+type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+
+// The line half of editInvoice's PATCH body: `undefined` when `edited` is
+// content-identical to `original`, so an untouched line editor sends no `line_items` key
+// at all ([fingerprint-excludes-line-ids]) -- replace-all churns line ids, and omitting
+// the key is what keeps that churn off edits that never went near a line. `[]` stays
+// reachable: emptying a 2-line invoice returns [], not undefined.
+//
+// Compares BY POSITION over exactly the five fields above, never `id`, never `line_no`
+// (line_no is positional, so a reorder correctly reads as a change). Both sides
+// canonicalize '' -> null before comparing AND in the emitted array: React inputs hold
+// '', never null, so a stored-NULL field seeds the form as ''. Without that
+// canonicalization an UNTOUCHED editor reports "changed" on every save -- which churns
+// line ids, moves the backend fingerprint for real (NULL -> '' is a genuine content
+// change) and so demotes a `validated` invoice on a save that changed nothing -- and
+// emits '' into a numeric column, where `$N::text::numeric` raises 22P02 -> ErrValidation
+// -> a 400 on a no-op save.
+//
+// STUB (R0): throws -- implemented at GREEN.
+export function diffLineItems(
+  _original: ReadonlyArray<LineContent>,
+  _edited: ReadonlyArray<LineContent>,
+): LineItemEditInput[] | undefined {
+  throw new Error('not implemented')
+}
+
+// The passive computed line-sum hint for the edit form ([line-sum-hint-semantics], Core
+// AC #5): Σ(unit_price × (quantity ?? 1)) over the lines. Display-only -- it never
+// derives or rewrites subtotal/vat/total ([totals-ownership]), which is why the
+// signature can see nothing but the two fields it multiplies.
+//
+// Returns an exact decimal STRING, not a number -- a deliberate carrier-only deviation
+// from the story's `number | null` (AC #5's arithmetic is unchanged). Money is strings
+// end-to-end ([D13]) precisely so no float touches it; the rule this mirrors has a 0.005
+// tolerance, so precision below the kobo is load-bearing; and the app's only money
+// formatter (fmt(), lib/format.ts:5-7) rounds to WHOLE naira, so a numeric return would
+// invite the component to render a hint that reads EQUAL to a subtotal it actually
+// differs from -- fabricating the very agreement this hint exists to question.
+//
+// `null`, never '0.00', when the line set is empty or ANY line's unit_price/quantity is
+// absent or present-but-non-numeric: that mirrors lineSumEval's violate-set (an absent
+// quantity weights 1; an unparseable one VIOLATES) rather than skipping the line.
+//
+// STUB (R0): throws -- implemented at GREEN.
+export function computedLineSum(_lines: ReadonlyArray<Pick<InvoiceLineItem, 'quantity' | 'unit_price'>>): string | null {
+  throw new Error('not implemented')
 }
 
 // not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason

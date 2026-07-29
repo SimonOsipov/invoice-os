@@ -333,6 +333,11 @@ describe('getInvoice', () => {
       rejection_reasons: reasons,
       rule_set_version: 2,
       qr_png_base64: 'aGVsbG8=',
+      // accepted: canEdit false, canRevalidate false -> the blocked reason is null (it is
+      // non-null EXACTLY when canEdit && !canRevalidate, i.e. validated/rejected).
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -346,7 +351,15 @@ describe('getInvoice', () => {
   })
 
   it('I-fiscal-2: getInvoice normalizes a missing qr_png_base64 to null', async () => {
-    const detailInvoice: InvoiceDetailRecord = { ...draftInvoice, rule_set_version: 2, qr_png_base64: 'aGVsbG8=' }
+    // draftInvoice is status 'draft': canEdit and canRevalidate both true, reason null.
+    const detailInvoice: InvoiceDetailRecord = {
+      ...draftInvoice,
+      rule_set_version: 2,
+      qr_png_base64: 'aGVsbG8=',
+      can_edit: true,
+      can_revalidate: true,
+      revalidate_blocked_reason: null,
+    }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -786,7 +799,12 @@ describe('listInvoices: needsAttention explicit-false (adversarial)', () => {
 describe('editInvoice: multi-field body fidelity (adversarial)', () => {
   it('I18: a multi-field patch serializes exactly the passed keys — no undefined/extra keys injected — via PATCH', async () => {
     const patch: InvoiceEditInput = { supplier_tin: 'x', buyer_name: 'New Buyer', total: '999.00' }
-    const updated: InvoiceRecord = { ...draftInvoice, ...patch }
+    // `updated` is the server's PATCH response, an InvoiceRecord. InvoiceEditInput's
+    // `line_items` (LineItemEditInput[], no id/line_no) is a DIFFERENT type from the
+    // stored InvoiceRecord['line_items'], so the key is dropped before spreading -- this
+    // patch is header-only either way.
+    const { line_items: _unusedLines, ...headerPatch } = patch
+    const updated: InvoiceRecord = { ...draftInvoice, ...headerPatch }
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
 

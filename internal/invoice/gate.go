@@ -12,7 +12,9 @@
 // The order is the design, and it is fixed:
 //
 //	Store.Get(id)                      tx #1, RLS-scoped, HYDRATES line items
-//	MBSPayload + contentFingerprint    pure
+//	MBSPayload + contentFingerprint    pure -- BOTH consume those lines
+//	                                   (INVED-01-02: lines are fingerprint
+//	                                   content, not just payload)
 //	Validator.Validate                 the HTTP call to 04, NO tx open
 //	Store.ApplyValidation              tx #2: FOR UPDATE, status re-check,
 //	                                   fingerprint re-check, write, transition,
@@ -158,7 +160,7 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 		// through the EXISTING statusForErr cases, and 04 is never called.
 		return Invoice{}, 0, err
 	}
-	if inv.Status != StatusDraft {
+	if !canRevalidate(inv.Status) {
 		return Invoice{}, 0, fmt.Errorf("%w: invoice is %s, the gate is draft-only", ErrNotDraft, inv.Status)
 	}
 
@@ -166,7 +168,7 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// is built from -- so it describes exactly the content 04 judged.
 	// ApplyValidation compares it to the LOCKED row and refuses the write if the
 	// invoice changed underneath ([toctou-staleness]).
-	fingerprint := contentFingerprint(inv)
+	fingerprint := contentFingerprint(inv, inv.LineItems)
 
 	// A batch of one: the same wire contract, client, and endpoint the importer
 	// uses ([batch-of-one]). No second endpoint to keep in sync.
@@ -230,7 +232,7 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 	fingerprints := make(map[string]string, len(invs))
 	for i, inv := range invs {
 		items[i] = EvalItem{Ref: inv.ID, Invoice: inv}
-		fingerprints[inv.ID] = contentFingerprint(inv)
+		fingerprints[inv.ID] = contentFingerprint(inv, inv.LineItems)
 	}
 
 	res, err := g.Evaluate(ctx, items)

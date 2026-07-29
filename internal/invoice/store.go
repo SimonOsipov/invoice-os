@@ -250,23 +250,11 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 		return Invoice{}, err
 	}
 
-	rows, err := tx.Query(ctx,
-		`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, inv.ID,
-	)
+	lines, err := hydrateLinesTx(ctx, tx, inv.ID)
 	if err != nil {
 		return Invoice{}, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var item LineItem
-		if err := scanLineItem(rows, &item); err != nil {
-			return Invoice{}, err
-		}
-		inv.LineItems = append(inv.LineItems, item)
-	}
-	if err := rows.Err(); err != nil {
-		return Invoice{}, err
-	}
+	inv.LineItems = lines
 
 	// Resolve the human-facing rule_set_versions.version int onto the
 	// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
@@ -289,6 +277,128 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 	}
 
 	return inv, nil
+}
+
+// hydrateLinesTx reads one invoice's line_items, ordered line_no ASC -- the
+// SINGLE line-read in this package (INVED-01-02), extracted verbatim from
+// getTx's own loop so getTx, Store.Edit and Store.ApplyValidation cannot drift
+// apart on projection or ordering. Returns nil (never []LineItem{}) for a
+// line-less invoice: `out` is only ever appended to, so getTx's observable
+// behaviour is byte-identical to the pre-extraction version.
+//
+// TX-SCOPED, NEVER POOL-SCOPED, and this is correctness rather than style.
+// db.WithinTenantTx/WithinRequestTenantTx set the tenant with
+// set_config('app.current_tenant', $1, true) -- is_local = TRUE, so the GUC
+// lives and dies with the transaction (internal/platform/db/db.go:62), and
+// line_items' RLS policy filters on exactly that GUC. Handed s.pool instead of
+// tx, this would run on a connection where the GUC is unset, the policy's
+// predicate would be false for every row, and it would return ZERO ROWS
+// SILENTLY WITH NO ERROR -- every lined invoice's locked-row fingerprint would
+// hash no lines while the evaluated one hashed the real ones, so every validate
+// would return ErrStaleValidation. A pool read is also a different MVCC
+// snapshot (defeating [toctou-staleness]) and takes a second connection while
+// holding a row lock. There is no precedent for a pool read inside a tx in this
+// package; do not create one.
+//
+// No separate lock on line_items is needed: the invoice row's FOR UPDATE is the
+// serialization point for its lines too.
+func hydrateLinesTx(ctx context.Context, tx pgx.Tx, invoiceID string) ([]LineItem, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, invoiceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LineItem
+	for rows.Next() {
+		var item LineItem
+		if err := scanLineItem(rows, &item); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// replaceLinesTx replaces an invoice's WHOLE line set inside the caller's tx:
+// DELETE every existing line, then re-INSERT in from array order with line_no
+// system-assigned 1..N ([line-update-shape], [line-no-by-position]). The INSERT
+// is Store.Create's line loop verbatim, including the $N::text::numeric binding.
+// Returns the INSERTed rows as RETURNING projected them.
+//
+// The RETURNING rows are the ONLY legitimate source of Store.Edit's post-write
+// fingerprint and of its response's LineItems. A slice synthesized from `in`
+// would carry the caller's raw decimal scale, so re-sending "100.0" against a
+// stored numeric(14,2) "100.00" would hash differently and fire a FALSE
+// demotion; RETURNING re-reads the column through the same ::text projection
+// hydrateLinesTx uses, so Postgres has already normalized it. There are no
+// triggers on line_items, so RETURNING is the stored row.
+//
+// DELETE and the INSERTs must stay SEPARATE statements. A single CTE doing both
+// genuinely collides on line_items_invoice_line_no_uq, which is NOT deferrable
+// (pg_constraint.condeferrable = f). As separate statements there is no
+// conflict and no renumbering dance is needed: tuples deleted by the current
+// transaction are already dead to that same transaction's uniqueness check.
+// Verified live on this worktree's DB as invoice_app under a real
+// app.current_tenant GUC -- DELETE 2, then re-INSERT of line_no 1,2,3, no
+// 23505. Do NOT add ON CONFLICT, a two-phase renumber, or a negative-offset
+// shuffle; none of them are needed and each hides this property.
+//
+// Empty in returns nil, never []LineItem{} -- matching hydrateLinesTx, though
+// contentFingerprint's count marker is len()-based so the two hash identically
+// either way.
+//
+// TX-SCOPED, NEVER POOL-SCOPED, for exactly the reason spelled out at length on
+// hydrateLinesTx: app.current_tenant is set with is_local = true, so on the
+// pool the RLS predicate is false, the DELETE removes ZERO ROWS SILENTLY and
+// the INSERT then collides. The DELETE carries no tenant predicate of its own
+// because line_items' tenant_isolation policy is FOR ALL with no TO clause and
+// so filters the DELETE's USING; the INSERT binds tenant_id from the caller's
+// own identity, exactly as Store.Create does.
+//
+// 22P02 (invalid_text_representation) maps to ErrValidation so a malformed line
+// numeric behaves exactly like a malformed HEADER numeric (updateContentTx) --
+// 400, not a raw 500. Every other SQLSTATE propagates raw so Store.Edit's
+// atomicity specs can still assert on it. Store.Create's raw propagation is
+// Create's own contract and is deliberately left alone.
+//
+// Known residual, documented rather than defended (D8 / LI-RLS-12): a
+// line_items row whose tenant_id disagrees with its invoice's tenant is
+// invisible to the owning tenant, so the DELETE skips it and the re-INSERT at
+// that line_no raises 23505 (the unique index is not RLS-filtered), surfacing
+// as a raw 500. Unreachable through the app -- both line writers bind the
+// caller's own tenant_id, so only a direct DB write can plant one.
+func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, in []LineItemInput) ([]LineItem, error) {
+	if _, err := tx.Exec(ctx, `DELETE FROM line_items WHERE invoice_id = $1`, invoiceID); err != nil {
+		return nil, err
+	}
+
+	var out []LineItem
+	for i, li := range in {
+		var item LineItem
+		if err := scanLineItem(tx.QueryRow(ctx,
+			`INSERT INTO line_items
+			   (tenant_id, invoice_id, line_no, description,
+			    quantity, unit_price, line_total, line_tax)
+			 VALUES ($1, $2, $3, $4,
+			         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric)
+			 RETURNING `+lineItemColumns,
+			tenantID, invoiceID, i+1, li.Description,
+			li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
+		), &item); err != nil {
+			if pgCode(err) == "22P02" {
+				return nil, ErrValidation
+			}
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 // History returns the caller's tenant's invoice_status_history rows for id,
@@ -451,6 +561,10 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 // audit write of its own (Edit's audit is conditional on a real content
 // change, which Update's is not, [D9]).
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
+	// Deliberately still INLINE rather than headerFieldsPresent(in): Store.Update
+	// is kept byte-identical by [store-update-untouched]. The duplication with
+	// that helper (INVED-01-04) is recorded, not accidental -- keep the two in
+	// sync if UpdateInput ever gains a field.
 	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
 		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
 		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
@@ -477,6 +591,19 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 		return Invoice{}, err
 	}
 	return inv, nil
+}
+
+// headerFieldsPresent reports whether in carries at least one header field --
+// the exact negation of Store.Update's inline all-nil guard, over the same 9
+// UpdateInput fields. Extracted by INVED-01-04 because Store.Edit now needs the
+// answer TWICE: once in its widened pre-tx guard (a lines-only edit is legal, so
+// "no header fields" alone is no longer a rejection) and once to decide whether
+// to call updateContentTx at all -- that function assumes >= 1 non-nil field and
+// would otherwise build `UPDATE invoices SET  WHERE ...`, a SQL syntax error.
+func headerFieldsPresent(in UpdateInput) bool {
+	return in.IssueDate != nil || in.SupplierTIN != nil || in.SupplierName != nil ||
+		in.BuyerTIN != nil || in.BuyerName != nil || in.Currency != nil ||
+		in.Subtotal != nil || in.VAT != nil || in.Total != nil
 }
 
 // updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
@@ -556,8 +683,10 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 // WithinRequestTenantTx, lock-then-recheck, propagate raw errors so their
 // SQLSTATE survives). Inside ONE db.WithinRequestTenantTx:
 //
-//  1. all-nil guard (checked BEFORE any tx opens, mirroring Store.Update's
-//     own guard, [A7]) -- ErrValidation.
+//  1. nothing-to-do guard (checked BEFORE any tx opens, mirroring Store.Update's
+//     own guard, [A7]) -- ErrValidation. WIDENED by INVED-01-04: refused only
+//     when there are no header fields AND no line array was sent, because a
+//     lines-only edit is legitimate.
 //  2. lock+read `before`: SELECT <invoiceColumns> ... FOR UPDATE, same lock
 //     and error mapping as ApplyValidation/Transition (pgx.ErrNoRows ->
 //     ErrNotFound; 22P02 -> ErrValidation).
@@ -565,19 +694,37 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     rejected, else ErrNotFixable, NOTHING written. This runs BEFORE the
 //     content write, so a not-fixable status wins over a malformed numeric
 //     in the same call ([A8], GuardBeforeContentValidation).
-//  4. preFP := contentFingerprint(before) -- taken on the LOCKED row, so it
-//     is authoritative under concurrency the same way ApplyValidation's
-//     re-check is.
-//  5. updateContentTx writes the content (shared with Store.Update, no audit
-//     of its own).
-//  6. DB-authoritative no-op check: contentFingerprint(after) == preFP means
-//     nothing really changed (either every field was resent unchanged, or
-//     only its NUMERIC SCALE changed and Postgres normalized it away, e.g.
-//     "100.00"->"100.0") -- return `after` with no audit, no demotion, no
-//     history row ([A6]: idempotence applies to draft AND validated).
-//  7. audit.Record("invoice.updated") -- a real content change, always.
-//  8. demotes to draft when before.Status is validated OR rejected, via
-//     transitionTx(before.Status -> draft) on THIS same tx -- the real
+//  4. preFP := contentFingerprint(before, beforeLines) -- taken on the LOCKED
+//     row, so it is authoritative under concurrency the same way
+//     ApplyValidation's re-check is. beforeLines comes from hydrateLinesTx on
+//     THIS tx: scanInvoice leaves LineItems nil and the fingerprint takes its
+//     lines explicitly ([fingerprint-explicit-lines-param]).
+//  5. updateContentTx writes the header content (shared with Store.Update, no
+//     audit of its own) -- but ONLY when header fields were actually sent. It
+//     assumes >= 1 non-nil field, so calling it with an all-nil UpdateInput
+//     would emit `UPDATE invoices SET  WHERE ...` and fail with a syntax error;
+//     hence the hasHeader gate. A lines-only edit skips it entirely. Then
+//     replaceLinesTx replaces the WHOLE line set -- but ONLY when in.LineItems
+//     is non-nil ([line-items-optional]): nil leaves the stored lines exactly
+//     as they are, a present-but-empty slice legitimately removes all of them.
+//     Its RETURNING rows are afterLines; when no array was sent, afterLines is
+//     beforeLines, because nothing was written.
+//  6. DB-authoritative no-op check: contentFingerprint(after, afterLines) ==
+//     preFP means nothing really changed (either every field was resent
+//     unchanged, or only its NUMERIC SCALE changed and Postgres normalized it
+//     away, e.g. "100.00"->"100.0") -- return `after` with no audit, no
+//     demotion, no history row ([A6]: idempotence applies to draft AND
+//     validated). The post-write lines are still attached to the return: a
+//     content-identical resend churns the line ids (replace-all always
+//     deletes and re-inserts, [fingerprint-excludes-line-ids]) and the caller
+//     must see the ids that are actually stored, never the pre-edit ones.
+//  7. audit.Record("invoice.updated") -- a real content change, always. Its
+//     fields array carries what was SUBMITTED (updateContentTx's list), plus
+//     the literal "line_items" whenever an array was sent
+//     ([audit-fields-includes-line-items]), so a lines-only edit audits
+//     fields: ["line_items"].
+//  8. demotes to draft whenever the state machine allows before.Status -> draft,
+//     via transitionTx on THIS same tx -- the real
 //     source status, never a hardcoded literal, so the history row's
 //     from_status stays truthful (task-237). A rejected `before`'s
 //     rejection_reasons are RETAINED across the demotion, not cleared
@@ -587,20 +734,24 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     bypasses MarkAcceptedTx entirely and must clear too. Either way the
 //     content write and the demotion are one atomic unit -- a failure at
 //     either step (including this audit's own actor CHECK) rolls back the
-//     whole edit, never a partial one (ContentAuditFailureRollsBackWholeEdit).
-//     A draft `before` has nothing to demote from and stays draft.
-//  9. return `after` -- draft (demoted) after a validated content change,
-//     the demoted row's OWN state after a draft content change, or the
-//     no-op return from step 6 (a validated no-op stays validated).
+//     whole edit, never a partial one (ContentAuditFailureRollsBackWholeEdit),
+//     the line replace included. A draft `before` has nothing to demote from
+//     and stays draft.
+//  9. re-attach afterLines and return `after` -- draft (demoted) after a
+//     validated content change, the demoted row's OWN state after a draft
+//     content change, or the no-op return from step 6 (a validated no-op stays
+//     validated). The lines are re-attached LAST because both updateContentTx
+//     and transitionTx return a freshly scanned Invoice, and scanInvoice
+//     leaves LineItems nil -- an earlier assignment would be overwritten.
+//     Every success path carries them ([edit-response-carries-lines]).
 //
 // Edit never touches violations/rule_set_version_id -- a demotion leaves the
 // prior verdict's stamp deliberately STALE until Store.ApplyValidation
 // re-runs and re-stamps it (DemoteThenRevalidateSucceeds closes that loop
 // end to end through the gate, completely unmodified by M4-05, [A12]).
-func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
-	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
-		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
-		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
+func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, error) {
+	hasHeader := headerFieldsPresent(in.UpdateInput)
+	if !hasHeader && in.LineItems == nil {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -625,45 +776,101 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 
 		// 3. fixable-state guard -- BEFORE the content write, so it wins over
 		// a malformed numeric ([A8]).
-		if before.Status != StatusDraft && before.Status != StatusValidated && before.Status != StatusRejected {
+		if !canEdit(before.Status) {
 			return ErrNotFixable
 		}
 
 		// 4. the locked row's fingerprint, taken before the write.
-		preFP := contentFingerprint(before)
-
-		// 5. the content write, shared with Store.Update.
-		after, changed, err := updateContentTx(ctx, tx, id, in)
+		// scanInvoice leaves LineItems nil, so the lines come from an explicit
+		// tx-scoped read ([fingerprint-explicit-lines-param]) -- the invoice
+		// row's FOR UPDATE above already serializes them.
+		beforeLines, err := hydrateLinesTx(ctx, tx, id)
 		if err != nil {
 			return err
+		}
+		preFP := contentFingerprint(before, beforeLines)
+
+		// 5. the header write, shared with Store.Update -- gated on hasHeader
+		// because updateContentTx assumes at least one non-nil field and would
+		// otherwise emit an empty SET clause. A lines-only edit skips it and
+		// carries `before` forward untouched.
+		var after Invoice
+		var changed []string
+		if hasHeader {
+			if after, changed, err = updateContentTx(ctx, tx, id, in.UpdateInput); err != nil {
+				return err
+			}
+		} else {
+			after = before
+		}
+
+		// 5b. the line write -- replace-all, only when an array was actually
+		// sent. afterLines are replaceLinesTx's RETURNING rows, i.e. the lines
+		// as they now stand in the DB; when nothing was written they are
+		// beforeLines, which is then post-write by definition.
+		afterLines := beforeLines
+		if in.LineItems != nil {
+			if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems); err != nil {
+				return err
+			}
 		}
 
 		// 6. DB-authoritative no-op check -- nothing to audit, demote, or
 		// record history for.
-		if contentFingerprint(after) == preFP {
+		//
+		// Both arguments must be POST-write. Feeding beforeLines here once Edit
+		// can write lines would be a SILENT bug, not a compile error: a
+		// lines-only edit would hash both sides over the pre-edit lines, come
+		// out equal, take this no-op path, and return with no audit row, no
+		// demotion and no history -- an edit that visibly changed the invoice
+		// reported as a no-op, which is precisely the Core AC 2 compliance hole.
+		// beforeLines is legitimate on this side ONLY through the afterLines
+		// assignment above, in the branch where no line write happened at all.
+		if contentFingerprint(after, afterLines) == preFP {
+			after.LineItems = afterLines
 			inv = after
 			return nil
 		}
 
-		// 7. the content change is real -- audit it.
+		// 7. the content change is real -- audit it. `fields` lists what was
+		// SUBMITTED (updateContentTx's own list), plus "line_items" whenever an
+		// array was sent ([audit-fields-includes-line-items]); a lines-only
+		// edit therefore audits fields: ["line_items"]. Built as a fresh slice
+		// rather than appended in place, so updateContentTx's returned slice is
+		// never aliased -- and so a lines-only edit's nil `changed` marshals as
+		// ["line_items"] rather than the JSON null a nil []string would give.
+		fields := changed
+		if in.LineItems != nil {
+			fields = append(append([]string{}, changed...), "line_items")
+		}
 		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
 			"id":     id,
-			"fields": changed,
+			"fields": fields,
 		}); err != nil {
 			return err
 		}
 
-		// 8. demote when before.Status is validated or rejected -- a draft
-		// has nothing to demote from. A rejected invoice's rejection_reasons
-		// are RETAINED across the demotion (reversed by M5-09-02/task-255,
-		// [reason-lifecycle]) -- the only remaining clear lives in
-		// transitionTx, gated on target == accepted.
-		if before.Status == StatusValidated || before.Status == StatusRejected {
+		// 8. demote whenever the state machine allows before.Status -> draft --
+		// DERIVED from legalTransitions, never a hand-maintained status literal
+		// (AC #11): a future edge that widened canEdit without symmetrically
+		// widening a literal here would let Edit commit on a non-draft invoice
+		// WITHOUT demoting it, a silent Core AC 2 violation. Deliberately not
+		// canEdit(before.Status), which also admits draft -- draft has nothing
+		// to demote from and transitionTx(draft->draft) is ErrIllegalTransition.
+		// A rejected invoice's rejection_reasons are RETAINED across the
+		// demotion (reversed by M5-09-02/task-255, [reason-lifecycle]) -- the
+		// only remaining clear lives in transitionTx, gated on
+		// target == accepted.
+		if canTransition(before.Status, StatusDraft) {
 			if after, err = transitionTx(ctx, tx, id, before.Status, StatusDraft, actorFromContext(ctx)); err != nil {
 				return err
 			}
 		}
 
+		// 9. re-attach the post-write lines LAST: both updateContentTx and
+		// transitionTx return a freshly scanned Invoice and scanInvoice leaves
+		// LineItems nil, so an earlier assignment would be silently dropped.
+		after.LineItems = afterLines
 		inv = after
 		return nil
 	})
@@ -708,6 +915,49 @@ func canTransition(from, target Status) bool {
 	}
 	return false
 }
+
+// canEdit reports whether an invoice in status s may be edited -- the SINGLE
+// statement of Store.Edit's fixable-state rule (INVED-01-03, Core AC 1/2/4),
+// DERIVED from legalTransitions rather than restated as a status literal. An
+// invoice is editable iff it is already a draft, or the machine lets it
+// become one: draft is editable by definition (there is no draft->draft
+// self-edge, and Transition rejects self-edges as ErrRedundantTransition
+// anyway), every other editable status is editable precisely because Edit's
+// step 8 can demote it back to draft in the same tx.
+//
+// Exactly ONE hop, never reachability. A transitive/BFS reading would admit
+// queued and submitted -- both have real 2-hop paths to draft via rejected
+// (queued->rejected->draft, submitted->rejected->draft) -- which would let a
+// caller edit an invoice already handed to the APP. Editability is "can this
+// invoice be demoted to draft by the edit itself", and Edit demotes with a
+// single transitionTx call, so one hop is the whole rule.
+//
+// Yields {draft, validated, rejected} on today's table -- byte-identical to
+// the three-status guard it replaces -- and tracks legalTransitions
+// automatically if the table ever changes (TestCanEdit_TracksLegalTransitions
+// perturbs the table at runtime to prove this is a derivation and not a
+// hand-copied list).
+func canEdit(s Status) bool {
+	return s == StatusDraft || canTransition(s, StatusDraft)
+}
+
+// canRevalidate reports whether the validation gate may run on status s --
+// the SINGLE statement of the gate's draft-only rule, shared by Gate.Validate's
+// advisory pre-check and Store.ApplyValidation's authoritative in-tx re-check
+// (INVED-01-03, Core AC 3).
+//
+// Deliberately a hand-written literal, NOT derived from
+// canTransition(s, StatusValidated), even though the two agree on today's
+// table. Deriving it would be a FALSE coupling: ApplyValidation promotes via
+// transitionTx(..., StatusDraft, StatusValidated, ...) with the FROM state
+// hardwired to draft, so an inbound edge to validated from some other status
+// would make a derived gate advertise re-validation on a status whose write
+// still 409s. Draft-only-ness is the gate's OWN contract, not an edge-table
+// property. TestCanRevalidate_AgreesWithThePromotionEdge is the tripwire: it
+// goes red the day such an edge is added, forcing a human decision on whether
+// the gate widens -- so it must be satisfied by this literal being right, never
+// by weakening the test.
+func canRevalidate(s Status) bool { return s == StatusDraft }
 
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
@@ -917,9 +1167,12 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 //     ErrValidation, mirroring Get/Update/Create/Transition.
 //  2. status re-check — must still be draft, else ErrNotDraft
 //     ([gate-scope-draft-only]).
-//  3. content re-check — contentFingerprint(locked) != evaluatedFingerprint
-//     -> ErrStaleValidation. FOR UPDATE makes this EXACT: Store.Update's
-//     UPDATE serializes against the lock, so the locked row is authoritative.
+//  3. content re-check — contentFingerprint(locked, lockedLines) !=
+//     evaluatedFingerprint -> ErrStaleValidation. FOR UPDATE makes this EXACT:
+//     Store.Update's UPDATE serializes against the lock, so the locked row is
+//     authoritative. lockedLines comes from hydrateLinesTx on THIS tx —
+//     scanInvoice leaves LineItems nil, and reading them off the pool instead
+//     would silently see zero rows under RLS (see hydrateLinesTx).
 //  4. stamp violations + rule_set_version_id (always — the version is stamped
 //     even on a blocking verdict; "these violations came from THAT rule set"
 //     is exactly what makes the verdict auditable).
@@ -978,13 +1231,24 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 		}
 
 		// 2. status re-check — BEFORE the fingerprint check (see the doc).
-		if locked.Status != StatusDraft {
+		// This is the AUTHORITATIVE guard (Gate.Validate's is advisory), so
+		// widening canRevalidate widens what actually gets written here — and
+		// step 5's transitionTx still hardwires FROM=draft. See canRevalidate.
+		if !canRevalidate(locked.Status) {
 			return ErrNotDraft
 		}
 
 		// 3. content re-check — the invoice must not have been edited under
-		// the run; the status check above cannot see an edit.
-		if contentFingerprint(locked) != evaluatedFingerprint {
+		// the run; the status check above cannot see an edit. scanInvoice
+		// leaves LineItems nil, so the locked row's lines are read explicitly
+		// INSIDE this tx ([fingerprint-explicit-lines-param]): the evaluated
+		// fingerprint was taken over a Get-hydrated invoice, so hashing no
+		// lines here would make every lined invoice fail the re-check.
+		lockedLines, err := hydrateLinesTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if contentFingerprint(locked, lockedLines) != evaluatedFingerprint {
 			return ErrStaleValidation
 		}
 

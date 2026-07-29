@@ -1,5 +1,5 @@
 // RED specs (M4-09-03, task-184, I1-I14) — pin the invoice list/detail data-access
-// helpers, the invoiceStatusStyle pill mapper, isFixable/verdictStatus, and the
+// helpers, the invoiceStatusStyle pill mapper, verdictStatus, and the
 // shouldFetchInvoices/invoicesViewState render-decision helpers before the executor
 // implements the bodies in invoices.ts.
 //
@@ -10,24 +10,33 @@
 // re-implementation of apiFetch's own contract (already covered by client.test.ts).
 //
 // Every spec below currently fails because listInvoices/getInvoice/getInvoiceHistory/
-// editInvoice/revalidateInvoice/invoiceStatusStyle/isFixable/verdictStatus/
+// editInvoice/revalidateInvoice/invoiceStatusStyle/verdictStatus/
 // shouldFetchInvoices/invoicesViewState's stub bodies throw `new Error('not
 // implemented')` before ever calling the real authedFetch/fetch (or, for the pure
 // helpers, before returning anything) — that IS the correct RED reason (assertion /
 // not-implemented), not an import/compile/setup error.
+// Scoped to this file only (not the shared tsconfig.json): INV-06-T11b is this file's
+// first-ever node:fs usage, and @types/node's ambient ("node:"-prefixed) module
+// declarations aren't picked up automatically under this project's tsconfig without it.
+/// <reference types="node" />
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncState } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
 import {
+  computedLineSum,
+  diffLineItems,
   editInvoice,
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
   invoicesViewState,
-  isFixable,
   isInFlight,
   isRowSelectable,
   LIVE_POLL_MS,
@@ -54,11 +63,16 @@ import {
   type EditFieldKey,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
+  type InvoiceLineItem,
   type InvoiceRecord,
   type InvoiceStatus,
   type RejectionReason,
   type StatusChange,
 } from './invoices'
+// Namespace import, ADDITIONAL to the named import above -- INV-06-T11a below asserts
+// over this whole object with the `in` operator, so it never imports the [isfixable-deleted]
+// export by name and can't fail to compile either before or after that export is removed.
+import * as invoicesModule from './invoices'
 
 interface MockResponse {
   ok: boolean
@@ -146,26 +160,11 @@ describe('invoiceStatusStyle', () => {
   })
 })
 
-describe('isFixable', () => {
-  // Updated (M5-09-03, task-253, Core AC #4): M5-05-01 (task-237) widened
-  // Store.Edit's own precondition to accept `rejected` (the reject/fix/resubmit rework
-  // path) -- this mirror re-syncs to match, closing [spa-untouched]. Deliberately
-  // updated, not deleted: 'rejected' moves OUT of the not-fixable set below and INTO
-  // this one.
-  it('I3: draft, validated and rejected are fixable', () => {
-    expect(isFixable('draft')).toBe(true)
-    expect(isFixable('validated')).toBe(true)
-    expect(isFixable('rejected')).toBe(true)
-  })
-
-  it('I4: queued/submitted/accepted/failed are not fixable', () => {
-    const nonFixable: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'failed']
-
-    for (const status of nonFixable) {
-      expect(isFixable(status)).toBe(false)
-    }
-  })
-})
+// I3/I4 (the deleted edit-availability predicate's own block) are removed with the export
+// itself (INVED-01-06, [gates-on-the-wire]): the status set they pinned now lives ONLY in
+// the backend, where TestCanEdit_AllStatuses (internal/invoice/transition_test.go) pins
+// the same seven states against legalTransitions. INV-06-T11a/T11b below are what replace
+// them here -- they assert the export is gone rather than assert over its behaviour.
 
 describe('verdictStatus', () => {
   // Updated (M5-09-03, task-253, Core AC #5): verdictStatus gains a second parameter,
@@ -333,6 +332,11 @@ describe('getInvoice', () => {
       rejection_reasons: reasons,
       rule_set_version: 2,
       qr_png_base64: 'aGVsbG8=',
+      // accepted: canEdit false, canRevalidate false -> the blocked reason is null (it is
+      // non-null EXACTLY when canEdit && !canRevalidate, i.e. validated/rejected).
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -346,7 +350,15 @@ describe('getInvoice', () => {
   })
 
   it('I-fiscal-2: getInvoice normalizes a missing qr_png_base64 to null', async () => {
-    const detailInvoice: InvoiceDetailRecord = { ...draftInvoice, rule_set_version: 2, qr_png_base64: 'aGVsbG8=' }
+    // draftInvoice is status 'draft': canEdit and canRevalidate both true, reason null.
+    const detailInvoice: InvoiceDetailRecord = {
+      ...draftInvoice,
+      rule_set_version: 2,
+      qr_png_base64: 'aGVsbG8=',
+      can_edit: true,
+      can_revalidate: true,
+      revalidate_blocked_reason: null,
+    }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -786,7 +798,12 @@ describe('listInvoices: needsAttention explicit-false (adversarial)', () => {
 describe('editInvoice: multi-field body fidelity (adversarial)', () => {
   it('I18: a multi-field patch serializes exactly the passed keys — no undefined/extra keys injected — via PATCH', async () => {
     const patch: InvoiceEditInput = { supplier_tin: 'x', buyer_name: 'New Buyer', total: '999.00' }
-    const updated: InvoiceRecord = { ...draftInvoice, ...patch }
+    // `updated` is the server's PATCH response, an InvoiceRecord. InvoiceEditInput's
+    // `line_items` (LineItemEditInput[], no id/line_no) is a DIFFERENT type from the
+    // stored InvoiceRecord['line_items'], so the key is dropped before spreading -- this
+    // patch is header-only either way.
+    const { line_items: _unusedLines, ...headerPatch } = patch
+    const updated: InvoiceRecord = { ...draftInvoice, ...headerPatch }
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -1177,4 +1194,447 @@ describe('reasonFieldFlags: hostile input (adversarial)', () => {
     expect(reasonFieldFlags(reasons).size).toBe(0)
   })
 })
+
+// --- RED specs (Stage 2.5, Mode A): INVED-01-06 (task-267) -- action flags, line
+// payload, and computedLineSum. Transcribed from the architect's Test Specs table
+// (INV-06-T1..T13); nothing above is weakened, skipped, or deleted.
+//
+// computedLineSum/diffLineItems are R0 stubs that `throw new Error('not implemented')` --
+// most specs below fail on that throw (the intended not-implemented RED signal, per this
+// file's established convention). INV-06-T10/T10c fail on a real assertion against
+// getInvoice, which does not yet normalize the three action flags. INV-06-T11a/T11b fail
+// on a real assertion against the [isfixable-deleted] export, which has not yet been
+// removed.
+
+// The five MBS content fields diffLineItems compares -- mirrors the unexported
+// `LineContent` type in invoices.ts (id/line_no deliberately excluded,
+// [fingerprint-excludes-line-ids]); this file can't import that type since it isn't
+// exported, so it's redeclared here structurally over the exported InvoiceLineItem.
+type LineFields = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+
+function lineFields(overrides: Partial<LineFields> = {}): LineFields {
+  return {
+    description: 'Widget',
+    quantity: '2',
+    unit_price: '100.00',
+    line_total: '200.00',
+    line_tax: '15.00',
+    ...overrides,
+  }
+}
+
+describe('computedLineSum (INVED-01-06)', () => {
+  it('INV-06-T1: sums unit_price * quantity across lines -- plain and DB-shaped (trailing-zero) decimal strings alike', () => {
+    const plain: Array<Pick<InvoiceLineItem, 'quantity' | 'unit_price'>> = [
+      { quantity: '2', unit_price: '100' },
+      { quantity: '1', unit_price: '50' },
+    ]
+    expect(computedLineSum(plain)).toBe('250.00')
+
+    const dbShaped: Array<Pick<InvoiceLineItem, 'quantity' | 'unit_price'>> = [
+      { quantity: '2.000', unit_price: '100.00' },
+      { quantity: '1.000', unit_price: '50.00' },
+    ]
+    expect(computedLineSum(dbShaped)).toBe('250.00')
+  })
+
+  it("INV-06-T2: an absent (null) quantity weights the line at 1, mirroring lineSumEval's implicit-weight-1 rule", () => {
+    expect(computedLineSum([{ quantity: null, unit_price: '100' }])).toBe('100.00')
+  })
+
+  it('INV-06-T3: any line missing unit_price nulls the whole sum -- never a partial total the rule would refuse', () => {
+    expect(
+      computedLineSum([
+        { quantity: '1', unit_price: null },
+        { quantity: '2', unit_price: '50' },
+      ]),
+    ).toBeNull()
+  })
+
+  it('INV-06-T4: a non-numeric unit_price nulls the sum', () => {
+    expect(computedLineSum([{ quantity: '1', unit_price: 'abc' }])).toBeNull()
+  })
+
+  it('INV-06-T5: an empty line set is null, never "0.00" -- nothing to show', () => {
+    expect(computedLineSum([])).toBeNull()
+  })
+
+  it("INV-06-T6: sub-kobo precision survives exactly -- the mirrored rule's own tolerance is 0.005", () => {
+    expect(computedLineSum([{ quantity: '3', unit_price: '0.005' }])).toBe('0.015')
+  })
+
+  it('INV-06-T6b: exact-decimal arithmetic only -- a float-accumulation mutant turns every case below red', () => {
+    // Mutation oracle: swapping this helper's exact scaled-integer arithmetic for a naive
+    // Number(u)*Number(q) accumulation reproduces float artifacts verified live in node:
+    // 8.20+0.10 -> 8.299999999999999; 100.10*3+0.30 -> 300.59999999999997;
+    // 0.07*3 -> 0.21000000000000002; 0.10+0.20 -> 0.30000000000000004. Any of those next to
+    // a Subtotal is a visible defect on the firm's #1 failing rule.
+    expect(
+      computedLineSum([
+        { quantity: '1', unit_price: '8.20' },
+        { quantity: '1', unit_price: '0.10' },
+      ]),
+    ).toBe('8.30')
+
+    expect(
+      computedLineSum([
+        { quantity: '3', unit_price: '100.10' },
+        { quantity: '1', unit_price: '0.30' },
+      ]),
+    ).toBe('300.60')
+
+    expect(computedLineSum([{ quantity: '3', unit_price: '0.07' }])).toBe('0.21')
+
+    expect(
+      computedLineSum([
+        { quantity: '1', unit_price: '0.10' },
+        { quantity: '1', unit_price: '0.20' },
+      ]),
+    ).toBe('0.30')
+  })
+
+  it('INV-06-T6c: a present-but-non-numeric quantity also nulls the sum, not only a bad amount', () => {
+    expect(computedLineSum([{ quantity: 'abc', unit_price: '100' }])).toBeNull()
+  })
+
+  it("INV-06-T6d: an empty-string unit_price nulls the sum -- guards the Number('')===0 trap", () => {
+    expect(computedLineSum([{ quantity: '1', unit_price: '' }])).toBeNull()
+  })
+
+  it("INV-06-T6e: a leading-zero unit_price fails the backend's own numeric grammar and nulls the sum", () => {
+    expect(computedLineSum([{ quantity: '1', unit_price: '007' }])).toBeNull()
+  })
+
+  it('INV-06-T13: computedLineSum never derives/rewrites subtotal, vat or total, and never mutates its input (AC #6)', () => {
+    const lines: InvoiceLineItem[] = [
+      { id: 'l1', line_no: 1, description: 'Widget', quantity: '2', unit_price: '100.00', line_total: '200.00', line_tax: '15.00' },
+      { id: 'l2', line_no: 2, description: 'Gadget', quantity: '1', unit_price: '50.00', line_total: '50.00', line_tax: '3.75' },
+    ]
+    const inv: InvoiceRecord = {
+      ...draftInvoice,
+      // Deliberately NOT reconciled with the lines below -- proves the hint doesn't touch
+      // these fields even when they disagree with its own computed sum.
+      subtotal: '999.99',
+      vat: '11.25',
+      total: '1011.24',
+      line_items: lines,
+    }
+    const linesSnapshot = JSON.parse(JSON.stringify(lines)) as InvoiceLineItem[]
+
+    const sum = computedLineSum(inv.line_items ?? [])
+
+    expect(sum).toBe('250.00')
+    expect(inv.subtotal).toBe('999.99')
+    expect(inv.vat).toBe('11.25')
+    expect(inv.total).toBe('1011.24')
+    expect(inv.line_items).toEqual(linesSnapshot)
+  })
+})
+
+describe('diffLineItems (INVED-01-06)', () => {
+  it('INV-06-T7: a content-identical copy returns undefined -- an untouched editor sends no line_items key', () => {
+    const original: LineFields[] = [lineFields(), lineFields({ description: 'Gadget', unit_price: '50.00', line_total: '50.00', line_tax: '3.75', quantity: '1' })]
+    const untouchedCopy: LineFields[] = original.map((l) => ({ ...l }))
+
+    expect(diffLineItems(original, untouchedCopy)).toBeUndefined()
+  })
+
+  it("INV-06-T7b: a stored NULL canonicalizes the same as the '' a React input yields -- highest-value spec here", () => {
+    const original: LineFields[] = [lineFields({ description: null, line_tax: null })]
+    const edited: LineFields[] = [lineFields({ description: '', line_tax: '' })]
+
+    // Without the ''->null canonicalization on both sides this returns an array: replace-all
+    // fires, line ids churn, and the fingerprint genuinely moves (NULL -> '' is real
+    // content) -- falsely demoting a validated invoice on a save that changed nothing, and
+    // (for a numeric column) raising 22P02 -> ErrValidation -> 400 on a no-op save.
+    expect(diffLineItems(original, edited)).toBeUndefined()
+  })
+
+  it("INV-06-T7d: a stored '' on the ORIGINAL side canonicalizes the same as the edited side's '' -- closes the gap T7b left (both sides there start out null, so a mutant that drops canonicalization ONLY on `original` still passes T7b)", () => {
+    // A blank description cell imports as a stored '' , never NULL (line_description is
+    // absent from importer/service.go's numericFields, so fieldValue's blank-guard never
+    // fires for it -- unlike subtotal/vat/total/line_quantity/line_unit_price). Round-tripped
+    // through the editor, an untouched line must still diff as unchanged.
+    const original: LineFields[] = [lineFields({ description: '', line_tax: '' })]
+    const edited: LineFields[] = [lineFields({ description: '', line_tax: '' })]
+
+    expect(diffLineItems(original, edited)).toBeUndefined()
+  })
+
+  it('INV-06-T7c: diffLineItems never mutates either input array, and still returns the correct diff', () => {
+    const original: LineFields[] = [lineFields()]
+    const edited: LineFields[] = [lineFields({ description: 'Changed' })]
+    Object.freeze(original[0])
+    Object.freeze(original)
+    Object.freeze(edited[0])
+    Object.freeze(edited)
+    const originalSnapshot = JSON.parse(JSON.stringify(original)) as LineFields[]
+    const editedSnapshot = JSON.parse(JSON.stringify(edited)) as LineFields[]
+
+    const result = diffLineItems(original, edited)
+
+    expect(result).toEqual([lineFields({ description: 'Changed' })])
+    expect(original).toEqual(originalSnapshot)
+    expect(edited).toEqual(editedSnapshot)
+  })
+
+  it('INV-06-T8: a single changed field returns the full canonicalized new set, in order', () => {
+    const line2 = lineFields({ description: 'Gadget', unit_price: '50.00', line_total: '50.00', line_tax: '3.75', quantity: '1' })
+    const original: LineFields[] = [lineFields(), line2]
+    const edited: LineFields[] = [lineFields({ description: 'New Description' }), { ...line2 }]
+
+    expect(diffLineItems(original, edited)).toEqual([lineFields({ description: 'New Description' }), line2])
+  })
+
+  it('INV-06-T9: removing the middle line of three returns the remaining two, in order', () => {
+    const line1 = lineFields({ description: 'First' })
+    const line2 = lineFields({ description: 'Second' })
+    const line3 = lineFields({ description: 'Third' })
+    const original: LineFields[] = [line1, line2, line3]
+    const edited: LineFields[] = [{ ...line1 }, { ...line3 }]
+
+    expect(diffLineItems(original, edited)).toEqual([line1, line3])
+  })
+
+  it('INV-06-T9b: emptying a 2-line invoice returns [] -- not undefined, the delete-all state must be reachable', () => {
+    const original: LineFields[] = [lineFields(), lineFields({ description: 'Second' })]
+
+    const result = diffLineItems(original, [])
+
+    expect(result).toEqual([])
+    expect(result).not.toBeUndefined()
+  })
+
+  it('INV-06-T9c: a line-less invoice stays line-less -- no spurious line_items key', () => {
+    expect(diffLineItems([], [])).toBeUndefined()
+  })
+
+  it("INV-06-T9d: reordering two otherwise-identical lines returns the NEW order -- line_no is positional and IS hashed", () => {
+    const a = lineFields({ description: 'A' })
+    const b = lineFields({ description: 'B' })
+    const original: LineFields[] = [a, b]
+    const edited: LineFields[] = [{ ...b }, { ...a }]
+
+    expect(diffLineItems(original, edited)).toEqual([b, a])
+  })
+
+  it('INV-06-T9e: emitted objects carry exactly the five MBS fields, even when edited rows are built by spreading InvoiceLineItem', () => {
+    const original: LineFields[] = [lineFields({ description: 'Old' })]
+    // InvoiceLineItem-typed VARIABLE (not an inline literal) so `id`/`line_no` don't trip
+    // excess-property checking against diffLineItems' Pick<InvoiceLineItem, ...> parameter.
+    const editedWithIds: InvoiceLineItem[] = [
+      { id: 'line-1', line_no: 1, description: 'New', quantity: '2', unit_price: '100.00', line_total: '200.00', line_tax: '15.00' },
+    ]
+
+    const result = diffLineItems(original, editedWithIds)
+
+    expect(result).toBeDefined()
+    for (const row of result ?? []) {
+      expect(Object.keys(row).sort()).toEqual(['description', 'line_tax', 'line_total', 'quantity', 'unit_price'])
+    }
+  })
+})
+
+describe('editInvoice: line_items absent/undefined/[] (INV-06-T12)', () => {
+  it('INV-06-T12: line_items is omitted when absent or undefined, and sent as an explicit [] when cleared', async () => {
+    const updated: InvoiceRecord = { ...draftInvoice, supplier_tin: 'x' }
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const fetchMock1 = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
+    await editInvoice(af, base, 'inv-1', { supplier_tin: 'x' })
+    const [, init1] = fetchMock1.mock.calls[0] as [string, RequestInit]
+    expect(init1.body).not.toContain('line_items')
+
+    const fetchMock2 = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
+    await editInvoice(af, base, 'inv-1', { supplier_tin: 'x', line_items: undefined })
+    const [, init2] = fetchMock2.mock.calls[0] as [string, RequestInit]
+    expect(init2.body).not.toContain('line_items')
+
+    const fetchMock3 = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
+    await editInvoice(af, base, 'inv-1', { line_items: [] })
+    const [, init3] = fetchMock3.mock.calls[0] as [string, RequestInit]
+    expect(init3.body).toBe(JSON.stringify({ line_items: [] }))
+    expect(init3.body).toContain('"line_items":[]')
+  })
+})
+
+describe('getInvoice: action-flag normalization (INVED-01-06)', () => {
+  it('INV-06-T10: a GET payload omitting all three action keys normalizes fail-closed', async () => {
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(draftInvoice) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_edit).toBe(false)
+    expect(result.can_revalidate).toBe(false)
+    expect(result.revalidate_blocked_reason).toBeNull()
+  })
+
+  it("INV-06-T10b: well-formed action flags -- including the backend's verbatim em-dash copy -- pass through byte-identical, never SPA-authored", async () => {
+    const reasonText = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
+    const wire = { ...draftInvoice, can_edit: true, can_revalidate: false, revalidate_blocked_reason: reasonText }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_edit).toBe(true)
+    expect(result.can_revalidate).toBe(false)
+    expect(result.revalidate_blocked_reason).toBe(reasonText)
+  })
+
+  it('INV-06-T10c: a non-boolean truthy can_edit (a stringly-typed "false") is denied, never passed through -- the mutation oracle for ===true over ??false', async () => {
+    const wire = { ...draftInvoice, can_edit: 'false', can_revalidate: true, revalidate_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_edit).toBe(false)
+    // Positive companion: a genuinely-true, differently-shaped flag on the SAME payload
+    // still passes through, proving the denial above is about can_edit's own value, not a
+    // side effect that zeroes out every flag.
+    expect(result.can_revalidate).toBe(true)
+  })
+})
+
+// The [isfixable-deleted] export's own doc-comment header, body, and vitest block are
+// named at exact line numbers in this subtask's architect plan for removal at GREEN; the
+// two specs below are the RED gate proving that removal actually happened, both as a
+// symbol (T11a) and as a source-wide identifier scan (T11b).
+describe('the [isfixable-deleted] export is gone (INVED-01-06)', () => {
+  it('INV-06-T11a: the export no longer exists on the module namespace', () => {
+    // A positive companion, so a broken/empty namespace import can't make the negative
+    // assertion below pass for the wrong reason.
+    expect('getInvoice' in invoicesModule).toBe(true)
+
+    expect(('isFix' + 'able') in invoicesModule).toBe(false)
+  })
+
+  it('INV-06-T11b: no file under frontend/app/src contains the identifier as a literal substring', () => {
+    // Root resolved from THIS file's own location, never process.cwd() -- vitest may be
+    // invoked from the monorepo root or from frontend/app, and cwd-relative traversal
+    // would silently scan the wrong subtree depending on which.
+    const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+    // Built at runtime, never spelled out literally -- a literal needle would appear in
+    // THIS file's own source text and make the scan match itself, so it could never pass
+    // even once the identifier is genuinely gone everywhere else.
+    const needle = 'isFix' + 'able'
+
+    // Sanity/positive companion first: prove the walker mechanism itself actually visits
+    // and reads files, by finding a needle that unquestionably exists (computedLineSum,
+    // declared earlier in this very file). A walker that silently visited nothing (wrong
+    // root, swallowed error, empty dir) would otherwise make the real scan below pass
+    // vacuously.
+    expect(scanForIdentifier(srcRoot, 'computedLineSum').length).toBeGreaterThan(0)
+
+    expect(scanForIdentifier(srcRoot, needle)).toEqual([])
+  })
+})
+
+// --- Adversarial / edge coverage added at QA (Stage 4, Mode B), on top of the
+// Stage-2.5 AC specs above (INV-06-T1..T13, left untouched). ---
+
+describe('computedLineSum (adversarial, QA)', () => {
+  it('QA-CLS-1: a very large line set (1000 lines) sums correctly, not just small fixtures', () => {
+    const lines: Array<Pick<InvoiceLineItem, 'quantity' | 'unit_price'>> = Array.from({ length: 1000 }, () => ({
+      quantity: '1',
+      unit_price: '1.00',
+    }))
+
+    expect(computedLineSum(lines)).toBe('1000.00')
+  })
+
+  it('QA-CLS-2: negative unit_price (a credit/reversal line) sums correctly, including an all-negative set', () => {
+    expect(computedLineSum([{ quantity: '2', unit_price: '-50.00' }])).toBe('-100.00')
+
+    expect(
+      computedLineSum([
+        { quantity: '1', unit_price: '100.00' },
+        { quantity: '1', unit_price: '-40.00' },
+      ]),
+    ).toBe('60.00')
+  })
+
+  it("QA-CLS-3: a quantity of '0' contributes zero -- distinct from an ABSENT quantity (weights 1) and a non-numeric one (violates)", () => {
+    expect(computedLineSum([{ quantity: '0', unit_price: '100.00' }])).toBe('0.00')
+  })
+
+  it('QA-CLS-4: extreme decimal scale (10 fractional digits) survives exactly -- no rounding or truncation', () => {
+    expect(computedLineSum([{ quantity: '1', unit_price: '0.0000000001' }])).toBe('0.0000000001')
+  })
+
+  it('QA-CLS-5: undefined and null line arrays normalize identically through the `?? []` call-site idiom', () => {
+    const maybeUndefined: InvoiceLineItem[] | undefined = undefined
+    const maybeNull: InvoiceLineItem[] | null = null
+    const fromUndefined = computedLineSum(maybeUndefined ?? [])
+    const fromNull = computedLineSum(maybeNull ?? [])
+
+    expect(fromUndefined).toBeNull()
+    expect(fromNull).toBeNull()
+    expect(fromUndefined).toBe(computedLineSum([]))
+  })
+})
+
+describe('diffLineItems (adversarial, QA)', () => {
+  it('QA-DLI-1: a line whose every one of the five fields is null on the original side and \'\' on the edited side is still unchanged -- generalizes T7b beyond description/line_tax to all five fields', () => {
+    const original: LineFields[] = [{ description: null, quantity: null, unit_price: null, line_total: null, line_tax: null }]
+    const edited: LineFields[] = [{ description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }]
+
+    expect(diffLineItems(original, edited)).toBeUndefined()
+  })
+
+  it('QA-DLI-2: a large line set (300 lines) -- untouched copy is undefined; a single deep change returns the full 300-line array with only that field changed', () => {
+    const original: LineFields[] = Array.from({ length: 300 }, (_, i) => lineFields({ description: `Item ${i}` }))
+    const untouchedCopy: LineFields[] = original.map((l) => ({ ...l }))
+    expect(diffLineItems(original, untouchedCopy)).toBeUndefined()
+
+    const edited: LineFields[] = original.map((l) => ({ ...l }))
+    edited[150] = { ...edited[150], description: 'Changed deep in the set' }
+
+    const result = diffLineItems(original, edited)
+    expect(result).toHaveLength(300)
+    expect(result?.[150].description).toBe('Changed deep in the set')
+    expect(result?.[149].description).toBe('Item 149')
+    expect(result?.[151].description).toBe('Item 151')
+  })
+
+  it('QA-DLI-3: round-trip property -- diffLineItems(x, x)-equivalent is undefined across a range of shapes, including negative/decimal/imported-blank content', () => {
+    const shapes: LineFields[][] = [
+      [lineFields()],
+      [{ description: null, quantity: null, unit_price: null, line_total: null, line_tax: null }],
+      [{ description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }],
+      [lineFields({ unit_price: '-50.00', line_total: '-100.00' })],
+      [lineFields({ unit_price: '0.0000000001' })],
+      [lineFields({ quantity: '0' })],
+      [lineFields(), lineFields({ description: 'Second', unit_price: '-1.00' })],
+      [],
+    ]
+
+    for (const shape of shapes) {
+      // A fresh, content-identical copy on the edited side -- never the same array
+      // reference -- so this is a genuine content comparison, not a reference check.
+      const copy: LineFields[] = shape.map((l) => ({ ...l }))
+      expect(diffLineItems(shape, copy), JSON.stringify(shape)).toBeUndefined()
+    }
+  })
+})
+
+// Recursively walks `rootDir`, reading every .ts/.tsx file, and returns the relative paths
+// of every file whose text contains `needle` as a literal substring.
+function scanForIdentifier(rootDir: string, needle: string): string[] {
+  const hits: string[] = []
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+      } else if (/\.(ts|tsx)$/.test(entry.name) && readFileSync(full, 'utf8').includes(needle)) {
+        hits.push(path.relative(rootDir, full))
+      }
+    }
+  }
+  walk(rootDir)
+  return hits
+}
 

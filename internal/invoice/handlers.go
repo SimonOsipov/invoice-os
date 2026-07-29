@@ -33,9 +33,12 @@ import (
 // precedent: writeJSON(w, status, entity)), so no separate response DTO is
 // needed for Create/Get/Transition.
 
-// lineItemReq is one entry of createRequest.LineItems. LineNo is deliberately
-// absent -- it is system-assigned 1..N by array position (Store.Create,
-// [D10]), never caller-supplied.
+// lineItemReq is one entry of createRequest.LineItems AND of editReq.LineItems
+// (INVED-01-05): the create and edit line shapes are deliberately ONE type, not
+// two byte-identical twins that could drift apart. LineNo is deliberately
+// absent -- it is system-assigned 1..N by array position (Store.Create /
+// replaceLinesTx, [D10], [line-no-by-position]), never caller-supplied, so a
+// client that sends one has it silently ignored rather than rejected.
 type lineItemReq struct {
 	Description *string `json:"description"`
 	Quantity    *string `json:"quantity"`
@@ -68,18 +71,27 @@ type transitionReq struct {
 
 // editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
 // optional header MBS-content fields, snake_case tags IDENTICAL to
-// createRequest's own (above) minus entity_id/invoice_number/line_items --
-// identity and lifecycle are not the edit's job ([D9]).
+// createRequest's own (above) minus entity_id/invoice_number -- identity and
+// lifecycle are not the edit's job ([D9]).
+//
+// LineItems (INVED-01-05) is a POINTER to a slice, mirroring
+// EditInput.LineItems, because three states must stay distinguishable
+// ([line-items-optional]): an ABSENT key and an explicit NULL both decode to a
+// nil pointer ("leave the stored lines exactly as they are"), while `[]`
+// decodes to a NON-nil pointer at a zero-length slice ("remove every line") and
+// a populated array replaces the whole set. A plain []lineItemReq could not
+// tell the first case from the second, so `[]` could never delete a line.
 type editReq struct {
-	IssueDate    *time.Time `json:"issue_date"`
-	SupplierTIN  *string    `json:"supplier_tin"`
-	SupplierName *string    `json:"supplier_name"`
-	BuyerTIN     *string    `json:"buyer_tin"`
-	BuyerName    *string    `json:"buyer_name"`
-	Currency     *string    `json:"currency"`
-	Subtotal     *string    `json:"subtotal"`
-	VAT          *string    `json:"vat"`
-	Total        *string    `json:"total"`
+	IssueDate    *time.Time     `json:"issue_date"`
+	SupplierTIN  *string        `json:"supplier_tin"`
+	SupplierName *string        `json:"supplier_name"`
+	BuyerTIN     *string        `json:"buyer_tin"`
+	BuyerName    *string        `json:"buyer_name"`
+	Currency     *string        `json:"currency"`
+	Subtotal     *string        `json:"subtotal"`
+	VAT          *string        `json:"vat"`
+	Total        *string        `json:"total"`
+	LineItems    *[]lineItemReq `json:"line_items"`
 }
 
 // listPagination is the "pagination" object in ListHandler's response
@@ -186,11 +198,34 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // explicit null when absent (TestGetHandler_QRPNGBase64MarshalsNull).
 // GetHandler calls qrcode.RenderBase64(*inv.QRPayload) when inv.QRPayload is
 // non-nil, logging (never 5xxing) a render failure, per Core AC #3/#5.
+//
+// CanEdit/CanRevalidate/RevalidateBlockedReason (INVED-01-05,
+// [gates-on-the-wire]) ship the DERIVED per-invoice availability of the two
+// actions, so the SPA holds no status set of its own at all. They are declared
+// LAST deliberately: writeJSON marshals with json.NewEncoder, so declaration
+// order IS wire key order, and appending keeps every pre-existing key's name,
+// type AND position untouched.
+//
+// NONE of the three carries omitempty, for the same reason the two siblings
+// above do not: a `false` bool tagged omitempty marshals to a MISSING key,
+// which would make "the server says this invoice is not editable" impossible to
+// tell apart from "an older server that has never heard of this key". All three
+// are present on every status -- explicit null, never omitted.
 type getResponse struct {
 	Invoice
-	RuleSetVersion *int    `json:"rule_set_version"`
-	QRPNGBase64    *string `json:"qr_png_base64"`
+	RuleSetVersion          *int    `json:"rule_set_version"`
+	QRPNGBase64             *string `json:"qr_png_base64"`
+	CanEdit                 bool    `json:"can_edit"`
+	CanRevalidate           bool    `json:"can_revalidate"`
+	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
 }
+
+// revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
+// Re-validate button ([revalidate-reason-from-backend]). Deliberately NOT a
+// switch over validated/rejected: that would be a fourth hand-maintained status
+// list, reopening Core AC 4. Separator is an em dash (U+2014) with single
+// spaces, matching the copy already on the invoice-detail screen.
+const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
@@ -231,7 +266,28 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			}
 		}
 
-		writeJSON(w, http.StatusOK, getResponse{Invoice: inv, RuleSetVersion: inv.RuleSetVersion, QRPNGBase64: qrPNGBase64})
+		// Both action flags are read off the DERIVED predicates canEdit/
+		// canRevalidate (store.go), never a status switch here: a switch would be
+		// a fourth hand-maintained status list and re-open Core AC 4.
+		//
+		// The reason is non-null EXACTLY when canEdit && !canRevalidate (i.e.
+		// validated/rejected). Not merely !canRevalidate: on queued/submitted/
+		// accepted/failed the copy would be a lie, since those statuses cannot be
+		// edited back to draft either. That also gives the SPA a clean invariant --
+		// revalidate_blocked_reason != null IFF a disabled Re-validate button is
+		// rendered ([actions-visibility]: the action bar renders iff can_edit).
+		resp := getResponse{
+			Invoice:        inv,
+			RuleSetVersion: inv.RuleSetVersion,
+			QRPNGBase64:    qrPNGBase64,
+			CanEdit:        canEdit(inv.Status),
+			CanRevalidate:  canRevalidate(inv.Status),
+		}
+		if resp.CanEdit && !resp.CanRevalidate {
+			reason := revalidateBlockedReason // a const is not addressable; copy to a local
+			resp.RevalidateBlockedReason = &reason
+		}
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -470,13 +526,15 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 
 // EditHandler returns PATCH /v1/invoices/{id} (M4-05-03). Same
 // identity-first-401 order as every other handler here, then decodes the
-// snake_case wire body (400 on decode error) into the 9 optional
-// header MBS-content fields, builds UpdateInput 1:1 from the decoded
-// request (identity/lifecycle are not the edit's job, [D9]), and calls edit.
+// snake_case wire body (400 on decode error -- including a line_items whose
+// JSON SHAPE is wrong, which is a decode-time 400, never a 500) into the 9
+// optional header MBS-content fields plus the optional line_items array,
+// builds EditInput 1:1 from the decoded request (identity/lifecycle are not
+// the edit's job, [D9]), and calls edit.
 // Errors map via statusForErr -- including the new ErrNotFixable->409 case
 // (Core AC #1) and the existing ErrValidation->400 case for the all-nil
 // guard ([A7]) -- 200 + updated Invoice on success (Core AC #2/#3).
-func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -494,7 +552,31 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 
 		id := r.PathValue("id")
 
-		inv, err := edit(r.Context(), id, UpdateInput{
+		// Carry the three line_items states across into EditInput unchanged
+		// ([line-items-optional]). make(..., len) rather than a var+append loop is
+		// load-bearing: append to a nil slice leaves a NIL slice when the array is
+		// empty, whereas make(..., 0) is non-nil, which is what lets a `[]` body
+		// reach Store.Edit as "remove every line" instead of "leave them alone".
+		//
+		// No all-nil guard here: a body carrying ONLY "line_items":[] must still
+		// reach the store. Store.Edit owns that check and needs to see the
+		// non-nil-but-empty pointer.
+		var lines *[]LineItemInput
+		if req.LineItems != nil {
+			mapped := make([]LineItemInput, len(*req.LineItems))
+			for i, li := range *req.LineItems {
+				mapped[i] = LineItemInput{
+					Description: li.Description,
+					Quantity:    li.Quantity,
+					UnitPrice:   li.UnitPrice,
+					LineTotal:   li.LineTotal,
+					LineTax:     li.LineTax,
+				}
+			}
+			lines = &mapped
+		}
+
+		inv, err := edit(r.Context(), id, EditInput{UpdateInput: UpdateInput{
 			IssueDate:    req.IssueDate,
 			SupplierTIN:  req.SupplierTIN,
 			SupplierName: req.SupplierName,
@@ -504,7 +586,7 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 			Subtotal:     req.Subtotal,
 			VAT:          req.VAT,
 			Total:        req.Total,
-		})
+		}, LineItems: lines})
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status >= http.StatusInternalServerError {

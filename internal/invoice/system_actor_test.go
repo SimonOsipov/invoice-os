@@ -991,7 +991,7 @@ func TestStoreEdit_ComposesWithRealMarkRejectedTxWriteAndRetains(t *testing.T) {
 	subject := uuid.NewString()
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 	newVAT := "9.50"
-	got, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	got, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change on rejected invoice): want success, got: %v", err)
 	}

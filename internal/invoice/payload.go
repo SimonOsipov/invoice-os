@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
+	"strconv"
 )
 
 // mbsDateLayout is dateEval's default layout (internal/validation/
@@ -176,11 +178,21 @@ func putNumber(m map[string]any, key string, v *string) {
 	}
 }
 
-// contentFingerprint is a sha256 over the ten MBS-content columns of an
-// invoices row -- invoice_number, issue_date, supplier_tin, supplier_name,
-// buyer_tin, buyer_name, currency, subtotal, vat, total. It deliberately
-// excludes everything that is not MBS content (id, tenant_id, entity_id,
-// import_batch_id, status, violations, rule_set_version_id, created_at).
+// contentFingerprint is a sha256 over an invoice's MBS CONTENT: the ten
+// content columns of the invoices row -- invoice_number, issue_date,
+// supplier_tin, supplier_name, buyer_tin, buyer_name, currency, subtotal,
+// vat, total -- and the invoice's line items. It deliberately excludes
+// everything that is not MBS content (id, tenant_id, entity_id,
+// import_batch_id, status, violations, rule_set_version_id, created_at) and,
+// among the lines, the line `id` ([fingerprint-excludes-line-ids]).
+//
+// Lines are passed EXPLICITLY rather than read off inv.LineItems
+// ([fingerprint-explicit-lines-param]): the two locked-row call sites in
+// store.go scan an invoices row with scanInvoice, which leaves LineItems nil,
+// so an implicit read would silently hash zero lines against a line-bearing
+// evaluated fingerprint and return ErrStaleValidation on EVERY validate. The
+// explicit parameter turns that invisible bug into a compile error at every
+// call site.
 //
 // [toctou-staleness] uses it to detect that an invoice's content changed
 // under a validate run: re-fingerprinting the row inside the write tx and
@@ -192,7 +204,39 @@ func putNumber(m map[string]any, key string, v *string) {
 // length-prefixed and NULL-marked, so the encoding is injective -- no pair of
 // distinct column tuples can collide by concatenation (("ab","c") and
 // ("a","bc") hash differently, and a NULL is distinct from "").
-func contentFingerprint(inv Invoice) string {
+//
+// The LINE canonicalization (INVED-01-02) is, after the ten header fields:
+//
+//	len(lines)                         the count marker
+//	per line, in line_no ASC order:    line_no, description, quantity,
+//	                                   unit_price, line_total, line_tax
+//
+// through the SAME encoder, so injectivity survives across a line boundary
+// and the header/line boundary both. The count marker is what keeps zero
+// lines distinct from one all-NULL line, and it is len() -- not a nil check
+// -- so a nil slice and a non-nil empty one hash identically (INVED-01-04's
+// replaceLinesTx can report []LineItem{} where hydrateLinesTx reports nil for
+// the same lineless invoice; the two must agree on "no lines").
+//
+// The field set is mbsLine's minus `id`, so a reader can diff the two and see
+// the id exclusion is the ONLY difference. Sorting is by line_no -- the only
+// stable content ordinal (line_items_invoice_line_no_uq makes it a total
+// order within an invoice) -- and NEVER by id: replace-all mints fresh uuids
+// on every save, so id order is non-deterministic across a content-identical
+// write and would fire a false demotion on every save.
+//
+// The sort runs on a defensive COPY. Gate.Validate passes inv.LineItems, the
+// same slice MBSPayload was built from; sorting in place would mutate the
+// caller's invoice and corrupt the payload this fingerprint is meant to
+// describe. Purity is load-bearing here, not hygiene.
+//
+// Decimals are hashed as the raw ::text projection, exactly as the ten header
+// fields already are ([D13]). Postgres normalizes at write time -- quantity is
+// numeric(14,3), the money columns numeric(14,2) -- so "10.0" and "10.00"
+// converge in the DB, not in this function. Consequence, stated so no test
+// asserts otherwise: for IN-MEMORY LineItem values the two DO fingerprint
+// differently, identical to the existing header behaviour.
+func contentFingerprint(inv Invoice, lines []LineItem) string {
 	h := sha256.New()
 
 	var issueDate *string
@@ -214,6 +258,25 @@ func contentFingerprint(inv Invoice) string {
 	writeFingerprintField(h, inv.Subtotal)
 	writeFingerprintField(h, inv.VAT)
 	writeFingerprintField(h, inv.Total)
+
+	count := strconv.Itoa(len(lines))
+	writeFingerprintField(h, &count)
+
+	// Copy before sorting -- the caller's slice is never touched (see the doc).
+	// LineItem holds only scalars and *string, so a shallow struct copy is a
+	// complete logical copy for hashing.
+	sorted := append([]LineItem(nil), lines...)
+	sort.SliceStable(sorted, func(a, b int) bool { return sorted[a].LineNo < sorted[b].LineNo })
+
+	for _, li := range sorted {
+		lineNo := strconv.Itoa(li.LineNo)
+		writeFingerprintField(h, &lineNo)
+		writeFingerprintField(h, li.Description)
+		writeFingerprintField(h, li.Quantity)
+		writeFingerprintField(h, li.UnitPrice)
+		writeFingerprintField(h, li.LineTotal)
+		writeFingerprintField(h, li.LineTax)
+	}
 
 	return hex.EncodeToString(h.Sum(nil))
 }

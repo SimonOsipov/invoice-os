@@ -264,6 +264,20 @@ export interface RejectionReason {
   path?: string
 }
 
+// InvoiceLineItem mirrors internal/invoice/invoice.go's LineItem struct exactly (:56-64,
+// INVED-01-08): one line_items row, its numeric columns read via ::text ([D13]) so money
+// never round-trips through a float. Store.List leaves LineItems nil ([D7]/[D8]); only
+// Store.Get (and therefore only the GET/PATCH responses) hydrates it.
+export interface InvoiceLineItem {
+  id: string
+  line_no: number
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
 // Invoice mirrors internal/invoice/invoice.go's Invoice struct exactly (M4-04-08,
 // task-115). violations is Go json.RawMessage on the wire -- always a JSON array in
 // practice (invoices.violations jsonb NOT NULL DEFAULT '[]', migrations/
@@ -296,7 +310,7 @@ export interface Invoice {
   csid: string | null
   qr_payload: string | null
   rejection_reasons: RejectionReason[]
-  line_items?: unknown[]
+  line_items?: InvoiceLineItem[]
 }
 
 export interface ListInvoicesQuery {
@@ -328,9 +342,17 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
 // either). NOT added to Invoice itself -- rule_set_version is json:"-" on the shared Go
 // struct (invoice.go:117), so a list item never carries it structurally; only a GET
 // response does.
+// CanEdit/CanRevalidate/RevalidateBlockedReason (INVED-01-08, [gates-on-the-wire]):
+// getResponse's three additive sibling keys (handlers.go:214-221), declared LAST on the Go
+// struct and none tagged omitempty -- present, explicit, on every status. Required (not
+// optional): a fail-open `?` would let a consumer read `undefined` as "the server didn't
+// say", exactly what [gates-on-the-wire] exists to prevent.
 export interface GetInvoiceResult extends Invoice {
   rule_set_version: number | null
   qr_png_base64: string | null
+  can_edit: boolean
+  can_revalidate: boolean
+  revalidate_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {
@@ -351,6 +373,20 @@ export interface InvoiceEditInput {
   subtotal?: string
   vat?: string
   total?: string
+  // line_items (INVED-01-08) mirrors editReq.LineItems, a POINTER to a slice on the Go side
+  // (handlers.go:94, editReq.LineItems *[]lineItemReq) -- three states over the wire: the
+  // key ABSENT (or `undefined`, which JSON.stringify drops) leaves the stored lines
+  // untouched; `[]` replaces the whole set with zero lines; a populated array replaces the
+  // whole set, renumbered 1..N by array position. Shape copied verbatim from
+  // CreateInvoiceInput's own line_items (:416-422) rather than shared -- the two wire
+  // request types (createRequest/editReq) are themselves independent on the Go side.
+  line_items?: Array<{
+    description?: string
+    quantity?: string
+    unit_price?: string
+    line_total?: string
+    line_tax?: string
+  }>
 }
 
 // editInvoice(): PATCH /v1/invoices/{id} (M4-05-03). Precondition: the invoice must be

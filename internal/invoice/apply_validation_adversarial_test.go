@@ -70,7 +70,7 @@ func TestApplyValidation_AuditOutcomePromotedOnCleanEvaluation(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	if _, err := store.ApplyValidation(c, inv.ID, []Violation{}, versionID, fp); err != nil {
 		t.Fatalf("ApplyValidation (clean): want success, got: %v", err)
@@ -108,7 +108,7 @@ func TestApplyValidation_AuditOutcomeBlockedOnErrorViolation(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	violations := []Violation{{RuleKey: "vat-standard-rate", Severity: "error", Message: "VAT rate mismatch"}}
 	if _, err := store.ApplyValidation(c, inv.ID, violations, versionID, fp); err != nil {
@@ -147,7 +147,7 @@ func TestApplyValidation_AuditOutcomePromotedWithWarningOnlyViolations(t *testin
 		t.Fatalf("Create: %v", err)
 	}
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	violations := []Violation{
 		{RuleKey: "supplier-tin-format", Severity: "warning", Message: "TIN format looks unusual"},
@@ -208,7 +208,7 @@ func TestApplyValidation_BlockedPathLongActorRollsBackWholeTx(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	longSubject := strings.Repeat("a", 256)
 	cCrafted := auth.WithIdentity(ctx, auth.Identity{Subject: longSubject, Role: "authenticated", TenantID: tenantID})
@@ -269,7 +269,7 @@ func TestApplyValidation_StatusCheckPrecedesFingerprintCheckWhenBothStale(t *tes
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	staleFP := contentFingerprint(inv) // taken BEFORE both the promotion and the edit below
+	staleFP := contentFingerprint(inv, inv.LineItems) // taken BEFORE both the promotion and the edit below
 	versionID := seedRuleSetVersionID(t, super)
 
 	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {

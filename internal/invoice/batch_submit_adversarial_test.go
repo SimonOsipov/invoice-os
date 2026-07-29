@@ -485,3 +485,73 @@ func TestBatchSubmit_ConcurrentIdenticalBatchesRaceToExactlyOneJob(t *testing.T)
 		t.Errorf("idempotency_keys rows after the race = %d, want exactly 1", n)
 	}
 }
+
+// --- INVED-01-04 (task-265) T12: Core AC 2's negative, the founder-flagged
+// compliance-grade requirement --------------------------------------------
+
+// TestBatchSubmit_LineEditedInvoiceRefusedNotValidated (T12): mutating a
+// line via Store.Edit demotes a validated invoice to draft; a subsequent
+// Submitter.BatchSubmit on that SAME id must refuse it -- enqueued:false,
+// reason:"not_validated" -- with no queue row and no idempotency_keys row
+// ever written. No NEW guard is needed here: BatchSubmit's own eligibility
+// check (batch_submit.go:180) only ever enqueues an invoice whose upfront-
+// locked status == validated (batch_submit.go:191's submission.SubmitArgs{}
+// is the sole call site in this package), so the existing check already
+// refuses a stale-verdict invoice PROVIDED Store.Edit actually demoted it.
+// This test proves the refusal really happens end to end, not merely that
+// it theoretically would -- a regression that made Store.Edit silently skip
+// the demotion (e.g. by reusing beforeLines in the post-hash, store.go:724)
+// would leave this invoice "validated" and BatchSubmit would enqueue it.
+func TestBatchSubmit_LineEditedInvoiceRefusedNotValidated(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+	q := newInsertOnlyQueueClient(t, app)
+	submitter := NewSubmitter(store, q)
+
+	tenantID := seedTenant(t, super, "T12 tenant")
+	entityID := seedEntity(t, super, tenantID, "T12 entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA := "Widget"
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "T12", LineItems: []LineItemInput{{Description: &descA}}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	newDesc := "Gadget"
+	edited, err := store.Edit(c, inv.ID, EditInput{LineItems: &[]LineItemInput{{Description: &newDesc}}})
+	if err != nil {
+		t.Fatalf("Edit (line change): want success, got: %v", err)
+	}
+	if edited.Status != StatusDraft {
+		t.Fatalf("Edit: status = %q, want draft (demoted) -- BatchSubmit's own eligibility guard below depends on this", edited.Status)
+	}
+
+	result, err := submitter.BatchSubmit(c, BatchSubmitInput{
+		InvoiceIDs:     []string{inv.ID},
+		IdempotencyKey: "T12-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("BatchSubmit: %v", err)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("BatchSubmit results = %d, want 1", len(result.Results))
+	}
+	item := result.Results[0]
+	if item.Enqueued {
+		t.Errorf("BatchSubmit enqueued a line-edited (draft) invoice, want enqueued=false")
+	}
+	if item.Reason != batchSubmitReasonNotValidated {
+		t.Errorf("BatchSubmit reason = %q, want %q", item.Reason, batchSubmitReasonNotValidated)
+	}
+	if n := countBatchSubmitJobs(t, app, inv.ID); n != 0 {
+		t.Errorf("river_job submission_submit rows = %d, want 0 -- a stale-verdict invoice must never reach the queue", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM idempotency_keys WHERE tenant_id = $1`, tenantID); n != 0 {
+		t.Errorf("idempotency_keys rows for tenant = %d, want 0 -- a stale-verdict invoice must never reach the outbox", n)
+	}
+}

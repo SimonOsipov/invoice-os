@@ -190,6 +190,26 @@ type UpdateInput struct {
 	Total        *string
 }
 
+// EditInput is the Store.Edit argument (INVED-01-04): the 9 optional header
+// fields of an embedded UpdateInput, plus the invoice's line items. Edit takes
+// this rather than a widened UpdateInput because updateContentTx is SHARED with
+// Store.Update, which must keep taking a header-only UpdateInput byte-identical
+// ([store-update-untouched]) -- embedding gives Edit both without forking the
+// content write.
+//
+// LineItems is a POINTER to a slice so "absent" and "empty" stay distinguishable
+// ([line-items-optional]): nil leaves the stored lines exactly as they are, while
+// a non-nil pointer replaces the WHOLE set with what it points at -- so a
+// present-but-empty []LineItemInput legitimately removes every line. The write is
+// replace-all, never a per-line diff ([line-update-shape]): line_no is
+// system-assigned 1..N by array position and is deliberately absent from
+// LineItemInput, so a reorder is expressed purely as array order
+// ([line-no-by-position]).
+type EditInput struct {
+	UpdateInput
+	LineItems *[]LineItemInput
+}
+
 // ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
 // two predicate filters, EntityID and NeedsAttention (M4-09-02), ANDed
 // together when both are set. EntityID "" (the zero value) applies no
@@ -259,11 +279,14 @@ var (
 	// run ([toctou-staleness]). The write tx cannot span the HTTP call to 04
 	// (it would pin a pool connection and hold a row lock under unbounded
 	// remote latency), so the gate evaluates with no tx open, then re-checks
-	// the LOCKED row's contentFingerprint against the one taken when the
-	// payload was built. A mismatch means the violations describe content that
-	// no longer exists, and stamping those as validated is the same class of
-	// lie [validated-is-earned] forbids. The status re-check alone does NOT
-	// catch this — status stays draft across a Store.Update.
+	// the LOCKED row's contentFingerprint -- over the row AND its line items,
+	// which INVED-01-02 made content too, so ApplyValidation re-reads the
+	// lines inside the same tx (scanInvoice leaves them nil) -- against the
+	// one taken when the payload was built. A mismatch means the violations
+	// describe content that no longer exists, and stamping those as validated
+	// is the same class of lie [validated-is-earned] forbids. The status
+	// re-check alone does NOT catch this — status stays draft across a
+	// Store.Update.
 	ErrNotDraft        = errors.New("invoice: not draft")
 	ErrStaleValidation = errors.New("invoice: stale validation")
 

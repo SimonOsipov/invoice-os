@@ -29,6 +29,8 @@
 //                       `qr_png_base64` (M5-09-01/03) gets the same defensive
 //                       normalization once implemented -- the wire never actually omits
 //                       either key (getResponse, handlers.go:189-192, no omitempty).
+//                       The three action flags normalize FAIL-CLOSED (`=== true`), see
+//                       getInvoice itself.
 // - getInvoiceHistory:  GET   `${base}/api/invoice/v1/invoices/{id}/history`, resolves
 //                       the bare StatusChange[] verbatim (HistoryHandler).
 // - editInvoice:        PATCH `${base}/api/invoice/v1/invoices/{id}`, only the changed
@@ -44,17 +46,15 @@
 // (entityStatusStyle in portfolio.ts, severityStyle in validationApi.ts): unknown status
 // -> muted fallback (total mapping, mirrors severityStyle's `?? MUTED_STYLE`).
 //
-// isFixable(status) is the edit-surface guard mirror of Store.Edit's own precondition
-// (ErrNotFixable, invoice.go:261-273, [A1]/System Design §4 step 3): true for
-// draft/validated/rejected, false for every other status. M5-05-01 (task-237) widened
-// the BACKEND precondition to this third fixable status (rejected, the rework path);
-// M5-09-03 (task-253, Core AC #4) re-synced this mirror to match, closing
-// [spa-untouched]. Widening to `rejected` also turns Re-validate on for a rejected
-// invoice (InvoiceDetail.tsx's "Fix & re-validate" card) -- correct for the edit form
-// (Store.Edit accepts draft/validated/rejected, store.go:592-594), but the validate
-// gate itself stays draft-only (gate.go:162 -> ErrNotDraft -> 409), so clicking
-// Re-validate before any edit 409s and is caught/surfaced by the existing handler, the
-// same known wrinkle already documented for `validated`.
+// Edit / re-validate availability is READ OFF THE WIRE, never mirrored here
+// (INVED-01-06, [gates-on-the-wire]): getInvoice surfaces can_edit / can_revalidate /
+// revalidate_blocked_reason, which the backend DERIVES from legalTransitions (canEdit,
+// store.go:919-942; canRevalidate, :944-960). The status-set predicate this file used to
+// export for that job is deleted outright rather than re-pointed -- a second list of
+// statuses is exactly the thing that drifts out of sync with the machine, which is what
+// happened when the backend widened Edit to accept `rejected` and the SPA did not follow.
+// The remaining status sets here (isInFlight for polling, isRowSelectable for batch
+// selection, INVOICE_STATUS_STYLE for pills) are NOT availability gates and stay.
 //
 // verdictStatus(staleSinceEdit, inv) is the within-session fix-loop indicator (Core AC
 // #7) plus the on-load demoted-draft derivation (Core AC #5, task-188 item 4): 'stale'
@@ -182,9 +182,29 @@ export interface InvoiceRecord {
 // `qr_png_base64` has no `omitempty` either (always present, explicit null when there is
 // no qr_payload or rendering failed) -- getInvoice's own `?? null` normalization is
 // defensive-only, the same posture already taken for `rule_set_version`.
+//
+// `can_edit`/`can_revalidate`/`revalidate_blocked_reason` (INVED-01-06, task-267,
+// [gates-on-the-wire]) are the backend-DERIVED per-action availability -- canEdit
+// (draft/validated/rejected) and canRevalidate (draft only), store.go:940/960 -- so the
+// SPA holds no status set of its own. The reason is non-null EXACTLY when
+// `canEdit && !canRevalidate` (validated/rejected), null everywhere else, and its copy
+// is the backend's verbatim ([revalidate-reason-from-backend]) -- the SPA never authors
+// a fallback string.
+//
+// REQUIRED and nullable (no `?`), matching the two keys above: getResponse tags none of
+// the three `omitempty` (handlers.go:214-221, pinned by
+// TestGetHandler_ActionFlagsFalseNotOmitted), so all three are present on every status.
+// An optional `?` would compile just as well, which is exactly why it is wrong -- it
+// lets a consumer read `undefined` and treat "the server did not say" as an open
+// question, the fail-open shape [gates-on-the-wire] exists to remove. They sit on
+// InvoiceDetailRecord ONLY, never InvoiceRecord: ListHandler returns bare Invoice rows,
+// which carry no such keys.
 export interface InvoiceDetailRecord extends InvoiceRecord {
   rule_set_version: number | null
   qr_png_base64: string | null
+  can_edit: boolean
+  can_revalidate: boolean
+  revalidate_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:91-98).
@@ -211,9 +231,29 @@ export interface ListInvoicesOptions {
   entityId?: string
 }
 
+// One entry of editInvoice's optional `line_items` array (lineItemReq,
+// handlers.go:42-48, INVED-01-05). Five nullable strings -- NO `id` and NO `line_no`:
+// line_no is system-assigned 1..N by array POSITION ([line-no-by-position]) and a
+// client-supplied one is silently ignored, so this array's order IS the only line
+// ordering the wire carries.
+export interface LineItemEditInput {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
 // editInvoice's PATCH body: the 9 optional header MBS-content fields (editReq,
 // handlers.go:70-80, [D9]) — identity/lifecycle are not the edit's job. Reuses
 // InvoiceRecord's own field types so the two never drift apart.
+//
+// `line_items` (INVED-01-06) mirrors editReq.LineItems, a POINTER to a slice, so all
+// three states stay distinguishable ([line-items-optional]): key ABSENT -- or set to
+// `undefined`, which JSON.stringify drops -- leaves the stored lines exactly as they
+// are; `[]` removes every line; a populated array replaces the whole set, renumbered
+// 1..N. A type that could not express "absent" would make every header-only save delete
+// all of the invoice's lines.
 export type InvoiceEditInput = Partial<
   Pick<
     InvoiceRecord,
@@ -227,7 +267,9 @@ export type InvoiceEditInput = Partial<
     | 'vat'
     | 'total'
   >
->
+> & {
+  line_items?: LineItemEditInput[]
+}
 
 // The 9 editable header fields (editReq, handlers.go:70-80, [D9]) -- moved here from
 // InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
@@ -271,9 +313,25 @@ export async function listInvoices(
   return res.invoices
 }
 
+// The two action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
+// emitting the STRING "false", a 1) would come through permissive. These gate a
+// destructive-ish action, so anything that is not literally `true` must deny -- a
+// defensive normalization on a permission-shaped flag only earns its keep fail-closed.
+// `revalidate_blocked_reason` keeps `?? null` (its declared type is nullable, so `??` is
+// reachable and idiomatic) and is passed through BYTE-IDENTICALLY -- no fallback string,
+// no rewriting: that copy is the backend's ([revalidate-reason-from-backend]), and an
+// SPA-authored default here is exactly the drift that decision forbids.
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
-  return { ...res, rule_set_version: res.rule_set_version ?? null, qr_png_base64: res.qr_png_base64 ?? null }
+  return {
+    ...res,
+    rule_set_version: res.rule_set_version ?? null,
+    qr_png_base64: res.qr_png_base64 ?? null,
+    can_edit: res.can_edit === true,
+    can_revalidate: res.can_revalidate === true,
+    revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
+  }
 }
 
 export async function getInvoiceHistory(
@@ -356,10 +414,6 @@ export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
   return INVOICE_STATUS_STYLE[status] ?? MUTED_STYLE
 }
 
-export function isFixable(status: InvoiceStatus): boolean {
-  return status === 'draft' || status === 'validated' || status === 'rejected'
-}
-
 export function verdictStatus(staleSinceEdit: boolean, inv: InvoiceRecord): 'stale' | 'current' {
   if (staleSinceEdit) return 'stale'
   const demotedSinceValidation =
@@ -409,6 +463,168 @@ export function reasonFieldFlags(reasons: RejectionReason[]): Map<EditFieldKey, 
     if (field != null && !flags.has(field)) flags.set(field, reason.code)
   }
   return flags
+}
+
+// The five MBS content fields of a line, the ONLY thing diffLineItems compares. `id` and
+// `line_no` are deliberately outside this Pick ([fingerprint-excludes-line-ids]).
+type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+
+// The line half of editInvoice's PATCH body: `undefined` when `edited` is
+// content-identical to `original`, so an untouched line editor sends no `line_items` key
+// at all ([fingerprint-excludes-line-ids]) -- replace-all churns line ids, and omitting
+// the key is what keeps that churn off edits that never went near a line. `[]` stays
+// reachable: emptying a 2-line invoice returns [], not undefined.
+//
+// Compares BY POSITION over exactly the five fields above, never `id`, never `line_no`
+// (line_no is positional, so a reorder correctly reads as a change). Both sides
+// canonicalize '' -> null before comparing AND in the emitted array: React inputs hold
+// '', never null, so a stored-NULL field seeds the form as ''. Without that
+// canonicalization an UNTOUCHED editor reports "changed" on every save -- which churns
+// line ids, moves the backend fingerprint for real (NULL -> '' is a genuine content
+// change) and so demotes a `validated` invoice on a save that changed nothing -- and
+// emits '' into a numeric column, where `$N::text::numeric` raises 22P02 -> ErrValidation
+// -> a 400 on a no-op save.
+//
+const LINE_EDIT_FIELDS = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax'] as const
+
+// '' and null are the SAME absent value on BOTH sides. No trimming: the backend does not
+// trim either, and silently rewriting an operator's content is not this helper's job.
+function canonField(v: string | null): string | null {
+  return v == null || v === '' ? null : v
+}
+
+function canonLine(line: LineContent): LineItemEditInput {
+  return {
+    description: canonField(line.description),
+    quantity: canonField(line.quantity),
+    unit_price: canonField(line.unit_price),
+    line_total: canonField(line.line_total),
+    line_tax: canonField(line.line_tax),
+  }
+}
+
+export function diffLineItems(
+  original: ReadonlyArray<LineContent>,
+  edited: ReadonlyArray<LineContent>,
+): LineItemEditInput[] | undefined {
+  // Fresh objects over the five fields only, so `id`/`line_no` cannot leak onto the wire
+  // even when the caller hands us whole InvoiceLineItem rows -- and so neither input array
+  // nor any of its rows is ever written to.
+  const next = edited.map(canonLine)
+  if (next.length === original.length) {
+    const prev = original.map(canonLine)
+    const unchanged = next.every((row, i) => LINE_EDIT_FIELDS.every((k) => row[k] === prev[i][k]))
+    if (unchanged) return undefined
+  }
+  return next
+}
+
+// The passive computed line-sum hint for the edit form ([line-sum-hint-semantics], Core
+// AC #5): Σ(unit_price × (quantity ?? 1)) over the lines. Display-only -- it never
+// derives or rewrites subtotal/vat/total ([totals-ownership]), which is why the
+// signature can see nothing but the two fields it multiplies.
+//
+// Returns an exact decimal STRING, not a number -- a deliberate carrier-only deviation
+// from the story's `number | null` (AC #5's arithmetic is unchanged). Money is strings
+// end-to-end ([D13]) precisely so no float touches it; the rule this mirrors has a 0.005
+// tolerance, so precision below the kobo is load-bearing; and the app's only money
+// formatter (fmt(), lib/format.ts:5-7) rounds to WHOLE naira, so a numeric return would
+// invite the component to render a hint that reads EQUAL to a subtotal it actually
+// differs from -- fabricating the very agreement this hint exists to question.
+//
+// `null`, never '0.00', when the line set is empty or ANY line's unit_price/quantity is
+// absent or present-but-non-numeric: that mirrors lineSumEval's violate-set (an absent
+// quantity weights 1; an unparseable one VIOLATES) rather than skipping the line.
+//
+// A decimal carried EXACTLY, as `u x 10^-s`. `s` is normalized non-negative at parse time
+// (an exponent that would drive it below zero is folded into `u` instead), so nothing
+// downstream has to reason about a negative scale. bigint throughout -- no float ever
+// touches a money value here, which is the whole point of the type.
+interface Scaled {
+  u: bigint
+  s: number
+}
+
+// Character-identical to the backend's own jsonNumberRe (internal/invoice/payload.go:42):
+// strip the ONE added pair of parens around the sign and this is the Go constant verbatim.
+// Capture groups cannot change the accepted language, so the same expression that GATES a
+// value also decomposes it -- one pattern, nothing to drift against itself.
+//
+// Transcribing the evaluator's own grammar is the point, not incidental: this hint's
+// refuse-set is then exactly the set putNumber/toFloat treat as a violation, so it never
+// renders a number the rule it mirrors would have rejected. (Display-only drift risk
+// against an unexported Go constant, deliberately bounded.)
+//
+// NOT Number()/parseFloat as the gate: Number('') === 0 would fabricate a silent zero out
+// of a field the operator just cleared. Verified in node that JS's '$' is strict
+// end-of-input here, exactly like Go RE2's -- '1\n' is refused by both -- so the
+// transcription does not quietly widen at the anchor.
+const DECIMAL_RE = /^(-?)(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
+
+function parseScaled(raw: string): Scaled | null {
+  // Optional groups are absent at runtime; RegExpExecArray types them all `string`.
+  const m: Array<string | undefined> | null = DECIMAL_RE.exec(raw)
+  if (m === null) return null
+  const fracDigits = m[3] != null ? m[3].slice(1) : ''
+  const exponent = m[4] != null ? Number(m[4].slice(1)) : 0
+  let u = BigInt(`${m[2] ?? ''}${fracDigits}`)
+  let s = fracDigits.length - exponent
+  if (s < 0) {
+    u *= 10n ** BigInt(-s)
+    s = 0
+  }
+  return { u: m[1] === '-' ? -u : u, s }
+}
+
+function mulScaled(a: Scaled, b: Scaled): Scaled {
+  return { u: a.u * b.u, s: a.s + b.s }
+}
+
+function addScaled(a: Scaled, b: Scaled): Scaled {
+  const s = Math.max(a.s, b.s)
+  return { u: a.u * 10n ** BigInt(s - a.s) + b.u * 10n ** BigInt(s - b.s), s }
+}
+
+// Exact digits, no thousands grouping -- that keeps this ICU-independent (format.test.ts:9
+// records that toLocaleString('en-NG') varies by node ICU build). Trailing zeros are
+// stripped down to, but never below, 2dp: 250.0000 -> '250.00', 0.015 stays '0.015'.
+function renderScaled({ u, s }: Scaled): string {
+  let mantissa = u
+  let scale = s
+  if (scale < 2) {
+    mantissa *= 10n ** BigInt(2 - scale)
+    scale = 2
+  }
+  while (scale > 2 && mantissa % 10n === 0n) {
+    mantissa /= 10n
+    scale -= 1
+  }
+  const negative = mantissa < 0n
+  const digits = (negative ? -mantissa : mantissa).toString().padStart(scale + 1, '0')
+  const cut = digits.length - scale
+  return `${negative ? '-' : ''}${digits.slice(0, cut)}.${digits.slice(cut)}`
+}
+
+export function computedLineSum(lines: ReadonlyArray<Pick<InvoiceLineItem, 'quantity' | 'unit_price'>>): string | null {
+  if (lines.length === 0) return null
+  let sum: Scaled = { u: 0n, s: 0 }
+  for (const line of lines) {
+    if (line.unit_price == null) return null
+    const amount = parseScaled(line.unit_price)
+    if (amount === null) return null
+    // An ABSENT quantity weights the line at 1 (putNumber drops a nil, so lineSumEval sees
+    // has == false and defaults); a PRESENT but unparseable one VIOLATES rather than
+    // falling back to 1. That asymmetry is the rule's own -- mirrored here, not smoothed
+    // over, or the hint would show a total on a line the rule refuses to total.
+    let weight: Scaled = { u: 1n, s: 0 }
+    if (line.quantity != null) {
+      const parsed = parseScaled(line.quantity)
+      if (parsed === null) return null
+      weight = parsed
+    }
+    sum = addScaled(sum, mulScaled(amount, weight))
+  }
+  return renderScaled(sum)
 }
 
 // not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason

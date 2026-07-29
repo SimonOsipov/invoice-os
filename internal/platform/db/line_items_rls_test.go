@@ -12,8 +12,15 @@
 //	    NULLABLE and un-CHECKed — store-invalid, so M4-04 can report violations
 //	    instead of the schema hard-rejecting an invalid import. created_at
 //	    timestamptz NOT NULL DEFAULT now() — verbatim M2-06 FORCE-RLS
-//	    `tenant_isolation` policy, GRANT SELECT/INSERT/UPDATE (no DELETE) TO
-//	    invoice_app.
+//	    `tenant_isolation` policy, GRANT SELECT/INSERT/UPDATE TO invoice_app.
+//
+// Grant history: M4-01-03 shipped SELECT/INSERT/UPDATE only (no hard-delete consumer
+// existed yet). INVED-01-01 added DELETE in 20260729095611_line_items_delete_grant.sql,
+// because removing a line is one of the three line edits the invoice edit surface
+// must support. The live matrix is SELECT/INSERT/UPDATE/DELETE for invoice_app and
+// nothing at all for invoice_tenant_reader, pinned by
+// TestRLS_LineItemsGrantMatrixIsSelectInsertUpdateDelete. The tenant_isolation policy
+// was NOT changed: it is FOR ALL, and a DELETE is filtered by its USING clause.
 //
 // Each of LI-RLS-01..07 attacks the same guarantees M2-07 (rls_test.go) proves for
 // the tenants/rls_fixture shape and M4-01-01/M4-01-02 (import_batches_rls_test.go /
@@ -499,52 +506,170 @@ func TestRLS_LineItemsReaderHasNoGrant(t *testing.T) {
 	}
 }
 
-// (QA-added, least-privilege proof): invoice_app has NO DELETE grant on line_items —
-// the migration grants only SELECT/INSERT/UPDATE (SIU, not SIUD — "no DELETE" in the
-// header: "the fix loop (M4-05) edits rows in place — no DELETE"). Even a same-tenant
-// DELETE on a row the app can otherwise see/update must be refused at the GRANT level
-// (42501), never reaching RLS's policy evaluation, and the row must survive untouched.
-// None of LI-RLS-01..12 exercise DELETE, so a future migration that widened the GRANT
-// would slip through unnoticed without this case.
-func TestRLS_LineItemsDeleteRefused(t *testing.T) {
+// (QA-added, least-privilege proof, INV-01-T4): the grant matrix is exactly
+// SELECT/INSERT/UPDATE/DELETE for invoice_app and nothing at all for
+// invoice_tenant_reader — the catalog half of INVED-01-01's widened grant (the
+// behavioural half is INV-01-T1..T3 below). Copies the idiom from
+// idempotency_keys_rls_test.go:127-163 (IK-01): has_table_privilege asked as the
+// SUPERUSER, NOT information_schema.role_table_grants — that view shows only grants
+// visible to the current role, so the "reader holds nothing" half is unprovable
+// through it.
+func TestRLS_LineItemsGrantMatrixIsSelectInsertUpdateDelete(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
-	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL A Corp")
+	for _, c := range []struct {
+		role string
+		priv string
+		want bool
+	}{
+		{"invoice_app", "SELECT", true},
+		{"invoice_app", "INSERT", true},
+		{"invoice_app", "UPDATE", true},
+		{"invoice_app", "DELETE", true},
+		{"invoice_app", "TRUNCATE", false},
+		{"invoice_app", "REFERENCES", false},
+		{"invoice_tenant_reader", "SELECT", false},
+		{"invoice_tenant_reader", "INSERT", false},
+		{"invoice_tenant_reader", "UPDATE", false},
+		{"invoice_tenant_reader", "DELETE", false},
+		{"invoice_tenant_reader", "TRUNCATE", false},
+	} {
+		var got bool
+		if err := h.super.QueryRow(ctx,
+			`SELECT has_table_privilege($1, 'public.line_items', $2)`, c.role, c.priv,
+		).Scan(&got); err != nil {
+			t.Fatalf("has_table_privilege(%q, line_items, %q): %v", c.role, c.priv, err)
+		}
+		if got != c.want {
+			t.Errorf("has_table_privilege(%q, line_items, %q) = %v, want %v — INVED-01-01 widens "+
+				"invoice_app to SELECT/INSERT/UPDATE/DELETE and grants invoice_tenant_reader nothing",
+				c.role, c.priv, got, c.want)
+		}
+	}
+}
+
+// (INV-01-T1): own-tenant DELETE now succeeds. INVED-01-01 grants invoice_app DELETE on
+// line_items; this test — together with INV-01-T2/T3/T4 below — replaces the removed
+// TestRLS_LineItemsDeleteRefused, which asserted the opposite premise. The error-free
+// return is not proof by itself — the row is re-read as the superuser afterwards to
+// confirm it is really gone.
+func TestRLS_LineItemsOwnTenantDeleteSucceeds(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL-OK A Corp")
 	defer cleanupEntityA()
-	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-A")
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-OK-A")
 	defer cleanupInvoiceA()
 	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
 	defer cleanupLine()
 
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
-		_, e := tx.Exec(ctx, `DELETE FROM line_items WHERE tenant_id = $1`, h.tenantA)
-		return e
+		ct, e := tx.Exec(ctx, `DELETE FROM line_items WHERE id = $1`, id)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 1 {
+			t.Errorf("own-tenant DELETE affected %d rows, want 1", ct.RowsAffected())
+		}
+		return nil
 	})
-	if err == nil {
-		t.Fatal("app-role DELETE on line_items succeeded, want permission denied (SQLSTATE 42501)")
+	if err != nil {
+		t.Fatalf("own-tenant DELETE on line_items: want success, got: %v", err)
 	}
-	if code := pgCode(err); code != "42501" {
-		t.Fatalf("app-role DELETE on line_items: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 0 {
+		t.Errorf("row count after own-tenant DELETE = %d, want 0", n)
+	}
+}
+
+// (INV-01-T2): a cross-tenant DELETE affects zero rows and raises no error — B's row is
+// invisible to a tx scoped to A, mirroring TestRLS_LineItemsCrossTenantUpdateAffectsZeroRows
+// (:149-173) exactly. This is 0-rows, not a 42501: a DELETE is filtered by the
+// tenant_isolation policy's USING clause (row invisibility), not a WITH CHECK rejection
+// — in Postgres, DELETE has no WITH CHECK at all.
+func TestRLS_LineItemsCrossTenantDeleteAffectsZeroRows(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "LI-DEL-XT B Corp")
+	defer cleanupEntityB()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "LI-DEL-XT-B")
+	defer cleanupInvoiceB()
+	lineB, cleanupLine := seedLineItem(t, h.tenantB, invoiceB, 1)
+	defer cleanupLine()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `DELETE FROM line_items WHERE tenant_id = $1`, h.tenantB)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 0 {
+			t.Errorf("cross-tenant DELETE affected %d rows, want 0", ct.RowsAffected())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant DELETE (expected 0 rows, no error): %v", err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, lineB); n != 1 {
+		t.Errorf("tenant-B row count after cross-tenant DELETE = %d, want 1 (row must survive)", n)
+	}
+}
+
+// (INV-01-T3): a missing app.current_tenant GUC fails closed for DELETE too — with no
+// context set, the tenant_isolation predicate is false for every row, so an unqualified
+// DELETE affects nothing even though invoice_app now holds the DELETE grant. This is the
+// mass-delete guard: an unscoped connection must not be able to wipe the table just
+// because the grant was widened. Mirrors TestRLS_LineItemsMissingContextFailsClosed
+// (:177-189), deliberately using a raw h.app.Begin (NOT WithinTenantTx) so no GUC is set.
+func TestRLS_LineItemsDeleteMissingContextFailsClosed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL-NOCTX A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-NOCTX-A")
+	defer cleanupInvoiceA()
+	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine()
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	ct, err := tx.Exec(ctx, `DELETE FROM line_items`)
+	if err != nil {
+		t.Fatalf("unqualified DELETE with no tenant context: want success with 0 rows affected, got error: %v", err)
+	}
+	if ct.RowsAffected() != 0 {
+		t.Errorf("unqualified DELETE with no tenant context affected %d rows, want 0", ct.RowsAffected())
 	}
 
 	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 1 {
-		t.Errorf("row count after refused DELETE = %d, want 1 (row must survive)", n)
+		t.Errorf("row count after no-context DELETE = %d, want 1 (row must survive)", n)
 	}
 }
 
 // (QA-added, cascade-is-FK-driven-not-grant-driven proof, belt-and-suspenders vs
-// LI-RLS-10 and TestRLS_LineItemsDeleteRefused above): line_items grants invoice_app
-// NO DELETE at all — proven above — so the app role can never directly remove a
-// line_items row. LI-RLS-10 proves the CASCADE removes lines when the parent invoice
-// is deleted, but does so via h.super, which BYPASSES every grant and every RLS
-// policy, so it cannot distinguish "the CASCADE fired" from "the superuser can do
-// anything anyway". This case re-proves the cascade using h.mig — the table OWNER,
-// which is bound by FORCE RLS exactly like every other role (LI-RLS-06) and was never
-// explicitly GRANTed DELETE on either table (ownership alone confers full privileges,
-// same as invoice_migrator's implicit rights on every M4-01 table) — under a real
-// tenant-scoped transaction. The line still disappears, proving the referential-action
-// CASCADE is driven by the FK constraint itself, not by any DELETE grant on line_items.
+// LI-RLS-10 and the DELETE cases above): the CASCADE that removes a line when its
+// parent invoice is deleted is a property of the FK's referential action, NOT of any
+// DELETE privilege on line_items. INVED-01-01 widened invoice_app's grant to include
+// DELETE, so this case no longer rests on "nobody can delete a line directly" — it
+// rests on the role performing the parent delete never having been *explicitly*
+// granted DELETE on line_items. LI-RLS-10 proves the CASCADE via h.super, which
+// BYPASSES every grant and every RLS policy, so it cannot distinguish "the CASCADE
+// fired" from "the superuser can do anything anyway". This case re-proves it using
+// h.mig — the table OWNER, bound by FORCE RLS exactly like every other role
+// (LI-RLS-06) and never explicitly GRANTed DELETE on either table (ownership alone
+// confers full privileges, same as invoice_migrator's implicit rights on every M4-01
+// table) — under a real tenant-scoped transaction. The line still disappears, proving
+// the referential-action CASCADE is driven by the FK constraint itself, not by any
+// DELETE grant on line_items.
 func TestRLS_LineItemsCascadeDrivenByFKNotGrant(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -698,5 +823,112 @@ func TestRLS_LineItemsUnfilteredCountSeesOnlyOwnTenant(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}
+
+// (QA-added, INVED-01-01 widened-grant adversarial coverage): invoice_tenant_reader
+// still has NO delete privilege — behavioral half. TestRLS_LineItemsGrantMatrixIs-
+// SelectInsertUpdateDelete already proves this via the catalog (has_table_privilege
+// asked as the superuser), but a catalog check alone cannot rule out a bug where the
+// catalog bit is correct yet the role can still delete anyway (e.g. via a second,
+// broader GRANT to a role invoice_tenant_reader is a member of). This case actually
+// issues the DELETE as h.reader and observes the refusal, mirroring how
+// TestRLS_SubmissionJobsAppDeleteRefused proves its own table's negative behaviorally
+// rather than by catalog alone.
+func TestRLS_LineItemsReaderDeleteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL-RDR A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-RDR-A")
+	defer cleanupInvoiceA()
+	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine()
+
+	_, err := h.reader.Exec(ctx, `DELETE FROM line_items WHERE id = $1`, id)
+	if err == nil {
+		t.Fatal("invoice_tenant_reader DELETE on line_items succeeded, want permission denied " +
+			"(SQLSTATE 42501) — the reader must hold no grant on this table at all, DELETE included")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("invoice_tenant_reader DELETE on line_items: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after reader's refused DELETE = %d, want 1 (row must survive)", n)
+	}
+}
+
+// (QA-added, INVED-01-01 widened-grant adversarial coverage): a malformed (non-UUID,
+// non-empty) app.current_tenant reaching Postgres directly makes a DELETE ERROR, not
+// silently affect zero rows. This is a DIFFERENT failure mode from INV-01-T3 (a truly
+// UNSET GUC, which fails closed with 0 rows and no error): the tenant_isolation
+// policy's predicate is `nullif(current_setting('app.current_tenant', true), '')::uuid`,
+// and casting a non-UUID string to ::uuid raises invalid_text_representation (22P02)
+// before any row is even considered. WithinTenantTx itself never lets a malformed
+// string this far (it validates client-side via uuid.Parse and returns ErrNoTenant —
+// proven generically for the helper by TestRLS_MissingContextFailsClosed's
+// `{"", "not-a-uuid"}` loop, not per table), so this case deliberately bypasses it with
+// a raw h.app.Begin + a hand-rolled set_config, exercising what the SQL layer itself
+// does if some future caller ever reaches Postgres without going through the shared
+// helper. Either way (this error, or WithinTenantTx's client-side ErrNoTenant) the row
+// must survive.
+func TestRLS_LineItemsDeleteMalformedTenantGUCErrors(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL-BADGUC A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-BADGUC-A")
+	defer cleanupInvoiceA()
+	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine()
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', 'not-a-uuid', true)`); err != nil {
+		t.Fatalf("set malformed app.current_tenant: %v", err)
+	}
+
+	_, err = tx.Exec(ctx, `DELETE FROM line_items WHERE id = $1`, id)
+	if err == nil {
+		t.Fatal("DELETE with a malformed (non-UUID) app.current_tenant succeeded, want invalid_text_representation (SQLSTATE 22P02)")
+	}
+	if code := pgCode(err); code != "22P02" {
+		t.Fatalf("DELETE with malformed app.current_tenant: SQLSTATE = %q, want 22P02 (invalid_text_representation): %v", code, err)
+	}
+	_ = tx.Rollback(ctx)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after malformed-GUC DELETE attempt = %d, want 1 (row must survive)", n)
+	}
+}
+
+// (QA-added, INVED-01-01 widened-grant adversarial coverage): line_items has NO
+// dependent FK children — no other table's row can be orphaned by a line_items DELETE,
+// because nothing references line_items(id). This pins the precondition that makes
+// INVED-01-01's widened grant safe with no cascade/orphan analysis: if a future story
+// adds a child table (e.g. line-item-level attachments or audit rows) with a plain FK
+// to line_items(id) and no ON DELETE clause, a line removal would then start raising
+// restrict_violation instead of silently succeeding — this case is the tripwire that
+// would turn red the day that happens, prompting a fresh look at this grant.
+func TestRLS_LineItemsHasNoDependentFKChildren(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var n int
+	err := h.super.QueryRow(ctx,
+		`SELECT count(*) FROM pg_constraint WHERE confrelid = 'public.line_items'::regclass AND contype = 'f'`,
+	).Scan(&n)
+	if err != nil {
+		t.Fatalf("query pg_constraint for FKs referencing line_items: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("FK constraints referencing line_items(id) = %d, want 0 (a line_items DELETE must not risk orphaning rows in any other table)", n)
 	}
 }

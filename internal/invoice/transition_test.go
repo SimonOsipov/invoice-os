@@ -670,6 +670,296 @@ func TestTransition_FailedToQueuedStaysIllegal(t *testing.T) {
 	}
 }
 
+// --- INVED-01-03 (task-264): canEdit/canRevalidate derived from the machine -
+
+// TestCanEdit_AllStatuses (INV-03-T1): folded over all 7 statuses, canEdit
+// yields exactly {draft, validated, rejected} -- byte-identical to the
+// 3-status guard it replaces at Store.Edit (store.go, [A8] fixable-state
+// guard) (Core AC 2).
+func TestCanEdit_AllStatuses(t *testing.T) {
+	want := map[Status]bool{
+		StatusDraft:     true,
+		StatusValidated: true,
+		StatusQueued:    false,
+		StatusSubmitted: false,
+		StatusAccepted:  false,
+		StatusRejected:  true,
+		StatusFailed:    false,
+	}
+	for _, s := range allStatuses {
+		if got := canEdit(s); got != want[s] {
+			t.Errorf("canEdit(%s) = %v, want %v", s, got, want[s])
+		}
+	}
+}
+
+// TestCanEdit_AgreesWithIndependentLegalEdgeOracle (INV-03-T2, rewritten from
+// the story's original self-referential spec): canEdit(s) is checked against
+// wantLegalEdge (transition_adversarial_test.go:47-59), an oracle hand-
+// written INDEPENDENTLY of legalTransitions/canTransition -- see that file's
+// header (:42-46) for why the oracle must stay independent. Comparing
+// against canTransition itself here would make this a tautology (the
+// original bug this rewrite fixes).
+func TestCanEdit_AgreesWithIndependentLegalEdgeOracle(t *testing.T) {
+	for _, s := range allStatuses {
+		want := s == StatusDraft || wantLegalEdge[[2]Status{s, StatusDraft}]
+		if got := canEdit(s); got != want {
+			t.Errorf("canEdit(%s) = %v, want %v (per the independent wantLegalEdge oracle, not canTransition)", s, got, want)
+		}
+	}
+}
+
+// TestCanRevalidate_AllStatuses (INV-03-T3): canRevalidate yields exactly
+// {draft} -- the gate's draft-only rule, stated once (Core AC 3).
+func TestCanRevalidate_AllStatuses(t *testing.T) {
+	for _, s := range allStatuses {
+		want := s == StatusDraft
+		if got := canRevalidate(s); got != want {
+			t.Errorf("canRevalidate(%s) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// TestLegalTransitions_SetEqualsIndependentOracle (INV-03-T4, strengthened
+// from a mere edge-count check): flattens legalTransitions to its
+// (from,target) pairs and asserts SET EQUALITY against the independent
+// wantLegalEdge oracle in BOTH directions -- not just a count of 11 -- so
+// neither an added nor a dropped edge slips through unnoticed. Pins that this
+// subtask adds/removes no lifecycle state or transition edge (AC 5, Out of
+// Scope). Does not touch canEdit/canRevalidate, so this is unaffected by
+// their R0 stubs.
+func TestLegalTransitions_SetEqualsIndependentOracle(t *testing.T) {
+	got := map[[2]Status]bool{}
+	for from, targets := range legalTransitions {
+		for _, target := range targets {
+			got[[2]Status{from, target}] = true
+		}
+	}
+	if len(got) != 11 {
+		t.Errorf("legalTransitions has %d edges, want 11", len(got))
+	}
+	for pair := range wantLegalEdge {
+		if !got[pair] {
+			t.Errorf("legalTransitions is missing edge %s->%s present in the independent wantLegalEdge oracle", pair[0], pair[1])
+		}
+	}
+	for pair := range got {
+		if !wantLegalEdge[pair] {
+			t.Errorf("legalTransitions has edge %s->%s NOT present in the independent wantLegalEdge oracle", pair[0], pair[1])
+		}
+	}
+	if !got[[2]Status{StatusValidated, StatusDraft}] {
+		t.Error("legalTransitions is missing validated->draft")
+	}
+	if !got[[2]Status{StatusRejected, StatusDraft}] {
+		t.Error("legalTransitions is missing rejected->draft")
+	}
+}
+
+// edgeTableWithout returns a deep copy of orig with the (from,target) edge
+// removed -- a fresh map with fresh slices, never mutating orig or any slice
+// it shares. Used by TestCanEdit_TracksLegalTransitions to perturb the
+// package-level legalTransitions var safely.
+func edgeTableWithout(orig map[Status][]Status, from, target Status) map[Status][]Status {
+	cp := make(map[Status][]Status, len(orig))
+	for k, v := range orig {
+		fresh := make([]Status, 0, len(v))
+		for _, s := range v {
+			if k == from && s == target {
+				continue
+			}
+			fresh = append(fresh, s)
+		}
+		cp[k] = fresh
+	}
+	return cp
+}
+
+// edgeTableWith returns a deep copy of orig with the (from,target) edge
+// added -- a fresh map with fresh slices, never mutating orig or any slice it
+// shares.
+func edgeTableWith(orig map[Status][]Status, from, target Status) map[Status][]Status {
+	cp := make(map[Status][]Status, len(orig))
+	for k, v := range orig {
+		fresh := make([]Status, len(v))
+		copy(fresh, v)
+		cp[k] = fresh
+	}
+	cp[from] = append(cp[from], target)
+	return cp
+}
+
+// TestCanEdit_TracksLegalTransitions (INV-03-T8, the AC-1/AC-4 enforcement
+// mechanism): T1/T2 pass for a hardcoded []Status{draft, validated, rejected}
+// literal TODAY, because the literal and the derivation happen to agree on
+// the current table -- neither one actually enforces "canEdit is DERIVED,
+// never a literal" (Core AC 4). This test perturbs legalTransitions at
+// runtime (deep copy via edgeTableWithout/edgeTableWith, t.Cleanup restore)
+// and asserts canEdit tracks the change; a hardcoded literal fails every
+// assertion below.
+//
+// Safe with NO t.Parallel: verified zero t.Parallel() calls anywhere in
+// internal/invoice, so this package's test functions run strictly
+// sequentially and the global var swap below cannot race another test. The
+// day someone adds t.Parallel() to this package, this global-var swap
+// becomes unsafe -- this comment is the warning.
+func TestCanEdit_TracksLegalTransitions(t *testing.T) {
+	orig := legalTransitions
+	t.Cleanup(func() { legalTransitions = orig })
+
+	// A: drop rejected->draft. A DERIVED canEdit stops admitting rejected;
+	// a hardcoded {draft,validated,rejected} literal keeps admitting it.
+	legalTransitions = edgeTableWithout(orig, StatusRejected, StatusDraft)
+	if canEdit(StatusRejected) {
+		t.Error("canEdit(rejected) = true after rejected->draft was removed -- canEdit is NOT derived from legalTransitions (hardcoded status list?)")
+	}
+	if !canEdit(StatusDraft) {
+		t.Error("canEdit(draft) must stay true -- draft is editable by definition, not by edge")
+	}
+	if !canEdit(StatusValidated) {
+		t.Error("canEdit(validated) must be unaffected by the rejected edge")
+	}
+
+	// B: add failed->draft. A DERIVED canEdit admits failed; a literal does
+	// not.
+	legalTransitions = edgeTableWith(orig, StatusFailed, StatusDraft)
+	if !canEdit(StatusFailed) {
+		t.Error("canEdit(failed) = false after failed->draft was added -- canEdit is NOT derived from legalTransitions")
+	}
+}
+
+// TestCanRevalidate_AgreesWithThePromotionEdge (INV-03-T9, tripwire): pins
+// the deliberately-NOT-derived canRevalidate literal against the machine by
+// asserting canRevalidate(s) == canTransition(s, StatusValidated) for all 7
+// statuses. canRevalidate stays a hand-written s == StatusDraft literal on
+// purpose (Store.ApplyValidation's promotion hardwires its FROM state to
+// draft via transitionTx, so draft-only-ness is the gate's OWN contract, not
+// an edge-table property, [gate-scope-draft-only]) -- but if anyone ever adds
+// an inbound edge to validated from a state other than draft, this test goes
+// red and forces a human decision on whether the gate should widen too.
+func TestCanRevalidate_AgreesWithThePromotionEdge(t *testing.T) {
+	for _, s := range allStatuses {
+		want := canTransition(s, StatusValidated)
+		if got := canRevalidate(s); got != want {
+			t.Errorf("canRevalidate(%s) = %v, canTransition(%s, validated) = %v -- want equal; an inbound edge to validated was added -- decide whether the gate widens; canRevalidate is deliberately a literal, see its doc", s, got, s, want)
+		}
+	}
+}
+
+// --- QA (task-264, Mode B): adversarial coverage T8/T9 did not include -----
+
+// TestCanEdit_TracksLegalTransitions_ValidatedEdgeRemoved (QA gap-close): T8
+// perturbs by dropping rejected->draft and adding failed->draft, but never
+// removes validated->draft -- the OTHER inbound edge canEdit's {draft,
+// validated, rejected} result depends on. Confirmed live during this QA pass:
+// a literal []Status{draft, validated, rejected} would keep admitting
+// validated here too (it never consults legalTransitions at all), so this arm
+// is exactly as load-bearing as T8's two -- it was simply missing.
+func TestCanEdit_TracksLegalTransitions_ValidatedEdgeRemoved(t *testing.T) {
+	orig := legalTransitions
+	t.Cleanup(func() { legalTransitions = orig })
+
+	legalTransitions = edgeTableWithout(orig, StatusValidated, StatusDraft)
+	if canEdit(StatusValidated) {
+		t.Error("canEdit(validated) = true after validated->draft was removed -- canEdit is NOT derived from legalTransitions (hardcoded status list?)")
+	}
+	if !canEdit(StatusDraft) {
+		t.Error("canEdit(draft) must stay true -- draft is editable by definition, not by edge")
+	}
+	if !canEdit(StatusRejected) {
+		t.Error("canEdit(rejected) must be unaffected by the validated edge (rejected->draft is untouched)")
+	}
+}
+
+// TestCanEdit_CanRevalidate_UnknownStatusNeverPanicsAndIsFalse: a Status value
+// outside the 7-member universe (never producible by the DB CHECK constraint
+// or scanInvoice, but Status is a bare `string` with no runtime validation of
+// its own) must not panic canEdit/canRevalidate, and must read as
+// not-editable/not-revalidatable -- legalTransitions[unknownStatus] is a
+// nil-slice map miss, which canTransition's range loop already treats as "no
+// edges", and unknownStatus != StatusDraft, so both predicates fall through
+// to false without a nil-map special case anywhere.
+func TestCanEdit_CanRevalidate_UnknownStatusNeverPanicsAndIsFalse(t *testing.T) {
+	const bogus Status = "not-a-real-status"
+	if canEdit(bogus) {
+		t.Error("canEdit(bogus) = true, want false for a status outside the 7-member universe")
+	}
+	if canRevalidate(bogus) {
+		t.Error("canRevalidate(bogus) = true, want false for a status outside the 7-member universe")
+	}
+	empty := Status("")
+	if canEdit(empty) {
+		t.Error("canEdit(\"\") = true, want false")
+	}
+	if canRevalidate(empty) {
+		t.Error("canRevalidate(\"\") = true, want false")
+	}
+}
+
+// edgeCount sums the number of (from,target) pairs in an edge table --
+// used by TestCanEdit_CanRevalidate_ArePureFunctions to detect any mutation
+// of legalTransitions by canEdit/canRevalidate, without needing reflect.
+func edgeCount(m map[Status][]Status) int {
+	n := 0
+	for _, v := range m {
+		n += len(v)
+	}
+	return n
+}
+
+// TestCanEdit_CanRevalidate_ArePureFunctions: neither predicate may mutate the
+// package-level legalTransitions var or any of its slices -- both are called
+// from two independent request paths (Store.Edit / Gate.Validate /
+// Store.ApplyValidation) with no synchronization between them, so a predicate
+// that wrote to the shared map would be a data race waiting for
+// TestCanEdit_TracksLegalTransitions's t.Parallel-sensitivity comment to
+// become an active bug. Calls every predicate many times over the full status
+// universe, then asserts the key count and total edge count are unchanged --
+// edgeTableWith/edgeTableWithout (used elsewhere in this file) each change
+// edgeCount by exactly 1, so this would catch either direction of drift.
+func TestCanEdit_CanRevalidate_ArePureFunctions(t *testing.T) {
+	beforeKeys := len(legalTransitions)
+	beforeEdges := edgeCount(legalTransitions)
+
+	for i := 0; i < 3; i++ {
+		for _, s := range allStatuses {
+			_ = canEdit(s)
+			_ = canRevalidate(s)
+		}
+	}
+
+	if got := len(legalTransitions); got != beforeKeys {
+		t.Errorf("legalTransitions has %d keys after calling canEdit/canRevalidate, want unchanged %d -- a predicate mutated the map", got, beforeKeys)
+	}
+	if got := edgeCount(legalTransitions); got != beforeEdges {
+		t.Errorf("legalTransitions has %d total edges after calling canEdit/canRevalidate, want unchanged %d -- a predicate mutated the map", got, beforeEdges)
+	}
+}
+
+// TestCanEdit_EmptyEdgeTableYieldsOnlyDraft: with every edge removed,
+// canEdit's one-hop derivation has nothing left to fall back on, so it must
+// yield {draft} and NOTHING else -- draft is editable by the `s ==
+// StatusDraft` literal branch alone, never by an edge. This is the boundary
+// case for "derived, not reachability": a canEdit implementation that
+// hardcoded {draft, validated, rejected} (ANTI-PATTERN 1) or that computed
+// draft-editability itself via canTransition/BFS over an edge (rather than the
+// literal) would both misbehave here in different ways -- the former stays
+// wrong regardless of the table, the latter would flip draft to
+// false once its self-edge (there isn't one) or any edge is gone.
+func TestCanEdit_EmptyEdgeTableYieldsOnlyDraft(t *testing.T) {
+	orig := legalTransitions
+	t.Cleanup(func() { legalTransitions = orig })
+
+	legalTransitions = map[Status][]Status{}
+
+	for _, s := range allStatuses {
+		want := s == StatusDraft
+		if got := canEdit(s); got != want {
+			t.Errorf("with legalTransitions empty, canEdit(%s) = %v, want %v", s, got, want)
+		}
+	}
+}
+
 // --- M5-09-02 (task-255): the clear moves into transitionTx -----------------
 
 // TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons

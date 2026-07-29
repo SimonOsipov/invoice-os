@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -319,6 +320,133 @@ func TestStoreCreate_LineItemsGetSystemOrdinals(t *testing.T) {
 		if invoiceIDs[i] != inv.ID {
 			t.Errorf("line_items[%d].invoice_id = %q, want %q", i, invoiceIDs[i], inv.ID)
 		}
+	}
+}
+
+// TestHydrateLinesTx_OrderedMatchingGetAndNilWhenLineless (INV-02-T12,
+// INVED-01-02): hydrateLinesTx, called inside a tx, must return an
+// invoice's line_items ordered line_no ASC -- matching Store.Get exactly --
+// and nil (not []LineItem{}) for a line-less invoice. hydrateLinesTx is the
+// SINGLE line-read getTx/Store.Edit/Store.ApplyValidation all now share, so
+// this pins the one query the rest of the package depends on.
+func TestHydrateLinesTx_OrderedMatchingGetAndNilWhenLineless(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INV-02-T12 tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-02-T12 entity")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INV-02-T12")
+
+	// Seed 3 line_items OUT of line_no order (mirrors
+	// TestStoreGet_HydratesLineItemsOrdered), so an unordered SELECT would
+	// fail the ordering assertion below.
+	for _, lineNo := range []int{3, 1, 2} {
+		if _, err := super.Exec(ctx,
+			`INSERT INTO line_items (tenant_id, invoice_id, line_no, description) VALUES ($1, $2, $3, $4)`,
+			tenantID, invoiceID, lineNo, fmt.Sprintf("Line %d", lineNo),
+		); err != nil {
+			t.Fatalf("seed line_items (line_no=%d): %v", lineNo, err)
+		}
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Get(c, invoiceID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	var viaHydrate []LineItem
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		viaHydrate, err = hydrateLinesTx(ctx, tx, invoiceID)
+		return err
+	}); err != nil {
+		t.Fatalf("hydrateLinesTx: %v", err)
+	}
+
+	if len(viaHydrate) != 3 {
+		t.Fatalf("hydrateLinesTx: len = %d, want 3", len(viaHydrate))
+	}
+	for i, want := range []int{1, 2, 3} {
+		if viaHydrate[i].LineNo != want {
+			t.Errorf("hydrateLinesTx[%d].LineNo = %d, want %d (ordered by line_no ASC)", i, viaHydrate[i].LineNo, want)
+		}
+	}
+	if !reflect.DeepEqual(viaHydrate, got.LineItems) {
+		t.Errorf("hydrateLinesTx result %+v does not match Store.Get's hydrated LineItems %+v -- "+
+			"hydrateLinesTx is supposed to be the SINGLE line-read both share [INV-02-T12]", viaHydrate, got.LineItems)
+	}
+
+	// A line-less invoice: hydrateLinesTx must return nil, never []LineItem{}
+	// -- a `var out []LineItem` never appended to stays nil, the same
+	// property INV-02-T13 depends on holding across the package.
+	linelessID := seedInvoice(t, super, tenantID, entityID, "INV-02-T12-lineless")
+	var viaHydrateLineless []LineItem
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		viaHydrateLineless, err = hydrateLinesTx(ctx, tx, linelessID)
+		return err
+	}); err != nil {
+		t.Fatalf("hydrateLinesTx (lineless): %v", err)
+	}
+	if viaHydrateLineless != nil {
+		t.Errorf("hydrateLinesTx(lineless invoice) = %#v, want nil (not []LineItem{}) [INV-02-T12]", viaHydrateLineless)
+	}
+}
+
+// TestHydrateLinesTx_FingerprintMatchesStoreGet (QA adversarial,
+// INVED-01-02 Part D): INV-02-T12 above already proves hydrateLinesTx's
+// lines are reflect.DeepEqual to Store.Get's -- this pins the SAME
+// hydration-consistency property one level up, at the actual
+// contentFingerprint an invoice's tx-scoped callers (Store.Edit,
+// Store.ApplyValidation) compute over hydrateLinesTx's lines against the
+// evaluatedFingerprint Gate.Validate computed over Store.Get's. If the two
+// line-reads ever diverged (e.g. a projection or ordering drift introduced
+// by a future change to one call site but not the other), this is the test
+// that would catch it as a fingerprint mismatch -- the exact failure mode
+// [toctou-staleness] depends on NOT happening.
+func TestHydrateLinesTx_FingerprintMatchesStoreGet(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INV-02-FP tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-02-FP entity")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INV-02-FP")
+
+	for i, lineNo := range []int{3, 1, 2} {
+		price := fmt.Sprintf("%d.00", i+1)
+		if _, err := super.Exec(ctx,
+			`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, unit_price) VALUES ($1, $2, $3, $4, $5::numeric)`,
+			tenantID, invoiceID, lineNo, fmt.Sprintf("Line %d", lineNo), price,
+		); err != nil {
+			t.Fatalf("seed line_items (line_no=%d): %v", lineNo, err)
+		}
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Get(c, invoiceID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	var viaHydrate []LineItem
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		viaHydrate, err = hydrateLinesTx(ctx, tx, invoiceID)
+		return err
+	}); err != nil {
+		t.Fatalf("hydrateLinesTx: %v", err)
+	}
+
+	fpViaGet := contentFingerprint(got, got.LineItems)
+	fpViaHydrate := contentFingerprint(got, viaHydrate)
+	if fpViaGet != fpViaHydrate {
+		t.Errorf("contentFingerprint(Store.Get lines) = %q, contentFingerprint(hydrateLinesTx lines) = %q, want equal -- "+
+			"the hydration-consistency property [toctou-staleness] depends on", fpViaGet, fpViaHydrate)
 	}
 }
 

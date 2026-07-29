@@ -243,9 +243,9 @@ func TestContentFingerprint_ChangesOnlyWithContent(t *testing.T) {
 	changedVAT := base
 	changedVAT.VAT = strPtr("80.00")
 
-	fpBase := contentFingerprint(base)
-	fpSame := contentFingerprint(sameAgain)
-	fpChanged := contentFingerprint(changedVAT)
+	fpBase := contentFingerprint(base, base.LineItems)
+	fpSame := contentFingerprint(sameAgain, sameAgain.LineItems)
+	fpChanged := contentFingerprint(changedVAT, changedVAT.LineItems)
 
 	if fpBase == "" {
 		t.Fatalf("contentFingerprint(base) is empty -- want a real hash [PAY-20]")
@@ -296,8 +296,8 @@ func TestMBSPayload_PureAndDeterministic(t *testing.T) {
 			"pure [PAY-21]\n  first:  %#v\n  second: %#v", p1, p2)
 	}
 
-	f1 := contentFingerprint(inv)
-	f2 := contentFingerprint(inv)
+	f1 := contentFingerprint(inv, inv.LineItems)
+	f2 := contentFingerprint(inv, inv.LineItems)
 	if f1 != f2 {
 		t.Errorf("contentFingerprint(inv) called twice produced different results "+
 			"(%q vs %q) -- must be pure [PAY-21]", f1, f2)

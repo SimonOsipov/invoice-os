@@ -161,6 +161,22 @@ function submittableInvoiceFields(invoiceNumber: string, buyerTin: string) {
   return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin }
 }
 
+// lineEditFields(): INVED-01-08's own fixture for the draft line-editor tests (Core AC
+// #5) -- two lines summing to 900.00 against a header subtotal of 1000, a mismatch that
+// WOULD block validation (line-items-sum-subtotal), which is exactly why this invoice is
+// never sent through /validate at all. Never confused with cleanInvoiceFields' own single
+// reconciling line.
+function lineEditFields(invoiceNumber: string) {
+  return {
+    ...cleanInvoiceFields(invoiceNumber),
+    subtotal: '1000',
+    line_items: [
+      { description: 'Widget A', quantity: '4', unit_price: '100', line_total: '400' },
+      { description: 'Widget B', quantity: '5', unit_price: '100', line_total: '500' },
+    ],
+  }
+}
+
 // invoiceRowByNumber(): the row-index idiom's simpler sibling for these tests -- every
 // fixture below gets its own Date.now()-suffixed invoice_number, so an exact-text filter
 // on the row is unambiguous without needing to capture and index into the list response
@@ -283,6 +299,15 @@ test('detail surface: violations render against the rule-set version, the fix lo
 
   const errors = collectErrors(page)
 
+  // INVED-01-08 (AC #2/#3): every POST .../validate the browser fires, registered BEFORE
+  // either of the two Re-validate clicks below so step 6's disabled-button assertion can
+  // prove genuine non-vacuity -- validatePosts must already hold both requests before the
+  // disabled click is even attempted.
+  const validatePosts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/validate')) validatePosts.push(r.url())
+  })
+
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `M4-09 detail ${Date.now()}`, tin: freshTin() })
 
@@ -335,6 +360,10 @@ test('detail surface: violations render against the rule-set version, the fix lo
   //    lookup: the form carries no per-field test ids, and the two TIN inputs
   //    share the same placeholder ("########-####"), so a placeholder-based
   //    locator would be ambiguous.
+  // [edit-mode-in-body] (INVED-01-07/08): the form now mounts only while `editing`, so the
+  // Edit toggle must be clicked before it exists at all -- without this every
+  // form.locator(...) below is a locator TIMEOUT, not an assertion.
+  await page.getByTestId('edit-toggle').click()
   const form = page.getByTestId('edit-invoice')
   await form.locator('xpath=.//div[normalize-space(text())="Issue date"]/following-sibling::input').fill('2026-02-01')
   await form.locator('xpath=.//div[normalize-space(text())="Supplier TIN"]/following-sibling::input').fill(freshTin())
@@ -342,7 +371,10 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await page.getByRole('button', { name: 'Save changes' }).click()
 
   await expect(page.getByTestId('stale-verdict')).toBeVisible()
-  await expect(form).not.toContainText('Something went wrong')
+  // [edit-mode-in-body]: handleSaved's setEditing(false) unmounts the editor on success --
+  // absence of the form IS the success oracle. `not.toContainText` on a 0-element locator
+  // passes VACUOUSLY (not-found), so it never actually proved anything; toHaveCount(0) does.
+  await expect(form, 'a successful save unmounts the editor').toHaveCount(0)
 
   // 4. handleSaved now refreshes the status-history timeline IN PLACE
   //    (history.run() alongside detail.run(), InvoiceDetail.tsx) -- no
@@ -364,28 +396,39 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
   await expect(page.getByTestId('status-history-row').last()).toContainText('draft → validated')
 
-  // 6. The other priority regression QA flagged: Re-validate on an untouched
-  //    VALIDATED invoice must surface an inline error, not fail silently.
-  //    isFixable(status) keeps the button visible for validated too
-  //    ([gate-scope-draft-only] doc comment, InvoiceDetail.tsx), but
-  //    Store.ApplyValidation's gate is draft-only -> 409 ErrNotDraft ->
-  //    "invoice is not a draft" (handlers.go's statusForErr), forwarded
-  //    verbatim as ApiError.message and rendered inline -- and nothing else
-  //    changes.
-  await page.getByTestId('revalidate').click()
-  await expect(page.getByText('invoice is not a draft')).toBeVisible()
+  // 6. INVED-01-07/08: the OLD 409-on-Re-validate dead end is gone. On an untouched
+  //    VALIDATED invoice, Re-validate is DISABLED with a visible reason
+  //    ([revalidate-visibility]/[revalidate-reason-from-backend]) -- Edit stays enabled
+  //    ([D-actions-hidden-while-editing] only hides the bar while an editor is mounted,
+  //    which none is here). The wire's own copy is asserted as a substring only (never the
+  //    em dash literal -- an encoding hazard through a CI shell).
+  const revalidate = page.getByTestId('revalidate')
+  await expect(revalidate).toBeVisible()
+  await expect(revalidate).toBeDisabled()
+  await expect(page.getByTestId('edit-toggle')).toBeEnabled()
+  await expect(page.getByTestId('revalidate-blocked-reason')).toContainText('Only draft invoices can be re-validated')
+
+  // Non-vacuity: the recorder must already hold BOTH earlier Re-validate clicks (steps 2
+  // and 5) before the disabled click below is attempted -- proving the predicate actually
+  // matches POST .../validate requests, not just that none happened to fire.
+  expect(validatePosts, 'the two earlier Re-validate clicks were observed').toHaveLength(2)
+
+  const noValidate = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/validate'),
+    { timeout: 2_000 },
+  )
+  // force:true bypasses Playwright's own actionability pre-checks (which would otherwise
+  // refuse to click a disabled element) -- but the real HTML `disabled` attribute still
+  // suppresses the browser's own click event, so React's onClick handler never fires.
+  // Never dispatchEvent('click'): that bypasses the browser's disabled-button suppression
+  // too and would test the OPPOSITE of the guarantee this step exists to prove.
+  await revalidate.click({ force: true })
+  await expect(noValidate).rejects.toThrow()
+  expect(validatePosts, 'a disabled Re-validate must issue no request').toHaveLength(2)
   await expect(page.getByTestId('status-history-row')).toHaveCount(2)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
-  // Chromium unconditionally logs "Failed to load resource … 409" to the
-  // console for step 6's deliberate not-a-draft fetch, regardless of how
-  // gracefully the app handles the response -- unsuppressable from app JS.
-  // The 409 itself is already positively verified above (the inline "invoice
-  // is not a draft" error rendering, history staying at 2 rows, status
-  // staying VALIDATED), so this filters out ONLY that one expected resource-
-  // load message; any other console error still fails the gate below.
-  const unexpectedErrors = errors.filter((e) => !/Failed to load resource.*\b409\b/.test(e))
-  expect(unexpectedErrors, `console errors on the app:\n${unexpectedErrors.join('\n')}`).toEqual([])
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
 // MixedImportResponse: the subset of POST /v1/imports's success body this test reads to
@@ -516,11 +559,12 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // 5. Fix VAT inline (the only broken field here -- vat-standard-rate is the sole
   // violation) and save. Scoped to the edit-invoice form via xpath sibling lookup (the
   // form carries no per-field test ids -- same idiom as the "detail surface" test above).
+  await page.getByTestId('edit-toggle').click()
   const form = page.getByTestId('edit-invoice')
   await form.locator('xpath=.//div[normalize-space(text())="VAT"]/following-sibling::input').fill('75')
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(page.getByTestId('stale-verdict')).toBeVisible()
-  await expect(form).not.toContainText('Something went wrong')
+  await expect(form, 'a successful save unmounts the editor').toHaveCount(0)
 
   // 6. Re-validate to green. handleRevalidate also refreshes the status-history timeline
   // in place (history.run(), alongside detail.run()) -- asserting its settled row count
@@ -662,6 +706,7 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   await expect(rejectionCard).toBeVisible()
   await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
 
+  await page.getByTestId('edit-toggle').click()
   const form = page.getByTestId('edit-invoice')
   const buyerTinFlag = form.locator('xpath=.//div[normalize-space(text())="Buyer TIN"]/following-sibling::*[@data-testid="field-flag"]')
   await expect(buyerTinFlag).toBeVisible()
@@ -729,6 +774,174 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// INVED-01-08, Core AC 6 -- the headline journey: a rejected invoice, edited back to
+// draft with its rejection reasons RETAINED, then re-validated to green, entirely from the
+// detail page. Deliberately NOT folded into the reject/resubmit test above: that test is
+// the M5-09 gate with a delicate 8/9-row history sequence and a poll-timing dependency
+// (the PENDING-trigger resubmit leg); coupling this story's headline journey to it would
+// make both harder to diagnose on a failure.
+//
+// Fixture: forcing `rejected` via the transitions API does NOT write rejection_reasons
+// (transitionTx only mutates that column to CLEAR it, and only on target===accepted) --
+// shouldShowRejectionCard requires rejection_reasons.length > 0, so that path would leave
+// the card untestable. The only source of a REAL reason is the mock APP, so this reuses
+// the reject/resubmit test's own proven recipe verbatim: validate, then batch-submit
+// through the UI so the mock adapter actually scripts the rejection.
+test('detail surface: a rejected invoice is edited back to draft with its reasons retained, then re-validated to green (Core AC 6)', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVED-01 loop ${Date.now()}`, tin: freshTin() })
+
+  const invoiceNumber = `INV-INVED01-LOOP-${Date.now()}`
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_REJECT),
+  })
+  await validateInvoice(token, inv.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+  // -0002 converges synchronously (queued->rejected, ~800ms adapter latency) -- default
+  // expect timeout is comfortable, no override needed (this file's own established note).
+  await expect(row.getByTestId('invoice-status-badge')).toContainText('REJECTED')
+
+  await openInvoiceRow(page, invoiceNumber)
+
+  // The rejection card carries the mock's real reason, and history sits at 4 rows: 1
+  // genesis, 2 draft->validated, 3 validated->queued, 4 queued->rejected.
+  const rejectionCard = page.getByTestId('rejection-reasons')
+  await expect(rejectionCard).toBeVisible()
+  await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
+  await expect(page.getByTestId('status-history-row')).toHaveCount(4)
+
+  // Edit -> change ONLY a line's description. diffEditInput therefore emits {} for the
+  // header and diffLineItems emits the one changed line, so only `line_items` reaches the
+  // wire -- Core AC 2's isolated line-only PATCH path.
+  await page.getByTestId('edit-toggle').click()
+  await page.getByTestId('line-row').nth(0).locator('input').first().fill('Widget A revised')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  // The demotion: rejected -> draft retains the reasons (transitionTx clears
+  // rejection_reasons only on target===accepted, [reason-lifecycle]) and stamps a 5th
+  // history row.
+  await expect(page.getByTestId('stale-verdict')).toBeVisible()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
+  await expect(rejectionCard).toBeVisible()
+  await expect(rejectionCard.getByTestId('rejection-reason-row')).toContainText('NGE-4102')
+  await expect(page.getByTestId('status-history-row')).toHaveCount(5)
+  await expect(page.getByTestId('status-history-row').last()).toContainText('rejected → draft')
+
+  // Re-validate is enabled again ([revalidate-visibility]/AC #2) -- the fixture's numbers
+  // were always clean (only the description text changed), so this re-validates green.
+  const revalidate = page.getByTestId('revalidate')
+  await expect(revalidate).toBeEnabled()
+  await revalidate.click()
+  await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+  await expect(page.getByTestId('status-history-row')).toHaveCount(6)
+  await expect(page.getByTestId('status-history-row').last()).toContainText('draft → validated')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// INVED-01-08, Core AC 5 -- the draft line editor: add / remove / cancel, and the passive
+// computed-sum hint tracking the LIVE edited rows rather than the last-saved
+// inv.line_items (the documented trap, InvoiceDetail.tsx's own doc comment on lineSum).
+// Read-only rows carry no testid (InvoiceDetail.tsx), so post-save count/order is asserted
+// by RE-OPENING Edit and reading the seeded inputs, plus description text on the read-only
+// body.
+test('detail surface: the draft line editor -- add, remove, cancel, and a live computed-sum hint (Core AC 5)', async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVED-01 lines ${Date.now()}`, tin: freshTin() })
+
+  const invoiceNumber = `INV-INVED01-LINES-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...lineEditFields(invoiceNumber) })
+
+  // PATCH recorder, registered once `inv.id` is known and before the browser opens --
+  // T8's non-vacuity proof that Cancel truly sent nothing, and T5/T6's proof that Save
+  // truly sent exactly one request each.
+  const patchCalls: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'PATCH' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}`)) patchCalls.push(r.url())
+  })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  // T7: two lines summing to 900.00 against a 1000 header subtotal (never validated, so no
+  // verdict is at risk). The hint must be fed the LIVE edited rows, not inv.line_items --
+  // presence alone is vacuous (the node always renders); only a value that MOVES as the
+  // operator types proves it.
+  await page.getByTestId('edit-toggle').click()
+  const lineRows = page.getByTestId('line-row')
+  await expect(lineRows).toHaveCount(2)
+  await expect(page.getByTestId('computed-line-sum')).toContainText('900.00')
+  await lineRows.nth(0).locator('input').nth(2).fill('200')
+  await expect(page.getByTestId('computed-line-sum')).toContainText('1300.00')
+  await expect(page.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+
+  // T8: cancel with the unit-price edit above still pending, plus an untouched-but-open
+  // row-1 description edit -- Cancel must discard BOTH and send nothing.
+  await lineRows.nth(1).locator('input').first().fill('Widget B (unsaved)')
+  await page.getByTestId('edit-cancel').click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-detail')).toContainText('Widget A')
+  await expect(page.getByTestId('invoice-detail')).toContainText('Widget B')
+  expect(patchCalls, 'Cancel must issue no PATCH').toHaveLength(0)
+
+  // T5: re-open (re-seeded from the still-unedited server record, since Cancel never
+  // refetches), add a third line, save.
+  await page.getByTestId('edit-toggle').click()
+  await page.getByTestId('line-add').click()
+  const newRow = page.getByTestId('line-row').nth(2)
+  await newRow.locator('input').nth(0).fill('Widget C')
+  await newRow.locator('input').nth(1).fill('2')
+  await newRow.locator('input').nth(2).fill('50')
+  await newRow.locator('input').nth(3).fill('100')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-detail')).toContainText('Widget C')
+  expect(patchCalls, 'retro-non-vacuity for T8: Save really does send exactly one PATCH').toHaveLength(1)
+
+  // T6: re-open (now 3 server-side lines), remove the middle row (Widget B), save -- order
+  // must survive: Widget A stays row 0, Widget C shifts up to row 1.
+  await page.getByTestId('edit-toggle').click()
+  await expect(page.getByTestId('line-row')).toHaveCount(3)
+  await page.getByTestId('line-row').nth(1).getByTestId('line-remove').click()
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-detail')).not.toContainText('Widget B')
+
+  // Re-open once more to assert order/count through the seeded inputs (read-only rows
+  // carry no testid).
+  await page.getByTestId('edit-toggle').click()
+  const finalRows = page.getByTestId('line-row')
+  await expect(finalRows).toHaveCount(2)
+  await expect(finalRows.nth(0).locator('input').first()).toHaveValue('Widget A')
+  await expect(finalRows.nth(1).locator('input').first()).toHaveValue('Widget C')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('submission surface: a failed invoice is an honest dead end', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -761,13 +974,17 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   await expect(page.getByTestId('failed-dead-end')).toBeVisible()
   await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
-  // "no submit control at all": failed is not `isFixable` (draft/validated/rejected
-  // only), so neither Re-validate nor the edit form renders -- and no button anywhere on
-  // this page matches /submit/i (InvoicesList, the only surface with a Submit button, is
-  // fully unmounted while on the detail view -- App.tsx's view switch is exclusive, never
-  // both mounted at once).
+  // "no submit control at all": `can_edit` is false for a failed invoice
+  // ([gates-on-the-wire], store.go's canEdit/canTransition), so the actions bar (Edit AND
+  // Re-validate together) renders nothing at all -- `edit-invoice` itself would be vacuous
+  // here (the form only mounts once Edit is clicked, and there is no Edit to click), so
+  // `invoice-actions`/`edit-toggle` are the real guard ([actions-visibility]). No button
+  // anywhere on this page matches /submit/i either (InvoicesList, the only surface with a
+  // Submit button, is fully unmounted while on the detail view -- App.tsx's view switch is
+  // exclusive, never both mounted at once).
   await expect(page.getByTestId('revalidate')).toHaveCount(0)
-  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
+  await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

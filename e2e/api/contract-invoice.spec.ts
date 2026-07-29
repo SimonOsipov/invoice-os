@@ -62,6 +62,21 @@ function cleanInvoiceFields(invoiceNumber: string) {
   }
 }
 
+// twoLineInvoiceFields(): a two-line variant of cleanInvoiceFields (INVED-01-08), needed
+// so T10's 3-line PATCH genuinely REPLACES the set rather than merely appending to a
+// single starting line, and so T11's fingerprint check has real line ids to compare.
+// Same header numbers as cleanInvoiceFields (fires zero violations), just split across two
+// reconciling lines instead of one.
+function twoLineInvoiceFields(invoiceNumber: string) {
+  return {
+    ...cleanInvoiceFields(invoiceNumber),
+    line_items: [
+      { description: 'Line One', quantity: '2', unit_price: '250', line_total: '500' },
+      { description: 'Line Two', quantity: '5', unit_price: '100', line_total: '500' },
+    ],
+  }
+}
+
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
   let entity: Entity
@@ -371,6 +386,172 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const created = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-H-${freshTin()}` })
       const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/history`)
       assertErrorEnvelope(res, 401, 'history no auth')
+    })
+  })
+
+  // INVED-01-08: the PATCH-line_items and GET-action-flag contracts (Core AC 2/3/4), plus
+  // the one additive transitions/submissions door Core AC 2 needs a second proof of. This
+  // file asserts individual keys, never an exact key set on a success body (verified) --
+  // so the three additive GET keys below are safe, and batch-submit's result item is
+  // asserted field-by-field rather than via a whole-object toEqual for the same reason.
+  test.describe('edit (PATCH)', () => {
+    test('PATCH line_items[3] -> 200, replaces the whole set with line_no reassigned 1..3', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: {
+          line_items: [
+            { description: 'Alpha', quantity: '1', unit_price: '100', line_total: '100' },
+            { description: 'Beta', quantity: '2', unit_price: '100', line_total: '200' },
+            { description: 'Gamma', quantity: '3', unit_price: '100', line_total: '300' },
+          ],
+        },
+      })
+      expect(res.status, 'PATCH with a full line_items array should return 200').toBe(200)
+      const body = res.body as Record<string, unknown>
+      const lines = body.line_items as Record<string, unknown>[]
+      expect(Array.isArray(lines), 'line_items should be an array').toBe(true)
+      expect(lines.length, 'PATCH should REPLACE the whole line set, not append to it').toBe(3)
+      expect(lines.map((l) => l.line_no), 'line_no should be reassigned 1..N by array position').toEqual([1, 2, 3])
+
+      const getRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const getLines = (getRes.body as Record<string, unknown>).line_items as Record<string, unknown>[]
+      expect(getLines.length, 'GET should reflect the replaced 3-line set').toBe(3)
+      expect(getLines.map((l) => l.line_no)).toEqual([1, 2, 3])
+    })
+
+    test('PATCH line_items:[] -> 200, and the response OMITS the key entirely, never []', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [] },
+      })
+      expect(res.status, 'PATCH line_items:[] should return 200').toBe(200)
+      // Invoice.LineItems is `json:"line_items,omitempty"` (invoice.go:105) and both
+      // replaceLinesTx and hydrateLinesTx return nil (never []LineItem{}) for zero rows --
+      // the wire carries NO key at all for a fully-emptied invoice. A naive
+      // `toEqual([])` would fail here; only absence is correct.
+      expect('line_items' in (res.body as Record<string, unknown>), 'a zero-line invoice must omit line_items entirely, not carry []').toBe(false)
+
+      const getRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      expect('line_items' in (getRes.body as Record<string, unknown>), 'GET must agree: no key, not []').toBe(false)
+    })
+
+    test('PATCH header-only change leaves line ids and content byte-identical [fingerprint-excludes-line-ids]', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
+      const before = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const beforeLines = (before.body as Record<string, unknown>).line_items
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { supplier_name: 'Renamed Supplier Ltd' },
+      })
+      expect(res.status, 'a header-only PATCH should return 200').toBe(200)
+
+      const after = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const afterBody = after.body as Record<string, unknown>
+      expect(afterBody.supplier_name, 'the header field should be updated').toBe('Renamed Supplier Ltd')
+      expect(afterBody.line_items, 'a header-only edit must not touch the stored lines (ids incl.)').toEqual(beforeLines)
+    })
+
+    test('PATCH a line change on a validated invoice demotes it to draft with can_revalidate:true and a null reason', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] },
+      })
+      expect(res.status, 'a line change on a validated invoice should still return 200').toBe(200)
+
+      const getRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const body = getRes.body as Record<string, unknown>
+      expect(body.status, 'the edit should demote validated -> draft').toBe('draft')
+      expect(body.can_edit, 'a demoted draft should still be editable').toBe(true)
+      expect(body.can_revalidate, 'a demoted draft should be re-validatable').toBe(true)
+      expect(body.revalidate_blocked_reason, 'the reason must be exactly null, not merely falsy').toBeNull()
+    })
+
+    test('GET on an untouched validated invoice -> can_edit:true, can_revalidate:false, and a non-empty reason', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-E-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      expect(res.status, 'GET on a validated invoice should return 200').toBe(200)
+      const body = res.body as Record<string, unknown>
+      expect(body.can_edit, 'a validated invoice should still be editable').toBe(true)
+      expect(body.can_revalidate, 'a validated invoice should not be re-validatable until edited').toBe(false)
+      expect(typeof body.revalidate_blocked_reason, 'the reason should be a string').toBe('string')
+      expect((body.revalidate_blocked_reason as string).length, 'the reason should be non-empty').toBeGreaterThan(0)
+    })
+
+    test('POST /invoices/submissions on a line-mutated (demoted) invoice skips it as not_validated', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const editRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] },
+      })
+      expect(editRes.status, 'the demoting edit should succeed').toBe(200)
+
+      const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
+      })
+      expect(res.status, 'batch-submit should still return 200 even when every invoice is skipped').toBe(200)
+      const body = res.body as Record<string, unknown>
+      const results = body.results as Record<string, unknown>[]
+      expect(results.length, 'exactly one result for one requested invoice').toBe(1)
+      expect(results[0].invoice_id, 'the result should name the requested invoice').toBe(created.id)
+      expect(results[0].enqueued, 'a draft (demoted) invoice must not be enqueued').toBe(false)
+      expect(results[0].reason, 'the skip reason must be not_validated').toBe('not_validated')
+    })
+
+    test('POST /transitions {"target":"queued"} on a draft (demoted-from-validated) invoice is refused with 409', async () => {
+      // The API-only second door onto the same refusal Core AC 2 names: the existing
+      // `illegal transition (draft -> submitted)` case above pins draft -> submitted; this
+      // pins draft -> queued specifically, reached via the validated -> edit -> demoted
+      // path, not a never-validated draft.
+      const created = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-E-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const editRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [{ description: 'Changed', quantity: '1', unit_price: '1000', line_total: '1000' }] },
+      })
+      expect(editRes.status, 'the demoting edit should succeed').toBe(200)
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'queued' },
+      })
+      assertErrorEnvelope(res, 409, 'draft (demoted-from-validated) -> queued transition')
+    })
+
+    test('PATCH a malformed line numeric -> 400, never a 500', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-E-${freshTin()}` })
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [{ description: 'x', unit_price: 'not-a-number' }] },
+      })
+      assertErrorEnvelope(res, 400, 'malformed line numeric')
     })
   })
 })

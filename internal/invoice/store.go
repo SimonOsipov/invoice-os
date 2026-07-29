@@ -485,6 +485,10 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 // audit write of its own (Edit's audit is conditional on a real content
 // change, which Update's is not, [D9]).
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
+	// Deliberately still INLINE rather than headerFieldsPresent(in): Store.Update
+	// is kept byte-identical by [store-update-untouched]. The duplication with
+	// that helper (INVED-01-04) is recorded, not accidental -- keep the two in
+	// sync if UpdateInput ever gains a field.
 	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
 		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
 		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
@@ -511,6 +515,19 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 		return Invoice{}, err
 	}
 	return inv, nil
+}
+
+// headerFieldsPresent reports whether in carries at least one header field --
+// the exact negation of Store.Update's inline all-nil guard, over the same 9
+// UpdateInput fields. Extracted by INVED-01-04 because Store.Edit now needs the
+// answer TWICE: once in its widened pre-tx guard (a lines-only edit is legal, so
+// "no header fields" alone is no longer a rejection) and once to decide whether
+// to call updateContentTx at all -- that function assumes >= 1 non-nil field and
+// would otherwise build `UPDATE invoices SET  WHERE ...`, a SQL syntax error.
+func headerFieldsPresent(in UpdateInput) bool {
+	return in.IssueDate != nil || in.SupplierTIN != nil || in.SupplierName != nil ||
+		in.BuyerTIN != nil || in.BuyerName != nil || in.Currency != nil ||
+		in.Subtotal != nil || in.VAT != nil || in.Total != nil
 }
 
 // updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
@@ -590,8 +607,12 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 // WithinRequestTenantTx, lock-then-recheck, propagate raw errors so their
 // SQLSTATE survives). Inside ONE db.WithinRequestTenantTx:
 //
-//  1. all-nil guard (checked BEFORE any tx opens, mirroring Store.Update's
-//     own guard, [A7]) -- ErrValidation.
+//  1. nothing-to-do guard (checked BEFORE any tx opens, mirroring Store.Update's
+//     own guard, [A7]) -- ErrValidation. WIDENED by INVED-01-04: refused only
+//     when there are no header fields AND no line array was sent, because a
+//     lines-only edit is legitimate. With in.LineItems always nil (Edit does not
+//     write lines YET) this reduces exactly to the 9-field all-nil guard it
+//     replaced.
 //  2. lock+read `before`: SELECT <invoiceColumns> ... FOR UPDATE, same lock
 //     and error mapping as ApplyValidation/Transition (pgx.ErrNoRows ->
 //     ErrNotFound; 22P02 -> ErrValidation).
@@ -605,7 +626,11 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     THIS tx: scanInvoice leaves LineItems nil and the fingerprint takes its
 //     lines explicitly ([fingerprint-explicit-lines-param]).
 //  5. updateContentTx writes the content (shared with Store.Update, no audit
-//     of its own).
+//     of its own) -- but ONLY when header fields were actually sent. It assumes
+//     >= 1 non-nil field, so calling it with an all-nil UpdateInput would emit
+//     `UPDATE invoices SET  WHERE ...` and fail with a syntax error; the
+//     hasHeader gate is wired now (INVED-01-04 R0) even though a header-less
+//     Edit cannot get past the guard until Edit can write lines.
 //  6. DB-authoritative no-op check: contentFingerprint(after, beforeLines) ==
 //     preFP (beforeLines reused -- Edit cannot change lines yet) means
 //     nothing really changed (either every field was resent unchanged, or
@@ -634,10 +659,9 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 // prior verdict's stamp deliberately STALE until Store.ApplyValidation
 // re-runs and re-stamps it (DemoteThenRevalidateSucceeds closes that loop
 // end to end through the gate, completely unmodified by M4-05, [A12]).
-func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, error) {
-	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
-		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
-		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
+func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, error) {
+	hasHeader := headerFieldsPresent(in.UpdateInput)
+	if !hasHeader && in.LineItems == nil {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -676,10 +700,20 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 		}
 		preFP := contentFingerprint(before, beforeLines)
 
-		// 5. the content write, shared with Store.Update.
-		after, changed, err := updateContentTx(ctx, tx, id, in)
-		if err != nil {
-			return err
+		// 5. the content write, shared with Store.Update -- gated on hasHeader
+		// because updateContentTx assumes at least one non-nil field. The else
+		// branch is UNREACHABLE at this point in INVED-01-04 (R0): in.LineItems
+		// is always nil, so the guard above already rejected every header-less
+		// input. It is wired ahead of the line write so that widening cannot
+		// silently produce an empty SET clause.
+		var after Invoice
+		var changed []string
+		if hasHeader {
+			if after, changed, err = updateContentTx(ctx, tx, id, in.UpdateInput); err != nil {
+				return err
+			}
+		} else {
+			after = before
 		}
 
 		// 6. DB-authoritative no-op check -- nothing to audit, demote, or

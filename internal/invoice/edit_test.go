@@ -73,7 +73,7 @@ func TestStoreEdit_NonFixableStateRejected(t *testing.T) {
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
 	newVAT := "9.99"
-	_, err = store.Edit(c, inv.ID, UpdateInput{VAT: &newVAT})
+	_, err = store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if !errors.Is(err, ErrNotFixable) {
 		t.Fatalf("Edit(queued invoice) err = %v, want ErrNotFixable", err)
 	}
@@ -119,7 +119,7 @@ func TestStoreEdit_ValidatedContentChangeDemotes(t *testing.T) {
 	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
 
 	newVAT := "9.50"
-	got, err := store.Edit(c, inv.ID, UpdateInput{VAT: &newVAT})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change on validated invoice): want success, got: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestStoreEdit_ContentAuditFailureRollsBackWholeEdit(t *testing.T) {
 
 		cCrafted := auth.WithIdentity(ctx, auth.Identity{Subject: craftedSubject, Role: "authenticated", TenantID: tenantID})
 		newVAT := "9.50"
-		_, err = store.Edit(cCrafted, inv.ID, UpdateInput{VAT: &newVAT})
+		_, err = store.Edit(cCrafted, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 		if err == nil {
 			t.Fatal("Edit with a crafted actor succeeded, want an audit_log actor CHECK violation (SQLSTATE 23514)")
 		}
@@ -290,7 +290,7 @@ func TestStoreEdit_ValidatedNoOpStaysValidated(t *testing.T) {
 	// Every field re-sent with its CURRENT value (issue_date is left nil,
 	// which is UpdateInput's own "leave unchanged" meaning -- trivially
 	// "current" for a field that was never set).
-	got, err := store.Edit(c, inv.ID, UpdateInput{
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{
 		SupplierTIN:  strPtr("SUP-TIN-1"),
 		SupplierName: strPtr("Supplier Co"),
 		BuyerTIN:     strPtr("BUY-TIN-1"),
@@ -299,7 +299,7 @@ func TestStoreEdit_ValidatedNoOpStaysValidated(t *testing.T) {
 		Subtotal:     strPtr("100.00"),
 		VAT:          strPtr("7.00"),
 		Total:        strPtr("107.00"),
-	})
+	}})
 	if err != nil {
 		t.Fatalf("Edit (no-op, every field identical): want success, got: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestStoreEdit_NumericScaleNoOp(t *testing.T) {
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
-	got, err := store.Edit(c, inv.ID, UpdateInput{Total: strPtr("100.0")})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{Total: strPtr("100.0")}})
 	if err != nil {
 		t.Fatalf("Edit (numeric-scale no-op, \"100.00\"->\"100.0\"): want success, got: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestStoreEdit_DraftContentChangeNoDemotion(t *testing.T) {
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
-	got, err := store.Edit(c, inv.ID, UpdateInput{VAT: strPtr("7.00")})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}})
 	if err != nil {
 		t.Fatalf("Edit (content change on draft): want success, got: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestStoreEdit_DraftNoOpWritesNothing(t *testing.T) {
 
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
-	got, err := store.Edit(c, inv.ID, UpdateInput{VAT: strPtr("7.00")})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}})
 	if err != nil {
 		t.Fatalf("Edit (no-op on draft): want success, got: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestStoreEdit_AllNilRejected(t *testing.T) {
 
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
-	if _, err := store.Edit(c, inv.ID, UpdateInput{}); !errors.Is(err, ErrValidation) {
+	if _, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{}}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Edit(all-nil) err = %v, want ErrValidation", err)
 	}
 
@@ -482,7 +482,7 @@ func TestStoreEdit_GuardBeforeContentValidation(t *testing.T) {
 		t.Fatalf("pre-hop Transition(-> queued): %v", err)
 	}
 
-	_, err = store.Edit(c, inv.ID, UpdateInput{VAT: strPtr("not-a-number")})
+	_, err = store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("not-a-number")}})
 	if !errors.Is(err, ErrNotFixable) {
 		t.Fatalf("Edit(queued, malformed numeric) err = %v, want ErrNotFixable (guard wins over 22P02)", err)
 	}
@@ -503,7 +503,7 @@ func TestStoreEdit_NotFoundAndCrossTenant(t *testing.T) {
 		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 		bogusID := uuid.NewString()
-		if _, err := store.Edit(c, bogusID, UpdateInput{VAT: strPtr("7.00")}); !errors.Is(err, ErrNotFound) {
+		if _, err := store.Edit(c, bogusID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}}); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("Edit(nonexistent id) err = %v, want ErrNotFound", err)
 		}
 	})
@@ -516,7 +516,7 @@ func TestStoreEdit_NotFoundAndCrossTenant(t *testing.T) {
 
 		cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
 
-		if _, err := store.Edit(cA, invoiceB, UpdateInput{VAT: strPtr("7.00")}); !errors.Is(err, ErrNotFound) {
+		if _, err := store.Edit(cA, invoiceB, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}}); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("Edit(tenant B's invoice) as tenant A err = %v, want ErrNotFound", err)
 		}
 
@@ -565,7 +565,7 @@ func TestStoreEdit_DemoteThenRevalidateSucceeds(t *testing.T) {
 	// Store.Edit changes content -> demotes validated->draft, keeping the
 	// STALE prior-validation stamp untouched.
 	newVAT := "9.50"
-	edited, err := store.Edit(c, inv.ID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change, demotion): want success, got: %v", err)
 	}
@@ -652,7 +652,7 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
 
-	got, err := store.Edit(c, inv.ID, UpdateInput{BuyerName: strPtr("New Buyer Co")})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("New Buyer Co")}})
 	if err != nil {
 		t.Fatalf("Edit (single non-money field change on validated): want success, got: %v", err)
 	}
@@ -774,7 +774,7 @@ func TestStoreEdit_RejectedContentChangeDemotesAndRetainsReasons(t *testing.T) {
 	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
 
 	newVAT := "9.50"
-	got, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	got, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change on rejected invoice): want success, got: %v", err)
 	}
@@ -867,7 +867,7 @@ func TestStoreEdit_RejectedNoOpKeepsStatusAndReasons(t *testing.T) {
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
 
-	got, err := store.Edit(c, inv.ID, UpdateInput{VAT: strPtr("7.00")})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}})
 	if err != nil {
 		t.Fatalf("Edit (no-op on rejected invoice): want success, got: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestStoreEdit_AcceptedStaysNotFixable(t *testing.T) {
 	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
 	newVAT := "9.99"
-	_, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	_, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if !errors.Is(err, ErrNotFixable) {
 		t.Fatalf("Edit(accepted invoice) err = %v, want ErrNotFixable", err)
 	}
@@ -969,7 +969,7 @@ func TestStoreEdit_NonFixableStatesRejectedTable(t *testing.T) {
 			beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
 
 			newVAT := "9.00"
-			_, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+			_, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 			if !errors.Is(err, ErrNotFixable) {
 				t.Fatalf("Edit(%s invoice) err = %v, want ErrNotFixable", status, err)
 			}
@@ -1031,7 +1031,7 @@ func TestStoreEdit_RejectedLegContentAuditFailureRollsBackWholeEdit(t *testing.T
 
 		cCrafted := auth.WithIdentity(ctx, auth.Identity{Subject: craftedSubject, Role: "authenticated", TenantID: tenantID})
 		newVAT := "9.50"
-		_, err := store.Edit(cCrafted, invID, UpdateInput{VAT: &newVAT})
+		_, err := store.Edit(cCrafted, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 		if err == nil {
 			t.Fatal("Edit with a crafted actor succeeded, want an audit_log actor CHECK violation (SQLSTATE 23514)")
 		}
@@ -1137,7 +1137,7 @@ func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *tes
 		go func() {
 			defer wg.Done()
 			vat := targets[i]
-			_, errs[i] = store.Edit(c, invID, UpdateInput{VAT: &vat})
+			_, errs[i] = store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &vat}})
 		}()
 	}
 	wg.Wait()
@@ -1245,7 +1245,7 @@ func TestStoreEdit_LinedInvoiceDemotesAndLeavesLinesUntouchedWithNilLineItems(t 
 	}
 
 	newVAT := "9.50"
-	got, err := store.Edit(c, inv.ID, UpdateInput{VAT: &newVAT})
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change on a lined, validated invoice): want success, got: %v", err)
 	}

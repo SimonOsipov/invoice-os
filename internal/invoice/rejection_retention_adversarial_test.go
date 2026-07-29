@@ -84,7 +84,7 @@ func TestRLS_RetainedDemotedDraftReasonsCrossTenantRefused(t *testing.T) {
 	}
 
 	newVAT := "6.60"
-	edited, err := store.Edit(cA, invA, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(cA, invA, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (tenant A, rejected->draft): %v (want nil)", err)
 	}
@@ -163,7 +163,7 @@ func TestOutcomeLoop_SecondRejectionOverwritesNotAccumulates(t *testing.T) {
 	}
 
 	newVAT := "8.88"
-	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (rejected->draft, fixing cycle A): %v (want nil)", err)
 	}
@@ -266,7 +266,7 @@ func TestConcurrency_EditRacesMarkAcceptedTxLeavesNoReasonsOnAccepted(t *testing
 		go func() {
 			defer wg.Done()
 			vat := target
-			_, editErrs[i] = store.Edit(c, invID, UpdateInput{VAT: &vat})
+			_, editErrs[i] = store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &vat}})
 		}()
 	}
 	go func() {
@@ -342,7 +342,7 @@ func TestOutcomeLoop_RejectEditValidateQueueFailRetainsReasons(t *testing.T) {
 	}
 
 	newVAT := "7.77"
-	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (rejected->draft): %v (want nil)", err)
 	}
@@ -507,7 +507,7 @@ func TestHandlers_RejectionReasonsSurfaceConsistentlyAcrossEndpoints(t *testing.
 		t.Errorf("ListHandler rejection_reasons = %s, want %s", listResp.Invoices[0].RejectionReasons, seededReasons)
 	}
 
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) { return base, nil }
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) { return base, nil }
 	_, editResp := doInvoiceEdit(t, edit, &id, invoiceID, `{"vat":"12.00"}`)
 	if string(editResp.RejectionReasons) != string(seededReasons) {
 		t.Errorf("EditHandler (PATCH) rejection_reasons = %s, want %s", editResp.RejectionReasons, seededReasons)

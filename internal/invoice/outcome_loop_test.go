@@ -113,7 +113,7 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	// to what MarkRejectedTx wrote in step 2 (M5-09-02: the demotion no
 	// longer clears it, [reason-lifecycle] reversed).
 	newVAT := "12.34"
-	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change on rejected invoice): %v (want nil)", err)
 	}
@@ -304,7 +304,7 @@ func TestStoreEdit_RetainedReasonsSurviveRevalidate(t *testing.T) {
 	}
 
 	newVAT := "4.20"
-	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (content change on rejected invoice): %v (want nil)", err)
 	}
@@ -438,7 +438,7 @@ func TestOutcomeLoop_ResubmitWithFreshKeyEnqueuesAgain(t *testing.T) {
 	}
 
 	newVAT := "5.55"
-	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (rejected->draft): %v (want nil)", err)
 	}
@@ -556,7 +556,7 @@ func TestOutcomeLoop_AcceptedInvoiceIsATrueDeadEnd(t *testing.T) {
 	}
 
 	newVAT := "3.21"
-	edited, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT})
+	edited, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
 	if err != nil {
 		t.Fatalf("Edit (rejected->draft): %v (want nil)", err)
 	}
@@ -592,7 +592,7 @@ func TestOutcomeLoop_AcceptedInvoiceIsATrueDeadEnd(t *testing.T) {
 	// ErrNotFixable, nothing written.
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
 	newVAT2 := "9.99"
-	if _, err := store.Edit(c, invID, UpdateInput{VAT: &newVAT2}); !errors.Is(err, ErrNotFixable) {
+	if _, err := store.Edit(c, invID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT2}}); !errors.Is(err, ErrNotFixable) {
 		t.Fatalf("Edit(loop-produced accepted invoice) err = %v, want ErrNotFixable", err)
 	}
 	var statusAfterRefusedEdit string

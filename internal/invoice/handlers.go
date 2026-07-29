@@ -471,12 +471,12 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 // EditHandler returns PATCH /v1/invoices/{id} (M4-05-03). Same
 // identity-first-401 order as every other handler here, then decodes the
 // snake_case wire body (400 on decode error) into the 9 optional
-// header MBS-content fields, builds UpdateInput 1:1 from the decoded
+// header MBS-content fields, builds EditInput 1:1 from the decoded
 // request (identity/lifecycle are not the edit's job, [D9]), and calls edit.
 // Errors map via statusForErr -- including the new ErrNotFixable->409 case
 // (Core AC #1) and the existing ErrValidation->400 case for the all-nil
 // guard ([A7]) -- 200 + updated Invoice on success (Core AC #2/#3).
-func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -494,7 +494,11 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 
 		id := r.PathValue("id")
 
-		inv, err := edit(r.Context(), id, UpdateInput{
+		// LineItems is deliberately left nil: INVED-01-04 changes the Go type
+		// only, NOT the wire. editReq gains line_items in INVED-01-05, and until
+		// it does a nil LineItems means "leave the stored lines alone", so the
+		// PATCH contract is byte-identical to before this type existed.
+		inv, err := edit(r.Context(), id, EditInput{UpdateInput: UpdateInput{
 			IssueDate:    req.IssueDate,
 			SupplierTIN:  req.SupplierTIN,
 			SupplierName: req.SupplierName,
@@ -504,7 +508,7 @@ func EditHandler(edit func(ctx context.Context, id string, in UpdateInput) (Invo
 			Subtotal:     req.Subtotal,
 			VAT:          req.VAT,
 			Total:        req.Total,
-		})
+		}})
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status >= http.StatusInternalServerError {

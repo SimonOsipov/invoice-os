@@ -261,7 +261,7 @@ func doInvoiceTransition(t *testing.T, transition func(ctx context.Context, id s
 // doInvoiceTransition: same identity-injection/path-value shape, PATCH
 // method, request body optional (an empty rawBody is a valid, if
 // content-length-zero, PATCH).
-func doInvoiceEdit(t *testing.T, edit func(ctx context.Context, id string, in UpdateInput) (Invoice, error), id *auth.Identity, invoiceID, rawBody string) (*httptest.ResponseRecorder, invoiceBody) {
+func doInvoiceEdit(t *testing.T, edit func(ctx context.Context, id string, in EditInput) (Invoice, error), id *auth.Identity, invoiceID, rawBody string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPatch, "/v1/invoices/"+invoiceID, strings.NewReader(rawBody))
 	r.SetPathValue("id", invoiceID)
@@ -2040,7 +2040,7 @@ func TestTransitionHandler_NonsenseTargetStill400UnknownStatus(t *testing.T) {
 func TestEditHandler_Unauthenticated401(t *testing.T) {
 	invoiceID := uuid.NewString()
 	called := false
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		called = true
 		return Invoice{}, nil
 	}
@@ -2065,7 +2065,7 @@ func TestEditHandler_MalformedBody400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	called := false
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		called = true
 		return Invoice{}, nil
 	}
@@ -2091,7 +2091,7 @@ func TestEditHandler_MalformedBody400(t *testing.T) {
 func TestEditHandler_NotFixable409(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		return Invoice{}, ErrNotFixable
 	}
 	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
@@ -2112,7 +2112,7 @@ func TestEditHandler_NotFixable409(t *testing.T) {
 func TestEditHandler_AllNil400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 	body := marshalEdit(t, editInvoiceRequest{})
@@ -2133,7 +2133,7 @@ func TestEditHandler_AllNil400(t *testing.T) {
 // 404 -- covers both a genuinely unknown id and a cross-tenant one.
 func TestEditHandler_NotFound404(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		return Invoice{}, ErrNotFound
 	}
 	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
@@ -2156,8 +2156,8 @@ func TestEditHandler_DemotionReturns200Draft(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	want := Invoice{ID: invoiceID, Status: StatusDraft}
-	var gotIn UpdateInput
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		if gotID != invoiceID {
 			t.Fatalf("edit called with id = %q, want %q", gotID, invoiceID)
 		}
@@ -2184,7 +2184,7 @@ func TestEditHandler_NoOpReturns200Validated(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	want := Invoice{ID: invoiceID, Status: StatusValidated}
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		return want, nil
 	}
 	body := marshalEdit(t, editInvoiceRequest{VAT: strPtr("7.50")})
@@ -2248,8 +2248,8 @@ func TestEditHandler_AllFieldsMapOneToOne(t *testing.T) {
 		Total:        strPtr("107.50"),
 	}
 
-	var gotIn UpdateInput
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		gotIn = in
 		return want, nil
 	}
@@ -2299,8 +2299,8 @@ func TestEditHandler_UnknownFieldIgnored200(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
 	want := Invoice{ID: invoiceID, Status: StatusValidated}
-	var gotIn UpdateInput
-	edit := func(ctx context.Context, gotID string, in UpdateInput) (Invoice, error) {
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
 		gotIn = in
 		return want, nil
 	}

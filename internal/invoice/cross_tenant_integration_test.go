@@ -454,7 +454,7 @@ func TestRLS_InvoicesEditRejectedCrossTenantRefused(t *testing.T) {
 
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
 	newVAT := "9.50"
-	if _, err := store.Edit(cA, invB, UpdateInput{VAT: &newVAT}); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Edit(cA, invB, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Edit(tenant B's rejected invoice) as tenant A err = %v, want ErrNotFound", err)
 	}
 

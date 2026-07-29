@@ -160,7 +160,7 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 		// through the EXISTING statusForErr cases, and 04 is never called.
 		return Invoice{}, 0, err
 	}
-	if inv.Status != StatusDraft {
+	if !canRevalidate(inv.Status) {
 		return Invoice{}, 0, fmt.Errorf("%w: invoice is %s, the gate is draft-only", ErrNotDraft, inv.Status)
 	}
 

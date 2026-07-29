@@ -662,7 +662,7 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 
 		// 3. fixable-state guard -- BEFORE the content write, so it wins over
 		// a malformed numeric ([A8]).
-		if before.Status != StatusDraft && before.Status != StatusValidated && before.Status != StatusRejected {
+		if !canEdit(before.Status) {
 			return ErrNotFixable
 		}
 
@@ -763,17 +763,48 @@ func canTransition(from, target Status) bool {
 	return false
 }
 
-// canEdit reports whether an invoice in status s may be edited.
-// STUB (INVED-01-03, R0): always returns false. The real body -- derived
-// from legalTransitions, never a status literal (Core AC 4) -- lands in the
-// R2 step of this subtask.
-func canEdit(s Status) bool { return false }
+// canEdit reports whether an invoice in status s may be edited -- the SINGLE
+// statement of Store.Edit's fixable-state rule (INVED-01-03, Core AC 1/2/4),
+// DERIVED from legalTransitions rather than restated as a status literal. An
+// invoice is editable iff it is already a draft, or the machine lets it
+// become one: draft is editable by definition (there is no draft->draft
+// self-edge, and Transition rejects self-edges as ErrRedundantTransition
+// anyway), every other editable status is editable precisely because Edit's
+// step 8 can demote it back to draft in the same tx.
+//
+// Exactly ONE hop, never reachability. A transitive/BFS reading would admit
+// queued and submitted -- both have real 2-hop paths to draft via rejected
+// (queued->rejected->draft, submitted->rejected->draft) -- which would let a
+// caller edit an invoice already handed to the APP. Editability is "can this
+// invoice be demoted to draft by the edit itself", and Edit demotes with a
+// single transitionTx call, so one hop is the whole rule.
+//
+// Yields {draft, validated, rejected} on today's table -- byte-identical to
+// the three-status guard it replaces -- and tracks legalTransitions
+// automatically if the table ever changes (TestCanEdit_TracksLegalTransitions
+// perturbs the table at runtime to prove this is a derivation and not a
+// hand-copied list).
+func canEdit(s Status) bool {
+	return s == StatusDraft || canTransition(s, StatusDraft)
+}
 
-// canRevalidate reports whether the validation gate may run on status s.
-// STUB (INVED-01-03, R0): always returns false. The real body -- the
-// gate's draft-only literal, s == StatusDraft -- lands in the R2 step of
-// this subtask.
-func canRevalidate(s Status) bool { return false }
+// canRevalidate reports whether the validation gate may run on status s --
+// the SINGLE statement of the gate's draft-only rule, shared by Gate.Validate's
+// advisory pre-check and Store.ApplyValidation's authoritative in-tx re-check
+// (INVED-01-03, Core AC 3).
+//
+// Deliberately a hand-written literal, NOT derived from
+// canTransition(s, StatusValidated), even though the two agree on today's
+// table. Deriving it would be a FALSE coupling: ApplyValidation promotes via
+// transitionTx(..., StatusDraft, StatusValidated, ...) with the FROM state
+// hardwired to draft, so an inbound edge to validated from some other status
+// would make a derived gate advertise re-validation on a status whose write
+// still 409s. Draft-only-ness is the gate's OWN contract, not an edge-table
+// property. TestCanRevalidate_AgreesWithThePromotionEdge is the tripwire: it
+// goes red the day such an edge is added, forcing a human decision on whether
+// the gate widens -- so it must be satisfied by this literal being right, never
+// by weakening the test.
+func canRevalidate(s Status) bool { return s == StatusDraft }
 
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
@@ -1047,7 +1078,10 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 		}
 
 		// 2. status re-check — BEFORE the fingerprint check (see the doc).
-		if locked.Status != StatusDraft {
+		// This is the AUTHORITATIVE guard (Gate.Validate's is advisory), so
+		// widening canRevalidate widens what actually gets written here — and
+		// step 5's transitionTx still hardwires FROM=draft. See canRevalidate.
+		if !canRevalidate(locked.Status) {
 			return ErrNotDraft
 		}
 

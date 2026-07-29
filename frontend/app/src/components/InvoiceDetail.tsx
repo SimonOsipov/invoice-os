@@ -1,7 +1,9 @@
 // Invoice detail dispatcher: for an imported invoice, mounts the live detail surface
 // (status pill, line items + totals, compliance/violations panel, fiscal record, APP
-// rejection reasons, fix-and-revalidate form, failed dead end, status history) fetched
-// from the gateway; otherwise renders an honest EmptyState ("No invoice selected"). The
+// rejection reasons, the Edit / Re-validate actions bar + inline edit mode, failed dead
+// end, status history) fetched from the gateway; otherwise renders an honest EmptyState
+// ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
+// into two independently-gated actions ([actions-visibility], [edit-ux]). The
 // Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
 // the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
 // — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
@@ -11,9 +13,12 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
+import { closeGlyph, plusGlyph } from '../glyphs'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
+  computedLineSum,
+  diffLineItems,
   editInvoice,
   EDIT_FIELD_KEYS,
   getInvoice,
@@ -94,6 +99,33 @@ function formFromInvoice(inv: InvoiceRecord): EditFormState {
     total: inv.total ?? '',
   }
 }
+
+// One editable line row (INVED-01-07). LineItemEditInput-shaped but with '' where the wire
+// carries null, because a controlled React input holds '' and never null. Deliberately no
+// `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
+// ([line-no-by-position], lib/invoices.ts:234-245), so this array's order IS the wire's
+// line ordering, and diffLineItems compares by position over the five content fields only.
+type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax', string>
+
+// Six columns: description / qty / unit / amount / tax / remove. Declared once so the
+// header row and the body rows can never drift apart (ValidationView.tsx repeats the
+// literal in both places; one const is the same shape without that hazard).
+const LINE_EDIT_GRID = '1fr 70px 110px 110px 110px 32px'
+
+function rowsFromInvoice(inv: InvoiceRecord): LineRowState[] {
+  return (inv.line_items ?? []).map((it) => ({
+    description: it.description ?? '',
+    quantity: it.quantity ?? '',
+    unit_price: it.unit_price ?? '',
+    line_total: it.line_total ?? '',
+    line_tax: it.line_tax ?? '',
+  }))
+}
+
+// `aria-describedby` target for the disabled Re-validate button's reason text. A module
+// const rather than useId(): InvoiceDetail renders exactly one LiveInvoiceDetail at a time
+// (it returns a single element), so this id cannot collide with itself in one document.
+const REVALIDATE_REASON_ID = 'revalidate-blocked-reason-text'
 
 // PATCH /v1/invoices/{id} treats an absent key as "leave this field alone" (the Go
 // handler decodes into *string/*time.Time pointers, nil when the key is missing) and a
@@ -224,6 +256,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [revalidating, setRevalidating] = useState(false)
   const [revalidateError, setRevalidateError] = useState<string | null>(null)
 
+  // Inline edit mode ([edit-ux]/[edit-mode-in-body], INVED-01-07). The ONLY new state this
+  // component gains: the editor itself is a child mounted only while true, seeding its own
+  // field/row state once at mount, so Cancel is just setEditing(false) -> unmount -> state
+  // discarded, and re-opening re-seeds from the current `inv`. Nothing to reset by hand.
+  // Safe because `inv` cannot mutate underneath a mounted editor: polling runs only while
+  // isInFlight (queued/submitted, lib/invoices.ts:683-688), which is disjoint from the
+  // can_edit set the Edit button lives behind (see the `gen` comment above).
+  const [editing, setEditing] = useState(false)
+
   let content: ReactNode
 
   // invoicesViewState (lib/invoices.ts) is pinned to AsyncState<InvoiceRecord[]> (the
@@ -245,12 +286,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const vat = inv.vat != null ? Number(inv.vat) : null
     const total = inv.total != null ? Number(inv.total) : null
     const verdict = verdictStatus(staleSinceEdit, inv)
+    // Two independent reasons to disable, styled identically: the wire says the action is
+    // unavailable (persistent, carries a reason), or one is already in flight (transient,
+    // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
+    const revalidateDisabled = !inv.can_revalidate || revalidating
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
     // (established by the `if (base == null)` branch above) does not survive into a
     // nested function DECLARATION — TS resets it there because declarations are
     // hoisted — but does survive into a closure/arrow function.
     const handleSaved = () => {
+      // FIRST: leave edit mode before the refresh below flips the ladder to <Loading/>, so
+      // the editor can never remount against a half-refreshed record (INVED-01-07).
+      setEditing(false)
       setStaleSinceEdit(true)
       // M5-09-07: clear the poll overlay BEFORE detail.run(), so this user-initiated
       // refresh's own result -- success or error -- is what renders next, never a stale
@@ -268,13 +316,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       history.run()
     }
 
-    // `inv.can_edit` gates this button on for draft, validated AND rejected (see
-    // below) so it stays visible when nothing has been edited yet -- clicking it on an
-    // untouched 'validated' OR 'rejected' invoice hits Store.ApplyValidation's
-    // draft-only gate ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught +
-    // surfaced here (mirrors InvoiceEditForm's formError) rather than left as an
-    // unhandled rejection with no user feedback; the operator must edit first (which
-    // demotes rejected/validated -> draft), then re-validate.
+    // INVED-01-07: the button this drives is now DISABLED whenever `!inv.can_revalidate`,
+    // so the old "click it on an untouched validated/rejected invoice and eat a 409
+    // (ErrNotDraft) from Store.ApplyValidation's draft-only gate" path is unreachable from
+    // the UI -- that dead end is precisely what this story removes. The catch stays: it is
+    // still the surface for a GENUINE failure (network blip, 5xx, a race where the wire
+    // said can_revalidate but the row moved on), never for a self-inflicted gate hit.
     const handleRevalidate = async () => {
       if (revalidating) return
       setRevalidating(true)
@@ -309,55 +356,153 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </div>
             <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
           </div>
+
+          {/* The actions bar ([actions-visibility], INVED-01-07). `inv.can_edit` is the
+              ONE and ONLY gate on it, read straight off the wire ([gates-on-the-wire]) --
+              this component holds no status list of its own for these two actions, which
+              is the whole point of the story: the backend derives both flags from
+              legalTransitions (canEdit/canRevalidate, store.go:919-960), so a lifecycle
+              change can never leave the SPA showing an action the machine refuses. On
+              queued/submitted/accepted/failed can_edit is false and nothing here renders,
+              leaving the failed dead-end card as the whole story on a failed invoice.
+              `!editing` hides the bar while the inline editor owns the screen; it returns
+              on Save or Cancel ([D-actions-hidden-while-editing]). */}
+          {inv.can_edit && !editing && (
+            <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  data-testid="edit-toggle"
+                  onClick={() => setEditing(true)}
+                  className="v2-btn v2-btn-primary pf-btn"
+                  style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                >
+                  Edit
+                </button>
+                {/* Disabled-with-reason rather than hidden ([revalidate-visibility]) --
+                    hiding it makes the edit -> demote -> re-validate loop undiscoverable.
+                    FOUR layers, all load-bearing, because a disabled button gets NO styling
+                    for free in this codebase: packages/design-tokens/*.css contains zero
+                    `:disabled` rules, and `.v2-btn-ghost` (app-layer.css:214) sets
+                    background/color explicitly with a :hover rule (:215) that is NOT guarded
+                    by `:not(:disabled)`.
+                    (1) the real HTML `disabled` attribute -- genuinely unclickable;
+                    (2) the inline background/color/cursor swap below, which both mutes the
+                        button and, being inline, outranks that unguarded :hover rule so a
+                        disabled button stops reacting to the pointer. Treatment copied from
+                        CreateUpload.tsx:154-156/:217-219, the repo's shipped PERSISTENT
+                        disabled gating; deliberately NOT InvoicesList.tsx:347's `opacity`,
+                        which is a sub-second in-flight state and provably does not suppress
+                        the hover swap (Surface Conflicts -- one precedent picked, not blended);
+                    (3) the visible sibling text below, carrying the backend's reason
+                        verbatim -- the only layer a keyboard/screen-reader user and a
+                        Playwright text assertion can both reach, since a disabled button is
+                        out of the tab order;
+                    (4) title + aria-describedby, as ADDITIONS to (3), never the sole carrier. */}
+                <button
+                  type="button"
+                  data-testid="revalidate"
+                  onClick={handleRevalidate}
+                  disabled={revalidateDisabled}
+                  title={inv.revalidate_blocked_reason ?? undefined}
+                  aria-describedby={inv.revalidate_blocked_reason != null ? REVALIDATE_REASON_ID : undefined}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  style={{
+                    height: 32,
+                    padding: '0 14px',
+                    fontSize: 13,
+                    // Spread ONLY when disabled: an inline `background` on the enabled
+                    // button would also kill its legitimate :hover affordance.
+                    ...(revalidateDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                  }}
+                >
+                  {revalidating ? 'Revalidating…' : 'Re-validate'}
+                </button>
+              </div>
+              {/* The backend's copy, verbatim ([revalidate-reason-from-backend]). The wire
+                  guarantees it is non-null exactly when can_edit && !can_revalidate
+                  (lib/invoices.ts:186-196); if it is somehow null we render NOTHING rather
+                  than invent a fallback string the SPA has no authority to author. */}
+              {inv.revalidate_blocked_reason != null && (
+                <div id={REVALIDATE_REASON_ID} data-testid="revalidate-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                  {inv.revalidate_blocked_reason}
+                </div>
+              )}
+              {/* Genuine-failure surface, moved here from the deleted fused card. Style
+                  unchanged; only the card-relative `margin` is dropped, since the column's
+                  own `gap: 8` now does that spacing. */}
+              {revalidateError && (
+                <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
+                  {revalidateError}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="pf-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
+          {/* The left-column card has two mutually exclusive bodies ([edit-mode-in-body]).
+              The read-only one below is unchanged from before INVED-01-07 -- deliberately,
+              so the split ships zero read-mode visual diff. */}
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{inv.supplier_name ?? '—'}</div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>TIN {inv.supplier_tin ?? '—'}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{inv.buyer_tin ?? '—'}</div>
-                </div>
-              </div>
-              <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
-                  <span className="label">Description</span>
-                  <span className="label" style={{ textAlign: 'right' }}>Qty</span>
-                  <span className="label" style={{ textAlign: 'right' }}>Unit</span>
-                  <span className="label" style={{ textAlign: 'right' }}>Amount</span>
-                </div>
-                {items.map((it) => (
-                  <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
-                    <span style={{ fontSize: 13 }}>{it.description ?? '—'}</span>
-                    <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.quantity ?? '—'}</span>
-                    <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.unit_price != null ? fmtPlain(Number(it.unit_price)) : '—'}</span>
-                    <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{it.line_total != null ? fmt(Number(it.line_total)) : '—'}</span>
+            {editing ? (
+              <InvoiceEditBody
+                ctx={ctx}
+                base={base}
+                invoiceId={invoiceId}
+                inv={inv}
+                onSaved={handleSaved}
+                onCancel={() => setEditing(false)}
+              />
+            ) : (
+              <>
+                <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24, gap: 24 }}>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}>{inv.supplier_name ?? '—'}</div>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 3 }}>TIN {inv.supplier_tin ?? '—'}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{inv.buyer_tin ?? '—'}</div>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-            <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
-              <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
-                  <span className="money" style={{ fontSize: 13 }}>{subtotal != null ? fmt(subtotal) : '—'}</span>
+                  <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+                      <span className="label">Description</span>
+                      <span className="label" style={{ textAlign: 'right' }}>Qty</span>
+                      <span className="label" style={{ textAlign: 'right' }}>Unit</span>
+                      <span className="label" style={{ textAlign: 'right' }}>Amount</span>
+                    </div>
+                    {items.map((it) => (
+                      <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 120px 120px', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
+                        <span style={{ fontSize: 13 }}>{it.description ?? '—'}</span>
+                        <span className="mono" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.quantity ?? '—'}</span>
+                        <span className="money" style={{ fontSize: 12, textAlign: 'right', color: 'var(--fg-2)' }}>{it.unit_price != null ? fmtPlain(Number(it.unit_price)) : '—'}</span>
+                        <span className="money" style={{ fontSize: 12.5, textAlign: 'right', fontWeight: 600 }}>{it.line_total != null ? fmt(Number(it.line_total)) : '—'}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT</span>
-                  <span className="money" style={{ fontSize: 13 }}>{vat != null ? fmt(vat) : '—'}</span>
+                <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end' }}>
+                  <div style={{ width: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
+                      <span className="money" style={{ fontSize: 13 }}>{subtotal != null ? fmt(subtotal) : '—'}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>VAT</span>
+                      <span className="money" style={{ fontSize: 13 }}>{vat != null ? fmt(vat) : '—'}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
+                      <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{total != null ? fmt(total) : '—'}</span>
+                    </div>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 9, borderTop: '1px solid var(--line-1)' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
-                  <span className="money" style={{ fontSize: 16, fontWeight: 700 }}>{total != null ? fmt(total) : '—'}</span>
-                </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -455,29 +600,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
-            {inv.can_edit && (
-              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span className="card-title">Fix &amp; re-validate</span>
-                  <button
-                    type="button"
-                    onClick={handleRevalidate}
-                    disabled={revalidating}
-                    data-testid="revalidate"
-                    className="v2-btn v2-btn-ghost pf-btn"
-                    style={{ height: 30, padding: '0 12px', fontSize: 12.5 }}
-                  >
-                    {revalidating ? 'Revalidating…' : 'Re-validate'}
-                  </button>
-                </div>
-                {revalidateError && (
-                  <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
-                    {revalidateError}
-                  </div>
-                )}
-                <InvoiceEditForm ctx={ctx} base={base} invoiceId={invoiceId} inv={inv} onSaved={handleSaved} />
-              </div>
-            )}
+            {/* INVED-01-07 deleted the fused "Fix & re-validate" card that used to sit
+                here -- one card that welded an always-mounted edit form to a Re-validate
+                button, so Edit and Re-validate could never be gated apart. Both now live
+                in the page-header actions bar above, independently gated. */}
 
             {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge
                 above, not this card): on the one poll tick where shouldRefreshHistory
@@ -531,27 +657,38 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   )
 }
 
-// The 9-field PATCH form ([edit-form-nine-fields]) — line items stay read-only, editing
-// them is not in scope ([D9]). Reuses ValidationView.tsx's field-label + `.pf-input`
-// markup convention. Form state is seeded once from `inv` at mount ([A-l]-style: this
-// card only mounts while `can_edit`, matching EntityFormModal's own once-per-open init)
-// — diffEditInput always diffs against the current `inv` prop (fresh on every parent
-// re-render), so a later edit's patch is computed against the latest saved content even
-// though the form's own untouched fields were seeded once.
-function InvoiceEditForm({
+// The inline edit body ([edit-mode-in-body]/[edit-ux], INVED-01-07 — was InvoiceEditForm,
+// the always-mounted 9-field form inside the deleted fused card). It now replaces the
+// left-column card's read-only body while `editing`, and covers the 9 header fields
+// ([edit-form-nine-fields]) PLUS the line items, which are editable for the first time
+// here (add / edit / remove).
+//
+// Both state slices are seeded once from `inv` at mount, matching EntityFormModal's
+// once-per-open init: the component only ever mounts while `editing`, so Cancel is
+// literally unmount-and-discard and re-opening re-seeds from the current `inv` — there is
+// no manual reset path to keep in sync. diffEditInput/diffLineItems still diff against the
+// current `inv` prop (fresh on every parent re-render), so a later edit's patch is computed
+// against the latest saved content even though the fields were seeded once.
+//
+// Reuses ValidationView.tsx's field-label + `.pf-input` markup convention throughout, and
+// its line-item repeater (:118-151) for the table, remove ✕ and dashed add chip.
+function InvoiceEditBody({
   ctx,
   base,
   invoiceId,
   inv,
   onSaved,
+  onCancel,
 }: {
   ctx: PlatformCtx
   base: string
   invoiceId: string
   inv: InvoiceRecord
   onSaved: () => void
+  onCancel: () => void
 }) {
   const [form, setForm] = useState<EditFormState>(() => formFromInvoice(inv))
+  const [rows, setRows] = useState<LineRowState[]>(() => rowsFromInvoice(inv))
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -597,11 +734,52 @@ function InvoiceEditForm({
     setForm((f) => ({ ...f, [field]: value }))
   }
 
+  function updateRow(idx: number, field: keyof LineRowState, value: string) {
+    setRows((rs) => rs.map((row, i) => (i === idx ? { ...row, [field]: value } : row)))
+  }
+
+  function addRow() {
+    setRows((rs) => [...rs, { description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }])
+  }
+
+  function removeRow(idx: number) {
+    setRows((rs) => rs.filter((_, i) => i !== idx))
+  }
+
+  // The passive computed line-sum hint ([totals-ownership], Core AC #5). Fed the LIVE
+  // edited rows, not inv.line_items, so it moves as the operator types.
+  //
+  // THE TRAP: computedLineSum tests `!= null` and does NOT canonicalize '' (lib/invoices.ts
+  // :608-628) — unlike diffLineItems, which canonicalizes internally (:492-504). A
+  // controlled React input holds '', never null, so a stored-NULL quantity arrives here as
+  // ''; passing that straight through runs parseScaled(''), which fails DECIMAL_RE and
+  // makes the helper return null for the WHOLE sum. An ABSENT quantity is supposed to
+  // weight the line at 1, so without this mapping the hint would be silently dead on most
+  // real invoices. Map '' -> null first.
+  const lineSum = computedLineSum(
+    rows.map((row) => ({
+      quantity: row.quantity === '' ? null : row.quantity,
+      unit_price: row.unit_price === '' ? null : row.unit_price,
+    })),
+  )
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (submitting) return
     const patch = diffEditInput(inv, form)
-    if (Object.keys(patch).length === 0) return // nothing changed — skip the PATCH, avoids the backend's all-nil 400
+    // `undefined` (content-identical lines) leaves the key ABSENT, so a header-only save
+    // never touches the stored lines or churns their ids ([fingerprint-excludes-line-ids]).
+    // `[]` — emptying a populated invoice — IS assigned, making the patch non-empty, so the
+    // delete-all PATCH is genuinely sent rather than swallowed by the no-op guard below.
+    const lines = diffLineItems(inv.line_items ?? [], rows)
+    if (lines !== undefined) patch.line_items = lines
+    // Nothing changed — skip the PATCH (it would 400 on the backend's all-nil check) and
+    // leave edit mode ([D-noop-save-exits]). Before INVED-01-07 this returned silently with
+    // the form still mounted; in an explicit edit mode that reads as a dead Save button.
+    if (Object.keys(patch).length === 0) {
+      onCancel()
+      return
+    }
     setSubmitting(true)
     setFormError(null)
     try {
@@ -615,62 +793,136 @@ function InvoiceEditForm({
   }
 
   return (
-    <form data-testid="edit-invoice" onSubmit={handleSubmit} style={{ padding: 16 }}>
-      {formError && (
-        <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
-          {formError}
+    <form data-testid="edit-invoice" onSubmit={handleSubmit}>
+      <div style={{ padding: 24, borderBottom: '1px solid var(--line-1)' }}>
+        {formError && (
+          <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+            {formError}
+          </div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Issue date</div>
+            {fieldFlag('issue_date')}
+            <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
+            {fieldFlag('currency')}
+            <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier name</div>
+            {fieldFlag('supplier_name')}
+            <input className="pf-input" type="text" value={form.supplier_name} onChange={(e) => updateField('supplier_name', e.target.value)} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier TIN</div>
+            {fieldFlag('supplier_tin')}
+            <input className="pf-input" type="text" value={form.supplier_tin} onChange={(e) => updateField('supplier_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>
+            {fieldFlag('buyer_name')}
+            <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer TIN</div>
+            {fieldFlag('buyer_tin')}
+            <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Subtotal</div>
+            {fieldFlag('subtotal')}
+            <input className="pf-input" type="text" value={form.subtotal} onChange={(e) => updateField('subtotal', e.target.value)} disabled={submitting} />
+            {/* The computed line-sum hint ([totals-ownership], Core AC #5). Rendered as a
+                sibling AFTER the input, never between the label and the input — that slot
+                belongs to field-flag, and the e2e label->input XPath must keep resolving.
+                Deliberately PASSIVE: it never writes subtotal/VAT/total, never blocks Save,
+                and carries no red/amber/border/icon and no "mismatch" wording, so it cannot
+                be misread as a validation error. `lineSum` is rendered RAW — never through
+                fmt(), which rounds to whole naira (lib/format.ts:5-7) and would erase the
+                sub-naira disagreement this hint exists to expose. No subtotal-vs-hint
+                comparison is drawn here: deciding they disagree is the rule engine's job. */}
+            <div data-testid="computed-line-sum" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.5 }}>
+              Lines total <span className="money">{lineSum ?? '—'}</span>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>VAT</div>
+            {fieldFlag('vat')}
+            <input className="pf-input" type="text" value={form.vat} onChange={(e) => updateField('vat', e.target.value)} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Total</div>
+            {fieldFlag('total')}
+            <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} disabled={submitting} />
+          </div>
         </div>
-      )}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Issue date</div>
-          {fieldFlag('issue_date')}
-          <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+
+        {/* Line items, editable ([edit-ux], Core AC #2 — the read-only table above has no
+            equivalent). Markup follows ValidationView.tsx:115-151, the repo's shipped
+            line-item repeater. `key={i}` matches it too: every input is fully controlled
+            from `rows`, so a removal re-renders correct values regardless of key identity.
+            No per-line rejection flags here ([line-level-flags-not-mapped]) — reasons whose
+            MBS path points at a line still render in full on the rejection card. `line_tax`
+            gets a column here only; widening the READ-ONLY table is out of scope, so a
+            stored line_tax stays invisible until Edit is clicked (noted as a follow-up). */}
+        <div className="label" style={{ margin: '18px 0 12px' }}>
+          Line items
         </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
-          {fieldFlag('currency')}
-          <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
+        <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden', marginBottom: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 10, padding: '9px 14px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
+            <span className="label">Description</span>
+            <span className="label">Qty</span>
+            <span className="label">Unit</span>
+            <span className="label">Amount</span>
+            <span className="label">Tax</span>
+            <span />
+          </div>
+          {rows.map((row, i) => (
+            <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 10, padding: '9px 14px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
+              <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+              <button
+                type="button"
+                data-testid="line-remove"
+                onClick={() => removeRow(i)}
+                disabled={submitting}
+                className="pf-btn"
+                aria-label="Remove line item"
+                style={{ width: 30, height: 30, borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: submitting ? 'not-allowed' : 'pointer', display: 'grid', placeItems: 'center' }}
+              >
+                {closeGlyph}
+              </button>
+            </div>
+          ))}
         </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier name</div>
-          {fieldFlag('supplier_name')}
-          <input className="pf-input" type="text" value={form.supplier_name} onChange={(e) => updateField('supplier_name', e.target.value)} disabled={submitting} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier TIN</div>
-          {fieldFlag('supplier_tin')}
-          <input className="pf-input" type="text" value={form.supplier_tin} onChange={(e) => updateField('supplier_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>
-          {fieldFlag('buyer_name')}
-          <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} disabled={submitting} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer TIN</div>
-          {fieldFlag('buyer_tin')}
-          <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Subtotal</div>
-          {fieldFlag('subtotal')}
-          <input className="pf-input" type="text" value={form.subtotal} onChange={(e) => updateField('subtotal', e.target.value)} disabled={submitting} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>VAT</div>
-          {fieldFlag('vat')}
-          <input className="pf-input" type="text" value={form.vat} onChange={(e) => updateField('vat', e.target.value)} disabled={submitting} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Total</div>
-          {fieldFlag('total')}
-          <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} disabled={submitting} />
-        </div>
+        <button
+          type="button"
+          data-testid="line-add"
+          onClick={addRow}
+          disabled={submitting}
+          className="pf-chip"
+          style={{ height: 30, padding: '0 12px', borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 500, border: '1px dashed var(--line-3)', background: 'transparent', color: 'var(--fg-2)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> Add line item
+        </button>
       </div>
-      <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 34, fontSize: 13 }}>
-        {submitting ? 'Saving…' : 'Save changes'}
-      </button>
+      {/* Cancel + Save pairing, heights and button variants from EntityFormModal.tsx:190/193
+          — the repo's only shipped Cancel+Submit pair. There is no `.v2-btn-secondary` in
+          packages/design-tokens/app-layer.css; ghost and primary are the two that exist. */}
+      <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button type="button" data-testid="edit-cancel" onClick={onCancel} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, fontSize: 13 }}>
+          Cancel
+        </button>
+        <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>
+          {submitting ? 'Saving…' : 'Save changes'}
+        </button>
+      </div>
     </form>
   )
 }

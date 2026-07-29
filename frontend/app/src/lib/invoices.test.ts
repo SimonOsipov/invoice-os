@@ -1350,6 +1350,17 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(diffLineItems(original, edited)).toBeUndefined()
   })
 
+  it("INV-06-T7d: a stored '' on the ORIGINAL side canonicalizes the same as the edited side's '' -- closes the gap T7b left (both sides there start out null, so a mutant that drops canonicalization ONLY on `original` still passes T7b)", () => {
+    // A blank description cell imports as a stored '' , never NULL (line_description is
+    // absent from importer/service.go's numericFields, so fieldValue's blank-guard never
+    // fires for it -- unlike subtotal/vat/total/line_quantity/line_unit_price). Round-tripped
+    // through the editor, an untouched line must still diff as unchanged.
+    const original: LineFields[] = [lineFields({ description: '', line_tax: '' })]
+    const edited: LineFields[] = [lineFields({ description: '', line_tax: '' })]
+
+    expect(diffLineItems(original, edited)).toBeUndefined()
+  })
+
   it('INV-06-T7c: diffLineItems never mutates either input array, and still returns the correct diff', () => {
     const original: LineFields[] = [lineFields()]
     const edited: LineFields[] = [lineFields({ description: 'Changed' })]
@@ -1518,6 +1529,94 @@ describe('the [isfixable-deleted] export is gone (INVED-01-06)', () => {
     expect(scanForIdentifier(srcRoot, 'computedLineSum').length).toBeGreaterThan(0)
 
     expect(scanForIdentifier(srcRoot, needle)).toEqual([])
+  })
+})
+
+// --- Adversarial / edge coverage added at QA (Stage 4, Mode B), on top of the
+// Stage-2.5 AC specs above (INV-06-T1..T13, left untouched). ---
+
+describe('computedLineSum (adversarial, QA)', () => {
+  it('QA-CLS-1: a very large line set (1000 lines) sums correctly, not just small fixtures', () => {
+    const lines: Array<Pick<InvoiceLineItem, 'quantity' | 'unit_price'>> = Array.from({ length: 1000 }, () => ({
+      quantity: '1',
+      unit_price: '1.00',
+    }))
+
+    expect(computedLineSum(lines)).toBe('1000.00')
+  })
+
+  it('QA-CLS-2: negative unit_price (a credit/reversal line) sums correctly, including an all-negative set', () => {
+    expect(computedLineSum([{ quantity: '2', unit_price: '-50.00' }])).toBe('-100.00')
+
+    expect(
+      computedLineSum([
+        { quantity: '1', unit_price: '100.00' },
+        { quantity: '1', unit_price: '-40.00' },
+      ]),
+    ).toBe('60.00')
+  })
+
+  it("QA-CLS-3: a quantity of '0' contributes zero -- distinct from an ABSENT quantity (weights 1) and a non-numeric one (violates)", () => {
+    expect(computedLineSum([{ quantity: '0', unit_price: '100.00' }])).toBe('0.00')
+  })
+
+  it('QA-CLS-4: extreme decimal scale (10 fractional digits) survives exactly -- no rounding or truncation', () => {
+    expect(computedLineSum([{ quantity: '1', unit_price: '0.0000000001' }])).toBe('0.0000000001')
+  })
+
+  it('QA-CLS-5: undefined and null line arrays normalize identically through the `?? []` call-site idiom', () => {
+    const maybeUndefined: InvoiceLineItem[] | undefined = undefined
+    const maybeNull: InvoiceLineItem[] | null = null
+    const fromUndefined = computedLineSum(maybeUndefined ?? [])
+    const fromNull = computedLineSum(maybeNull ?? [])
+
+    expect(fromUndefined).toBeNull()
+    expect(fromNull).toBeNull()
+    expect(fromUndefined).toBe(computedLineSum([]))
+  })
+})
+
+describe('diffLineItems (adversarial, QA)', () => {
+  it('QA-DLI-1: a line whose every one of the five fields is null on the original side and \'\' on the edited side is still unchanged -- generalizes T7b beyond description/line_tax to all five fields', () => {
+    const original: LineFields[] = [{ description: null, quantity: null, unit_price: null, line_total: null, line_tax: null }]
+    const edited: LineFields[] = [{ description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }]
+
+    expect(diffLineItems(original, edited)).toBeUndefined()
+  })
+
+  it('QA-DLI-2: a large line set (300 lines) -- untouched copy is undefined; a single deep change returns the full 300-line array with only that field changed', () => {
+    const original: LineFields[] = Array.from({ length: 300 }, (_, i) => lineFields({ description: `Item ${i}` }))
+    const untouchedCopy: LineFields[] = original.map((l) => ({ ...l }))
+    expect(diffLineItems(original, untouchedCopy)).toBeUndefined()
+
+    const edited: LineFields[] = original.map((l) => ({ ...l }))
+    edited[150] = { ...edited[150], description: 'Changed deep in the set' }
+
+    const result = diffLineItems(original, edited)
+    expect(result).toHaveLength(300)
+    expect(result?.[150].description).toBe('Changed deep in the set')
+    expect(result?.[149].description).toBe('Item 149')
+    expect(result?.[151].description).toBe('Item 151')
+  })
+
+  it('QA-DLI-3: round-trip property -- diffLineItems(x, x)-equivalent is undefined across a range of shapes, including negative/decimal/imported-blank content', () => {
+    const shapes: LineFields[][] = [
+      [lineFields()],
+      [{ description: null, quantity: null, unit_price: null, line_total: null, line_tax: null }],
+      [{ description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }],
+      [lineFields({ unit_price: '-50.00', line_total: '-100.00' })],
+      [lineFields({ unit_price: '0.0000000001' })],
+      [lineFields({ quantity: '0' })],
+      [lineFields(), lineFields({ description: 'Second', unit_price: '-1.00' })],
+      [],
+    ]
+
+    for (const shape of shapes) {
+      // A fresh, content-identical copy on the edited side -- never the same array
+      // reference -- so this is a genuine content comparison, not a reference check.
+      const copy: LineFields[] = shape.map((l) => ({ ...l }))
+      expect(diffLineItems(shape, copy), JSON.stringify(shape)).toBeUndefined()
+    }
   })
 })
 

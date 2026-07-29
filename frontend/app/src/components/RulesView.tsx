@@ -17,8 +17,16 @@ import { SeverityPill, TypePill } from './RulePills'
 import type { PlatformCtx } from '../types'
 
 // Key · Type · Target field · Severity · Source · Message · On
-const RULE_COLS = 'minmax(160px,1.1fr) 132px minmax(130px,1fr) 76px 82px minmax(170px,1.4fr) 74px'
-const TABLE_MIN_WIDTH = 940
+//
+// These minimums are load-bearing, not taste. The table sits beside a fixed 244px
+// rail inside a 252px-sidebar shell, which leaves it ~854px at a 1440px viewport —
+// so a min-width above that pushes the LAST column off-screen behind a horizontal
+// scrollbar. That column is the lock/toggle: the one cell on the row that says
+// whether a rule is inherited or yours to switch off. It has to be visible without
+// scrolling at a normal laptop width. Sum of the minimums below is 744 + 32px of
+// row padding = 776, which is what TABLE_MIN_WIDTH states.
+const RULE_COLS = 'minmax(150px,1.1fr) 118px minmax(120px,1fr) 72px 74px minmax(140px,1.3fr) 70px'
+const TABLE_MIN_WIDTH = 790
 
 const VERSION_TONE = {
   active: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
@@ -120,22 +128,25 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
             {GOLDEN_VERSIONS.map((v) => {
               const tone = VERSION_TONE[v.kind]
               return (
+                // Version and tag share a row; the meta line gets the card's full
+                // width below them. Side by side, `eff. 2026-04-15 · 40 rules` does
+                // not fit next to a SUPERSEDED pill in 244px and breaks mid-phrase.
                 <div
                   key={v.version}
-                  style={{ padding: '11px 14px', borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10, background: v.kind === 'active' ? 'var(--action-tint)' : 'var(--bg-2)' }}
+                  style={{ padding: '11px 14px', borderTop: '1px solid var(--line-1)', background: v.kind === 'active' ? 'var(--action-tint)' : 'var(--bg-2)' }}
                 >
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <span className="mono" style={{ display: 'block', fontSize: 13, fontWeight: 700, color: 'var(--fg-1)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: 'var(--fg-1)' }}>
                       {v.version}
                     </span>
-                    <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginTop: 1 }}>
-                      {v.meta}
+                    <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '2px 8px' }}>
+                      <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
+                        {v.tag}
+                      </span>
                     </span>
-                  </span>
-                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '2px 8px' }}>
-                    <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
-                      {v.tag}
-                    </span>
+                  </div>
+                  <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginTop: 3 }}>
+                    {v.meta}
                   </span>
                 </div>
               )

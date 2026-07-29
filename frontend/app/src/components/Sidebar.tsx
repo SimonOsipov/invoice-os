@@ -23,6 +23,7 @@ import {
   NAV_DASHBOARD,
   NAV_INVOICES,
   NAV_REPORTS,
+  NAV_RULES,
   NAV_SETTINGS,
   NAV_VALIDATION,
   tickGlyph11,
@@ -98,9 +99,15 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // once /v1/me has PROVEN it, otherwise the mode-derived label. Reusing `orgLabel` keeps
   // one answer to "what is this firm called" rather than two that can disagree.
   const firmName = user.verified && user.tenantName ? user.tenantName : orgLabel
+  //
+  // NAV_RULES is CLIENT-SCOPED in both modes: custom rules are stored per client
+  // (lib/rules.ts), so in firm mode it belongs in the group that follows the
+  // switcher, never the firm-wide one. It sits directly after Validation because it
+  // configures the validation engine — see NAV_RULES in glyphs.tsx for why that is
+  // the position the brief's "directly after Workflows" resolves to here.
   const navGroups: { key: string; label: string; scope: string; items: SidebarNavItem[] }[] = isFirm
     ? [
-        { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_CUSTOMERS, NAV_REPORTS] },
+        { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_RULES, NAV_CUSTOMERS, NAV_REPORTS] },
         { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_CLIENTS, NAV_SETTINGS] },
       ]
     : [
@@ -108,7 +115,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
           key: 'workspace',
           label: 'Workspace',
           scope: active.short,
-          items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, approvalsItem, NAV_REPORTS, NAV_SETTINGS],
+          items: [NAV_DASHBOARD, invoicesItem, NAV_VALIDATION, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_SETTINGS],
         },
       ]
   let activeNav: string = view === 'create' || view === 'detail' ? 'invoices' : view

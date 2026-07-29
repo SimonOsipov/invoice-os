@@ -52,7 +52,13 @@ export const warnTriGlyph = <Icon paths={['m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2
 // toggle icon was removed with the firm/in-house switch (workspace is persona-fixed).
 export const firmModeIcon = <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={14} />
 
-export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
+// Rules screen: the lock replaces the toggle on every inherited row, and the star
+// heads the "Suggested for you" card (same glyph the Support Console's learned-rules
+// inbox uses, so the two surfaces read as the same idea).
+export const lockGlyph = <Icon paths={['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']} size={11} />
+export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 19 12 16.1 6.82 19 8 12.91l-4-3.64 5.91-1.01z']} size={15} />
+
+export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
 
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
@@ -62,6 +68,14 @@ export const NAV_INVOICES: NavDef = {
 }
 export const NAV_CLIENTS: NavDef = { id: 'clients', label: 'Clients', glyph: firmModeIcon }
 export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation', glyph: shieldGlyph }
+// list-checks. The brief places Rules "directly after Workflows"; this app has no
+// Workflows nav item (see Sidebar.tsx), so it sits directly after Validation — the
+// rules ARE the validation engine's configuration, which makes it the true sibling.
+export const NAV_RULES: NavDef = {
+  id: 'rules',
+  label: 'Rules',
+  glyph: <Icon paths={['m3 17 2 2 4-4', 'm3 7 2 2 4-4', 'M13 6h8', 'M13 12h8', 'M13 18h8']} size={17} />,
+}
 export const NAV_APPROVALS: NavDef = {
   id: 'approvals',
   label: 'Approvals',

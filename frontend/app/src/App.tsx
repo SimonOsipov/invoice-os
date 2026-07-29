@@ -19,6 +19,16 @@ import {
   type ImportReport,
   type UploadPhase,
 } from './lib/importApi'
+import {
+  addSuggested,
+  customRulesFor,
+  customRulesKey,
+  removeCustom,
+  toggleCustom,
+  type CustomRule,
+  type CustomRuleStore,
+  type Suggestion,
+} from './lib/rules'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
@@ -29,6 +39,7 @@ import { CreateFlow } from './components/CreateFlow'
 import { InvoiceDetail } from './components/InvoiceDetail'
 import { ClientsView } from './components/ClientsView'
 import { ValidationView } from './components/ValidationView'
+import { RulesView } from './components/RulesView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
@@ -168,6 +179,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [valIdx, setValIdx] = useState(0)
   const [parseIdx, setParseIdx] = useState(0)
+  // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
+  // RulesView so a client's set survives navigating away and back, and so switching
+  // company genuinely swaps the set instead of carrying one client's rules over to
+  // the next. A client absent from the store has never been edited and reads the
+  // seed set; only edited clients get an entry.
+  const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
+  const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
+  const rulesKey = customRulesKey(active.entityId)
+  const customRules = customRulesFor(customRuleStore, rulesKey)
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -243,6 +263,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setCreateStep('form')
     setValidation(null)
+    // Custom rules are per client, so the incoming client has a different set — a
+    // drawer left open would keep describing a rule from the company just left.
+    setOpenRuleKey(null)
   }
 
   function openCreate() {
@@ -524,6 +547,36 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setXmlOpen(false)
   }
 
+  function openRule(key: string) {
+    setOpenRuleKey(key)
+  }
+
+  function closeRule() {
+    setOpenRuleKey(null)
+  }
+
+  // All three custom-rule writers go through the same shape: resolve THIS client's
+  // list (seed set if untouched), run the pure reducer, store it back under this
+  // client's key. `rulesKey` is captured per render off `active`, so a write can
+  // never land on the company the switcher just left.
+  function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {
+    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey)) }))
+  }
+
+  function addSuggestedRule(s: Suggestion) {
+    updateCustomRules((rules) => addSuggested(rules, s))
+  }
+
+  function toggleCustomRule(key: string) {
+    updateCustomRules((rules) => toggleCustom(rules, key))
+  }
+
+  function removeCustomRule(key: string) {
+    updateCustomRules((rules) => removeCustom(rules, key))
+    // The drawer is showing the rule that just stopped existing.
+    setOpenRuleKey((k) => (k === key ? null : k))
+  }
+
   const user: SignedInUser = {
     name: session.persona.name,
     initials: session.persona.initials,
@@ -559,6 +612,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     connectorMappings,
     valIdx,
     parseIdx,
+    customRules,
+    openRuleKey,
     entityId,
     importFile,
     preview,
@@ -599,6 +654,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     saveConnectorMapping,
     openXml,
     closeXml,
+    openRule,
+    closeRule,
+    addSuggestedRule,
+    toggleCustomRule,
+    removeCustomRule,
     signOut: onSignOut,
   }
 
@@ -629,6 +689,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
           {view === 'detail' && <InvoiceDetail ctx={ctx} />}
           {view === 'clients' && <ClientsView ctx={ctx} />}
           {view === 'validation' && <ValidationView ctx={ctx} />}
+          {view === 'rules' && <RulesView ctx={ctx} />}
           {view === 'customers' && <CustomersView ctx={ctx} />}
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}

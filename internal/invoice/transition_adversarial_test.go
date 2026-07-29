@@ -370,3 +370,61 @@ func TestTransition_MultiHopHistoryIntegrityChain(t *testing.T) {
 		t.Errorf("invoice.transitioned audit rows = %d, want 4 (one per hop, excluding the 1 invoice.created row)", n)
 	}
 }
+
+// TestTransition_LineEditedInvoiceIllegalDraftToQueued (INVED-01-04 T19, QA
+// F3): mutating a line via Store.Edit demotes a validated invoice to draft
+// ([edit-lines-demote]); the SECOND path into queued -- the generic
+// transitions route, POST /v1/invoices/{id}/transitions {"target":"queued"}
+// -- must refuse it too, closing the gap Submitter.BatchSubmit's own
+// eligibility check (T12, batch_submit_adversarial_test.go) does not cover
+// on its own. TransitionHandler does NOT special-case queued the way it
+// refuses target=validated (handlers.go:391 only refuses THAT one target),
+// so the closure has to be mechanism-level: after the line edit the invoice
+// is draft, and draft->queued is not a legal edge in legalTransitions, so
+// transitionTx's existing legality guard alone refuses it with
+// ErrIllegalTransition -- no new guard required. This test drives
+// Store.Transition directly (the same function TransitionHandler calls)
+// rather than round-tripping HTTP, since the store-level outcome is what the
+// guard actually is.
+func TestTransition_LineEditedInvoiceIllegalDraftToQueued(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T19 tenant")
+	entityID := seedEntity(t, super, tenantID, "T19 entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA := "Widget"
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "T19", LineItems: []LineItemInput{{Description: &descA}}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	newDesc := "Gadget"
+	edited, err := store.Edit(c, inv.ID, EditInput{LineItems: &[]LineItemInput{{Description: &newDesc}}})
+	if err != nil {
+		t.Fatalf("Edit (line change): want success, got: %v", err)
+	}
+	if edited.Status != StatusDraft {
+		t.Fatalf("Edit: status = %q, want draft (demoted) -- the Transition refusal below depends on this", edited.Status)
+	}
+
+	if _, err := store.Transition(c, inv.ID, StatusQueued); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("Transition(draft -> queued) after a line edit err = %v, want ErrIllegalTransition -- the generic transitions route must refuse the second path into queued too (QA F3)", err)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1`, inv.ID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("status after refused Transition = %q, want unchanged %q", status, StatusDraft)
+	}
+	if n := countBatchSubmitJobs(t, app, inv.ID); n != 0 {
+		t.Errorf("river_job submission_submit rows = %d, want 0", n)
+	}
+}

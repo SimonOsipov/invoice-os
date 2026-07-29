@@ -3062,16 +3062,37 @@ func TestGetHandler_RevalidateBlockedReasonExactCopy(t *testing.T) {
 	}
 }
 
-// TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys (T10): every
-// pre-existing getResponse key must keep its name/type/position (AC #5),
-// and the three new action-flag keys must be purely ADDITIVE -- exactly
-// len(preExisting)+3 top-level keys total, modeled on
-// TestValidateHandler_TopLevelKeysNotNested's exact-key-set technique. RED
-// today: len(raw) == len(preExisting) (24), not 27, and the three new-key
-// existence checks fail outright.
+// TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys (T10; STRENGTHENED by
+// QA/Mode B, task-266 Part B #1): every pre-existing getResponse key must
+// keep its name/position (AC #5), and the three new action-flag keys must be
+// purely ADDITIVE -- exactly len(preExisting)+3 top-level keys total,
+// modeled on TestValidateHandler_TopLevelKeysNotNested's exact-key-set
+// technique.
+//
+// QA finding: the original single-fixture version of this test (status
+// validated only) asserted PRESENCE of the three new keys but never their
+// VALUE. validated is a status where can_edit is TRUE (a non-zero bool), so
+// a regression that tagged can_edit `,omitempty` left the key present in
+// THIS fixture regardless -- a `false`-only bug hides behind a `true`-valued
+// sample. Confirmed empirically by mutation testing: adding `,omitempty` to
+// can_edit turns TestGetHandler_ActionFlagsAllStatuses and
+// TestGetHandler_ActionFlagsFalseNotOmitted red but left the original
+// single-case version of THIS test green. Relying on those two separate
+// tests to catch that one regression made this test's own "additive keys"
+// claim fragile: a future edit could delete either sibling believing this
+// test already covers the contract, and the regression would then go
+// permanently undetected.
+//
+// Strengthened two ways, both applied via a 2-case table:
+//  1. VALUE assertions on all three new keys, not just presence -- also
+//     catches a value-computation bug (e.g. a status switch that always
+//     emits can_edit:true) that presence-only checks cannot see.
+//  2. A SECOND case at a status where both booleans are FALSE (queued), so
+//     this test is self-sufficient against a `,omitempty` regression on
+//     EITHER bool, independent of whether TestGetHandler_ActionFlagsAllStatuses/
+//     ActionFlagsFalseNotOmitted continue to exist.
 func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	invoiceID := uuid.NewString()
 	versionID := uuid.NewString()
 	version := 3
 	desc := "widget"
@@ -3081,10 +3102,121 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// TestGetHandler_QRPNGBase64PopulatedWhenPayloadPresent) that renders as
 	// a valid PNG without tripping QR capacity.
 	payload := "irn-0001-2026.csid-abc123.mbs-qr-payload-sample-fixture"
+
+	preExisting := []string{
+		"id", "entity_id", "import_batch_id", "invoice_number", "status", "issue_date",
+		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
+		"vat", "total", "violations", "rule_set_version_id", "created_at", "line_items",
+		"irn", "csid", "qr_payload", "rejection_reasons",
+		"rule_set_version", "qr_png_base64",
+	}
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason"}
+
+	tests := []struct {
+		name              string
+		status            Status
+		wantCanEdit       string
+		wantCanRevalidate string
+		wantReasonNull    bool
+	}{
+		{"validated_true_can_edit", StatusValidated, "true", "false", false},
+		{"queued_false_both_flags", StatusQueued, "false", "false", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			invoiceID := uuid.NewString()
+			want := Invoice{
+				ID:               invoiceID,
+				EntityID:         uuid.NewString(),
+				InvoiceNumber:    "INV-T10",
+				Status:           tt.status,
+				Violations:       json.RawMessage(`[]`),
+				RuleSetVersionID: &versionID,
+				RuleSetVersion:   &version,
+				LineItems:        []LineItem{{ID: uuid.NewString(), LineNo: 1, Description: &desc}},
+				IRN:              &irn,
+				CSID:             &csid,
+				QRPayload:        &payload,
+				RejectionReasons: json.RawMessage(`["reason1"]`),
+			}
+			get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+			rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+			}
+
+			for _, k := range preExisting {
+				if _, ok := raw[k]; !ok {
+					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the three new action-flag keys must be purely additive", k, rec.Body.String())
+				}
+			}
+			for _, k := range newKeys {
+				if _, ok := raw[k]; !ok {
+					t.Errorf("raw JSON keys missing new action-flag key %q (body=%s)", k, rec.Body.String())
+				}
+			}
+			wantTotal := len(preExisting) + len(newKeys)
+			if len(raw) != wantTotal {
+				t.Errorf("raw JSON has %d top-level keys, want exactly %d (%d pre-existing + %d new) (body=%s)",
+					len(raw), wantTotal, len(preExisting), len(newKeys), rec.Body.String())
+			}
+
+			if got := string(raw["can_edit"]); got != tt.wantCanEdit {
+				t.Errorf("%s: can_edit raw = %q, want %q (body=%s)", tt.status, got, tt.wantCanEdit, rec.Body.String())
+			}
+			if got := string(raw["can_revalidate"]); got != tt.wantCanRevalidate {
+				t.Errorf("%s: can_revalidate raw = %q, want %q (body=%s)", tt.status, got, tt.wantCanRevalidate, rec.Body.String())
+			}
+			reasonRaw := string(raw["revalidate_blocked_reason"])
+			if tt.wantReasonNull {
+				if reasonRaw != "null" {
+					t.Errorf("%s: revalidate_blocked_reason raw = %q, want null (body=%s)", tt.status, reasonRaw, rec.Body.String())
+				}
+			} else if reasonRaw == "" || reasonRaw == "null" {
+				t.Errorf("%s: revalidate_blocked_reason raw = %q, want a non-null quoted string (body=%s)", tt.status, reasonRaw, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestGetHandler_ActionFlagKeysOrderedLast (task-266 Part B #2): a permanent
+// gate on wire key ORDER, not just the key SET. The exact-key-set test above
+// decodes into a map[string]json.RawMessage, which discards order -- someone
+// reordering getResponse's fields (e.g. moving the three action-flag keys
+// before rule_set_version/qr_png_base64, or interleaving them among the
+// embedded Invoice fields) would violate AC #5's "position" clause with
+// every other test in this file still green. Confirmed empirically:
+// reordering getResponse's struct fields (can_edit/can_revalidate/
+// revalidate_blocked_reason moved BEFORE rule_set_version/qr_png_base64)
+// left the full ./internal/invoice/... suite green before this test existed.
+//
+// Walks the raw response with json.Decoder.Token(), which -- unlike
+// json.Unmarshal into a map -- preserves the ORDER keys appear on the wire,
+// and asserts the exact ordered key list: every embedded Invoice field in
+// its OWN struct declaration order (invoice.go), followed by
+// rule_set_version, qr_png_base64, then the three action-flag keys LAST, in
+// that order -- exactly what json.NewEncoder produces for an embedded
+// anonymous struct field followed by the outer struct's own fields, per
+// encoding/json's byIndex field ordering.
+func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	versionID := uuid.NewString()
+	version := 3
+	desc := "widget"
+	irn := "IRN-ORDER-001"
+	csid := "CSID-ORDER-001"
+	payload := "irn-0001-2026.csid-abc123.mbs-qr-payload-sample-fixture"
 	want := Invoice{
 		ID:               invoiceID,
 		EntityID:         uuid.NewString(),
-		InvoiceNumber:    "INV-T10",
+		InvoiceNumber:    "INV-ORDER",
 		Status:           StatusValidated,
 		Violations:       json.RawMessage(`[]`),
 		RuleSetVersionID: &versionID,
@@ -3102,33 +3234,89 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
-	}
-
-	preExisting := []string{
+	got := topLevelKeyOrder(t, rec.Body.Bytes())
+	want2 := []string{
+		// Invoice's own declared field order (invoice.go) -- LineItems is
+		// declared LAST on Invoice, after RejectionReasons, NOT immediately
+		// after created_at (unlike the presence-only list above, which never
+		// asserted order and so never needed to get this right).
 		"id", "entity_id", "import_batch_id", "invoice_number", "status", "issue_date",
 		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
-		"vat", "total", "violations", "rule_set_version_id", "created_at", "line_items",
-		"irn", "csid", "qr_payload", "rejection_reasons",
+		"vat", "total", "violations", "rule_set_version_id", "created_at",
+		"irn", "csid", "qr_payload", "rejection_reasons", "line_items",
+		// getResponse's own fields, in declaration order -- the three
+		// action-flag keys MUST be last (AC #5's additive/position clause).
 		"rule_set_version", "qr_png_base64",
+		"can_edit", "can_revalidate", "revalidate_blocked_reason",
 	}
-	for _, k := range preExisting {
-		if _, ok := raw[k]; !ok {
-			t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the three new action-flag keys must be purely additive", k, rec.Body.String())
+	if !reflect.DeepEqual(got, want2) {
+		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
+	}
+}
+
+// topLevelKeyOrder walks a JSON object's top-level keys in WIRE ORDER using
+// json.Decoder.Token() (interleaved with Decode into a throwaway
+// json.RawMessage to consume each value without needing to know its shape)
+// -- unlike json.Unmarshal into a map, which discards order entirely.
+func topLevelKeyOrder(t *testing.T, body []byte) []string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(body))
+	tok, err := dec.Token()
+	if err != nil {
+		t.Fatalf("read opening token: %v", err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		t.Fatalf("first token = %v, want object start '{'", tok)
+	}
+	var keys []string
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			t.Fatalf("read key token: %v", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			t.Fatalf("key token = %v (%T), want a string", keyTok, keyTok)
+		}
+		keys = append(keys, key)
+		var discard json.RawMessage
+		if err := dec.Decode(&discard); err != nil {
+			t.Fatalf("consume value for key %q: %v", key, err)
 		}
 	}
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason"}
-	for _, k := range newKeys {
-		if _, ok := raw[k]; !ok {
-			t.Errorf("raw JSON keys missing new action-flag key %q (body=%s)", k, rec.Body.String())
-		}
+	return keys
+}
+
+// TestGetHandler_ActionFlagsAreDerivedNotHardcoded (task-266 Part C mutation
+// finding): perturbs legalTransitions at runtime -- same technique as
+// TestCanEdit_TracksLegalTransitions (transition_test.go) -- and confirms
+// GetHandler's can_edit wire value tracks the change. This is the ONLY spec
+// in the package that can tell "GetHandler calls canEdit(inv.Status)" apart
+// from "GetHandler restates a hardcoded {draft,validated,rejected} switch":
+// on TODAY's legalTransitions table the two produce byte-identical output,
+// so a hardcoded switch mutation was confirmed (empirically, via mutation
+// testing) to leave the ENTIRE existing ./internal/invoice/... suite green,
+// including every other action-flag test in this file. That silent
+// equivalence is exactly the Core AC 4 risk this test exists to close: a
+// future edge added to legalTransitions would widen canEdit but leave a
+// hardcoded switch stale, and nothing else would catch it.
+func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
+	orig := legalTransitions
+	t.Cleanup(func() { legalTransitions = orig })
+	legalTransitions = edgeTableWith(orig, StatusFailed, StatusDraft)
+
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusFailed}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	wantTotal := len(preExisting) + len(newKeys)
-	if len(raw) != wantTotal {
-		t.Errorf("raw JSON has %d top-level keys, want exactly %d (%d pre-existing + %d new) (body=%s)",
-			len(raw), wantTotal, len(preExisting), len(newKeys), rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, `"can_edit":true`) {
+		t.Errorf("body = %s, want the literal \"can_edit\":true for failed once failed->draft is a legal edge -- GetHandler must call canEdit(inv.Status), not restate a hardcoded per-status switch (Core AC 4)", body)
 	}
 }
 
@@ -3302,4 +3490,301 @@ func TestEditHandler_RealStore_LineItemsThreeStates(t *testing.T) {
 			t.Errorf("line_items changed despite a 409-refused edit: before %+v, after %+v", before, after)
 		}
 	})
+}
+
+// --- INVED-01-05 QA (Mode B): Part D (DB e2e) + Part F (adversarial) -------
+// ---------------------------------------------------------------------------
+//
+// Beyond the RED specs and the two Part B gap-closure tests above: DB e2e
+// composition gaps the RED specs deliberately left to store-level/unit-level
+// coverage (malformed line numeric through the REAL HTTP handler, a
+// lines-only PATCH demoting a REAL validated invoice through the REAL HTTP
+// handler), plus adversarial wire-shape coverage (mixed header+line_items in
+// one call, an unknown per-line field, a large array, duplicate content
+// lines, and a null array entry).
+
+// TestEditHandler_RealStore_MalformedLineNumericIs400NotFrom500 (task-266
+// Part D): T13 (TestEditHandler_LineItemsMalformedNumericIs400NotFrom500,
+// above) only proves the statusForErr mapping via a STUBBED store that
+// fabricates a wrapped ErrValidation -- it never exercises the real
+// replaceLinesTx 22P02 path through the real HTTP handler. This wires the
+// REAL Store.Edit into the REAL EditHandler (mirrors
+// TestEditHandler_RealStore_LineItemsThreeStates) so a malformed line
+// numeric's actual 22P02 -> ErrValidation -> 400 chain is proven end to end,
+// DB error through to wire status code, and the original line survives the
+// rolled-back replace-all.
+func TestEditHandler_RealStore_MalformedLineNumericIs400NotFrom500(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "INVED-01-05-e2e-malformed tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-malformed entity")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	seedLines := []LineItemInput{
+		{Description: strPtr("Seed A"), Quantity: strPtr("1"), UnitPrice: strPtr("10.00"), LineTotal: strPtr("10.00"), LineTax: strPtr("0.00")},
+	}
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "INVED-01-05-E2E-MALFORMED", StatusDraft, seedLines)
+
+	body := `{"line_items":[{"description":"a","unit_price":"not-a-number"}]}`
+	rec, resp := doInvoiceEdit(t, store.Edit, &identity, inv.ID, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, NOT 500 (body=%s) -- the real store's 22P02 must map through statusForErr's ErrValidation case", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+	after := readLineItemsForTest(t, super, inv.ID)
+	if len(after) != 1 || after[0].Description == nil || *after[0].Description != "Seed A" {
+		t.Errorf("line_items after a 400-refused edit = %+v, want the original 1 row unchanged (the malformed replace-all rolled back)", after)
+	}
+}
+
+// TestEditHandler_RealStore_LinesOnlyPatchDemotesValidatedInvoice (task-266
+// Part D): the RED specs' DB e2e four-way table
+// (TestEditHandler_RealStore_LineItemsThreeStates) exercises all four
+// line_items states only against a DRAFT (or, for the 409 case, an
+// ACCEPTED) invoice -- it never proves a lines-only PATCH through the REAL
+// HTTP handler demotes a VALIDATED invoice. Store-level demotion is already
+// proven (TestStoreEdit_LineChangeOnValidatedDemotesAndAuditsLineItemsField,
+// INVED-01-04) by calling store.Edit directly; this is the composition test
+// that proves the SAME contract survives the wire decode this subtask adds:
+// a body carrying ONLY line_items (no header field at all) reaches
+// EditHandler, decodes to a non-nil EditInput.LineItems, and Store.Edit's
+// demotion step still fires -- response status draft, one invoice.updated
+// audit row whose fields include "line_items", one invoice.transitioned
+// audit row, and one (validated,draft) invoice_status_history row.
+func TestEditHandler_RealStore_LinesOnlyPatchDemotesValidatedInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "INVED-01-05-e2e-demote tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-demote entity")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	seedLines := []LineItemInput{
+		{Description: strPtr("Seed A"), Quantity: strPtr("1"), UnitPrice: strPtr("10.00"), LineTotal: strPtr("10.00"), LineTax: strPtr("0.00")},
+	}
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "INVED-01-05-E2E-DEMOTE", StatusValidated, seedLines)
+
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
+
+	body := `{"line_items":[{"description":"New A","quantity":"2","unit_price":"5.00","line_total":"10.00","line_tax":"0.00"}]}`
+	rec, resp := doInvoiceEdit(t, store.Edit, &identity, inv.ID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Status != string(StatusDraft) {
+		t.Errorf("response status = %q, want %q -- a lines-only PATCH (no header fields) on a validated invoice must still demote it", resp.Status, StatusDraft)
+	}
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated+1 {
+		t.Errorf("invoice.updated audit rows = %d, want %d", n, beforeUpdated+1)
+	}
+	if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != beforeTransitioned+1 {
+		t.Errorf("invoice.transitioned audit rows = %d, want %d", n, beforeTransitioned+1)
+	}
+	fields := auditFields(t, app, tenantID, "invoice.updated")
+	found := false
+	for _, f := range fields {
+		if f == "line_items" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("invoice.updated audit fields = %v, want it to contain %q ([audit-fields-includes-line-items])", fields, "line_items")
+	}
+	if n := mustCount(t, super,
+		`SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`, inv.ID,
+	); n != 1 {
+		t.Errorf("invoice_status_history (validated,draft) rows = %d, want exactly 1", n)
+	}
+}
+
+// TestEditHandler_MixedHeaderAndLineItemsBothMapped (task-266 Part F): a
+// single PATCH carrying BOTH a header field and line_items must map BOTH
+// into EditInput -- neither the header decode nor the line_items decode
+// path in EditHandler is exclusive of the other. None of the RED unit specs
+// combine the two in one body (T1's fixture is line_items-only; the header
+// mapping specs predate this story).
+func TestEditHandler_MixedHeaderAndLineItemsBothMapped(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, `{"vat":"9.99","supplier_name":"Acme","line_items":[{"description":"a"}]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotIn.VAT == nil || *gotIn.VAT != "9.99" {
+		t.Errorf("EditInput.VAT = %v, want a non-nil pointer to %q", gotIn.VAT, "9.99")
+	}
+	if gotIn.SupplierName == nil || *gotIn.SupplierName != "Acme" {
+		t.Errorf("EditInput.SupplierName = %v, want a non-nil pointer to %q", gotIn.SupplierName, "Acme")
+	}
+	if gotIn.LineItems == nil || len(*gotIn.LineItems) != 1 {
+		t.Fatalf("EditInput.LineItems = %v, want a non-nil pointer to 1 mapped line item", gotIn.LineItems)
+	}
+	if got := (*gotIn.LineItems)[0].Description; got == nil || *got != "a" {
+		t.Errorf("line[0].Description = %v, want %q", got, "a")
+	}
+}
+
+// TestEditHandler_LineItemsUnknownFieldIgnored200 (task-266 Part F): an
+// unknown key WITHIN a line_items entry (not just at the top level, already
+// pinned by TestEditHandler_UnknownFieldIgnored200) must be silently
+// ignored -- EditHandler never calls DisallowUnknownFields, and lineItemReq
+// has no such field, so this is the line-item mirror of that existing
+// top-level guard.
+func TestEditHandler_LineItemsUnknownFieldIgnored200(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, `{"line_items":[{"description":"a","not_a_real_field":"whatever"}]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for an unknown per-line JSON field (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotIn.LineItems == nil || len(*gotIn.LineItems) != 1 {
+		t.Fatalf("EditInput.LineItems = %v, want a non-nil pointer to 1 mapped line item", gotIn.LineItems)
+	}
+	if got := (*gotIn.LineItems)[0].Description; got == nil || *got != "a" {
+		t.Errorf("line[0].Description = %v, want %q -- the unknown field must not have interfered with decoding the known ones", got, "a")
+	}
+}
+
+// TestEditHandler_LineItemsLargeArrayMapped (task-266 Part F): no
+// http.MaxBytesReader/line-count cap applies to PATCH (documented,
+// traceable-to-no-AC non-goal in the Implementation Plan, mirroring
+// CreateHandler which has none either) -- a large line_items array must
+// still decode and map completely, not truncate or error partway.
+func TestEditHandler_LineItemsLargeArrayMapped(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+
+	const n = 500
+	var b strings.Builder
+	b.WriteString(`{"line_items":[`)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"description":"line-%d"}`, i)
+	}
+	b.WriteString(`]}`)
+
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, b.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a %d-entry line_items array (body len=%d)", rec.Code, n, rec.Body.Len())
+	}
+	if gotIn.LineItems == nil || len(*gotIn.LineItems) != n {
+		t.Fatalf("len(*EditInput.LineItems) = %v, want %d", gotIn.LineItems, n)
+	}
+	first, last := (*gotIn.LineItems)[0], (*gotIn.LineItems)[n-1]
+	if first.Description == nil || *first.Description != "line-0" {
+		t.Errorf("line[0].Description = %v, want %q", first.Description, "line-0")
+	}
+	if last.Description == nil || *last.Description != fmt.Sprintf("line-%d", n-1) {
+		t.Errorf("line[%d].Description = %v, want %q", n-1, last.Description, fmt.Sprintf("line-%d", n-1))
+	}
+}
+
+// TestEditHandler_RealStore_DuplicateContentLinesBothSurvive (task-266 Part
+// F): two line_items entries with byte-identical MBS content (same
+// description/quantity/price/total/tax) must BOTH survive the replace-all --
+// line_no is system-assigned by array POSITION ([line-no-by-position]), not
+// derived from content, so there is no content-based uniqueness constraint
+// to collide with. Confirms replaceLinesTx's per-line_no unique index
+// (line_items_invoice_line_no_uq) is scoped to (invoice_id, line_no), never
+// to content.
+func TestEditHandler_RealStore_DuplicateContentLinesBothSurvive(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "INVED-01-05-e2e-dup tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-01-05-e2e-dup entity")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "INVED-01-05-E2E-DUP", StatusDraft, nil)
+
+	body := `{"line_items":[` +
+		`{"description":"Same","quantity":"1","unit_price":"10.00","line_total":"10.00","line_tax":"0.00"},` +
+		`{"description":"Same","quantity":"1","unit_price":"10.00","line_total":"10.00","line_tax":"0.00"}` +
+		`]}`
+	rec, _ := doInvoiceEdit(t, store.Edit, &identity, inv.ID, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for two content-identical lines (body=%s)", rec.Code, rec.Body.String())
+	}
+	stored := readLineItemsForTest(t, super, inv.ID)
+	if len(stored) != 2 {
+		t.Fatalf("stored line_items = %d rows, want 2 -- duplicate CONTENT must not be deduplicated or rejected", len(stored))
+	}
+	if stored[0].LineNo != 1 || stored[1].LineNo != 2 {
+		t.Errorf("stored line_no = [%d, %d], want [1, 2] -- system-assigned by position", stored[0].LineNo, stored[1].LineNo)
+	}
+	for i, li := range stored {
+		if li.Description == nil || *li.Description != "Same" {
+			t.Errorf("stored[%d].Description = %v, want %q", i, li.Description, "Same")
+		}
+	}
+}
+
+// TestEditHandler_LineItemsNullEntryDecodesToZeroValueNotError (task-266
+// Part F): a line_items array containing a `null` ELEMENT (not the whole
+// key, already covered by T2b) alongside a real object must decode without
+// error -- encoding/json's null handling for a struct-kind slice element
+// leaves it at its zero value (every lineItemReq field is a nil pointer)
+// rather than raising a decode error, since lineItemReq is a plain struct,
+// not a pointer/map/slice/interface. Pins that this does not panic or 500
+// when the mapping loop dereferences its (all-nil) fields.
+func TestEditHandler_LineItemsNullEntryDecodesToZeroValueNotError(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, `{"line_items":[null,{"description":"a"}]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a null array entry, NOT a decode error (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotIn.LineItems == nil || len(*gotIn.LineItems) != 2 {
+		t.Fatalf("EditInput.LineItems = %v, want a non-nil pointer to 2 entries", gotIn.LineItems)
+	}
+	lines := *gotIn.LineItems
+	if lines[0].Description != nil {
+		t.Errorf("line[0] (from a JSON null entry).Description = %v, want nil (zero-value, not an error)", lines[0].Description)
+	}
+	if lines[1].Description == nil || *lines[1].Description != "a" {
+		t.Errorf("line[1].Description = %v, want %q", lines[1].Description, "a")
+	}
 }

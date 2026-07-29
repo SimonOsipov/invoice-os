@@ -7,6 +7,7 @@ import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
 import type { CustomRule, Suggestion } from './lib/rules'
+import type { Policy } from './lib/workflows'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
@@ -133,7 +134,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
+export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
 // 'report' added by M4-08-04 (plan B1/DRIFT-1) — one subtask ahead of story §6's
 // original assignment (M4-08-05), because wizardHeader's report->2 branch does not
@@ -228,6 +229,20 @@ export type PlatformCtx = {
   /** Key of the rule whose detail drawer is open, golden or custom. */
   openRuleKey: string | null
 
+  // --- Workflows screen -----------------------------------------------------
+  // Approval policies for the CURRENT WORKSPACE, already resolved out of the
+  // per-mode store in App.tsx. Per mode, not per client: the prototype keys this set
+  // on firm/in-house and switching company in firm mode does not change it, which is
+  // also why the nav item sits in the firm-wide sidebar group (lib/workflows.ts).
+  //
+  // Only the store and "which policy is open" live here. Everything transient inside
+  // the builder — node selection, the drag/drop hint, the scenario inputs, the saved
+  // flash — is local to WorkflowsView, following the ClientsView precedent: it is
+  // derived from that one view and nothing else reads it.
+  policies: Policy[]
+  /** Id of the policy open in the builder; null shows the policy list. */
+  editingPolicyId: string | null
+
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two
   // halves of the flow are two components: the file is chosen in CreateUpload, which
@@ -291,5 +306,13 @@ export type PlatformCtx = {
   addSuggestedRule: (s: Suggestion) => void
   toggleCustomRule: (key: string) => void
   removeCustomRule: (key: string) => void
+  // Workflows screen. `savePolicy` is the ONE write funnel: the builder composes the
+  // next Policy with the pure reducers in lib/workflows.ts and hands the whole object
+  // back, so App.tsx never needs to know the node tree's shape.
+  openPolicy: (id: string) => void
+  closePolicy: () => void
+  createPolicy: () => void
+  deletePolicy: (id: string) => void
+  savePolicy: (next: Policy) => void
   signOut: () => void
 }

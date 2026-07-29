@@ -825,3 +825,110 @@ func TestRLS_LineItemsUnfilteredCountSeesOnlyOwnTenant(t *testing.T) {
 		t.Fatalf("WithinTenantTx: %v", err)
 	}
 }
+
+// (QA-added, INVED-01-01 widened-grant adversarial coverage): invoice_tenant_reader
+// still has NO delete privilege — behavioral half. TestRLS_LineItemsGrantMatrixIs-
+// SelectInsertUpdateDelete already proves this via the catalog (has_table_privilege
+// asked as the superuser), but a catalog check alone cannot rule out a bug where the
+// catalog bit is correct yet the role can still delete anyway (e.g. via a second,
+// broader GRANT to a role invoice_tenant_reader is a member of). This case actually
+// issues the DELETE as h.reader and observes the refusal, mirroring how
+// TestRLS_SubmissionJobsAppDeleteRefused proves its own table's negative behaviorally
+// rather than by catalog alone.
+func TestRLS_LineItemsReaderDeleteRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL-RDR A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-RDR-A")
+	defer cleanupInvoiceA()
+	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine()
+
+	_, err := h.reader.Exec(ctx, `DELETE FROM line_items WHERE id = $1`, id)
+	if err == nil {
+		t.Fatal("invoice_tenant_reader DELETE on line_items succeeded, want permission denied " +
+			"(SQLSTATE 42501) — the reader must hold no grant on this table at all, DELETE included")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("invoice_tenant_reader DELETE on line_items: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after reader's refused DELETE = %d, want 1 (row must survive)", n)
+	}
+}
+
+// (QA-added, INVED-01-01 widened-grant adversarial coverage): a malformed (non-UUID,
+// non-empty) app.current_tenant reaching Postgres directly makes a DELETE ERROR, not
+// silently affect zero rows. This is a DIFFERENT failure mode from INV-01-T3 (a truly
+// UNSET GUC, which fails closed with 0 rows and no error): the tenant_isolation
+// policy's predicate is `nullif(current_setting('app.current_tenant', true), '')::uuid`,
+// and casting a non-UUID string to ::uuid raises invalid_text_representation (22P02)
+// before any row is even considered. WithinTenantTx itself never lets a malformed
+// string this far (it validates client-side via uuid.Parse and returns ErrNoTenant —
+// proven generically for the helper by TestRLS_MissingContextFailsClosed's
+// `{"", "not-a-uuid"}` loop, not per table), so this case deliberately bypasses it with
+// a raw h.app.Begin + a hand-rolled set_config, exercising what the SQL layer itself
+// does if some future caller ever reaches Postgres without going through the shared
+// helper. Either way (this error, or WithinTenantTx's client-side ErrNoTenant) the row
+// must survive.
+func TestRLS_LineItemsDeleteMalformedTenantGUCErrors(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-DEL-BADGUC A Corp")
+	defer cleanupEntityA()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-DEL-BADGUC-A")
+	defer cleanupInvoiceA()
+	id, cleanupLine := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupLine()
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', 'not-a-uuid', true)`); err != nil {
+		t.Fatalf("set malformed app.current_tenant: %v", err)
+	}
+
+	_, err = tx.Exec(ctx, `DELETE FROM line_items WHERE id = $1`, id)
+	if err == nil {
+		t.Fatal("DELETE with a malformed (non-UUID) app.current_tenant succeeded, want invalid_text_representation (SQLSTATE 22P02)")
+	}
+	if code := pgCode(err); code != "22P02" {
+		t.Fatalf("DELETE with malformed app.current_tenant: SQLSTATE = %q, want 22P02 (invalid_text_representation): %v", code, err)
+	}
+	_ = tx.Rollback(ctx)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, id); n != 1 {
+		t.Errorf("row count after malformed-GUC DELETE attempt = %d, want 1 (row must survive)", n)
+	}
+}
+
+// (QA-added, INVED-01-01 widened-grant adversarial coverage): line_items has NO
+// dependent FK children — no other table's row can be orphaned by a line_items DELETE,
+// because nothing references line_items(id). This pins the precondition that makes
+// INVED-01-01's widened grant safe with no cascade/orphan analysis: if a future story
+// adds a child table (e.g. line-item-level attachments or audit rows) with a plain FK
+// to line_items(id) and no ON DELETE clause, a line removal would then start raising
+// restrict_violation instead of silently succeeding — this case is the tripwire that
+// would turn red the day that happens, prompting a fresh look at this grant.
+func TestRLS_LineItemsHasNoDependentFKChildren(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	var n int
+	err := h.super.QueryRow(ctx,
+		`SELECT count(*) FROM pg_constraint WHERE confrelid = 'public.line_items'::regclass AND contype = 'f'`,
+	).Scan(&n)
+	if err != nil {
+		t.Fatalf("query pg_constraint for FKs referencing line_items: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("FK constraints referencing line_items(id) = %d, want 0 (a line_items DELETE must not risk orphaning rows in any other table)", n)
+	}
+}

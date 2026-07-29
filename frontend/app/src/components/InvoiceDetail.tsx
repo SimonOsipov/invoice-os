@@ -110,7 +110,23 @@ type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_tot
 // Six columns: description / qty / unit / amount / tax / remove. Declared once so the
 // header row and the body rows can never drift apart (ValidationView.tsx repeats the
 // literal in both places; one const is the same shape without that hazard).
-const LINE_EDIT_GRID = '1fr 70px 110px 110px 110px 32px'
+//
+// Widths are budgeted against the row's REAL content box, which is narrow: this table
+// sits in the left cell of the page's `1fr 340px` split, so at a viewport V the row has
+// V - 772px to spend (V, less the 252px sidebar + scrollbar, the 36px page gutters, the
+// 340px right rail + 16px gap, and the card/table borders + 24px card and 14px row
+// padding). At V=1280 that is 508px. The five fixed tracks used to total 432px and the
+// five 10px gaps another 50, leaving the flexible description track 26px -- narrower than
+// its own input chrome, so the text was invisible. Trimming the numerics (qty holds 2-4
+// digits, not 5) hands description 164px at 1280.
+//
+// Deliberately NO `minmax()` floor on description: 508px is fully spent at 1280, so a
+// floor at the resolved width buys nothing there and below it would push the row past a
+// parent that clips (`overflow: hidden`), hiding the remove button rather than the
+// description. A bare `1fr` degrades by shrinking, which is the safer failure. The
+// numeric inputs override .pf-input's 12px side padding down to 8px so the trimmed tracks
+// still show ~6 mono characters instead of ~5.
+const LINE_EDIT_GRID = '1fr 52px 70px 70px 70px 32px'
 
 function rowsFromInvoice(inv: InvoiceRecord): LineRowState[] {
   return (inv.line_items ?? []).map((it) => ({
@@ -891,10 +907,10 @@ function InvoiceEditBody({
           {rows.map((row, i) => (
             <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 10, padding: '9px 14px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
               <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
-              <input className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+              <input className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
               <button
                 type="button"
                 data-testid="line-remove"

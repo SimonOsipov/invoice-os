@@ -4,9 +4,9 @@ import { BrandMark } from '../icons'
 import { activeNavHref } from './activeSection'
 
 // Page order, not feature order. Two deliberate absences:
-//   - `Platform` is gone; its #modules target is now carried by `The solution`.
+//   - `Platform` is gone; its #modules target is now carried by `The Solution`.
 //   - `How it works` has no link at all. The section stays on the page (between
-//     The solution and Compliance), it just isn't a nav destination.
+//     The Solution and Compliance), it just isn't a nav destination.
 // `shed` names the class that drops the link below a breakpoint (landing.css). The
 // nav must never wrap or clip, and it has no room for six links under ~1240px, so
 // the tail is shed rather than allowed to collide with the lockup or the CTAs.
@@ -14,8 +14,8 @@ import { activeNavHref } from './activeSection'
 // shed" and "has no shed", and whether `l.shed` is even readable then depends on
 // TypeScript's object-literal normalisation rather than on anything stated here.
 const NAV_LINKS: { label: string; href: string; shed?: string }[] = [
-  { label: 'The problem', href: '#problem' },
-  { label: 'The solution', href: '#modules' },
+  { label: 'The Problem', href: '#problem' },
+  { label: 'The Solution', href: '#modules' },
   { label: 'Compliance', href: '#compliance', shed: 'ios-nav-shed-1080' },
   { label: "Who it's for", href: '#accountants', shed: 'ios-nav-shed-1080' },
   { label: 'Developers', href: '#developers', shed: 'ios-nav-shed-1240' },

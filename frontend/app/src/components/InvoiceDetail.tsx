@@ -366,7 +366,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               queued/submitted/accepted/failed can_edit is false and nothing here renders,
               leaving the failed dead-end card as the whole story on a failed invoice.
               `!editing` hides the bar while the inline editor owns the screen; it returns
-              on Save or Cancel ([D-actions-hidden-while-editing]). */}
+              on Save or Cancel ([D-actions-hidden-while-editing]).
+
+              Why `can_edit` ALONE and not `can_edit || can_revalidate`: canRevalidate is
+              draft-only and canEdit yields {draft, validated, rejected} (store.go:940/960),
+              so `can_revalidate` IMPLIES `can_edit` -- the `||` arm is unreachable today,
+              and adding it would erase AC #7's intent that NEITHER action renders past the
+              editable states. Widening the gate is a deliberate human decision, guarded on
+              the backend by TestCanRevalidate_AgreesWithThePromotionEdge; it must not be
+              pre-empted here by a defensive `||`. */}
           {inv.can_edit && !editing && (
             <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
               <div style={{ display: 'flex', gap: 8 }}>

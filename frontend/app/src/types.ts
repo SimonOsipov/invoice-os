@@ -6,6 +6,7 @@
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
+import type { CustomRule, Suggestion } from './lib/rules'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
@@ -132,7 +133,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'validation' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
+export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
 // 'report' added by M4-08-04 (plan B1/DRIFT-1) — one subtask ahead of story §6's
 // original assignment (M4-08-05), because wizardHeader's report->2 branch does not
@@ -217,6 +218,16 @@ export type PlatformCtx = {
   valIdx: number
   parseIdx: number
 
+  // --- Rules screen ---------------------------------------------------------
+  // The ACTIVE client's custom rules, already resolved out of the per-client store
+  // in App.tsx — components never see the store or the key, so a surface cannot
+  // accidentally render one client's rules under another's name. The golden ruleset
+  // is not here at all: it is inherited, identical for every tenant, and read
+  // straight off lib/rules.ts by the view.
+  customRules: CustomRule[]
+  /** Key of the rule whose detail drawer is open, golden or custom. */
+  openRuleKey: string | null
+
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two
   // halves of the flow are two components: the file is chosen in CreateUpload, which
@@ -272,5 +283,13 @@ export type PlatformCtx = {
   saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
   openXml: () => void
   closeXml: () => void
+  // Rules screen. There is deliberately no editCustomRule/disableGoldenRule pair:
+  // a tenant may adopt, switch off and remove its OWN rules, and may do nothing at
+  // all to an inherited one.
+  openRule: (key: string) => void
+  closeRule: () => void
+  addSuggestedRule: (s: Suggestion) => void
+  toggleCustomRule: (key: string) => void
+  removeCustomRule: (key: string) => void
   signOut: () => void
 }

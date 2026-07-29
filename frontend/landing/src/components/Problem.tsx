@@ -42,7 +42,10 @@ export function Problem() {
               key={p}
               style={{
                 display: 'flex',
-                alignItems: 'flex-start',
+                // Centred, not top-aligned: the labels run to one or two lines and a
+                // 24px tile pinned to the first line reads as hanging off a two-line
+                // card. The tile centres against the label block as a whole.
+                alignItems: 'center',
                 gap: 12,
                 background: 'var(--bg-2)',
                 border: '1px solid var(--line-1)',
@@ -50,7 +53,18 @@ export function Problem() {
                 padding: 16,
               }}
             >
-              <span style={{ flex: 'none', color: 'var(--status-amber-text)', display: 'inline-flex', marginTop: 1 }}>
+              <span
+                style={{
+                  flex: 'none',
+                  width: 24,
+                  height: 24,
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--status-amber-bg)',
+                  color: 'var(--status-amber-text)',
+                  display: 'grid',
+                  placeItems: 'center',
+                }}
+              >
                 <Icon
                   paths={['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z', 'M12 9v4', 'M12 17h.01']}
                   size={16}

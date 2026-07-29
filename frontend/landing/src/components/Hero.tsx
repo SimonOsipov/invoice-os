@@ -1,15 +1,16 @@
 import { HERO_CHECKS } from '../data'
 
+// The hero sits on plain cream: the hairline-square background layer
+// (.hero-grid / .hero-grid-fade, still shipped by the design system for anything
+// that wants it) was removed here deliberately, as was the mandate pill that used
+// to sit above the H1 — so this section carries no absolutely-positioned layer and
+// needs no stacking context of its own.
 export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignIn: () => void }) {
   return (
-    <section id="top" style={{ position: 'relative', borderBottom: '1px solid var(--line-1)' }}>
-      {/* Background-only layer. The grid texture and its fade mask must never sit
-          on the element that carries the content, or the mask fades the content. */}
-      <span className="hero-grid hero-grid-fade" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+    <section id="top" style={{ borderBottom: '1px solid var(--line-1)' }}>
       <div
         className="ios-grid ios-2"
         style={{
-          position: 'relative',
           maxWidth: 1280,
           margin: '0 auto',
           padding: '80px 32px 72px',

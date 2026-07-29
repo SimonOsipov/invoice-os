@@ -171,7 +171,7 @@ func TestOutcomeLoop_SecondRejectionOverwritesNotAccumulates(t *testing.T) {
 		t.Fatalf("Edit returned status = %q, want %q", edited.Status, StatusDraft)
 	}
 
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	versionID := seedRuleSetVersionID(t, super)
 	revalidated, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP)
 	if err != nil {
@@ -350,7 +350,7 @@ func TestOutcomeLoop_RejectEditValidateQueueFailRetainsReasons(t *testing.T) {
 		t.Fatalf("Edit returned status = %q, want %q", edited.Status, StatusDraft)
 	}
 
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	versionID := seedRuleSetVersionID(t, super)
 	revalidated, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP)
 	if err != nil {

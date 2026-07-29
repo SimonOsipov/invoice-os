@@ -176,11 +176,21 @@ func putNumber(m map[string]any, key string, v *string) {
 	}
 }
 
-// contentFingerprint is a sha256 over the ten MBS-content columns of an
-// invoices row -- invoice_number, issue_date, supplier_tin, supplier_name,
-// buyer_tin, buyer_name, currency, subtotal, vat, total. It deliberately
-// excludes everything that is not MBS content (id, tenant_id, entity_id,
-// import_batch_id, status, violations, rule_set_version_id, created_at).
+// contentFingerprint is a sha256 over an invoice's MBS CONTENT: the ten
+// content columns of the invoices row -- invoice_number, issue_date,
+// supplier_tin, supplier_name, buyer_tin, buyer_name, currency, subtotal,
+// vat, total -- and the invoice's line items. It deliberately excludes
+// everything that is not MBS content (id, tenant_id, entity_id,
+// import_batch_id, status, violations, rule_set_version_id, created_at) and,
+// among the lines, the line `id` ([fingerprint-excludes-line-ids]).
+//
+// Lines are passed EXPLICITLY rather than read off inv.LineItems
+// ([fingerprint-explicit-lines-param]): the two locked-row call sites in
+// store.go scan an invoices row with scanInvoice, which leaves LineItems nil,
+// so an implicit read would silently hash zero lines against a line-bearing
+// evaluated fingerprint and return ErrStaleValidation on EVERY validate. The
+// explicit parameter turns that invisible bug into a compile error at every
+// call site.
 //
 // [toctou-staleness] uses it to detect that an invoice's content changed
 // under a validate run: re-fingerprinting the row inside the write tx and
@@ -192,7 +202,13 @@ func putNumber(m map[string]any, key string, v *string) {
 // length-prefixed and NULL-marked, so the encoding is injective -- no pair of
 // distinct column tuples can collide by concatenation (("ab","c") and
 // ("a","bc") hash differently, and a NULL is distinct from "").
-func contentFingerprint(inv Invoice) string {
+//
+// NOTE (INVED-01-02 step R0): the `lines` parameter is accepted but not yet
+// hashed. R0 is a deliberately behaviour-preserving refactor -- the signature
+// and every call site move first, so that the specs added next fail on an
+// ASSERTION rather than on a package-wide compile error. The line hashing
+// lands in the GREEN step.
+func contentFingerprint(inv Invoice, lines []LineItem) string {
 	h := sha256.New()
 
 	var issueDate *string

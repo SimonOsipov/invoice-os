@@ -166,7 +166,7 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// is built from -- so it describes exactly the content 04 judged.
 	// ApplyValidation compares it to the LOCKED row and refuses the write if the
 	// invoice changed underneath ([toctou-staleness]).
-	fingerprint := contentFingerprint(inv)
+	fingerprint := contentFingerprint(inv, inv.LineItems)
 
 	// A batch of one: the same wire contract, client, and endpoint the importer
 	// uses ([batch-of-one]). No second endpoint to keep in sync.
@@ -230,7 +230,7 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 	fingerprints := make(map[string]string, len(invs))
 	for i, inv := range invs {
 		items[i] = EvalItem{Ref: inv.ID, Invoice: inv}
-		fingerprints[inv.ID] = contentFingerprint(inv)
+		fingerprints[inv.ID] = contentFingerprint(inv, inv.LineItems)
 	}
 
 	res, err := g.Evaluate(ctx, items)

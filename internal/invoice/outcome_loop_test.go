@@ -137,7 +137,7 @@ func TestOutcomeLoop_RejectFixRevalidateResubmitAccept(t *testing.T) {
 	// Step 4: Store.ApplyValidation (unmodified since M4-04-05/task-112) -- requires
 	// status==draft, which the demotion above just produced; a FRESH
 	// fingerprint of the edited row satisfies the content re-check.
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	versionID := seedRuleSetVersionID(t, super)
 	validated, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP)
 	if err != nil {
@@ -319,7 +319,7 @@ func TestStoreEdit_RetainedReasonsSurviveRevalidate(t *testing.T) {
 		t.Fatalf("rejection_reasons after Edit = %q, want byte-identical to the seed %q (AC-1's own retention, a precondition for this test)", reasonsAfterEdit, seededReasons)
 	}
 
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	versionID := seedRuleSetVersionID(t, super)
 	validated, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP)
 	if err != nil {
@@ -446,7 +446,7 @@ func TestOutcomeLoop_ResubmitWithFreshKeyEnqueuesAgain(t *testing.T) {
 		t.Fatalf("Edit returned status = %q, want %q", edited.Status, StatusDraft)
 	}
 
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	versionID := seedRuleSetVersionID(t, super)
 	revalidated, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP)
 	if err != nil {
@@ -561,7 +561,7 @@ func TestOutcomeLoop_AcceptedInvoiceIsATrueDeadEnd(t *testing.T) {
 		t.Fatalf("Edit (rejected->draft): %v (want nil)", err)
 	}
 
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	versionID := seedRuleSetVersionID(t, super)
 	if _, err := store.ApplyValidation(c, invID, []Violation{}, versionID, freshFP); err != nil {
 		t.Fatalf("ApplyValidation (draft->validated): %v (want nil)", err)

@@ -8,7 +8,11 @@
 //     dropped, say, SupplierName from writeFingerprintField's call list
 //     would go undetected by PAY-20 alone);
 //   - the "only if" direction: mutating a NON-content column (id, status,
-//     line items, ...) must leave the fingerprint UNCHANGED. This is not
+//     import_batch_id, ...) must leave the fingerprint UNCHANGED. Line items
+//     were on that list until INVED-01-02, which made them CONTENT: a line
+//     added, removed, reordered or edited now moves the fingerprint, exactly
+//     like a header change. Only the line `id` stays excluded
+//     ([fingerprint-excludes-line-ids]). This is not
 //     cosmetic -- [toctou-staleness] compares a fingerprint taken before
 //     the 04 round trip against one recomputed from the locked row inside
 //     the write tx. If a non-content field's mutation spuriously changed
@@ -60,7 +64,7 @@ func fullFingerprintFixture() Invoice {
 // would still pass PAY-20 but fail here.
 func TestContentFingerprint_EachOfTenContentColumnsIsSignificant(t *testing.T) {
 	base := fullFingerprintFixture()
-	baseFP := contentFingerprint(base)
+	baseFP := contentFingerprint(base, base.LineItems)
 
 	mutations := map[string]func(*Invoice){
 		"InvoiceNumber": func(i *Invoice) { i.InvoiceNumber = "INV-999" },
@@ -84,7 +88,7 @@ func TestContentFingerprint_EachOfTenContentColumnsIsSignificant(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			mutated := fullFingerprintFixture()
 			mutate(&mutated)
-			mutatedFP := contentFingerprint(mutated)
+			mutatedFP := contentFingerprint(mutated, mutated.LineItems)
 			if mutatedFP == baseFP {
 				t.Errorf("contentFingerprint unchanged after mutating %s: both %q -- this "+
 					"content column must be part of the fingerprint [AC#9]", field, baseFP)
@@ -94,15 +98,20 @@ func TestContentFingerprint_EachOfTenContentColumnsIsSignificant(t *testing.T) {
 }
 
 // TestContentFingerprint_NonContentFieldsAreIgnored (AC #9, "only if"
-// direction): mutating a field that is NOT one of the ten MBS-content
-// columns must leave the fingerprint UNCHANGED. A false-positive change
-// here would make [toctou-staleness]'s re-check spuriously fire
-// ErrStaleValidation on an invoice whose CONTENT never changed -- e.g. a
-// concurrent status transition or an audit-only write between the
-// fingerprint-taken and fingerprint-rechecked reads.
+// direction): mutating a field that is not part of the invoice's MBS content
+// -- i.e. neither one of the ten content columns nor a line item -- must
+// leave the fingerprint UNCHANGED. A false-positive change here would make
+// [toctou-staleness]'s re-check spuriously fire ErrStaleValidation on an
+// invoice whose CONTENT never changed -- e.g. a concurrent status transition
+// or an audit-only write between the fingerprint-taken and
+// fingerprint-rechecked reads.
+//
+// The LineItems/LineItemsEmptied entries were REMOVED here by INVED-01-02:
+// they asserted the exact inverse of that subtask's AC #3 (lines are now
+// content). The "only if" direction for line ids survives as INV-02-T5.
 func TestContentFingerprint_NonContentFieldsAreIgnored(t *testing.T) {
 	base := fullFingerprintFixture()
-	baseFP := contentFingerprint(base)
+	baseFP := contentFingerprint(base, base.LineItems)
 
 	mutations := map[string]func(*Invoice){
 		"ID":               func(i *Invoice) { i.ID = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz" },
@@ -111,10 +120,6 @@ func TestContentFingerprint_NonContentFieldsAreIgnored(t *testing.T) {
 		"Status":           func(i *Invoice) { i.Status = StatusValidated },
 		"CreatedAt":        func(i *Invoice) { i.CreatedAt = time.Now() },
 		"RuleSetVersionID": func(i *Invoice) { i.RuleSetVersionID = strPtr("11111111-2222-3333-4444-555555555555") },
-		"LineItems": func(i *Invoice) {
-			i.LineItems = []LineItem{{ID: "different-line", LineNo: 7, UnitPrice: strPtr("9999.00")}}
-		},
-		"LineItemsEmptied": func(i *Invoice) { i.LineItems = nil },
 	}
 
 	for field, mutate := range mutations {
@@ -122,10 +127,11 @@ func TestContentFingerprint_NonContentFieldsAreIgnored(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			mutated := fullFingerprintFixture()
 			mutate(&mutated)
-			mutatedFP := contentFingerprint(mutated)
+			mutatedFP := contentFingerprint(mutated, mutated.LineItems)
 			if mutatedFP != baseFP {
 				t.Errorf("contentFingerprint changed after mutating non-content field %s: "+
-					"%q -> %q -- only the ten MBS-content columns may affect the fingerprint; "+
+					"%q -> %q -- only the ten MBS-content columns and the line items may "+
+					"affect the fingerprint; "+
 					"a spurious change here would falsely trip [toctou-staleness]'s "+
 					"ErrStaleValidation on an invoice whose content never changed [AC#9]",
 					field, baseFP, mutatedFP)
@@ -147,8 +153,8 @@ func TestContentFingerprint_NullDistinctFromEmptyString(t *testing.T) {
 	emptyCurrency := fullFingerprintFixture()
 	emptyCurrency.Currency = strPtr("")
 
-	fpNull := contentFingerprint(nullCurrency)
-	fpEmpty := contentFingerprint(emptyCurrency)
+	fpNull := contentFingerprint(nullCurrency, nullCurrency.LineItems)
+	fpEmpty := contentFingerprint(emptyCurrency, emptyCurrency.LineItems)
 	if fpNull == fpEmpty {
 		t.Errorf("contentFingerprint(Currency=nil) == contentFingerprint(Currency=\"\") "+
 			"(%q) -- a NULL column must fingerprint differently from an empty-string column",

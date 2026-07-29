@@ -551,7 +551,7 @@ func TestStoreEdit_DemoteThenRevalidateSucceeds(t *testing.T) {
 
 	staleVersionID := seedRuleSetVersionID(t, super)
 	staleViolations := []Violation{{RuleKey: "vat-standard-rate", Severity: "warning", Message: "VAT rate looks unusual"}}
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 	validated, err := store.ApplyValidation(c, inv.ID, staleViolations, staleVersionID, fp)
 	if err != nil {
 		t.Fatalf("ApplyValidation (seed: warning-only promotes with violations stored): %v", err)
@@ -582,7 +582,7 @@ func TestStoreEdit_DemoteThenRevalidateSucceeds(t *testing.T) {
 	// unchanged draft-only gate's status re-check (now draft) and content
 	// re-check (fp matches the just-demoted row); a clean verdict re-stamps
 	// and promotes back to validated.
-	freshFP := contentFingerprint(edited)
+	freshFP := contentFingerprint(edited, edited.LineItems)
 	freshVersionID := seedRuleSetVersionID(t, super)
 	revalidated, err := store.ApplyValidation(c, inv.ID, []Violation{}, freshVersionID, freshFP)
 	if err != nil {

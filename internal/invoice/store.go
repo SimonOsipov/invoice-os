@@ -250,23 +250,11 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 		return Invoice{}, err
 	}
 
-	rows, err := tx.Query(ctx,
-		`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, inv.ID,
-	)
+	lines, err := hydrateLinesTx(ctx, tx, inv.ID)
 	if err != nil {
 		return Invoice{}, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var item LineItem
-		if err := scanLineItem(rows, &item); err != nil {
-			return Invoice{}, err
-		}
-		inv.LineItems = append(inv.LineItems, item)
-	}
-	if err := rows.Err(); err != nil {
-		return Invoice{}, err
-	}
+	inv.LineItems = lines
 
 	// Resolve the human-facing rule_set_versions.version int onto the
 	// transient inv.RuleSetVersion (M4-09-01, [read-shape-via-subselect]):
@@ -289,6 +277,52 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 	}
 
 	return inv, nil
+}
+
+// hydrateLinesTx reads one invoice's line_items, ordered line_no ASC -- the
+// SINGLE line-read in this package (INVED-01-02), extracted verbatim from
+// getTx's own loop so getTx, Store.Edit and Store.ApplyValidation cannot drift
+// apart on projection or ordering. Returns nil (never []LineItem{}) for a
+// line-less invoice: `out` is only ever appended to, so getTx's observable
+// behaviour is byte-identical to the pre-extraction version.
+//
+// TX-SCOPED, NEVER POOL-SCOPED, and this is correctness rather than style.
+// db.WithinTenantTx/WithinRequestTenantTx set the tenant with
+// set_config('app.current_tenant', $1, true) -- is_local = TRUE, so the GUC
+// lives and dies with the transaction (internal/platform/db/db.go:62), and
+// line_items' RLS policy filters on exactly that GUC. Handed s.pool instead of
+// tx, this would run on a connection where the GUC is unset, the policy's
+// predicate would be false for every row, and it would return ZERO ROWS
+// SILENTLY WITH NO ERROR -- every lined invoice's locked-row fingerprint would
+// hash no lines while the evaluated one hashed the real ones, so every validate
+// would return ErrStaleValidation. A pool read is also a different MVCC
+// snapshot (defeating [toctou-staleness]) and takes a second connection while
+// holding a row lock. There is no precedent for a pool read inside a tx in this
+// package; do not create one.
+//
+// No separate lock on line_items is needed: the invoice row's FOR UPDATE is the
+// serialization point for its lines too.
+func hydrateLinesTx(ctx context.Context, tx pgx.Tx, invoiceID string) ([]LineItem, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT `+lineItemColumns+` FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, invoiceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LineItem
+	for rows.Next() {
+		var item LineItem
+		if err := scanLineItem(rows, &item); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // History returns the caller's tenant's invoice_status_history rows for id,
@@ -565,12 +599,15 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     rejected, else ErrNotFixable, NOTHING written. This runs BEFORE the
 //     content write, so a not-fixable status wins over a malformed numeric
 //     in the same call ([A8], GuardBeforeContentValidation).
-//  4. preFP := contentFingerprint(before) -- taken on the LOCKED row, so it
-//     is authoritative under concurrency the same way ApplyValidation's
-//     re-check is.
+//  4. preFP := contentFingerprint(before, beforeLines) -- taken on the LOCKED
+//     row, so it is authoritative under concurrency the same way
+//     ApplyValidation's re-check is. beforeLines comes from hydrateLinesTx on
+//     THIS tx: scanInvoice leaves LineItems nil and the fingerprint takes its
+//     lines explicitly ([fingerprint-explicit-lines-param]).
 //  5. updateContentTx writes the content (shared with Store.Update, no audit
 //     of its own).
-//  6. DB-authoritative no-op check: contentFingerprint(after) == preFP means
+//  6. DB-authoritative no-op check: contentFingerprint(after, beforeLines) ==
+//     preFP (beforeLines reused -- Edit cannot change lines yet) means
 //     nothing really changed (either every field was resent unchanged, or
 //     only its NUMERIC SCALE changed and Postgres normalized it away, e.g.
 //     "100.00"->"100.0") -- return `after` with no audit, no demotion, no
@@ -630,7 +667,14 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 		}
 
 		// 4. the locked row's fingerprint, taken before the write.
-		preFP := contentFingerprint(before)
+		// scanInvoice leaves LineItems nil, so the lines come from an explicit
+		// tx-scoped read ([fingerprint-explicit-lines-param]) -- the invoice
+		// row's FOR UPDATE above already serializes them.
+		beforeLines, err := hydrateLinesTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		preFP := contentFingerprint(before, beforeLines)
 
 		// 5. the content write, shared with Store.Update.
 		after, changed, err := updateContentTx(ctx, tx, id, in)
@@ -639,8 +683,10 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 		}
 
 		// 6. DB-authoritative no-op check -- nothing to audit, demote, or
-		// record history for.
-		if contentFingerprint(after) == preFP {
+		// record history for. beforeLines is REUSED rather than re-read: Edit
+		// cannot change lines yet, so a second query would return the same rows.
+		// (INVED-01-04 replaces this argument with replaceLinesTx's output.)
+		if contentFingerprint(after, beforeLines) == preFP {
 			inv = after
 			return nil
 		}
@@ -917,9 +963,12 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 //     ErrValidation, mirroring Get/Update/Create/Transition.
 //  2. status re-check — must still be draft, else ErrNotDraft
 //     ([gate-scope-draft-only]).
-//  3. content re-check — contentFingerprint(locked) != evaluatedFingerprint
-//     -> ErrStaleValidation. FOR UPDATE makes this EXACT: Store.Update's
-//     UPDATE serializes against the lock, so the locked row is authoritative.
+//  3. content re-check — contentFingerprint(locked, lockedLines) !=
+//     evaluatedFingerprint -> ErrStaleValidation. FOR UPDATE makes this EXACT:
+//     Store.Update's UPDATE serializes against the lock, so the locked row is
+//     authoritative. lockedLines comes from hydrateLinesTx on THIS tx —
+//     scanInvoice leaves LineItems nil, and reading them off the pool instead
+//     would silently see zero rows under RLS (see hydrateLinesTx).
 //  4. stamp violations + rule_set_version_id (always — the version is stamped
 //     even on a blocking verdict; "these violations came from THAT rule set"
 //     is exactly what makes the verdict auditable).
@@ -983,8 +1032,16 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 		}
 
 		// 3. content re-check — the invoice must not have been edited under
-		// the run; the status check above cannot see an edit.
-		if contentFingerprint(locked) != evaluatedFingerprint {
+		// the run; the status check above cannot see an edit. scanInvoice
+		// leaves LineItems nil, so the locked row's lines are read explicitly
+		// INSIDE this tx ([fingerprint-explicit-lines-param]): the evaluated
+		// fingerprint was taken over a Get-hydrated invoice, so hashing no
+		// lines here would make every lined invoice fail the re-check.
+		lockedLines, err := hydrateLinesTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if contentFingerprint(locked, lockedLines) != evaluatedFingerprint {
 			return ErrStaleValidation
 		}
 

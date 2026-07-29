@@ -157,7 +157,7 @@ func TestApplyValidation_CleanEvaluationPromotesAndStampsVersion(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
 
@@ -218,7 +218,7 @@ func TestApplyValidation_CleanEvaluationWritesBothAuditRows(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	beforeValidated := auditCount(t, app, tenantID, "invoice.validated")
 	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
@@ -262,7 +262,7 @@ func TestApplyValidation_ErrorViolationStaysDraftNoHistoryRow(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
 
@@ -308,7 +308,7 @@ func TestApplyValidation_WarningInfoOnlyPromotes(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	violations := []Violation{
 		{RuleKey: "supplier-tin-format", Severity: "warning", Message: "TIN format looks unusual"},
@@ -348,7 +348,7 @@ func TestApplyValidation_MixedErrorWarningStaysDraftStoresBoth(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	violations := []Violation{
 		{RuleKey: "vat-standard-rate", Severity: "error", Message: "VAT rate mismatch"},
@@ -393,7 +393,7 @@ func TestApplyValidation_ValidatedInvoiceRefused(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 	before := snapshotInvoiceGateState(t, super, inv.ID)
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
 
@@ -429,7 +429,7 @@ func TestApplyValidation_QueuedInvoiceRefused(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 	before := snapshotInvoiceGateState(t, super, inv.ID)
 
 	if _, err := store.ApplyValidation(c, inv.ID, []Violation{}, versionID, fp); !errors.Is(err, ErrNotDraft) {
@@ -458,7 +458,7 @@ func TestApplyValidation_StaleFingerprintRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	staleFP := contentFingerprint(inv) // taken BEFORE the Update below
+	staleFP := contentFingerprint(inv, inv.LineItems) // taken BEFORE the Update below
 
 	newVAT := "42.00"
 	if _, err := store.Update(c, inv.ID, UpdateInput{VAT: &newVAT}); err != nil {
@@ -503,7 +503,7 @@ func TestApplyValidation_FreshFingerprintAfterUpdateSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	freshFP := contentFingerprint(updated) // taken AFTER the edit -- current
+	freshFP := contentFingerprint(updated, updated.LineItems) // taken AFTER the edit -- current
 
 	versionID := seedRuleSetVersionID(t, super)
 
@@ -540,7 +540,7 @@ func TestApplyValidation_LongActorRollsBackWholeTx(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	longSubject := strings.Repeat("a", 256)
 	cCrafted := auth.WithIdentity(ctx, auth.Identity{Subject: longSubject, Role: "authenticated", TenantID: tenantID})
@@ -629,7 +629,7 @@ func TestApplyValidation_UnseededRuleSetVersionIDRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 	bogusVersionID := uuid.NewString()
 
 	before := snapshotInvoiceGateState(t, super, inv.ID)
@@ -677,7 +677,7 @@ func TestApplyValidation_ConcurrentSerializesToOneWinner(t *testing.T) {
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	const n = 6
 	errs := make([]error, n)
@@ -752,7 +752,7 @@ func TestApplyValidation_NilViolationsNormalizeToEmptyArrayNeverNull(t *testing.
 	}
 
 	versionID := seedRuleSetVersionID(t, super)
-	fp := contentFingerprint(inv)
+	fp := contentFingerprint(inv, inv.LineItems)
 
 	var nilViolations []Violation // deliberately nil, not []Violation{}
 

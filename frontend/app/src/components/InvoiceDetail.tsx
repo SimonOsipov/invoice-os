@@ -19,7 +19,6 @@ import {
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
-  isFixable,
   LIVE_POLL_MS,
   reasonFieldFlags,
   rejectionProvenance,
@@ -151,7 +150,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const inv = live ?? detail.data
 
   // `gen` closes the in-flight-tick race ([poll-overlay-not-rerun], mirrors InvoicesList's
-  // own runId idiom, packages/api-client/src/async-state.ts:89/92/96). isFixable
+  // own runId idiom, packages/api-client/src/async-state.ts:89/92/96). `can_edit`
   // (draft/validated/rejected) and isInFlight (queued/submitted) are disjoint, so
   // Save/Re-validate can't be clicked while a NEW tick gets scheduled -- but clearInterval
   // only stops FUTURE ticks; it does not cancel a tick's getInvoice() promise that was
@@ -256,7 +255,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       // M5-09-07: clear the poll overlay BEFORE detail.run(), so this user-initiated
       // refresh's own result -- success or error -- is what renders next, never a stale
       // `live` value ([poll-overlay-not-rerun]). Unreachable while a tick is in flight
-      // (isFixable is draft/validated/rejected only, never queued/submitted -- see A2),
+      // (`can_edit` is draft/validated/rejected only, never queued/submitted -- see A2),
       // but required for the queued->rejected->edit path, where `live` still holds the
       // rejected record from polling that has since stopped.
       // gen bump: invalidates any tick whose getInvoice() promise was ALREADY in flight
@@ -269,7 +268,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       history.run()
     }
 
-    // isFixable(inv.status) gates this button on for draft, validated AND rejected (see
+    // `inv.can_edit` gates this button on for draft, validated AND rejected (see
     // below) so it stays visible when nothing has been edited yet -- clicking it on an
     // untouched 'validated' OR 'rejected' invoice hits Store.ApplyValidation's
     // draft-only gate ([gate-scope-draft-only]) and 409s (ErrNotDraft). Caught +
@@ -456,7 +455,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
-            {isFixable(inv.status) && (
+            {inv.can_edit && (
               <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span className="card-title">Fix &amp; re-validate</span>
@@ -535,7 +534,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 // The 9-field PATCH form ([edit-form-nine-fields]) — line items stay read-only, editing
 // them is not in scope ([D9]). Reuses ValidationView.tsx's field-label + `.pf-input`
 // markup convention. Form state is seeded once from `inv` at mount ([A-l]-style: this
-// card only mounts while `isFixable`, matching EntityFormModal's own once-per-open init)
+// card only mounts while `can_edit`, matching EntityFormModal's own once-per-open init)
 // — diffEditInput always diffs against the current `inv` prop (fresh on every parent
 // re-render), so a later edit's patch is computed against the latest saved content even
 // though the form's own untouched fields were seeded once.

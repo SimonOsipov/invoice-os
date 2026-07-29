@@ -1,5 +1,5 @@
 // RED specs (M4-09-03, task-184, I1-I14) — pin the invoice list/detail data-access
-// helpers, the invoiceStatusStyle pill mapper, isFixable/verdictStatus, and the
+// helpers, the invoiceStatusStyle pill mapper, verdictStatus, and the
 // shouldFetchInvoices/invoicesViewState render-decision helpers before the executor
 // implements the bodies in invoices.ts.
 //
@@ -10,7 +10,7 @@
 // re-implementation of apiFetch's own contract (already covered by client.test.ts).
 //
 // Every spec below currently fails because listInvoices/getInvoice/getInvoiceHistory/
-// editInvoice/revalidateInvoice/invoiceStatusStyle/isFixable/verdictStatus/
+// editInvoice/revalidateInvoice/invoiceStatusStyle/verdictStatus/
 // shouldFetchInvoices/invoicesViewState's stub bodies throw `new Error('not
 // implemented')` before ever calling the real authedFetch/fetch (or, for the pure
 // helpers, before returning anything) — that IS the correct RED reason (assertion /
@@ -37,7 +37,6 @@ import {
   getInvoiceHistory,
   invoiceStatusStyle,
   invoicesViewState,
-  isFixable,
   isInFlight,
   isRowSelectable,
   LIVE_POLL_MS,
@@ -161,26 +160,11 @@ describe('invoiceStatusStyle', () => {
   })
 })
 
-describe('isFixable', () => {
-  // Updated (M5-09-03, task-253, Core AC #4): M5-05-01 (task-237) widened
-  // Store.Edit's own precondition to accept `rejected` (the reject/fix/resubmit rework
-  // path) -- this mirror re-syncs to match, closing [spa-untouched]. Deliberately
-  // updated, not deleted: 'rejected' moves OUT of the not-fixable set below and INTO
-  // this one.
-  it('I3: draft, validated and rejected are fixable', () => {
-    expect(isFixable('draft')).toBe(true)
-    expect(isFixable('validated')).toBe(true)
-    expect(isFixable('rejected')).toBe(true)
-  })
-
-  it('I4: queued/submitted/accepted/failed are not fixable', () => {
-    const nonFixable: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'failed']
-
-    for (const status of nonFixable) {
-      expect(isFixable(status)).toBe(false)
-    }
-  })
-})
+// I3/I4 (the deleted edit-availability predicate's own block) are removed with the export
+// itself (INVED-01-06, [gates-on-the-wire]): the status set they pinned now lives ONLY in
+// the backend, where TestCanEdit_AllStatuses (internal/invoice/transition_test.go) pins
+// the same seven states against legalTransitions. INV-06-T11a/T11b below are what replace
+// them here -- they assert the export is gone rather than assert over its behaviour.
 
 describe('verdictStatus', () => {
   // Updated (M5-09-03, task-253, Core AC #5): verdictStatus gains a second parameter,

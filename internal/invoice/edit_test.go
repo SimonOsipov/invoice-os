@@ -37,6 +37,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -2221,4 +2222,302 @@ func TestStoreEdit_MalformedLineNumericValidationErrorZeroRowsWritten(t *testing
 			t.Errorf("Edit(queued, malformed line unit_price) err = %v, must NOT also resolve as ErrValidation (guard must win outright)", err)
 		}
 	})
+}
+
+// --- INVED-01-04 QA (Mode B): adversarial coverage beyond the RED specs ---
+// -----------------------------------------------------------------------
+//
+// The T1-T22 specs above are the architect's Test Specs table, authored RED
+// before GREEN existed. These six close gaps QA identified while attacking
+// Core AC 2 that the table didn't explicitly name: pure reordering (no
+// add/remove), a large line set, all-NULL line numerics, a header+line
+// change in ONE call (does the audit/history stay singular, not doubled?),
+// lines concurrently removed out from under a header-only edit, and a
+// direct fingerprint-level proof that emptying a line set is a genuine
+// content change, not merely "trust the demotion happened".
+
+// A1: reordering two EXISTING lines (no add/remove) is expressed purely as
+// array order ([line-no-by-position]) -- line_no follows the NEW position,
+// never the line's prior identity -- and still counts as a real content
+// change (each line_no position now hashes a different description) so it
+// demotes exactly like an append/drop would.
+func TestStoreEdit_ReorderOnlyLineChangeDemotesAndRenumbersByPosition(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-QA-REORDER tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-QA-REORDER entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA, descB := "Widget", "Gadget"
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-REORDER", StatusValidated, []LineItemInput{
+		{Description: &descA}, {Description: &descB},
+	})
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`, inv.ID)
+
+	// Swap: same two descriptions, reversed order -- no line added or removed.
+	got, err := store.Edit(c, inv.ID, EditInput{LineItems: &[]LineItemInput{
+		{Description: &descB}, {Description: &descA},
+	}})
+	if err != nil {
+		t.Fatalf("Edit (reorder-only): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want %q (a pure reorder is still a real content change per line_no position)", got.Status, StatusDraft)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`, inv.ID); n != beforeHistory+1 {
+		t.Errorf("invoice_status_history (validated,draft) rows = %d, want %d", n, beforeHistory+1)
+	}
+
+	stored := readLineItemsForTest(t, super, inv.ID)
+	if len(stored) != 2 {
+		t.Fatalf("line_items rows = %d, want 2", len(stored))
+	}
+	if stored[0].LineNo != 1 || stored[0].Description == nil || *stored[0].Description != descB {
+		t.Errorf("line_no 1 = %+v, want description %q (the FIRST array entry, regardless of its prior line_no)", stored[0], descB)
+	}
+	if stored[1].LineNo != 2 || stored[1].Description == nil || *stored[1].Description != descA {
+		t.Errorf("line_no 2 = %+v, want description %q (the SECOND array entry, regardless of its prior line_no)", stored[1], descA)
+	}
+}
+
+// A2: a large line set (50 lines) persists in full, renumbered 1..N
+// contiguously with no unique-constraint violation on the delete-then-
+// reinsert -- the DELETE/INSERT separation ([line-update-shape] doc comment)
+// holds regardless of set size, not just the 2-3 line fixtures the RED specs
+// use.
+func TestStoreEdit_LargeLineSetPersistsAllRenumbered1ToN(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-QA-LARGE tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-QA-LARGE entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descSeed := "Widget"
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-LARGE", StatusValidated, []LineItemInput{
+		{Description: &descSeed},
+	})
+
+	const n = 50
+	lines := make([]LineItemInput, n)
+	descs := make([]string, n)
+	for i := 0; i < n; i++ {
+		descs[i] = fmt.Sprintf("Line %d", i+1)
+		lines[i] = LineItemInput{Description: &descs[i]}
+	}
+	got, err := store.Edit(c, inv.ID, EditInput{LineItems: &lines})
+	if err != nil {
+		t.Fatalf("Edit (50-line replace): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+	if len(got.LineItems) != n {
+		t.Fatalf("Edit returned %d LineItems, want %d", len(got.LineItems), n)
+	}
+
+	stored := readLineItemsForTest(t, super, inv.ID)
+	if len(stored) != n {
+		t.Fatalf("line_items rows = %d, want %d", len(stored), n)
+	}
+	for i, li := range stored {
+		if li.LineNo != i+1 {
+			t.Errorf("stored[%d].LineNo = %d, want %d (contiguous from 1)", i, li.LineNo, i+1)
+		}
+		if li.Description == nil || *li.Description != descs[i] {
+			t.Errorf("stored[%d].Description = %v, want %q", i, li.Description, descs[i])
+		}
+	}
+}
+
+// A3: a line with every numeric field NULL (only Description set) is
+// store-invalid-faithfully persisted un-rejected -- no CHECK constraint on
+// quantity/unit_price/line_total/line_tax (migrations/20260714105151_line_items.sql),
+// mirroring Store.Create's existing NULL-numeric tolerance.
+func TestStoreEdit_AllNullNumericLineFieldsPersist(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-QA-NULLNUM tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-QA-NULLNUM entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descSeed := "Widget"
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-NULLNUM", StatusValidated, []LineItemInput{
+		{Description: &descSeed},
+	})
+
+	newDesc := "All-null-numerics line"
+	got, err := store.Edit(c, inv.ID, EditInput{LineItems: &[]LineItemInput{
+		{Description: &newDesc}, // Quantity/UnitPrice/LineTotal/LineTax left nil
+	}})
+	if err != nil {
+		t.Fatalf("Edit (all-NULL-numerics line): want success (store-invalid-faithfully), got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("Edit returned %d LineItems, want 1", len(got.LineItems))
+	}
+	li := got.LineItems[0]
+	if li.Quantity != nil || li.UnitPrice != nil || li.LineTotal != nil || li.LineTax != nil {
+		t.Errorf("Edit returned line numerics = %+v, want all four NULL (store-invalid-faithfully, no CHECK constraint)", li)
+	}
+
+	stored := readLineItemsForTest(t, super, inv.ID)
+	if len(stored) != 1 || stored[0].Quantity != nil || stored[0].UnitPrice != nil || stored[0].LineTotal != nil || stored[0].LineTax != nil {
+		t.Errorf("stored line = %+v, want all four numerics NULL", stored)
+	}
+}
+
+// A4: a header field AND a line change submitted in ONE Edit call produces
+// exactly ONE invoice.updated audit row (fields containing BOTH "vat" and
+// "line_items", not two separate rows) and exactly ONE validated->draft
+// history row (not two) -- Store.Edit composes the header write, the line
+// write, the single audit record and the single transitionTx call in one
+// pass; nothing about combining the two inputs should double either side
+// effect.
+func TestStoreEdit_HeaderAndLineChangeInOneCallSingleAuditSingleHistory(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-QA-COMBINED tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-QA-COMBINED entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA := "Widget"
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-COMBINED", StatusValidated, []LineItemInput{
+		{Description: &descA},
+	})
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`, inv.ID)
+
+	newVAT := "9.50"
+	newDesc := "Gadget"
+	got, err := store.Edit(c, inv.ID, EditInput{
+		UpdateInput: UpdateInput{VAT: &newVAT},
+		LineItems:   &[]LineItemInput{{Description: &newDesc}},
+	})
+	if err != nil {
+		t.Fatalf("Edit (header+line combined): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated+1 {
+		t.Errorf("audit_log invoice.updated rows = %d, want %d (exactly ONE row for the combined edit, not two)", n, beforeUpdated+1)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`, inv.ID); n != beforeHistory+1 {
+		t.Errorf("invoice_status_history (validated,draft) rows = %d, want %d (exactly ONE demotion, not two)", n, beforeHistory+1)
+	}
+	fields := auditFields(t, app, tenantID, "invoice.updated")
+	hasVAT, hasLines := false, false
+	for _, f := range fields {
+		if f == "vat" {
+			hasVAT = true
+		}
+		if f == "line_items" {
+			hasLines = true
+		}
+	}
+	if !hasVAT || !hasLines {
+		t.Errorf(`invoice.updated audit fields = %v, want to contain BOTH "vat" and "line_items"`, fields)
+	}
+}
+
+// A5: an invoice's lines are removed by a direct (non-Edit) write between
+// the invoice's creation and a later header-only Edit -- simulating a
+// concurrently-completed prior deletion, e.g. another admin path or a
+// migration, rather than a literal in-transaction race (the FOR UPDATE lock
+// rules out a true concurrent line write during Edit's own tx, per
+// [aggregate-lock]). Store.Edit must not panic or error on a lineless
+// invoice: hydrateLinesTx simply reports zero rows, exactly as it would for
+// an invoice that legitimately never had lines.
+func TestStoreEdit_LinesRemovedOutOfBandThenHeaderOnlyEditSucceeds(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-QA-OOB tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-QA-OOB entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA := "Widget"
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-OOB", StatusValidated, []LineItemInput{
+		{Description: &descA},
+	})
+
+	// Simulate an out-of-band prior removal of every line, bypassing Store.Edit
+	// entirely -- superuser, outside any app transaction.
+	if _, err := super.Exec(ctx, `DELETE FROM line_items WHERE invoice_id = $1`, inv.ID); err != nil {
+		t.Fatalf("out-of-band delete: %v", err)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM line_items WHERE invoice_id = $1`, inv.ID); n != 0 {
+		t.Fatalf("precondition: line_items rows = %d, want 0", n)
+	}
+
+	newVAT := "9.50"
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: &newVAT}})
+	if err != nil {
+		t.Fatalf("Edit (header-only, on a now-lineless invoice): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+	if len(got.LineItems) != 0 {
+		t.Errorf("Edit returned LineItems = %+v, want empty (the invoice genuinely has none)", got.LineItems)
+	}
+	if fields := auditFields(t, app, tenantID, "invoice.updated"); !reflect.DeepEqual(fields, []string{"vat"}) {
+		t.Errorf(`invoice.updated audit fields = %v, want exactly ["vat"] (LineItems was nil in this call, so "line_items" must NOT appear)`, fields)
+	}
+}
+
+// A6 (Part D): `line_items: []` on a lined, validated invoice with an
+// UNCHANGED header genuinely changes the aggregate content fingerprint --
+// not merely "the demotion happened, so presumably it did". This computes
+// contentFingerprint directly, before and after, over the SAME (unchanged)
+// header, proving the count marker (len(lines), INVED-01-02) is what makes
+// zero lines distinguishable from the original two, independent of Edit's
+// internal no-op check.
+func TestStoreEdit_EmptyLineItemsFingerprintDiffersFromPreEdit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-QA-FP tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-QA-FP entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA, descB := "Widget", "Gadget"
+	inv := seedLinedInvoiceAtStatus(t, super, store, c, entityID, "EDIT-QA-FP", StatusValidated, []LineItemInput{
+		{Description: &descA}, {Description: &descB},
+	})
+	preLines := readLineItemsForTest(t, super, inv.ID)
+	preFP := contentFingerprint(inv, preLines)
+
+	empty := []LineItemInput{}
+	got, err := store.Edit(c, inv.ID, EditInput{LineItems: &empty})
+	if err != nil {
+		t.Fatalf("Edit (line_items: []): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Fatalf("status = %q, want %q (demoted) -- precondition for the fingerprint comparison below to be meaningful", got.Status, StatusDraft)
+	}
+
+	// The header is byte-unchanged (`got` differs from `inv` only in
+	// Status/LineItems); recompute the SAME fingerprint function directly over
+	// got's header and its now-empty lines.
+	postFP := contentFingerprint(got, got.LineItems)
+	if postFP == preFP {
+		t.Errorf("contentFingerprint unchanged (%s) after removing all lines -- the count marker must make zero lines distinct from the original two, independent of Edit's own no-op check", postFP)
+	}
+	if len(got.LineItems) != 0 {
+		t.Errorf("got.LineItems = %+v, want empty", got.LineItems)
+	}
 }

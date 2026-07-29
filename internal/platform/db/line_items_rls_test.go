@@ -12,8 +12,15 @@
 //	    NULLABLE and un-CHECKed — store-invalid, so M4-04 can report violations
 //	    instead of the schema hard-rejecting an invalid import. created_at
 //	    timestamptz NOT NULL DEFAULT now() — verbatim M2-06 FORCE-RLS
-//	    `tenant_isolation` policy, GRANT SELECT/INSERT/UPDATE (no DELETE) TO
-//	    invoice_app.
+//	    `tenant_isolation` policy, GRANT SELECT/INSERT/UPDATE TO invoice_app.
+//
+// Grant history: M4-01-03 shipped SELECT/INSERT/UPDATE only (no hard-delete consumer
+// existed yet). INVED-01-01 added DELETE in 20260729095611_line_items_delete_grant.sql,
+// because removing a line is one of the three line edits the invoice edit surface
+// must support. The live matrix is SELECT/INSERT/UPDATE/DELETE for invoice_app and
+// nothing at all for invoice_tenant_reader, pinned by
+// TestRLS_LineItemsGrantMatrixIsSelectInsertUpdateDelete. The tenant_isolation policy
+// was NOT changed: it is FOR ALL, and a DELETE is filtered by its USING clause.
 //
 // Each of LI-RLS-01..07 attacks the same guarantees M2-07 (rls_test.go) proves for
 // the tenants/rls_fixture shape and M4-01-01/M4-01-02 (import_batches_rls_test.go /
@@ -649,17 +656,20 @@ func TestRLS_LineItemsDeleteMissingContextFailsClosed(t *testing.T) {
 }
 
 // (QA-added, cascade-is-FK-driven-not-grant-driven proof, belt-and-suspenders vs
-// LI-RLS-10 and TestRLS_LineItemsDeleteRefused above): line_items grants invoice_app
-// NO DELETE at all — proven above — so the app role can never directly remove a
-// line_items row. LI-RLS-10 proves the CASCADE removes lines when the parent invoice
-// is deleted, but does so via h.super, which BYPASSES every grant and every RLS
-// policy, so it cannot distinguish "the CASCADE fired" from "the superuser can do
-// anything anyway". This case re-proves the cascade using h.mig — the table OWNER,
-// which is bound by FORCE RLS exactly like every other role (LI-RLS-06) and was never
-// explicitly GRANTed DELETE on either table (ownership alone confers full privileges,
-// same as invoice_migrator's implicit rights on every M4-01 table) — under a real
-// tenant-scoped transaction. The line still disappears, proving the referential-action
-// CASCADE is driven by the FK constraint itself, not by any DELETE grant on line_items.
+// LI-RLS-10 and the DELETE cases above): the CASCADE that removes a line when its
+// parent invoice is deleted is a property of the FK's referential action, NOT of any
+// DELETE privilege on line_items. INVED-01-01 widened invoice_app's grant to include
+// DELETE, so this case no longer rests on "nobody can delete a line directly" — it
+// rests on the role performing the parent delete never having been *explicitly*
+// granted DELETE on line_items. LI-RLS-10 proves the CASCADE via h.super, which
+// BYPASSES every grant and every RLS policy, so it cannot distinguish "the CASCADE
+// fired" from "the superuser can do anything anyway". This case re-proves it using
+// h.mig — the table OWNER, bound by FORCE RLS exactly like every other role
+// (LI-RLS-06) and never explicitly GRANTed DELETE on either table (ownership alone
+// confers full privileges, same as invoice_migrator's implicit rights on every M4-01
+// table) — under a real tenant-scoped transaction. The line still disappears, proving
+// the referential-action CASCADE is driven by the FK constraint itself, not by any
+// DELETE grant on line_items.
 func TestRLS_LineItemsCascadeDrivenByFKNotGrant(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()

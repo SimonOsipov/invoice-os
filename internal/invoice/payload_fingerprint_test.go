@@ -161,3 +161,280 @@ func TestContentFingerprint_NullDistinctFromEmptyString(t *testing.T) {
 			fpNull)
 	}
 }
+
+// --- INVED-01-02: line items as content (INV-02-T1..T9, T13) --------------
+//
+// RED (Stage 2.5, Mode A): contentFingerprint's signature already takes
+// `lines []LineItem` (R0, commit 939aef2) but the body still hashes only the
+// ten header fields -- `lines` is accepted and ignored. T1/T2/T3/T4/T6/T7
+// fail on that gap; T5/T8/T9/T13 pass already, as regression/behaviour
+// guards for the GREEN step, not RED-provers -- see each doc comment.
+
+// twoLineFingerprintFixture is fullFingerprintFixture's header with exactly
+// two distinct, fully-populated line items (all five MBS fields set on
+// each), for INV-02-T1/T4/T7/T9's "invoice with 2 lines" specs.
+func twoLineFingerprintFixture() Invoice {
+	inv := fullFingerprintFixture()
+	inv.LineItems = []LineItem{
+		{ID: "line-a", LineNo: 1, Description: strPtr("Widget"), Quantity: strPtr("2"),
+			UnitPrice: strPtr("100.00"), LineTotal: strPtr("200.00"), LineTax: strPtr("15.00")},
+		{ID: "line-b", LineNo: 2, Description: strPtr("Gadget"), Quantity: strPtr("1"),
+			UnitPrice: strPtr("50.00"), LineTotal: strPtr("50.00"), LineTax: strPtr("3.75")},
+	}
+	return inv
+}
+
+// threeLineFingerprintFixture is fullFingerprintFixture's header with three
+// distinct, fully-populated line items, for INV-02-T3/T8's specs.
+func threeLineFingerprintFixture() Invoice {
+	inv := fullFingerprintFixture()
+	inv.LineItems = []LineItem{
+		{ID: "line-a", LineNo: 1, Description: strPtr("First"), Quantity: strPtr("1"),
+			UnitPrice: strPtr("10.00"), LineTotal: strPtr("10.00"), LineTax: strPtr("0.75")},
+		{ID: "line-b", LineNo: 2, Description: strPtr("Second"), Quantity: strPtr("2"),
+			UnitPrice: strPtr("20.00"), LineTotal: strPtr("40.00"), LineTax: strPtr("3.00")},
+		{ID: "line-c", LineNo: 3, Description: strPtr("Third"), Quantity: strPtr("3"),
+			UnitPrice: strPtr("30.00"), LineTotal: strPtr("90.00"), LineTax: strPtr("6.75")},
+	}
+	return inv
+}
+
+// TestContentFingerprint_EachLineFieldIsSignificant (INV-02-T1): mutating
+// exactly one of a line's five MBS fields (description/quantity/unit_price/
+// line_total/line_tax) must move the fingerprint -- mirrors
+// TestContentFingerprint_EachOfTenContentColumnsIsSignificant's "if" proof,
+// replayed across the line fields §B's Field-set decision adds.
+func TestContentFingerprint_EachLineFieldIsSignificant(t *testing.T) {
+	base := twoLineFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	mutations := map[string]func(*LineItem){
+		"Description": func(li *LineItem) { li.Description = strPtr("Different") },
+		"Quantity":    func(li *LineItem) { li.Quantity = strPtr("99") },
+		"UnitPrice":   func(li *LineItem) { li.UnitPrice = strPtr("999.00") },
+		"LineTotal":   func(li *LineItem) { li.LineTotal = strPtr("999.00") },
+		"LineTax":     func(li *LineItem) { li.LineTax = strPtr("99.00") },
+	}
+	if len(mutations) != 5 {
+		t.Fatalf("test fixture bug: %d mutations defined, want exactly 5 (the five MBS line columns)", len(mutations))
+	}
+
+	for field, mutate := range mutations {
+		field, mutate := field, mutate
+		t.Run(field, func(t *testing.T) {
+			mutated := twoLineFingerprintFixture()
+			mutate(&mutated.LineItems[0])
+			mutatedFP := contentFingerprint(mutated, mutated.LineItems)
+			if mutatedFP == baseFP {
+				t.Errorf("contentFingerprint unchanged after mutating line field %s: both %q -- "+
+					"this line column must be part of the fingerprint [INV-02-T1]", field, baseFP)
+			}
+		})
+	}
+}
+
+// TestContentFingerprint_AppendedLineChangesFingerprint (INV-02-T2):
+// appending a 3rd line to a 2-line invoice must change the fingerprint.
+func TestContentFingerprint_AppendedLineChangesFingerprint(t *testing.T) {
+	base := twoLineFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	appended := twoLineFingerprintFixture()
+	appended.LineItems = append(appended.LineItems, LineItem{
+		ID: "line-c", LineNo: 3, Description: strPtr("Extra"), Quantity: strPtr("1"),
+		UnitPrice: strPtr("10.00"), LineTotal: strPtr("10.00"), LineTax: strPtr("0.75"),
+	})
+	appendedFP := contentFingerprint(appended, appended.LineItems)
+
+	if appendedFP == baseFP {
+		t.Errorf("contentFingerprint unchanged after appending a 3rd line: both %q [INV-02-T2]", baseFP)
+	}
+}
+
+// TestContentFingerprint_RemovedAndRenumberedLineChangesFingerprint
+// (INV-02-T3): removing the middle line of a 3-line invoice and renumbering
+// the survivor to 1..2 -- the shape a real replace-all-lines save produces --
+// must change the fingerprint.
+func TestContentFingerprint_RemovedAndRenumberedLineChangesFingerprint(t *testing.T) {
+	base := threeLineFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	shortened := threeLineFingerprintFixture()
+	kept := []LineItem{shortened.LineItems[0], shortened.LineItems[2]}
+	kept[0].LineNo = 1
+	kept[1].LineNo = 2
+	shortened.LineItems = kept
+	shortenedFP := contentFingerprint(shortened, shortened.LineItems)
+
+	if shortenedFP == baseFP {
+		t.Errorf("contentFingerprint unchanged after removing the middle line and renumbering the survivor: "+
+			"both %q [INV-02-T3]", baseFP)
+	}
+}
+
+// TestContentFingerprint_LineNoIsContent (INV-02-T4): reassigning which
+// line_no carries which content -- the SAME two content tuples, attached to
+// the OTHER line_no -- must change the fingerprint. This is what makes the
+// spec meaningful with §C's sort in place: a plain reordering of the
+// argument SLICE (line_no values held fixed) would sort back to the same
+// canonical sequence and correctly show NO change; only an actual
+// renumbering -- content reassigned to a different line_no -- proves
+// line_no itself is hashed, not merely used to cancel out caller order.
+func TestContentFingerprint_LineNoIsContent(t *testing.T) {
+	base := twoLineFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	swapped := twoLineFingerprintFixture()
+	swapped.LineItems[0].LineNo, swapped.LineItems[1].LineNo = swapped.LineItems[1].LineNo, swapped.LineItems[0].LineNo
+	swappedFP := contentFingerprint(swapped, swapped.LineItems)
+
+	if swappedFP == baseFP {
+		t.Errorf("contentFingerprint unchanged after swapping which line_no carries which content: "+
+			"both %q -- line_no must be part of the fingerprint, not just an ordering key [INV-02-T4]", baseFP)
+	}
+}
+
+// TestContentFingerprint_LineIDsAreNotContent (INV-02-T5, guard): two
+// invoices whose lines carry identical content but DIFFERENT ids must
+// fingerprint EQUAL -- [fingerprint-excludes-line-ids]. This is the "only
+// if" half of the LineItems/LineItemsEmptied entries removed from
+// TestContentFingerprint_NonContentFieldsAreIgnored by INVED-01-02 (§F):
+// those asserted the whole line was non-content, which INV-02-T1..T4 now
+// disprove; only the line id survives as excluded.
+func TestContentFingerprint_LineIDsAreNotContent(t *testing.T) {
+	a := twoLineFingerprintFixture()
+	b := twoLineFingerprintFixture()
+	// Same content, deliberately different ids on both lines -- exactly what
+	// a replace-all save produces every time (fresh uuids minted per write).
+	b.LineItems[0].ID = "totally-different-id-a"
+	b.LineItems[1].ID = "totally-different-id-b"
+
+	fpA := contentFingerprint(a, a.LineItems)
+	fpB := contentFingerprint(b, b.LineItems)
+	if fpA != fpB {
+		t.Errorf("contentFingerprint(id=%q) = %q, contentFingerprint(id=%q) = %q -- line ids must NOT affect "+
+			"the fingerprint [fingerprint-excludes-line-ids] [INV-02-T5]",
+			a.LineItems[0].ID, fpA, b.LineItems[0].ID, fpB)
+	}
+}
+
+// TestContentFingerprint_ZeroLinesDiffersFromOneAllNullLine (INV-02-T6):
+// zero lines and exactly one line whose five MBS fields are all NULL must
+// fingerprint DIFFERENTLY -- the line-count marker (len(lines)) is itself
+// part of the hash, so "no lines" and "one line of no content" cannot
+// collide.
+func TestContentFingerprint_ZeroLinesDiffersFromOneAllNullLine(t *testing.T) {
+	zero := fullFingerprintFixture()
+	zero.LineItems = nil
+	zeroFP := contentFingerprint(zero, zero.LineItems)
+
+	oneNull := fullFingerprintFixture()
+	oneNull.LineItems = []LineItem{{ID: "line-null", LineNo: 1}}
+	oneNullFP := contentFingerprint(oneNull, oneNull.LineItems)
+
+	if zeroFP == oneNullFP {
+		t.Errorf("contentFingerprint(0 lines) == contentFingerprint(1 all-NULL line) (%q) -- "+
+			"the line count marker must distinguish them [INV-02-T6]", zeroFP)
+	}
+}
+
+// TestContentFingerprint_LineEncodingStaysInjective (INV-02-T7): the same
+// concatenation-collision shape the header encoding must resist
+// (("ab","c") vs ("a","bc")), replayed across a LINE boundary --
+// [{description:"ab"},{description:"c"}] must not collide with
+// [{description:"a"},{description:"bc"}].
+func TestContentFingerprint_LineEncodingStaysInjective(t *testing.T) {
+	base := fullFingerprintFixture()
+
+	abC := base
+	abC.LineItems = []LineItem{
+		{ID: "l1", LineNo: 1, Description: strPtr("ab")},
+		{ID: "l2", LineNo: 2, Description: strPtr("c")},
+	}
+	aBc := base
+	aBc.LineItems = []LineItem{
+		{ID: "l1", LineNo: 1, Description: strPtr("a")},
+		{ID: "l2", LineNo: 2, Description: strPtr("bc")},
+	}
+
+	fpABC := contentFingerprint(abC, abC.LineItems)
+	fpABc := contentFingerprint(aBc, aBc.LineItems)
+	if fpABC == fpABc {
+		t.Errorf("contentFingerprint([{%q},{%q}]) == contentFingerprint([{%q},{%q}]) (%q) -- the "+
+			"length-prefixed encoding must stay injective across a line boundary [INV-02-T7]",
+			"ab", "c", "a", "bc", fpABC)
+	}
+}
+
+// TestContentFingerprint_PureAndDoesNotMutateCallerSlice (INV-02-T8, guard):
+// two calls with the SAME arguments return identical fingerprints, and --
+// the load-bearing half -- the caller's line slice is not reordered or
+// otherwise mutated by the call. gate.go:169 passes inv.LineItems, the SAME
+// slice MBSPayload was built from; an in-place sort there would silently
+// corrupt the payload the fingerprint is supposed to describe ([toctou-
+// staleness] compares against exactly that slice).
+func TestContentFingerprint_PureAndDoesNotMutateCallerSlice(t *testing.T) {
+	inv := threeLineFingerprintFixture()
+	// Deliberately out of line_no order, so an in-place sort would be
+	// detectable.
+	inv.LineItems = []LineItem{inv.LineItems[2], inv.LineItems[0], inv.LineItems[1]}
+	original := append([]LineItem(nil), inv.LineItems...)
+
+	fp1 := contentFingerprint(inv, inv.LineItems)
+	fp2 := contentFingerprint(inv, inv.LineItems)
+	if fp1 != fp2 {
+		t.Errorf("contentFingerprint(same args) = %q then %q, want identical (deterministic) [INV-02-T8]", fp1, fp2)
+	}
+
+	if len(inv.LineItems) != len(original) {
+		t.Fatalf("caller's LineItems length changed: %d -> %d, want unchanged [INV-02-T8]", len(original), len(inv.LineItems))
+	}
+	for i := range original {
+		if inv.LineItems[i] != original[i] {
+			t.Errorf("caller's LineItems[%d] = %+v after the call, want unchanged %+v -- contentFingerprint "+
+				"must sort a defensive COPY, never the caller's own slice [INV-02-T8]",
+				i, inv.LineItems[i], original[i])
+		}
+	}
+}
+
+// TestContentFingerprint_HeaderChangeStillSignificantWithLines (INV-02-T9,
+// guard): a header-field change on an invoice that ALSO carries line items
+// must still change the fingerprint -- the pre-existing ten-field behaviour
+// (TestContentFingerprint_EachOfTenContentColumnsIsSignificant) must not
+// regress now that lines are hashed too.
+func TestContentFingerprint_HeaderChangeStillSignificantWithLines(t *testing.T) {
+	base := twoLineFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	mutated := twoLineFingerprintFixture()
+	mutated.VAT = strPtr("999.99")
+	mutatedFP := contentFingerprint(mutated, mutated.LineItems)
+
+	if mutatedFP == baseFP {
+		t.Errorf("contentFingerprint unchanged after a header (VAT) mutation on a lined invoice: both %q -- "+
+			"the ten header fields must remain significant now lines are hashed too [INV-02-T9]", baseFP)
+	}
+}
+
+// TestContentFingerprint_NilAndEmptyLinesAreIdentical (INV-02-T13, guard):
+// lines=nil and lines=[]LineItem{} must fingerprint EQUAL. Concrete
+// consequence across INVED-01-02/04: hydrateLinesTx returns nil for a
+// lineless invoice, while INVED-01-04's replaceLinesTx may return
+// []LineItem{} for the same invoice -- a divergence here would make the
+// no-op check and the staleness guard disagree on whether an edit happened.
+func TestContentFingerprint_NilAndEmptyLinesAreIdentical(t *testing.T) {
+	base := fullFingerprintFixture()
+
+	nilLines := base
+	nilLines.LineItems = nil
+	emptyLines := base
+	emptyLines.LineItems = []LineItem{}
+
+	fpNil := contentFingerprint(nilLines, nilLines.LineItems)
+	fpEmpty := contentFingerprint(emptyLines, emptyLines.LineItems)
+	if fpNil != fpEmpty {
+		t.Errorf("contentFingerprint(lines=nil) = %q != contentFingerprint(lines=[]LineItem{}) = %q, want "+
+			"equal [INV-02-T13]", fpNil, fpEmpty)
+	}
+}

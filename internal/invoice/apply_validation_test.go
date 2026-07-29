@@ -775,3 +775,118 @@ func TestApplyValidation_NilViolationsNormalizeToEmptyArrayNeverNull(t *testing.
 			"[Stage-1 F2, AC#14, violations-write]", violationsText, "[]")
 	}
 }
+
+// --- INVED-01-02: line hydration through the real gate (INV-02-T10/T11) ---
+
+// TestApplyValidation_LinedDraftValidatesWithoutStaleFingerprint (INV-02-T10):
+// a stored draft invoice with >=2 line items, validated end to end through
+// the REAL gate (Store.Get -> Evaluate -> 04 in-process -> Store.
+// ApplyValidation), must reach a real verdict -- never ErrStaleValidation.
+// This is the "outage detector" for INVED-01-02's single highest-risk
+// defect: if Store.ApplyValidation's locked-row fingerprint ever stopped
+// hydrating its lines (missing, or reading off the pool instead of the tx --
+// see hydrateLinesTx's own doc), EVERY validate call on a lined invoice
+// would fail this exact spec with ErrStaleValidation, because Gate.
+// Validate's evaluated fingerprint (over a Get-hydrated invoice) would no
+// longer match the locked row's line-less one. Reuses gate_test.go's
+// startInProcess04/gapiValidInvoiceInput/gapiS2SToken (same package).
+func TestApplyValidation_LinedDraftValidatesWithoutStaleFingerprint(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "INV-02-T10 tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-02-T10 entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	// gapiValidInvoiceInput (gate_test.go) carries exactly 2 line items --
+	// the ">=2 line items" this spec calls for -- and is independently
+	// verified (PAY-18) to produce zero violations against the real v2 rule
+	// set.
+	inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "INV-02-T10"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(inv.LineItems) < 2 {
+		t.Fatalf("test fixture bug: Create returned %d line items, want >= 2", len(inv.LineItems))
+	}
+
+	srv := startInProcess04(t, app)
+	validator := NewValidator(srv.URL, gapiS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	got, _, err := gate.Validate(c, inv.ID)
+	if errors.Is(err, ErrStaleValidation) {
+		t.Fatalf("Gate.Validate on a lined draft returned ErrStaleValidation -- ApplyValidation's locked-row "+
+			"fingerprint must be taken over hydrated lines, or EVERY validate on a lined invoice fails this "+
+			"way [INV-02-T10]: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("Gate.Validate: want a clean promotion, got err: %v", err)
+	}
+	if got.Status != StatusValidated {
+		t.Errorf("status = %q, want %q -- gapiValidInvoiceInput is independently verified (PAY-18) to produce "+
+			"zero violations against the real v2 rule set [INV-02-T10]", got.Status, StatusValidated)
+	}
+	var vs []Violation
+	if err := json.Unmarshal(got.Violations, &vs); err != nil {
+		t.Fatalf("unmarshal violations %s: %v", got.Violations, err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("violations = %+v, want none [INV-02-T10]", vs)
+	}
+	if got.RuleSetVersionID == nil {
+		t.Error("rule_set_version_id not stamped -- want a real verdict, not a no-op [INV-02-T10]")
+	}
+}
+
+// TestApplyValidation_LinedInvoiceStillTripsStaleGuard (INV-02-T11): the
+// SAME TOCTOU guard TestApplyValidation_StaleFingerprintRefused (GATE-11)
+// proves for a line-less invoice, replayed on one that HAS line items -- an
+// edit committed between the pre-edit fingerprint and the ApplyValidation
+// call must still be caught as ErrStaleValidation, with nothing written.
+// Confirms hydrateLinesTx's tx-scoped read inside ApplyValidation does not
+// weaken [toctou-staleness] now that lines are part of what "changed" means.
+func TestApplyValidation_LinedInvoiceStillTripsStaleGuard(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "INV-02-T11 tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-02-T11 entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA, descB := "Widget", "Gadget"
+	inv, err := store.Create(c, CreateInput{
+		EntityID: entityID, InvoiceNumber: "INV-02-T11",
+		LineItems: []LineItemInput{
+			{Description: &descA, Quantity: strPtr("2"), UnitPrice: strPtr("100.00")},
+			{Description: &descB, Quantity: strPtr("1"), UnitPrice: strPtr("50.00")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(inv.LineItems) != 2 {
+		t.Fatalf("test fixture bug: Create returned %d line items, want 2", len(inv.LineItems))
+	}
+	staleFP := contentFingerprint(inv, inv.LineItems) // taken BEFORE the Update below
+
+	newVAT := "42.00"
+	if _, err := store.Update(c, inv.ID, UpdateInput{VAT: &newVAT}); err != nil {
+		t.Fatalf("Update (content edit between fingerprint and apply): %v", err)
+	}
+
+	versionID := seedRuleSetVersionID(t, super)
+	before := snapshotInvoiceGateState(t, super, inv.ID)
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID)
+
+	if _, err := store.ApplyValidation(c, inv.ID, []Violation{}, versionID, staleFP); !errors.Is(err, ErrStaleValidation) {
+		t.Fatalf("ApplyValidation(stale fingerprint, lined invoice) err = %v, want ErrStaleValidation [INV-02-T11]", err)
+	}
+
+	assertGateSnapshotUnchanged(t, before, snapshotInvoiceGateState(t, super, inv.ID), "INV-02-T11")
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv.ID); n != beforeHistory {
+		t.Errorf("invoice_status_history rows = %d, want unchanged %d [INV-02-T11]", n, beforeHistory)
+	}
+}

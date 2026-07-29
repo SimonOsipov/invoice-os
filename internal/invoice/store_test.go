@@ -396,6 +396,60 @@ func TestHydrateLinesTx_OrderedMatchingGetAndNilWhenLineless(t *testing.T) {
 	}
 }
 
+// TestHydrateLinesTx_FingerprintMatchesStoreGet (QA adversarial,
+// INVED-01-02 Part D): INV-02-T12 above already proves hydrateLinesTx's
+// lines are reflect.DeepEqual to Store.Get's -- this pins the SAME
+// hydration-consistency property one level up, at the actual
+// contentFingerprint an invoice's tx-scoped callers (Store.Edit,
+// Store.ApplyValidation) compute over hydrateLinesTx's lines against the
+// evaluatedFingerprint Gate.Validate computed over Store.Get's. If the two
+// line-reads ever diverged (e.g. a projection or ordering drift introduced
+// by a future change to one call site but not the other), this is the test
+// that would catch it as a fingerprint mismatch -- the exact failure mode
+// [toctou-staleness] depends on NOT happening.
+func TestHydrateLinesTx_FingerprintMatchesStoreGet(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INV-02-FP tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-02-FP entity")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INV-02-FP")
+
+	for i, lineNo := range []int{3, 1, 2} {
+		price := fmt.Sprintf("%d.00", i+1)
+		if _, err := super.Exec(ctx,
+			`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, unit_price) VALUES ($1, $2, $3, $4, $5::numeric)`,
+			tenantID, invoiceID, lineNo, fmt.Sprintf("Line %d", lineNo), price,
+		); err != nil {
+			t.Fatalf("seed line_items (line_no=%d): %v", lineNo, err)
+		}
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Get(c, invoiceID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	var viaHydrate []LineItem
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var err error
+		viaHydrate, err = hydrateLinesTx(ctx, tx, invoiceID)
+		return err
+	}); err != nil {
+		t.Fatalf("hydrateLinesTx: %v", err)
+	}
+
+	fpViaGet := contentFingerprint(got, got.LineItems)
+	fpViaHydrate := contentFingerprint(got, viaHydrate)
+	if fpViaGet != fpViaHydrate {
+		t.Errorf("contentFingerprint(Store.Get lines) = %q, contentFingerprint(hydrateLinesTx lines) = %q, want equal -- "+
+			"the hydration-consistency property [toctou-staleness] depends on", fpViaGet, fpViaHydrate)
+	}
+}
+
 // INV-STORE-03: Create writes exactly one "invoice.created" audit row, actor
 // == the caller's Subject.
 func TestStoreCreate_WritesExactlyOneCreatedAuditActorIsSubject(t *testing.T) {

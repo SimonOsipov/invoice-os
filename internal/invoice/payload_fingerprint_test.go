@@ -25,6 +25,7 @@
 package invoice
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -436,5 +437,200 @@ func TestContentFingerprint_NilAndEmptyLinesAreIdentical(t *testing.T) {
 	if fpNil != fpEmpty {
 		t.Errorf("contentFingerprint(lines=nil) = %q != contentFingerprint(lines=[]LineItem{}) = %q, want "+
 			"equal [INV-02-T13]", fpNil, fpEmpty)
+	}
+}
+
+// --- QA adversarial coverage (Mode B), added AFTER implementation ---------
+
+// TestContentFingerprint_LineNumericNullVsEmptyVsZeroAreDistinct (QA
+// adversarial): a line's numeric field must fingerprint DIFFERENTLY across
+// three genuinely different wire values -- NULL (omitted, [payload-absence]),
+// the empty string (present, blank) and the literal "0" (present, a real
+// zero) -- pairwise. TestContentFingerprint_NullDistinctFromEmptyString only
+// proves the NULL-vs-"" half, on a HEADER field, and never covers "0" at
+// all; a regression that, say, treated an empty numeric string as
+// equivalent to zero somewhere upstream of the hash would pass every
+// existing spec but silently conflate two distinct DB states here.
+func TestContentFingerprint_LineNumericNullVsEmptyVsZeroAreDistinct(t *testing.T) {
+	build := func(qty *string) Invoice {
+		inv := fullFingerprintFixture()
+		inv.LineItems = []LineItem{{ID: "l1", LineNo: 1, Quantity: qty}}
+		return inv
+	}
+
+	nullInv, emptyInv, zeroInv := build(nil), build(strPtr("")), build(strPtr("0"))
+	fpNull := contentFingerprint(nullInv, nullInv.LineItems)
+	fpEmpty := contentFingerprint(emptyInv, emptyInv.LineItems)
+	fpZero := contentFingerprint(zeroInv, zeroInv.LineItems)
+
+	if fpNull == fpEmpty {
+		t.Errorf("contentFingerprint(Quantity=nil) == contentFingerprint(Quantity=\"\") (%q)", fpNull)
+	}
+	if fpNull == fpZero {
+		t.Errorf("contentFingerprint(Quantity=nil) == contentFingerprint(Quantity=\"0\") (%q)", fpNull)
+	}
+	if fpEmpty == fpZero {
+		t.Errorf("contentFingerprint(Quantity=\"\") == contentFingerprint(Quantity=\"0\") (%q)", fpEmpty)
+	}
+}
+
+// TestContentFingerprint_LineFieldDelimiterCharsStayInjective (QA
+// adversarial): INV-02-T7 proves injectivity across a LINE boundary using
+// plain alphabetic content ("ab"/"c" vs "a"/"bc"). This replays the same
+// boundary-shift attack but embeds the encoder's OWN delimiter syntax
+// ("S<len>:", ";") and a bare digit run inside the field VALUES themselves
+// -- content an attacker (or a legitimately weird invoice description)
+// could supply -- to prove the length-prefix, not any character pattern in
+// the content, is what the parser (conceptually) relies on. Moving the 'a'
+// character across the Description/Quantity boundary while keeping
+// delimiter-lookalike substrings in both fields must still change the hash.
+func TestContentFingerprint_LineFieldDelimiterCharsStayInjective(t *testing.T) {
+	base := fullFingerprintFixture()
+
+	variantA := base
+	variantA.LineItems = []LineItem{
+		{ID: "l1", LineNo: 1, Description: strPtr("5:x"), Quantity: strPtr("a;b")},
+	}
+	variantB := base
+	variantB.LineItems = []LineItem{
+		{ID: "l1", LineNo: 1, Description: strPtr("5:xa"), Quantity: strPtr(";b")},
+	}
+
+	fpA := contentFingerprint(variantA, variantA.LineItems)
+	fpB := contentFingerprint(variantB, variantB.LineItems)
+	if fpA == fpB {
+		t.Errorf("contentFingerprint([{desc:%q,qty:%q}]) == contentFingerprint([{desc:%q,qty:%q}]) (%q) -- "+
+			"the length-prefixed encoding must stay injective even when field VALUES embed delimiter-lookalike "+
+			"characters (\"S5:\", \";\")",
+			"5:x", "a;b", "5:xa", ";b", fpA)
+	}
+}
+
+// TestContentFingerprint_FiftyLinesRemainsSensitive (QA adversarial, scale):
+// contentFingerprint must not panic, silently truncate, or lose sensitivity
+// on an invoice with many lines. Mutating a SINGLE line (the 37th of 50)
+// must still move the fingerprint -- confirming the per-field/per-line
+// hashing discipline holds at a size no other spec exercises (the largest
+// elsewhere is threeLineFingerprintFixture's 3).
+func TestContentFingerprint_FiftyLinesRemainsSensitive(t *testing.T) {
+	const n = 50
+	base := fullFingerprintFixture()
+	lines := make([]LineItem, n)
+	for i := range lines {
+		desc := fmt.Sprintf("Line %d", i+1)
+		price := fmt.Sprintf("%d.00", i+1)
+		lines[i] = LineItem{ID: fmt.Sprintf("line-%d", i+1), LineNo: i + 1, Description: &desc, UnitPrice: &price}
+	}
+	base.LineItems = lines
+	baseFP := contentFingerprint(base, base.LineItems)
+	if baseFP == "" {
+		t.Fatal("contentFingerprint(50 lines) is empty -- want a real hash")
+	}
+
+	mutated := base
+	mutatedLines := append([]LineItem(nil), lines...)
+	mutatedDesc := "MUTATED"
+	mutatedLines[36].Description = &mutatedDesc // the 37th line, 0-indexed
+	mutated.LineItems = mutatedLines
+	mutatedFP := contentFingerprint(mutated, mutated.LineItems)
+
+	if mutatedFP == baseFP {
+		t.Errorf("contentFingerprint unchanged after mutating the 37th of 50 lines: both %q", baseFP)
+	}
+}
+
+// TestContentFingerprint_LineNoValueIsHashedNotJustASortKey (QA adversarial
+// -- closes a coverage gap found by mutation-testing INV-02-T4): T4
+// (TestContentFingerprint_LineNoIsContent) swaps line_no between two lines
+// of DIFFERENT content and asserts the fingerprint changes -- but that swap
+// ALSO flips which content sorts first (the sort key is line_no), so a
+// fingerprint change there is explained just as well by the reordering as
+// by line_no's own bytes being hashed. Confirmed experimentally: a mutant
+// that stops writing line_no into the hash at all (leaving it as a
+// SORT-ONLY key) still passes T4 and every other existing spec undetected.
+// This test controls for the confound: renumbering 1,2 -> 10,20 preserves
+// the RELATIVE order (10 < 20, same as 1 < 2), so the sorted content
+// sequence is byte-identical before and after -- the ONLY thing that can
+// move the fingerprint is line_no's own encoded value.
+func TestContentFingerprint_LineNoValueIsHashedNotJustASortKey(t *testing.T) {
+	base := twoLineFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	renumbered := twoLineFingerprintFixture()
+	renumbered.LineItems[0].LineNo = 10
+	renumbered.LineItems[1].LineNo = 20
+	renumberedFP := contentFingerprint(renumbered, renumbered.LineItems)
+
+	if renumberedFP == baseFP {
+		t.Errorf("contentFingerprint unchanged after renumbering line_no 1,2 -> 10,20 (order-preserving, so "+
+			"the sorted CONTENT sequence is unchanged): both %q -- line_no's own bytes must be hashed, not "+
+			"merely used to decide sort order", baseFP)
+	}
+}
+
+// TestContentFingerprint_GoldenDigestPinsTheEncoding (QA adversarial --
+// closes a second coverage gap found by mutation-testing): removing the
+// explicit line-COUNT marker entirely (`count := strconv.Itoa(len(lines));
+// writeFingerprintField(h, &count)`) passes EVERY spec in this file
+// undetected, INCLUDING TestContentFingerprint_ZeroLinesDiffersFromOneAllNullLine
+// (INV-02-T6), which the implementation's own doc comment claims that
+// marker exists to guarantee: a lineless invoice and a one-all-NULL-line
+// invoice still differ without it, because line_no alone ("1") is never
+// empty. No behavioral assertion phrased as "X != Y" can catch a mutation
+// that changes what the STRING fed to sha256 is while every pairwise
+// inequality this file checks happens to survive by coincidence. Pinning
+// the actual literal digest is the one check that cannot be fooled that
+// way: ANY byte-level change to the encoding (marker removed, field
+// reordered, delimiter changed, ...) changes this literal.
+//
+// Deliberately narrow (one lineless fixture, one 2-line fixture) --this is
+// a change-detector, not a spec of what the "correct" digest should be.
+// Updating the literal is fine after a DELIBERATE, reviewed encoding
+// change; it must never be updated to silently paper over an
+// undiscussed one.
+func TestContentFingerprint_GoldenDigestPinsTheEncoding(t *testing.T) {
+	lineless := fullFingerprintFixture()
+	lineless.LineItems = nil
+	const wantLineless = "0777fab27f14e3c71e3dcde4e250fb9b33cdde5e63c2d44a9f328098e17d7050"
+	if got := contentFingerprint(lineless, lineless.LineItems); got != wantLineless {
+		t.Errorf("contentFingerprint(lineless fixture) = %s, want %s -- the encoding changed; if that was "+
+			"deliberate and reviewed, update this literal, never silently", got, wantLineless)
+	}
+
+	lined := twoLineFingerprintFixture()
+	const wantLined = "2eae3f13152795c4ddd01a60a77a4cc924a450661e0618971f63b5cc677923fe"
+	if got := contentFingerprint(lined, lined.LineItems); got != wantLined {
+		t.Errorf("contentFingerprint(2-line fixture) = %s, want %s -- the encoding changed; if that was "+
+			"deliberate and reviewed, update this literal, never silently", got, wantLined)
+	}
+}
+
+// TestContentFingerprint_DuplicateLineNoIsOrderDependent (QA adversarial,
+// documents architect-flagged behaviour -- NOT asserted as correct):
+// contentFingerprint sorts with sort.SliceStable, whose defining property is
+// that TIED keys preserve the CALLER's original relative order. When two
+// lines share the same line_no (impossible in the DB --
+// line_items_invoice_line_no_uq forbids it -- but not impossible in an
+// in-memory []LineItem, e.g. a dry-run CreateInput built from malformed
+// import data before any DB constraint runs), the fingerprint depends on
+// which one the caller put first. This test exists to make that dependency
+// VISIBLE and regression-checkable, not to bless it as desired behaviour.
+func TestContentFingerprint_DuplicateLineNoIsOrderDependent(t *testing.T) {
+	base := fullFingerprintFixture()
+	a := LineItem{ID: "a", LineNo: 1, Description: strPtr("A-content")}
+	b := LineItem{ID: "b", LineNo: 1, Description: strPtr("B-content")}
+
+	orderAB := base
+	orderAB.LineItems = []LineItem{a, b}
+	orderBA := base
+	orderBA.LineItems = []LineItem{b, a}
+
+	fpAB := contentFingerprint(orderAB, orderAB.LineItems)
+	fpBA := contentFingerprint(orderBA, orderBA.LineItems)
+	if fpAB == fpBA {
+		t.Errorf("contentFingerprint([a,b]) == contentFingerprint([b,a]) for tied line_no=1 (%q) -- expected "+
+			"these to DIFFER: sort.SliceStable preserves caller order for tied keys, so a duplicate line_no "+
+			"is order-dependent by construction. If this now fails, the sort or its comparator changed and "+
+			"this documented behaviour needs re-verifying, not silently accepting", fpAB)
 	}
 }

@@ -36,11 +36,13 @@ package invoice
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -1128,3 +1130,109 @@ func TestStoreEdit_ConcurrentEditsOnRejectedInvoiceSerializeToOneDemotion(t *tes
 // re-premises the identical atomicity shape onto the clear's new home: the
 // conditional `rejection_reasons = '[]'` clause transitionTx's UPDATE gains
 // for target == StatusAccepted.
+
+// --- INVED-01-02 QA (Mode B): Store.Edit's shape is untouched by a LINED
+// invoice -----------------------------------------------------------------
+
+// TestStoreEdit_LinedInvoiceDemotesAndLeavesLinesUntouchedWithNilLineItems
+// (QA adversarial, INVED-01-02 Part D/E): no existing Store.Edit test
+// exercises an invoice that actually HAS line items -- every one of them
+// above is header-only. This closes that gap and pins two things at once:
+//
+//  1. Edit's RETURN shape is unchanged by INVED-01-02: `after` comes from
+//     updateContentTx/transitionTx, both scanInvoice-only, so
+//     got.LineItems is nil even though the invoice has 2 real lines in the
+//     DB -- subtask 04's LineItems-on-UpdateInput territory, not this
+//     one's. A regression that started hydrating LineItems onto Edit's
+//     return here would be exactly the kind of scope creep [D9]/this
+//     subtask's boundary forbids.
+//  2. The line_items ROWS themselves are byte-unchanged after the edit --
+//     Edit only ever reads lines (via hydrateLinesTx, for the fingerprint),
+//     never writes them; UpdateInput has no LineItems field to write with.
+//
+// The demotion itself (validated -> draft on a real header content change)
+// still fires exactly as TestStoreEdit_ValidatedContentChangeDemotes proves
+// for a header-only invoice -- this confirms lines-in-the-picture doesn't
+// perturb that path (the preFP/afterFP comparison now also hashes
+// beforeLines on both sides, so a real header change must still show up as
+// "changed" despite the extra line content folded into both hashes).
+func TestStoreEdit_LinedInvoiceDemotesAndLeavesLinesUntouchedWithNilLineItems(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "INV-02-EDIT-LINES tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-02-EDIT-LINES entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	descA, descB := "Widget", "Gadget"
+	priceA, priceB := "10.00", "20.00"
+	inv, err := store.Create(c, CreateInput{
+		EntityID: entityID, InvoiceNumber: "INV-02-EDIT-LINES", VAT: strPtr("7.00"),
+		LineItems: []LineItemInput{
+			{Description: &descA, UnitPrice: &priceA},
+			{Description: &descB, UnitPrice: &priceB},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(inv.LineItems) != 2 {
+		t.Fatalf("Create: len(LineItems) = %d, want 2", len(inv.LineItems))
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	// Snapshot the line_items rows verbatim before the edit.
+	beforeLines := readLineItemsForTest(t, super, inv.ID)
+	if len(beforeLines) != 2 {
+		t.Fatalf("seeded line_items rows = %d, want 2", len(beforeLines))
+	}
+
+	newVAT := "9.50"
+	got, err := store.Edit(c, inv.ID, UpdateInput{VAT: &newVAT})
+	if err != nil {
+		t.Fatalf("Edit (content change on a lined, validated invoice): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want %q (demoted)", got.Status, StatusDraft)
+	}
+	if got.LineItems != nil {
+		t.Errorf("Edit returned LineItems = %+v, want nil -- Store.Edit's return is scanInvoice-only "+
+			"(subtask 04's LineItems-on-UpdateInput territory, not this one's)", got.LineItems)
+	}
+
+	afterLines := readLineItemsForTest(t, super, inv.ID)
+	if !reflect.DeepEqual(beforeLines, afterLines) {
+		t.Errorf("line_items rows changed by Edit: before %+v, after %+v -- Store.Edit must not write lines", beforeLines, afterLines)
+	}
+}
+
+// readLineItemsForTest reads one invoice's line_items ordered line_no ASC,
+// as the superuser -- a DIFFERENT projection than lineItemColumns (fewer
+// columns, no tenant_id needed) so this stays a read-back check independent
+// of hydrateLinesTx/scanLineItem's own correctness.
+func readLineItemsForTest(t *testing.T, super *pgxpool.Pool, invoiceID string) []LineItem {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT id, line_no, description, quantity::text, unit_price::text, line_total::text, line_tax::text `+
+			`FROM line_items WHERE invoice_id = $1 ORDER BY line_no ASC`, invoiceID,
+	)
+	if err != nil {
+		t.Fatalf("read line_items: %v", err)
+	}
+	defer rows.Close()
+	var out []LineItem
+	for rows.Next() {
+		var li LineItem
+		if err := rows.Scan(&li.ID, &li.LineNo, &li.Description, &li.Quantity, &li.UnitPrice, &li.LineTotal, &li.LineTax); err != nil {
+			t.Fatalf("scan line_items row: %v", err)
+		}
+		out = append(out, li)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate line_items: %v", err)
+	}
+	return out
+}

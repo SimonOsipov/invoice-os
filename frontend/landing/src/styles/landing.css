@@ -21,6 +21,15 @@ body {
    inner row, and (from LAND-01-03) the scroll-spy threshold. */
 html {
   scroll-padding-top: var(--header-h);
+  scroll-behavior: smooth;
+}
+/* Smooth anchor jumps are a nav affordance, not a decoration, so they are dropped
+   wholesale for anyone who has asked the OS for less motion — the jump still lands,
+   it just lands instantly. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 @keyframes scanline {
@@ -62,6 +71,38 @@ html {
 }
 .ios-price:hover {
   border-color: var(--line-3) !important;
+}
+
+/* Top-nav links. Separate from .ios-link because the two want different hovers:
+   .ios-link goes teal -> amber (the prototype's generic link rule, which the footer
+   still uses), whereas the nav is teal throughout — teal on hover, teal when current.
+   `!important` for the same reason .ios-link needs it: the colour is set inline per
+   link, and an inline declaration outranks a class rule without it.
+
+   The active state carries NO transition: the underline appears instantly, so a
+   fading colour would arrive after it and read as two separate events. */
+.ios-nav-link {
+  transition: color 120ms ease-out;
+}
+.ios-nav-link:hover {
+  color: var(--action) !important;
+}
+.ios-nav-link[aria-current] {
+  transition: none;
+}
+
+/* Nav shedding. The six links need ~1240px alongside the lockup and both CTAs;
+   below that the tail is dropped rather than allowed to wrap or collide. The
+   sections themselves stay reachable by scrolling — only the shortcut goes. */
+@media (max-width: 1239.98px) {
+  .ios-nav-shed-1240 {
+    display: none !important;
+  }
+}
+@media (max-width: 1079.98px) {
+  .ios-nav-shed-1080 {
+    display: none !important;
+  }
 }
 
 /* Modules grid on the gradient band: the fill lifts to --on-dark-10 (the design

@@ -11,6 +11,7 @@ const CRUMB_MAP: Record<View, string> = {
   dashboard: 'Overview',
   invoices: 'Invoices',
   validation: 'Validation',
+  rules: 'Validation rules',
   create: 'New invoice',
   detail: 'Invoice detail',
   clients: 'Client portfolio',

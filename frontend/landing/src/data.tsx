@@ -97,7 +97,7 @@ const mg = (paths: string[]) => <Icon paths={paths} size={20} />
 export const MODULES: Module[] = [
   { title: 'Business profile', body: 'Multi-tenant setup, tax details, numbering, currency, branches.', glyph: mg(['M3 21h18', 'M5 21V7l8-4v18', 'M19 21V11l-6-4']) },
   { title: 'User access', body: 'Role-based access, team invites, accountant-client links.', glyph: mg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']) },
-  { title: 'Customer / vendor', body: 'Buyer & seller database, tax IDs, duplicate detection.', glyph: mg(['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z']) },
+  { title: 'Customer / vendor', body: 'Buyer & seller database, TIN & company verification, duplicate detection.', glyph: mg(['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z']) },
   { title: 'Invoice management', body: 'Drafts, line items, credit & debit notes, cancellations.', glyph: mg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8M16 17H8']) },
   { title: 'Validation engine', body: 'Rule-based checks for fields, tax logic, totals, numbering.', glyph: mg(['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']) },
   { title: 'Approval workflow', body: 'Creator, reviewer, approver, rejection notes, status trail.', glyph: mg(['M20 6 9 17l-5-5']) },
@@ -231,12 +231,11 @@ export const FIRM: Audience = {
     { title: 'Multi-client portal', body: 'Every client company in one switchable workspace.', glyph: fg(['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z']) },
     { title: 'Bulk validation queues', body: 'Run and clear validation across clients in one pass.', glyph: fg(['m3 17 2 2 4-4', 'm3 7 2 2 4-4', 'M13 6h8', 'M13 12h8', 'M13 18h8']) },
     { title: 'Per-client readiness scores', body: "See who's audit-ready and who needs attention.", glyph: fg(['m12 14 4-4', 'M3.34 19a10 10 0 1 1 17.32 0']) },
-    { title: 'Partner revenue share', body: 'Earn 25% recurring on every client you bring on.', glyph: fg(['M19 5 5 19', 'M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z', 'M17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z']) },
     { title: 'White-glove client onboarding', body: 'Templates and imports to set up new books fast.', glyph: fg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M19 8v6', 'M22 11h-6']) },
   ],
   stats: [
     { value: '1 login', label: 'Every client company, switched instantly.', color: 'var(--fg-1)' },
-    { value: '25%', label: 'Recurring revenue share per client.', color: 'var(--accent)' },
+    { value: '80%', label: 'Less manual invoice checking per client book.', color: 'var(--accent)' },
   ],
   cta: 'Join the partner program',
 }
@@ -253,7 +252,7 @@ export const INHOUSE: Audience = {
     { title: 'Month-end close reports', body: 'VAT/WHT summaries and exception reports on demand.', glyph: fg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8', 'M16 17H8']) },
   ],
   stats: [
-    { value: '4 roles', label: 'Creator, reviewer, approver, admin.', color: 'var(--fg-1)' },
+    { value: 'No code', label: 'Workflow & rule builder for your own approval chains and checks.', color: 'var(--fg-1)' },
     { value: '1 company', label: 'Full control of your compliance.', color: 'var(--accent)' },
   ],
   cta: 'Book a team demo',
@@ -369,7 +368,7 @@ export const PLANS: Plan[] = [
     metaAnnual: 'PARTNER PROGRAM · UNLIMITED TENANTS',
     cta: 'Talk to sales',
     variant: 'light',
-    features: ['Unlimited invoices & tenants', 'Multi-client partner portal', '25% recurring revenue share', 'SSO, SCIM & audit exports', 'Dedicated compliance manager', 'Country-module roadmap access'],
+    features: ['Unlimited invoices & tenants', 'Multi-client partner portal', 'Partner commercials on request', 'SSO, SCIM & audit exports', 'Dedicated compliance manager', 'Country-module roadmap access'],
   },
 ]
 

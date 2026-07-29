@@ -21,8 +21,10 @@ import { resolveTarget } from '../targets'
 const LANDING_URL = resolveTarget('LANDING_URL')
 
 // The six nav targets, in DOM order. Mirrors NAV_LINKS in
-// frontend/landing/src/components/Nav.tsx.
-const NAV_HREFS = ['#how', '#modules', '#compliance', '#accountants', '#developers', '#pricing'] as const
+// frontend/landing/src/components/Nav.tsx. `#how` is deliberately NOT here: the
+// How-it-works section still exists on the page, it just has no nav link — which
+// makes it a second non-nav section E8 could park in, alongside `#demo`.
+const NAV_HREFS = ['#problem', '#modules', '#compliance', '#accountants', '#developers', '#pricing'] as const
 
 // Sub-pixel rects: a post-jump section top measures e.g. 64.77 or 65.16 against a
 // 65px header. Every geometry comparison carries this slack. It is NOT a header

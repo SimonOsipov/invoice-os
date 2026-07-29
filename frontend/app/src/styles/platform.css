@@ -37,6 +37,26 @@ body {
     transform: none;
   }
 }
+/* Right-hand drawer (Rules). Same pair the ops/support consoles use for theirs —
+   the scrim fades, the panel slides in from its own edge. */
+@keyframes pfFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pfDrawer {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
 
 .pf-nav {
   transition: background 120ms ease-out, color 120ms ease-out;
@@ -118,6 +138,26 @@ body {
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
+}
+/* Rules screen. The toggle appears on custom rules only — inherited rows draw a
+   lock instead, so there is no disabled variant of this control to style. */
+.pf-toggle {
+  transition: background 140ms ease-out;
+}
+.pf-knob {
+  transition: transform 140ms ease-out;
+}
+pre.pf-json {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--slate-200);
+  background: var(--surface);
+  border-radius: var(--radius-input);
+  padding: 14px 16px;
+  overflow-x: auto;
+  white-space: pre;
 }
 
 /* ------------------------------------------------------------------
@@ -209,6 +249,15 @@ body {
   .pf-health > * {
     border-left: 0 !important;
     border-top: 1px solid var(--line-1);
+  }
+  /* The rules rail is a fixed 244px beside a table that already has a 940px
+     minimum; below this width the pair no longer fits, so the rail stacks above
+     the table (which keeps its own horizontal scroll). */
+  .pf-rules-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .pf-drawer {
+    width: 100vw !important;
   }
 }
 

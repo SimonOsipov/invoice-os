@@ -12,7 +12,9 @@
 // The order is the design, and it is fixed:
 //
 //	Store.Get(id)                      tx #1, RLS-scoped, HYDRATES line items
-//	MBSPayload + contentFingerprint    pure
+//	MBSPayload + contentFingerprint    pure -- BOTH consume those lines
+//	                                   (INVED-01-02: lines are fingerprint
+//	                                   content, not just payload)
 //	Validator.Validate                 the HTTP call to 04, NO tx open
 //	Store.ApplyValidation              tx #2: FOR UPDATE, status re-check,
 //	                                   fingerprint re-check, write, transition,

@@ -259,11 +259,14 @@ var (
 	// run ([toctou-staleness]). The write tx cannot span the HTTP call to 04
 	// (it would pin a pool connection and hold a row lock under unbounded
 	// remote latency), so the gate evaluates with no tx open, then re-checks
-	// the LOCKED row's contentFingerprint against the one taken when the
-	// payload was built. A mismatch means the violations describe content that
-	// no longer exists, and stamping those as validated is the same class of
-	// lie [validated-is-earned] forbids. The status re-check alone does NOT
-	// catch this — status stays draft across a Store.Update.
+	// the LOCKED row's contentFingerprint -- over the row AND its line items,
+	// which INVED-01-02 made content too, so ApplyValidation re-reads the
+	// lines inside the same tx (scanInvoice leaves them nil) -- against the
+	// one taken when the payload was built. A mismatch means the violations
+	// describe content that no longer exists, and stamping those as validated
+	// is the same class of lie [validated-is-earned] forbids. The status
+	// re-check alone does NOT catch this — status stays draft across a
+	// Store.Update.
 	ErrNotDraft        = errors.New("invoice: not draft")
 	ErrStaleValidation = errors.New("invoice: stale validation")
 

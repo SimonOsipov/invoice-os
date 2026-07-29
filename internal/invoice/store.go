@@ -683,9 +683,17 @@ func (s *Store) Edit(ctx context.Context, id string, in UpdateInput) (Invoice, e
 		}
 
 		// 6. DB-authoritative no-op check -- nothing to audit, demote, or
-		// record history for. beforeLines is REUSED rather than re-read: Edit
-		// cannot change lines yet, so a second query would return the same rows.
-		// (INVED-01-04 replaces this argument with replaceLinesTx's output.)
+		// record history for. beforeLines is REUSED rather than re-read
+		// because Edit cannot change lines yet, so a second query would return
+		// the identical rows.
+		//
+		// INVED-01-04 MUST replace this second argument with the lines as they
+		// stand AFTER replaceLinesTx. Leaving it as beforeLines once Edit can
+		// write lines is a SILENT bug, not a compile error: a lines-only edit
+		// would hash both sides over the pre-edit lines, come out equal, take
+		// this no-op path, and return with no audit row, no demotion and no
+		// history -- an edit that visibly changed the invoice reported as a
+		// no-op.
 		if contentFingerprint(after, beforeLines) == preFP {
 			inv = after
 			return nil

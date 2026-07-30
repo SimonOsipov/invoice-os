@@ -210,17 +210,20 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   await importBtn.click()
 
   // E2E-06 (redesigned per D5, FLOW-06's non-bar half): an honest in-flight
-  // indicator appears, and no invented PARSE_LABELS stage list renders on the
-  // import path. Deliberately does NOT assert the determinate bar -- §7 point 1:
+  // indicator appears. Deliberately does NOT assert the determinate bar -- §7 point 1:
   // App.tsx seeds uploadPhase total:0, which uploadPercent maps to null (the
   // indeterminate spinner), and IMPAPI-08 makes zero progress events legal, so a
   // real N% bar is not deterministically observable on a live run. Hosted on this
   // 500-invoice test specifically because the window between click and response is
   // seconds here (milliseconds on the small mixed fixture below, which is why that
   // test does not also assert this).
+  //
+  // The companion "no invented PARSE_LABELS stage list renders here" absence
+  // assertions are GONE, not repointed (INVCR-01-01, plan D-01b): PARSE_LABELS was
+  // deleted with the document mock, so those two strings now exist in no code path at
+  // all and the assertions could never fail again. INVCR-01-05 introduces the honest
+  // server-stage list and owns asserting it positively.
   await expect(page.getByText('Working…', { exact: true })).toBeVisible({ timeout: 60_000 })
-  await expect(page.getByText('Scanning line rows', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Detecting delimiter & encoding', { exact: true })).toHaveCount(0)
 
   await importResp
   const wireMs = Date.now() - importT0
@@ -374,87 +377,59 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('E2E-10/E2E-08 (FLOW-07, [scanline-stays-on-doc-path]/F4): the wizard header flips between the 3-step import path and the 5-step document path, and the single-document PDF path still runs unchanged', async ({
+// E2E-10 (FLOW-07, [wizard-steps-split]): the header path resolver, re-anchored. The
+// sample-PDF click that used to flip the strip is deleted with the mock, so manual entry
+// ('Skip — enter manually' -> skipUpload -> createStep 'form') is now the only way to
+// reach a DOCUMENT_ONLY_STEP and is therefore the oracle. No SANDBOX toggle: with the
+// document card gone, LIVE and SANDBOX render an identical first step.
+//
+// E2E-08 is deliberately NOT replaced -- its subject (the sample-PDF parse -> form ->
+// validate -> results run) is deleted by this subtask, so nothing is left to guard.
+test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-step import path on entry and the 5-step document path once manual entry is chosen', async ({
   page,
 }) => {
   const errors = collectErrors(page)
 
   await signInFirm(page)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  // [import-upload-unify] the document-preview card (sample PDF/JPG parse) is now
-  // sandbox-gated -- switch environments once, up front. It stays on for the rest
-  // of this test: ctx.sandbox lives on Workspace state, untouched by openCreate()
-  // (the "New invoice" CTA re-clicked at line ~396 below).
-  await page.getByRole('button', { name: 'SANDBOX' }).click()
-
-  const newInvoiceBtn = page.locator('header').getByRole('button', { name: 'New invoice' })
-  await newInvoiceBtn.click()
-
-  // E2E-10 (discharges J1's deferred layout half; confirming oracle for FLOW-07).
-  // Bare 'upload' step with nothing chosen renders the 3-step IMPORT_STEPS strip
-  // (Import/Map/Report) -- the header's path resolver (wizardHeader) is unaffected
-  // by sandbox; only the sample file's clickability needed the toggle above.
-  await expect(page.getByText('Report', { exact: true }), '3-step IMPORT_STEPS strip expected with nothing chosen').toBeVisible()
+  // Leg 1 -- createStep 'upload' is NOT in DOCUMENT_ONLY_STEPS, so IMPORT_STEPS renders.
+  // All THREE document-only labels are checked absent (the old :398 checked one of three).
+  await expect(page.getByText('Report', { exact: true }), '3-step IMPORT_STEPS strip expected on entry').toBeVisible({ timeout: 30_000 })
   await expect(page.getByText('Build', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Validate', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Approve', { exact: true })).toHaveCount(0)
 
-  // Selecting the PDF sample flips to the 5-step WIZARD_STEPS strip
-  // (Import/Map/Build/Validate/Approve).
-  await page.getByText('lagos-freight-INV-0482.pdf', { exact: true }).click()
-  await expect(page.getByText('Build', { exact: true }), '5-step WIZARD_STEPS strip expected once a sample file is picked').toBeVisible()
+  // Leg 2 -- 'form' IS in DOCUMENT_ONLY_STEPS, so wizardHeader must return WIZARD_STEPS
+  // at STAGE_OF.form === 2, and the import-only 'Report' label must disappear.
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByText('Build', { exact: true }), '5-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
+  await expect(page.getByText('Validate', { exact: true })).toBeVisible()
+  await expect(page.getByText('Approve', { exact: true })).toBeVisible()
   await expect(page.getByText('Report', { exact: true })).toHaveCount(0)
 
-  // Also choosing a spreadsheet file flips back to the 3-step strip -- a chosen
-  // import file always wins over a stale sample selection (wizardHeader's FLOW-13
-  // tie-break, lib/importFlow.ts).
-  await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
-    .setInputFiles({ name: 'e2e10.csv', mimeType: 'text/csv', buffer: Buffer.from('Invoice No,Issue Date\nX,2026-01-01', 'utf8') })
-  await expect(page.getByText('Report', { exact: true }), 'a chosen import file must win the strip back to 3 steps').toBeVisible()
-  await expect(page.getByText('Build', { exact: true })).toHaveCount(0)
-
-  // Reset to a clean wizard before driving E2E-08 -- the header's "New invoice" CTA
-  // (openCreate) unconditionally clears uploadFile/importFile/mapping/etc, so the
-  // probe above's stray spreadsheet selection cannot leak into the document path
-  // below (D7: no file upload is involved in the document path at all).
-  await newInvoiceBtn.click()
-
-  // E2E-08 ([scanline-stays-on-doc-path] / F4 regression guard): the fenced
-  // single-document path (now a sandbox-only preview, [import-upload-unify]) must
-  // still run byte-for-byte the same upload -> parsing -> form -> validate ->
-  // results flow M4-08-06 could only prove unchanged by git-diff and code review.
-  // This is the only REAL oracle for that claim.
-  await page.getByText('lagos-freight-INV-0482.pdf', { exact: true }).click()
-  await page.getByRole('button', { name: 'Upload & parse' }).click()
-
-  await expect(page.getByText('Parsing lagos-freight-INV-0482.pdf…', { exact: true })).toBeVisible()
-  await expect(page.getByText(/\d+% PARSED/)).toBeVisible()
-
-  // Auto-advances to 'form' (~1.3s) -- wait for the destination state (the
-  // pre-fill banner), never an intermediate scanline frame.
-  await expect(
-    page.getByText('Pre-filled from lagos-freight-INV-0482.pdf — review and edit below.', { exact: true }),
-  ).toBeVisible({ timeout: 15_000 })
-
-  await page.getByRole('button', { name: 'Run validation' }).click()
-  await expect(page.getByText('Validating against MBS rules…', { exact: true })).toBeVisible()
-  await expect(page.getByText(/\d+% COMPLETE/)).toBeVisible()
-
-  // Auto-advances to 'results' (~1.8s) -- one of the three verdict literals plus a
-  // /16 score, whichever this deterministic mock draft resolves to (which one is
-  // not the point; that a verdict renders at all, unchanged, is).
-  await expect(page.getByText(/Not compliant yet|Review warnings|Compliant — ready to approve/)).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText(/\d+\/16/)).toBeVisible()
+  // Not just the strip: the build step's BODY rendered underneath it. A resolver that
+  // returned the right labels over a blank step router would otherwise pass. Same
+  // smallest-match text idiom as :465/:529's 'Import invoices ·'; the header CTA's name
+  // is exactly 'New invoice' with no '·', so there is no collision.
+  await expect(page.getByText('New invoice ·', { exact: false }), 'the build step body rendered').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// [import-upload-unify] LIVE-mode guards for the unified upload surface. Three things
-// this change made true that nothing else asserts: the mock document card is
-// sandbox-ONLY (it used to render unconditionally), manual entry survives OUTSIDE that
-// gate (it used to live in the document card's sibling rail -- gating it along with the
-// card would have deleted the only from-scratch creation path in production), and the
-// dropzone accepts a real drop (setInputFiles everywhere else bypasses onDrop entirely).
-test('[import-upload-unify] LIVE: document preview gated, manual entry survives, dropzone accepts a drop', async ({ page }) => {
+// [import-upload-unify] LIVE-mode guards for the unified upload surface. Two things
+// this change made true that nothing else asserts: manual entry survives OUTSIDE the
+// import card (it used to live in the mock document card's sibling rail -- gating it
+// along with that card would have deleted the only from-scratch creation path in
+// production), and the dropzone accepts a real drop (setInputFiles everywhere else
+// bypasses onDrop entirely).
+//
+// This test used to carry a third claim -- that the mock document card was sandbox-ONLY
+// rather than unconditional. INVCR-01-01 deleted that card outright, so its three
+// absence assertions became permanently vacuous (the strings exist in no code path) and
+// were removed rather than repointed, per plan D-01b. What remains is the positive fact
+// that survives: there is exactly ONE import surface here, and it is real.
+test('[import-upload-unify] LIVE: one real import surface, manual entry survives, dropzone accepts a drop', async ({ page }) => {
   const errors = collectErrors(page)
 
   await signInFirm(page)
@@ -463,11 +438,6 @@ test('[import-upload-unify] LIVE: document preview gated, manual entry survives,
   // The unified card is the only import surface in LIVE. Entity is now static header
   // text, not a <select> -- this doubles as the assertion that it still renders.
   await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
-
-  // Sandbox-gated: neither the divider, the card, nor its samples may appear in LIVE.
-  await expect(page.getByText('Or import a single document', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Import a document ·', { exact: false })).toHaveCount(0)
-  await expect(page.getByText('lagos-freight-INV-0482.pdf', { exact: true })).toHaveCount(0)
 
   // Wait for the zone itself, not just the card. The dropzone no longer depends on the
   // entities fetch at all -- reading columns needs only the file ([inhouse-can-start]) --

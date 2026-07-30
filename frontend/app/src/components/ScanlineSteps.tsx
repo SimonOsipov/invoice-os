@@ -1,6 +1,10 @@
-// Shared "scanline" progress mock used by both the upload-parsing and MBS-validation
-// steps of the create flow — structurally identical in the prototype (Platform.dc.html
-// ~L450-467 for parsing, ~L530-547 for validating), just different label lists / timings.
+// The "scanline" progress mock behind the create flow's MBS-validation step
+// (Platform.dc.html ~L530-547). It was shared with an upload-parsing step of identical
+// structure until INVCR-01-01 deleted that fake document parse, so there is exactly ONE
+// caller left (CreateFlow's `validating` branch) and the labels/timings props no longer
+// serve a second label list. Kept generic rather than inlined because this whole
+// client-side validation tail is itself deleted in INVCR-01-03, once POST /v1/invoices
+// makes the server the only source of verdicts ([server-truth]).
 
 import type { ReactNode } from 'react'
 import { tickGlyph13 } from '../glyphs'

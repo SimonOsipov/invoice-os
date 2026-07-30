@@ -4,15 +4,13 @@
 
 import { DOC_TYPE_DEFS } from '../data'
 import { amount, fmt } from '../lib/format'
-import { plusGlyph, shieldGlyph, tickGlyph13 } from '../glyphs'
+import { plusGlyph, shieldGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 const WHT_RE = /servic|consult|support|warehous|leasing/i
 
 export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
-  const { active, draft, uploadFile } = ctx
-  const hasUploadFile = !!uploadFile
-  const selFileName = uploadFile === 'pdf' ? 'lagos-freight-INV-0482.pdf' : uploadFile === 'img' ? 'scan-invoice-0482.jpg' : ''
+  const { active, draft } = ctx
 
   const sub = amount(draft.items)
   const vat = sub * 0.075
@@ -22,12 +20,6 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div className="pf-create-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        {hasUploadFile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 20px', background: 'var(--action-tint)', borderBottom: '1px solid var(--line-1)' }}>
-            <span style={{ color: 'var(--action)', display: 'inline-flex' }}>{tickGlyph13}</span>
-            <span style={{ fontSize: 12.5, color: 'var(--action)', fontWeight: 500 }}>Pre-filled from {selFileName} — review and edit below.</span>
-          </div>
-        )}
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span className="card-title">New invoice · {active.short}</span>
           <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>

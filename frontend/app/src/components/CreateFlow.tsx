@@ -1,9 +1,9 @@
 // Create / validate flow orchestrator — the wizard header + a step router keyed on
-// `ctx.createStep`, serving two paths: a single document (upload → parsing → form →
-// validating → results) and a server-backed spreadsheet import (upload → mapping →
-// report). Ported from Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
+// `ctx.createStep`, serving two paths: manual entry (form → validating → results) and a
+// server-backed spreadsheet import (upload → mapping → report). Ported from
+// Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
 
-import { VAL_LABELS, PARSE_LABELS, SAMPLE_FILES } from '../data'
+import { VAL_LABELS } from '../data'
 import { wizardHeader } from '../lib/importFlow'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
@@ -13,15 +13,16 @@ import { CreateReport } from './CreateReport'
 import { ScanlineSteps } from './ScanlineSteps'
 import type { PlatformCtx } from '../types'
 
-// The wizard now serves TWO paths with different step lists — the 5-step single-document
-// wizard and the 3-step Import/Map/Report import — so the header is resolved by
-// wizardHeader (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which
-// has no concept of which path the user is on. STAGE_OF moved there with it: one table,
-// one owner, no second copy to drift.
+// The wizard serves TWO paths with different step lists — the 5-step manual-entry wizard
+// and the 3-step Import/Map/Report import — so the header is resolved by wizardHeader
+// (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which has no concept
+// of which path the user is on. STAGE_OF moved there with it: one table, one owner, no
+// second copy to drift. wizardHeader takes the step ALONE: the file arguments existed
+// only to disambiguate 'upload' between the two paths, and with the document mock deleted
+// (INVCR-01-01) 'upload' belongs unambiguously to the import path.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
-  const { createStep, draft, uploadFile, importFile, valIdx, parseIdx } = ctx
-  const { steps, stageIndex } = wizardHeader(createStep, uploadFile, importFile)
-  const selFileName = uploadFile ? SAMPLE_FILES.find((f) => f.id === uploadFile)?.name || '' : ''
+  const { createStep, draft, valIdx } = ctx
+  const { steps, stageIndex } = wizardHeader(createStep)
   const valCount = Math.min(valIdx, VAL_LABELS.length)
 
   return (
@@ -48,18 +49,6 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
       </div>
 
       {createStep === 'upload' && <CreateUpload ctx={ctx} />}
-
-      {createStep === 'parsing' && (
-        <ScanlineSteps
-          title={`Parsing ${selFileName}…`}
-          subtitle="READING FILE · DETECTING COLUMNS"
-          labels={PARSE_LABELS}
-          idx={parseIdx}
-          unitLabel="PARSED"
-          transformMs={180}
-          widthMs={170}
-        />
-      )}
 
       {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
 

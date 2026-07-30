@@ -140,7 +140,7 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflow
 // original assignment (M4-08-05), because wizardHeader's report->2 branch does not
 // compile against this union and lib/importFlow.ts's STAGE_OF is a total Record over it.
 // -05 still owns the CreateReport render branch; this commit adds only the member.
-export type CreateStep = 'upload' | 'parsing' | 'mapping' | 'form' | 'validating' | 'results' | 'report'
+export type CreateStep = 'upload' | 'mapping' | 'form' | 'validating' | 'results' | 'report'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.
@@ -204,7 +204,6 @@ export type PlatformCtx = {
   draft: Draft
   createStep: CreateStep
   validation: ValidationResult | null
-  uploadFile: string | null
   mapping: Mapping | null
   armedField: string | null
   dragField: string | null
@@ -217,7 +216,6 @@ export type PlatformCtx = {
   connectors: ConnectorsState
   connectorMappings: ConnectorMappings
   valIdx: number
-  parseIdx: number
 
   // --- Rules screen ---------------------------------------------------------
   // The ACTIVE client's custom rules, already resolved out of the per-client store
@@ -276,8 +274,6 @@ export type PlatformCtx = {
   runValidation: () => void
   applyFix: (patch: Partial<Draft>) => void
   backToEdit: () => void
-  selectFile: (id: string) => void
-  parseFile: () => void
   armField: (k: string) => void
   setDrag: (k: string) => void
   endDrag: () => void

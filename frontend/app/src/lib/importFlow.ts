@@ -27,7 +27,6 @@ export const IMPORT_STEPS: [string, string][] = [
 // wizardHeader routes 'report' to the import path unconditionally.
 export const STAGE_OF: Record<CreateStep, number> = {
   upload: 0,
-  parsing: 0,
   mapping: 1,
   form: 2,
   validating: 3,
@@ -38,26 +37,22 @@ export const STAGE_OF: Record<CreateStep, number> = {
 export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, mapping: 1, report: 2 }
 
 // The header-path resolver ([wizard-steps-split], debate finding J1). Exact rule:
-// path = 'document' iff createStep in {parsing, form, validating, results} OR
-// (createStep === 'upload' AND uploadFile !== null AND importFile === null);
-// otherwise 'import'. Total over CreateStep via `?? 0` — a step added to the union
-// without an IMPORT_STAGE_OF entry falls to the import path at index 0 rather than
-// ever returning undefined/NaN (FLOW-14).
-const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['parsing', 'form', 'validating', 'results']
+// path = 'document' iff createStep in {form, validating, results}; otherwise 'import'.
+// Total over CreateStep via `?? 0` — a step added to the union without an
+// IMPORT_STAGE_OF entry falls to the import path at index 0 rather than ever
+// returning undefined/NaN (FLOW-14).
+//
+// KNOWN AND TRANSIENT (INVCR-01-01, plan D-01d) — do NOT "fix" this here. Deleting the
+// sandbox PDF/JPG document mock took away the only writer of the old `uploadFile` slot,
+// so 'upload' no longer has a document-path tie-break and nothing can reach WIZARD_STEPS
+// at index 0 or 1 any more: the surviving manual path enters at 'form' (stageIndex 2), so
+// the 5-step strip permanently paints steps 1 (Import) and 2 (Map) as un-reached.
+// INVCR-01-04 replaces that strip outright with the two-stage `Enter · Review` model and
+// resolves it. A workaround here would only have to be unpicked by that subtask.
+const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form', 'validating', 'results']
 
-export function wizardHeader(
-  createStep: CreateStep,
-  uploadFile: string | null,
-  importFile: File | null,
-): { steps: [string, string][]; stageIndex: number } {
-  // 'upload' is the ONE step both paths share, so it is the only one that needs the
-  // two file slots to disambiguate: a chosen import file always wins over a stale
-  // sample selection left behind by an earlier pass through the picker (FLOW-13).
-  const isDocument =
-    DOCUMENT_ONLY_STEPS.includes(createStep) ||
-    (createStep === 'upload' && uploadFile !== null && importFile === null)
-
-  return isDocument
+export function wizardHeader(createStep: CreateStep): { steps: [string, string][]; stageIndex: number } {
+  return DOCUMENT_ONLY_STEPS.includes(createStep)
     ? { steps: WIZARD_STEPS, stageIndex: STAGE_OF[createStep] ?? 0 }
     : { steps: IMPORT_STEPS, stageIndex: IMPORT_STAGE_OF[createStep] ?? 0 }
 }

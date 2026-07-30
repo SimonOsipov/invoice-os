@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
@@ -164,7 +163,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>('form')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
-  const [uploadFile, setUploadFile] = useState<string | null>(null)
   const [mapping, setMapping] = useState<Mapping | null>(null)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
@@ -187,7 +185,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
   const [valIdx, setValIdx] = useState(0)
-  const [parseIdx, setParseIdx] = useState(0)
   // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
   // RulesView so a client's set survives navigating away and back, and so switching
   // company genuinely swaps the set instead of carrying one client's rules over to
@@ -233,14 +230,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   const valTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const valDone = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const parseTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const parseDone = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const clearVal = () => {
     if (valTimer.current) { clearInterval(valTimer.current); valTimer.current = null }
     if (valDone.current) { clearTimeout(valDone.current); valDone.current = null }
-    if (parseTimer.current) { clearInterval(parseTimer.current); parseTimer.current = null }
-    if (parseDone.current) { clearTimeout(parseDone.current); parseDone.current = null }
   }
 
   useEffect(() => clearVal, [])
@@ -297,7 +290,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setCreateStep('upload')
     setDraft(defaultDraft(active))
     setValidation(null)
-    setUploadFile(null)
     setMapping(null)
     setSwitcherOpen(false)
     resetImport()
@@ -372,10 +364,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setCreateStep('form')
   }
 
-  function selectFile(id: string) {
-    setUploadFile(id)
-  }
-
   // Stores whatever the input yielded — the extension rule lives in canReadColumns
   // alone, so there is exactly one gate that can be right or wrong, not two that can
   // disagree. A rejected file still lands here and the Import panel explains why.
@@ -435,29 +423,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       .finally(() => {
         reqInFlight.current = false
       })
-  }
-
-  function parseFile() {
-    if (!uploadFile) return
-    clearVal()
-    const TOTAL = PARSE_LABELS.length
-    setCreateStep('parsing')
-    setParseIdx(0)
-    parseTimer.current = setInterval(() => {
-      setParseIdx((prev) => {
-        const next = prev + 1
-        if (next >= TOTAL) {
-          if (parseTimer.current) clearInterval(parseTimer.current)
-          parseTimer.current = null
-          // Sample documents have no columns to map, so they go straight to the
-          // single-invoice form. Spreadsheets take the server-backed import path
-          // (Import -> Map -> Report), which never routes through here.
-          parseDone.current = setTimeout(() => setCreateStep('form'), 320)
-          return TOTAL
-        }
-        return next
-      })
-    }, 200)
   }
 
   function armField(k: string) {
@@ -521,7 +486,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   function skipUpload() {
     clearVal()
     setCreateStep('form')
-    setUploadFile(null)
     setMapping(null)
   }
 
@@ -659,7 +623,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     draft,
     createStep,
     validation,
-    uploadFile,
     mapping,
     armedField,
     dragField,
@@ -672,7 +635,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     connectors,
     connectorMappings,
     valIdx,
-    parseIdx,
     customRules,
     openRuleKey,
     policies,
@@ -695,8 +657,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     runValidation,
     applyFix,
     backToEdit,
-    selectFile,
-    parseFile,
     armField,
     setDrag,
     endDrag,

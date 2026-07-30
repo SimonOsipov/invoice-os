@@ -168,20 +168,6 @@ export const CANON: CanonField[] = [
   { key: 'line_unit_price' },
 ]
 
-export type SampleFileDef = {
-  id: string
-  ext: string
-  name: string
-  meta: string
-  iconBg: string
-  iconColor: string
-}
-
-export const SAMPLE_FILES: SampleFileDef[] = [
-  { id: 'pdf', ext: 'PDF', name: 'lagos-freight-INV-0482.pdf', meta: '1 PAGE · 142 KB', iconBg: 'var(--status-red-bg)', iconColor: 'var(--status-red-text)' },
-  { id: 'img', ext: 'JPG', name: 'scan-invoice-0482.jpg', meta: 'IMAGE · 2.1 MB', iconBg: 'var(--action-tint)', iconColor: 'var(--action)' },
-]
-
 export const VAL_LABELS: string[] = [
   'Buyer TIN format',
   'Buyer billing address',
@@ -199,16 +185,6 @@ export const VAL_LABELS: string[] = [
   'Digital-signature slot reserved',
   'QR payload generated',
   'Document schema · UBL 2.1',
-]
-
-// The scanline now reads the file and detects columns, then hands off to Map —
-// "Mapping to invoice fields" stopped being an animation and became a real step.
-export const PARSE_LABELS: string[] = [
-  'Reading file',
-  'Detecting delimiter & encoding',
-  'Reading header row',
-  'Scanning line rows',
-  'Detecting columns',
 ]
 
 export const DOC_TYPE_DEFS: [string, string, string][] = [

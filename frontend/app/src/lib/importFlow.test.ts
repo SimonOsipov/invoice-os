@@ -18,11 +18,9 @@
 //   FLOW-08  previewColumns: duplicate headers kept as distinct entries             (AC2)
 //   FLOW-09  isMappableColumn: '' blocked, whitespace-only header stays mappable    (AC2)
 //   FLOW-10  columnLetter: A..Z, AA, AB, ... past column 26                         (AC2)
-//   FLOW-11  wizardHeader document set: parsing/form/validating/results             (AC6)
-//   FLOW-12  wizardHeader import set: mapping/report/upload(with importFile)        (AC2)
-//   FLOW-13  wizardHeader 'upload' disambiguation, importFile wins over stale       (AC6)
-//            uploadFile sample selection
-//   FLOW-14  wizardHeader totality: every CreateStep literal, never undefined/NaN   (AC6)
+//   FLOW-11  wizardHeader document set: form/validating/results                      (AC6)
+//   FLOW-12  wizardHeader import set: upload/mapping/report — one path per CreateStep (AC2,6)
+//   FLOW-14  wizardHeader totality: every CreateStep literal, never undefined/NaN     (AC6)
 //
 // Every spec below currently fails because wizardHeader/hasImportableExtension/
 // canReadColumns/canStartImport/isMappableColumn/columnLetter/previewColumns's stub
@@ -191,59 +189,59 @@ describe('columnLetter (FLOW-10)', () => {
   })
 })
 
-describe('wizardHeader (FLOW-11..14)', () => {
-  const importFile = new File([], 'data.csv')
-
-  // FLOW-11 — document set. Falsification: an impl routing every step to the 3-step
-  // import list, silently rewriting the untouched single-document wizard header.
+describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
   it('routes the single-document steps to WIZARD_STEPS at their existing stage index', () => {
-    expect(wizardHeader('parsing', null, null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
-    expect(wizardHeader('form', null, null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 2 })
-    expect(wizardHeader('validating', null, null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 3 })
-    expect(wizardHeader('results', null, null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 4 })
+    expect(wizardHeader('form')).toEqual({ steps: WIZARD_STEPS, stageIndex: 2 })
+    expect(wizardHeader('validating')).toEqual({ steps: WIZARD_STEPS, stageIndex: 3 })
+    expect(wizardHeader('results')).toEqual({ steps: WIZARD_STEPS, stageIndex: 4 })
     expect(WIZARD_STEPS.length).toBe(5)
   })
 
-  // FLOW-12 — import set. Falsification: an impl keyed on the old flat STAGE_OF — it
-  // maps mapping->1 by coincidence but returns the 5-step list and undefined for 'report'.
-  it('routes mapping/report/upload(with an import file) to the 3-step import list', () => {
-    expect(wizardHeader('mapping', null, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 1 })
-    expect(wizardHeader('report', null, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 2 })
-    expect(wizardHeader('upload', null, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+  // FLOW-12 absorbs FLOW-13's one surviving assertion (bare 'upload' -> IMPORT_STEPS@0)
+  // now that there is no second file arg left to disambiguate with.
+  it('routes upload/mapping/report to the 3-step import list', () => {
+    expect(wizardHeader('upload')).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+    expect(wizardHeader('mapping')).toEqual({ steps: IMPORT_STEPS, stageIndex: 1 })
+    expect(wizardHeader('report')).toEqual({ steps: IMPORT_STEPS, stageIndex: 2 })
     expect(IMPORT_STEPS.length).toBe(3)
   })
 
-  // FLOW-13 — 'upload' disambiguation. Falsification: an impl defaulting bare 'upload'
-  // to the document path (case 1); an impl letting a stale uploadFile sample selection
-  // override a chosen import file (case 3).
-  it('disambiguates the shared upload step; a chosen import file always wins', () => {
-    expect(wizardHeader('upload', null, null)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
-    expect(wizardHeader('upload', 'pdf', null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
-    expect(wizardHeader('upload', 'pdf', importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
-    expect(wizardHeader('upload', null, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
-  })
-
-  // FLOW-14 — totality. The `?? 0` fallback guards steps added to the union without
-  // an IMPORT_STAGE_OF entry, so the header always has an active step. Falsification:
-  // an impl with no fallback returns undefined and renders with none.
   it('is total over every CreateStep literal — stageIndex is always a valid index', () => {
-    const ALL_STEPS: CreateStep[] = ['upload', 'parsing', 'mapping', 'form', 'validating', 'results', 'report']
+    const ALL_STEPS: CreateStep[] = ['upload', 'mapping', 'form', 'validating', 'results', 'report']
     ALL_STEPS.forEach((step) => {
-      const { steps, stageIndex } = wizardHeader(step, null, null)
+      const { steps, stageIndex } = wizardHeader(step)
       expect(steps.length).toBeGreaterThanOrEqual(3)
       expect(Number.isInteger(stageIndex)).toBe(true)
       expect(stageIndex).toBeGreaterThanOrEqual(0)
       expect(stageIndex).toBeLessThan(steps.length)
     })
   })
+
+  // AC-2 regression guard (QA addition, not in the architect's FLOW map): pins the
+  // 1-arg SIGNATURE itself, not just return values. Verified against a local stub both
+  // directions before landing this: a 2-arg call against a 1-arg fn is a real TS2554
+  // the directive suppresses; a bare 1-arg call needs no directive. If wizardHeader
+  // ever regresses to 2/3-arg, @ts-expect-error goes unused (TS2578) and typecheck
+  // fails on THIS line, not silently elsewhere.
+  it('AC-2: wizardHeader is 1-arg only under noUnusedParameters — a stale 2-arg call does not compile', () => {
+    // @ts-expect-error — regression guard: the story's original AC#2 wording specified a
+    // 2-arg signature, which does not compile once uploadFile/importFile are dropped (D-01a).
+    const twoArg = wizardHeader('upload', null)
+    expect(twoArg).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+  })
 })
 
-// INVCR-01-01 (task-277, RALPH Stage 2.5 Mode A): the ONE genuinely RED-first spec in
-// that subtask's deletion of the sandbox PDF/JPG document mock. On today's code
-// STAGE_OF still carries a runtime `parsing: 0` entry (importFlow.ts:30) — this fails
-// now, and only the subtask's deletion of 'parsing' from CreateStep (and STAGE_OF)
-// makes it pass. Every other importFlow.test.ts change task-277 makes is a green→green
-// narrowing of a table that already passes; do not mistake those for red-first specs.
+// INVCR-01-01 (task-277): the ONE genuinely RED-first spec in that subtask's deletion of
+// the sandbox PDF/JPG document mock. Authored against the pre-deletion code, where
+// STAGE_OF still carried a runtime `parsing: 0` entry, and observed failing for the right
+// reason first (`expected [ Array(7) ] to not include 'parsing'`); only deleting 'parsing'
+// from CreateStep and STAGE_OF turned it green. Every other importFlow.test.ts change
+// task-277 made was a green→green narrowing of a table that already passed — do not
+// mistake those for red-first specs.
+//
+// It stays as a REGRESSION guard: the runtime key set, not just the type. 'parsing' left
+// the CreateStep union, so a reintroduced literal would be a compile error — but STAGE_OF
+// is a plain object and an extra runtime key would otherwise slip in silently.
 describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
   it("has no 'parsing' stage left in the runtime step tables", () => {
     expect(Object.keys(STAGE_OF)).not.toContain('parsing')
@@ -251,54 +249,26 @@ describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
   })
 })
 
-// QA (M4-08-04): adversarial/edge coverage beyond the architect's FLOW-01..14
+// QA (M4-08-04): adversarial/edge coverage beyond the architect's FLOW-01..12,14
 // specs. New describe blocks only — nothing above this point is modified.
 describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
-  const anImportFile = new File([], 'sheet.xlsx')
-
-  // Literal expected values, not re-derived from STAGE_OF/IMPORT_STAGE_OF — a
-  // table that mirrors the implementation's own table would pass against a
-  // wrong implementation as long as both drifted the same way. 'upload' is the
-  // only step whose result depends on the file args (wizardHeader's own rule);
-  // every other step must be FILE-STATE INDEPENDENT, asserted explicitly below.
-  const fileStates: Array<[string | null, File | null, string]> = [
-    [null, null, 'no files'],
-    ['pdf', null, 'sample selected only'],
-    [null, anImportFile, 'import file only'],
-    ['pdf', anImportFile, 'both — import file wins'],
-  ]
-
-  it('routes document-only steps to WIZARD_STEPS at their fixed index, regardless of file state', () => {
-    const expected: Array<[CreateStep, number]> = [
-      ['parsing', 0],
-      ['form', 2],
-      ['validating', 3],
-      ['results', 4],
-    ]
+  // Literal expected values, not re-derived from STAGE_OF/IMPORT_STAGE_OF. The 1-arg
+  // signature makes every step a pure function of createStep alone, so there is no
+  // file-state axis left to hold constant across (FLOW-13's old reason is gone with it).
+  it('routes document-only steps to WIZARD_STEPS at their fixed index', () => {
+    const expected: Array<[CreateStep, number]> = [['form', 2], ['validating', 3], ['results', 4]]
     expected.forEach(([step, idx]) => {
-      fileStates.forEach(([uploadFile, importFile]) => {
-        expect(wizardHeader(step, uploadFile, importFile)).toEqual({ steps: WIZARD_STEPS, stageIndex: idx })
-      })
+      expect(wizardHeader(step)).toEqual({ steps: WIZARD_STEPS, stageIndex: idx })
     })
   })
 
-  it('routes mapping/report to IMPORT_STEPS at their fixed index, regardless of file state', () => {
-    const expected: Array<[CreateStep, number]> = [
-      ['mapping', 1],
-      ['report', 2],
-    ]
+  // Gains ['upload', 0] here (absorbed from deleted QA-3/FLOW-13): import-side table
+  // is now total over every IMPORT_STEPS-routed CreateStep, not just mapping/report.
+  it('routes upload/mapping/report to IMPORT_STEPS at their fixed index', () => {
+    const expected: Array<[CreateStep, number]> = [['upload', 0], ['mapping', 1], ['report', 2]]
     expected.forEach(([step, idx]) => {
-      fileStates.forEach(([uploadFile, importFile]) => {
-        expect(wizardHeader(step, uploadFile, importFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: idx })
-      })
+      expect(wizardHeader(step)).toEqual({ steps: IMPORT_STEPS, stageIndex: idx })
     })
-  })
-
-  it("'upload' is the sole step whose path depends on file state, at the exact literal values", () => {
-    expect(wizardHeader('upload', null, null)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
-    expect(wizardHeader('upload', 'pdf', null)).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
-    expect(wizardHeader('upload', null, anImportFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
-    expect(wizardHeader('upload', 'pdf', anImportFile)).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
   })
 })
 

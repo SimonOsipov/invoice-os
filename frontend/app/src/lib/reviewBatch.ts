@@ -507,7 +507,7 @@ export function reviewPageQuery(batchId: string, s: ReviewFilterState): ListInvo
 //
 // Takes the four TOTALS, no rows parameter -- "no count is derived from a row length" is
 // enforced by the signature, not by discipline. Labels are D3's, superseding §7.3's
-// `Ready to approve` / `Approved`.
+// earlier pair, which used the D2-forbidden vocabulary.
 export interface ReviewPillView {
   id: ReviewPill
   label: string

@@ -6,7 +6,8 @@ import { gatewayBase, toApiError, useAsync, type ApiError } from '@invoice-os/ap
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, emptyClient, inhouseClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
-import { validate } from './lib/validation'
+import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
+import { createInvoice } from './lib/invoices'
 import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
@@ -66,7 +67,6 @@ import type {
   PlatformCtx,
   SettingsTab,
   SignedInUser,
-  ValidationResult,
   View,
 } from './types'
 
@@ -133,12 +133,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const entitiesList = useMemo(() => entitiesAsync.data ?? [], [entitiesAsync.data])
 
   // The switcher roster. Rebuilt whenever the live entity list changes (first load, or a
-  // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge: a
-  // SAMPLE invoice approve() appended to a client's mock list (the single-document path,
-  // untouched by this story) does not survive a refetch triggered elsewhere. That mock
-  // invoice never renders anywhere live anyway — InvoiceDetail's mock branch is fully
-  // retired (M5-09-04); it only ever fed CustomersView/ReportsView/XmlModal, themselves
-  // still-mock surfaces this plan's next step migrates off active.invoices.
+  // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge, and
+  // since INVCR-01-03 this effect is its ONLY writer: the mock approve() that used to
+  // prepend a locally-built invoice to a client's list is gone, so no creation path writes
+  // active.invoices any more. Those generated SAMPLE rows never rendered anywhere live
+  // anyway — InvoiceDetail's mock branch is fully retired (M5-09-04); they only ever fed
+  // CustomersView/ReportsView/XmlModal, themselves still-mock surfaces this plan's next
+  // step migrates off active.invoices.
   const [clients, setClients] = useState<Client[]>([])
   useEffect(() => {
     setClients(buildClients(entitiesList))
@@ -159,10 +160,29 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     return clients.find((c) => c.entityId === activeEntityId) ?? clients[0] ?? emptyClient()
   }, [mode, clients, activeEntityId, session])
 
+  // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
+  // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
+  // resolved object and not `active.entityId`:
+  //
+  //  - the filing gate. `active` is rebuilt from `entitiesList` by an effect, so between a
+  //    refetch landing and that rebuild the id can name an entity not (yet) in the list.
+  //    Gating on the id there arms the button and the click does nothing — the exact
+  //    silent-no-op shape [inhouse-can-start] exists to forbid.
+  //  - draftToCreateRequest, which takes `Entity` and never `Client`: buildClientForEntity
+  //    does `tin: e.tin ?? '—'`, so a TIN-less entity is unrepresentable through Client and
+  //    would cross the wire as the literal em-dash.
+  //
+  // null for in-house (no business_entities row at all), for the emptyClient() placeholder,
+  // and for the whole loading/error/no-gateway window — all three are the same honest
+  // "nothing to file against", so they need no separate copy.
+  const activeEntity = useMemo(
+    () => entitiesList.find((e) => e.id === active.entityId) ?? null,
+    [entitiesList, active.entityId],
+  )
+
   const [view, setView] = useState<View>('dashboard')
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>('form')
-  const [validation, setValidation] = useState<ValidationResult | null>(null)
   const [mapping, setMapping] = useState<Mapping | null>(null)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
@@ -184,7 +204,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
-  const [valIdx, setValIdx] = useState(0)
   // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
   // RulesView so a client's set survives navigating away and back, and so switching
   // company genuinely swaps the set instead of carrying one client's rules over to
@@ -219,24 +238,22 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [importError, setImportError] = useState<ApiError | null>(null)
   const [report, setReport] = useState<ImportReport | null>(null)
 
-  // Re-entrancy guard for the two import round trips. A ref, not state: React batches
-  // state updates, so a fast double-click can fire the handler twice before a `disabled`
-  // prop re-renders — and for startImport that would create the SAME import twice, i.e.
-  // duplicate invoices. readColumns and startImport live on different steps and can
-  // never overlap, so one flag covers both. A ref also cannot get stuck the way a
-  // component-local flag would: CreateUpload never observes the rejection that would
-  // clear it, since errors come back through ctx.importError.
+  // The manual form's one round trip (INVCR-01-03). `filing` renders the disabled/spinner
+  // frame; correctness against a double-click belongs to reqInFlight below, not to this.
+  const [filing, setFiling] = useState(false)
+  const [filingError, setFilingError] = useState<ApiError | null>(null)
+
+  // Re-entrancy guard for the THREE server round trips this workspace fires. A ref, not
+  // state: React batches state updates, so a fast double-click can fire the handler twice
+  // before a `disabled` prop re-renders — and for startImport that would create the SAME
+  // import twice, i.e. duplicate invoices, while for fileDraft it would persist TWO
+  // separately-submittable invoices (createRequest carries no idempotency key; that field
+  // is batch-submit-only). readColumns (upload step), startImport (mapping step) and
+  // fileDraft (form step) live on different steps and can never overlap, so one flag covers
+  // all three. A ref also cannot get stuck the way a component-local flag would: the
+  // wizard components never observe the rejection that would clear it, since errors come
+  // back through ctx.importError / ctx.filingError.
   const reqInFlight = useRef(false)
-
-  const valTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const valDone = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const clearVal = () => {
-    if (valTimer.current) { clearInterval(valTimer.current); valTimer.current = null }
-    if (valDone.current) { clearTimeout(valDone.current); valDone.current = null }
-  }
-
-  useEffect(() => clearVal, [])
 
   // resetImport() snapshots active.entityId at openCreate so a company switch cannot
   // silently retarget an import already in flight. But that snapshot can be taken
@@ -274,7 +291,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setCreateStep('form')
-    setValidation(null)
+    // A failed filing's message named the company just left. `filing` is deliberately NOT
+    // cleared: a request already in flight is still in flight, and it will land on the
+    // invoice it was fired for — under the PREVIOUS company. Leaving the button disabled
+    // until it settles is the honest frame; cancelling it is not something this flow does.
+    setFilingError(null)
     // Custom rules are per client, so the incoming client has a different set — a
     // drawer left open would keep describing a rule from the company just left.
     setOpenRuleKey(null)
@@ -285,11 +306,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   function openCreate() {
-    clearVal()
     setView('create')
     setCreateStep('upload')
     setDraft(defaultDraft(active))
-    setValidation(null)
+    setFilingError(null)
     setMapping(null)
     setSwitcherOpen(false)
     resetImport()
@@ -312,7 +332,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   function closeCreate() {
-    clearVal()
     setView('invoices')
   }
 
@@ -327,41 +346,26 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     }))
   }
 
-  function runValidation() {
-    clearVal()
-    const TOTAL = 16
-    const draftAtRun = draft
-    setCreateStep('validating')
-    setValIdx(0)
-    valTimer.current = setInterval(() => {
-      setValIdx((prev) => {
-        const next = prev + 1
-        if (next >= TOTAL) {
-          if (valTimer.current) clearInterval(valTimer.current)
-          valTimer.current = null
-          valDone.current = setTimeout(() => {
-            setCreateStep('results')
-            setValidation(validate(draftAtRun))
-          }, 300)
-          return TOTAL
-        }
-        return next
-      })
-    }, 95)
+  // Separate from updateItem: a description is a string kept verbatim, while qty/price are
+  // numbers coerced off the input's text. One writer switching on the field would have to
+  // branch on the value's type, which is how a description ends up as 0.
+  function updateItemDesc(i: number, desc: string) {
+    setDraft((d) => ({
+      ...d,
+      items: d.items.map((it, idx) => (idx === i ? { ...it, desc } : it)),
+    }))
   }
 
-  function applyFix(patch: Partial<Draft>) {
-    const nd = { ...draft, ...patch }
-    setDraft(nd)
-    setValidation(validate(nd))
+  // A blank line, not a copy of the last one: qty 1 is the only value that cannot silently
+  // multiply a price the operator has not entered yet.
+  function addItem() {
+    setDraft((d) => ({ ...d, items: [...d.items, { desc: '', qty: 1, price: 0 }] }))
   }
 
-  // The results screen is reachable only from the single-document path now (the
-  // multi-invoice path ends at the server's report, not at a locally-built draft), so
-  // leaving it always lands back on the form.
-  function backToEdit() {
-    clearVal()
-    setCreateStep('form')
+  // The form disables its remove control at one remaining line, so this never empties the
+  // list in practice; the filter is still written to be total rather than assuming that.
+  function removeItem(i: number) {
+    setDraft((d) => (d.items.length <= 1 ? d : { ...d, items: d.items.filter((_it, idx) => idx !== i) }))
   }
 
   // Stores whatever the input yielded — the extension rule lives in canReadColumns
@@ -479,28 +483,39 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   function backToImport() {
-    clearVal()
     setCreateStep('upload')
   }
 
   function skipUpload() {
-    clearVal()
     setCreateStep('form')
     setMapping(null)
   }
 
-  function approve() {
-    if (!validation || validation.errors.length > 0 || validation.warnings.length > 0) return
-    const d = draft
-    const inv = { number: d.number, buyer: d.buyer, buyerTin: d.buyerTin, buyerAddress: d.buyerAddress, date: d.date, items: d.items, status: 'Approved' as const, wht: d.wht, docType: d.docType || 'B2B' }
-    // Matched by entityId, not array index ([entity-picker] keystone). A no-op for
-    // in-house/the empty fallback (entityId:null, never a member of `clients`) — this
-    // single-document mock path is untouched by this story, and its only observable
-    // effect (active.invoices) feeds CustomersView/ReportsView/XmlModal, themselves
-    // still-mock surfaces the next step of this plan migrates off it.
-    setClients((cs) => cs.map((c) => (c.entityId === active.entityId ? { ...c, invoices: [inv, ...c.invoices] } : c)))
-    setView('detail')
-    setDetailSel(selectMock(inv.number))
+  // The manual path's one round trip. Replaces the mock approve(), which wrote the draft
+  // into local `clients` state, showed a success screen and persisted NOTHING — reachable
+  // in LIVE via "Skip — enter manually", so a production user could complete it and lose
+  // the invoice silently.
+  //
+  // Everything ordering-sensitive lives in fileDraftInvoice (lib/invoiceDraft.ts), which is
+  // node-testable under the no-jsdom constraint; this is the wiring only. `onCreated` is
+  // passed as a BARE function reference so there is no local closure here that could do
+  // anything other than navigate, and no branch in which it fires early.
+  //
+  // The guard is the second of two — CreateForm renders the same fileDraftGate result as a
+  // disabled button with a named reason, so a blocked click never reaches here. `base ==
+  // null` is the no-gateway build (zero network), and the `activeEntity == null` clause is
+  // redundant with the gate but required for the narrowing draftToCreateRequest's
+  // `Pick<Entity, …>` parameter needs — the same reason readColumns keeps `!importFile`.
+  function fileDraft() {
+    const base = gatewayBase()
+    if (base == null || activeEntity == null || !fileDraftGate(draft, activeEntity).canFile) return
+    void fileDraftInvoice(draft, activeEntity, {
+      create: (input) => createInvoice(authedFetch, base, input),
+      inFlight: reqInFlight,
+      onPending: setFiling,
+      onError: setFilingError,
+      onCreated: openImportedInvoice,
+    })
   }
 
   function selectInvoice(number: string) {
@@ -508,9 +523,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDetailSel(selectMock(number))
   }
 
-  // Click-through from a rule-violation row in the import report (Core AC4). `id` is a
-  // real invoice UUID (invoice_violations[].invoice_id), NOT a mock invoice number — so
-  // InvoiceDetail renders its placeholder rather than resolving it against active.invoices.
+  // Click-through from a rule-violation row in the import report (Core AC4), from a row in
+  // the invoices list, and — since INVCR-01-03 — the landing point of a successful manual
+  // filing. `id` is always a real invoice UUID, never a mock invoice number, so InvoiceDetail
+  // resolves it against the server instead of against active.invoices. Reused verbatim by
+  // the create flow rather than given a variant: "the real detail screen showing the
+  // server's own row" IS the whole affirmation that a filing succeeded, and a second route
+  // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
     setView('detail')
     setDetailSel(selectImported(id))
@@ -615,6 +634,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clients,
     active,
     entities: entitiesList,
+    activeEntity,
     entitiesState,
     entitiesError: entitiesAsync.error,
     refetchEntities: entitiesAsync.run,
@@ -622,7 +642,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     view,
     draft,
     createStep,
-    validation,
     mapping,
     armedField,
     dragField,
@@ -634,7 +653,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     xmlOpen,
     connectors,
     connectorMappings,
-    valIdx,
+    filing,
+    filingError,
     customRules,
     openRuleKey,
     policies,
@@ -654,9 +674,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     closeCreate,
     updateDraft,
     updateItem,
-    runValidation,
-    applyFix,
-    backToEdit,
+    updateItemDesc,
+    addItem,
+    removeItem,
     armField,
     setDrag,
     endDrag,
@@ -668,7 +688,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     readColumns,
     backToImport,
     skipUpload,
-    approve,
+    fileDraft,
     selectInvoice,
     openImportedInvoice,
     setSandbox,

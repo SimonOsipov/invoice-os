@@ -29,27 +29,31 @@ export const STAGE_OF: Record<CreateStep, number> = {
   upload: 0,
   mapping: 1,
   form: 2,
-  validating: 3,
-  results: 4,
   report: 2, // unreachable via 'document' — see wizardHeader
 }
 
 export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, mapping: 1, report: 2 }
 
 // The header-path resolver ([wizard-steps-split], debate finding J1). Exact rule:
-// path = 'document' iff createStep in {form, validating, results}; otherwise 'import'.
-// Total over CreateStep via `?? 0` — a step added to the union without an
-// IMPORT_STAGE_OF entry falls to the import path at index 0 rather than ever
-// returning undefined/NaN (FLOW-14).
+// path = 'document' iff createStep === 'form'; otherwise 'import'. Total over CreateStep
+// via `?? 0` — a step added to the union without an IMPORT_STAGE_OF entry falls to the
+// import path at index 0 rather than ever returning undefined/NaN (FLOW-14).
 //
-// KNOWN AND TRANSIENT (INVCR-01-01, plan D-01d) — do NOT "fix" this here. Deleting the
-// sandbox PDF/JPG document mock took away the only writer of the old `uploadFile` slot,
-// so 'upload' no longer has a document-path tie-break and nothing can reach WIZARD_STEPS
-// at index 0 or 1 any more: the surviving manual path enters at 'form' (stageIndex 2), so
-// the 5-step strip permanently paints steps 1 (Import) and 2 (Map) as un-reached.
-// INVCR-01-04 replaces that strip outright with the two-stage `Enter · Review` model and
-// resolves it. A workaround here would only have to be unpicked by that subtask.
-const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form', 'validating', 'results']
+// KNOWN AND TRANSIENT (updated by INVCR-01-03; originally INVCR-01-01 plan D-01d) — do NOT
+// "fix" this here, and in particular do NOT set STAGE_OF.form to 0. The manual path is now
+// a SINGLE step: INVCR-01-01 deleted the sandbox PDF/JPG document mock (the only writer of
+// the old `uploadFile` slot, so 'upload' lost its document-path tie-break), and
+// INVCR-01-03 deleted the mock validate/approve tail (its two steps left CreateStep
+// entirely). So this set is down to one member and 'form' still resolves to stageIndex 2:
+// the 5-step strip paints Build as current with Import/Map un-reached BEHIND it and
+// Validate/Approve permanently unreachable AHEAD of it.
+//
+// INVCR-01-04 — the very next subtask on this same branch, PR still draft, so no user ever
+// sees this state — replaces the strip outright with the two-stage `Enter · Review` model
+// and sets STAGE_OF.form = 0 as ONE coherent change. Doing that half here would light the
+// wrong label (Import, while the user types) and break import-wizard.spec.ts's strip
+// assertions for no gain. A workaround here would only have to be unpicked by 04.
+const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form']
 
 export function wizardHeader(createStep: CreateStep): { steps: [string, string][]; stageIndex: number } {
   return DOCUMENT_ONLY_STEPS.includes(createStep)

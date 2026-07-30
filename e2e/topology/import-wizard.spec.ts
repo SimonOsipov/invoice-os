@@ -465,9 +465,12 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
   await expect(readColumnsBtn, 'enabled once a dropped file lands').toBeEnabled()
 
   // Manual entry must be reachable in LIVE. skipUpload -> createStep 'form'; the build
-  // step's own primary is 'Run validation' (CreateForm), which no earlier step renders.
+  // step's own primary is 'File invoice' (CreateForm), which no earlier step renders. That
+  // label replaced 'Run validation' in INVCR-01-03, when the mock 16-check scanline and its
+  // approve screen were deleted in favour of one real POST /v1/invoices — the firm persona
+  // has a resolved entity, so the gate passes and the primary reads its armed label.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable in LIVE').toBeVisible()
+  await expect(page.getByRole('button', { name: 'File invoice' }), 'manual build step reachable in LIVE').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -536,10 +539,17 @@ test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone
   await expect(commitBtn, 'commit names why it cannot file').toBeVisible()
   await expect(commitBtn, 'and is truly disabled, not a silent no-op').toBeDisabled()
 
-  // Manual entry stays reachable for in-house as well.
+  // Manual entry stays reachable for in-house as well — and stops the SAME way the commit
+  // step above does. INVCR-01-03 made the manual primary a real POST /v1/invoices, which
+  // writes invoices.entity_id (NOT NULL), so with no entity anywhere in this tenant it
+  // cannot file either. The refusal reuses the commit step's copy byte-for-byte (one
+  // wording, not two that drift) and is gated on the RESOLVED entity, so it is truly
+  // disabled rather than an armed button that swallows the click.
   await page.getByRole('button', { name: '← Back to import' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable for in-house').toBeVisible()
+  const fileBtn = page.getByRole('button', { name: 'Filing needs a linked entity' })
+  await expect(fileBtn, 'manual build step reachable for in-house, and names why it cannot file').toBeVisible()
+  await expect(fileBtn, 'and is truly disabled, not a silent no-op').toBeDisabled()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

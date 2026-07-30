@@ -11,7 +11,6 @@ export const tickGlyph13 = <Icon paths={['M20 6 9 17l-5-5']} size={13} strokeWid
 export const crossGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={3} />
 export const gripGlyph = <Icon paths={['M9 5h.01', 'M9 12h.01', 'M9 19h.01', 'M15 5h.01', 'M15 12h.01', 'M15 19h.01']} size={13} strokeWidth={2.4} />
 export const xSmallGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={11} strokeWidth={2.4} />
-export const warnGlyph = <Icon paths={['M12 9v4M12 17h.01']} size={12} strokeWidth={3} />
 export const plusGlyph = <Icon paths={['M12 5v14M5 12h14']} size={15} strokeWidth={2} />
 export const searchGlyph = <Icon paths={['M21 21l-4.3-4.3', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z']} size={15} />
 export const shieldGlyph = <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={16} />

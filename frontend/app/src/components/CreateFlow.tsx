@@ -1,16 +1,18 @@
-// Create / validate flow orchestrator — the wizard header + a step router keyed on
-// `ctx.createStep`, serving two paths: manual entry (form → validating → results) and a
-// server-backed spreadsheet import (upload → mapping → report). Ported from
+// Create flow orchestrator — the wizard header + a step router keyed on `ctx.createStep`,
+// serving two paths: manual entry (a single 'form' step that files straight to the server)
+// and a server-backed spreadsheet import (upload → mapping → report). Ported from
 // Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
+//
+// The manual path has no step after 'form': INVCR-01-03 replaced the mock
+// validate-then-approve tail with one real POST, and a successful filing navigates away to
+// the real invoice detail view rather than rendering any success step here. Nothing in this
+// router may affirm a filing — there is no branch left that could.
 
-import { VAL_LABELS } from '../data'
 import { wizardHeader } from '../lib/importFlow'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
-import { CreateResults } from './CreateResults'
 import { CreateReport } from './CreateReport'
-import { ScanlineSteps } from './ScanlineSteps'
 import type { PlatformCtx } from '../types'
 
 // The wizard serves TWO paths with different step lists — the 5-step manual-entry wizard
@@ -21,9 +23,8 @@ import type { PlatformCtx } from '../types'
 // only to disambiguate 'upload' between the two paths, and with the document mock deleted
 // (INVCR-01-01) 'upload' belongs unambiguously to the import path.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
-  const { createStep, draft, valIdx } = ctx
+  const { createStep } = ctx
   const { steps, stageIndex } = wizardHeader(createStep)
-  const valCount = Math.min(valIdx, VAL_LABELS.length)
 
   return (
     <div style={{ padding: '24px 36px 56px' }}>
@@ -53,20 +54,6 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
       {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
 
       {createStep === 'form' && <CreateForm ctx={ctx} />}
-
-      {createStep === 'validating' && (
-        <ScanlineSteps
-          title="Validating against MBS rules…"
-          subtitle={`${draft.number} · ${valCount} / 16 CHECKS`}
-          labels={VAL_LABELS}
-          idx={valIdx}
-          unitLabel="COMPLETE"
-          transformMs={170}
-          widthMs={150}
-        />
-      )}
-
-      {createStep === 'results' && <CreateResults ctx={ctx} />}
 
       {createStep === 'report' && <CreateReport ctx={ctx} />}
     </div>

@@ -38,14 +38,15 @@
 //   the DECLARED (already-rounded) subtotal x 0.075, and `total` their sum. Do NOT reuse
 //   computedLineSum -- its absent-quantity-weights-1 rule and no-round render belong to
 //   the edit-form hint, not this mapper.
-// - Two edges unreachable through today's UI (CreateForm has no delete-line control and
-//   its "Add line" button has no onClick), handled per task-278's plan rather than
-//   spec'd: an empty `items` array emits `line_items: []` with subtotal/vat/total all
-//   `null` -- never '0.00', mirroring computedLineSum's own stated rule; a non-finite
-//   qty/price (Number('abc') -> NaN via App.tsx:323-328's updateItem) crosses the wire as
-//   its raw String() and makes that line's line_total -- and every total -- null,
-//   mirroring payload.go's raw-string fallback.
-import type { ApiError } from '@invoice-os/api-client'
+// - Two edges handled per task-278's plan rather than spec'd: an empty `items` array emits
+//   `line_items: []` with subtotal/vat/total all `null` -- never '0.00', mirroring
+//   computedLineSum's own stated rule; a non-finite qty/price (Number('abc') -> NaN via
+//   App.tsx's updateItem) crosses the wire as its raw String() and makes that line's
+//   line_total -- and every total -- null, mirroring payload.go's raw-string fallback.
+//   INVCR-01-03 gave CreateForm working add/remove-line controls, so the NaN edge is now
+//   reachable; the empty-items edge deliberately is not -- the remove control is disabled
+//   at one remaining line, so the form cannot file a lineless invoice.
+import { toApiError, type ApiError } from '@invoice-os/api-client'
 
 import {
   addScaled,
@@ -153,15 +154,14 @@ export function draftToCreateRequest(
   }
 }
 
-// STUB (Mode A, RED-first, INVCR-01-03/task-279): fileDraftInvoice/fileDraftGate throw --
-// the executor implements the bodies in Stage 3. Body order IS the contract (task-279
-// plan §3): `if (inFlight.current) return` -> `inFlight.current = true` -> `onError(null)`
-// -> `onPending(true)` -> `await create(draftToCreateRequest(draft, entity))` ->
-// `onCreated(rec.id)` | `catch -> onError(toApiError(err))` -> `finally {
-// inFlight.current = false; onPending(false) }`. Never rejects -- failures land on
-// onError, never on the returned promise (SUBMIT-2). `create` is typed
-// `Promise<{id:string}>`, the structural minimum, so a spec fixture needn't build a
-// 20-field InvoiceRecord.
+// The manual form's one round trip, extracted out of the Workspace component because
+// vitest runs environment:'node' with no jsdom and no Testing Library -- a handler living
+// inside Workspace would have no oracle at all. Same "node-testable without jsdom"
+// convention lib/importFlow.ts states for its own gates.
+//
+// `create` is typed `Promise<{id:string}>`, the structural minimum, so a spec fixture
+// needn't build a 20-field InvoiceRecord (createInvoice's real InvoiceRecord return is
+// structurally assignable to it).
 export type FileDraftDeps = {
   create: (input: InvoiceCreateInput) => Promise<{ id: string }>
   inFlight: { current: boolean }
@@ -170,22 +170,70 @@ export type FileDraftDeps = {
   onCreated: (invoiceId: string) => void
 }
 
+// BODY ORDER IS THE CONTRACT (SUBMIT-1/2/3, task-279 plan §3) -- do not reorder:
+//
+//   1. the re-entrancy check and 2. the flag write happen SYNCHRONOUSLY, before the first
+//      `await`: React batches state updates, so a fast double-click fires this handler
+//      again before a `disabled` prop can re-render, and createRequest carries NO
+//      idempotency key (that field is batch-submit-only), so two POSTs are two persisted,
+//      separately-submittable invoices. A `filing` state flag CANNOT close this -- only a
+//      ref read-and-written in the same synchronous tick can (SUBMIT-3).
+//   3. onError(null) then 4. onPending(true) are the only observations that may land
+//      before the response.
+//   5. onCreated fires ONLY in the resolve branch. There is deliberately no `setStep` or
+//      `setVerdict` dep for this function to affirm success with early: navigation to the
+//      real invoice detail is the ONLY success surface the create flow has, so an
+//      optimistic affirmation is unrepresentable rather than merely untested (Core AC 1).
+//      SUBMIT-1 proves the ordering by asserting the observation log WHILE create()'s
+//      promise is still open.
+//
+// NEVER REJECTS: every failure lands on onError as an ApiError and the returned promise
+// still resolves (SUBMIT-2). The caller does `void fileDraftInvoice(...)`, so a rejection
+// would surface as an unhandled promise rejection and the user would see nothing at all.
 export async function fileDraftInvoice(
-  _draft: Draft,
-  _entity: Pick<Entity, 'id' | 'name' | 'tin'>,
-  _deps: FileDraftDeps,
+  draft: Draft,
+  entity: Pick<Entity, 'id' | 'name' | 'tin'>,
+  deps: FileDraftDeps,
 ): Promise<void> {
-  throw new Error('not implemented')
+  if (deps.inFlight.current) return
+  deps.inFlight.current = true
+  deps.onError(null)
+  deps.onPending(true)
+  try {
+    const created = await deps.create(draftToCreateRequest(draft, entity))
+    deps.onCreated(created.id)
+  } catch (err: unknown) {
+    // Raw, unmapped: ApiError.message already carries the gateway's own {"error":…}
+    // verbatim, so there is no status->copy table to drift out of date.
+    deps.onError(toApiError(err))
+  } finally {
+    deps.inFlight.current = false
+    deps.onPending(false)
+  }
 }
 
 // Precedence: entity first (unresolvable in-app -- no picker on this screen), invoice
 // number second (resolvable -- the field is editable) -- mirrors CreateMapping.tsx:
 // 98-111's `!canFile -> !invNumMapped` ordering. 'Filing needs a linked entity' and
 // 'Invoice number is required' are the exact copy CreateForm renders (task-279 plan
-// §8.5, §2).
+// §8.5, §2); the first is byte-identical to CreateMapping's own refusal, reused rather
+// than re-authored -- mapping and form are different steps, so the two never both mount.
+//
+// Gates on the RESOLVED Entity, never on a Client.entityId: `active` is rebuilt from the
+// live entity list by an effect, so there is a window where the id is non-null but not yet
+// present in the fetched list, and gating on the id there renders an armed button that
+// swallows the click. `null` covers all three honest refusals at once -- in-house (no
+// business_entities row at all), the emptyClient() placeholder, and the no-gateway build.
+//
+// The blank-number branch is reachable only because this subtask made the field editable;
+// it is the client-side half of the server's own 400 `invoice_number is required`. NO
+// trim: '' is the mapper's absent sentinel and neither layer rewrites an operator's
+// content ([no-trim-at-either-layer]).
 export function fileDraftGate(
-  _draft: Draft,
-  _entity: Pick<Entity, 'id' | 'name' | 'tin'> | null,
+  draft: Draft,
+  entity: Pick<Entity, 'id' | 'name' | 'tin'> | null,
 ): { canFile: true } | { canFile: false; reason: string } {
-  throw new Error('not implemented')
+  if (entity === null) return { canFile: false, reason: 'Filing needs a linked entity' }
+  if (draft.number === '') return { canFile: false, reason: 'Invoice number is required' }
+  return { canFile: true }
 }

@@ -184,17 +184,33 @@ export function emptyClient(): Client {
   return finishClient(cfg, null)
 }
 
+// The manual create form's starting state. Every field here is now genuinely EDITABLE and
+// every one of them crosses the wire on POST /v1/invoices (INVCR-01-03), so these are real
+// defaults, not a mock fixture:
+//
+// - `buyerTin` seeds BLANK. It used to seed '198477' — six digits, deliberately malformed
+//   so the deleted mock validator would demo its own error state. With the mock gone that
+//   value became the default body of every REAL invoice, making the server flag a
+//   buyer-tin-format violation the app itself had authored. Blank maps to `buyer_tin: null`
+//   (nullIfBlank), which is legal and honest: nothing was entered.
+// - `number` still seeds a fixed value, and the (tenant_id, entity_id, invoice_number)
+//   UNIQUE index means the SECOND filing under one entity 409s on it — resolvable only
+//   because the field is now an input the operator can change. Not auto-uniquified: an
+//   invoice number is a fiscal identifier the product never guesses (§9).
+// - `date` still seeds the demo '2026-06-16' rather than today's date. Reseeding to today
+//   is a product call and would put nondeterminism into the flow INVCR-01-16's e2e drives;
+//   the field is editable and issue_date is also fixable on the detail screen.
+// - `currency` stays fixed at NGN with no editor: NGN-only is the real `currency-allowed`
+//   rule parameter, not a UI simplification, so a picker would offer values the rule pack
+//   rejects.
 export function defaultDraft(client: ClientCfg): Draft {
   const sd = SECTORS[client.sector] || SECTORS.foods
   return {
     number: 'INV-2026-00482',
     buyer: sd.buyers[0],
-    buyerTin: '198477',
-    buyerAddress: '',
+    buyerTin: '',
     date: '2026-06-16',
     currency: 'NGN',
-    wht: false,
-    docType: 'B2B',
     items: [
       { desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 },
       { desc: sd.items[1] || 'Supply', qty: 12, price: 85000 },

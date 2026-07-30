@@ -22,15 +22,15 @@ import { detailTarget, selectImported } from './importReport'
 import type { Entity } from './portfolio'
 import type { Draft } from '../types'
 
+// buyerAddress/wht/docType left `Draft` in INVCR-01-03 (task-279) — the create flow was
+// de-intersected from the mock verdict engine's `Validatable`, and none of the three has a
+// column or a wire field. They are no longer expressible here at all.
 const baseDraft: Draft = {
   number: 'INV-2026-00482',
   buyer: 'Beta Ltd',
   buyerTin: '00000000002',
-  buyerAddress: '12 Marina Road',
   date: '2026-06-16',
   currency: 'NGN',
-  wht: false,
-  docType: 'B2B',
   items: [{ desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 }],
 }
 
@@ -185,9 +185,13 @@ describe('draftToCreateRequest: supplier TIN (C7)', () => {
 
 describe('draftToCreateRequest: unpersistable / dropped fields', () => {
   it('DRAFT-4 no unpersistable key is ever emitted', () => {
-    const draft: Draft = { ...baseDraft, buyerAddress: '12 Marina Road', wht: true, docType: 'B2G' }
-
-    const result = draftToCreateRequest(draft, baseEntity)
+    // This spec used to override buyerAddress/wht/docType on the input draft to prove the
+    // mapper dropped them. INVCR-01-03 removed all three from `Draft`, so those overrides
+    // are now COMPILE errors rather than runtime cases — strictly stronger than asserting
+    // the mapper ignores them. The output-key assertions below are unchanged and remain the
+    // guard: they fail for any mapper that emits these keys from any source, and DRAFT-10
+    // separately pins the whole emitted key set exactly.
+    const result = draftToCreateRequest(baseDraft, baseEntity)
 
     const keys = Object.keys(result)
     expect(keys).not.toContain('buyer_address')

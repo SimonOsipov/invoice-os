@@ -168,25 +168,9 @@ export const CANON: CanonField[] = [
   { key: 'line_unit_price' },
 ]
 
-export const VAL_LABELS: string[] = [
-  'Buyer TIN format',
-  'Buyer billing address',
-  'Mandatory seller fields',
-  'VAT computed at 7.5%',
-  'Line totals reconcile to header',
-  'Currency declared · NGN',
-  'Invoice number unique in ledger',
-  'Invoice date within open period',
-  'Withholding-tax logic',
-  'Tax-point date valid',
-  'Supplier VAT registration active',
-  'Line HS / SKU codes present',
-  'Rounding within ±0.01 tolerance',
-  'Digital-signature slot reserved',
-  'QR payload generated',
-  'Document schema · UBL 2.1',
-]
-
+// Still read by the Workflows builder's doc-type condition (WorkflowParts.tsx's
+// DOC_OPTIONS) — it outlived the create form's own doc-type picker, which INVCR-01-03
+// removed because `invoices` has no doc-type column to file the choice into.
 export const DOC_TYPE_DEFS: [string, string, string][] = [
   ['B2B', 'Business', 'Standard tax invoice'],
   ['B2G', 'Government', 'Routed to MDA portal'],

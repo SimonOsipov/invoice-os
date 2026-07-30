@@ -18,7 +18,7 @@
 //   FLOW-08  previewColumns: duplicate headers kept as distinct entries             (AC2)
 //   FLOW-09  isMappableColumn: '' blocked, whitespace-only header stays mappable    (AC2)
 //   FLOW-10  columnLetter: A..Z, AA, AB, ... past column 26                         (AC2)
-//   FLOW-11  wizardHeader document set: form/validating/results                      (AC6)
+//   FLOW-11  wizardHeader document set: form (validating/results left in INVCR-01-03) (AC6)
 //   FLOW-12  wizardHeader import set: upload/mapping/report — one path per CreateStep (AC2,6)
 //   FLOW-14  wizardHeader totality: every CreateStep literal, never undefined/NaN     (AC6)
 //
@@ -194,10 +194,11 @@ describe('columnLetter (FLOW-10)', () => {
 })
 
 describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
+  // Down to ONE document step since INVCR-01-03 deleted the mock validate/approve tail.
+  // WIZARD_STEPS itself is deliberately UNCHANGED here (still 5 entries, 'form' still at
+  // index 2) — replacing the strip with the two-stage Enter·Review model is INVCR-01-04.
   it('routes the single-document steps to WIZARD_STEPS at their existing stage index', () => {
     expect(wizardHeader('form')).toEqual({ steps: WIZARD_STEPS, stageIndex: 2 })
-    expect(wizardHeader('validating')).toEqual({ steps: WIZARD_STEPS, stageIndex: 3 })
-    expect(wizardHeader('results')).toEqual({ steps: WIZARD_STEPS, stageIndex: 4 })
     expect(WIZARD_STEPS.length).toBe(5)
   })
 
@@ -211,7 +212,7 @@ describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
   })
 
   it('is total over every CreateStep literal — stageIndex is always a valid index', () => {
-    const ALL_STEPS: CreateStep[] = ['upload', 'mapping', 'form', 'validating', 'results', 'report']
+    const ALL_STEPS: CreateStep[] = ['upload', 'mapping', 'form', 'report']
     ALL_STEPS.forEach((step) => {
       const { steps, stageIndex } = wizardHeader(step)
       expect(steps.length).toBeGreaterThanOrEqual(3)
@@ -249,7 +250,8 @@ describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
 describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
   it("has no 'parsing' stage left in the runtime step tables", () => {
     expect(Object.keys(STAGE_OF)).not.toContain('parsing')
-    expect(Object.keys(STAGE_OF)).toHaveLength(6)
+    // 6 -> 4 in INVCR-01-03, which deleted two more members; STEP-1 below owns that count.
+    expect(Object.keys(STAGE_OF)).toHaveLength(4)
   })
 
   // STEP-1 (INVCR-01-03, task-279, Mode A — RED-first): 'validating'/'results' leave
@@ -272,7 +274,7 @@ describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
   // signature makes every step a pure function of createStep alone, so there is no
   // file-state axis left to hold constant across (FLOW-13's old reason is gone with it).
   it('routes document-only steps to WIZARD_STEPS at their fixed index', () => {
-    const expected: Array<[CreateStep, number]> = [['form', 2], ['validating', 3], ['results', 4]]
+    const expected: Array<[CreateStep, number]> = [['form', 2]]
     expected.forEach(([step, idx]) => {
       expect(wizardHeader(step)).toEqual({ steps: WIZARD_STEPS, stageIndex: idx })
     })
@@ -298,7 +300,7 @@ describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
   // failure here, rather than only by silently falling through the `?? 0` fallback
   // (covered separately below).
   it('QA-WH-KEYS: the document/import partition covers exactly the members STAGE_OF is compiler-required to have — no member left un-partitioned', () => {
-    const documentSet: CreateStep[] = ['form', 'validating', 'results']
+    const documentSet: CreateStep[] = ['form']
     const importSet: CreateStep[] = ['upload', 'mapping', 'report']
     expect([...documentSet, ...importSet].slice().sort()).toEqual(Object.keys(STAGE_OF).sort())
     // Positive companion: the two sets are actually disjoint, so the equality above

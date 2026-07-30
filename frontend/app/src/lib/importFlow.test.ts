@@ -363,6 +363,47 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
   })
 })
 
+// QA adversarial coverage (Stage 4, task-280 verification). importFlow.ts's own STAGE_OF
+// doc comment warns: "Do NOT dedupe this against IMPORT_STAGE_OF ... Their values mirror
+// IMPORT_STAGE_OF's so the two tables can never disagree" — but nothing before this point
+// enforces that as an INVARIANT. STEPS-3/STEPS-3b pin literal snapshots of both tables;
+// if a future edit changed one table's shared-key values and updated both literals to
+// match (or if either literal spec is later modified/removed), a real divergence between
+// the two tables would ship undetected. These specs derive their expectation from the
+// tables themselves, not from a re-typed literal, so they survive that scenario.
+describe('STAGE_OF / IMPORT_STAGE_OF structural invariants (QA, task-280)', () => {
+  it('QA-MIRROR-1: STAGE_OF never disagrees with IMPORT_STAGE_OF on their shared keys', () => {
+    const sharedKeys = Object.keys(IMPORT_STAGE_OF) as CreateStep[]
+    sharedKeys.forEach((key) => {
+      expect(STAGE_OF[key], key).toBe(IMPORT_STAGE_OF[key])
+    })
+    // Positive companion: guards the loop above against vacuously passing over an
+    // empty key set (e.g. if IMPORT_STAGE_OF were ever accidentally emptied).
+    expect(sharedKeys.length).toBeGreaterThan(0)
+    // 'form' is DOCUMENT_ONLY -- deliberately absent from IMPORT_STAGE_OF, so it must
+    // never appear in the "shared keys" this spec walks (would make the loop assert
+    // nothing about the one entry that actually differs between the two tables).
+    expect(sharedKeys).not.toContain('form')
+  })
+
+  // D-04a case (b) (plan §1): a step AHEAD names a place to stand that doesn't exist —
+  // exactly what Build/Validate/Approve were on the retired 5-item strip. Every
+  // import-path CreateStep (upload/mapping/review) IS reachable via IMPORT_STAGE_OF,
+  // so IMPORT_STEPS' length must always equal the highest reachable index + 1, derived
+  // structurally rather than re-pinning the literal STEPS-1 already checks — this still
+  // catches a phantom trailing IMPORT_STEPS entry even if STEPS-1's literal is edited to
+  // match it. (WIZARD_STEPS is deliberately EXCLUDED from this shape of check: its
+  // second entry, 'Review', is reached one navigation later on the real invoice detail
+  // page, not through wizardHeader's stageIndex at all — plan §1's "Recorded residual,
+  // flagged not fixed" — so applying this same ceiling to WIZARD_STEPS would incorrectly
+  // fail on working, intended behaviour.)
+  it('QA-NO-PHANTOM-IMPORT-STEP: IMPORT_STEPS carries no entry past IMPORT_STAGE_OF’s reachable ceiling', () => {
+    const reachableIndices = Object.values(IMPORT_STAGE_OF) as number[]
+    const maxReachable = Math.max(...reachableIndices)
+    expect(IMPORT_STEPS.length).toBe(maxReachable + 1)
+  })
+})
+
 // INVCR-01-01 (task-277): the ONE genuinely RED-first spec in that subtask's deletion of
 // the sandbox PDF/JPG document mock. Authored against the pre-deletion code, where
 // STAGE_OF still carried a runtime `parsing: 0` entry, and observed failing for the right

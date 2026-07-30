@@ -32,6 +32,9 @@ const SIDEBAR = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.tsx')
 const GLYPHS = join(REPO_ROOT, 'frontend/app/src/glyphs.tsx')
 const PERSONAS_SRC = join(REPO_ROOT, 'e2e/personas.ts')
 const PERSONAS_TEST_SRC = join(REPO_ROOT, 'e2e/personas.test.ts')
+const APP_SESSION_SRC = join(REPO_ROOT, 'frontend/app/src/lib/session.ts')
+const OPS_SESSION_SRC = join(REPO_ROOT, 'frontend/ops-console/src/session.ts')
+const SUPPORT_SESSION_SRC = join(REPO_ROOT, 'frontend/support-console/src/session.ts')
 
 // process.env hygiene (targets.test.ts:9-11's idiom, extended to all three destination
 // vars): snapshot before each test and restore after, so row 1/2's mutations can never leak
@@ -160,6 +163,61 @@ function extractGlyphLabels(glyphsSrc: string): Map<string, string> {
     map.set(m[1], m[2])
   }
   return map
+}
+
+// --- G13 extraction helpers (the three live product session gates) --------------------
+//
+// accepts() (personas.ts) reads PERSONAS[id].destination -- a field in THIS registry, hand
+// -maintained alongside BOUNDARY_MATRIX in the same file. Row 10 (G5) cross-checks
+// BOUNDARY_MATRIX against accepts(), and row 3 cross-checks accepts() against a hardcoded
+// ACCEPTED set -- but every one of those three things (BOUNDARY_MATRIX, PERSONAS, ACCEPTED)
+// lives in e2e/, typed by hand. None of them is read from the frontend session-gate source
+// the registry claims to mirror (personas.ts:144-149's own comment: "Mirrors the three live
+// product gates"). A registry that quietly drifted from shouldAutoSignIn / OPS_OPERATORS /
+// SUPPORT_OPERATORS -- say a future frontend change widens or narrows who a destination
+// accepts, with nobody remembering to update e2e/personas.ts -- would leave G5 and row 3
+// green throughout, because both sides of every existing check are e2e-side data. These
+// helpers read the actual frontend source, the same way G1-G3 read auth.ts/Sidebar.tsx.
+
+// frontend/app/src/lib/session.ts's shouldAutoSignIn: `personaParam === 'x' || ...`. Slice
+// the function body (declaration to the next column-0 `}`) and pull every string compared
+// with `===`, rather than hardcoding {'firm','inhouse'} here -- a hardcoded set would just be
+// a FOURTH hand-typed copy of the same claim.
+function extractShouldAutoSignInIds(src: string): string[] {
+  const startIdx = src.indexOf('function shouldAutoSignIn')
+  if (startIdx === -1) {
+    throw new Error('G13: `function shouldAutoSignIn` anchor not found in frontend/app/src/lib/session.ts -- the anchors moved, update e2e/personas.test.ts')
+  }
+  const endIdx = src.indexOf('\n}', startIdx)
+  if (endIdx === -1) {
+    throw new Error('G13: closing column-0 `}` not found after shouldAutoSignIn -- the anchors moved, update e2e/personas.test.ts')
+  }
+  const body = src.slice(startIdx, endIdx)
+  const ids = [...body.matchAll(/===\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
+  if (ids.length === 0) {
+    throw new Error('G13: no `=== \'...\'` comparisons found inside shouldAutoSignIn -- the anchors moved, update e2e/personas.test.ts')
+  }
+  return ids
+}
+
+// frontend/{ops,support}-console/src/session.ts's OPS_OPERATORS / SUPPORT_OPERATORS: a
+// `{ id: { name: ..., org: ... } } as const` map. Slice the object body (declaration to the
+// next column-0 `}`) and pull every top-level (2-space-indented) key.
+function extractOperatorKeys(src: string, constName: string, srcLabel: string): string[] {
+  const startIdx = src.indexOf(`export const ${constName}`)
+  if (startIdx === -1) {
+    throw new Error(`G13: \`export const ${constName}\` anchor not found in ${srcLabel} -- the anchors moved, update e2e/personas.test.ts`)
+  }
+  const endIdx = src.indexOf('\n}', startIdx)
+  if (endIdx === -1) {
+    throw new Error(`G13: closing column-0 \`}\` not found after ${constName} -- the anchors moved, update e2e/personas.test.ts`)
+  }
+  const body = src.slice(startIdx, endIdx)
+  const keys = [...body.matchAll(/^ {2}(\w+):\s*\{/gm)].map((m) => m[1])
+  if (keys.length === 0) {
+    throw new Error(`G13: no top-level keys found inside ${constName} -- the anchors moved, update e2e/personas.test.ts`)
+  }
+  return keys
 }
 
 describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-270)', () => {
@@ -408,5 +466,72 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const inhouseTokens = resolveNavConstsFromGroupsSlice(parts[1], aliasMap)
     expect(firmTokens, 'firm branch should resolve the renamed invoices wrapper').toContain('NAV_INVOICES')
     expect(inhouseTokens, 'in-house branch should resolve the renamed approvals wrapper').toContain('NAV_APPROVALS')
+  })
+
+  // --- QA-added coverage (task-271 Stage 4, Mode B): BOUNDARY_MATRIX vs the live gates ---
+  //
+  // G5 (row 10) proves BOUNDARY_MATRIX agrees with accepts(); accepts() just reads
+  // PERSONAS[id].destination, a field in this SAME hand-maintained registry. So G5 (and row
+  // 3's hardcoded ACCEPTED set) check the e2e-side data against itself, not against the
+  // frontend session gates the registry claims to mirror. This row reads the three actual
+  // gates -- shouldAutoSignIn, OPS_OPERATORS, SUPPORT_OPERATORS -- so a future change to any
+  // of them that nobody mirrors into e2e/personas.ts fails HERE, not silently.
+  it('row 13 (BOUNDARY_MATRIX vs the live product gates) -- the matrix cannot drift from shouldAutoSignIn/OPS_OPERATORS/SUPPORT_OPERATORS', () => {
+    const appAccepted = new Set(extractShouldAutoSignInIds(readFileSync(APP_SESSION_SRC, 'utf8')))
+    const opsAccepted = new Set(
+      extractOperatorKeys(readFileSync(OPS_SESSION_SRC, 'utf8'), 'OPS_OPERATORS', 'frontend/ops-console/src/session.ts'),
+    )
+    const supportAccepted = new Set(
+      extractOperatorKeys(readFileSync(SUPPORT_SESSION_SRC, 'utf8'), 'SUPPORT_OPERATORS', 'frontend/support-console/src/session.ts'),
+    )
+
+    expect(appAccepted.size, 'shouldAutoSignIn accepted ids (vacuity guard)').toBeGreaterThanOrEqual(2)
+    expect(opsAccepted.size, 'OPS_OPERATORS keys (vacuity guard)').toBeGreaterThanOrEqual(1)
+    expect(supportAccepted.size, 'SUPPORT_OPERATORS keys (vacuity guard)').toBeGreaterThanOrEqual(1)
+
+    const PRODUCT_GATE: Record<Destination, Set<string>> = {
+      app: appAccepted,
+      ops: opsAccepted,
+      support: supportAccepted,
+    }
+
+    expect(BOUNDARY_MATRIX.length, 'boundary matrix rows (vacuity guard)').toBe(12)
+    const disagreements: string[] = []
+    for (const row of BOUNDARY_MATRIX) {
+      const productAccepts = PRODUCT_GATE[row.destination].has(row.persona)
+      const matrixAccepts = row.verdict === 'accepts'
+      if (productAccepts !== matrixAccepts) {
+        disagreements.push(
+          `${row.destination}:${row.persona}: matrix says "${row.verdict}", live product gate says "${productAccepts ? 'accepts' : 'refuses'}"`,
+        )
+      }
+    }
+    expect(disagreements, disagreements.join('\n')).toEqual([])
+  })
+
+  // Negative control for G13's extractors: proves they can tell an accepted id apart from a
+  // rejected one, rather than (say) matching every quoted string in the file regardless of
+  // context. Exercises the SAME functions as row 13, over inline fixtures -- not a copy.
+  it('row 14 (G13-neg) -- the live-gate extractors distinguish an accepted id from a rejected one', () => {
+    // Column-0 braces, matching the real files' shape (both extractors slice to the next
+    // column-0 `}`) -- an indented fixture would silently miss its own closing brace.
+    const authFixture = [
+      'export function shouldAutoSignIn(personaParam: string | null): boolean {',
+      "  return personaParam === 'alpha' || personaParam === 'beta'",
+      '}',
+    ].join('\n')
+    const ids = extractShouldAutoSignInIds(authFixture)
+    expect(ids).toContain('alpha')
+    expect(ids).toContain('beta')
+    expect(ids).not.toContain('gamma')
+
+    const operatorsFixture = [
+      'export const FAKE_OPERATORS = {',
+      "  alpha: { name: 'Alpha', org: 'Test' },",
+      '} as const',
+    ].join('\n')
+    const keys = extractOperatorKeys(operatorsFixture, 'FAKE_OPERATORS', 'fixture')
+    expect(keys).toContain('alpha')
+    expect(keys).not.toContain('beta')
   })
 })

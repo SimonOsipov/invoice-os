@@ -96,6 +96,13 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
 // the FIRM half of Test 4 only: [dashboard-scope-per-client] made Invoices a CLIENT-scoped
 // surface, and signing in leaves the switcher on whatever `clients[0]` resolves to
 // (portfolio's ORDER BY name ASC), never this test's own stamped entity.
+//
+// Known latent limit, shared with both existing copies and NOT introduced here: the
+// dropdown is position:absolute inside .pf-shell (height:100vh, overflow:hidden) with no
+// max-height (Sidebar.tsx:158), so once a firm tenant owns more entities than fit the
+// viewport, the option for a late-sorting name is unreachable and this click fails with
+// "outside of the viewport". Bounded today by per-PR ephemeral environments; a product fix,
+// not a test one.
 async function selectEntity(page: Page, entityName: string): Promise<void> {
   await page.getByTestId('company-switcher').click()
   await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
@@ -331,6 +338,11 @@ test('Approvals: the in-house-only badge equals the live validated count, and th
 //
 // No fixtures: the roster renders regardless of data. approvalsItem is unconditionally in
 // navGroups (Sidebar.tsx:125); only its BADGE is conditional.
+//
+// Left on the config's 60s default even though it is the only 60s test doing TWO full
+// sign-ins: it creates no fixtures, makes no writes, and runs third, by which point Test 1
+// has warmed the fleet. Raise it in-file if a real run proves otherwise -- never by
+// widening the config.
 test('sidebar roster: the firm and in-house personas render different, exact nav rosters', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -384,6 +396,10 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
   // with the handler's default limit of 50, so this run's fixtures are always on page 1
   // however large the tenant grows.
   await signInAs(page, 'inhouse')
+  // Identity guard before touching the nav, the same one Tests 2 and 3 take: without it a
+  // slow or failed persona swap surfaces as an opaque timeout on a locator further down
+  // rather than as "the wrong workspace rendered".
+  await expect(sidebar(page)).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
   await goTo(page, 'Invoices')
   await expect(page.getByTestId('invoices-list')).toBeVisible()
   await expect(invoiceRowByNumber(page, inhouseNumberA)).toBeVisible()
@@ -395,6 +411,7 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
   // which is never this test's stamped entity. entity_id is applied SERVER-side, so
   // entity B's invoice is absent from the response, not merely hidden.
   await signInAs(page, 'firm')
+  await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
   await selectEntity(page, firmEntityA.name)
   await goTo(page, 'Invoices')
   await expect(page.getByTestId('invoices-list')).toBeVisible()

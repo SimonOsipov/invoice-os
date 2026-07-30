@@ -35,7 +35,10 @@ import {
   isValidEmail,
   lastActiveLabel,
   memberFromInvite,
+  mergeChips,
   nameFromEmail,
+  NO_CLIENT_MATCH,
+  NO_CLIENTS_NOTE,
   parseEmailInput,
   removeMember,
   replaceMember,
@@ -1711,6 +1714,54 @@ describe('the firm client picker (T6.5-T6.7, §7)', () => {
     // is deliberately NOT collapsed into `All clients` — the user picked six, not "everyone".
     expect(clientSelectionCount(0)).toBe('0 of 6 selected')
     expect(clientSelectionCount(6)).toBe('6 of 6 selected')
+  })
+})
+
+describe('mergeChips — the de-dupe nothing upstream performs (T6.9-T6.11, §7)', () => {
+  it('de-dupes on the LOWER-CASED address, keeping the first spelling (T6.9)', () => {
+    // The whole reason this function exists. QA33 pins `classifyInvites` returning ['ok','ok']
+    // for ['new@x.ng', 'NEW@x.ng'] and QA34 pins `addMembers` appending both — so if the chip
+    // list compared with `===`, one person would be invited twice with two ids and two rows.
+    expect(mergeChips([], ['a@x.ng', 'A@x.ng'])).toEqual(['a@x.ng'])
+    expect(mergeChips(['a@x.ng'], ['A@X.NG'])).toEqual(['a@x.ng'])
+    // The FIRST spelling survives, because that is the address that will be mailed — the same
+    // rule `parseEmailInput` follows within a single paste (T2.5).
+    expect(mergeChips(['MiXeD@x.ng'], ['mixed@x.ng'])).toEqual(['MiXeD@x.ng'])
+  })
+
+  it('is the CROSS-paste half that parseEmailInput cannot do (T6.10)', () => {
+    // `parseEmailInput` runs per paste and sees a fresh string each time, so pasting the same
+    // list twice yields two identical arrays that only this function can reconcile.
+    const first = mergeChips([], parseEmailInput('a@x.ng, b@x.ng'))
+    expect(first).toEqual(['a@x.ng', 'b@x.ng'])
+    const second = mergeChips(first, parseEmailInput('b@x.ng; c@x.ng'))
+    expect(second).toEqual(['a@x.ng', 'b@x.ng', 'c@x.ng'])
+    // Order is append-only: a re-pasted address does NOT jump to the end, so the chips do not
+    // reshuffle under the user between pastes.
+    expect(mergeChips(second, parseEmailInput('a@x.ng'))).toEqual(['a@x.ng', 'b@x.ng', 'c@x.ng'])
+  })
+
+  it('degrades cleanly and never returns its input reference (T6.11)', () => {
+    const cur = ['a@x.ng']
+    expect(mergeChips(cur, [])).toEqual(['a@x.ng'])
+    expect(mergeChips(cur, parseEmailInput(''))).toEqual(['a@x.ng'])
+    expect(mergeChips(cur, parseEmailInput('   '))).toEqual(['a@x.ng'])
+    expect(mergeChips([], [])).toEqual([])
+    // Always allocates, per §15.1 — a caller that mutated the result must not reach the state
+    // array React is still holding.
+    expect(mergeChips(cur, [])).not.toBe(cur)
+  })
+})
+
+describe('the client picker\'s two invented sentences (T6.12, §7)', () => {
+  it('explains the disabled Send, and echoes the roster search word for word (T6.12)', () => {
+    // INVENTED COPY. §7 gives the zero-selected state a BEHAVIOUR (nothing to grant, nothing to
+    // send) and no sentence, so the sentence is pinned here rather than left in the component.
+    expect(NO_CLIENTS_NOTE).toBe('Pick at least one client, or switch to All clients.')
+    // Deliberately the roster search's line with one noun changed. Pinned as a PAIR, so the two
+    // cannot drift into phrasing the same failure two ways on one tab.
+    expect(NO_CLIENT_MATCH).toBe('No clients match this search.')
+    expect(NO_CLIENT_MATCH).toBe('No members match this search.'.replace('members', 'clients'))
   })
 })
 

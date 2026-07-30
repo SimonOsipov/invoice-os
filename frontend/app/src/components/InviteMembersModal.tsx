@@ -27,6 +27,9 @@ import {
   INVITE_ERROR,
   invitedNotice,
   memberFromInvite,
+  mergeChips,
+  NO_CLIENT_MATCH,
+  NO_CLIENTS_NOTE,
   parseEmailInput,
   REVIEWER_HINT,
   type AccessRole,
@@ -45,14 +48,6 @@ import type { PlatformCtx } from '../types'
 const TITLE = 'Invite people'
 const EYEBROW = "THEY'LL RECEIVE AN EMAIL INVITE"
 
-// INVENTED COPY, and the only string this subtask leaves outside a spec — §7 specifies the
-// zero-selected state's BEHAVIOUR (nothing to grant, so nothing to send) but supplies no
-// sentence for it. Flagged rather than smuggled into lib/members.ts, whose additions this
-// subtask's plan enumerates closed.
-const NO_CLIENTS_NOTE = 'Pick at least one client, or switch to All clients.'
-
-const NO_MATCH = 'No clients match this search.'
-
 // `position` is `RoleKey | null`, so `None` is a SENTINEL option mapped back to null on the way
 // out — the `'all'`-as-just-another-option idiom MembersView.tsx:27-33 already records, where
 // the caller narrows on the way back. `department` gets no sentinel: `InviteOptions` declares it
@@ -61,28 +56,6 @@ const NO_MATCH = 'No clients match this search.'
 const NO_POSITION = 'none'
 const POSITION_OPTIONS: WfOption[] = [{ value: NO_POSITION, label: 'None' }, ...ROLE_OPTIONS]
 const DEPARTMENT_OPTIONS: WfOption[] = DEPARTMENTS.map((d) => ({ value: d, label: d }))
-
-/**
- * D3's second duty — de-dupe chips ACROSS successive pastes, which nothing upstream does.
- * `parseEmailInput` de-dupes only WITHIN one paste (T2.5) and `classifyInvites` has no batch
- * memory at all (QA33), so the chip list is the only place that state exists.
- *
- * Keyed on `toLowerCase()`, keeping the first spelling seen — the same key `parseEmailInput`
- * uses and the same case-insensitive comparison `classifyInvites` makes against stored rows. A
- * raw `===` would let `a@x.ng` and `A@x.ng` both chip and both classify `ok`, and the roster
- * would gain the same person twice.
- */
-function mergeChips(current: readonly string[], added: readonly string[]): string[] {
-  const seen = new Set(current.map((c) => c.toLowerCase()))
-  const out = [...current]
-  for (const address of added) {
-    const key = address.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(address)
-  }
-  return out
-}
 
 export function InviteMembersModal({ ctx, onClose, onFlash }: {
   ctx: PlatformCtx
@@ -256,6 +229,16 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
           <div className="label" style={{ marginBottom: 6 }}>
             Emails
           </div>
+          {/* GATE ITEM, accepted not fixed. `app-layer.css:234-240` is
+              `.asc-app input:focus { box-shadow: 0 0 0 2px var(--ring) !important }`, so the
+              focus ring draws around the bare input INSIDE this box rather than around the box.
+              `!important` means no inline fix. The remedy is four lines of app stylesheet —
+              `.asc-app .pf-chipbox:focus-within` for the ring plus
+              `.asc-app .pf-chipbox input:focus { box-shadow: none !important }`, which at
+              (0,3,1) outranks that rule's (0,2,1) — but it trades a WORKING focus indicator for
+              an unverifiable one, and deleting a focus ring is the one failure here that is
+              worse than a misplaced one. D5's own instruction applies: verify the rendered
+              result at the Phase 3.5 gate, not by reading class lists. */}
           <div
             onClick={() => inputRef.current?.focus()}
             data-testid="invite-chip-box"
@@ -380,7 +363,7 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
                   />
                   {shownClients.length === 0 ? (
                     <div data-testid="invite-client-empty" style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--fg-3)' }}>
-                      {NO_MATCH}
+                      {NO_CLIENT_MATCH}
                     </div>
                   ) : (
                     shownClients.map((c) => (

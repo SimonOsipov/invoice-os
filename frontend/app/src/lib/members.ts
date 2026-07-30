@@ -935,6 +935,48 @@ export const INVITE_ERROR: Record<Exclude<InviteVerdict, 'ok'>, string> = {
 }
 
 /**
+ * The chip list's own de-duplication — §7's "an address already chipped does not chip twice",
+ * and the duty NOTHING upstream performs. `parseEmailInput` de-dupes only WITHIN one paste
+ * (T2.5) and `classifyInvites` has no batch memory at all (QA33), so the chip list is the only
+ * place this state exists and this is the only function that enforces it.
+ *
+ * Keyed on `toLowerCase()`, keeping the FIRST spelling seen — the same key `parseEmailInput`
+ * uses and the same case-insensitive comparison `classifyInvites` makes against stored rows. A
+ * raw `===` would let `a@x.ng` and `A@x.ng` both chip and both classify `ok`, and the roster
+ * would gain the same person twice.
+ *
+ * It lives here rather than in the modal against that subtask's own "everything else stays
+ * component-side" rule, because that rule's stated reason — "its oracle is the deploy gate" —
+ * is false for exactly this function: a lower-cased-key collision is invisible in a screenshot.
+ * Same argument that pulled QA40-QA46's three derivations out of MEMB-01-04's components.
+ */
+export function mergeChips(current: readonly string[], added: readonly string[]): string[] {
+  const seen = new Set(current.map((c) => c.toLowerCase()))
+  const out = [...current]
+  for (const address of added) {
+    const key = address.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(address)
+  }
+  return out
+}
+
+/**
+ * §7's zero-selected state. `Selected clients` with nothing ticked is an invite that grants
+ * access to nothing, so `Send invites` is disabled and this says why — INVENTED COPY, since §7
+ * specifies the behaviour and supplies no sentence for it.
+ */
+export const NO_CLIENTS_NOTE = 'Pick at least one client, or switch to All clients.'
+
+/**
+ * The client picker's filtered-to-zero line. Deliberately the roster search's sentence with one
+ * noun changed (MembersView.tsx:141) — two search boxes on one tab that phrased "nothing
+ * matched" differently would read as two different failures.
+ */
+export const NO_CLIENT_MATCH = 'No clients match this search.'
+
+/**
  * The invite modal's client-picker search. Same rule as `filterMembers` — trimmed,
  * case-insensitive substring (QA36) — so the two search boxes this tab ships cannot disagree
  * about what a trailing space means.

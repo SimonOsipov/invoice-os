@@ -77,11 +77,17 @@ export function InitialsChip({ initials, status, size = 30 }: { initials: string
 // WorkflowParts.tsx:171-186; also InvoicesList.tsx:416-424, ViolationsTable.tsx:55-56,
 // RulesView.tsx:31-34). Three distinct tones, no treatment reused (AC#2).
 //
-// Active keeps a pill rather than an empty cell. `Status` is a column, and every other
-// table in this app fills its status column on every row; a blank cell on five of seven
-// rows reads as missing data, not as "the default".
+// Active keeps a pill rather than an empty cell — `Status` is a column, and every other
+// table in this app fills its status column on every row, so a blank cell on thirteen of
+// sixteen rows reads as missing data rather than as "the default".
+//
+// But MUTED, not green. Two reasons. The palette assigns meaning: "Teal = pass, amber =
+// attention, destructive = failure" (app-layer.css:71-73), and an active member is not a
+// pass verdict, they are the baseline — --status-muted-* is what the app already uses for
+// a neutral state marker (DRAFT, SUPERSEDED). And thirteen saturated pills would out-shout
+// the three exceptions the column exists to surface. §10's "active = the solid default".
 const STATUS_TONE: Record<MemberStatus, { bg: string; border: string; text: string; label: string }> = {
-  active: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'ACTIVE' },
+  active: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'ACTIVE' },
   invited: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'INVITED' },
   suspended: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'SUSPENDED' },
 }

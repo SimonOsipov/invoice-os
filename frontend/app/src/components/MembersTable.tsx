@@ -72,11 +72,15 @@ const TABLE_MIN_WIDTH: Record<Mode, number> = { firm: 870, inhouse: 1036 }
 
 // `overflowX: 'auto'` makes that container a scroll container on BOTH axes, for the same
 // reason `.pf-scroll` is — so the absolutely-positioned `⋯` menu would be clipped, and
-// would spawn a vertical scrollbar, on any row near the bottom. The container simply makes
-// room for whichever menu is open. The alternative, flipping the menu upward by row index,
-// is wrong the moment a filter changes the row count; the app has no portal and no
-// fixed-position popover to borrow instead. 168 = the tallest menu (3 items + the
-// last-admin note) plus its 6px offset.
+// would spawn a vertical scrollbar, on any row without ~155px of table below it. The
+// scroller simply makes room for whichever menu is open. 168 = the tallest menu (3 items
+// plus the last-admin note) and its 6px offset.
+//
+// The obvious alternative — flip the menu upward for the last few rows — was measured and
+// rejected: a row is ~58px, so opening downward needs three rows below and upward needs
+// two above, and ANY filtered list under about four rows then clips in both directions.
+// Searching one person's name produces exactly that list. The app has no portal and no
+// fixed-position popover to borrow instead.
 const MENU_CLEARANCE = 168
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
@@ -156,141 +160,144 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
   }
 
   return (
-    <div
-      data-testid="members-table"
-      style={{
-        border: '1px solid var(--line-1)',
-        borderRadius: 'var(--radius-md)',
-        background: 'var(--bg-2)',
-        overflowX: 'auto',
-        paddingBottom: menuOpen ? MENU_CLEARANCE : 0,
-      }}
-    >
-      {/* Deliberately NOT `.pf-list-head`/`.pf-list-row`: those carry a <=480px collapse to
-          a single column (platform.css:264-276) that would fight the minWidth this table
-          depends on, and Members is a desktop surface. `.pf-row` is taken on the body rows
-          for its hover highlight — with a `⋯` sitting hundreds of pixels from the name it
-          acts on, the row highlight is what ties the two together — and MEMB-01-07 gives
-          the row its own click. */}
+    // Two elements where RulesView.tsx:195 uses one, and the split is the whole point: the
+    // clearance above has to sit OUTSIDE the card's border. Inside it, opening a menu would
+    // visibly grow the card by 168px of empty background; outside it, the menu simply
+    // overhangs the card's bottom edge the way a dropdown is supposed to.
+    <div style={{ overflowX: 'auto', paddingBottom: menuOpen ? MENU_CLEARANCE : 0 }}>
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: COLS[mode],
-          gap: 16,
-          padding: '11px 18px',
-          background: 'var(--bg-1)',
-          borderBottom: '1px solid var(--line-1)',
-          alignItems: 'center',
-          minWidth,
-        }}
+        data-testid="members-table"
+        // No `overflow: 'hidden'` here, unlike InvoicesList.tsx:360 — it would clip the
+        // menu right back. The head row's tint therefore squares off the top corners
+        // fractionally, exactly as it does on RulesView.
+        style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', minWidth }}
       >
-        {HEADS[mode].map((h, i) => (
-          <span key={i} className="label" style={ELLIPSIS}>
-            {h}
-          </span>
-        ))}
-      </div>
+        {/* Deliberately NOT `.pf-list-head`/`.pf-list-row`: those carry a <=480px collapse to
+            a single column (platform.css:264-276) that would fight the minWidth this table
+            depends on, and Members is a desktop surface. `.pf-row` is taken on the body rows
+            for its hover highlight — with a `⋯` sitting hundreds of pixels from the name it
+            acts on, the row highlight is what ties the two together — and MEMB-01-07 gives
+            the row its own click. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: COLS[mode],
+            gap: 16,
+            padding: '11px 18px',
+            background: 'var(--bg-1)',
+            borderBottom: '1px solid var(--line-1)',
+            alignItems: 'center',
+            minWidth,
+          }}
+        >
+          {HEADS[mode].map((h, i) => (
+            <span key={i} className="label" style={ELLIPSIS}>
+              {h}
+            </span>
+          ))}
+        </div>
 
-      {rows.map((m) => {
-        // The CURRENT row from the CURRENT list. `isProtectedAdmin` does no identity lookup
-        // — it returns true for a detached object that is not in the list at all
-        // (members.test.ts:1421) — so a stale row read from a closure gives a wrong answer.
-        const protectedAdmin = isProtectedAdmin(members, m)
-        // Gated on the member HOLDING a position, not on mode. Firm rows carry no position
-        // at all (members.test.ts:222), so this guard is already mode-proof; a mode check
-        // beside it would be a second rule that can drift from the first.
-        const steps = m.status === 'suspended' && m.position != null ? stepsFor(policies, m.position) : null
-        const blocked = steps ? steps.total : 0
-        return (
-          <Fragment key={m.id}>
-            <div
-              className="pf-row"
-              data-testid="member-row"
-              style={{
-                display: 'grid',
-                gridTemplateColumns: COLS[mode],
-                gap: 16,
-                padding: '14px 18px',
-                // The warning strip below carries the hairline when there is one, so the
-                // row and its warning read as one unit rather than two.
-                borderBottom: blocked > 0 ? undefined : '1px solid var(--line-1)',
-                alignItems: 'center',
-                minWidth,
-              }}
-            >
-              {/* Person — chip + name + email, two lines (InvoicesList.tsx:410-413). */}
-              <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                <InitialsChip initials={m.initials} status={m.status} />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    {/* §10.1 softens the INVITED name only. Suspended keeps full-strength
-                        text — its distinctness is carried by the red chip and red pill,
-                        and softening it too would make the two states converge. */}
-                    <span style={{ ...ELLIPSIS, fontSize: 13.5, fontWeight: 500, color: m.status === 'invited' ? 'var(--fg-3)' : 'var(--fg-1)' }}>
-                      {m.name}
+        {rows.map((m) => {
+          // The CURRENT row from the CURRENT list. `isProtectedAdmin` does no identity lookup
+          // — it returns true for a detached object that is not in the list at all
+          // (members.test.ts:1421) — so a stale row read from a closure gives a wrong answer.
+          const protectedAdmin = isProtectedAdmin(members, m)
+          // Gated on the member HOLDING a position, not on mode. Firm rows carry no position
+          // at all (members.test.ts:222), so this guard is already mode-proof; a mode check
+          // beside it would be a second rule that can drift from the first.
+          const steps = m.status === 'suspended' && m.position != null ? stepsFor(policies, m.position) : null
+          const blocked = steps ? steps.total : 0
+          return (
+            <Fragment key={m.id}>
+              <div
+                className="pf-row"
+                data-testid="member-row"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: COLS[mode],
+                  gap: 16,
+                  padding: '14px 18px',
+                  // The warning strip below carries the hairline when there is one, so the
+                  // row and its warning read as one unit rather than two.
+                  borderBottom: blocked > 0 ? undefined : '1px solid var(--line-1)',
+                  alignItems: 'center',
+                  minWidth,
+                }}
+              >
+                {/* Person — chip + name + email, two lines (InvoicesList.tsx:410-413). */}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <InitialsChip initials={m.initials} status={m.status} />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      {/* §10.1 softens the INVITED name only. Suspended keeps full-strength
+                          text — its distinctness is carried by the red chip and red pill,
+                          and softening it too would make the two states converge. */}
+                      <span style={{ ...ELLIPSIS, fontSize: 13.5, fontWeight: 500, color: m.status === 'invited' ? 'var(--fg-3)' : 'var(--fg-1)' }}>
+                        {m.name}
+                      </span>
+                      {m.isYou && <YouChip />}
                     </span>
-                    {m.isYou && <YouChip />}
-                  </span>
-                  <span className="mono" style={{ display: 'block', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
-                    {m.email}
+                    <span className="mono" style={{ display: 'block', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
+                      {m.email}
+                    </span>
                   </span>
                 </span>
-              </span>
 
-              <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{roleLabel(m.role)}</span>
+                <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{roleLabel(m.role)}</span>
 
-              {isFirm ? (
-                <span
-                  // AC#3's tooltip. Newline-joined rather than comma-joined: six client
-                  // names on one line is a tooltip nobody reads.
-                  title={clientAccessNames(m.clientAccess ?? []).join('\n')}
-                  style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}
-                >
-                  {clientAccessLabel(m.clientAccess ?? [])}
-                </span>
-              ) : (
-                <>
-                  <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{m.department ?? '—'}</span>
-                  <span style={{ ...ELLIPSIS, fontSize: 13, color: m.position ? 'var(--fg-2)' : 'var(--fg-4)' }}>
-                    {m.position ? roleOf(m.position).title : '—'}
+                {isFirm ? (
+                  <span
+                    // AC#3's tooltip. Newline-joined rather than comma-joined: six client
+                    // names on one line is a tooltip nobody reads.
+                    title={clientAccessNames(m.clientAccess ?? []).join('\n')}
+                    style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}
+                  >
+                    {clientAccessLabel(m.clientAccess ?? [])}
                   </span>
-                </>
-              )}
+                ) : (
+                  <>
+                    <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{m.department ?? '—'}</span>
+                    <span style={{ ...ELLIPSIS, fontSize: 13, color: m.position ? 'var(--fg-2)' : 'var(--fg-4)' }}>
+                      {m.position ? roleOf(m.position).title : '—'}
+                    </span>
+                  </>
+                )}
 
-              <span style={{ minWidth: 0 }}>
-                <MemberStatusPill status={m.status} />
-              </span>
+                <span style={{ minWidth: 0 }}>
+                  <MemberStatusPill status={m.status} />
+                </span>
 
-              <span className="mono" style={{ ...ELLIPSIS, fontSize: 12, color: 'var(--fg-3)' }}>
-                {lastActiveLabel(m)}
-              </span>
+                <span className="mono" style={{ ...ELLIPSIS, fontSize: 12, color: 'var(--fg-3)' }}>
+                  {lastActiveLabel(m)}
+                </span>
 
-              <MoreMenu
-                open={openMenuId === m.id}
-                onOpen={() => setOpenMenuId(m.id)}
-                onClose={closeMenu}
-                label={m.name}
-                items={menuItems(m, protectedAdmin)}
-                note={protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined}
-              />
-            </div>
-
-            {blocked > 0 && (
-              // A full-width strip under the row rather than a third line inside the Person
-              // cell: AC#12 wants row 5 / row 11 to leave the column widths alone, and a
-              // warning inside a fixed cell would have to ellipsise away exactly when it
-              // matters.
-              <div style={{ padding: '0 18px 12px', borderBottom: '1px solid var(--line-1)', minWidth }}>
-                <AmberNote testId="member-steps-warning">
-                  {blocked === 1
-                    ? 'Named in 1 approval step · that step will block'
-                    : `Named in ${blocked} approval steps · those steps will block`}
-                </AmberNote>
+                <MoreMenu
+                  open={openMenuId === m.id}
+                  onOpen={() => setOpenMenuId(m.id)}
+                  onClose={closeMenu}
+                  label={m.name}
+                  items={menuItems(m, protectedAdmin)}
+                  note={protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined}
+                />
               </div>
-            )}
-          </Fragment>
-        )
-      })}
+
+              {blocked > 0 && (
+                // A full-width strip under the row rather than a third line inside the Person
+                // cell: AC#12 wants row 5 / row 11 to leave the column widths alone, and a
+                // warning inside a fixed cell would have to ellipsise away exactly when it
+                // matters.
+                <div style={{ padding: '0 18px 12px', borderBottom: '1px solid var(--line-1)', minWidth }}>
+                  <AmberNote testId="member-steps-warning">
+                    {blocked === 1
+                      ? 'Named in 1 approval step · that step will block'
+                      : `Named in ${blocked} approval steps · those steps will block`}
+                  </AmberNote>
+                </div>
+              )}
+            </Fragment>
+          )
+        })}
+      </div>
     </div>
   )
 }

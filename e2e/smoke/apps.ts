@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import { signInUrl } from '../personas'
 import { resolveTarget } from '../targets'
 
 // The three pure SPAs under smoke test (landing, ops-console, support-console) — no
@@ -33,7 +34,11 @@ export const APPS: AppTarget[] = [
     // here (destUrl -> ?persona=developer) rather than through a test-only backdoor, so
     // this smoke test still exercises the real entry path. The redirect itself is pinned by
     // its own spec in smoke.spec.ts.
-    url: `${resolveTarget('OPS_CONSOLE_URL')}?persona=developer`,
+    //
+    // The hand-off URL comes from the persona registry (../personas), which knows this
+    // persona's destination and therefore which env var carries its base — the id and the
+    // console it opens are stated once, there, rather than re-paired by hand here.
+    url: signInUrl('developer'),
     assertMainView: async (page) => {
       // Sidebar brand + the default Overview screen heading.
       await expect(page.getByText('ASComply').first()).toBeVisible()
@@ -44,7 +49,7 @@ export const APPS: AppTarget[] = [
     name: 'support-console',
     // Same sign-in hand-off shape as the ops console, with this console's own
     // persona id — the two gates reject each other's links, which is the point.
-    url: `${resolveTarget('SUPPORT_CONSOLE_URL')}?persona=support`,
+    url: signInUrl('support'),
     assertMainView: async (page) => {
       // Sidebar brand + the default Submissions ops heading. The cross-tenant strip is
       // asserted too: it is the one piece of chrome that distinguishes this console from

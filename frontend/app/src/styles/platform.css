@@ -111,6 +111,22 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--ring);
 }
+/* The invite modal's email chip box is a bordered <div> wrapping a bare <input>,
+   so app-layer.css:236's `.asc-app input:focus` rang the INNER input — a second
+   rounded rectangle 9px inside the box. Moved onto the box, which makes it ring
+   as one field, like `WfAmountInput`. `.asc-app`-scoped unlike the rest of this
+   file because the specificity IS the mechanism: the suppressor's (0,3,1) beats
+   that rule's (0,2,1), which is how one `!important` overrides another. The
+   `!important` on border-color is copied from `.pf-input:focus` for the same
+   reason it exists there — beating the box's inline `border` shorthand. Nothing
+   competes for the box-shadow, so it stays a normal declaration. */
+.asc-app .pf-chipbox:focus-within {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.asc-app .pf-chipbox input:focus {
+  box-shadow: none !important;
+}
 /* No transform on press anywhere — the system doesn't squish. Hover is a
    fill or brightness change only, never movement and never a shadow change. */
 .pf-btn {

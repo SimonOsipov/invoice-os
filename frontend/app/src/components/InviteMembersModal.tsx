@@ -225,18 +225,16 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
           <div className="label" style={{ marginBottom: 6 }}>
             Emails
           </div>
-          {/* GATE ITEM, accepted not fixed. `app-layer.css:234-240` is
-              `.asc-app input:focus { box-shadow: 0 0 0 2px var(--ring) !important }`, so the
-              focus ring draws around the bare input INSIDE this box rather than around the box.
-              `!important` means no inline fix. The remedy is four lines of app stylesheet —
-              `.asc-app .pf-chipbox:focus-within` for the ring plus
-              `.asc-app .pf-chipbox input:focus { box-shadow: none !important }`, which at
-              (0,3,1) outranks that rule's (0,2,1) — but it trades a WORKING focus indicator for
-              an unverifiable one, and deleting a focus ring is the one failure here that is
-              worse than a misplaced one. D5's own instruction applies: verify the rendered
-              result at the Phase 3.5 gate, not by reading class lists. */}
+          {/* `pf-chipbox` is load-bearing, not decoration: it is the hook for the two
+              platform.css rules that move the focus ring off the bare input and onto this box.
+              Without them `.asc-app input:focus` (app-layer.css:236) rings the input INSTEAD,
+              9px inside the border — two nested rounded rectangles, measured on the deployed
+              build and fixed there. `WfAmountInput` is the target behaviour: same inline
+              border, ringed as one field. The rules live in the app's own platform.css and not
+              in packages/design-tokens/, which is vendored and re-pulled. */}
           <div
             onClick={() => inputRef.current?.focus()}
+            className="pf-chipbox"
             data-testid="invite-chip-box"
             style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minHeight: 38, padding: '6px 8px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', background: 'var(--bg-1)', cursor: 'text' }}
           >

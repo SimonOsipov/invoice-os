@@ -278,11 +278,14 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
               >
                 {suspending ? 'Suspend' : 'Reactivate'}
               </button>
-              {/* Rendered in BOTH states. §8 gives one sentence here and it describes what
-                  suspension IS, which is exactly what `Reactivate` undoes; AC#6 is a verbatim
-                  gate, so inventing a second sentence would add unspec'd copy to satisfy a
-                  requirement nothing states. */}
-              <span style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>{SUSPEND_EXPLANATION}</span>
+              {/* SUSPEND ONLY. §8 scopes this sentence to Suspend and it describes what
+                  suspension DOES, so beside `Reactivate` it asserted the opposite of the
+                  button's effect — a suspended member read "Reactivate" next to "Blocks
+                  sign-in" (seen on the deployed build, both personas). Nothing takes its
+                  place: §8 supplies no reactivate copy and AC#6 is a verbatim gate, so an
+                  invented sentence is the one outcome worse than an absent one. The button
+                  keeps its `minWidth`, so the Remove row below stays aligned with it. */}
+              {suspending && <span style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>{SUSPEND_EXPLANATION}</span>}
             </div>
           )}
 

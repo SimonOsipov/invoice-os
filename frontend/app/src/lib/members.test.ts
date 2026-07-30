@@ -6,22 +6,36 @@ import {
   ACCESS_ROLES,
   activeAdmins,
   activeHolders,
+  addMembers,
   blockedPositions,
   canvasApprovalLine,
   CAPABILITY_ROWS,
+  classifyInvites,
   clientAccessLabel,
   clientAccessNames,
   CLIENT_ROSTER,
   delegateCandidates,
   DEPARTMENTS,
   departmentsInUse,
+  filterMembers,
   holders,
   inhouseNotifyTargets,
+  initialsFrom,
   inspectorApprovalLine,
+  isProtectedAdmin,
+  isValidEmail,
   lastActiveLabel,
+  memberFromInvite,
+  nameFromEmail,
+  parseEmailInput,
+  removeMember,
+  replaceMember,
   resolvePosition,
   SEED_FIRM_MEMBERS,
+  SEED_INHOUSE_MEMBERS,
   seedMembers,
+  setMemberRole,
+  setMemberStatus,
   stepsFor,
   unassignedPositions,
   type Member,
@@ -63,6 +77,29 @@ const inhouseRow = (name: string, status: MemberStatus, position: RoleKey | null
   isYou: false,
   department: 'Finance',
   position,
+})
+
+/**
+ * The firm mirror of `inhouseRow` — the one fixture MEMB-01-01 did not need. The T2 reducer
+ * specs need a row they can hand to `addMembers`/`replaceMember` that is NOT in the seed,
+ * and `clientAccess` (firm-only) is the module's single nested value, so it is the whole
+ * point of having it.
+ */
+const firmRow = (name: string, status: MemberStatus, clientAccess: 'all' | number[]): Member => ({
+  id: `m-${name.split(' ')[0].toLowerCase()}`,
+  name,
+  initials: name
+    .split(' ')
+    .map((t) => t[0])
+    .join(''),
+  email: `${name.split(' ')[0].toLowerCase()}@okafor.ng`,
+  role: 'preparer',
+  status,
+  lastActive: status === 'active' ? '2 hours ago' : null,
+  joined: status === 'invited' ? null : '12 Mar 2025',
+  invitedBy: 'Chinedu Okafor',
+  isYou: false,
+  clientAccess,
 })
 
 /** The seed's only non-empty `else` lane holds an autoapprove, so T1.18 builds its own. */
@@ -640,5 +677,373 @@ describe('CAPABILITY_ROWS copy (QA18, §6)', () => {
       'manage ERP connectors',
       'manage signing certificates',
     ])
+  })
+})
+
+// ============================================================================
+// T2.1–T2.44 — MEMB-01-02 acceptance-criteria specs (authored RED, test-first)
+// ============================================================================
+// Transcribed from task-295's Test Specs table BEFORE the invite pipeline, the reducers,
+// `filterMembers` and the last-admin guard exist. members.ts carries signature-only stubs
+// that throw, so every spec below fails today — none of them can pass by accident.
+//
+// T2.15–T2.32b run over FIRM (the only mode carrying `clientAccess`); T2.33–T2.44 run over
+// IN-HOUSE (the only mode with enough rows to make a filter narrow). Fixtures are the ones
+// MEMB-01-01 shipped, plus `firmRow`.
+
+describe('parseEmailInput (T2.1–T2.6, §7)', () => {
+  it('splits on a comma (T2.1)', () => {
+    expect(parseEmailInput('a@x.ng, b@x.ng')).toEqual(['a@x.ng', 'b@x.ng'])
+  })
+
+  it('splits on semicolons, newlines and spaces too, keeping input order (T2.2)', () => {
+    expect(parseEmailInput('a@x.ng;b@x.ng\nc@x.ng d@x.ng')).toEqual(['a@x.ng', 'b@x.ng', 'c@x.ng', 'd@x.ng'])
+  })
+
+  it('trims each address (T2.3)', () => {
+    expect(parseEmailInput('  a@x.ng  ,  b@x.ng ')).toEqual(['a@x.ng', 'b@x.ng'])
+  })
+
+  it('drops empty fragments left by repeated separators (T2.4)', () => {
+    expect(parseEmailInput('a@x.ng,,;  ,b@x.ng')).toEqual(['a@x.ng', 'b@x.ng'])
+  })
+
+  it('de-dupes case-insensitively, keeping the first spelling seen (T2.5)', () => {
+    expect(parseEmailInput('A@x.ng, a@X.ng')).toEqual(['A@x.ng'])
+  })
+
+  it('returns nothing for an empty paste (T2.6)', () => {
+    expect(parseEmailInput('')).toEqual([])
+  })
+})
+
+describe('isValidEmail (T2.7–T2.8, §7)', () => {
+  it('accepts a plain address, a long dotted/hyphenated one and a plus tag (T2.7)', () => {
+    for (const value of ['a@b.co', 'o.adebanjo-ogunleye@okaforandpartners.com.ng', 'x+y@z.ng']) {
+      expect(isValidEmail(value)).toBe(true)
+    }
+  })
+
+  it('rejects a bare domain, a missing @, an embedded space, a missing side and a double @ (T2.8)', () => {
+    for (const value of ['a@b', 'ab.co', 'a b@c.co', '@b.co', 'a@', '', 'a@@b.co']) {
+      expect(isValidEmail(value)).toBe(false)
+    }
+  })
+})
+
+describe('nameFromEmail / initialsFrom (T2.9–T2.14, §7)', () => {
+  it('reads a dotted local part as two capitalised tokens (T2.9)', () => {
+    expect(nameFromEmail('t.okonkwo@honeywell.ng')).toBe('T Okonkwo')
+  })
+
+  it('reads underscore and dash as separators too (T2.10)', () => {
+    expect(nameFromEmail('ada_eze@x.ng')).toBe('Ada Eze')
+    expect(nameFromEmail('ada-eze@x.ng')).toBe('Ada Eze')
+  })
+
+  it('reads a single-token local part as one capitalised word (T2.11)', () => {
+    expect(nameFromEmail('zainab@x.ng')).toBe('Zainab')
+  })
+
+  it('takes one letter per token when the local part has two or more (T2.12)', () => {
+    expect(initialsFrom('t.okonkwo@x.ng')).toBe('TO')
+  })
+
+  it('takes the first TWO letters of a single-token local part (T2.13)', () => {
+    // The reason `initialsFrom` is a deliberate fork of customers.ts's `initials(name)`,
+    // which would return one character here.
+    expect(initialsFrom('zainab@x.ng')).toBe('ZA')
+  })
+
+  it('caps at two characters however many tokens there are (T2.14)', () => {
+    expect(initialsFrom('a.b.c@x.ng')).toBe('AB')
+  })
+})
+
+describe('classifyInvites (T2.15–T2.20, §7)', () => {
+  it('reports an existing active member, matching case-insensitively (T2.15)', () => {
+    // mf1, upper-cased: the comparison is on lower-cased emails, not on the stored string.
+    expect(classifyInvites(firm(), ['C.OKAFOR@OKAFOR.NG'])).toEqual(['member'])
+  })
+
+  it('reports an already-invited address as invited, not as a member (T2.16)', () => {
+    expect(classifyInvites(firm(), ['b.suleiman@okafor.ng'])).toEqual(['invited'])
+  })
+
+  it('reports a suspended member as a member (T2.17)', () => {
+    expect(classifyInvites(firm(), ['h.yusuf@okafor.ng'])).toEqual(['member'])
+  })
+
+  it('reports an unparseable address as malformed (T2.18)', () => {
+    expect(classifyInvites(firm(), ['not-an-email'])).toEqual(['malformed'])
+  })
+
+  it('reports a fresh valid address as ok (T2.19)', () => {
+    expect(classifyInvites(firm(), ['t.okonkwo@okafor.ng'])).toEqual(['ok'])
+  })
+
+  it('returns one verdict per address, in input order (T2.20)', () => {
+    expect(classifyInvites(firm(), ['new@x.ng', 'c.okafor@okafor.ng', 'bad'])).toEqual(['ok', 'member', 'malformed'])
+  })
+})
+
+describe('memberFromInvite (T2.21–T2.24, §7)', () => {
+  it('mints an invited row with the derived name, the passed inviter and no activity (T2.21)', () => {
+    const m = memberFromInvite(
+      't.okonkwo@x.ng',
+      { mode: 'inhouse', role: 'reviewer', department: 'Finance', position: null },
+      'Ngozi Balogun',
+    )
+    expect(m).toMatchObject({
+      email: 't.okonkwo@x.ng',
+      name: 'T Okonkwo',
+      initials: 'TO',
+      role: 'reviewer',
+      status: 'invited',
+      lastActive: null,
+      joined: null,
+      isYou: false,
+      invitedBy: 'Ngozi Balogun',
+    })
+    // QA17 pins `invitedBy === '—'` IFF `isYou`, and an invited row is never `isYou`.
+    expect(m.invitedBy).not.toBe('—')
+  })
+
+  it('mints unique ids that collide with no seeded id, five in one call chain (T2.22)', () => {
+    const minted = ['a1@x.ng', 'a2@x.ng', 'a3@x.ng', 'a4@x.ng', 'a5@x.ng'].map((e) =>
+      memberFromInvite(e, { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor'),
+    )
+    const ids = minted.map((m) => m.id)
+    expect(new Set(ids).size).toBe(5)
+
+    const store = seedMembers()
+    const seeded = new Set([...store.firm, ...store.inhouse].map((m) => m.id))
+    for (const id of ids) expect(seeded.has(id)).toBe(false)
+  })
+
+  it('gives a firm invite its clientAccess and NO in-house keys at all (T2.23)', () => {
+    const m = memberFromInvite('t.okonkwo@x.ng', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
+    expect(m.clientAccess).toBe('all')
+    // Key ABSENT, not merely undefined: `{department: undefined}` would satisfy a
+    // `toBeUndefined()` check while still shipping the column into the firm table.
+    expect('department' in m).toBe(false)
+    expect('position' in m).toBe(false)
+  })
+
+  it('gives an in-house invite its department and position and NO clientAccess key (T2.24)', () => {
+    const m = memberFromInvite(
+      't.okonkwo@x.ng',
+      { mode: 'inhouse', role: 'reviewer', department: 'Finance', position: null },
+      'Ngozi Balogun',
+    )
+    expect(m.department).toBe('Finance')
+    expect(m.position).toBeNull()
+    expect('clientAccess' in m).toBe(false)
+  })
+})
+
+describe('reducers — immutability and misses (T2.25–T2.32b, §15.1)', () => {
+  it('appends without touching the input list (T2.25)', () => {
+    const list = firm()
+    const added = firmRow('Tosin Okonkwo', 'invited', [0])
+    const out = addMembers(list, [added])
+
+    expect(out).not.toBe(list)
+    expect(out).toHaveLength(8)
+    expect(out[7]).toEqual(added)
+    expect(list).toHaveLength(7)
+    expect(list).toEqual(firm())
+  })
+
+  it('swaps the row with the matching id and leaves the input alone (T2.26)', () => {
+    const list = firm()
+    const next: Member = { ...list[1], role: 'admin' }
+    const out = replaceMember(list, next)
+
+    expect(out).not.toBe(list)
+    expect(out[1].role).toBe('admin')
+    expect(list[1].role).toBe('preparer')
+    expect(out.map((m) => m.role)).toEqual(['admin', 'admin', 'reviewer', 'reviewer', 'preparer', 'preparer', 'reviewer'])
+    expect(list).toEqual(firm())
+  })
+
+  it('returns a NEW array of the same values when the id is not present (T2.27)', () => {
+    const list = firm()
+    const ghost = firmRow('Ghost Person', 'active', 'all')
+    expect(list.map((m) => m.id)).not.toContain(ghost.id)
+
+    const out = replaceMember(list, ghost)
+    expect(out).not.toBe(list)
+    expect(out).toEqual(list)
+    expect(list).toEqual(firm())
+  })
+
+  it('drops exactly the removed id, preserving order (T2.28)', () => {
+    const list = firm()
+    const out = removeMember(list, 'mf3')
+
+    expect(out).toHaveLength(6)
+    expect(out.map((m) => m.id)).toEqual(['mf1', 'mf2', 'mf4', 'mf5', 'mf6', 'mf7'])
+    expect(list).toEqual(firm())
+  })
+
+  it('builds a NEW member object rather than assigning into the old one (T2.29)', () => {
+    const list = firm()
+    const out = setMemberRole(list, 'mf2', 'admin')
+
+    expect(out[1]).not.toBe(list[1])
+    expect(out[1].role).toBe('admin')
+    expect(list[1].role).toBe('preparer')
+  })
+
+  it('flips active to suspended and changes nothing else on the row (T2.30)', () => {
+    const list = firm()
+    const out = setMemberStatus(list, 'mf2', 'suspended')
+
+    expect(out[1].status).toBe('suspended')
+    expect(list[1].status).toBe('active')
+    expect({ ...out[1], status: 'active' }).toEqual(list[1])
+  })
+
+  it('flips suspended back to active (T2.31)', () => {
+    const list = firm()
+    expect(list[6].id).toBe('mf7')
+    expect(list[6].status).toBe('suspended')
+
+    const out = setMemberStatus(list, 'mf7', 'active')
+    expect(out[6].status).toBe('active')
+    expect(list[6].status).toBe('suspended')
+  })
+
+  it('never touches its input list or the seed, in either mode (T2.32)', () => {
+    const seedFirmBefore = structuredClone(SEED_FIRM_MEMBERS)
+    const seedInhouseBefore = structuredClone(SEED_INHOUSE_MEMBERS)
+
+    const cases = [
+      { list: firm(), pristine: firm(), id: 'mf2', extra: firmRow('Tosin Okonkwo', 'invited', [0]) },
+      { list: inhouse(), pristine: inhouse(), id: 'mh4', extra: inhouseRow('Tosin Okonkwo', 'invited', null) },
+    ]
+
+    for (const c of cases) {
+      const untouched = () => expect(c.list).toEqual(c.pristine)
+
+      replaceMember(c.list, { ...c.list[1], role: 'admin' })
+      untouched()
+      addMembers(c.list, [c.extra])
+      untouched()
+      removeMember(c.list, c.id)
+      untouched()
+      setMemberRole(c.list, c.id, 'admin')
+      untouched()
+      setMemberStatus(c.list, c.id, 'suspended')
+      untouched()
+    }
+
+    expect(SEED_FIRM_MEMBERS).toEqual(seedFirmBefore)
+    expect(SEED_INHOUSE_MEMBERS).toEqual(seedInhouseBefore)
+    expect(scopedIds(SEED_FIRM_MEMBERS, 1)).toEqual([0, 1, 3])
+    expect(scopedIds(SEED_FIRM_MEMBERS, 2)).toEqual([2, 5])
+  })
+
+  it('copies the nested clientAccess when it builds a row, it does not alias it (T2.32b)', () => {
+    // T2.32 alone cannot see this: it compares by VALUE, and an aliased array holds the
+    // right value until something writes through it. `clientAccess` is the module's only
+    // nested value and exists only on firm rows, so the probe has to sit on a
+    // subset-scoped firm row — mf2's [0,1,3]. Same hole T1.2b closed for `seedMembers`.
+    const list = firm()
+    expect(list[1].id).toBe('mf2')
+    expect(scopedIds(list, 1)).toEqual([0, 1, 3])
+
+    for (const out of [setMemberRole(list, 'mf2', 'admin'), setMemberStatus(list, 'mf2', 'suspended')]) {
+      expect(out[1].clientAccess).not.toBe(list[1].clientAccess)
+      expect(out[1].clientAccess).not.toBe(SEED_FIRM_MEMBERS[1].clientAccess)
+
+      scopedIds(out, 1).push(4)
+      expect(scopedIds(out, 1)).toEqual([0, 1, 3, 4])
+      expect(scopedIds(list, 1)).toEqual([0, 1, 3])
+      expect(scopedIds(SEED_FIRM_MEMBERS, 1)).toEqual([0, 1, 3])
+    }
+  })
+})
+
+describe('filterMembers (T2.33–T2.39, §6)', () => {
+  it('matches on the name when the email does not carry it (T2.33)', () => {
+    // Ngozi's email is n.balogun@honeywell.ng, so 'ngozi' is a name-only match.
+    expect(names(filterMembers(inhouse(), 'ngozi', 'all'))).toEqual(['Ngozi Balogun'])
+  })
+
+  it('matches on the email as a plain substring, not a domain split (T2.34)', () => {
+    // 15, not 16: Oluwafunmilayo sits on honeywellgroup.com.ng, which contains 'honeywell'
+    // but not 'honeywell.ng'. The pair is what pins substring matching.
+    const domain = filterMembers(inhouse(), 'honeywell.ng', 'all')
+    expect(domain).toHaveLength(15)
+    expect(names(domain)).not.toContain('Oluwafunmilayo Ademola-Oyediran')
+    expect(filterMembers(inhouse(), 'honeywell', 'all')).toHaveLength(16)
+  })
+
+  it('ignores case in the query (T2.35)', () => {
+    expect(names(filterMembers(inhouse(), 'ADEBAYO', 'all'))).toEqual(['Adebayo Ogunlesi'])
+  })
+
+  it('returns nothing when nothing matches (T2.36)', () => {
+    expect(filterMembers(inhouse(), 'zzzz', 'all')).toEqual([])
+  })
+
+  it('applies the role filter on its own (T2.37)', () => {
+    expect(names(filterMembers(inhouse(), '', 'admin'))).toEqual(['Ngozi Balogun'])
+  })
+
+  it("treats roleFilter 'all' as no role predicate at all (T2.38)", () => {
+    expect(filterMembers(inhouse(), '', 'all')).toHaveLength(16)
+  })
+
+  it('ANDs the two predicates, and the AND actually narrows (T2.39)', () => {
+    expect(names(filterMembers(inhouse(), 'z', 'reviewer'))).toEqual(['Emeka Uzowulu'])
+
+    // Neither predicate alone can produce that result: 'z' spans all three roles, and
+    // the reviewer filter alone returns eight. ('o' would prove nothing — every in-house
+    // row matches it via @honeywell.)
+    expect(names(filterMembers(inhouse(), 'z', 'all'))).toEqual(['Ngozi Balogun', 'Emeka Uzowulu', 'Zainab Lawal'])
+    expect(filterMembers(inhouse(), '', 'reviewer')).toHaveLength(8)
+  })
+})
+
+describe('isProtectedAdmin (T2.40–T2.44, §9)', () => {
+  it('protects the sole active admin (T2.40)', () => {
+    const list = inhouse()
+    expect(list[0].name).toBe('Ngozi Balogun')
+    expect(isProtectedAdmin(list, list[0])).toBe(true)
+  })
+
+  it('does not protect a non-admin (T2.41)', () => {
+    const list = inhouse()
+    expect(list[3].name).toBe('Tunde Adeyemi')
+    expect(list[3].role).toBe('reviewer')
+    expect(isProtectedAdmin(list, list[3])).toBe(false)
+  })
+
+  it('protects neither admin once there are two active ones (T2.42)', () => {
+    const list = setMemberRole(inhouse(), 'mh4', 'admin')
+    expect(activeAdmins(list)).toHaveLength(2)
+    expect(isProtectedAdmin(list, list[0])).toBe(false)
+    expect(isProtectedAdmin(list, list[3])).toBe(false)
+  })
+
+  it('re-locks the first admin once the second is suspended (T2.43)', () => {
+    const two = setMemberRole(inhouse(), 'mh4', 'admin')
+    const list = setMemberStatus(two, 'mh4', 'suspended')
+
+    expect(list[3].status).toBe('suspended')
+    expect(isProtectedAdmin(list, list[0])).toBe(true)
+    expect(isProtectedAdmin(list, list[3])).toBe(false)
+  })
+
+  it('does not count an invited admin (T2.44)', () => {
+    const list = setMemberRole(inhouse(), 'mh16', 'admin')
+
+    expect(list[15].name).toBe('Sadiq Ibrahim')
+    expect(list[15].status).toBe('invited')
+    expect(isProtectedAdmin(list, list[0])).toBe(true)
+    expect(isProtectedAdmin(list, list[15])).toBe(false)
   })
 })

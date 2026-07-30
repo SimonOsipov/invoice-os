@@ -613,3 +613,90 @@ export function lastActiveLabel(member: Member): string {
 export function activeAdmins(list: readonly Member[]): Member[] {
   return list.filter((m) => m.role === 'admin' && m.status === 'active')
 }
+
+// ---------------------------------------------------------------------------
+// MEMB-01-02 — invite pipeline, reducers, filter and the last-admin guard
+// ---------------------------------------------------------------------------
+// SIGNATURE-ONLY STUBS, authored ahead of the implementation (test-first). The T2 suite
+// in members.test.ts asserts against these today and is RED by construction: every body
+// throws, so no T2 spec can pass by accident before the behaviour exists. The signatures
+// are the contract — MEMB-01-02's execution pass fills the bodies in and deletes
+// `notImplemented`, whose disappearance `noUnusedLocals` then enforces.
+
+/** MEMB-01-02 stub marker. Reads its arguments so the stubs keep real parameter names. */
+function notImplemented(...args: unknown[]): never {
+  void args
+  throw new Error('not implemented')
+}
+
+/** One verdict per pasted address, in input order. */
+export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
+
+/**
+ * Discriminated on `mode`, so the fork is a compile-time fact and a firm invite's
+ * `clientAccess` is REQUIRED rather than optional: `clientAccessLabel`/`clientAccessNames`
+ * read `access.length` on anything that is not `'all'` and would throw on `undefined` in
+ * MEMB-01-04's table and MEMB-01-07's drawer. `Member` itself stays flat (see its
+ * docblock) — this is the argument, not the result.
+ */
+export type InviteOptions =
+  | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | number[] }
+  | { mode: 'inhouse'; role: AccessRole; department: Department; position: RoleKey | null }
+
+/** Splits on comma / semicolon / whitespace / newline; trims, drops empties, de-dupes. */
+export function parseEmailInput(raw: string): string[] {
+  return notImplemented(raw)
+}
+
+export function isValidEmail(value: string): boolean {
+  return notImplemented(value)
+}
+
+/** §7's "name derived from the local part" — local part, split, capitalised, space-joined. */
+export function nameFromEmail(email: string): string {
+  return notImplemented(email)
+}
+
+/** Takes an EMAIL, not a name — see MEMB-01-02's fork rationale against `initials()`. */
+export function initialsFrom(email: string): string {
+  return notImplemented(email)
+}
+
+export function classifyInvites(existing: readonly Member[], addresses: readonly string[]): InviteVerdict[] {
+  return notImplemented(existing, addresses)
+}
+
+/** The inviter's name arrives as an ARGUMENT — this module never reaches for ctx. */
+export function memberFromInvite(email: string, opts: InviteOptions, inviterName: string): Member {
+  return notImplemented(email, opts, inviterName)
+}
+
+export function replaceMember(list: readonly Member[], next: Member): Member[] {
+  return notImplemented(list, next)
+}
+
+export function addMembers(list: readonly Member[], added: readonly Member[]): Member[] {
+  return notImplemented(list, added)
+}
+
+export function removeMember(list: readonly Member[], id: string): Member[] {
+  return notImplemented(list, id)
+}
+
+export function setMemberRole(list: readonly Member[], id: string, role: AccessRole): Member[] {
+  return notImplemented(list, id, role)
+}
+
+export function setMemberStatus(list: readonly Member[], id: string, status: MemberStatus): Member[] {
+  return notImplemented(list, id, status)
+}
+
+/** Name OR email, case-insensitive substring. `roleFilter: 'all'` disables the role predicate. */
+export function filterMembers(list: readonly Member[], query: string, roleFilter: AccessRole | 'all'): Member[] {
+  return notImplemented(list, query, roleFilter)
+}
+
+/** §9 — true iff `member` is an active admin and they are the only one. */
+export function isProtectedAdmin(list: readonly Member[], member: Member): boolean {
+  return notImplemented(list, member)
+}

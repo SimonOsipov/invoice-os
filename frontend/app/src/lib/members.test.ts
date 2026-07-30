@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
+import { CFG } from '../data'
 import {
   ACCESS_ROLES,
   activeAdmins,
@@ -10,6 +11,7 @@ import {
   CAPABILITY_ROWS,
   clientAccessLabel,
   clientAccessNames,
+  CLIENT_ROSTER,
   delegateCandidates,
   DEPARTMENTS,
   departmentsInUse,
@@ -26,7 +28,7 @@ import {
   type MemberStatus,
   type PositionResolution,
 } from './members'
-import { SEED_INHOUSE_POLICIES, type Policy, type RoleKey } from './workflows'
+import { SEED_INHOUSE_POLICIES, WF_ROLES, type Policy, type RoleKey } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // Every spec starts from a fresh clone, never from a SEED_* constant — except T1.2/T1.2b,
@@ -420,5 +422,223 @@ describe('constants (T1.39–T1.40, §3/§6)', () => {
     expect(CAPABILITY_ROWS.map((r) => r.admin)).toEqual([true, true, true, true, true, true, true, true])
     expect(CAPABILITY_ROWS.map((r) => r.reviewer)).toEqual([true, true, true, true, true, false, false, false])
     expect(CAPABILITY_ROWS.map((r) => r.preparer)).toEqual([true, true, true, false, false, false, false, false])
+  })
+})
+
+// ============================================================================
+// QA1–QA17 — adversarial / edge coverage (MEMB-01-01 QA, Mode B)
+// ============================================================================
+// T1.1–T1.40 are the architect's acceptance-criteria specs, authored before the
+// implementation. Each spec below was chosen because a mutation of the shipped code
+// SURVIVED that set: it names a behaviour §5/§6/§15.5/§15.6 states but nothing yet
+// pins. Nothing here re-asserts a T1 spec.
+
+/** A holder list the seed cannot produce: mixed statuses on one position. */
+const cfoHolders = (statuses: readonly MemberStatus[]): Member[] =>
+  statuses.map((s, i) => ({ ...inhouseRow(`Holder${i} Person`, s, 'cfo'), id: `m-cfo-${i}`, name: `Holder ${i}` }))
+
+describe('CLIENT_ROSTER (QA1, §14.5)', () => {
+  it('is the six CFG companies, ids equal to their CFG index, in CFG order (QA1)', () => {
+    // The roster had no spec of its own. Its ids ARE the CFG indices — every stored
+    // `clientAccess` subset in the seed indexes into this array by position.
+    expect(CLIENT_ROSTER).toHaveLength(6)
+    expect(CLIENT_ROSTER.map((c) => c.id)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(CLIENT_ROSTER.map((c) => c.name)).toEqual(CFG.map((c) => c.name))
+    expect(CLIENT_ROSTER[0].name).toBe('Lagos Freight & Logistics Ltd')
+    expect(CLIENT_ROSTER[5].name).toBe('Kano Textile Mills Plc')
+  })
+})
+
+describe('client access — decided-but-unpinned behaviour (QA2–QA5, §6)', () => {
+  it("resolves 'all' to every roster name rather than to an empty list (QA2)", () => {
+    // A judgement call the story does not make: `'all'` could equally have returned []
+    // and pushed the special case onto callers. It does not — pinned so MEMB-01-04's
+    // tooltip and MEMB-01-07's drawer can rely on it.
+    expect(clientAccessNames('all')).toEqual(CFG.map((c) => c.name))
+    expect(clientAccessNames('all')).toHaveLength(6)
+  })
+
+  it('returns names in CFG order whatever order the stored ids are in (QA3)', () => {
+    // T1.34 passes [0,1,3] — already sorted — so it cannot see an implementation that
+    // simply maps the stored order.
+    expect(clientAccessNames([3, 0])).toEqual(['Lagos Freight & Logistics Ltd', 'Adeyemi & Sons Trading'])
+    expect(clientAccessNames([5, 2, 0])).toEqual([
+      'Lagos Freight & Logistics Ltd',
+      'Nigerian Delta Supplies Co.',
+      'Kano Textile Mills Plc',
+    ])
+  })
+
+  it('resolves an empty subset to nothing and ignores an id off the roster (QA4)', () => {
+    expect(clientAccessNames([])).toEqual([])
+    expect(clientAccessNames([99])).toEqual([])
+    expect(clientAccessNames([0, 99])).toEqual(['Lagos Freight & Logistics Ltd'])
+  })
+
+  it('labels a single-client subset in the singular — the seeded invited firm row (QA5)', () => {
+    // Bature Suleiman ships `[0]`, so '1 client' is reachable on the shipped screen;
+    // T1.33 only exercises 'all' / 3 / 2 / 0.
+    const bature = firm().find((m) => m.name === 'Bature Suleiman')
+    expect(bature?.clientAccess).toEqual([0])
+    expect(clientAccessLabel([0])).toBe('1 client')
+    expect(clientAccessLabel([0, 1])).toBe('2 clients')
+  })
+})
+
+describe('resolvePosition and the two approval lines — frames the seed cannot reach (QA6–QA9, §15.5)', () => {
+  it('picks the first ACTIVE holder, not the first holder, and counts every holder as extra (QA6)', () => {
+    // No seeded position has an inactive holder ahead of an active one, so T1.21/T1.22
+    // pass just as happily against `primary = all[0].name`.
+    const list = cfoHolders(['suspended', 'active', 'invited'])
+    expect(names(list)).toEqual(['Holder 0', 'Holder 1', 'Holder 2'])
+    expect(resolvePosition(list, 'cfo')).toEqual({ kind: 'ok', primary: 'Holder 1', extra: 2 })
+  })
+
+  it('reports a position held only by an invited member as blocked, never as unassigned (QA7)', () => {
+    // §6's notice counts positions with NO holder; an invite that has not been accepted
+    // is a holder, so this belongs in the blocked bucket instead.
+    const list = [inhouseRow('Sadiq Ibrahim', 'invited', 'cfo')]
+    expect(resolvePosition(list, 'cfo')).toEqual({ kind: 'blocked', primary: 'Sadiq Ibrahim', extra: 0 })
+    expect(blockedPositions(list)).toEqual(['cfo'])
+    expect(unassignedPositions(list)).not.toContain('cfo')
+  })
+
+  it('keeps the "+n" suffix on a blocked canvas line (QA8)', () => {
+    // Decided, not specified: the "+n" rule is per-line, not per-variant. Unreachable
+    // from the seed, where the one blocked position has a single holder.
+    const res = resolvePosition(cfoHolders(['suspended', 'suspended', 'invited']), 'cfo')
+    expect(res).toEqual({ kind: 'blocked', primary: 'Holder 0', extra: 2 })
+    expect(canvasApprovalLine(res)).toBe('Holder 0 +2 — suspended')
+  })
+
+  it('omits "+n" from the inspector line even when the canvas shows it (QA9)', () => {
+    // §11.2's worked example is Ngozi with a second fin_dir holder and NO "+1". T1.26
+    // only ever passes resolutions with extra === 0, so the asymmetry was unpinned.
+    const res = resolved('fin_dir')
+    expect(res).toEqual({ kind: 'ok', primary: 'Ngozi Balogun', extra: 1 })
+    expect(canvasApprovalLine(res)).toBe('Ngozi Balogun +1')
+    expect(inspectorApprovalLine(res)).toBe('Currently: Ngozi Balogun')
+  })
+})
+
+describe('stepsFor — counting and empty input (QA10–QA11, §15.5)', () => {
+  it('counts every matching approval in a policy, not merely whether one exists (QA10)', () => {
+    // No seeded policy names one position twice, so `count` is never observed above 1.
+    const policy: Policy = {
+      id: 'polZ',
+      name: 'Twice-named policy',
+      scope: 'All invoices',
+      status: 'published',
+      updated: 'just now',
+      nodes: [
+        { id: 'zn1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
+        { id: 'zn2', type: 'approval', role: 'fin_mgr', sla: '48', delegate: false },
+        {
+          id: 'zn3',
+          type: 'condition',
+          field: 'amount',
+          op: '>',
+          value: 1_000_000,
+          then: [{ id: 'zn4', type: 'approval', role: 'fin_mgr', sla: '72', delegate: false }],
+          else: [],
+        },
+      ],
+    }
+    expect(stepsFor([policy], 'fin_mgr')).toEqual({ total: 3, policies: [{ name: 'Twice-named policy', count: 3 }] })
+  })
+
+  it('returns an empty result for an empty policy list (QA11)', () => {
+    expect(stepsFor([], 'fin_dir')).toEqual({ total: 0, policies: [] })
+  })
+})
+
+describe('empty-list boundaries (QA12, §5)', () => {
+  it('every list derivation degrades to empty — except unassignedPositions, which reports all eight (QA12)', () => {
+    const none: Member[] = []
+    expect(holders(none, 'cfo')).toEqual([])
+    expect(activeHolders(none, 'cfo')).toEqual([])
+    expect(blockedPositions(none)).toEqual([])
+    expect(departmentsInUse(none)).toEqual([])
+    expect(delegateCandidates(none)).toEqual([])
+    expect(activeAdmins(none)).toEqual([])
+    expect(resolvePosition(none, 'cfo')).toEqual({ kind: 'none' })
+
+    // The one asymmetry: with nobody in the workspace, every approval position is vacant.
+    expect(unassignedPositions(none)).toEqual(WF_ROLES.map((r) => r.key))
+    expect(unassignedPositions(none)).toHaveLength(8)
+  })
+})
+
+describe('inhouseNotifyTargets — empty current (QA13, §11.4)', () => {
+  it('appends nothing when the node carries no stored target (QA13)', () => {
+    // A new notify node's target starts empty; an unguarded push would put a blank
+    // option at the bottom of the select.
+    expect(inhouseNotifyTargets(inhouse(), '')).toEqual(NOTIFY_BASE)
+    expect(inhouseNotifyTargets([], '')).toEqual(['Audit Committee', 'Board', 'Preparer'])
+  })
+})
+
+describe('activeAdmins and lastActiveLabel — status precedence (QA14–QA15, §9/§10.1)', () => {
+  it('counts only ACTIVE admins — a suspended or invited admin does not hold the lock (QA14)', () => {
+    // Both seeds ship exactly one admin, so T1.38 reads 1 whether or not status filters.
+    const list = [
+      { ...inhouseRow('Ngozi Balogun', 'active', 'fin_dir'), role: 'admin' as const },
+      { ...inhouseRow('Suspended Admin', 'suspended', null), role: 'admin' as const },
+      { ...inhouseRow('Invited Admin', 'invited', null), role: 'admin' as const },
+    ]
+    expect(names(activeAdmins(list))).toEqual(['Ngozi Balogun'])
+  })
+
+  it('reads the invite expiry even when an invited row carries a last-active value (QA15)', () => {
+    // §10.1 makes the Last active column read the expiry for invited rows, full stop —
+    // status wins over the stored string. Every seeded invited row has `null`, so the
+    // precedence was unobservable.
+    const row: Member = { ...inhouseRow('Nneka Chukwu', 'invited', null), lastActive: '5 minutes ago' }
+    expect(lastActiveLabel(row)).toBe('Expires in 6 days')
+  })
+})
+
+describe('seed invariants the reducers will depend on (QA16–QA17, §15.6)', () => {
+  it('gives every member a unique id and a unique email within its mode (QA16)', () => {
+    // MEMB-01-02's replaceMember / removeMember key off `id`, and classifyInvites
+    // compares lower-cased emails; a duplicate in either would break them silently.
+    for (const list of [firm(), inhouse()]) {
+      const ids = list.map((m) => m.id)
+      const emails = list.map((m) => m.email.toLowerCase())
+      expect(new Set(ids).size).toBe(list.length)
+      expect(new Set(emails).size).toBe(list.length)
+    }
+  })
+
+  it('marks the two founding admins as invited by nobody, and everyone else by a name (QA17)', () => {
+    // Decided, not specified: inventing an inviter for the founding admin would invent
+    // a fact. §8's drawer renders this string as-is.
+    for (const list of [firm(), inhouse()]) {
+      for (const m of list) {
+        if (m.isYou) expect(m.invitedBy).toBe('—')
+        else expect(m.invitedBy).not.toBe('—')
+      }
+    }
+    expect(you(firm()).invitedBy).toBe('—')
+    expect(you(inhouse()).invitedBy).toBe('—')
+    expect(firm().find((m) => m.name === 'Folake Adesina')?.invitedBy).toBe('Chinedu Okafor')
+    expect(inhouse().find((m) => m.name === 'Yetunde Fashola')?.invitedBy).toBe('Ngozi Balogun')
+  })
+})
+
+describe('CAPABILITY_ROWS copy (QA18, §6)', () => {
+  it('carries §6\'s eight capability labels, in §6\'s order (QA18)', () => {
+    // T1.40 pins the row count and the three boolean columns but never looks at a label,
+    // so the copy MEMB-01-05 renders was entirely unenforced.
+    expect(CAPABILITY_ROWS.map((r) => r.label)).toEqual([
+      'create and edit invoices',
+      'import from file or ERP',
+      'run validation',
+      'approve in approval steps',
+      'transmit to FIRS/MBS',
+      'invite and manage members',
+      'manage ERP connectors',
+      'manage signing certificates',
+    ])
   })
 })

@@ -33,13 +33,9 @@
 // parseReviewHash/formatReviewHash are the pure hash codec only; the
 // `window.location.hash` read/write and App.tsx boot wiring land in 09 -- this module
 // stays DOM-free so it is node-testable with no jsdom.
-//
-// 08 STUB (task-284, Stage 2.5/Mode A) -- every export below throws `new Error('not
-// implemented')` before Stage 3 implements it; that IS the correct RED reason (mirrors
-// the validationApi.ts/importApi.ts stub idiom this repo already uses).
-import type { ListInvoicesOptions, InvoiceStatus } from './invoices'
-import type { Violation } from './validationApi'
-import type { RowError, ImportBatch } from './importApi'
+import { invoiceStatusStyle, type ListInvoicesOptions, type InvoiceStatus } from './invoices'
+import { severityStyle, type Severity, type Violation } from './validationApi'
+import { rowErrorRows, type RowError, type ImportBatch } from './importApi'
 import type { StatusStyle } from '../types'
 
 export interface VerdictInput {
@@ -62,8 +58,59 @@ export interface VerdictPill {
   badges: VerdictBadge[]
 }
 
-export function verdictPill(_input: VerdictInput): VerdictPill {
-  throw new Error('not implemented')
+// severityStyle's `.label` ('Error'/'Warning'/'Info') is dropped here deliberately -- see
+// the module header. A badge carrying both `tone.label` and `label` would let a component
+// render 'Error' where 'KEPT · INVALID' belongs.
+function tone(sev: Severity): BadgeTone {
+  const { bg, border, text } = severityStyle(sev)
+  return { bg, border, text }
+}
+
+// EXACTLY ONE badge, by precedence: kept-invalid > rules-failed > advisory > none. Every
+// row of the story's verdict table falls out of that one line, and it is what makes the
+// two exclusivity rules structural rather than remembered -- `KEPT · INVALID` cannot stack
+// on `N RULES FAILED`, and `0 RULES FAILED` is unreachable because the rules-failed arm is
+// only entered with `errorCount > 0`.
+//
+// `severity === 'error'` is the ONLY blocking predicate (§10.12's trap): "has a violation"
+// is never the input to the failing badge, so a warning-only row is VALIDATED + advisory,
+// never failing. All 19 shipped rules are `error` today, which is exactly why a lazy
+// `violations.length` impl would pass everything except PILL-4 and then break on the first
+// warning rule ever published.
+//
+// The advisory arm is status-AGNOSTIC on purpose: a draft carrying warnings gets the same
+// advisory badge a validated row does. Suppressing it would be forming an opinion the
+// server did not send (that a draft's warnings do not count), and this module reports what
+// the wire says. Not pinned by the frozen suite either way -- flagged in the task notes.
+export function verdictPill(input: VerdictInput): VerdictPill {
+  const status = invoiceStatusStyle(input.status)
+  const errorCount = input.violations.filter((v) => v.severity === 'error').length
+  const advisoryCount = input.violations.length - errorCount
+
+  if (input.kept_as_is_at != null) {
+    // `count` is the number of BLOCKING violations the row was kept despite -- machine-
+    // readable context for a tooltip, never interpolated into this badge's own label.
+    return { status, badges: [{ kind: 'kept-invalid', count: errorCount, label: 'KEPT · INVALID', tone: tone('warning') }] }
+  }
+  if (errorCount > 0) {
+    return {
+      status,
+      badges: [{ kind: 'rules-failed', count: errorCount, label: `${errorCount} RULES FAILED`, tone: tone('error') }],
+    }
+  }
+  if (advisoryCount > 0) {
+    // Tone follows the severity actually present rather than a fixed one: an advisory set
+    // holding a warning renders amber, an info-only set renders muted. Hard-coding either
+    // would mis-signal the other.
+    const advisorySeverity: Severity = input.violations.some((v) => v.severity === 'warning') ? 'warning' : 'info'
+    return {
+      status,
+      badges: [
+        { kind: 'advisory', count: advisoryCount, label: `${advisoryCount} ADVISORY`, tone: tone(advisorySeverity) },
+      ],
+    }
+  }
+  return { status, badges: [] }
 }
 
 export interface ChannelTiles {
@@ -72,11 +119,41 @@ export interface ChannelTiles {
   atZero: boolean
 }
 
+// D1: the APP supplies the rule-set NAME, the server supplies the NUMBER. Kept a module
+// constant rather than imported from lib/rules.ts, whose GOLDEN_SET pins a `v8` the server
+// has never emitted -- that is mock data for the Rules screen (which has no endpoint) and
+// importing it here would let a hard-coded version leak into a live surface.
+const RULE_SET_NAME = 'NG-MBS'
+
+// `undefined` is handled alongside `null` on purpose, despite ImportBatch typing this
+// field always-present: the recorded shipped trap is that InvoiceRecord's own
+// rule_set_version is typed `number | null` and still reads `undefined` on list rows. A
+// missing version renders "not evaluated" and NEVER `v0` -- `?? 0` here would report a
+// rule set numbered zero as if it had run.
+function ruleSetLabel(v: number | null | undefined): string {
+  return v != null ? `${RULE_SET_NAME} v${v}` : 'not evaluated'
+}
+
+// The two channels stay apart (§7.1). LIVE is `pagination.total` off two filtered list
+// queries, PASSED IN -- never counted off whatever page the caller happens to hold, and
+// never read from the report's invoices_clean/invoices_with_violations (which the GET
+// deliberately does not serve). FROZEN is the batch's own structural errors, one number
+// feeding the tile, the tab count and the footer so the three cannot disagree.
+//
+// `atZero` reports the FROZEN channel's zero state as an explicit fact -- §7.1 renders it
+// as a distinct dashed-and-greyed tile, so "no unreadable rows" is a thing to say, not a
+// thing to omit. Deliberately NOT coupled to the live totals: the channels are independent
+// and an empty batch is not the same fact as a batch with nothing unreadable in it.
 export function channelTiles(
-  _batch: Pick<ImportBatch, 'errors' | 'rule_set_version'>,
-  _live: { cleanTotal: number; failingTotal: number },
+  batch: Pick<ImportBatch, 'errors' | 'rule_set_version'>,
+  live: { cleanTotal: number; failingTotal: number },
 ): ChannelTiles {
-  throw new Error('not implemented')
+  const unreadable = unreadableRows(batch.errors).length
+  return {
+    live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
+    frozen: { unreadable, ruleSetLabel: ruleSetLabel(batch.rule_set_version) },
+    atZero: unreadable === 0,
+  }
 }
 
 export interface UnreadableRow {
@@ -85,26 +162,94 @@ export interface UnreadableRow {
   message: string
 }
 
-export function unreadableRows(_errors: RowError[]): UnreadableRow[] {
-  throw new Error('not implemented')
+// Row numbers come off the SHIPPED union reader rowErrorRows, never a local re-read of
+// the row/rows union -- two readers of one union is the drift hazard importReport.ts
+// already names. `rows:[5,6]` is therefore two entries, not one.
+//
+// An error carrying NEITHER `row` nor `rows` yields `rowErrorRows(e) === []`, so a naive
+// `errors.flatMap(rowErrorRows)` would silently drop a server-reported structural failure
+// entirely -- the swallow this story forbids. It becomes one `row: null` entry instead:
+// "we cannot tell you which row" is still a report; saying nothing is not.
+//
+// `column` falls back to an em dash, never a fabricated column name (decision 20).
+export function unreadableRows(errors: RowError[]): UnreadableRow[] {
+  return errors.flatMap((e): UnreadableRow[] => {
+    const column = e.field ?? '—'
+    const rows = rowErrorRows(e)
+    if (rows.length === 0) return [{ row: null, column, message: e.message }]
+    return rows.map((row) => ({ row, column, message: e.message }))
+  })
 }
 
 export type ReviewPill = 'all' | 'needs-fix' | 'ready' | 'queued'
 
-export function filterToQuery(_pill: ReviewPill): Partial<ListInvoicesOptions> {
-  throw new Error('not implemented')
+// `all` returns an object with ZERO keys, not `{needsFix:false, status:undefined}` -- the
+// latter survives a spread into ListInvoicesOptions and, in a less strict emitter than
+// listInvoices', serializes as `?status=undefined`. No pill is ever satisfied by filtering
+// a page in the browser ([filters-are-server-side]): each one is a server query, so a pill
+// count is the server's `pagination.total`, not the length of whatever page is on screen.
+export function filterToQuery(pill: ReviewPill): Partial<ListInvoicesOptions> {
+  switch (pill) {
+    case 'needs-fix':
+      return { needsFix: true }
+    case 'ready':
+      return { status: 'validated' }
+    case 'queued':
+      return { status: 'queued' }
+    case 'all':
+      return {}
+  }
 }
 
-export function pagerLabels(_p: { limit: number; offset: number; total: number }): { showing: string; page: string } {
-  throw new Error('not implemented')
+// Renders §7.3's two pager strings from `pagination` alone. The separator in
+// "SHOWING 1–50 OF 500" is an EN DASH (U+2013), per the design -- a hyphen is a silent
+// copy bug.
+//
+// The `limit < 1` arm is what makes AC-9's "no NaN, no Infinity" true: `ceil(total/0)` is
+// Infinity and `floor(0/0)` is NaN, and both would render into the string. That one IS
+// unreachable from the server (ListHandler 400s on `limit < 1`, and `pagination` echoes
+// the EFFECTIVE limit) -- a guard against a synthetic caller, not a case this expects.
+//
+// The `last < first` arm is DIFFERENT: it is genuinely reachable from a real response.
+// Any `offset >= total` lands there -- e.g. sitting on page 2 (`offset:50`) when a filter
+// narrows the result set to 10 -- and it renders "SHOWING 0 OF 10", not an inverted
+// "51–10". `page` clamps to `pages` in the same situation, so the two strings agree that
+// there is nothing on this page rather than disagreeing about where it is.
+export function pagerLabels(p: { limit: number; offset: number; total: number }): { showing: string; page: string } {
+  const first = p.total === 0 ? 0 : p.offset + 1
+  const last = Math.min(p.offset + p.limit, p.total)
+  const pages = p.limit < 1 ? 1 : Math.max(1, Math.ceil(p.total / p.limit))
+  const page = Math.min(pages, (p.limit < 1 ? 0 : Math.floor(p.offset / p.limit)) + 1)
+
+  let showing: string
+  if (p.total === 0) showing = 'SHOWING 0 OF 0'
+  else if (last < first) showing = `SHOWING 0 OF ${p.total}`
+  else showing = `SHOWING ${first}–${last} OF ${p.total}`
+
+  return { showing, page: `PAGE ${page} / ${pages}` }
 }
 
-export function parseReviewHash(_hash: string): string | null {
-  throw new Error('not implemented')
+const REVIEW_HASH_PREFIX = '#review/'
+
+// Canonical 8-4-4-4-12 hex. Anchored at both ends on purpose: a `startsWith` + `slice`
+// parser would happily return '../../etc' or a '<uuid>/extra' suffix as if it were a batch
+// id, and that id goes straight into a request whose empty/absent form is a TENANT-WIDE
+// list. Case is accepted in both directions because uuid.Parse is (server side).
+const REVIEW_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+// Returns null -- NEVER '' -- for anything that is not `#review/<uuid>`: '' is a string a
+// caller can accidentally treat as a usable id, and passing it to listInvoices omits the
+// param and silently widens the query to the whole tenant. The prefix match is
+// case-SENSITIVE ('#REVIEW/...' is not our route) while the uuid's own case is preserved
+// VERBATIM -- lower-casing it here would be rewriting the caller's data.
+export function parseReviewHash(hash: string): string | null {
+  if (!hash.startsWith(REVIEW_HASH_PREFIX)) return null
+  const tail = hash.slice(REVIEW_HASH_PREFIX.length)
+  return REVIEW_UUID.test(tail) ? tail : null
 }
 
-export function formatReviewHash(_id: string): string {
-  throw new Error('not implemented')
+export function formatReviewHash(id: string): string {
+  return `${REVIEW_HASH_PREFIX}${id}`
 }
 
 // The single composer 09/10 use to build every review request -- flagged as an 8th
@@ -112,10 +257,26 @@ export function formatReviewHash(_id: string): string {
 // Plan §4, not smuggled: it is the only lever this subtask has to discharge 06's
 // recorded safety argument, and without it 09/10 would hand-assemble ListInvoicesOptions
 // inside a component, contradicting this subtask's own dumb-renderers premise.
+//
+// The throw is the runtime half of the same argument, and it is the only enforcement a
+// pure function has left: the TYPE stops `undefined`, but `''` is still a `string`, and
+// listInvoices treats an empty importBatchId as ABSENT (matching the server's own
+// empty-is-absent rule) -- which returns a tenant-wide page carrying a plausible total,
+// i.e. exactly the wrong-page-instead-of-an-honest-error failure mode ListHandler's own
+// doc comment refuses. Loud beats a review table full of another batch's invoices.
+//
+// The extras follow listInvoices' emission rules rather than being spread in blind: a
+// blank search box must not become `q=''` on the wire, and `offset: 0` must survive.
 export function reviewQuery(
-  _batchId: string,
-  _pill: ReviewPill,
-  _extra?: { ruleKey?: string; q?: string; limit?: number; offset?: number },
+  batchId: string,
+  pill: ReviewPill,
+  extra: { ruleKey?: string; q?: string; limit?: number; offset?: number } = {},
 ): ListInvoicesOptions {
-  throw new Error('not implemented')
+  if (batchId === '') throw new Error('reviewQuery: batchId is required — an empty one lists the whole tenant')
+  const opts: ListInvoicesOptions = { importBatchId: batchId, ...filterToQuery(pill) }
+  if (extra.ruleKey) opts.ruleKey = extra.ruleKey
+  if (extra.q) opts.q = extra.q
+  if (extra.limit != null) opts.limit = extra.limit
+  if (extra.offset != null) opts.offset = extra.offset
+  return opts
 }

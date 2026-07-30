@@ -27,11 +27,20 @@ import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 
 export type Severity = 'error' | 'warning' | 'info'
 
+// `expected`/`actual` (INVCR-01-08 AC-3) carry the arithmetic a math rule disagreed with,
+// so the inline fix editor (subtask 14) can show "expected 1,150.00, got 1,050.00" instead
+// of only the rule's prose. OPTIONAL and `string`, mirroring the `*string`+`omitempty` the
+// server side puts on the wire in subtask 12 ([expected-is-decimal-string]): a rule with no
+// arithmetic to report omits the keys entirely, so ABSENT means absent -- never `''`, which
+// would render as an empty expectation rather than as no expectation. Decimal STRINGS, not
+// numbers, for the same reason every money field on the wire is ([D13]).
 export interface Violation {
   rule_key: string
   severity: Severity
   message: string
   path?: string
+  expected?: string
+  actual?: string
 }
 
 export interface ValidateResponse {

@@ -18,10 +18,18 @@
 // seam from M3-07-02, src/lib/authedFetch.ts), mirroring listEntities/updateEntity in
 // portfolio.ts. Gateway path prefix confirmed `${base}/api/invoice/v1/…`
 // (importApi.ts:248,263):
-// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?needs_attention=true]
-//                       [&entity_id=...]`, unwraps `.invoices` (ListHandler,
-//                       handlers.go:223-292, [needs-attention-param-strictness],
-//                       [entity-id-restored]).
+// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?<any of the nine
+//                       filters>]`, resolving the ENVELOPE whole -- `{invoices,
+//                       pagination}`, not the bare array it used to unwrap (INVCR-01-08,
+//                       task-284 AC-1: `pagination.total` is what every review filter-pill
+//                       count and the pager read, and it was unreachable while this
+//                       discarded it). Absent options emit no param and the client adds no
+//                       defaults of its own (ListHandler, handlers.go:349-451,
+//                       [needs-attention-param-strictness], [entity-id-restored]).
+// - violationSummary:   GET   `${base}/api/invoice/v1/invoices/violation-summary
+//                       ?import_batch_id=...`, unwraps `.rules` -- the review rail's
+//                       rule-key aggregate (ViolationSummaryHandler, handlers.go:821;
+//                       import_batch_id is REQUIRED there, absent/malformed is a 400).
 // - getInvoice:         GET   `${base}/api/invoice/v1/invoices/{id}`, resolves an
 //                       InvoiceDetailRecord and normalizes a missing/undefined
 //                       `rule_set_version` to `null` (defensive; the backend now sends
@@ -212,7 +220,10 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   revalidate_blocked_reason: string | null
 }
 
-// GET /v1/invoices response envelope (listResponse, handlers.go:91-98).
+// GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
+// keys -- applied filters are deliberately NOT echoed back
+// (TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues pins len == 2), so
+// `pagination` reports the EFFECTIVE limit/offset the server used, clamped.
 export interface InvoiceListResponse {
   invoices: InvoiceRecord[]
   pagination: { limit: number; offset: number; total: number }
@@ -227,13 +238,36 @@ export interface StatusChange {
   changed_at: string
 }
 
-// listInvoices's two filters (ListFilter, invoice.go:200-217): needsAttention
-// ([needs-attention-bool-true-only] — absent/false applies no predicate) and entityId
-// ([entity-id-restored] — absent/undefined applies no filter, tenant-wide). Both AND
-// together server-side when set together.
+// listInvoices's nine filters (ListFilter, invoice.go:200-217; ListHandler,
+// handlers.go:349-451). All nine AND together server-side, and EVERY one is optional:
+// an absent option emits NO query param, so `listInvoices(af, base, {})` is byte-identical
+// to the pre-INVCR-01 tenant-wide call.
+//
+// The four that shipped first: needsAttention ([needs-attention-bool-true-only] —
+// absent/false applies no predicate), entityId ([entity-id-restored] — absent/undefined
+// applies no filter, tenant-wide), plus limit/offset, which the client never sent until
+// now. INVCR-01-06 ([D4]) adds the review screen's five: importBatchId, status, needsFix,
+// ruleKey, q.
+//
+// `status` is typed InvoiceStatus, NOT string, on purpose: D2 retires 'approved' from
+// this flow's vocabulary, and a typed enum makes writing it a compile error at every call
+// site — cheaper and earlier than a runtime guard.
+//
+// NO CLIENT-SIDE DEFAULTS (task-284 §1, pinned by LIST-5 + I7's `not.toContain('?')`).
+// The server already defaults limit=50/offset=0 and clamps limit down to 200
+// (handlers.go:361-375); an `opts.limit ?? 50` here would emit `?limit=50` on every call
+// in the app and silently change the wire for the three shipped screens that send no
+// options at all. The server's defaults stay the only defaults.
 export interface ListInvoicesOptions {
   needsAttention?: boolean
   entityId?: string
+  limit?: number
+  offset?: number
+  importBatchId?: string
+  status?: InvoiceStatus
+  needsFix?: boolean
+  ruleKey?: string
+  q?: string
 }
 
 // One entry of editInvoice's optional `line_items` array (lineItemReq,
@@ -339,36 +373,59 @@ export interface BatchSubmitResultItem {
   reason?: string
 }
 
+// Returns the envelope WHOLE (INVCR-01-08/task-284 AC-1), not the bare `.invoices` array
+// it used to unwrap: `pagination.total` is the source of every review-screen filter-pill
+// count and of the "SHOWING 1–50 OF 500" pager, and discarding it here made that number
+// unreachable no matter what the server sent.
+//
+// Three emission rules, one per kind of option — a wrong one here is the only way this
+// function can break I7/LIST-1b/LIST-4:
+//   - booleans emit iff STRICTLY `=== true` ([needs-attention-bool-true-only]); `false`
+//     is absent, and `??`/truthiness would let the string "false" through permissive.
+//   - strings emit iff truthy, so `''` is ABSENT — matching the server's own
+//     empty-is-absent rule (handlers.go:409-445, `if raw != ""`).
+//   - limit/offset emit iff `!= null`, NEVER truthiness: `offset: 0` is falsy, so an
+//     `if (opts.offset)` would silently drop the first page's own offset (LIST-4).
 export async function listInvoices(
   authedFetch: AuthedFetch,
   base: string,
   opts: ListInvoicesOptions = {},
-): Promise<InvoiceRecord[]> {
+): Promise<InvoiceListResponse> {
   const params = new URLSearchParams()
   if (opts.needsAttention === true) params.set('needs_attention', 'true')
   if (opts.entityId) params.set('entity_id', opts.entityId)
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  if (opts.offset != null) params.set('offset', String(opts.offset))
+  if (opts.importBatchId) params.set('import_batch_id', opts.importBatchId)
+  if (opts.status) params.set('status', opts.status)
+  if (opts.needsFix === true) params.set('needs_fix', 'true')
+  if (opts.ruleKey) params.set('rule_key', opts.ruleKey)
+  if (opts.q) params.set('q', opts.q)
   const query = params.toString() ? `?${params.toString()}` : ''
-  const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
-  return res.invoices
+  return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
 }
 
-// GET /v1/invoices/violation-summary?import_batch_id=... -- the review rail's rule-key
-// aggregate (08/task-284 AC-2, per 07's own R3). Unwraps `.rules` unconditionally,
-// mirroring listInvoices' `.invoices` unwrap and submitInvoices' `.results` unwrap
-// (:442). Server-ordered (count DESC / key ASC) and severity-agnostic -- never re-sorted
-// or re-filtered here, so the rail matches the `rule_key` filter it triggers. 08 STUB
-// (task-284, Stage 2.5) -- Stage 3 implements the body.
+// One row of the violation-summary aggregate (RuleCount, store.go:639-642): a distinct
+// rule_key and the number of DISTINCT invoices failing it in this batch -- an invoice
+// naming the same rule twice counts ONCE, so these never sum to the invoice total.
 export interface RuleCount {
   rule_key: string
   invoices: number
 }
 
+// The rows arrive SERVER-ordered (count DESC, then rule_key ASC) and severity-agnostic,
+// and are passed through untouched: this rail is a set of filter triggers, so re-sorting
+// or re-filtering it here would make the rail disagree with the `rule_key` query each of
+// its rows fires ([filters-are-server-side]).
 export async function violationSummary(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _importBatchId: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  importBatchId: string,
 ): Promise<RuleCount[]> {
-  throw new Error('not implemented')
+  const res = await authedFetch<{ rules: RuleCount[] }>(
+    `${base}/api/invoice/v1/invoices/violation-summary?import_batch_id=${encodeURIComponent(importBatchId)}`,
+  )
+  return res.rules
 }
 
 // The two action booleans normalize with `=== true`, NOT `?? false`: `??` only defends

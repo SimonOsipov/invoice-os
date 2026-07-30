@@ -16,7 +16,7 @@
 // asymmetry with ReviewUnreadableTab (a props-only renderer over frozen batch data) is
 // the point — that channel is frozen, this one is live.
 //
-// FOUR things here look like extra work until you know why:
+// FIVE things here look like extra work until you know why:
 //
 //  1. `useAsync<InvoiceListResponse>` over the WHOLE ENVELOPE, never `.invoices`.
 //     asyncReducer's `success` arm nulls `data` whenever resolveStatus says empty, and
@@ -50,6 +50,20 @@
 //     AGAIN by the workspace switcher would render a partially-empty batch on a
 //     sibling-entity deep link, and it would look correct in every local test.
 //
+//  5. The bulk bar's THREE structural placements (INVCR-01-11). (a) The submit and
+//     confirm buttons are gated on `loading`, because point 2's keep-previous serves the
+//     PREVIOUS page's ids across the whole loading gap — the table is dimmed, never
+//     disabled, so an ungated confirm after `Next →` sends invoices the user is no
+//     longer looking at and gets a 200 for it. (b) The results panel is a sibling gated
+//     on `results !== null` ALONE: nested under `selected.length > 0` a successful
+//     submit's own `setSelected([])` would unmount it the instant it should appear
+//     (InvoicesList.tsx:299-302 records hitting exactly that), and nested under the
+//     `shown != null` branch a later page error would destroy the receipt. (c) The
+//     confirmation is a second action INSIDE the bar, not a modal: this app has no
+//     confirm-modal precedent, WorkflowsView.tsx:124-126 refuses to invent one, and the
+//     repo's only such modal (a different SPA) records no Escape, no focus trap and no
+//     `role="dialog"` — a11y debt this would inherit for one button.
+//
 // The `Ln` (line count) column of §7.3's grid is NOT built: Store.List returns invoice
 // HEADERS with LineItems left nil by design (store.go:478-479), so a line count has no
 // data source, and putting one on the list wire shape would change the response of three
@@ -57,16 +71,18 @@
 
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 
-import { ErrorState, Loading, useAsync } from '@invoice-os/api-client'
+import { ErrorState, Loading, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
 import { chevDownGlyph, searchGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
   isRowSelectable,
   listInvoices,
+  newIdempotencyKey,
   pruneSelection,
   selectableIds,
   selectAllState,
+  submitInvoices,
   toggleSelection,
   violationSummary,
   type InvoiceListResponse,
@@ -76,6 +92,10 @@ import {
   type RuleCount,
 } from '../lib/invoices'
 import {
+  BULK_COPY,
+  bulkBarView,
+  bulkOutcome,
+  bulkPhaseReducer,
   initialReviewFilter,
   pagerLabels,
   pagerNav,
@@ -84,6 +104,8 @@ import {
   reviewPageQuery,
   reviewPills,
   verdictPill,
+  type BulkPhase,
+  type SubmitResultRow,
 } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 
@@ -100,17 +122,32 @@ const REVIEW_GRID_GAP = 9
 // and not twelve.
 const SEARCH_DEBOUNCE_MS = 300
 
+// The bulk bar's shared disabled treatment. `disabled` is the real gate; this only makes
+// it visible, matching the Pager's own `btn` idiom 400 lines below (deliberately NOT
+// hoisted out of it — that component holds a second, unrelated height).
+function btnStyle(enabled: boolean) {
+  return { height: 34, padding: '0 14px', fontSize: 12.5, opacity: enabled ? 1 : 0.45, cursor: enabled ? 'pointer' : 'not-allowed' }
+}
+
 export function ReviewInvoicesTab({
   ctx,
   base,
   batchId,
   totals,
+  onSubmitted,
 }: {
   ctx: PlatformCtx
   // Both NON-NULLABLE: the shell has already checked them before mounting this tab, and
   // the types say so rather than re-checking and inventing a second empty state.
   base: string
   batchId: string
+  // Fired after a successful bulk submit so the SHELL re-runs its four count queries.
+  // Without it the row badges correctly read QUEUED while all four pills, the green
+  // tile, the `Invoices (N)` tab label and the footer stay at their pre-submit numbers —
+  // and clicking `Ready to submit` then fires a query whose result contradicts the badge
+  // above it. The shell keeps its previous data across that refresh (`lastShell`), so
+  // this tab is NOT unmounted by it.
+  onSubmitted: () => void
   // The four pill counts, fetched by the SHELL in one Promise.all. Passing them down
   // makes AC-2 structurally true (each count IS its own filtered response's
   // pagination.total) and guarantees the `Ready to submit` pill can never disagree with
@@ -169,6 +206,19 @@ export function ReviewInvoicesTab({
   const rows = useMemo(() => shown?.invoices ?? [], [shown])
 
   const [selected, setSelected] = useState<string[]>([])
+  // The bulk-submit machine. `useState`, not `useReducer`: the contract is
+  // `const next = bulkPhaseReducer(phase, a); if (next === phase) return` — identity has
+  // to be able to stop the REQUEST, and useReducer's identity return only suppresses a
+  // re-render (the handler would fire anyway).
+  const [phase, setPhase] = useState<BulkPhase>('idle')
+  const [results, setResults] = useState<SubmitResultRow[] | null>(null)
+  const [submitError, setSubmitError] = useState<ApiError | null>(null)
+  // Checked and set SYNCHRONOUSLY, before anything async — React batches state updates,
+  // so a fast double-click re-enters the handler before `disabled` re-renders. The
+  // reducer's `submitting` identity arm is the structural half of the same guard; this
+  // ref is the half that closes the window `disabled` alone loses
+  // (InvoicesList.tsx:160-166 / App.tsx's `reqInFlight`).
+  const submitInFlight = useRef(false)
   // AC-6: an id that left the visible set leaves the selection — and under SERVER paging
   // "absent from `rows`" now means "on another page", which is what holds up the
   // zero-margin 200-id batch-submit cap InvoicesList.tsx:217-227 rests on (selection
@@ -183,6 +233,11 @@ export function ReviewInvoicesTab({
       const next = pruneSelection(sel, rows)
       return next.length === sel.length ? sel : next
     })
+    // A confirmation armed over page 1 must not still be armed over page 2's rows. The
+    // `submitting` guard keeps an unrelated `rows` change (a debounce landing) from
+    // re-enabling the button mid-request, and both branches return the SAME value when
+    // nothing changed, so this cannot loop the way an unguarded updater would.
+    setPhase((p) => (p === 'submitting' ? p : 'idle'))
   }, [rows])
 
   const allState = selectAllState(selected, rows)
@@ -190,9 +245,102 @@ export function ReviewInvoicesTab({
   const railList = railPills(rail.data ?? [], filter.ruleKey)
   const filtersActive = filter.pill !== 'all' || filter.ruleKey != null || filter.q !== ''
   const loading = page.status === 'loading'
+  const bar = bulkBarView(selected, rows, phase, loading)
+
+  // Every phase change goes through the pure reducer and bails on identity — "do
+  // nothing" is expressed once, in a tested function, rather than as an `if` per handler.
+  function toPhase(action: Parameters<typeof bulkPhaseReducer>[1]): boolean {
+    const next = bulkPhaseReducer(phase, action)
+    if (next === phase) return false
+    setPhase(next)
+    return true
+  }
+
+  // ANY selection change invalidates an armed confirmation, for the same reason the key
+  // is minted late: arm 3 rows → untick them → tick 5 others would otherwise re-show the
+  // bar already armed, one click away from sending a set the operator never armed. It
+  // also drops a stale error from the superseded selection (InvoicesList.tsx:203).
+  function disarm() {
+    setSubmitError(null)
+    toPhase({ type: 'cancel' })
+  }
 
   function toggleAll() {
     setSelected(allState === 'all' ? [] : selectableIds(rows))
+    disarm()
+  }
+
+  // Click 1 selects every eligible row on the page AND arms; click 2 runs the SAME
+  // submit() the bar's confirm runs, over ONE shared `phase` — so the footer and the bar
+  // can never hold two confirmations at once or disagree about which one is armed.
+  // Recorded edge: if the operator narrows the selection between the two clicks, click 2
+  // sends that narrower set (it is `bar.eligible`, always), not the whole page.
+  function submitAll() {
+    if (phase === 'idle') {
+      setSelected(selectableIds(rows))
+      toPhase({ type: 'arm' })
+      return
+    }
+    void submit()
+  }
+
+  async function submit() {
+    // `bar.eligible` is pruneSelection's output — the ONLY thing that ever goes on the
+    // wire. Never `selected`: an id that left the page or lost `validated` since the
+    // click would otherwise 404 the whole batch. Empty is reachable from the footer
+    // (its gate is page-scoped, so unticking every row leaves it enabled at zero
+    // eligible) and an empty `invoice_ids` is a 400 — checked BEFORE the transition
+    // below, or the bar would sit in `submitting` with no request to settle it.
+    const ids = bar.eligible
+    if (ids.length === 0) return
+    // Identity IS "do nothing": no arm ⇒ no request (AC-3), and a second confirm cannot
+    // re-enter a request the server already has.
+    if (!toPhase({ type: 'confirm' })) return
+    if (submitInFlight.current) return
+    submitInFlight.current = true
+    setSubmitError(null)
+    // Resolved from THIS page's rows before the refetch below nulls `page.data`: looked
+    // up live, every result row would flicker to a raw uuid, and a submitted invoice may
+    // leave the page entirely under the `Ready to submit` pill.
+    const numbersById = new Map(rows.map((row) => [row.id, row.invoice_number]))
+    try {
+      // A FRESH key per attempt, minted HERE and held nowhere. Arm → cancel → change the
+      // selection → arm → confirm would reuse a key minted at arm time; the server then
+      // derives the identical per-invoice dedupe key, skips the enqueue, runs NO
+      // transition, and the panel reads "Already submitted with this request" while the
+      // invoice silently strands at validated. Freshness is the invariant, not
+      // stability: BatchSubmit re-reads status FOR UPDATE and skips anything not
+      // validated, so a fresh key on a crash-retry is safe by construction.
+      const res = await submitInvoices(ctx.authedFetch, base, ids, newIdempotencyKey())
+      // submitInvoices unwraps `.results` unguarded and SUB-3 pins a malformed 2xx
+      // resolving to `undefined` — normalised here as well as inside bulkOutcome.
+      const items = res ?? []
+      const outcome = bulkOutcome({ ok: true, items }, numbersById)
+      setResults(outcome.results)
+      if (outcome.clearSelection) setSelected([])
+      // Functional, unlike the click-driven transitions above: this runs AFTER an await,
+      // so the closure's `phase` is stale by definition — the reducer must read the
+      // phase React actually holds.
+      setPhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
+      // BOTH refetches, neither optional. `page.run()` moves the row badges to QUEUED;
+      // `onSubmitted()` moves the shell's four counts, the tiles, the tab label and the
+      // footer. One without the other is a screen that contradicts itself.
+      // Badges are NEVER derived from the response above: batch_submit.go's
+      // duplicate-request branch hard-codes a known-wrong status (M5-11).
+      page.run()
+      onSubmitted()
+    } catch (err) {
+      // A request-level failure (a 404 on one stale id fails the WHOLE batch — there is
+      // no per-item result for it) keeps the selection so the operator can retry without
+      // re-picking rows, and shows NO results panel. `results: null` also clears a panel
+      // left by an earlier submit, which would otherwise read as this attempt's receipt.
+      const outcome = bulkOutcome({ ok: false }, numbersById)
+      setResults(outcome.results)
+      setSubmitError(toApiError(err))
+      setPhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
+    } finally {
+      submitInFlight.current = false
+    }
   }
 
   return (
@@ -351,6 +499,124 @@ export function ReviewInvoicesTab({
         </div>
       )}
 
+      {/* The receipt. Gated on `results !== null` ALONE and rendered OUTSIDE both the
+          selection branch and the `shown != null` branch — see the file header, point 5b.
+          Per-item rows only: a headline "N submitted" would have to come from
+          `items.filter(i => i.enqueued)`, and the one derived from `selected.length`
+          instead reports a server-skipped invoice as sent.
+          It deliberately SURVIVES a new selection and a new arm, and is replaced only by
+          the next outcome: its per-row skip labels are exactly what tells the operator
+          which invoices to re-pick, so clearing it the moment they start doing that would
+          destroy the information driving the action. */}
+      {results !== null && (
+        <div
+          data-testid="review-submit-results"
+          style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
+            <span className="label">{BULK_COPY.resultInvoice}</span>
+            <span className="label">{BULK_COPY.resultOutcome}</span>
+          </div>
+          {results.map((r, i) => (
+            <div key={`${r.invoiceNumber}-${i}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 500 }}>{r.invoiceNumber}</span>
+              <span style={{ fontSize: 12.5, color: r.enqueued ? 'var(--status-green-text)' : 'var(--fg-3)' }}>{r.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* A request-level failure. NO `onRetry`, deliberately: retrying is arming and
+          confirming again in the bar below, which AC-3 requires and which the intact
+          selection makes a two-click job. A one-click Retry here would either fire a
+          request with no confirmation, or — since `confirm` from `idle` is the reducer's
+          identity arm — be a button that does nothing at all. The error clears on the
+          next selection change (`disarm`), so it can never outlive the selection it
+          describes. */}
+      {submitError != null && (
+        <div data-testid="review-submit-error">
+          <ErrorState error={submitError} />
+        </div>
+      )}
+
+      {/* §7.3's bulk bar. Accent-tinted per AC-1, using the ENV_BANNER.live token pair. */}
+      {bar.visible && (
+        <div
+          data-testid="review-bulk-bar"
+          style={{ background: 'var(--action-tint)', border: '1px solid var(--teal-200)', borderRadius: 'var(--radius-md)', padding: '11px 14px', display: 'flex', flexDirection: 'column', gap: 9 }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{bar.countLabel}</span>
+            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              {phase === 'idle' ? (
+                <>
+                  <button
+                    data-testid="review-bulk-clear"
+                    onClick={() => {
+                      setSelected([])
+                      disarm()
+                    }}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={btnStyle(true)}
+                  >
+                    {BULK_COPY.clear}
+                  </button>
+                  <button
+                    data-testid="review-bulk-submit"
+                    onClick={() => toPhase({ type: 'arm' })}
+                    disabled={!bar.canSubmit}
+                    className="v2-btn v2-btn-primary pf-btn"
+                    style={btnStyle(bar.canSubmit)}
+                  >
+                    {bar.submitLabel}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    data-testid="review-bulk-cancel"
+                    onClick={disarm}
+                    disabled={phase === 'submitting'}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={btnStyle(phase !== 'submitting')}
+                  >
+                    {BULK_COPY.cancel}
+                  </button>
+                  <button
+                    data-testid="review-bulk-confirm"
+                    onClick={() => void submit()}
+                    disabled={!bar.canSubmit}
+                    className="v2-btn v2-btn-primary pf-btn"
+                    style={btnStyle(bar.canSubmit)}
+                  >
+                    {phase === 'submitting' ? BULK_COPY.sending : bar.confirmLabel}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Page-scoped and cause-free — it answers "why did select-all pick 12 of 50?",
+              which is the only version of §7.3's split note this screen can honestly make:
+              a non-selectable row may be failing, mid-edit, or already sent, and only its
+              own verdict pill knows which. */}
+          {bar.note != null && (
+            <p data-testid="review-bulk-note" style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>
+              {bar.note}
+            </p>
+          )}
+
+          {/* The second stage. Inside the bar, beside the count it qualifies — not a
+              modal (file header, point 5c). */}
+          {phase !== 'idle' && (
+            <div style={{ borderTop: '1px solid var(--teal-200)', paddingTop: 9 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{bar.confirmPrompt}</div>
+              <p style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: '4px 0 0', lineHeight: 1.55 }}>{bar.confirmDetail}</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Error is checked FIRST, before any stale page can render: rows the user could
           mistake for the result of the query that just failed are worse than no rows. */}
       {page.error != null && <ErrorState error={page.error} onRetry={page.run} />}
@@ -409,7 +675,10 @@ export function ReviewInvoicesTab({
                   r={r}
                   checked={selected.includes(r.id)}
                   onOpen={() => ctx.openImportedInvoice(r.id)}
-                  onToggle={() => setSelected((sel) => toggleSelection(sel, r.id))}
+                  onToggle={() => {
+                    setSelected((sel) => toggleSelection(sel, r.id))
+                    disarm()
+                  }}
                 />
               ))
             )}
@@ -423,6 +692,25 @@ export function ReviewInvoicesTab({
             busy={loading}
             onGo={(offset) => dispatch({ type: 'page', offset })}
           />
+
+          {/* AC-7's footer action, built HERE rather than in the shell footer: §7.3's
+              Footer paragraph is inside the Invoices tab, the selection it operates on
+              lives in this component, and the shell footer also renders under the
+              Unreadable-rows tab where a submit-all is nonsense.
+              PAGE-SCOPED, and that is a hard limit rather than a choice — the endpoint
+              caps a submit at 200 ids with a flat 400 carrying no partial progress, a
+              filtered total can be far larger, and nothing in this repo chunks. */}
+          <div style={{ display: 'flex' }}>
+            <button
+              data-testid="review-submit-all"
+              onClick={submitAll}
+              disabled={!bar.canSubmitAll}
+              className="v2-btn v2-btn-ghost pf-btn"
+              style={btnStyle(bar.canSubmitAll)}
+            >
+              {bar.submitAllLabel}
+            </button>
+          </div>
         </>
       )}
     </div>

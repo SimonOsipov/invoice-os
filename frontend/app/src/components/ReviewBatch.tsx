@@ -32,7 +32,7 @@
 // `reqInFlight` guards the WRITE path (a duplicate POST is a duplicate import), and a
 // duplicate idempotent GET in dev is the shipped, accepted InvoicesList behaviour.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -123,6 +123,19 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
     { immediate: shouldFetchInvoices(base) && batchId != null, deps: [batchId] },
   )
 
+  // Keep-previous at the SHELL, mirroring the `lastPage` idiom ReviewInvoicesTab ships
+  // 40 lines into its own file. Subtask 11's bulk submit calls `shell.run()` to move the
+  // four counts, and `dispatch({type:'start'})` nulls `data` on every re-run — so without
+  // this ref the <Loading/> branch below would UNMOUNT the tab mid-flow and destroy its
+  // filter, page, selection and the receipt panel the operator is reading. Written only
+  // in an effect, never during render, and CLEARED on error so a pre-error shell cannot
+  // ghost back under a failed refresh.
+  const lastShell = useRef<ReviewShellData | null>(null)
+  useEffect(() => {
+    if (shell.data != null) lastShell.current = shell.data
+    else if (shell.error != null) lastShell.current = null
+  }, [shell.data, shell.error])
+
   // An ERROR, not an empty review surface. Reachable by editing the hash to something
   // parseReviewHash rejects, which lands on the review step with no batch to show —
   // CreateReport's `if (!report) return null` rendered a blank body there.
@@ -137,10 +150,16 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   // Also the stale/foreign deep-link path: GET /v1/imports/{id} 404s "not found" for a
   // nonexistent AND a cross-tenant id alike, so a well-formed uuid from someone else's
   // workspace lands here rather than rendering an empty batch as if it were real.
+  //
+  // The error branch stays FIRST and unchanged: a refresh that 500s replaces the screen
+  // with a retryable ErrorState and loses the receipt. That is the stated cost of keeping
+  // this order — the submit is already durable server-side and the badges are correct on
+  // retry, whereas rendering counts we could not verify is the worse failure.
   if (shell.error) return <ErrorState error={shell.error} onRetry={shell.run} />
-  if (shell.data == null) return <Loading label="Reading the import…" />
+  const shellData = shell.data ?? lastShell.current
+  if (shellData == null) return <Loading label="Reading the import…" />
 
-  const { batch, allTotal, cleanTotal, failingTotal, queuedTotal } = shell.data
+  const { batch, allTotal, cleanTotal, failingTotal, queuedTotal } = shellData
 
   // The SOLE owner of §7.5-vs-batch, keyed on the batch GET alone — never on
   // routeAfterImport's `kind`, which answers a different question ("is there ONE invoice
@@ -256,6 +275,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
           base={base}
           batchId={batchId}
           totals={{ allTotal, cleanTotal, failingTotal, queuedTotal }}
+          onSubmitted={shell.run}
         />
       )}
 
@@ -268,8 +288,13 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
           not yet send, printed as a zero, is exactly the false zero this story's counter
           discipline exists to prevent. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', paddingTop: 4 }}>
+        {/* `N queued for transmission` rather than AC-7's literal `N submitted`: the only
+            count this screen has is `status=queued`, and the worker advances rows past
+            queued within seconds — so labelling it "submitted" would read `0 submitted`
+            for a fully-sent batch on a revisit, the exact false zero this story's counter
+            discipline exists to prevent. QUEUED is D2's own real name for the state. */}
         <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>
-          {allTotal} invoices stored · {cleanTotal} ready to submit · {failingTotal} awaiting a fix
+          {allTotal} invoices stored · {cleanTotal} ready to submit · {queuedTotal} queued for transmission · {failingTotal} awaiting a fix
         </span>
         {/* NAVIGATION ONLY. The invoices were persisted at import time (§10.10), so a
             "Finish writes the batch" step would be a lie about when the data landed. */}

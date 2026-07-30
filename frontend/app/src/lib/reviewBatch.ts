@@ -36,6 +36,9 @@
 // module stays DOM-free so it is node-testable with no jsdom.
 import {
   invoiceStatusStyle,
+  pruneSelection,
+  selectableIds,
+  skipReasonLabel,
   type BatchSubmitResultItem,
   type InvoiceRecord,
   type ListInvoicesOptions,
@@ -597,22 +600,44 @@ export function pagerNav(p: { limit: number; offset: number; total: number }): P
 
 // --- INVCR-01-11 (task-287): the bulk-submit bar's pure model ---
 //
-// 11 STUB (task-287, Stage 2.5/Mode A) -- bulkPhaseReducer/bulkBarView/bulkOutcome throw
-// `new Error('not implemented')` below; Stage 3 implements the bodies. `eligible` is
-// `pruneSelection(selected, rows)` (lib/invoices.ts) CONSUMED, never re-derived -- it IS
-// the wire payload the confirm handler sends. `notReady`/`canSubmitAll`/`submitAllLabel`
-// are page-scoped off `rows` via `selectableIds`, independent of the current selection.
-// `BATCH_SUBMIT_MAX_IDS` is NOT a stub -- its value is a documented mirror of
-// handlers.go:718's server constant (a drift guard, not behaviour Stage 3 implements),
-// so BULK-14 is GREEN-BEFORE by design, same idiom PILL-3b already uses in this file.
+// `eligible` is `pruneSelection(selected, rows)` (lib/invoices.ts) CONSUMED, never
+// re-derived -- it IS the wire payload the confirm handler sends. `notReady`/
+// `canSubmitAll`/`submitAllLabel` are page-scoped off `rows` via `selectableIds`,
+// independent of the current selection. `BATCH_SUBMIT_MAX_IDS` mirrors
+// handlers.go:718's server constant as a drift guard, so BULK-14 is GREEN-BEFORE by
+// design, the same idiom PILL-3b already uses in this file.
+//
+// EVERY user-visible string of this feature is built HERE, never inline in the component
+// ([bulk-copy-lives-in-the-lib]): LIB-SCAN-1 scans this file WHOLE, so the D2 vocabulary
+// rule is a guard rather than a thing to remember. Count-dependent copy is a field on
+// BulkBarView; the static chrome is BULK_COPY below.
 
 export const BATCH_SUBMIT_MAX_IDS = 200 // handlers.go:718 -- documented mirror + drift guard, NOT a runtime clamp
 
 export type BulkPhase = 'idle' | 'armed' | 'submitting'
 export type BulkAction = { type: 'arm' } | { type: 'cancel' } | { type: 'confirm' } | { type: 'settled' }
 
-export function bulkPhaseReducer(_p: BulkPhase, _a: BulkAction): BulkPhase {
-  throw new Error('not implemented')
+// Every no-op arm returns the state INSTANCE it was given, and the component's contract
+// is `const next = reducer(phase, a); if (next === phase) return` -- identity IS "do
+// nothing", which is how "no arm => no request" (AC-3) and the double-click guard get an
+// oracle under environment:'node' rather than living in a click handler no unit test can
+// reach. Two arms are load-bearing:
+//   - `confirm` from 'idle' is identity: a confirm that was never armed fires NOTHING.
+//   - `confirm`/`cancel` from 'submitting' are identity: the request is already gone, so
+//     a second click cannot re-enter it and a cancel cannot un-send it.
+// No `default` arm, deliberately: a new BulkAction member becomes a `tsc --noEmit` error
+// here instead of silently falling through to the current phase.
+export function bulkPhaseReducer(p: BulkPhase, a: BulkAction): BulkPhase {
+  switch (a.type) {
+    case 'arm':
+      return p === 'idle' ? 'armed' : p
+    case 'cancel':
+      return p === 'submitting' ? p : 'idle'
+    case 'confirm':
+      return p === 'armed' ? 'submitting' : p
+    case 'settled':
+      return 'idle'
+  }
 }
 
 export interface BulkBarView {
@@ -630,14 +655,78 @@ export interface BulkBarView {
   canSubmitAll: boolean
 }
 
+// THE LOADING GATE (`canSubmit`/`canSubmitAll`) is this subtask's primary correctness
+// requirement, and it is here rather than in the component because the component cannot
+// be unit-tested. ReviewInvoicesTab keeps the PREVIOUS page's envelope across the whole
+// loading gap (`page.data ?? lastPage.current`), so `rows` keeps its identity, the prune
+// effect never fires, the selection survives and the table is only DIMMED -- never
+// disabled. Ungated, "select 5 -> Next -> submit before the response lands" puts the
+// PREVIOUS page's ids on the wire, gets a 200, and leaves nothing to notice.
+//
+// `notReady` is page-scoped and cause-FREE on purpose. A non-selectable row may be a
+// draft failing a rule, a draft awaiting re-validation, or already queued/submitted/
+// accepted/rejected/failed -- only its own verdict pill knows which, so the note answers
+// the one question this bar can honestly answer ("why did select-all pick 12 of 50?")
+// and names no cause. The status word is interpolated from invoiceStatusStyle, never
+// written as a literal, so it cannot drift from the pill in the Verdict column.
 export function bulkBarView(
-  _selected: string[],
-  _rows: InvoiceRecord[],
-  _phase: BulkPhase,
-  _pageLoading: boolean,
+  selected: string[],
+  rows: InvoiceRecord[],
+  phase: BulkPhase,
+  pageLoading: boolean,
 ): BulkBarView {
-  throw new Error('not implemented')
+  // CONSUMED, never re-derived: this exact array is what the confirm handler sends.
+  const eligible = pruneSelection(selected, rows)
+  // Page-scoped, independent of `selected` -- clicking submit-all is what selects them.
+  const pageEligible = selectableIds(rows).length
+  const notReady = rows.length - pageEligible
+  const n = eligible.length
+  // ONE gate, shared by both actions: nothing may be sent while the page the ids came
+  // from is being replaced, and nothing may be sent twice.
+  const open = !pageLoading && phase !== 'submitting'
+
+  return {
+    visible: n > 0,
+    eligible,
+    notReady,
+    // The scope is IN the string. `pruneSelection` drops any id absent from `rows`, and
+    // under server paging "absent from rows" means "on another page" -- so a bare
+    // "12 selected" would be a lie about what a click sends at 500 invoices over 10 pages.
+    countLabel: `${n} selected on this page`,
+    note:
+      notReady > 0
+        ? `Only ${invoiceStatusStyle('validated').label} rows can be sent. ${notReady} of the ${rows.length} on this page cannot.`
+        : null,
+    submitLabel: `Submit ${n} for transmission`,
+    // Singular at one, so the confirmation never reads "Send 1 invoices".
+    confirmPrompt: `Send ${n} ${n === 1 ? 'invoice' : 'invoices'} for transmission?`,
+    // Names the ACTION and the OBSERVABLE OUTCOME, never FIRS: `sandbox` is a mock
+    // toggle and the environment banner already owns that claim in both of its states.
+    // The irreversibility is backed by legalTransitions (store.go:1070-1076), which
+    // gives `queued` no edge back to validated/draft -- it is not a scare sentence.
+    confirmDetail: `They move to ${invoiceStatusStyle('queued').label} for transmission. Nothing on this screen can pull them back.`,
+    confirmLabel: `Yes, send ${n} now`,
+    canSubmit: n > 0 && open,
+    // Page-scoped, never batch-wide: the server caps a batch submit at 200 ids with a
+    // flat 400 and no partial progress, `cleanTotal` can be far larger, and there is no
+    // chunking anywhere in this codebase.
+    submitAllLabel: `Submit all ${pageEligible} on this page for transmission`,
+    canSubmitAll: pageEligible > 0 && open,
+  }
 }
+
+// The static chrome of the bar and its results panel. An 8th export beyond the task
+// plan's §9 list, declared rather than smuggled: [bulk-copy-lives-in-the-lib] requires
+// every user-visible string of this feature to sit in this file (LIB-SCAN-1 scans it
+// whole), and these five are not derived from any count, so putting them on BulkBarView
+// would make a view-model out of chrome.
+export const BULK_COPY = {
+  clear: 'Clear',
+  cancel: 'Cancel',
+  sending: 'Sending…',
+  resultInvoice: 'Invoice #',
+  resultOutcome: 'Result',
+} as const
 
 // NO `status` field, by design (AC-5): batch_submit.go's duplicate-request branch
 // hard-codes a known-wrong `queued` status on a SKIPPED item (M5-11) -- omitting the
@@ -654,9 +743,37 @@ export interface BulkOutcome {
   clearSelection: boolean
 }
 
+// The SOLE builder of the results panel, on BOTH legs. A request-level failure (a 404 on
+// an id that went stale between the click and the request) returns `results: null` and
+// `clearSelection: false` -- no panel to read, and the selection survives so the operator
+// can retry without re-picking rows.
+//
+// `items ?? []` is here rather than only at the call site because submitInvoices unwraps
+// `.results` unguarded (invoices.ts:508-519) and SUB-3 pins a malformed 2xx resolving to
+// `undefined` -- reaching `.map` on that would throw out of a click handler with no error
+// boundary under it.
+//
+// `item.status` is read NOWHERE, and SubmitResultRow has no field for it: batch_submit.go
+// hard-codes `queued` on a SKIPPED item in its duplicate-request branch (M5-11), so the
+// label comes from `enqueued` + `reason` alone. Row badges are refetched, never derived
+// from this response.
 export function bulkOutcome(
-  _res: { ok: true; items: BatchSubmitResultItem[] | undefined } | { ok: false },
-  _numbersById: Map<string, string>,
+  res: { ok: true; items: BatchSubmitResultItem[] | undefined } | { ok: false },
+  numbersById: Map<string, string>,
 ): BulkOutcome {
-  throw new Error('not implemented')
+  if (!res.ok) return { results: null, clearSelection: false }
+  const items = res.items ?? []
+  return {
+    results: items.map((item) => ({
+      // Captured BEFORE the post-submit refetch by the caller: looked up live, every row
+      // would flicker to its raw uuid while the list reloads, and a submitted row may not
+      // be on the page at all once it lands.
+      invoiceNumber: numbersById.get(item.invoice_id) ?? item.invoice_id,
+      // InvoicesList.tsx:313 verbatim. `reason` is optional and `enqueued` is a plain
+      // boolean, not a discriminant, so `!enqueued` alone does not narrow it.
+      label: item.enqueued ? 'Queued' : item.reason != null ? skipReasonLabel(item.reason) : 'Not queued',
+      enqueued: item.enqueued,
+    })),
+    clearSelection: true,
+  }
 }

@@ -78,6 +78,86 @@ describe('draftToCreateRequest: money', () => {
     expect(result.line_items[1].line_tax).toBeNull()
     expect(result.subtotal).toBe('3300.47')
   })
+
+  it('DRAFT-9 [verbatim-typed-derived-rounded]: quantity/unit_price beyond 2dp cross verbatim, unlike the rounded derived fields', () => {
+    // qty is numeric(14,3) and unit_price numeric(14,2), but the TYPED wire values are
+    // not rounded to their column scale the way subtotal/vat/total/line_total are --
+    // round2() must never touch item.qty/item.price. Both values below carry 3dp so a
+    // round2-mutated implementation is forced to visibly diverge: half-up round2 would
+    // turn quantity '2.567' into '2.57' and unit_price '1000.005' into '1000.01'.
+    const draft: Draft = {
+      ...baseDraft,
+      items: [{ desc: 'x', qty: 2.567, price: 1000.005 }],
+    }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.line_items[0].quantity).toBe('2.567')
+    expect(result.line_items[0].unit_price).toBe('1000.005')
+    // The derived line_total, by contrast, IS rounded to 2dp: exact 2.567 * 1000.005 =
+    // 2567.012835 -> half-up round2 -> '2567.01'.
+    expect(result.line_items[0].line_total).toBe('2567.01')
+  })
+
+  it('DRAFT-11 subtotal is round2 of the EXACT sum, not the sum of already-rounded line_totals', () => {
+    // task-278 GAP-2 refinement: lineSumEval (internal/validation/evaluators_math.go:
+    // 225-241) sums unit_price * quantity per line with NO intermediate rounding and
+    // NEVER reads line_total -- so subtotal must match round2(Sigma exact products), not
+    // Sigma(round2(each product)). quantity is numeric(14,3) and the UI input has no
+    // `step`, so a fractional quantity is reachable. Two lines of 2.5 x 1500.25 diverge
+    // the two candidate algorithms:
+    //   exact line = 3750.625; exact sum = 7501.250 -> round2 -> '7501.25' (CORRECT --
+    //     matches the server's own unrounded arithmetic)
+    //   rounded line_total = round2(3750.625) = '3750.63'; summed = '7501.26' (WRONG --
+    //     drifts 0.01 from the server's computation, > the 0.005 line-items-sum-subtotal
+    //     tolerance, firing a false violation on a correctly-declared invoice)
+    // Neither DRAFT-1 nor DRAFT-2 discriminates these -- both algorithms agree there.
+    const draft: Draft = {
+      ...baseDraft,
+      items: [
+        { desc: 'a', qty: 2.5, price: 1500.25 },
+        { desc: 'b', qty: 2.5, price: 1500.25 },
+      ],
+    }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.line_items[0].line_total).toBe('3750.63')
+    expect(result.line_items[1].line_total).toBe('3750.63')
+    expect(result.subtotal).toBe('7501.25') // NOT '7501.26'
+  })
+
+  it('DRAFT-12 an unparseable qty/price crosses as its raw String(), nulls that line_total, and nulls every declared total', () => {
+    // QA adversarial coverage (task-278 Stage 4): the mapper's own header comment
+    // (invoiceDraft.ts:41-47) and "UNSPECCED edge cases" note in the plan CLAIM this
+    // behaviour but no prior spec ASSERTED it -- confirmed by grep, zero hits for "NaN"
+    // in this file before this spec. NaN is reachable at the type level (LineItem.qty/
+    // price: number, and NaN is a valid `number` at runtime) even though today's
+    // <input type="number"> makes it hard to reach through the UI.
+    const draft: Draft = {
+      ...baseDraft,
+      items: [
+        { desc: 'valid line', qty: 2, price: 100 },
+        { desc: 'corrupt line', qty: NaN, price: 50 },
+      ],
+    }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    // String(NaN) === 'NaN' crosses verbatim -- parseScaled refuses it, it is never
+    // silently coerced to '0' or dropped.
+    expect(result.line_items[1].quantity).toBe('NaN')
+    expect(result.line_items[1].unit_price).toBe('50')
+    // The corrupt line's OWN line_total is null...
+    expect(result.line_items[1].line_total).toBeNull()
+    // ...but critically, the OTHER, perfectly valid line is untouched per-line: its own
+    // line_total is still computed normally. Only the DECLARED totals (subtotal/vat/
+    // total), which depend on every line, go null.
+    expect(result.line_items[0].line_total).toBe('200.00')
+    expect(result.subtotal).toBeNull()
+    expect(result.vat).toBeNull()
+    expect(result.total).toBeNull()
+  })
 })
 
 describe('draftToCreateRequest: supplier TIN (C7)', () => {
@@ -155,6 +235,44 @@ describe('draftToCreateRequest: identity fields', () => {
     expect(result.entity_id).toBe('e-1')
     expect(result.supplier_name).toBe('Lagos Freight Ltd')
     expect(result.invoice_number).toBe(draft.number)
+  })
+})
+
+describe('draftToCreateRequest: wire key order', () => {
+  it('DRAFT-10 the emitted object matches createRequest\'s own field order byte-for-byte', () => {
+    // apiFetch JSON.stringifies the returned object verbatim, so object-literal
+    // insertion order IS what crosses the network -- the mapper's own header comment
+    // (invoiceDraft.ts:111-113) states the return literal is deliberately ordered to
+    // match createRequest's declaration order (handlers.go:51-64). No other DRAFT-*
+    // spec pins this: they all read named properties, which is order-independent.
+    const draft: Draft = {
+      ...baseDraft,
+      items: [{ desc: 'a', qty: 2, price: 1500.25 }],
+    }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(Object.keys(result)).toEqual([
+      'entity_id',
+      'invoice_number',
+      'issue_date',
+      'supplier_tin',
+      'supplier_name',
+      'buyer_tin',
+      'buyer_name',
+      'currency',
+      'subtotal',
+      'vat',
+      'total',
+      'line_items',
+    ])
+    expect(Object.keys(result.line_items[0])).toEqual([
+      'description',
+      'quantity',
+      'unit_price',
+      'line_total',
+      'line_tax',
+    ])
   })
 })
 

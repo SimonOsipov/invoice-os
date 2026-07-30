@@ -38,6 +38,7 @@ import {
   setMemberStatus,
   stepsFor,
   unassignedPositions,
+  type InviteOptions,
   type Member,
   type MemberStatus,
   type PositionResolution,
@@ -1045,5 +1046,388 @@ describe('isProtectedAdmin (T2.40–T2.44, §9)', () => {
     expect(list[15].status).toBe('invited')
     expect(isProtectedAdmin(list, list[0])).toBe(true)
     expect(isProtectedAdmin(list, list[15])).toBe(false)
+  })
+})
+
+// ============================================================================
+// QA19–QA35 — adversarial / edge coverage (MEMB-01-02 QA, Mode B)
+// ============================================================================
+// The T2 batch above is the acceptance-criteria transcription, authored RED before the
+// implementation existed. This batch is what mutation-testing the shipped implementation
+// showed those specs CANNOT see: every spec below was written against a mutant that
+// survived the whole T2 suite. The mutation it kills is named in each spec's comment.
+
+describe('reducer misses — the four AC#6 leaves T2.27 does not reach (QA19–QA22, §15.1)', () => {
+  // AC#6 covers a miss for ALL FIVE reducers, but T2.27 covers `replaceMember` alone. The
+  // superseded rules.ts:253-268 reading (`return rules as CustomRule[]`, the input
+  // REFERENCE) survives the entire T2 suite in the other four. These are the guards.
+
+  it('addMembers allocates a new array even when nothing is added (QA19)', () => {
+    const list = firm()
+    const out = addMembers(list, [])
+
+    expect(out).not.toBe(list)
+    expect(out).toEqual(list)
+    expect(out).toHaveLength(7)
+    // A miss reallocates the ARRAY, not the rows — untouched rows pass through by reference.
+    expect(out[0]).toBe(list[0])
+    expect(list).toEqual(firm())
+  })
+
+  it('removeMember allocates a new array when the id is not present (QA20)', () => {
+    const list = firm()
+    expect(list.map((m) => m.id)).not.toContain('mf99')
+
+    const out = removeMember(list, 'mf99')
+    expect(out).not.toBe(list)
+    expect(out).toEqual(list)
+    expect(out).toHaveLength(7)
+    expect(out[0]).toBe(list[0])
+    expect(list).toEqual(firm())
+  })
+
+  it('setMemberRole allocates a new array when the id is not present (QA21)', () => {
+    const list = firm()
+    const out = setMemberRole(list, 'mf99', 'admin')
+
+    expect(out).not.toBe(list)
+    expect(out).toEqual(list)
+    expect(out.map((m) => m.role)).toEqual(list.map((m) => m.role))
+    expect(out[0]).toBe(list[0])
+    expect(list).toEqual(firm())
+  })
+
+  it('setMemberStatus allocates a new array when the id is not present (QA22)', () => {
+    const list = firm()
+    const out = setMemberStatus(list, 'mf99', 'suspended')
+
+    expect(out).not.toBe(list)
+    expect(out).toEqual(list)
+    expect(out.map((m) => m.status)).toEqual(list.map((m) => m.status))
+    expect(out[0]).toBe(list[0])
+    expect(list).toEqual(firm())
+  })
+})
+
+describe('reducers key off id, never email (QA23, §15.1)', () => {
+  it('routes by next.id even when next carries a DIFFERENT row\'s email (QA23)', () => {
+    // T2.26/T2.27 cannot see this: T2.26 builds `next` by spreading the target row, so its
+    // id AND email both match, and T2.27's ghost matches neither. An email-keyed
+    // `replaceMember` therefore passes both. This is the spec that separates them.
+    const list = firm()
+    expect(list[1].id).toBe('mf2')
+    expect(list[2].id).toBe('mf3')
+
+    // mf2's email on a row whose id is mf3 — the id must win.
+    const next: Member = { ...list[1], id: 'mf3', name: 'Impostor' }
+    const out = replaceMember(list, next)
+
+    expect(out[2]).toBe(next)
+    expect(out[1]).toBe(list[1])
+    expect(out[1].name).toBe('Folake Adesina')
+    expect(out.map((m) => m.id)).toEqual(['mf1', 'mf2', 'mf3', 'mf4', 'mf5', 'mf6', 'mf7'])
+
+    // And the converse: rewriting the email alone still lands on the same row.
+    const renamed: Member = { ...list[1], email: 'nobody@nowhere.ng' }
+    const out2 = replaceMember(list, renamed)
+    expect(out2[1]).toBe(renamed)
+    expect(out2[2]).toBe(list[2])
+  })
+})
+
+describe('minted ids are unique ACROSS modes, not only within one (QA24, §7)', () => {
+  it('prefixes per mode over one shared counter, colliding with no seeded id (QA24)', () => {
+    // T2.22 mints five FIRM invites only, so the mf/mh fork — the actual mechanism for
+    // cross-mode uniqueness — is never observed there: an `mf`-only implementation passes it.
+    const firmInvites = ['q1@x.ng', 'q2@x.ng'].map((e) =>
+      memberFromInvite(e, { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor'),
+    )
+    const inhouseInvites = ['q3@x.ng', 'q4@x.ng'].map((e) =>
+      memberFromInvite(e, { mode: 'inhouse', role: 'reviewer', department: 'Finance', position: null }, 'Ngozi Balogun'),
+    )
+
+    for (const m of firmInvites) expect(m.id.startsWith('mf')).toBe(true)
+    for (const m of inhouseInvites) expect(m.id.startsWith('mh')).toBe(true)
+
+    const ids = [...firmInvites, ...inhouseInvites].map((m) => m.id)
+    expect(new Set(ids).size).toBe(4)
+
+    // Against BOTH seeded modes, not just the minting one.
+    const store = seedMembers()
+    const seeded = new Set([...store.firm, ...store.inhouse].map((m) => m.id))
+    for (const id of ids) expect(seeded.has(id)).toBe(false)
+  })
+})
+
+describe('the seed literals themselves, as an oracle no snapshot can launder (QA25, §15.6)', () => {
+  it('holds its hand-authored values after every reducer runs over the CONSTANTS (QA25)', () => {
+    // T2.32 snapshots SEED_* with structuredClone at the top of its own body, so corruption
+    // committed by an earlier spec in this file is captured by the snapshot and the
+    // comparison passes vacuously. This spec asserts the literals directly — and runs the
+    // five reducers over the constants THEMSELVES (not a clone) first, which is the one
+    // call shape T2.32 never makes.
+    const extraFirm = firmRow('Tosin Okonkwo', 'invited', [0])
+    const extraInhouse = inhouseRow('Tosin Okonkwo', 'invited', null)
+
+    replaceMember(SEED_FIRM_MEMBERS, { ...SEED_FIRM_MEMBERS[1], role: 'admin' })
+    addMembers(SEED_FIRM_MEMBERS, [extraFirm])
+    removeMember(SEED_FIRM_MEMBERS, 'mf2')
+    setMemberRole(SEED_FIRM_MEMBERS, 'mf2', 'admin')
+    setMemberStatus(SEED_FIRM_MEMBERS, 'mf2', 'suspended')
+
+    replaceMember(SEED_INHOUSE_MEMBERS, { ...SEED_INHOUSE_MEMBERS[3], role: 'admin' })
+    addMembers(SEED_INHOUSE_MEMBERS, [extraInhouse])
+    removeMember(SEED_INHOUSE_MEMBERS, 'mh4')
+    setMemberRole(SEED_INHOUSE_MEMBERS, 'mh4', 'admin')
+    setMemberStatus(SEED_INHOUSE_MEMBERS, 'mh4', 'suspended')
+
+    expect(SEED_FIRM_MEMBERS.map((m) => m.id)).toEqual(['mf1', 'mf2', 'mf3', 'mf4', 'mf5', 'mf6', 'mf7'])
+    expect(SEED_FIRM_MEMBERS.map((m) => m.role)).toEqual([
+      'admin',
+      'preparer',
+      'reviewer',
+      'reviewer',
+      'preparer',
+      'preparer',
+      'reviewer',
+    ])
+    expect(SEED_FIRM_MEMBERS.map((m) => m.status)).toEqual([
+      'active',
+      'active',
+      'active',
+      'active',
+      'active',
+      'invited',
+      'suspended',
+    ])
+    expect(SEED_FIRM_MEMBERS.map((m) => m.clientAccess)).toEqual(['all', [0, 1, 3], [2, 5], 'all', 'all', [0], 'all'])
+
+    expect(SEED_INHOUSE_MEMBERS.map((m) => m.id)).toEqual([
+      'mh1',
+      'mh2',
+      'mh3',
+      'mh4',
+      'mh5',
+      'mh6',
+      'mh7',
+      'mh8',
+      'mh9',
+      'mh10',
+      'mh11',
+      'mh12',
+      'mh13',
+      'mh14',
+      'mh15',
+      'mh16',
+    ])
+    expect(SEED_INHOUSE_MEMBERS.map((m) => m.role)).toEqual([
+      'admin',
+      'reviewer',
+      'reviewer',
+      'reviewer',
+      'reviewer',
+      'reviewer',
+      'preparer',
+      'preparer',
+      'preparer',
+      'preparer',
+      'reviewer',
+      'preparer',
+      'reviewer',
+      'preparer',
+      'preparer',
+      'reviewer',
+    ])
+    expect(SEED_INHOUSE_MEMBERS.map((m) => m.status)).toEqual([
+      'active',
+      'active',
+      'active',
+      'active',
+      'active',
+      'suspended',
+      'active',
+      'active',
+      'active',
+      'active',
+      'active',
+      'active',
+      'active',
+      'active',
+      'invited',
+      'invited',
+    ])
+    expect(SEED_INHOUSE_MEMBERS.map((m) => m.position)).toEqual([
+      'fin_dir',
+      'fin_dir',
+      'line_mgr',
+      'controller',
+      'compliance',
+      'cfo',
+      'preparer',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ])
+    // The one row T2.34's 15-vs-16 split turns on.
+    expect(SEED_INHOUSE_MEMBERS[10].email).toBe('o.ademola-oyediran@honeywellgroup.com.ng')
+    // Exactly one active admin per mode — the frame every §9 spec is read against.
+    expect(activeAdmins(SEED_FIRM_MEMBERS)).toHaveLength(1)
+    expect(activeAdmins(SEED_INHOUSE_MEMBERS)).toHaveLength(1)
+  })
+})
+
+describe('name and initials — the branches no acceptance criterion names (QA26–QA31, §7)', () => {
+  it('returns ONE character for a single-LETTER local part, not two (QA26)', () => {
+    // Records that the plan's "always 2 chars" is really "at MOST 2": there is no second
+    // letter to take, and no seeded row reaches this. `slice(0, 2)` is the pinned behaviour.
+    expect(initialsFrom('a@x.ng')).toBe('A')
+    expect(nameFromEmail('a@x.ng')).toBe('A')
+  })
+
+  it('TITLE-cases each token — it does not preserve the typed casing (QA27)', () => {
+    // An underspecified pick: the plan says only "capitalised". Pinned so a later subtask
+    // cannot flip it silently — invited rows render beside Title Case seeded names.
+    expect(nameFromEmail('ADEBAYO.X@y.ng')).toBe('Adebayo X')
+    expect(nameFromEmail('MiXeD.CaSe@x.ng')).toBe('Mixed Case')
+    expect(nameFromEmail('T.OKONKWO@honeywell.ng')).toBe('T Okonkwo')
+  })
+
+  it("treats '+' as a local-part separator, exactly like . _ and - (QA28)", () => {
+    // T2.9/T2.10 pin . _ and -, and T2.7 only validates a plus-tagged address; nothing pins
+    // what a plus tag DERIVES. A plus tag is the likeliest real address to hit this.
+    expect(nameFromEmail('c+tag@x.ng')).toBe('C Tag')
+    expect(initialsFrom('c+tag@x.ng')).toBe('CT')
+    expect(nameFromEmail('chinedu+okafor@x.ng')).toBe('Chinedu Okafor')
+  })
+
+  it('stores the address VERBATIM and normalises only the derived name (QA29)', () => {
+    // `parseEmailInput` keeps the first spelling seen because that is what gets mailed;
+    // `memberFromInvite` has to agree, or the chip and the row disagree on the address.
+    const m = memberFromInvite('MiXeD.CaSe@X.NG', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
+    expect(m.email).toBe('MiXeD.CaSe@X.NG')
+    expect(m.name).toBe('Mixed Case')
+    expect(m.initials).toBe('MC')
+  })
+
+  it('does not trim — the pipeline trims in parseEmailInput, not in the validator (QA30)', () => {
+    expect(isValidEmail(' a@b.co')).toBe(false)
+    expect(isValidEmail('a@b.co ')).toBe(false)
+    // …and parseEmailInput is why that is safe: it strips whitespace before validation.
+    expect(parseEmailInput(' a@b.co ')).toEqual(['a@b.co'])
+  })
+
+  it('survives a Windows CRLF paste without a stray carriage return (QA31)', () => {
+    // `\s` in the separator class is load-bearing: a `[,;\t\n ]` class would leave the `\r`
+    // glued to the address, and every chip from a Windows paste would read Not a valid email.
+    const out = parseEmailInput('a@x.ng\r\nb@x.ng\r\n')
+    expect(out).toEqual(['a@x.ng', 'b@x.ng'])
+    for (const address of out) expect(isValidEmail(address)).toBe(true)
+  })
+})
+
+describe('invite-pipeline contracts MEMB-01-06 has to honour (QA32–QA35, §7)', () => {
+  it('copies a firm invite\'s clientAccess so minted rows never share one array (QA32)', () => {
+    // MEMB-01-06 maps `memberFromInvite` over a whole chip list from a SINGLE `opts`. If the
+    // array were assigned through, every invited row would alias it — and the drawer's
+    // scoping editor would then edit all of them at once.
+    const opts: Extract<InviteOptions, { mode: 'firm' }> = { mode: 'firm', role: 'preparer', clientAccess: [0, 2] }
+    const a = memberFromInvite('a@x.ng', opts, 'Chinedu Okafor')
+    const b = memberFromInvite('b@x.ng', opts, 'Chinedu Okafor')
+
+    expect(a.clientAccess).toEqual([0, 2])
+    expect(b.clientAccess).toEqual([0, 2])
+    expect(a.clientAccess).not.toBe(b.clientAccess)
+    expect(a.clientAccess).not.toBe(opts.clientAccess)
+    ;(a.clientAccess as number[]).push(4)
+    expect(b.clientAccess).toEqual([0, 2])
+    expect(opts.clientAccess).toEqual([0, 2])
+  })
+
+  it('classifies each address independently — no memory of earlier verdicts (QA33)', () => {
+    // `parseEmailInput` de-dupes within ONE paste. `classifyInvites` de-dupes nothing, so a
+    // second paste of the same address reads `ok` again. MEMB-01-06 owns that de-dupe.
+    expect(classifyInvites(firm(), ['new@x.ng', 'NEW@x.ng'])).toEqual(['ok', 'ok'])
+  })
+
+  it('appends duplicates verbatim — addMembers de-dupes nothing (QA34)', () => {
+    // Pinned as a contract, not an accident: MEMB-01-06 must drop non-`ok` classifications
+    // and de-dupe chips across successive pastes itself, because this funnel will not.
+    const list = firm()
+    const out = addMembers(list, [list[1], list[1]])
+
+    expect(out).toHaveLength(9)
+    expect(out.map((m) => m.id)).toEqual(['mf1', 'mf2', 'mf3', 'mf4', 'mf5', 'mf6', 'mf7', 'mf2', 'mf2'])
+    expect(list).toEqual(firm())
+  })
+
+  it('accepts a separators-only local part and mints a NAMELESS row (QA35)', () => {
+    // RECORDED, NOT ENDORSED. `isValidEmail` is deliberately minimal, so a local part made
+    // only of separators passes it, classifies `ok`, and mints a row whose name and initials
+    // are both empty — a blank Person cell in MEMB-01-04's table. Pinned so the behaviour is
+    // a visible decision rather than an accident; the UX call (reject the chip) belongs to
+    // MEMB-01-06 and is recorded in its notes.
+    expect(isValidEmail('...@x.ng')).toBe(true)
+    expect(classifyInvites(firm(), ['...@x.ng'])).toEqual(['ok'])
+
+    const m = memberFromInvite('...@x.ng', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
+    expect(m.name).toBe('')
+    expect(m.initials).toBe('')
+  })
+})
+
+describe('filter and guard — boundaries the T2 batch does not reach (QA36–QA38, §6/§9)', () => {
+  it('TRIMS the query before matching, so trailing whitespace does not zero the box (QA36)', () => {
+    // An underspecified pick: the plan says only "case-insensitive substring". Pinned
+    // because MEMB-01-03 wires this straight to a text input, where a trailing space is
+    // the difference between one result and none.
+    expect(names(filterMembers(inhouse(), '  ngozi  ', 'all'))).toEqual(['Ngozi Balogun'])
+    expect(names(filterMembers(inhouse(), 'ngozi ', 'admin'))).toEqual(['Ngozi Balogun'])
+    // A whitespace-only query is an EMPTY query, not a query that matches nothing.
+    expect(filterMembers(inhouse(), '   ', 'all')).toHaveLength(16)
+    expect(names(filterMembers(inhouse(), ' \n\t ', 'admin'))).toEqual(['Ngozi Balogun'])
+  })
+
+  it('degrades to empty on an empty list, and still allocates (QA37)', () => {
+    // QA12 covered MEMB-01-01's derivations at the empty boundary; none of MEMB-01-02's
+    // exports had that coverage.
+    const empty: readonly Member[] = []
+    const row = firmRow('Ghost Person', 'active', 'all')
+
+    expect(classifyInvites(empty, ['a@x.ng', 'bad'])).toEqual(['ok', 'malformed'])
+    expect(filterMembers(empty, 'ngozi', 'all')).toEqual([])
+    expect(addMembers(empty, [row])).toEqual([row])
+    expect(replaceMember(empty, row)).toEqual([])
+    expect(removeMember(empty, 'mf1')).toEqual([])
+    expect(setMemberRole(empty, 'mf1', 'admin')).toEqual([])
+    expect(setMemberStatus(empty, 'mf1', 'active')).toEqual([])
+
+    for (const out of [
+      addMembers(empty, []),
+      replaceMember(empty, row),
+      removeMember(empty, 'mf1'),
+      setMemberRole(empty, 'mf1', 'admin'),
+      setMemberStatus(empty, 'mf1', 'active'),
+    ]) {
+      expect(out).not.toBe(empty)
+    }
+  })
+
+  it('reads the LIST, never the member alone — including for a detached row (QA38)', () => {
+    // An active admin who is not in the list still reads as protected when that list holds
+    // exactly one active admin: `isProtectedAdmin` does no identity lookup. Recorded so
+    // MEMB-01-04's ⋯ menu and MEMB-01-07's drawer pass the CURRENT row, never a stale one.
+    const sole = inhouse()[0]
+    expect(sole.role).toBe('admin')
+    expect(isProtectedAdmin([], sole)).toBe(false)
+
+    const detached: Member = { ...firmRow('Ghost Admin', 'active', 'all'), role: 'admin' }
+    expect(inhouse().map((m) => m.id)).not.toContain(detached.id)
+    expect(isProtectedAdmin(inhouse(), detached)).toBe(true)
   })
 })

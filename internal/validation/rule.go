@@ -86,11 +86,24 @@ type RuleSet struct {
 
 // Violation is one failed rule, in the exact JSON shape the M3-09
 // playground UI and the /v1/validate response (story API spec) expect.
+//
+// Expected/Actual (D9, [expected-is-decimal-string]) carry the value this
+// rule judged against and the value it found, for evaluator types that have
+// a natural expectation to report: format/regex (the pattern), enum (the
+// allowed values), range (the bound), tax_math and line_sum (an exact
+// decimal.Decimal.String(), never a float -- the [D13] money discipline).
+// Both are *string + omitempty so a rule type with no natural expectation
+// (required, date, cross_field, conditional, cel) omits the keys entirely --
+// an absent expectation is omitempty-absent, never a fabricated "". Built via
+// violation()'s option args (evaluators.go), the single construction point
+// for every Violation this package returns.
 type Violation struct {
 	RuleKey  string   `json:"rule_key"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
 	Path     string   `json:"path,omitempty"` // resolved target, for the M3-09 UI
+	Expected *string  `json:"expected,omitempty"`
+	Actual   *string  `json:"actual,omitempty"`
 }
 
 // Result is the /v1/validate response body: the rule-set version actually

@@ -127,3 +127,133 @@ func TestGolden(t *testing.T) {
 		})
 	}
 }
+
+// TestGoldenSetUnchangedForOmittingRules (INVCR-01-12 AC-6, D9; Stage 2
+// correction C2): the golden JSON files above are a byte-for-byte compare,
+// so a diff there proves SOMETHING changed but not that the RIGHT set of
+// violations changed -- an always-absent omitempty field is invisible to a
+// byte-diff review, so it can't by itself distinguish "correctly omitted"
+// from "population code never ran". This test asserts the semantic property
+// directly and typed, against the same two fixture payloads TestGolden
+// pins:
+//   - every violation an OMITTING-type rule fires (required/cel -- the only
+//     two omitting types the seeded corpus exercises, Stage 2 correction
+//     C1) has Expected == nil && Actual == nil, unconditionally.
+//   - every violation a POPULATING-type rule fires (format/regex, enum,
+//     range, tax_math, line_sum) carries the EXACT Expected/Actual this
+//     subtask's evaluators must compute -- not merely non-nil.
+//
+// Correction C2's own prose undercounts this corpus: demo_bad_invoice's
+// supplier-tin-format is ALSO a populating type (format/regex, not just
+// vat-standard-rate's tax_math), and many_violations additionally exercises
+// enum (currency-allowed) and range (subtotal-non-negative) -- 7
+// populating-type violations fire across the two payloads, not 2, and only
+// 4 distinct omitting-type violations fire, not all 11 seeded omitting
+// rules (the other 7 never fire against either fixture; the direct-eval
+// omission tests in evaluators_test.go/evaluators_math_test.go/cel_test.go
+// cover required/date/cross_field/conditional/cel independently of this
+// corpus). Verified by reading both golden files and the fixture builders
+// directly (badInvoicePayload/manyViolationsPayload), not assumed from the
+// plan text.
+func TestGoldenSetUnchangedForOmittingRules(t *testing.T) {
+	_, app := dbTestPools(t)
+	rs := loadActive(t, app)
+	engine := NewDefaultEngine()
+
+	type want struct {
+		expected *string
+		actual   *string
+	}
+
+	cases := []struct {
+		name    string
+		payload func() Payload
+		want    map[string]want
+	}{
+		{
+			name:    "demo_bad_invoice",
+			payload: badInvoicePayload,
+			want: map[string]want{
+				// format/regex: pattern only, no Actual (population table).
+				"supplier-tin-format": {expected: ptr("^[0-9]{8}-[0-9]{4}$")},
+				// tax_math: base(subtotal=1000)*rate(0.075)=75; Actual is
+				// the resolved "expected"(param) operand, vat=70.
+				"vat-standard-rate": {expected: ptr("75"), actual: ptr("70")},
+			},
+		},
+		{
+			name:    "many_violations",
+			payload: manyViolationsPayload,
+			want: map[string]want{
+				// enum: allowed values joined " · " (one value: NGN); Actual
+				// is the resolved (non-matching) value, currency=USD.
+				"currency-allowed": {expected: ptr("NGN"), actual: ptr("USD")},
+				// required (omitting).
+				"invoice-number-required": {},
+				"issue-date-required":     {},
+				// line_sum: folded line total (100*10 + 5*1 = 1005) vs the
+				// declared "expected"(param), subtotal=-5.
+				"line-items-sum-subtotal": {expected: ptr("1005"), actual: ptr("-5")},
+				// cel (omitting).
+				"no-duplicate-line-items": {},
+				// range (min:0 only): ">= 0"; Actual is the resolved value,
+				// subtotal=-5.
+				"subtotal-non-negative": {expected: ptr(">= 0"), actual: ptr("-5")},
+				// required (omitting).
+				"supplier-name-required": {},
+				// format/regex, same shape as demo_bad_invoice's.
+				"supplier-tin-format": {expected: ptr("^[0-9]{8}-[0-9]{4}$")},
+				// tax_math: base(subtotal=-5)*rate(0.075)=-0.375; Actual is
+				// the resolved "expected"(param) operand, vat=999.
+				"vat-standard-rate": {expected: ptr("-0.375"), actual: ptr("999")},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := engine.Evaluate(tc.payload(), rs)
+			if err != nil {
+				t.Fatalf("Evaluate(%s): %v", tc.name, err)
+			}
+			if len(result.Violations) != len(tc.want) {
+				t.Fatalf("len(Violations) = %d, want %d for %s -- this test's want map must name EXACTLY the violations "+
+					"this fixture produces; a drift here means the fixture changed and this want map needs updating "+
+					"alongside it (not a signal to loosen the assertion)",
+					len(result.Violations), len(tc.want), tc.name)
+			}
+			seen := make(map[string]bool, len(tc.want))
+			for _, v := range result.Violations {
+				w, ok := tc.want[v.RuleKey]
+				if !ok {
+					t.Errorf("unexpected violation key %q -- not in this test's want map", v.RuleKey)
+					continue
+				}
+				seen[v.RuleKey] = true
+				if !strPtrEqual(v.Expected, w.expected) {
+					t.Errorf("%s: Expected = %s, want %s", v.RuleKey, stringPtrDebug(v.Expected), stringPtrDebug(w.expected))
+				}
+				if !strPtrEqual(v.Actual, w.actual) {
+					t.Errorf("%s: Actual = %s, want %s", v.RuleKey, stringPtrDebug(v.Actual), stringPtrDebug(w.actual))
+				}
+			}
+			for key := range tc.want {
+				if !seen[key] {
+					t.Errorf("want map names violation key %q but %s produced no such violation", key, tc.name)
+				}
+			}
+		})
+	}
+}
+
+// ptr returns a pointer to s -- shorthand for the want-map literals above.
+func ptr(s string) *string { return &s }
+
+// strPtrEqual reports whether two *string are both nil or both non-nil with
+// equal pointed-to values.
+func strPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}

@@ -74,11 +74,21 @@ const defaultValidateTimeout = 60 * time.Second
 //
 // Severity is a plain string, not a named type: 03 only reads it, and the gate
 // that interprets it (M4-04-06) is the right owner of any constant.
+//
+// Expected/Actual (D9, INVCR-01-12) mirror 04's shipped validation.Violation
+// field for field, INCLUDING the *string + omitempty shape -- a rule type
+// with no natural expectation (required/date/cross_field/conditional/cel)
+// omits both keys entirely on the wire, and 03 must not fabricate a value
+// where 04 sent none. Severity's divergence (Severity here vs the named type
+// there) is the ONE deliberate exception to "field for field" -- see this
+// struct's own header above; it does not extend to Expected/Actual.
 type Violation struct {
-	RuleKey  string `json:"rule_key"`
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
-	Path     string `json:"path,omitempty"`
+	RuleKey  string  `json:"rule_key"`
+	Severity string  `json:"severity"`
+	Message  string  `json:"message"`
+	Path     string  `json:"path,omitempty"`
+	Expected *string `json:"expected,omitempty"`
+	Actual   *string `json:"actual,omitempty"`
 }
 
 // ValidateItem is one invoice submitted for evaluation. Ref is caller-opaque

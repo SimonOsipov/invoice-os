@@ -145,6 +145,41 @@ func TestTaxMath_OutsideToleranceViolates(t *testing.T) {
 	}
 }
 
+// TestTaxMath_ExpectedIsExactDecimal (INVCR-01-12 AC-2/AC-3, D9): Expected
+// is base.Mul(rate) as an exact decimal string; Actual is the resolved
+// "expected" param operand (the invoice's OWN reported VAT, i.e. what the
+// rule judged against, NOT what the rule computed -- see this file's own
+// Test Specs table naming). subtotal=1125000, rate=0.075, vat=0 => 1125000 *
+// 0.075 = 84375 exactly (shopspring/decimal, no binary-float error).
+func TestTaxMath_ExpectedIsExactDecimal(t *testing.T) {
+	e := taxMathEval{}
+	payload := Payload{"invoice": map[string]any{
+		"subtotal": float64(1125000),
+		"vat":      float64(0),
+	}}
+	r := Rule{
+		Key:      "vat-standard-rate",
+		Type:     TypeTaxMath,
+		Params:   json.RawMessage(`{"base":"subtotal","rate":0.075,"expected":"vat","tolerance":0.005}`),
+		Severity: "error",
+		Message:  "VAT must equal 7.5% of the subtotal.",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: 1125000*0.075=84375, expected(param) vat=0")
+	}
+	if v.Expected == nil || *v.Expected != "84375" {
+		t.Errorf("Expected = %v, want \"84375\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "0" {
+		t.Errorf("Actual = %v, want \"0\"", stringPtrDebug(v.Actual))
+	}
+}
+
 // --- cross_field --------------------------------------------------------
 
 // TestCrossField_SumMismatchViolates (Test Spec): left="total"(100),
@@ -249,6 +284,35 @@ func TestCrossField_LessThanViolates(t *testing.T) {
 	}
 }
 
+// TestCrossField_OmitsExpectedAndActual (INVCR-01-12 AC-5, D9): cross_field
+// has no single natural expectation to report (it compares two payload
+// paths, neither of which is "the" expected value) -- omitted entirely on
+// the wire. cross_field doesn't exist in the seeded corpus (Stage 2
+// correction C1), so this is exercised by direct construction.
+func TestCrossField_OmitsExpectedAndActual(t *testing.T) {
+	e := crossFieldEval{}
+	payload := Payload{"invoice": map[string]any{
+		"total":     float64(100),
+		"lines_sum": float64(90),
+	}}
+	r := Rule{
+		Key:      "CROSSFIELD-TOTAL",
+		Type:     TypeCrossField,
+		Params:   json.RawMessage(`{"left":"total","op":"eq","right":"lines_sum"}`),
+		Severity: "error",
+		Message:  "total must equal the sum of line items",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: total 100 != lines_sum 90")
+	}
+	assertOmitsExpectedAndActual(t, v)
+}
+
 // --- conditional ----------------------------------------------------------
 
 // conditionalTINRule is the shared `if country==NG then supplier.tin
@@ -347,6 +411,26 @@ func TestConditional_IfTrueThenComparisonFails(t *testing.T) {
 	if v.RuleKey != r.Key || v.Severity != r.Severity || v.Message != r.Message {
 		t.Errorf("Eval() violation = %+v, want RuleKey=%q Severity=%q Message=%q", v, r.Key, r.Severity, r.Message)
 	}
+}
+
+// TestConditional_OmitsExpectedAndActual (INVCR-01-12 AC-5, D9): conditional
+// has no single natural expectation to report -- omitted entirely on the
+// wire. conditional doesn't exist in the seeded corpus (Stage 2 correction
+// C1), so this is exercised by direct construction (reusing
+// conditionalTINRule's if-true/then-required-fails shape).
+func TestConditional_OmitsExpectedAndActual(t *testing.T) {
+	e := conditionalEval{}
+	payload := Payload{"invoice": map[string]any{"country": "NG"}} // supplier.tin absent
+	r := conditionalTINRule()
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: country=NG (if true) and supplier.tin is absent (then fails)")
+	}
+	assertOmitsExpectedAndActual(t, v)
 }
 
 // --- cross-cutting: bad params -------------------------------------------

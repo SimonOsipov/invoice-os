@@ -41,9 +41,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	// Test-only: TestViolationWireShapesAgree needs both Violation types in
+	// hand to compare their json tags. This does NOT trip
+	// TestValidatorClient_DoesNotImportValidationPackage (VC-14, below) --
+	// that guard runs `go list -deps ./internal/invoice` WITHOUT -test, which
+	// only inspects the non-test build graph; test files are excluded
+	// regardless of package clause. payload_engine_test.go established this
+	// precedent first, gate_test.go's header (see there) reconfirmed it
+	// empirically; this file reuses the same precedent for the SAME reason
+	// repoRootForValidatorTest's neighboring comment gives for NOT doing this
+	// is stale (predates that precedent) -- flagged for cleanup, not touched
+	// here (out of this subtask's scope).
+	"github.com/SimonOsipov/invoice-os/internal/validation"
 )
 
 // cannedRuleSetVersion is a placeholder rule-set version number used only
@@ -479,4 +493,44 @@ func repoRootForValidatorTest(t *testing.T) string {
 		t.Fatalf("git rev-parse --show-toplevel: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestViolationWireShapesAgree (INVCR-01-12 AC-1, D9): this file's Violation
+// and 04's validation.Violation (internal/validation/rule.go) are declared
+// independently ([wire-types-redeclared]) but this file's own header is
+// explicit that their json tags ARE the contract, and MUST match field for
+// field. Compares json TAG SETS ONLY, never Go field types: Severity is
+// deliberately the named validation.Severity there and a plain string here
+// (this file's Violation doc comment explains why) -- a field-TYPE
+// comparison would fail on arrival and invite "fixing" an intentional
+// divergence that isn't a bug.
+func TestViolationWireShapesAgree(t *testing.T) {
+	ours := reflect.TypeOf(Violation{})
+	theirs := reflect.TypeOf(validation.Violation{})
+
+	tagSet := func(typ reflect.Type) map[string]bool {
+		set := make(map[string]bool, typ.NumField())
+		for i := 0; i < typ.NumField(); i++ {
+			tag := typ.Field(i).Tag.Get("json")
+			if tag == "" {
+				t.Fatalf("%s field %q has no json tag", typ.Name(), typ.Field(i).Name)
+			}
+			set[tag] = true
+		}
+		return set
+	}
+
+	ourTags := tagSet(ours)
+	theirTags := tagSet(theirs)
+
+	for tag := range ourTags {
+		if !theirTags[tag] {
+			t.Errorf("json tag %q is on invoice.Violation but not on validation.Violation -- the two must agree field for field", tag)
+		}
+	}
+	for tag := range theirTags {
+		if !ourTags[tag] {
+			t.Errorf("json tag %q is on validation.Violation but not on invoice.Violation -- the two must agree field for field", tag)
+		}
+	}
 }

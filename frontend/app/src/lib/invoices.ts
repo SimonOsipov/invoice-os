@@ -383,16 +383,23 @@ export async function getInvoiceHistory(
 
 // POST /v1/invoices -- the missing caller for CreateHandler (cmd/invoice/main.go:56,
 // INVCR-01-02, task-278: the handler has existed since M4-02 with no caller). Follows
-// editInvoice's shape verbatim below -- forwards `body` to apiFetch untouched, no
+// editInvoice's shape verbatim below -- forwards `input` to apiFetch untouched, no
 // wrapping. Non-2xx rejects with the underlying ApiError unchanged.
 //
-// STUB (Mode A): throws -- the executor implements the body in Stage 3.
+// The 201 body is the bare domain Invoice with its line_items (CreateHandler,
+// handlers.go:117-165), NOT the getResponse wrapper -- so like listInvoices/editInvoice/
+// revalidateInvoice's responses it carries no `rule_set_version` key, and the resolved
+// record reads `undefined` there at runtime despite InvoiceRecord typing it `number |
+// null` (see that type's own comment). Deliberately NOT normalized with `?? null` here:
+// getInvoice is the one helper that does that, and a fourth variant of the same wire shape
+// is worse than the documented gap. If that gap is ever closed it should be closed once,
+// for all four helpers, not per-callsite.
 export async function createInvoice(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _body: InvoiceCreateInput,
+  authedFetch: AuthedFetch,
+  base: string,
+  input: InvoiceCreateInput,
 ): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices`, { method: 'POST', body: input })
 }
 
 export async function editInvoice(

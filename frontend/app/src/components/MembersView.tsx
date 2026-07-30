@@ -19,6 +19,7 @@ import { plusGlyph } from '../glyphs'
 import { ACCESS_ROLES, filterMembers, isFiltering, unassignedNotice, unassignedPositions, type AccessRole } from '../lib/members'
 import { roleOf } from '../lib/workflows'
 import { AmberNote } from './MemberParts'
+import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
 import type { PlatformCtx } from '../types'
@@ -143,6 +144,18 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       ) : (
         <MembersTable ctx={ctx} rows={shown} policies={ctx.policies} onFlash={setFlash} />
       )}
+
+      {/* AFTER the ternary, not inside its last arm — so both render over the
+          roster-of-one empty state and over the filtered-to-zero row as well as under the
+          table. Same reasoning as the unassigned notice above: what the three roles can do
+          is a statement about ROLES, which no search string and no roster size can change,
+          and hiding it because a filter matched nothing would say the search had deleted
+          it. The `Client users` placeholder follows for §6's own reason — it exists to
+          keep an open question visible, and a search box must not close a question. */}
+      <MemberRoleMatrix />
+      {/* Firm only, and gated here beside this tab's other two mode forks: in-house
+          renders no node at all, not a hidden one. */}
+      {mode === 'firm' && <ClientUsersCard />}
     </>
   )
 }

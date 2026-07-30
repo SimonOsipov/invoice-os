@@ -129,6 +129,26 @@ export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer
 ]
 
 /**
+ * §6's footnote under the capability matrix, and §6's copy for the firm-only `Client users`
+ * placeholder. Both are rendered verbatim by MemberRoleMatrix — MEMB-01-05's AC#1 says so
+ * for the footnote and AC#3 for the card — and neither is a derivation of anything.
+ *
+ * They live here, beside the eight labels QA18 already pins, for the reason task-297's QA
+ * moved three display strings out of components: `environment: node` cannot mount a
+ * component, so a string authored inside one is a string no spec can hold (§15.8). The
+ * footnote is the longest passage in the story, two sentences whose clauses depend on each
+ * other, and a fluent paraphrase of it is exactly what a screenshot gate cannot catch.
+ *
+ * The expander's own header label stays in the component: §6 names it as the affordance,
+ * not as prose, and AC#1's verbatim clause covers the rows and the footnote only.
+ */
+export const CAPABILITY_FOOTNOTE =
+  'Approving also requires an approval position in the policy that routes the invoice. A person needs the Reviewer role to act on approval steps at all, and an approval position to decide which steps.'
+
+export const CLIENT_USERS_COPY =
+  'Give a contact at one of your clients read-only access, or approval rights on their own invoices.'
+
+/**
  * The static client roster `clientAccess` indexes. Ids ARE the CFG indices (../data) —
  * deliberately the static mock roster and not the live portfolio entity list, whose ids are
  * UUID strings a `number[]` cannot address (Decision `[client-roster-is-static]`).

@@ -10,11 +10,13 @@ import {
   addMembers,
   blockedPositions,
   canvasApprovalLine,
+  CAPABILITY_FOOTNOTE,
   CAPABILITY_ROWS,
   classifyInvites,
   clientAccessLabel,
   clientAccessNames,
   CLIENT_ROSTER,
+  CLIENT_USERS_COPY,
   delegateCandidates,
   DEPARTMENTS,
   departmentsInUse,
@@ -1559,5 +1561,25 @@ describe('stepsWarning — §10.4 copy over stepsFor().total (QA45–QA46)', () 
     // 0 is never rendered (the row warning is gated on `total > 0`), but if it ever were,
     // "Named in 0 approval step" would be wrong in the same way "0 positions has" is.
     expect(stepsWarning(0)).toBe('Named in 0 approval steps · those steps will block')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// MEMB-01-05 — the two §6 strings the expander renders verbatim
+// ---------------------------------------------------------------------------
+// Authored WITH the constants rather than before them: MEMB-01-05 is `Test-first: no` and
+// everything else it ships is rendering, whose oracle is the deploy gate. Copy is the one
+// part a screenshot cannot audit — a reviewer reads a fluent paraphrase as correct — and
+// AC#1 requires the footnote VERBATIM. QA18 already pins the eight row labels; this pins
+// the other half of that obligation, plus the `Client users` card's sentence.
+
+describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
+  it("carries §6's footnote and Client users copy verbatim (T5.1)", () => {
+    expect(CAPABILITY_FOOTNOTE).toBe(
+      'Approving also requires an approval position in the policy that routes the invoice. A person needs the Reviewer role to act on approval steps at all, and an approval position to decide which steps.',
+    )
+    expect(CLIENT_USERS_COPY).toBe(
+      'Give a contact at one of your clients read-only access, or approval rights on their own invoices.',
+    )
   })
 })

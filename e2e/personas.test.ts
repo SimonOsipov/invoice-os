@@ -31,6 +31,7 @@ const LANDING_AUTH = join(REPO_ROOT, 'frontend/landing/src/auth.ts')
 const SIDEBAR = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.tsx')
 const GLYPHS = join(REPO_ROOT, 'frontend/app/src/glyphs.tsx')
 const PERSONAS_SRC = join(REPO_ROOT, 'e2e/personas.ts')
+const PERSONAS_TEST_SRC = join(REPO_ROOT, 'e2e/personas.test.ts')
 
 // process.env hygiene (targets.test.ts:9-11's idiom, extended to all three destination
 // vars): snapshot before each test and restore after, so row 1/2's mutations can never leak
@@ -333,5 +334,79 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     expect(duplicates, `duplicate (destination,persona) pairs: ${duplicates.join(', ')}`).toEqual([])
     expect(badVerdicts, badVerdicts.join('\n')).toEqual([])
     expect(disagreements, disagreements.join('\n')).toEqual([])
+  })
+
+  // --- QA-added coverage (task-270 Stage 4, Mode B): the one-way dependency rule --------
+  //
+  // Row 0 only guards the @playwright/test half of the HARD CONSTRAINT in task-270's
+  // implementation plan: personas.ts must not transitively import topology/targets.ts or
+  // smoke/apps.ts either, because BOTH resolve a deploy target at module scope and throw on
+  // import when unset -- exactly what CI's env-less `test:unit` job hits. A regression here
+  // fails silently at import time (a bare "Cannot find module" or "X_URL is not set" collection
+  // error with no row-level attribution), so it is worth its own named assertion rather than
+  // relying on the accidental blast radius of another row. personas.test.ts itself is checked
+  // too: if a future edit re-imports either module directly into the test file (say, to reuse
+  // a helper), the same import-time throw would take out every row in this file at once.
+  it('row 11 (one-way dependency) -- personas.ts and personas.test.ts never import topology/targets or smoke/apps', () => {
+    const personasSrc = readFileSync(PERSONAS_SRC, 'utf8')
+    const testSrc = readFileSync(PERSONAS_TEST_SRC, 'utf8')
+    expect(personasSrc.length, 'e2e/personas.ts has no content to scan').toBeGreaterThan(0)
+    expect(testSrc.length, 'e2e/personas.test.ts has no content to scan').toBeGreaterThan(0)
+
+    const FORBIDDEN = [
+      { label: 'topology/targets', pattern: /from\s+['"][^'"]*\btopology\/targets['"]/ },
+      { label: 'smoke/apps', pattern: /from\s+['"][^'"]*\bsmoke\/apps['"]/ },
+    ]
+    const files = [
+      ['e2e/personas.ts', personasSrc],
+      ['e2e/personas.test.ts', testSrc],
+    ] as const
+
+    const violations: string[] = []
+    for (const [label, src] of files) {
+      for (const { label: forbiddenLabel, pattern } of FORBIDDEN) {
+        if (pattern.test(src)) violations.push(`${label} imports ${forbiddenLabel}`)
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  // --- QA-added coverage (task-270 Stage 4, Mode B): the alias map survives a rename ----
+  //
+  // G3's alias map (buildSidebarAliasMap) is DERIVED from Sidebar.tsx's whole-file text
+  // rather than hardcoded to the two names ('invoicesItem'/'approvalsItem') it happens to
+  // resolve today -- task-270's plan calls this out explicitly as the reason a rename cannot
+  // rot the guard. That claim was, until now, only ever exercised against today's real
+  // variable names; this proves the SAME resolver derives the alias from arbitrarily-named
+  // wrapper locals, independent of what Sidebar.tsx currently calls them.
+  it('row 12 (G3 alias map) -- the alias map derivation survives a rename of the wrapper locals', () => {
+    const FIXTURE = `
+      const renamedInvoicesWrapper: SidebarNavItem = {
+        ...NAV_INVOICES,
+        badge: null,
+      }
+      const renamedApprovalsWrapper: SidebarNavItem = {
+        ...NAV_APPROVALS,
+        badge: null,
+      }
+      const navGroups = isFirm
+        ? [
+            { key: 'client', label: 'Acme', scope: 'CLIENT', items: [NAV_DASHBOARD, renamedInvoicesWrapper] },
+          ]
+        : [
+            { key: 'workspace', label: 'Workspace', scope: 'Acme', items: [NAV_DASHBOARD, renamedApprovalsWrapper] },
+          ]
+    `
+    const aliasMap = buildSidebarAliasMap(FIXTURE)
+    expect(Object.keys(aliasMap).length, 'aliases derived from the fixture (vacuity guard)').toBeGreaterThanOrEqual(2)
+    expect(aliasMap.renamedInvoicesWrapper, 'a renamed NAV_INVOICES wrapper should still resolve').toBe('NAV_INVOICES')
+    expect(aliasMap.renamedApprovalsWrapper, 'a renamed NAV_APPROVALS wrapper should still resolve').toBe('NAV_APPROVALS')
+
+    const parts = FIXTURE.split(/\]\s*:\s*\[/)
+    expect(parts.length, 'fixture ternary seam split (vacuity guard)').toBe(2)
+    const firmTokens = resolveNavConstsFromGroupsSlice(parts[0], aliasMap)
+    const inhouseTokens = resolveNavConstsFromGroupsSlice(parts[1], aliasMap)
+    expect(firmTokens, 'firm branch should resolve the renamed invoices wrapper').toContain('NAV_INVOICES')
+    expect(inhouseTokens, 'in-house branch should resolve the renamed approvals wrapper').toContain('NAV_APPROVALS')
   })
 })

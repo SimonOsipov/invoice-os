@@ -117,16 +117,26 @@ export const MANY_VIOLATION_KEYS = [
   'vat-standard-rate',
 ]
 
-// freshTin(): a unique NNNNNNNN-NNNN TIN with a correct Luhn check digit,
-// generated fresh per call so repeated runs (including against the un-reset
-// live dev DB) never collide on business_entities' duplicate-TIN partial
-// index (there is no DELETE endpoint — only offboard/onboard = archive/
-// active). Replicates internal/portfolio/tin.go's luhnValid exactly: from the
-// rightmost digit, double every second digit (subtracting 9 if >9), sum all
-// digits; valid iff the sum is a multiple of 10. Uniqueness comes from a
-// per-process run seed (pid-derived, stable for the life of this process)
-// combined with a module-level call counter — not Date.now()/Math.random(),
-// per the story's guidance for test code.
+// freshTin(): an NNNNNNNN-NNNN TIN with a correct Luhn check digit, generated
+// fresh per call so repeated runs against the un-reset live dev DB do not
+// collide on business_entities' duplicate-TIN partial index (there is no
+// DELETE endpoint — only offboard/onboard = archive/active). Replicates
+// internal/portfolio/tin.go's luhnValid exactly: from the rightmost digit,
+// double every second digit (subtracting 9 if >9), sum all digits; valid iff
+// the sum is a multiple of 10.
+//
+// UNIQUENESS IS PROBABILISTIC, NOT GUARANTEED (finding F-G). It comes from a
+// per-process run seed combined with a module-level call counter — not
+// Date.now()/Math.random(), per the story's guidance for test code. The seed is
+// `process.pid % 10000` (see tinRunSeed below), so there are only 10,000 of
+// them and PIDs recycle: two runs whose PIDs are congruent mod 10000 emit
+// byte-identical TIN sequences. That is nonetheless adequate, because a
+// collision cannot produce a FALSE PASS — it fails loud. Postgres raises 23505 on
+// `business_entities_tenant_tin_uq` (UNIQUE (tenant_id, tin) WHERE tin IS NOT
+// NULL, migrations/20260709155011_business_entities.sql:55), which
+// internal/portfolio/store.go:58-59 maps to ErrDuplicateTIN and the API returns
+// as an error the calling spec asserts on. The index is also per-TENANT, so
+// only a colliding run against the same tenant can trip it at all.
 let tinCounter = 0
 const tinRunSeed = String(process.pid % 10000).padStart(4, '0')
 

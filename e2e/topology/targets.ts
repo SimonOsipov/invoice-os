@@ -5,6 +5,7 @@
 // resolveTarget throws rather than falling back to a hardcoded dev deployment (Decision
 // [fail-loud-targets]).
 
+import { PERSONAS, type PersonaId } from '../personas'
 import { ACTIVE_RULE_SET_VERSION } from '../rule-set'
 import { resolveTarget } from '../targets'
 
@@ -44,26 +45,34 @@ export const TENANTS = {
   },
 } as const
 
-// The firm persona (frontend/app/src/auth.ts) resolves to seeded tenant 1111. Its
-// uppercased backend name is what the verified sidebar renders after the round trip.
+// The two app personas, DERIVED from the persona registry (../personas) rather than restated
+// here — that registry is the single source of truth for the axis (PERSONA-01), and these
+// constants used to be a second, hand-maintained copy of the same two ids and tenant names.
 //
 // `param` replaced the old `buttonName`: the app no longer ships its own persona picker
 // (the landing page is the single sign-in front door), so there is no button to click on a
 // deployed build. Signing in is the same ?persona= hand-off the landing performs —
 // landing/src/auth.ts destUrl() — which makes these specs exercise the real entry path
 // rather than a picker only the standalone showcase build still renders.
-export const FIRM_PERSONA = {
-  param: 'firm',
-  tenantName: 'Okafor & Partners',
-} as const
+//
+// `tenantName` is optional on PersonaDef (the two console personas have no tenant), but every
+// consumer here calls .toUpperCase() on it, so narrow it once at the seam and fail loudly —
+// the same shape as resolveTarget above, and better than pushing a `!` out to five call sites
+// where a missing value would surface as an unexplained TypeError mid-spec.
+function appPersona(id: PersonaId): { param: PersonaId; tenantName: string } {
+  const { tenantName } = PERSONAS[id]
+  if (!tenantName) throw new Error(`e2e/personas.ts: persona "${id}" has no tenantName, but ${id.toUpperCase()}_PERSONA needs one`)
+  return { param: id, tenantName }
+}
+
+// The firm persona (frontend/app/src/auth.ts) resolves to seeded tenant 1111. Its
+// uppercased backend name is what the verified sidebar renders after the round trip.
+export const FIRM_PERSONA = appPersona('firm')
 
 // The in-house persona, resolving to seeded tenant 2222. Proving that a hand-off SWITCHES
 // identity (auth.spec.ts) needs a second persona to switch TO — one whose sidebar shares no
 // tenant label with the firm's, so "switched" and "did not switch" are distinguishable.
-export const INHOUSE_PERSONA = {
-  param: 'inhouse',
-  tenantName: 'Honeywell Group',
-} as const
+export const INHOUSE_PERSONA = appPersona('inhouse')
 
 // The seeded, ACTIVE MBS rule-set that the live gateway evaluates (v2 since M4-04-01 --
 // migrations/20260716185106_rule_set_v2.sql). The "has-violations" preset

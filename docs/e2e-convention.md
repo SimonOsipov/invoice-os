@@ -55,18 +55,72 @@ data (fresh TINs, random UUIDs, high offsets for empty-state).
 
 ## Target surface
 
-The **tenant-facing `app` SPA** (gateway-wired) is the **only** functional-E2E target.
+Four frontends deploy — the `landing` front door and the three SPAs it hands off to — and
+they are **not equally testable**. The line that matters is not *which SPA* a test drives
+but **what backs the assertion**:
 
-- `ops-console` (mock) and `landing` (static marketing) get **smoke only** — no live
-  backend to exercise.
-- Mock-only `app` surfaces (Customers, Reports, Settings, company switcher, XML/UBL
-  preview, onboarding dashboard) are **out** — a browser test there asserts nothing real.
-  Submission/transmit is real (M5-09): it is covered via the invoices **list**'s
-  batch-select-and-submit path (`invoice-surfaces.spec.ts`) — the invoice **detail**
-  surface deliberately carries no submit control in any status.
+| surface | backing | what a browser assertion may claim |
+|---|---|---|
+| `app` SPA | gateway-wired (real API, real DB) | a **contract**: rendered state matches what the API returned |
+| `ops-console` | mock data, no backend | **fixture behaviour** — that the console's own client-side logic works |
+| `support-console` | mock data, no backend | same |
+| `landing` | static marketing | render, plus client-side navigation |
 
-**What "smoke only" covers.** Render checks, plus client-side behaviour that has no other
-harness — these SPAs have no DOM component-test layer (every frontend vitest project runs
-in `node`), so a browser check is the only place a control, a route guard, or a scroll-spy
-can be exercised at all. That is a floor, not a licence for per-screen coverage: *keep the
-browser layer thin* and *functional only — no visual regression* apply here unchanged.
+The `app` SPA remains the only place a browser test can prove the **stack** integrates end
+to end. The consoles and the landing page carry functional coverage of their own
+client-side behaviour because they have no other harness: every frontend vitest project
+runs in `node`, so the repo has no DOM component-test layer, and a browser check is the
+only place a control, a route guard, or a scroll-spy can be exercised at all.
+
+**Mock-backed assertions pin fixtures, not contracts — and the spec must say so in-file.**
+A spec asserting an ops-console counter or an approval-policy list asserts that a seeded
+fixture and a pure function over it still agree; it will need revisiting when a real
+endpoint lands (`frontend/app/src/lib/workflows.ts:9` — "There is no approvals endpoint").
+Writing such an assertion as though it proved a contract is the failure this rule prevents;
+refusing to write it at all leaves a shipped screen untested. So: write it, and label it.
+
+Mock-only `app` surfaces follow the same rule. **Workflows, Reports and Settings** carry
+functional coverage as sidebar surfaces of the persona that owns them (see below). The
+company switcher, XML/UBL preview and onboarding dashboard are not nav surfaces and hold no
+coverage cell — note that the switcher *is* **operated** by `workflows.spec.ts` and
+`persona-surfaces.spec.ts` as the mechanism for changing the active client, which is not the
+same as being covered by them. Submission/transmit is real (M5-09): it is covered via the
+invoices **list**'s batch-select-and-submit path (`invoice-surfaces.spec.ts`) — the invoice
+**detail** surface deliberately carries no submit control in any status.
+
+**What "smoke only" covered, and still does.** Render checks, plus client-side behaviour
+that has no other harness. That was always a floor rather than a licence for per-screen
+coverage, and it still is: *keep the browser layer thin* and *functional only — no visual
+regression* apply here unchanged, and the browser layer's size is bounded by the persona
+surface catalogue below, not by the number of screens that exist. **The guard below enforces
+only the floor** — that no persona-scoped surface ships uncovered. Nothing mechanical
+enforces the ceiling; keeping the layer thin stays a review judgement.
+
+## Persona is an axis, not a constant
+
+`?persona=` is the single sign-in front door for all four personas, and the suite treats it
+as a **parameter** rather than a constant baked into each spec.
+
+- **`e2e/personas.ts`** is the registry: four personas, the three destinations they route
+  to, the app SPA's 10 nav surfaces, and a **coverage map** naming which persona is proven
+  on which surface by which spec.
+- **`e2e/personas.test.ts`** makes it load-bearing. **G3** asserts the catalogue matches
+  `Sidebar.tsx`'s live `navGroups`; **G6** asserts the rendered (surface, persona) pairs and
+  the coverage cells are the same set — in both directions, so a stale cell fails too. A new
+  persona, or a new persona-scoped surface, cannot ship uncovered: the guard goes red first.
+
+Two coverage grades, and no third:
+
+| grade | what it buys | what it does not |
+|---|---|---|
+| `drives` | the spec signs in as that persona, opens that surface, and asserts **rendered content** | — |
+| `nav-only` | the spec proves the surface is **present** in that persona's sidebar, and that the others are absent | says nothing about what the surface renders for that persona |
+
+There is deliberately no `pending`/`planned`/`todo` grade: a cell exists and names a spec
+that exists, or it does not exist. A surface may only be downgraded to `nav-only` by editing
+`EXPECTED_NAV_ONLY` inside `personas.test.ts` — a visible diff in the file whose job is to
+prevent quiet erosion.
+
+A spec may be named for the **axis** it varies (`api/persona-inhouse.spec.ts`) as well as
+for a capability: *organize by capability, not by date* forbids **dated** files, not files
+named for their subject.

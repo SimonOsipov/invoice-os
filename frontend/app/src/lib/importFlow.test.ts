@@ -387,6 +387,28 @@ describe('the deleted PDF/JPG document mock does not creep back into frontend/ap
       expect(hits, needle).toEqual([])
     })
   })
+
+  // QA (Stage 4, task-279): extends DEL-1's same scanner idiom (not a third copy) over
+  // the REST of AC-3's deleted-identifier list that DEL-1 itself does not check --
+  // runValidation, applyFix, backToEdit, warnGlyph, and the valTimer/valDone/clearVal
+  // trio. Each is confirmed zero-hits under src today (verified independently before
+  // authoring this spec, same as DEL-1's own claim) and none is built from concatenated
+  // parts here because none is a plausible English/UI word -- unlike DEL-1's own
+  // needles, there is no legitimate surviving surface these could collide with.
+  //
+  // Deliberately NOT scanned: `approve` and `valIdx`. `approve` is a live substring of
+  // (a) data.tsx's own WIZARD_STEPS strip label 'Approve' -- untouched by this subtask
+  // per [stage-strip-stays-transient] -- and (b) the unrelated Workflows
+  // approval-policy feature (WorkflowInspector.tsx/WorkflowBuilder.tsx/
+  // WorkflowParts.tsx), so a scan for it would fail on legitimate, in-scope code and
+  // teach nothing about the deleted mock's `approve()` handler specifically.
+  it('QA-DEL-2: the rest of the deleted validate/approve tail (runValidation, applyFix, backToEdit, warnGlyph, valTimer, valDone, clearVal) never creeps back', () => {
+    const needles = ['runValidation', 'applyFix', 'backToEdit', 'warnGlyph', 'valTimer', 'valDone', 'clearVal']
+    needles.forEach((needle) => {
+      const hits = scanForIdentifier(srcRoot, needle).filter((relPath) => relPath !== selfRelPath)
+      expect(hits, needle).toEqual([])
+    })
+  })
 })
 
 // AC7-1 (INVCR-01-03, task-279, Mode A — RED-first): lib/validation.ts SURVIVES this

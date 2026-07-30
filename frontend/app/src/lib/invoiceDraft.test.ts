@@ -406,6 +406,147 @@ describe('fileDraftGate (GATE-1)', () => {
   })
 })
 
+// QA (Stage 4, task-279): GATE-1 is architect-flagged "weak-but-real" -- it exercises
+// every branch's OUTCOME but not every branch's TRIGGER independently, and does not pin
+// [no-trim-at-either-layer] for the gate itself (only draftToCreateRequest's DRAFT-6
+// does, for a different function). These four close that gap without re-testing GATE-1's
+// own assertions.
+describe('fileDraftGate: adversarial / boundary (QA, task-279)', () => {
+  it('QA-GATE-1 a whitespace-only invoice number is NOT gated -- only the exact empty string is (mirrors [no-trim-at-either-layer])', () => {
+    // draft.number === '' is the ONLY blank check fileDraftGate makes (invoiceDraft.ts:
+    // 237) -- neither layer trims, so a lone space is a (weird but) non-empty string and
+    // must pass. A `.trim() === ''` implementation would wrongly gate this.
+    expect(fileDraftGate({ ...baseDraft, number: ' ' }, baseEntity)).toEqual({ canFile: true })
+  })
+
+  it('QA-GATE-2 entity identity alone gates -- a TIN-less or empty-name entity still counts as resolved', () => {
+    // The gate's entity branch is `entity === null`, nothing deeper: it is not the
+    // draftToCreateRequest mapper, and has no reason to inspect entity.tin/name. A
+    // TIN-less entity (legal -- DRAFT-5 pins the mapper's own null-TIN handling) must
+    // still be treated as "resolved" here.
+    const tinlessEntity: Pick<Entity, 'id' | 'name' | 'tin'> = { id: 'e-2', name: '', tin: null }
+    expect(fileDraftGate(baseDraft, tinlessEntity)).toEqual({ canFile: true })
+  })
+
+  it('QA-GATE-3 the two reason strings are exact -- no trailing punctuation, no interpolation', () => {
+    // Byte-exact pin, independent of GATE-1's toEqual checks: CreateForm renders
+    // gate.reason directly as the button's label (task-279 plan §8.5), and the entity
+    // reason must stay byte-identical to CreateMapping's own refusal copy
+    // ([file-is-the-verb]) -- a stray space or period here would silently fork the two
+    // wordings apart.
+    const entityResult = fileDraftGate(baseDraft, null)
+    const numberResult = fileDraftGate({ ...baseDraft, number: '' }, baseEntity)
+    expect(entityResult.canFile === false && entityResult.reason).toBe('Filing needs a linked entity')
+    expect(numberResult.canFile === false && numberResult.reason).toBe('Invoice number is required')
+  })
+
+  it('QA-GATE-4 canFile:true never carries a reason key at all', () => {
+    // The discriminated union's positive branch is `{ canFile: true }` with no other
+    // members (invoiceDraft.ts:238) -- a caller narrowing on `canFile` must not find a
+    // stray `reason` left over from a careless spread.
+    const result = fileDraftGate(baseDraft, baseEntity)
+    expect(Object.keys(result)).toEqual(['canFile'])
+  })
+})
+
+// QA (Stage 4, task-279): fileDraftInvoice edge cases the 7 red specs (SUBMIT-1/2/3,
+// GATE-1) don't reach -- all three drive a REAL synchronous/malformed failure through
+// the function rather than a well-behaved mock, which is exactly the class of input the
+// red specs (authored against a throwing stub, before any implementation existed) could
+// not anticipate.
+describe('fileDraftInvoice: edge cases beyond the red specs (QA, task-279)', () => {
+  it('QA-SUBMIT-1 create() resolving without an `id` still reaches onCreated -- fileDraftInvoice does not validate the shape at runtime', () => {
+    // `create`'s type is `Promise<{id:string}>`, but nothing inside fileDraftInvoice
+    // re-checks that contract at runtime -- it trusts the caller. A misbehaving `create`
+    // (a malformed server response the api-client layer failed to catch) resolving with
+    // no `id` at all must not throw or hang; it silently reaches onCreated with
+    // `undefined`. Documented as ACTUAL behaviour, not a claim it is correct -- App.tsx's
+    // real `onCreated` is `openImportedInvoice`, which would then navigate to
+    // `/detail` for invoiceId `undefined`, a downstream concern outside this function.
+    const onCreated = vi.fn()
+    const onError = vi.fn()
+    const onPending = vi.fn()
+    const create = vi.fn(() => Promise.resolve({} as { id: string }))
+    const inFlight = { current: false }
+
+    return fileDraftInvoice(baseDraft, baseEntity, { create, inFlight, onPending, onError, onCreated }).then(() => {
+      expect(onCreated).toHaveBeenCalledWith(undefined)
+      // onError(null) still fires once, unconditionally, at the top of the body-order
+      // contract (the "clear any previous error" observation) -- this is NOT a new
+      // error being reported for the missing `id`, so pin it explicitly rather than
+      // asserting onError was never called at all.
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(onError).toHaveBeenCalledWith(null)
+      expect(inFlight.current).toBe(false)
+    })
+  })
+
+  it('QA-SUBMIT-2 a synchronous throw from draftToCreateRequest lands on onError, never escapes, and the returned promise still resolves', () => {
+    // draftToCreateRequest is called INSIDE fileDraftInvoice's try block, synchronously,
+    // before `create` is ever invoked (invoiceDraft.ts:203) -- so a malformed draft that
+    // makes the mapper throw (rather than reject a promise) must be caught by the SAME
+    // try/catch as a rejected create(), not escape as an unhandled synchronous
+    // exception. `items` typed as an array but forced to `null` here (a shape no
+    // TypeScript caller can produce, but a corrupted/hand-built Draft at runtime could)
+    // makes `draft.items.map(...)` throw a real TypeError -- not a fake/injected one.
+    const malformedDraft = { ...baseDraft, items: null } as unknown as Draft
+    const create = vi.fn()
+    const onCreated = vi.fn()
+    const onError = vi.fn()
+    const onPending = vi.fn()
+    const inFlight = { current: false }
+
+    return expect(
+      fileDraftInvoice(malformedDraft, baseEntity, { create, inFlight, onPending, onError, onCreated }),
+    )
+      .resolves.toBeUndefined()
+      .then(() => {
+        expect(create).not.toHaveBeenCalled()
+        expect(onCreated).not.toHaveBeenCalled()
+        // Two onError calls: the unconditional onError(null) clear at the top of the
+        // body-order contract, then the actual reported error from the catch clause --
+        // the synchronous throw did NOT skip the clear or double up on it.
+        expect(onError).toHaveBeenCalledTimes(2)
+        expect(onError).toHaveBeenNthCalledWith(1, null)
+        const [reported] = onError.mock.calls[1]
+        expect(reported).not.toBeNull()
+        expect(reported.message).toMatch(/map is not a function|Cannot read propert/)
+        expect(onPending).toHaveBeenLastCalledWith(false)
+        expect(inFlight.current).toBe(false)
+      })
+  })
+
+  it('QA-SUBMIT-3 onPending(false) still fires via `finally` when onCreated itself throws synchronously', () => {
+    // NOTE: this also demonstrates a real (not merely hypothetical) sharp edge, worth
+    // recording for the team rather than silently passing over: onCreated() is called
+    // INSIDE the same try block as `create()` (invoiceDraft.ts:204), so a throw from
+    // onCreated is caught by the SAME catch clause as a network failure and gets
+    // reported to onError as if the FILING itself had failed -- even though the POST
+    // genuinely succeeded and the invoice now exists server-side. In production
+    // onCreated is the bare `openImportedInvoice` reference (App.tsx), which does not
+    // throw under normal navigation, so this is not reachable today -- but the ordering
+    // is asserted here because `finally` firing regardless is the one guarantee this
+    // test can make, and the mislabeling is worth flagging rather than assuming away.
+    const boom = new Error('onCreated blew up')
+    const onCreated = vi.fn(() => {
+      throw boom
+    })
+    const onError = vi.fn()
+    const onPending = vi.fn()
+    const create = vi.fn(() => Promise.resolve({ id: 'u-1' }))
+    const inFlight = { current: false }
+
+    return fileDraftInvoice(baseDraft, baseEntity, { create, inFlight, onPending, onError, onCreated }).then(() => {
+      // The one guarantee under test: finally always runs.
+      expect(onPending).toHaveBeenLastCalledWith(false)
+      expect(inFlight.current).toBe(false)
+      // Documented actual behaviour: onCreated's own throw is caught upstream and
+      // reported as a filing error, despite `create()` having already resolved.
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'onCreated blew up' }))
+    })
+  })
+})
+
 // Local helper -- no shared 'deferred promise' convention exists yet elsewhere in this
 // repo's tests (grepped before adding this). `resolve` is captured out of the Promise
 // executor so a test can control exactly WHEN create() settles, independent of when it

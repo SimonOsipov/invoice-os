@@ -42,9 +42,10 @@
 // two tests contend for one entity, and a retry's fixed invoice numbers never collide
 // across attempts -- no-duplicate-invoice-number is scoped per entity
 // (internal/importer/service.go's msgDuplicateInvoiceNumber). The one exception is
-// E2E-05/E2E-09 below, which the Implementation Plan requires share ONE page/session
-// (the F6 hijack this guards against is session-scoped) -- both live in a single
-// test with two labelled assertion blocks rather than two tests.
+// E2E-04/E2E-09 below, which share ONE page/session (the F6 hijack E2E-09 guards
+// against is session-scoped) -- both live in a single test with labelled assertion
+// blocks rather than two tests. E2E-05 was the third block in that test until
+// INVCR-01-09 deleted it with the report row it clicked; see the deletion site.
 //
 // No production code changes at authoring time, and no data-testid -- every selector
 // below was role/exact-text, matching the convention every existing spec in this
@@ -58,13 +59,14 @@ import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
-import { buildMixedCsv, buildPerfCsv, PERF_HEADER, statValue } from '../importFixtures'
+import { buildMixedCsv, buildPerfCsv, PERF_HEADER } from '../importFixtures'
 
 // MixedImportResponse: the subset of POST /v1/imports's success body (internal/
-// importer/handlers.go's importResponse) E2E-05 reads to get a REAL invoice UUID to
-// click through with, independent of the DOM. invoice_id is optional on the wire
-// (absent on dry-run; this is a real import, so it is always populated here --
-// perf.spec.ts's own proven recipe, re-verified against
+// importer/handlers.go's importResponse) E2E-04 reads to assert that a REAL import
+// populates a REAL invoice UUID, independent of the DOM -- the wire-level fact that
+// makes subtask 10's row click-through and 16's N=1 route implementable. invoice_id is
+// optional on the wire (absent on dry-run; this is a real import, so it is always
+// populated here -- perf.spec.ts's own proven recipe, re-verified against
 // internal/importer/service.go:951).
 interface MixedImportResponse {
   invoice_violations: {
@@ -279,7 +281,10 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
 
   await importResp
   const wireMs = Date.now() - importT0
-  await expect(page.getByText('Ready invoices', { exact: true })).toBeVisible({ timeout: 60_000 })
+  // Re-anchored by INVCR-01-09: the `Stat` tile grid this used to wait on
+  // ('Ready invoices') is gone with CreateReport.tsx. The review shell's title is the
+  // equivalent arrival signal -- it renders only once all four of its requests resolve.
+  await expect(page.getByRole('heading', { name: '500 invoices imported' })).toBeVisible({ timeout: 60_000 })
   const renderedMs = Date.now() - importT0
 
   // Evidence base for a future xhr.timeout decision (§5) -- assert NOTHING about
@@ -288,16 +293,31 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   console.log(`IMP-UI-PERF (deployed): 500 inv / 1500 rows -- preview ${previewMs}ms, import wire ${wireMs}ms, report rendered ${renderedMs}ms`)
   testInfo.annotations.push({ type: 'imp-ui-perf', description: `preview=${previewMs}ms wire=${wireMs}ms rendered=${renderedMs}ms` })
 
-  // E2E-01 (Core AC7), restated per D2 -- there is no standalone rows_total tile; it
-  // appears only inside "Rows valid" as `${rows_valid} / ${rows_total}`.
-  await expect(statValue(page, 'Rows valid')).toHaveText('1500 / 1500')
-  await expect(statValue(page, 'Ready invoices')).toHaveText('500')
-  await expect(statValue(page, 'Quarantined')).toHaveText('0')
+  // E2E-01 (Core AC7), REWRITTEN for the review shell (INVCR-01-09). All three facts
+  // this asserted survive the deletion of CreateReport's `Stat` grid, in new shapes and
+  // from new sources -- so the assertion moves rather than being dropped:
+  //   - rows_total    -> the header sub-line's `1500 ROWS READ` (off the batch GET).
+  //   - ready count   -> the title's `500 invoices imported`, which is now the LIVE
+  //                      pagination.total of the batch's invoices, not the 201 body's
+  //                      frozen `ready_invoices` -- a stronger fact, since it proves the
+  //                      rows are queryable in the ledger and not merely counted.
+  //   - quarantined   -> the amber "Not imported" channel's own tile.
+  // `statValue()` (e2e/importFixtures.ts) was deleted with these three call sites: it
+  // located a CreateReport `Stat`'s value by an xpath sibling step off a `.label` div,
+  // a two-child shape that no longer exists anywhere, and it had no other consumer.
+  await expect(page.getByText('1500 ROWS READ', { exact: false })).toBeVisible()
+  await expect(page.getByText('0 unreadable rows', { exact: true })).toBeVisible()
+  // Positive companion for the tile above: the channel's zero-state copy, which proves
+  // the tile is rendering the AT-ZERO branch rather than an amber tile that happens to
+  // read 0 -- the channel must stay visible (dashed, greyed) rather than disappear.
+  await expect(page.getByText('Every row in the file became part of an invoice.', { exact: true })).toBeVisible()
+  // The second tab is OMITTED from the DOM at zero unreadable rows, never merely hidden.
+  await expect(page.getByRole('button', { name: /^Unreadable rows \(/ })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-exclusive]/F6): mixed fixture renders two distinct report sections; the violation row opens the real invoice id; a normal invoice afterwards renders the real detail view', async ({
+test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -346,64 +366,85 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   const resp = await importResp
   const body = (await resp.json()) as MixedImportResponse
 
-  // E2E-04 + RPT-09: both channels render as two DISTINCT sections, proven by
-  // TEXT-OFFSET ORDERING (§4) -- section titles are plain <div>s with no heading
-  // role, no testid and no count, so containment cannot be asserted by role. This
-  // genuinely falsifies a merged, reordered, or single-section rendering.
-  await expect(page.getByText('Rule violations', { exact: true })).toBeVisible()
-  const reportText = await page.locator('main').innerText()
-  const iStructTitle = reportText.indexOf('Structural row errors')
-  const iStructMsg = reportText.indexOf('rows disagree on issue_date')
-  const iViolTitle = reportText.indexOf('Rule violations')
-  const iViolKey = reportText.indexOf('vat-standard-rate')
-  expect(iStructTitle, 'Structural row errors section missing').toBeGreaterThanOrEqual(0)
-  expect(iStructMsg, 'structural error message ("rows disagree on issue_date") missing').toBeGreaterThanOrEqual(0)
-  expect(iViolTitle, 'Rule violations section missing').toBeGreaterThanOrEqual(0)
-  expect(iViolKey, 'vat-standard-rate violation missing').toBeGreaterThanOrEqual(0)
-  expect(iStructTitle, 'the structural section must render before its own message').toBeLessThan(iStructMsg)
-  expect(iStructMsg, 'the structural section must render entirely before the violations section').toBeLessThan(iViolTitle)
-  expect(iViolTitle, 'the violations section must render before its own rule key').toBeLessThan(iViolKey)
+  // E2E-04, REWRITTEN for the review shell (INVCR-01-09). The old assertion proved the
+  // two channels were two DISTINCT SECTIONS by text-offset ordering, because
+  // CreateReport stacked them as untitled <div>s on one screen. They are now two TABS,
+  // which affords a strictly stronger claim than ordering: the structural message must
+  // be reachable ONLY through the Unreadable rows tab, i.e. the channels are separated
+  // by NAVIGATION and not merely by vertical position. A merged rendering fails the
+  // first leg; a mislabelled one fails the second.
+  //
+  // The CONTENT half of the old assertion (`vat-standard-rate` under "Rule violations")
+  // has no home in 09: the review shell's Invoices tab is a single summary line until
+  // subtask 10 builds the table with its per-row verdicts and rule rail. Asserting it
+  // here would be asserting a surface this subtask does not ship.
+  const structuralMsg = 'rows disagree on issue_date'
+  await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
+  const unreadableTab = page.getByRole('button', { name: /^Unreadable rows \(\d+\)$/ })
+  await expect(unreadableTab, 'the Unreadable rows tab must render for a fixture with a structural failure').toBeVisible()
 
-  // The clean invoice is a provable SUBSET witness: it must appear in NEITHER
-  // section, proving "Rule violations" is not just echoing the whole report.
+  // Leg 1: the structural channel is NOT on the default tab.
+  await expect(page.getByText(structuralMsg)).toHaveCount(0)
+
+  // Leg 2: it is on the other one, verbatim -- the browser never re-authors the
+  // server's own reason string.
+  await unreadableTab.click()
+  await expect(page.getByText(structuralMsg)).toBeVisible()
+
+  // §7.1's amber "Not imported" channel renders its own NON-ZERO count off the batch's
+  // structural errors, independent of the tab body -- the tile, the tab and the footer
+  // all read the same expansion count, so a disagreement between them is falsifiable.
+  await expect(page.getByText(/^[1-9]\d* unreadable rows$/)).toBeVisible()
+
+  // The clean invoice is a provable SUBSET witness, RE-HOMED (INVCR-01-09) rather than
+  // rescoped. Asserted HERE, deliberately after the click above and never before it: the
+  // claim is now "a readable invoice never enters the STRUCTURAL channel", i.e. it is
+  // absent while the Unreadable rows tab is the open one -- and only one tab body is
+  // mounted at a time, so this is a claim about that tab, not about the page.
+  //
+  // The old version made the same call before any tab existed, where it passed only
+  // because 09 lists no invoices anywhere. Subtask 10 puts this very invoice on screen
+  // legitimately, under the OTHER tab, at which point the old placement would have gone
+  // red for a correct implementation and the obvious "fix" (deleting it) would have lost
+  // the invariant. This placement survives 10 unchanged.
   await expect(page.getByText('INV-UI-MIX-CLEAN')).toHaveCount(0)
 
-  // E2E-05: click the violation row and land on the LIVE detail (M4-09-05) for the
-  // REAL invoice id -- read from the import response body, independent of the DOM.
-  // [click-through-honest-placeholder]'s inert M4-08 placeholder is GONE
-  // (InvoiceDetail.tsx's `target.kind === 'imported'` branch now mounts
-  // LiveInvoiceDetail instead); the early-branch ordering that decision guarded
-  // still applies to whichever component sits behind it.
+  // E2E-05 is DELETED here, not rescoped. Its subject was the click-through from a
+  // rule-violation row in the import report to the live InvoiceDetail, and the review
+  // shell has no such row: the content channel moved off the frozen 201 payload onto
+  // live per-invoice verdicts (D4), and no table renders them yet. Two owners, both
+  // downstream on this branch:
+  //   - subtask 10 owns the invoices-table row click-through, which is the direct
+  //     successor of this assertion.
+  //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice/detailTarget
+  //     seam this exercised (import a one-invoice file -> land on the real InvoiceDetail,
+  //     never the review shell), which is the highest-value uncovered path in 09.
+  // Deleting rather than leaving a weakened version is deliberate: a spec that asserts
+  // less than its name claims is worse than an absent one.
+  //
+  // What is NOT deleted is the fact the import response carries a real invoice id at
+  // all -- that is a wire-level claim, independent of any DOM affordance, and it is what
+  // makes subtask 10's and 16's click-throughs implementable.
   const violateEntry = body.invoice_violations.find((iv) => iv.invoice_number === 'INV-UI-MIX-VIOLATE')
   expect(
     violateEntry,
     'expected an invoice_violations entry for INV-UI-MIX-VIOLATE -- if this fails, check whether vat-standard-rate was disabled by an out-of-order suite run (api -> topology -> demo)',
   ).toBeTruthy()
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
-  const violateId = violateEntry!.invoice_id
-  expect(violateId, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
+  expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
 
-  // Proves the click targets the REAL invoice id, not a client-side guess -- a
-  // network-level replacement for the retired placeholder's raw-UUID text render:
-  // the live detail's own GET request carries violateId in its path.
-  const detailResp = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateId}`),
-  )
-  await page.getByText('INV-UI-MIX-VIOLATE', { exact: true }).click()
-  await detailResp
-
-  await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
-  await expect(page.getByTestId('violations-table')).toContainText('vat-standard-rate')
-
-  // E2E-09 (the F6 regression guard, [detail-target-exclusive]): click back through
-  // to Invoices and open a DIFFERENT invoice -- the live detail must refresh to
-  // THAT invoice's own content, not keep rendering INV-UI-MIX-VIOLATE's. Proves
-  // importedInvoiceId tracks the LATEST clicked row rather than hijacking the
-  // detail view for the rest of the session. "Audit trail" was the retired mock
-  // detail's panel title; M4-09-05's live detail names the equivalent panel
-  // "Status history" instead, so its absence here is also proof this is the live
-  // surface, never the old mock fallback.
+  // E2E-09 (the F6 regression guard, [detail-target-exclusive]): leave the review
+  // screen for Invoices and open one of this batch's invoices -- the live detail must
+  // render THAT invoice's own content. "Audit trail" was the retired mock detail's
+  // panel title; M4-09-05's live detail names the equivalent panel "Status history"
+  // instead, so its absence here is also proof this is the live surface, never the old
+  // mock fallback.
+  //
+  // The exit is "Finish · go to invoices" (INVCR-01-09), not the detail view's
+  // "← All invoices": with E2E-05 deleted this test never leaves the review shell, so
+  // there is no detail view to come back from. Finish is NAVIGATION ONLY -- the
+  // invoices were persisted at import time -- and this click is also the only coverage
+  // that the review screen has a working exit at all.
   //
   // [entity-id-restored] regression fix: Invoices is entity-scoped now (server-side,
   // via listInvoices' own `entity_id` param), and `selectEntity` above made `entity`
@@ -417,7 +458,7 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   // filter-after-paginate regression this fix closes (the scoped list would render
   // EMPTY whenever the default entity's own invoices fell outside the newest-50
   // tenant-wide window, timing out this very click).
-  await page.getByRole('button', { name: '← All invoices' }).click()
+  await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
   await page.getByTestId('invoices-list').getByText('INV-UI-MIX-CLEAN', { exact: true }).click()
 
   await expect(page.getByTestId('invoice-detail')).toBeVisible()

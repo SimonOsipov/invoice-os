@@ -1,0 +1,116 @@
+// Review · "Unreadable rows" tab (INVCR-01-09, §7.4, Core AC 6). The STRUCTURAL
+// channel: rows the parser could not turn into an invoice at all. No row here has an
+// invoice id or a lifecycle state, and none can — `UnreadableRow` is `{row, column,
+// message}` by type, so there is no field to put one in.
+//
+// DEGRADED VERSUS §7.4, AND IT SAYS SO. Two things §7.4 draws are not on the wire and
+// are NOT built ([raw-source-line-dropped]):
+//   - the raw semicolon-delimited source line under each row, and
+//   - the offending-cell chip.
+// §17's revised backend list supersedes §11 and omits §11.6; there is no raw line in any
+// response, and adding one would mean persisting raw file content — PII, plus the 10 MiB
+// upload cap. §7.4's five polished reason strings are [brief-only] for the same reason:
+// the server sends its own (`rows disagree on issue_date`, `blank invoice number: row
+// cannot be grouped`), and those are rendered VERBATIM. Nothing here authors a reason.
+//
+// `Column` is renamed `Field`. `RowError.field` is the IMPORTER's canonical field name
+// (`invoice_number`, `issue_date`, `subtotal` — importer/service.go), not a heading from
+// the user's spreadsheet, and labelling it `Column` sends them hunting for a column that
+// is not there. The caption under the table states that plainly rather than leaving it to
+// be inferred, and also states that the field is a best guess on numeric errors
+// (service.go:346) — which is why an absent one renders `—` and never an invented name.
+//
+// "Download this list (CSV)", NOT §7.4's "Download these rows": with no raw line there
+// are no ROWS to download. What the file contains is exactly this rendered table, which
+// is still a genuinely useful fix-list to take back to Excel — but the noun in §7.4's
+// label would be a lie about what lands in the user's downloads folder. The serialization
+// is pure and spec'd (`unreadableCsv`, CSV-1); only the Blob/anchor click lives here.
+
+import { unreadableCsv, type UnreadableRow } from '../lib/reviewBatch'
+
+const UNREADABLE_GRID = '90px 170px 1fr'
+
+// The one DOM-only step: turn the pure CSV string into a file the browser saves. Kept as
+// small as possible precisely because it has no unit oracle — everything decidable
+// (quoting, the header row, the null-row cell) is decided inside unreadableCsv.
+function downloadCsv(rows: UnreadableRow[], batchId: string): void {
+  // The BOM is what makes Excel read the em dash and any non-ASCII supplier name as
+  // UTF-8 rather than the local ANSI codepage — the same mojibake class the importer's
+  // own decoder exists to undo, and this file's whole purpose is to be opened in Excel.
+  const blob = new Blob([`﻿${unreadableCsv(rows)}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `unreadable-rows-${batchId}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export function ReviewUnreadableTab({
+  rows,
+  rowsTotal,
+  batchId,
+  onImportCorrected,
+}: {
+  rows: UnreadableRow[]
+  rowsTotal: number
+  batchId: string
+  onImportCorrected: () => void
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Amber panel — CreateUpload.tsx:203-226's shape. Amber, not red: nothing here
+          failed a rule, so the red the compliance channel owns would mis-signal it. */}
+      <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>{rows.length} rows never became invoices</div>
+        <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
+          The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.
+        </p>
+      </div>
+
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <div className="label" style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <span>Row</span>
+          <span>Field</span>
+          <span>Why it could not be read</span>
+        </div>
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, alignItems: 'baseline', padding: '11px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--line-1)' }}
+          >
+            {/* `row: null` is an em dash, never "ROW null" — the server told us it could
+                not attribute the failure to a line, and that is a fact worth stating. */}
+            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
+            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-word' }}>{r.column}</span>
+            {/* VERBATIM. No client-authored reason string, ever. */}
+            <span style={{ fontSize: 13, color: 'var(--fg-1)' }}>{r.message}</span>
+          </div>
+        ))}
+        <div style={{ padding: '11px 18px', borderTop: '1px solid var(--line-1)', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.55 }}>
+          Field names are the importer&rsquo;s own, not your spreadsheet&rsquo;s headings, and are a best guess on numeric errors.
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => downloadCsv(rows, batchId)}
+          className="v2-btn v2-btn-ghost pf-btn"
+          style={{ height: 36, padding: '0 14px', fontSize: 13 }}
+        >
+          Download this list (CSV)
+        </button>
+        <button
+          onClick={onImportCorrected}
+          className="v2-btn v2-btn-ghost pf-btn"
+          style={{ height: 36, padding: '0 14px', fontSize: 13 }}
+        >
+          Import a corrected file
+        </button>
+        <span style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--fg-3)' }}>
+          {rows.length} of {rowsTotal} rows. The invoices that did import are unaffected.
+        </span>
+      </div>
+    </div>
+  )
+}

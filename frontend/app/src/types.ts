@@ -5,7 +5,7 @@
 // import here would form a cycle. `AuthedFetch`/`Entity` are only ever used as types below.
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
-import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
+import type { ImportPreview, UploadPhase } from './lib/importApi'
 import type { CustomRule, Suggestion } from './lib/rules'
 import type { Policy } from './lib/workflows'
 
@@ -156,13 +156,14 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflow
 // 'review' was added by M4-08-04 under its former name (plan B1/DRIFT-1) — one subtask
 // ahead of story §6's original assignment (M4-08-05), because wizardHeader's index-2
 // branch does not compile against this union and lib/importFlow.ts's STAGE_OF is a total
-// Record over it. -05 still owns the CreateReport render branch; that commit added only
-// the member. INVCR-01-03 dropped the mock validate/approve tail's own two steps: the
+// Record over it. INVCR-01-03 dropped the mock validate/approve tail's own two steps: the
 // manual path is now ONE screen with one round trip, and the affirmation is the real
 // invoice detail view rendering the server's row — there is deliberately no step between
 // 'form' and that. INVCR-01-04 renamed the last member to 'review' ([three-stages]): the
-// stage is the user's review surface, not the import-report payload CreateReport renders
-// on it — which is why CreateReport/ImportReport/ctx.report keep their own names.
+// stage is the user's REVIEW SURFACE, not an import-report payload rendered on it — and
+// INVCR-01-09 cashed that distinction by deleting CreateReport.tsx outright. 'review' now
+// renders ReviewBatch.tsx off `reviewBatchId` + two live GETs, which is also why the step
+// is reachable by URL (`#review/<uuid>`) where the payload-backed one never could be.
 export type CreateStep = 'upload' | 'mapping' | 'form' | 'review'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
@@ -294,9 +295,15 @@ export type PlatformCtx = {
   preview: ImportPreview | null
   uploadPhase: UploadPhase
   importError: ApiError | null
-  report: ImportReport | null
-  // Set by openImportedInvoice (M4-08-05) when the user clicks a rule-violation row in
-  // the report. Mutually exclusive with `selectedId` by construction — both are members
+  // The batch the review step is showing (INVCR-01-09). REPLACES the old
+  // `report: ImportReport | null`, which was the POST's frozen 201 payload held in
+  // memory: D4 made the review screen revisitable by URL (`#review/<uuid>`), so it
+  // re-fetches from GET /v1/imports/{id} + the list endpoint's own totals instead, and
+  // a stale in-memory report is exactly the frozen-counter source that replaced. An id
+  // is all any consumer needs; nothing may resurrect the payload.
+  reviewBatchId: string | null
+  // Set by openImportedInvoice (M4-08-05) when the user clicks through to a real
+  // invoice. Mutually exclusive with `selectedId` by construction — both are members
   // of one DetailSelection atom in App.tsx (lib/importReport.ts), so neither can be left
   // stale when the other is written. Non-null makes InvoiceDetail render its honest
   // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
@@ -327,6 +334,12 @@ export type PlatformCtx = {
   selectImportFile: (f: File | null) => void
   readColumns: () => void
   backToImport: () => void
+  // The review surface's two ways back to the upload step (§7.4's "Import a corrected
+  // file", §7.5's "Choose another file"): resetImport THEN backToImport, as one action so
+  // the two call sites cannot drift on the order. Distinct from backToImport, whose other
+  // caller is the Map step's back button — resetting there would wipe a file and preview
+  // the user is going back precisely to keep.
+  restartImport: () => void
   skipUpload: () => void
   // The manual path's ONLY action. Fire-and-forget: it never rejects and never returns a
   // verdict — outcomes arrive through `filing`/`filingError` and, on 201, through the

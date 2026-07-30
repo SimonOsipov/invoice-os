@@ -14,7 +14,13 @@
 // via a re-export chain that could register its tests twice; it has none, but the
 // discipline is the same reason NEITHER of the two existing buildPerfCsv definitions
 // is imported here.
-import type { Page } from '@playwright/test'
+//
+// INVCR-01-09 deleted `statValue()` from this file. It located a CreateReport.tsx `Stat`
+// tile's value by an xpath sibling step off a `.label` div -- a two-child shape that
+// stopped existing when the review shell replaced that component. Its three call sites
+// (all in import-wizard.spec.ts, its only consumer) were rewritten against the new
+// header/tile copy rather than re-pointed, because the facts moved sources too: the
+// invoice count is now a LIVE pagination.total, not the 201 body's frozen counter.
 
 export const PERF_HEADER = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
 
@@ -118,17 +124,4 @@ export function buildMixedCsv(): string {
     ),
   )
   return lines.join('\n')
-}
-
-// statValue(): locates a CreateReport.tsx `Stat` tile's rendered value by its exact
-// label text (`<div class="label">{label}</div>` immediately followed by
-// `<div class="mono">{value}</div>` -- CreateReport.tsx's Stat component renders
-// exactly this two-child shape, nothing between them). The xpath sibling step is what
-// makes this precise: there is no other distinguishing class/role on either div, and
-// a same-page ancestor-filter approach would need to disambiguate nesting depth,
-// where "the label's very next sibling" cannot mismatch. Shared by every topology
-// spec that reads a report tile, so it lives here rather than being copy-pasted per
-// call site.
-export function statValue(page: Page, label: string) {
-  return page.getByText(label, { exact: true }).locator('xpath=following-sibling::div[1]')
 }

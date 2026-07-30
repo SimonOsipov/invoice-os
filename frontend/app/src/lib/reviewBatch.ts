@@ -30,12 +30,15 @@
 // type-level half of cashing 06's un-cashed `#review/<uuid>` safety argument
 // (constructing a review request without a batch id is a compile error).
 //
-// parseReviewHash/formatReviewHash are the pure hash codec only; the
-// `window.location.hash` read/write and App.tsx boot wiring land in 09 -- this module
-// stays DOM-free so it is node-testable with no jsdom.
+// parseReviewHash/formatReviewHash are the pure hash codec only; reviewHash is the
+// App-facing composer over them. The `window.location.hash` read/write itself lives at
+// exactly TWO call sites in App.tsx (the boot initializer and the mirror effect) -- this
+// module stays DOM-free so it is node-testable with no jsdom.
 import { invoiceStatusStyle, type ListInvoicesOptions, type InvoiceStatus } from './invoices'
 import { severityStyle, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
+import { reportSummary } from './importReport'
+import { fmtDateTime } from './format'
 import type { StatusStyle, View, CreateStep } from '../types'
 
 export interface VerdictInput {
@@ -281,12 +284,6 @@ export function reviewQuery(
   return opts
 }
 
-// 09 STUB (task-285, Stage 2.5/Mode A) -- every export below throws `new Error('not
-// implemented')` before Stage 3 implements it; that IS the correct RED reason (mirrors
-// the 08 STUB idiom this file already used, and the validationApi.ts/importApi.ts
-// convention it was copied from). Unused params are underscore-prefixed to satisfy
-// noUnusedParameters until Stage 3 fills the bodies in.
-
 // --- Post-import routing (AC-9, task-285 Implementation Plan §3) ---
 //
 // The SOLE decision boundary between "startImport succeeded" and where the app lands.
@@ -299,8 +296,28 @@ export type PostImportRoute =
   | { kind: 'review'; batchId: string }
   | { kind: 'rejected'; batchId: string }
 
-export function routeAfterImport(_report: ImportReport, _resolvedInvoiceId: string | null): PostImportRoute {
-  throw new Error('not implemented')
+export function routeAfterImport(report: ImportReport, resolvedInvoiceId: string | null): PostImportRoute {
+  // 1. STATUS first, through the SHIPPED predicate. reportSummary keys `failed` on
+  //    `status !== 'completed'` (importReport.ts, Trap B), which is deliberately not a
+  //    `=== 'failed'` whitelist -- normalizeReport does not validate `status`, so an
+  //    unrecognised one must fail safe. Re-writing that comparison here would be a
+  //    second copy of a spec-pinned predicate, free to drift (the fork AC-10 forbids).
+  if (reportSummary(report).kind === 'failed') return { kind: 'rejected', batchId: report.id }
+  // 2. Then the COUNT. Nothing was created, so there is nothing to open.
+  if (report.ready_invoices === 0) return { kind: 'rejected', batchId: report.id }
+  // 3. Then the ID, and only at EXACTLY one -- `> 1` falls through to the batch surface
+  //    even when an id resolved, which is what makes `if (resolvedInvoiceId) return
+  //    single` a failing implementation rather than an equivalent one.
+  //
+  //    Truthiness, NEVER `!= null`: the id comes from `r.invoices[0]?.id`, so `''` is
+  //    representable, and `''` is a string that passes a null check. Routing the detail
+  //    view at an empty id is exactly the failure this degrade-to-review branch exists
+  //    to prevent -- a clean single invoice is COUNTED by the report but never LISTED
+  //    in it (Go appends InvoiceViolations only when a violation exists), so the id can
+  //    only ever come from the follow-up list page, which can legitimately come back
+  //    empty.
+  if (report.ready_invoices === 1 && resolvedInvoiceId) return { kind: 'single', invoiceId: resolvedInvoiceId }
+  return { kind: 'review', batchId: report.id }
 }
 
 // --- §7.5-vs-batch resolution (AC-7, resolves the AC-7/AC-9 divergence -- §4) ---
@@ -314,8 +331,11 @@ export function routeAfterImport(_report: ImportReport, _resolvedInvoiceId: stri
 // for the same import -- the two are not required to agree.
 export type ReviewShellState = 'batch' | 'rejected'
 
-export function reviewShellState(_batch: Pick<ImportBatch, 'status'>): ReviewShellState {
-  throw new Error('not implemented')
+export function reviewShellState(batch: Pick<ImportBatch, 'status'>): ReviewShellState {
+  // `!== 'completed'`, matching reportSummary's own direction but over a DIFFERENT type
+  // (ImportBatch's 4-value status union, not ImportReport's 2-value one) answering a
+  // DIFFERENT question -- which is why this is not a second copy of that predicate.
+  return batch.status !== 'completed' ? 'rejected' : 'batch'
 }
 
 // --- Header copy (AC-2, §7.1) ---
@@ -332,10 +352,18 @@ export interface ReviewHeader {
 }
 
 export function reviewHeader(
-  _batch: Pick<ImportBatch, 'id' | 'rows_total' | 'rule_set_version' | 'created_at'>,
-  _live: { allTotal: number },
+  batch: Pick<ImportBatch, 'id' | 'rows_total' | 'rule_set_version' | 'created_at'>,
+  live: { allTotal: number },
 ): ReviewHeader {
-  throw new Error('not implemented')
+  return {
+    title: `${live.allTotal} invoices imported`,
+    batchId: batch.id,
+    // ruleSetLabel is the SHIPPED one above ('NG-MBS v3', or 'not evaluated' when the
+    // version is null) -- rendered verbatim and never re-cased here, because uppercasing
+    // is CSS's job and a `.toUpperCase()` would also uppercase 'not evaluated' into a
+    // shout. fmtDateTime is lib/format.ts's; no date formatting is authored here.
+    subline: `${batch.rows_total} ROWS READ · SERVER VERDICT · RULE SET ${ruleSetLabel(batch.rule_set_version)} · ${fmtDateTime(batch.created_at)}`,
+  }
 }
 
 // --- Tabs (AC-4, §7.2) ---
@@ -350,8 +378,10 @@ export interface ReviewTab {
   label: string
 }
 
-export function reviewTabs(_counts: { invoices: number; unreadable: number }): ReviewTab[] {
-  throw new Error('not implemented')
+export function reviewTabs(counts: { invoices: number; unreadable: number }): ReviewTab[] {
+  const tabs: ReviewTab[] = [{ id: 'invoices', label: `Invoices (${counts.invoices})` }]
+  if (counts.unreadable > 0) tabs.push({ id: 'unreadable', label: `Unreadable rows (${counts.unreadable})` })
+  return tabs
 }
 
 // --- Hash codec, the App-facing half (AC-1, §2) ---
@@ -362,8 +392,11 @@ export function reviewTabs(_counts: { invoices: number; unreadable: number }): R
 // review -- App.tsx has ONE effect calling this, not N call sites each responsible for
 // remembering to clear it. `window` itself is never touched here -- only at the two call
 // sites this function's own module comment (top of file) names in App.tsx.
-export function reviewHash(_view: View, _createStep: CreateStep, _reviewBatchId: string | null): string | null {
-  throw new Error('not implemented')
+export function reviewHash(view: View, createStep: CreateStep, reviewBatchId: string | null): string | null {
+  // Truthiness on the id for the same reason routeAfterImport uses it: `''` is a string
+  // and `#review/` with nothing after it is not a route, it is a broken one.
+  if (view !== 'create' || createStep !== 'review' || !reviewBatchId) return null
+  return formatReviewHash(reviewBatchId)
 }
 
 // --- Unreadable-rows CSV (AC-5, §7.4 "Download this list (CSV)") ---
@@ -373,6 +406,20 @@ export function reviewHash(_view: View, _createStep: CreateStep, _reviewBatchId:
 // exactly `Row,Field,Why it could not be read`; `row: null` renders as an empty cell,
 // never the string 'null' -- there are no *rows* to download once the raw source line is
 // gone (`[raw-source-line-dropped]`), only this rendered table.
-export function unreadableCsv(_rows: UnreadableRow[]): string {
-  throw new Error('not implemented')
+export const UNREADABLE_CSV_HEADER = 'Row,Field,Why it could not be read'
+
+// A field is quoted iff it contains a comma, a double quote, CR or LF; embedded quotes
+// are doubled. The em dash needs no quoting (it is neither) and must survive verbatim --
+// escaping it would put visible quotes around a placeholder in Excel.
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+}
+
+export function unreadableCsv(rows: UnreadableRow[]): string {
+  const lines = rows.map((r) =>
+    // `row: null` is an EMPTY cell, never the string 'null': the server told us it could
+    // not attribute the failure to a line, and "null" in a spreadsheet reads as data.
+    [r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
+  )
+  return [UNREADABLE_CSV_HEADER, ...lines].join('\n')
 }

@@ -39,10 +39,12 @@
 //    on a fast link hits 100% while the server has not started, and then sits at 100%
 //    for the entire wait. A bar that fills and stops is worse than one that never claims.
 //
-// 5. NO RULE-SET VERSION. It arrives in the 201 body (ImportReport.rule_set_version) —
-//    structurally AFTER this screen — and there is no rules endpoint to ask beforehand.
-//    The only build-time value in the app is a mock literal that already disagrees with
-//    the real active version. The review screen renders the real one from the report.
+// 5. NO RULE-SET VERSION. It is decided by the server DURING the request this card is
+//    showing — structurally after this screen — and there is no rules endpoint to ask
+//    beforehand. The only build-time value in the app is a mock literal that already
+//    disagrees with the real active version. The review screen renders the real one,
+//    read back off GET /v1/imports/{id} (INVCR-01-09) rather than off the 201 body: it
+//    is revisitable by URL, so it re-derives everything from the server.
 //
 // What IS rendered: the server's own preview facts stated as WHAT IS BEING IMPORTED and
 // never as progress, one phase word for the single transition the transport genuinely

@@ -7,7 +7,8 @@ import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, emptyClient, inhouseClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
-import { createInvoice } from './lib/invoices'
+import { createInvoice, listInvoices } from './lib/invoices'
+import { parseReviewHash, reviewHash, reviewQuery, routeAfterImport, type PostImportRoute } from './lib/reviewBatch'
 import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
@@ -16,7 +17,6 @@ import {
   makeImportAuth,
   previewImport,
   type ImportPreview,
-  type ImportReport,
   type UploadPhase,
 } from './lib/importApi'
 import {
@@ -180,9 +180,29 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     [entitiesList, active.entityId],
   )
 
-  const [view, setView] = useState<View>('dashboard')
+  // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the READ half ---------
+  //
+  // ONE lazy parse of `window.location.hash`, here in Workspace rather than App: App
+  // renders <Workspace> only once `session != null`, so a read up there would run before
+  // the session exists on the deep-link hand-off path. The three initializers below are
+  // DERIVED from this single value — there is deliberately no boot effect that navigates,
+  // because StrictMode double-invokes effects and a navigating one would fire twice.
+  //
+  // The hash survives the landing hand-off: App's `?persona=` strip (below) rebuilds the
+  // URL as `pathname + window.location.hash`, preserving it.
+  //
+  // There is NO `hashchange` listener, by decision. D4 asks that the screen survive a
+  // RELOAD, which it does. In-SPA history navigation does not exist for any surface in
+  // this app (replaceState everywhere, no router), and a listener for this one screen
+  // would make the app half-routed with a divergence the mirror effect below cannot
+  // reconcile (hash hand-deleted while the review screen is still mounted). Recorded
+  // limitation: pasting a review hash into an already-open tab's address bar does not
+  // navigate until reload.
+  const [bootBatchId] = useState<string | null>(() => parseReviewHash(window.location.hash))
+  const [view, setView] = useState<View>(bootBatchId ? 'create' : 'dashboard')
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
-  const [createStep, setCreateStep] = useState<CreateStep>('form')
+  const [createStep, setCreateStep] = useState<CreateStep>(bootBatchId ? 'review' : 'form')
+  const [reviewBatchId, setReviewBatchId] = useState<string | null>(bootBatchId)
   const [mapping, setMapping] = useState<Mapping | null>(null)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
@@ -236,7 +256,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [importError, setImportError] = useState<ApiError | null>(null)
-  const [report, setReport] = useState<ImportReport | null>(null)
 
   // The manual form's one round trip (INVCR-01-03). `filing` renders the disabled/spinner
   // frame; correctness against a double-click belongs to reqInFlight below, not to this.
@@ -267,10 +286,27 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // upload step: past it the columns are already read against the snapshot, and moving
   // the target then is the retarget resetImport exists to prevent. In-house stays null
   // through this — active.entityId is null there too, so the guard's third clause holds.
+  // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the WRITE half ---------
+  //
+  // ONE writer, mirroring state to the URL, rather than a `location.hash = …` at every
+  // exit from review. Every one of Finish, `← Invoices`, `Choose another file`, `Enter
+  // one invoice instead`, sidebar nav, switchClient and openCreate would otherwise each
+  // have to remember to clear the hash — and `closeCreate` in particular does not, so a
+  // reload after Finish would bounce straight back into the review screen. Mirroring the
+  // state makes "clear it" structural instead of remembered; it is the same idiom as
+  // App's session mirror below.
+  //
+  // `replaceState`, never `location.hash = …`: assigning adds a history entry the back
+  // button bounces off, and assigning `''` leaves a bare `#` in the URL. The rebuilt URL
+  // keeps `search` — App's `?persona=` strip is the one writer that removes it, and it
+  // preserves the hash in turn, so the two effects compose in either order.
+  //
+  // At boot this rewrites the identical URL (the three initializers above already agree
+  // with the hash it parses), so the first pass is a no-op rather than a navigation.
   useEffect(() => {
-    if (createStep !== 'upload' || entityId !== null || active.entityId === null) return
-    setEntityId(active.entityId)
-  }, [createStep, entityId, active.entityId])
+    const h = reviewHash(view, createStep, reviewBatchId)
+    window.history.replaceState(null, '', window.location.pathname + window.location.search + (h ?? ''))
+  }, [view, createStep, reviewBatchId])
 
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
@@ -291,6 +327,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setCreateStep('form')
+    // A batch belongs to ONE entity. Leaving this set would keep the review screen's
+    // deep-link id pointing at the company just left — and the mirror effect above would
+    // keep writing its hash into the URL from the incoming company's dashboard.
+    setReviewBatchId(null)
     // A failed filing's message named the company just left. `filing` is deliberately NOT
     // cleared: a request already in flight is still in flight, and it will land on the
     // invoice it was fired for — under the PREVIOUS company. Leaving the button disabled
@@ -328,7 +368,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setPreview(null)
     setUploadPhase({ kind: 'idle' })
     setImportError(null)
-    setReport(null)
+    // Per-run, sitting exactly where `setReport(null)` sat: a second import must not
+    // inherit the first one's batch, and `Import a corrected file` routes back through
+    // here specifically so a deep-link arrival — which carries no importFile, preview or
+    // mapping at all — cannot open the upload step on another run's state.
+    setReviewBatchId(null)
   }
 
   function closeCreate() {
@@ -402,13 +446,26 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       })
   }
 
+  // Where a classified import LANDS (INVCR-01-09, Core AC 8). `review` and `rejected`
+  // are handled IDENTICALLY on purpose: both are the review step, and which SURFACE it
+  // renders there is decided by reviewShellState(batch) off the batch GET alone — never
+  // by this route's `kind`. That single ownership is what makes the POST-arrival path and
+  // a deep-link revisit (which never calls routeAfterImport at all) run one derivation.
+  function applyRoute(route: PostImportRoute) {
+    if (route.kind === 'single') {
+      openImportedInvoice(route.invoiceId)
+      return
+    }
+    setReviewBatchId(route.batchId)
+    setCreateStep('review')
+  }
+
   function startImport() {
     const base = gatewayBase()
     if (base == null || !importFile || !entityId || !mapping || !canStartImport(preview, mapping)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
     setImportError(null)
-    setReport(null)
     // Seed 'sending' with an unknown total: uploadPercent maps total 0 to null, so the
     // UI opens on the indeterminate spinner and only flips to a determinate bar if the
     // transport actually reports a computable length. Zero progress events is legal
@@ -417,11 +474,35 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase)
       .then(
         (res) => {
-          setReport(res)
-          setCreateStep('review')
+          // Core AC 8: exactly ONE ready invoice goes straight to that invoice, so the
+          // single-invoice path never makes the user read a batch report about a batch of
+          // one. The id is NOT in the 201 body on this path — Go appends InvoiceViolations
+          // only when a violation exists, so a CLEAN single invoice is counted and never
+          // listed — which is why it takes a follow-up list page to resolve.
+          //
+          // Fired ONLY at ready_invoices === 1. At any other count its answer is
+          // discarded, so asking is pure cost.
+          if (res.status === 'completed' && res.ready_invoices === 1) {
+            // RETURNED, not floating: `.finally` below releases reqInFlight, and an
+            // un-returned promise would release it mid-flight and re-arm the button
+            // while this chain is still resolving.
+            return listInvoices(authedFetch, base, reviewQuery(res.id, 'all', { limit: 1 }))
+              .then(
+                (r) => r.invoices[0]?.id ?? null,
+                // DEGRADES to null, never setImportError. The import SUCCEEDED and the
+                // rows are in the ledger; an error banner here would say "failed" about
+                // data that landed. routeAfterImport turns a null id into the review
+                // surface, which is the honest fallback — the batch is real either way.
+                () => null,
+              )
+              .then((id) => applyRoute(routeAfterImport(res, id)))
+          }
+          applyRoute(routeAfterImport(res, null))
         },
         // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
-        // review step that has no report to show.
+        // review step with no batch to show. Note this is the REQUEST's error arm — the
+        // server's own "the file was rejected" verdict arrives as a resolved 201 and is
+        // classified by routeAfterImport above, not here.
         (err: unknown) => setImportError(toApiError(err)),
       )
       .finally(() => {
@@ -498,6 +579,21 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   function backToImport() {
+    setCreateStep('upload')
+  }
+
+  // The review surface's TWO ways back to the upload step ("Choose another file" on the
+  // rejected-file card, "Import a corrected file" on the unreadable-rows tab). ONE action
+  // rather than asking the component to call resetImport-then-backToImport in the right
+  // order at two call sites — and deliberately NOT folded into backToImport itself, whose
+  // other caller is the Map step's back button, where wiping the chosen file and its
+  // preview would be a regression.
+  //
+  // The reset is what makes this safe from a DEEP LINK: an arrival by URL carries no
+  // importFile, no preview and no mapping at all, so the upload step must not open on
+  // whatever a previous run in this session happened to leave behind.
+  function restartImport() {
+    resetImport()
     setCreateStep('upload')
   }
 
@@ -679,7 +775,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     preview,
     uploadPhase,
     importError,
-    report,
+    reviewBatchId,
     importedInvoiceId: detailSel.importedInvoiceId,
     nav,
     setFilter,
@@ -702,6 +798,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     selectImportFile,
     readColumns,
     backToImport,
+    restartImport,
     skipUpload,
     fileDraft,
     selectInvoice,

@@ -12,7 +12,7 @@ import { wizardHeader } from '../lib/importFlow'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
-import { CreateReport } from './CreateReport'
+import { ReviewBatch } from './ReviewBatch'
 import { ImportProgress } from './ImportProgress'
 import type { PlatformCtx } from '../types'
 
@@ -47,8 +47,14 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '24px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
+        {/* "Cancel" implies undo, and on the review step there is nothing to undo: the
+            invoices were persisted at import time (§10.10), the batch exists, and this
+            button does the identical setView('invoices') that "Finish · go to invoices"
+            does 400px below it. Naming it after where it goes is the only honest label
+            on a surface where everything is already saved. The other three steps keep
+            "Cancel", where abandoning genuinely discards work in progress. */}
         <button onClick={ctx.closeCreate} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, padding: '0 12px', fontSize: 13 }}>
-          ← Cancel
+          {createStep === 'review' ? '← Invoices' : '← Cancel'}
         </button>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0 }}>
           {steps.map(([n, label], idx) => {
@@ -77,7 +83,7 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
 
           {createStep === 'form' && <CreateForm ctx={ctx} />}
 
-          {createStep === 'review' && <CreateReport ctx={ctx} />}
+          {createStep === 'review' && <ReviewBatch ctx={ctx} />}
         </>
       )}
     </div>

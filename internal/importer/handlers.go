@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -342,6 +343,45 @@ func PreviewHandler() http.HandlerFunc {
 			// Every data row, not just the previewed ones.
 			RowsTotal: len(rows),
 		})
+	}
+}
+
+// batchResponse is the GET /v1/imports/{id} success body (task-283):
+// id/entity_id/status/rows_total/rows_valid/rows_invalid/errors/created_at
+// are FROZEN at Finalize; rule_set_version is DERIVED (min() over the
+// batch's invoices, task-283 R4). Errors is []RowError (never nil from
+// Store.GetBatch), so a clean batch serializes "errors":[] -- NOT the same
+// as POST /v1/imports's own contract, which renders "errors":null for a
+// clean import (a flagged, deliberately-unfixed divergence between the two
+// endpoints, task-283 trap 4).
+//
+// RuleSetVersion is a *int with NO omitempty: it must render an explicit
+// JSON null when nothing under this batch was ever validated -- never
+// omitted, never a false 0 ([Stage-1 F2]).
+type batchResponse struct {
+	ID          string     `json:"id"`
+	EntityID    string     `json:"entity_id"`
+	Status      string     `json:"status"`
+	RowsTotal   int        `json:"rows_total"`
+	RowsValid   int        `json:"rows_valid"`
+	RowsInvalid int        `json:"rows_invalid"`
+	Errors      []RowError `json:"errors"`
+
+	RuleSetVersion *int      `json:"rule_set_version"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// GetHandler will become GET /v1/imports/{id} (Stage 3, task-283):
+// identity-first-401 -> a handler-level uuid.Parse guard (400 BEFORE the
+// store is ever called -- a malformed id must never reach
+// Store.GetBatch's own 22P02 mapping, which would put a package-internal
+// "importer: validation" string on the wire) -> call get -> statusForErr ->
+// 200 + batchResponse on success. A cross-tenant OR unknown id must resolve
+// to a BYTE-IDENTICAL 404 (no existence oracle, task-283 R5). Stub
+// (Stage 2.5): always 501, never touches r or get.
+func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

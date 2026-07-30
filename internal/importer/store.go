@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -184,4 +185,35 @@ func (s *Store) EntitySupplier(ctx context.Context, entityID string) (name strin
 		return "", nil, txErr
 	}
 	return name, tin, nil
+}
+
+// Batch is one import_batches row plus its DERIVED rule_set_version
+// (task-283). Every field except RuleSetVersion is FROZEN at Finalize --
+// the live ledger counters (ready_invoices/invoices_clean/
+// invoices_with_violations) are deliberately absent (plan R2; they are
+// re-derived, live, from GET /v1/invoices?import_batch_id=... instead).
+// RuleSetVersion is *int, nil when nothing under this batch was ever
+// validated -- never a false 0 ([Stage-1 F2]).
+type Batch struct {
+	ID          string
+	EntityID    string
+	Status      string
+	RowsTotal   int
+	RowsValid   int
+	RowsInvalid int
+	Errors      []RowError
+
+	RuleSetVersion *int
+	CreatedAt      time.Time
+}
+
+// GetBatch is not yet implemented (stub, Stage 2.5). Will become: the batch
+// row plus min(rule_set_versions.version) over the invoices linked to it by
+// import_batch_id -- NOT LIMIT 1, which is non-deterministic once a batch
+// holds invoices stamped against two different rule-set versions (task-283
+// R4) -- via EntitySupplier's WithinRequestTenantTx + ErrNoRows->ErrNotFound
+// shape PLUS CreateBatch's 22P02->ErrValidation mapping (EntitySupplier
+// alone would 500 on a malformed id -- task-283 R5).
+func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
+	return Batch{}, nil
 }

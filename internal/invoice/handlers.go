@@ -796,6 +796,30 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 	}
 }
 
+// violationSummaryResponse is the GET /v1/invoices/violation-summary success
+// body: {"rules":[...]}. Rules is []RuleCount (never a nil slice from
+// Store.ViolationSummary), so a batch with no violations serializes
+// "rules":[] rather than "rules":null.
+type violationSummaryResponse struct {
+	Rules []RuleCount `json:"rules"`
+}
+
+// ViolationSummaryHandler will become GET
+// /v1/invoices/violation-summary?import_batch_id=X (Stage 3, task-283, R6 --
+// a SEPARATE route, not a listResponse key: TestListHandler_
+// EnvelopeExactKeysAndEffectiveClampedValues pins listResponse at exactly 2
+// keys). import_batch_id is REQUIRED (400 if absent or malformed, via a
+// uuid.Parse guard BEFORE the store is ever called -- an unbounded
+// tenant-wide aggregation is not a supported query). Same identity-first-401
+// order as every handler above, then call summary, statusForErr, 200 +
+// violationSummaryResponse on success. Stub (Stage 2.5): always 501, never
+// touches r or summary.
+func ViolationSummaryHandler(summary func(ctx context.Context, importBatchID string) ([]RuleCount, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in

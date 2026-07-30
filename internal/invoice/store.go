@@ -626,6 +626,39 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 	return items, total, nil
 }
 
+// RuleCount is one row of the violation-summary aggregate: a distinct
+// rule_key plus the count of distinct invoices carrying at least one
+// violation entry for that key. Copied from internal/dashboard's own
+// RuleCount (dashboard.go) rather than imported cross-package -- the
+// established per-package-copy convention (pgCode, writeJSON/writeError,
+// the two seedImportBatch test shapes) -- because the two aggregates
+// deliberately diverge: this one is SEVERITY-AGNOSTIC (see
+// Store.ViolationSummary's own doc), the dashboard's TopViolations counts
+// severity:"error" only (internal/dashboard/store.go:95) -- a different
+// question with its own predicate, task-283 R3.
+type RuleCount struct {
+	RuleKey  string `json:"rule_key"`
+	Invoices int    `json:"invoices"`
+}
+
+// ViolationSummary is not yet implemented (stub, Stage 2.5). Will become:
+// one row per distinct rule_key among the violations of invoices linked to
+// importBatchID, count(DISTINCT invoice.id), ordered invoices DESC then
+// rule_key ASC -- reusing internal/dashboard/store.go:90-99's
+// jsonb_typeof(violations)='array' guard and its empty-rule_key nullif guard
+// (REQUIRED: jsonb_array_elements raises 22023 on non-array input, and
+// invoices carries no array CHECK on violations) but DELIBERATELY OMITTING
+// its v->>'severity'='error' clause, so the rail's count matches the
+// severity-agnostic Store.List{ImportBatchID,RuleKey} filter total the
+// rail's click-through triggers (task-283 R3 -- all 19 shipped rules are
+// today "error", so the two clauses coincide until the first warning-only
+// rule ships; do NOT "fix" this divergence by copying the dashboard's
+// clause back in). RLS-scoped like every other read here -- no manual
+// tenant predicate.
+func (s *Store) ViolationSummary(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+	return nil, nil
+}
+
 // Update applies only in's non-nil MBS-content fields to an invoices row and
 // writes an "invoice.updated" audit row in the same transaction. An all-nil in
 // is rejected as ErrValidation BEFORE any tx opens (a no-op UPDATE is forbidden,

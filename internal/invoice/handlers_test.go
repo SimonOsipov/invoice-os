@@ -4152,3 +4152,163 @@ func TestEditHandler_LineItemsNullEntryDecodesToZeroValueNotError(t *testing.T) 
 		t.Errorf("line[1].Description = %v, want %q", lines[1].Description, "a")
 	}
 }
+
+// --- GET /v1/invoices/violation-summary (task-283 specs 12-14) -------------
+
+// violationSummaryBody mirrors the (future) GET
+// /v1/invoices/violation-summary response wire shape (violationSummaryResponse,
+// handlers.go), plus an Error field for the shared {"error":"..."} envelope
+// -- same convention as invoiceBody/listInvoicesResponse.
+type violationSummaryBody struct {
+	Rules []RuleCount `json:"rules"`
+	Error string      `json:"error"`
+}
+
+// doViolationSummary builds the GET /v1/invoices/violation-summary request
+// (query appended verbatim, e.g. "?import_batch_id=..."), injects id into
+// the context when non-nil, runs it through ViolationSummaryHandler(summary,
+// nil), and decodes the JSON response body.
+func doViolationSummary(t *testing.T, summary func(ctx context.Context, importBatchID string) ([]RuleCount, error), id *auth.Identity, query string) (*httptest.ResponseRecorder, violationSummaryBody) {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/invoices/violation-summary"+query, nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	ViolationSummaryHandler(summary, nil).ServeHTTP(rec, r)
+	var resp violationSummaryBody
+	if len(rec.Body.Bytes()) > 0 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+	}
+	return rec, resp
+}
+
+// TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled
+// (spec 12, task-283 AC-6): import_batch_id is REQUIRED on this route --
+// absent OR malformed must 400 BEFORE store.ViolationSummary is ever
+// called (an unbounded tenant-wide aggregation is not a supported query).
+// The status alone is VACUOUS: a malformed uuid reaching the store would
+// ALSO plausibly 400 -- the spy (store must not run) is the only half of
+// this test that actually discriminates a handler-level uuid.Parse
+// pre-check from a store-level rejection.
+func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t *testing.T) {
+	t.Run("missing import_batch_id", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run when import_batch_id is absent")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, &id, "")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+
+	t.Run("malformed import_batch_id", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run when import_batch_id is not a well-formed uuid")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, &id, "?import_batch_id=not-a-uuid")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestViolationSummaryHandler_RulesIsEmptyArrayNotNull (spec 13): a store
+// returning a nil []RuleCount must still render "rules":[], never null.
+func TestViolationSummaryHandler_RulesIsEmptyArrayNotNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		return nil, nil
+	}
+	rec, _ := doViolationSummary(t, summary, &id, "?import_batch_id="+uuid.NewString())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.Bytes()
+	if !bytes.Contains(raw, []byte(`"rules":[]`)) {
+		t.Errorf("body = %s, want raw JSON to contain \"rules\":[] (never null, even when the store returns a nil slice)", raw)
+	}
+}
+
+// TestRoutes_BothResolveInBothDirections (spec 14, task-283 R6): Go 1.22+
+// net/http.ServeMux resolves by PATTERN SPECIFICITY, not registration order
+// -- a literal segment ("violation-summary") always beats a wildcard
+// ({id}), in EITHER registration order (go.mod is go 1.26.4; empirically
+// verified live both ways -- the older "register the literal BEFORE {id}"
+// wording is obsolete). This test drives a real *http.ServeMux, built in
+// BOTH registration orders, for BOTH request directions each time, and
+// asserts the CORRECT closure fires (and the wrong one does not) every
+// time.
+func TestRoutes_BothResolveInBothDirections(t *testing.T) {
+	build := func(literalFirst bool) (mux *http.ServeMux, getCalled, summaryCalled *bool) {
+		getCalled = new(bool)
+		summaryCalled = new(bool)
+		get := func(ctx context.Context, id string) (Invoice, error) {
+			*getCalled = true
+			return Invoice{}, nil
+		}
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			*summaryCalled = true
+			return nil, nil
+		}
+		mux = http.NewServeMux()
+		if literalFirst {
+			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, nil))
+		} else {
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, nil))
+			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
+		}
+		return mux, getCalled, summaryCalled
+	}
+
+	callerID := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	doReq := func(mux *http.ServeMux, target string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", target, nil)
+		r = r.WithContext(auth.WithIdentity(r.Context(), callerID))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}
+
+	for _, literalFirst := range []bool{true, false} {
+		name := "wildcard registered first"
+		if literalFirst {
+			name = "literal registered first"
+		}
+		t.Run(name, func(t *testing.T) {
+			mux, getCalled, summaryCalled := build(literalFirst)
+			doReq(mux, "/v1/invoices/violation-summary?import_batch_id="+uuid.NewString())
+			if !*summaryCalled {
+				t.Error("GET /v1/invoices/violation-summary did not resolve to ViolationSummaryHandler's closure")
+			}
+			if *getCalled {
+				t.Error(`GET /v1/invoices/violation-summary incorrectly resolved to GetHandler's closure ("violation-summary" read as a path {id})`)
+			}
+
+			mux, getCalled, summaryCalled = build(literalFirst)
+			doReq(mux, "/v1/invoices/"+uuid.NewString())
+			if !*getCalled {
+				t.Error("GET /v1/invoices/<uuid> did not resolve to GetHandler's closure")
+			}
+			if *summaryCalled {
+				t.Error("GET /v1/invoices/<uuid> incorrectly resolved to ViolationSummaryHandler's closure")
+			}
+		})
+	}
+}

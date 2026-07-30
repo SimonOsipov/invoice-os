@@ -4227,6 +4227,46 @@ func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t 
 	})
 }
 
+// TestViolationSummaryHandler_NoIdentity401 (QA Stage 4, task-283 F2 / AC
+// #3 "identity-first 401"): no identity in the request context must 401
+// BEFORE the handler-level import_batch_id checks (absent/malformed-uuid
+// guard), and BEFORE store.ViolationSummary, ever run -- proven here with
+// BOTH an absent AND a malformed import_batch_id, so a wrong ordering
+// (the import_batch_id guard before the identity check) would surface as
+// 400, not 401, in either sub-case. The spy additionally proves the store
+// itself never runs.
+func TestViolationSummaryHandler_NoIdentity401(t *testing.T) {
+	t.Run("missing import_batch_id", func(t *testing.T) {
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run without an identity")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, nil, "")
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+
+	t.Run("malformed import_batch_id", func(t *testing.T) {
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run without an identity")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, nil, "?import_batch_id=not-a-uuid")
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
 // TestViolationSummaryHandler_RulesIsEmptyArrayNotNull (spec 13): a store
 // returning a nil []RuleCount must still render "rules":[], never null.
 func TestViolationSummaryHandler_RulesIsEmptyArrayNotNull(t *testing.T) {

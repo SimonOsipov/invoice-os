@@ -565,3 +565,25 @@ func TestGetBatchHandler_MalformedID400StoreNeverCalled(t *testing.T) {
 		t.Error("expected a non-empty error message in the body")
 	}
 }
+
+// TestGetBatchHandler_NoIdentity401 (QA Stage 4, task-283 F2 / AC #3
+// "identity-first 401"): no identity in the request context must 401
+// BEFORE the handler-level uuid.Parse guard, and BEFORE store.GetBatch,
+// ever run -- proven here with a MALFORMED path id ("not-a-uuid"), so a
+// wrong ordering (uuid.Parse before the identity check) would surface as
+// 400, not 401, discriminating the two orderings. The spy additionally
+// proves the store itself never runs either way.
+func TestGetBatchHandler_NoIdentity401(t *testing.T) {
+	get := func(ctx context.Context, gotID string) (Batch, error) {
+		t.Fatal("store.GetBatch must not run without an identity")
+		return Batch{}, nil
+	}
+	rec, resp := doImportGetBatch(t, get, nil, "not-a-uuid")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}

@@ -19,6 +19,11 @@
 // Specs 4/6 (handler-level, fake store) live in handlers_test.go; specs
 // 7-14 live in internal/invoice (violation_summary_test.go / handlers_test.go).
 //
+// QA Stage 4 addition (task-283, not in Stage 1's table):
+// TestGetBatch_DirectMalformedIDReturnsErrValidationNot500 -- the ONE spec
+// that exercises GetBatch's own 22P02->ErrValidation mapping directly
+// (every handler-level malformed-id test uses a fake store closure).
+//
 // Run (`make test-rls` does NOT cover this package -- it targets
 // ./internal/platform/db/... at port 5432):
 //
@@ -31,6 +36,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -178,6 +184,15 @@ func TestGetBatch_ReturnsFrozenCountsAndErrors(t *testing.T) {
 // could return either version, or flip between calls. RED against the
 // stub: RuleSetVersion is always nil, so the first call already fails on
 // value.
+//
+// Seed order is DELIBERATE (QA Stage 4, F1): the HIGHER-version invoice
+// row is inserted FIRST, the lower (= correct min) SECOND. A fresh heap
+// scan tends to surface rows in insertion order, so a LIMIT 1 (no ORDER
+// BY) implementation reaches the higher-version row first and returns the
+// WRONG value here -- proven live by reversing the original (lower-first)
+// order, which left LIMIT 1 coincidentally agreeing with min() 3/3 (see
+// task-283 implementation notes). min() itself is order-independent and
+// still returns the true minimum either way.
 func TestGetBatch_RuleSetVersionIsMinNotArbitrary(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -186,10 +201,11 @@ func TestGetBatch_RuleSetVersionIsMinNotArbitrary(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "GETBATCH-MIN entity")
 	rowA, rowB := twoRuleSetVersionRows(t, super)
 
-	want := rowA.version
-	if rowB.version < want {
-		want = rowB.version
+	lo, hi := rowA, rowB
+	if hi.version < lo.version {
+		lo, hi = hi, lo
 	}
+	want := lo.version
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
@@ -201,8 +217,9 @@ func TestGetBatch_RuleSetVersionIsMinNotArbitrary(t *testing.T) {
 	if err := store.Finalize(c, batchID, 2, 2, 0, nil, "completed"); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
-	seedInvoiceForBatch(t, super, tenantID, entityID, batchID, &rowA.id)
-	seedInvoiceForBatch(t, super, tenantID, entityID, batchID, &rowB.id)
+	// Higher version FIRST, lower (= min) SECOND -- see doc comment above.
+	seedInvoiceForBatch(t, super, tenantID, entityID, batchID, &hi.id)
+	seedInvoiceForBatch(t, super, tenantID, entityID, batchID, &lo.id)
 
 	for i := 0; i < 5; i++ {
 		got, err := store.GetBatch(c, batchID)
@@ -293,6 +310,20 @@ func TestGetBatch_ZeroInvoicesVersionIsNullAndBodyRendersNull(t *testing.T) {
 	if !bytes.Contains(emptyBody, []byte(`"rule_set_version":null`)) {
 		t.Errorf("empty body = %s, want the literal \"rule_set_version\":null", emptyBody)
 	}
+	// QA Stage 4 addition: pins the REAL Postgres round-trip for AC #2's
+	// "errors is [] never null" -- Finalize(..., nil, ...) normalizes to a
+	// jsonb '[]' payload (store.go's Finalize), and GetBatch's
+	// json.Unmarshal of that payload must come back a non-nil []RowError.
+	// The only other spec covering this shape (handlers_test.go's
+	// TestGetBatchHandler_ErrorsIsEmptyArrayNotNull) injects a FAKE store
+	// returning Batch{Errors: nil} directly -- it never exercises the real
+	// column default or the real Unmarshal path.
+	if emptyGot.Errors == nil {
+		t.Error("GetBatch (empty).Errors = nil, want a non-nil empty []RowError (real Postgres round-trip)")
+	}
+	if !bytes.Contains(emptyBody, []byte(`"errors":[]`)) {
+		t.Errorf("empty body = %s, want the literal \"errors\":[] (never null, even on a clean/zero-error batch)", emptyBody)
+	}
 }
 
 // TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown (spec 5, task-283
@@ -363,6 +394,59 @@ func TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 	}
 }
 
+// TestGetBatch_ProcessingStatusUnfinalizedBatchReturns200 (QA Stage 4,
+// task-283 trap 2): CreateBatch alone (no Finalize) leaves a row with
+// status='processing' and all-zero counts -- reachable in production by a
+// crash between the two calls, and now user-visible for the first time via
+// this route (no terminal transition, no reaper -- flagged, out of scope
+// per the plan). This pins that such a row is NOT an error case: GET
+// returns 200 with status="processing", zeroed counts, "errors":[], and
+// rule_set_version:null (no invoices are linked yet) -- never a 404, never
+// a 500, and never silently coerced to some other status string.
+func TestGetBatch_ProcessingStatusUnfinalizedBatchReturns200(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "GETBATCH-PROCESSING tenant")
+	entityID := seedEntity(t, super, tenantID, "GETBATCH-PROCESSING entity")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	batchID, err := store.CreateBatch(c, entityID)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	// Deliberately NOT calling Finalize -- simulates a crash between the
+	// two calls.
+
+	got, err := store.GetBatch(c, batchID)
+	if err != nil {
+		t.Fatalf("GetBatch (unfinalized): %v, want 200/no error", err)
+	}
+	if got.Status != "processing" {
+		t.Errorf("Status = %q, want %q (CreateBatch's own INSERT value)", got.Status, "processing")
+	}
+	if got.RowsTotal != 0 || got.RowsValid != 0 || got.RowsInvalid != 0 {
+		t.Errorf("counts = (total=%d valid=%d invalid=%d), want (0,0,0)", got.RowsTotal, got.RowsValid, got.RowsInvalid)
+	}
+	if got.Errors == nil {
+		t.Error("Errors = nil, want a non-nil empty []RowError")
+	}
+	if got.RuleSetVersion != nil {
+		t.Errorf("RuleSetVersion = %v, want nil (no invoices linked to an unfinalized batch)", *got.RuleSetVersion)
+	}
+
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID}
+	rec, _ := doImportGetBatch(t, store.GetBatch, &id, batchID)
+	if rec.Code != http.StatusOK {
+		t.Errorf("HTTP status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"status":"processing"`)) {
+		t.Errorf("body = %s, want the literal \"status\":\"processing\"", rec.Body.Bytes())
+	}
+}
+
 // TestGetBatch_RowsInvalidAgreesWithErrorRowCount (spec 15): drives the
 // REAL Service.Import (not a stub) on a fixture that quarantines via BOTH
 // error shapes -- a 2-row disagreeing group (RowError.Rows) and a 1-row
@@ -410,5 +494,36 @@ func TestGetBatch_RowsInvalidAgreesWithErrorRowCount(t *testing.T) {
 	}
 	if gotSum := sumRowErrorRows(got.Errors); gotSum != wantInvalid {
 		t.Errorf("sum of RowError row counts = %d, want %d", gotSum, wantInvalid)
+	}
+}
+
+// TestGetBatch_DirectMalformedIDReturnsErrValidationNot500 (QA Stage 4,
+// task-283 AC #1 / R5): calls Store.GetBatch DIRECTLY (bypassing
+// GetHandler's own uuid.Parse guard entirely) with a malformed,
+// non-well-formed-uuid id. This is the ONE spec that actually exercises
+// GetBatch's own 22P02->ErrValidation mapping -- every other malformed-id
+// test in this package (handlers_test.go's
+// TestGetBatchHandler_MalformedID400StoreNeverCalled) uses a fake `get`
+// closure precisely so the real store is NEVER called, and no other spec
+// here passes a non-uuid string to store.GetBatch. Without this mapping
+// (AC #1's "EntitySupplier alone would 500 on a malformed id"), a
+// non-HTTP caller of Store.GetBatch would get a raw pgx 22P02 error
+// instead of the package's own ErrValidation sentinel -- and any handler
+// built on top would map that to a 500 via statusForErr's default case,
+// not the intended 400.
+func TestGetBatch_DirectMalformedIDReturnsErrValidationNot500(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "GETBATCH-MALFORMED tenant")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	_, err := store.GetBatch(c, "not-a-uuid")
+	if err == nil {
+		t.Fatal("GetBatch(\"not-a-uuid\") = nil error, want ErrValidation")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("GetBatch(\"not-a-uuid\") error = %v, want errors.Is(err, ErrValidation) -- a malformed id reaching the store directly must not surface as a raw/unmapped error (which a caller would 500 on)", err)
 	}
 }

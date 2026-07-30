@@ -187,6 +187,42 @@ func TestViolationSummary_NonArrayViolationsDoNotError(t *testing.T) {
 	}
 }
 
+// TestViolationSummary_EmptyOrMissingRuleKeyExcludedByNullifGuard (QA Stage
+// 4, task-283 R3): the empty-rule_key nullif guard on v->>'rule_key' is
+// copied verbatim from internal/dashboard/store.go but, unlike the
+// jsonb_typeof guard (pinned by spec 10) and the severity omission (pinned
+// by spec 9), its own behavior was previously unpinned by any spec here.
+// Three invoices: one with rule_key set to the empty string (v->>'rule_key'
+// evaluates to empty, and nullif collapses an empty match to SQL NULL), one
+// whose violation object OMITS rule_key entirely (v->>'rule_key' is already
+// SQL NULL), and one with a real rule_key -- only the real one may appear.
+func TestViolationSummary_EmptyOrMissingRuleKeyExcludedByNullifGuard(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "VIOSUM-EMPTYKEY tenant")
+	entityID := seedEntity(t, super, tenantID, "VIOSUM-EMPTYKEY entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-EMPTYKEY-blank", batchID, string(StatusDraft),
+		`[{"rule_key":"","severity":"error","message":"blank key"}]`)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-EMPTYKEY-missing", batchID, string(StatusDraft),
+		`[{"severity":"error","message":"no rule_key field at all"}]`)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-EMPTYKEY-real", batchID, string(StatusDraft),
+		`[{"rule_key":"real-rule","severity":"error","message":"x"}]`)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.ViolationSummary(c, batchID)
+	if err != nil {
+		t.Fatalf("ViolationSummary: %v", err)
+	}
+	if len(got) != 1 || got[0] != (RuleCount{RuleKey: "real-rule", Invoices: 1}) {
+		t.Errorf("ViolationSummary = %+v, want exactly [{real-rule 1}] -- an empty or missing rule_key must never form its own group", got)
+	}
+}
+
 // TestRLS_ViolationSummaryTenantScopedAndNonVacuous (spec 11): two legs,
 // ONE test. Tenant 1 summarising tenant 2's batch must come back EMPTY
 // (never an error, never tenant 2's rows) -- and, in the SAME test, tenant

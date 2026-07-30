@@ -97,6 +97,19 @@ export const ACCESS_ROLES: readonly { id: AccessRole; label: string; description
   },
 ]
 
+/**
+ * The `ACCESS_ROLES` display label for one role id — the Access role column, the drawer and
+ * the invite modal all want it and none of them may re-case `m.role`, which happens to
+ * produce the right string today and diverges silently the first time a label changes.
+ *
+ * The fallback exists for the same reason `roleOf`'s does (workflows.ts:39-41): a persisted
+ * id this build does not know must render as SOMETHING rather than crash the row. It is a
+ * branch no screenshot can reach, which is exactly why it is spec'd here and not inlined.
+ */
+export function accessRoleLabel(role: AccessRole): string {
+  return ACCESS_ROLES.find((r) => r.id === role)?.label ?? role
+}
+
 export const DEPARTMENTS: readonly Department[] = ['Finance', 'Tax & Compliance', 'Accounts Payable', 'Executive', 'Procurement']
 
 /**
@@ -503,6 +516,25 @@ export function unassignedPositions(list: readonly Member[]): RoleKey[] {
   return WF_ROLES.filter((r) => holders(list, r.key).length === 0).map((r) => r.key)
 }
 
+/**
+ * §6's copy for the in-house unassigned-positions notice, pluralised — the sentence only,
+ * never the position titles, which the caller renders separately so it can weight them.
+ *
+ * §6 supplies the PLURAL verbatim ("2 approval positions have nobody assigned. Policies that
+ * use them will block."); the singular is a reconstruction, written to match it phrase for
+ * phrase (positions→position, have→has, them→it) and pinned here rather than in a component
+ * so the invented half is an artifact a spec can hold. It is reachable: MEMB-01-07's drawer
+ * can assign a position and drive the count to 1.
+ *
+ * Lives beside `clientAccessLabel` because it is the same kind of thing — a member-domain
+ * count rendered as a sentence, and one `environment: node` can actually reach.
+ */
+export function unassignedNotice(count: number): string {
+  return count === 1
+    ? '1 approval position has nobody assigned. Policies that use it will block.'
+    : `${count} approval positions have nobody assigned. Policies that use them will block.`
+}
+
 /** Positions that HAVE holders but none active — a policy step that would block. */
 export function blockedPositions(list: readonly Member[]): RoleKey[] {
   return WF_ROLES.filter((r) => holders(list, r.key).length > 0 && activeHolders(list, r.key).length === 0).map((r) => r.key)
@@ -537,6 +569,23 @@ export function stepsFor(policies: readonly Policy[], position: RoleKey): Policy
     }
   }
   return { total, policies: named }
+}
+
+/**
+ * §10.4's copy for the suspended-member row warning, pluralised over `stepsFor(...).total`.
+ *
+ * §10.4 supplies the PLURAL verbatim ("Named in 2 approval steps · those steps will block");
+ * the singular is a reconstruction (steps→step, those→that) and is reachable the moment a
+ * Workflows edit leaves one step naming the position. Same reason as `unassignedNotice`: the
+ * invented half belongs where a spec can hold it, not inside a component vitest cannot mount.
+ *
+ * Call it only for a member who HOLDS a position — the guard is `m.position != null`, not a
+ * mode check, since firm rows carry no position at all (T1.6).
+ */
+export function stepsWarning(total: number): string {
+  return total === 1
+    ? 'Named in 1 approval step · that step will block'
+    : `Named in ${total} approval steps · those steps will block`
 }
 
 export function resolvePosition(list: readonly Member[], position: RoleKey): PositionResolution {

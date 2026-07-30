@@ -17,13 +17,13 @@
 import { Fragment, useCallback, useState } from 'react'
 
 import {
-  ACCESS_ROLES,
+  accessRoleLabel,
   clientAccessLabel,
   clientAccessNames,
   isProtectedAdmin,
   lastActiveLabel,
   stepsFor,
-  type AccessRole,
+  stepsWarning,
   type Member,
 } from '../lib/members'
 // `roleOf` comes from the workflows MODULE, never from a Workflow* component: §15.2 bars
@@ -89,13 +89,6 @@ const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', wh
 
 // §9, verbatim. Carried by the menu as visible text, not only as a tooltip.
 const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else first."
-
-// The label comes off ACCESS_ROLES — the same constant MembersView.tsx:26-29 already reads
-// for the filter options — and NOT from re-casing `m.role`, which happens to produce the
-// right string today and would diverge silently the first time a label changes.
-function roleLabel(role: AccessRole): string {
-  return ACCESS_ROLES.find((r) => r.id === role)?.label ?? role
-}
 
 export function MembersTable({ ctx, rows, policies, onFlash }: {
   ctx: PlatformCtx
@@ -243,7 +236,7 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
                   </span>
                 </span>
 
-                <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{roleLabel(m.role)}</span>
+                <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
 
                 {isFirm ? (
                   <span
@@ -287,11 +280,7 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
                 // warning inside a fixed cell would have to ellipsise away exactly when it
                 // matters.
                 <div style={{ padding: '0 18px 12px', borderBottom: '1px solid var(--line-1)', minWidth }}>
-                  <AmberNote testId="member-steps-warning">
-                    {blocked === 1
-                      ? 'Named in 1 approval step · that step will block'
-                      : `Named in ${blocked} approval steps · those steps will block`}
-                  </AmberNote>
+                  <AmberNote testId="member-steps-warning">{stepsWarning(blocked)}</AmberNote>
                 </div>
               )}
             </Fragment>

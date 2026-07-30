@@ -4,6 +4,7 @@ import { APP_PERSONAS } from '../auth'
 import { CFG } from '../data'
 import {
   ACCESS_ROLES,
+  accessRoleLabel,
   activeAdmins,
   activeHolders,
   addMembers,
@@ -38,6 +39,8 @@ import {
   setMemberRole,
   setMemberStatus,
   stepsFor,
+  stepsWarning,
+  unassignedNotice,
   unassignedPositions,
   type InviteOptions,
   type Member,
@@ -1469,5 +1472,92 @@ describe('filter and guard — boundaries the T2 batch does not reach (QA36–QA
     const detached: Member = { ...firmRow('Ghost Admin', 'active', 'all'), role: 'admin' }
     expect(inhouse().map((m) => m.id)).not.toContain(detached.id)
     expect(isProtectedAdmin(inhouse(), detached)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// MEMB-01-04 QA — the three display derivations the table would otherwise inline
+// ---------------------------------------------------------------------------
+// All three shipped inside MembersTable/MembersView, where `environment: node` cannot reach
+// them: two of them are INVENTED COPY (a singular §6 and a singular §10.4 that the story
+// supplies only in the plural) and the third has a fallback branch no screenshot can hit.
+// Pulled into this module — which already owns `clientAccessLabel`, `lastActiveLabel` and
+// CAPABILITY_ROWS' copy — so the reconstructions are artifacts a spec holds rather than
+// strings only a reviewer's eye guards.
+
+describe('accessRoleLabel (QA40–QA41, §6)', () => {
+  it('returns the ACCESS_ROLES label for every role, never a re-cased id (QA40)', () => {
+    expect(accessRoleLabel('admin')).toBe('Admin')
+    expect(accessRoleLabel('preparer')).toBe('Preparer')
+    expect(accessRoleLabel('reviewer')).toBe('Reviewer')
+
+    // The pin, not a restatement: every seed row's label must come off the constant, so a
+    // label edit in ACCESS_ROLES cannot leave the table rendering the old word. Both modes,
+    // because the column is the one cell §15.7 gives both grids.
+    for (const m of [...firm(), ...inhouse()]) {
+      const declared = ACCESS_ROLES.find((r) => r.id === m.role)
+      expect(declared).toBeDefined()
+      expect(accessRoleLabel(m.role)).toBe(declared?.label)
+    }
+  })
+
+  it('falls back to the raw id for a role this build does not know (QA41)', () => {
+    // The `roleOf` fallback's twin (workflows.ts:39-41): a persisted id from a newer build
+    // must render as something rather than crash the row. Unreachable from the seed, which
+    // is exactly why the screenshot gate cannot stand in for this spec.
+    expect(accessRoleLabel('auditor' as never)).toBe('auditor')
+    expect(ACCESS_ROLES.map((r) => r.id)).not.toContain('auditor')
+  })
+})
+
+describe('unassignedNotice — §6 copy, plural verbatim and singular reconstructed (QA42–QA44)', () => {
+  it('renders §6 verbatim at the seed count of 2 (QA42)', () => {
+    // The count the in-house seed actually produces: WF_ROLES holds 8 positions and the
+    // roster holds 6 of them, so `fin_mgr` and `ceo` are the two §6 names.
+    const unassigned = unassignedPositions(inhouse())
+    expect(unassigned).toEqual(['fin_mgr', 'ceo'])
+    expect(unassignedNotice(unassigned.length)).toBe(
+      '2 approval positions have nobody assigned. Policies that use them will block.',
+    )
+  })
+
+  it('reconstructs the singular phrase for phrase (QA43)', () => {
+    // INVENTED COPY, pinned so the reconstruction is reviewable as text rather than as a
+    // ternary buried in a component. Three agreements move together: positions→position,
+    // have→has, them→it. Reachable via MEMB-01-07's drawer.
+    expect(unassignedNotice(1)).toBe('1 approval position has nobody assigned. Policies that use it will block.')
+  })
+
+  it('takes the plural for every count that is not 1, zero included (QA44)', () => {
+    // Zero is not rendered — MembersView gates on `unassigned.length > 0` — but the branch
+    // must not be the singular if that gate is ever loosened, because "0 approval position
+    // has" is the one wording no reading of §6 permits.
+    expect(unassignedNotice(0)).toBe('0 approval positions have nobody assigned. Policies that use them will block.')
+    expect(unassignedNotice(8)).toBe('8 approval positions have nobody assigned. Policies that use them will block.')
+    // Firm mode's number, and the reason the notice is gated on MODE and not on this count:
+    // firm rows carry no position at all (T1.6), so every position reads as unassigned.
+    expect(unassignedPositions(firm()).length).toBe(WF_ROLES.length)
+  })
+})
+
+describe('stepsWarning — §10.4 copy over stepsFor().total (QA45–QA46)', () => {
+  it('renders §10.4 verbatim for the suspended CFO the seed is built around (QA45)', () => {
+    // The §2 headline frame end to end: the only cfo holder is suspended, and both cfo
+    // steps across the in-house policies are what "those steps will block" refers to.
+    const cfo = inhouse().find((m) => m.position === 'cfo')
+    expect(cfo?.status).toBe('suspended')
+    const steps = stepsFor(SEED_INHOUSE_POLICIES, 'cfo')
+    expect(steps.total).toBe(2)
+    expect(stepsWarning(steps.total)).toBe('Named in 2 approval steps · those steps will block')
+  })
+
+  it('reconstructs the singular, and keeps the plural everywhere else (QA46)', () => {
+    // INVENTED COPY. steps→step and those→that move together; the middle dot and its
+    // spacing are §10.4's, not a renderer's.
+    expect(stepsWarning(1)).toBe('Named in 1 approval step · that step will block')
+    expect(stepsWarning(3)).toBe('Named in 3 approval steps · those steps will block')
+    // 0 is never rendered (the row warning is gated on `total > 0`), but if it ever were,
+    // "Named in 0 approval step" would be wrong in the same way "0 positions has" is.
+    expect(stepsWarning(0)).toBe('Named in 0 approval steps · those steps will block')
   })
 })

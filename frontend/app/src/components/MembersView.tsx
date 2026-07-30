@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { ACCESS_ROLES, filterMembers, isFiltering, unassignedPositions, type AccessRole } from '../lib/members'
+import { ACCESS_ROLES, filterMembers, isFiltering, unassignedNotice, unassignedPositions, type AccessRole } from '../lib/members'
 import { roleOf } from '../lib/workflows'
 import { AmberNote } from './MemberParts'
 import { MembersTable } from './MembersTable'
@@ -47,15 +47,6 @@ const EMPTY_TITLE: Record<PlatformCtx['mode'], string> = {
 }
 
 const EMPTY_MESSAGE = "Invite as many people as you need — you're priced by compliance need, not per seat."
-
-// §6's copy. The singular is reachable — MEMB-01-07's drawer can assign a position and
-// drive the count to 1 — and §6 supplies only the plural, so the singular is written to
-// match it phrase for phrase.
-function unassignedNotice(count: number): string {
-  return count === 1
-    ? '1 approval position has nobody assigned. Policies that use it will block.'
-    : `${count} approval positions have nobody assigned. Policies that use them will block.`
-}
 
 export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const { members, mode } = ctx

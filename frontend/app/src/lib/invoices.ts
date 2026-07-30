@@ -33,6 +33,11 @@
 //                       getInvoice itself.
 // - getInvoiceHistory:  GET   `${base}/api/invoice/v1/invoices/{id}/history`, resolves
 //                       the bare StatusChange[] verbatim (HistoryHandler).
+// - createInvoice:      POST  `${base}/api/invoice/v1/invoices`, follows editInvoice's
+//                       shape verbatim (CreateHandler, handlers.go:117-165, INVCR-01-02,
+//                       task-278) -- the missing caller for a handler that has existed
+//                       since M4-02 (cmd/invoice/main.go:56). draftToCreateRequest
+//                       (lib/invoiceDraft.ts) is the pure Draft -> body mapper.
 // - editInvoice:        PATCH `${base}/api/invoice/v1/invoices/{id}`, only the changed
 //                       fields in the body (EditHandler, handlers.go:427-475, [D9]).
 // - revalidateInvoice:  POST  `${base}/api/invoice/v1/invoices/{id}/validate`, no body
@@ -271,6 +276,40 @@ export type InvoiceEditInput = Partial<
   line_items?: LineItemEditInput[]
 }
 
+// One entry of createInvoice's `line_items` array (lineItemReq echo, createRequest.
+// LineItems, handlers.go:51-64, INVCR-01-02/task-278). Same five nullable-string fields
+// as LineItemEditInput -- deliberately a SEPARATE type, not reused: create and edit are
+// different endpoints (createRequest vs editReq) that could diverge independently. NO
+// `id`/`line_no`: line_no is system-assigned 1..N by array position (handlers.go:38-41)
+// and a client-supplied one is silently ignored.
+export interface LineItemCreateInput {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
+// createInvoice's POST body (createRequest, handlers.go:51-64). `entity_id`/
+// `invoice_number` are the two REQUIRED fields -- blank rejects 400 before create ever
+// runs (handlers.go:138-145); every other header field is nullable. The mapper
+// (draftToCreateRequest, lib/invoiceDraft.ts) never emits `buyer_address`/`wht`/
+// `doc_type` -- they have no column and no wire field.
+export interface InvoiceCreateInput {
+  entity_id: string
+  invoice_number: string
+  issue_date: string | null
+  supplier_tin: string | null
+  supplier_name: string | null
+  buyer_tin: string | null
+  buyer_name: string | null
+  currency: string | null
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  line_items: LineItemCreateInput[]
+}
+
 // The 9 editable header fields (editReq, handlers.go:70-80, [D9]) -- moved here from
 // InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
 // component share one definition; EditFieldKey travels with the const it's derived
@@ -340,6 +379,20 @@ export async function getInvoiceHistory(
   id: string,
 ): Promise<StatusChange[]> {
   return authedFetch<StatusChange[]>(`${base}/api/invoice/v1/invoices/${id}/history`)
+}
+
+// POST /v1/invoices -- the missing caller for CreateHandler (cmd/invoice/main.go:56,
+// INVCR-01-02, task-278: the handler has existed since M4-02 with no caller). Follows
+// editInvoice's shape verbatim below -- forwards `body` to apiFetch untouched, no
+// wrapping. Non-2xx rejects with the underlying ApiError unchanged.
+//
+// STUB (Mode A): throws -- the executor implements the body in Stage 3.
+export async function createInvoice(
+  _authedFetch: AuthedFetch,
+  _base: string,
+  _body: InvoiceCreateInput,
+): Promise<InvoiceRecord> {
+  throw new Error('not implemented')
 }
 
 export async function editInvoice(
@@ -540,7 +593,12 @@ export function diffLineItems(
 // (an exponent that would drive it below zero is folded into `u` instead), so nothing
 // downstream has to reason about a negative scale. bigint throughout -- no float ever
 // touches a money value here, which is the whole point of the type.
-interface Scaled {
+//
+// Exported (INVCR-01-02, task-278, [money-primitives-exported]): draftToCreateRequest
+// (lib/invoiceDraft.ts) is the second consumer of this exact-decimal kit, alongside
+// computedLineSum below. Zero behaviour change -- these five names were module-private
+// until now.
+export interface Scaled {
   u: bigint
   s: number
 }
@@ -561,7 +619,7 @@ interface Scaled {
 // transcription does not quietly widen at the anchor.
 const DECIMAL_RE = /^(-?)(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
 
-function parseScaled(raw: string): Scaled | null {
+export function parseScaled(raw: string): Scaled | null {
   // Optional groups are absent at runtime; RegExpExecArray types them all `string`.
   const m: Array<string | undefined> | null = DECIMAL_RE.exec(raw)
   if (m === null) return null
@@ -576,11 +634,11 @@ function parseScaled(raw: string): Scaled | null {
   return { u: m[1] === '-' ? -u : u, s }
 }
 
-function mulScaled(a: Scaled, b: Scaled): Scaled {
+export function mulScaled(a: Scaled, b: Scaled): Scaled {
   return { u: a.u * b.u, s: a.s + b.s }
 }
 
-function addScaled(a: Scaled, b: Scaled): Scaled {
+export function addScaled(a: Scaled, b: Scaled): Scaled {
   const s = Math.max(a.s, b.s)
   return { u: a.u * 10n ** BigInt(s - a.s) + b.u * 10n ** BigInt(s - b.s), s }
 }
@@ -588,7 +646,7 @@ function addScaled(a: Scaled, b: Scaled): Scaled {
 // Exact digits, no thousands grouping -- that keeps this ICU-independent (format.test.ts:9
 // records that toLocaleString('en-NG') varies by node ICU build). Trailing zeros are
 // stripped down to, but never below, 2dp: 250.0000 -> '250.00', 0.015 stays '0.015'.
-function renderScaled({ u, s }: Scaled): string {
+export function renderScaled({ u, s }: Scaled): string {
   let mantissa = u
   let scale = s
   if (scale < 2) {

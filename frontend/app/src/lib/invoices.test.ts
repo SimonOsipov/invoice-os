@@ -30,6 +30,7 @@ import { ApiError, type AsyncState } from '@invoice-os/api-client'
 import { createAuthedFetch } from './authedFetch'
 import {
   computedLineSum,
+  createInvoice,
   diffLineItems,
   editInvoice,
   gateByActiveEntity,
@@ -61,6 +62,7 @@ import {
   verdictStatus,
   type BatchSubmitResultItem,
   type EditFieldKey,
+  type InvoiceCreateInput,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceLineItem,
@@ -400,6 +402,81 @@ describe('editInvoice', () => {
     expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1')
     expect(init.method).toBe('PATCH')
     expect(init.body).toBe(JSON.stringify({ supplier_tin: 'x' }))
+  })
+})
+
+describe('createInvoice', () => {
+  it('CREATE-1 posts to the invoice create route with the body verbatim', async () => {
+    const body: InvoiceCreateInput = {
+      entity_id: 'e1',
+      invoice_number: 'INV-2026-00482',
+      issue_date: '2026-06-16T00:00:00Z',
+      supplier_tin: '12345678-0001',
+      supplier_name: 'Lagos Freight Ltd',
+      buyer_tin: '00000000002',
+      buyer_name: 'Beta Ltd',
+      currency: 'NGN',
+      subtotal: '3300.47',
+      vat: '247.54',
+      total: '3548.01',
+      line_items: [
+        { description: 'Logistics consulting', quantity: '2', unit_price: '1500.25', line_total: '3000.50', line_tax: null },
+        { description: 'Warehousing', quantity: '3', unit_price: '99.99', line_total: '299.97', line_tax: null },
+      ],
+    }
+    const created: InvoiceRecord = {
+      ...draftInvoice,
+      id: 'inv-new',
+      entity_id: 'e1',
+      invoice_number: body.invoice_number,
+      supplier_tin: body.supplier_tin,
+      supplier_name: body.supplier_name,
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 201, json: () => Promise.resolve(created) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await createInvoice(af, base, body)
+
+    expect(result).toEqual(created)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify(body))
+    // I18-style fidelity: exactly the passed keys, no undefined/extra keys injected.
+    const sentBody: unknown = JSON.parse(init.body as string)
+    expect(Object.keys(sentBody as object).sort()).toEqual(Object.keys(body).sort())
+  })
+
+  it('CREATE-2 a 400 rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({ error: 'entity_id is required' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const body: InvoiceCreateInput = {
+      entity_id: '',
+      invoice_number: 'INV-2026-00482',
+      issue_date: null,
+      supplier_tin: null,
+      supplier_name: null,
+      buyer_tin: null,
+      buyer_name: null,
+      currency: 'NGN',
+      subtotal: null,
+      vat: null,
+      total: null,
+      line_items: [],
+    }
+
+    const err = await captureRejection(() => createInvoice(af, base, body))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(400)
+    expect((err as ApiError).message).toBe('entity_id is required')
   })
 })
 

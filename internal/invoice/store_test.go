@@ -41,6 +41,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -943,6 +944,53 @@ func TestStoreList_TenantScopedAndPaginated(t *testing.T) {
 	}
 	if len(emptyItems) != 0 {
 		t.Errorf("List (empty tenant) len = %d, want 0", len(emptyItems))
+	}
+}
+
+// TestStoreList_ZeroFilterQueryUnchanged (INVCR-01-06 spec 10, AC-1,
+// task-282): GREEN BEFORE -- a regression guard, not red-first. AC-1
+// requires "the zero ListFilter still produces a byte-identical
+// where-less query"; the SQL string itself is unobservable from outside the
+// package, so the observable invariant substituted here is what a
+// byte-identical where-less query would return: a zero ListFilter must
+// return EVERY invoice regardless of import batch -- two different batches,
+// plus one with import_batch_id NULL -- not just the rows in one batch or
+// the other. This already holds today (Store.List applies none of the 5 new
+// filters yet) and must keep holding once they're wired -- it discriminates
+// a wrong implementation where an EMPTY ImportBatchID leaks into the SQL as
+// `import_batch_id = ''` or `import_batch_id IS NULL` (which would silently
+// narrow the zero-filter case instead of leaving it unfiltered).
+func TestStoreList_ZeroFilterQueryUnchanged(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "ZERO-FILTER tenant")
+	entityID := seedEntity(t, super, tenantID, "ZERO-FILTER entity")
+	batchA := seedImportBatch(t, super, tenantID, entityID)
+	batchB := seedImportBatch(t, super, tenantID, entityID)
+
+	aID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-A", &batchA, time.Now().UTC())
+	bID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-B", &batchB, time.Now().UTC())
+	nullID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-NULL", nil, time.Now().UTC())
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (zero ListFilter): %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("List (zero ListFilter).total = %d, want 3 (all invoices regardless of import_batch_id)", total)
+	}
+	seen := map[string]bool{}
+	for _, inv := range items {
+		seen[inv.ID] = true
+	}
+	for _, id := range []string{aID, bID, nullID} {
+		if !seen[id] {
+			t.Errorf("List (zero ListFilter) is missing invoice %s", id)
+		}
 	}
 }
 

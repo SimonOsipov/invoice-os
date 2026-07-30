@@ -843,6 +843,223 @@ func TestListHandler_EntityIDParam(t *testing.T) {
 	})
 }
 
+// TestListHandler_MalformedImportBatchID400 (INVCR-01-06 spec 7, AC-6/AC-1
+// fork 1, task-282): ListHandler parses ?import_batch_id with uuid.Parse --
+// absent OR EMPTY leaves the captured ListFilter.ImportBatchID at "" (the
+// zero value, unfiltered -- [Fork 1: empty param = absent, not 400]); a
+// well-formed uuid passes through verbatim; a malformed value 400s BEFORE
+// the store is ever called. Mirrors TestListHandler_EntityIDParam's exact
+// shape.
+//
+// RED today: ListHandler does not parse import_batch_id at all, so the
+// malformed sub-test fails (200 + store called, not 400) and the
+// well-formed-uuid sub-test fails (captured.ImportBatchID stays "", not the
+// uuid) -- both value mismatches, not compile errors.
+func TestListHandler_MalformedImportBatchID400(t *testing.T) {
+	t.Run("absent applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.ImportBatchID != "" {
+			t.Errorf("captured ListFilter.ImportBatchID = %q, want \"\" when ?import_batch_id is absent", captured.ImportBatchID)
+		}
+	})
+
+	t.Run("empty string applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?import_batch_id=")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.ImportBatchID != "" {
+			t.Errorf("captured ListFilter.ImportBatchID = %q, want \"\" for ?import_batch_id= (empty is absent, not a 400 -- [Fork 1])", captured.ImportBatchID)
+		}
+	})
+
+	t.Run("well-formed uuid sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		batchID := uuid.NewString()
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?import_batch_id="+batchID)
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.ImportBatchID != batchID {
+			t.Errorf("captured ListFilter.ImportBatchID = %q, want %q", captured.ImportBatchID, batchID)
+		}
+	})
+
+	t.Run("malformed value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when import_batch_id is not a well-formed uuid")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?import_batch_id=nope")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_UnknownStatus400 (INVCR-01-06 spec 8, AC-6, task-282):
+// ListHandler parses ?status via the existing Status.valid() (the same
+// "unknown status" 400 TransitionHandler already uses, handlers.go:434) --
+// absent leaves the captured ListFilter.Status at "" (zero value,
+// unfiltered); one of the 7 canonical values passes through; anything else
+// 400s BEFORE the store is ever called. "approved" is D2's forbidden
+// vocabulary (not one of the 7 canonical Status values), so this doubles as
+// a D2 guard.
+//
+// RED today: ListHandler does not parse status at all, so "approved" 200s
+// with the store called (not 400), and "validated" leaves captured.Status
+// == "" (not StatusValidated) -- both value mismatches.
+func TestListHandler_UnknownStatus400(t *testing.T) {
+	t.Run("absent applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.Status != "" {
+			t.Errorf("captured ListFilter.Status = %q, want \"\" when ?status is absent", captured.Status)
+		}
+	})
+
+	t.Run("validated sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?status=validated")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.Status != StatusValidated {
+			t.Errorf("captured ListFilter.Status = %q, want %q", captured.Status, StatusValidated)
+		}
+	})
+
+	t.Run("approved is unknown, 400s store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when status is not a canonical value")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?status=approved")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_NonBoolNeedsFix400 (INVCR-01-06 spec 9, AC-6, task-282):
+// ListHandler parses ?needs_fix via strconv.ParseBool, mirroring
+// TestListHandler_NeedsAttentionParse's exact shape -- absent defaults the
+// captured ListFilter.NeedsFix to false; "1" sets it true; an unparseable
+// value 400s BEFORE the store is ever called.
+//
+// RED today: ListHandler does not parse needs_fix at all, so the "1"
+// sub-test fails (captured.NeedsFix stays false) and the "malformed"
+// sub-test fails (no 400, store runs anyway) -- both value mismatches.
+func TestListHandler_NonBoolNeedsFix400(t *testing.T) {
+	t.Run("absent defaults to false", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.NeedsFix {
+			t.Errorf("captured ListFilter.NeedsFix = true, want false when ?needs_fix is absent")
+		}
+	})
+
+	t.Run("1 sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?needs_fix=1")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if !captured.NeedsFix {
+			t.Errorf("captured ListFilter.NeedsFix = false, want true for ?needs_fix=1")
+		}
+	})
+
+	t.Run("unparseable value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when needs_fix is not a bool")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?needs_fix=maybe")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
 // TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues (QA Mode B
 // adversarial): the RAW response body's top-level envelope must have EXACTLY
 // two keys, "invoices" and "pagination" (no extra keys, no drift from the

@@ -211,26 +211,45 @@ type EditInput struct {
 }
 
 // ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
-// two predicate filters, EntityID and NeedsAttention (M4-09-02), ANDed
-// together when both are set. EntityID "" (the zero value) applies no
-// filter -- tenant-wide, byte-identical to every caller before this field
-// existed. It was added by a regression fix ([entity-id-restored], reversing
-// the earlier [entity-id-cut] decision): the SPA had been narrowing to one
-// entity by filtering listInvoices' response IN THE BROWSER, but that
-// response was (and still is, absent EntityID) a tenant-wide LIMIT-50 page --
-// filter-AFTER-paginate, so an entity's own invoices silently vanished
-// whenever they weren't inside the newest 50 tenant-wide (CI caught this on a
-// shared, never-reset dev DB; see ListHandler's doc comment, handlers.go).
-// EntityID fixes it by narrowing BEFORE the limit applies, in SQL.
-// NeedsAttention is a plain bool: true applies the verbatim dashboard
-// predicate (Store.List's doc comment); false/omitted applies no predicate
-// ([needs-attention-bool-true-only] — no "not-needs-attention" branch).
+// predicate filters, ALL ANDed together when more than one is set. EntityID
+// and NeedsAttention (M4-09-02) were the first two; EntityID "" (the zero
+// value) applies no filter -- tenant-wide, byte-identical to every caller
+// before this field existed. It was added by a regression fix
+// ([entity-id-restored], reversing the earlier [entity-id-cut] decision): the
+// SPA had been narrowing to one entity by filtering listInvoices' response IN
+// THE BROWSER, but that response was (and still is, absent EntityID) a
+// tenant-wide LIMIT-50 page -- filter-AFTER-paginate, so an entity's own
+// invoices silently vanished whenever they weren't inside the newest 50
+// tenant-wide (CI caught this on a shared, never-reset dev DB; see
+// ListHandler's doc comment, handlers.go). EntityID fixes it by narrowing
+// BEFORE the limit applies, in SQL. NeedsAttention is a plain bool: true
+// applies the verbatim dashboard predicate (Store.List's doc comment);
+// false/omitted applies no predicate ([needs-attention-bool-true-only] — no
+// "not-needs-attention" branch).
+//
+// ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4], Core AC 7)
+// are the review-screen's five filters, declared here as Stage 2.5 compile
+// scaffolding -- Store.List does not yet apply them (that's Stage 3). Each
+// zero value ("" / false) applies no predicate, same convention as EntityID.
+// NeedsFix is a NEW, separate predicate from NeedsAttention
+// ([needs-fix-is-a-new-predicate]) -- it must never be folded into the
+// needs_attention SQL fragment, which is byte-pinned to the dashboard rollup
+// (TestStoreList_NeedsAttentionMatchesDashboardRollup,
+// [needs-attention-drift-guard]). RuleKey is deliberately a single string,
+// not []string -- ListFilter must stay a comparable struct
+// (needs_attention_adversarial_test.go's whole-struct == check).
 type ListFilter struct {
 	Limit  int
 	Offset int
 
 	EntityID       string
 	NeedsAttention bool
+
+	ImportBatchID string
+	Status        Status
+	NeedsFix      bool
+	RuleKey       string
+	Query         string
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/

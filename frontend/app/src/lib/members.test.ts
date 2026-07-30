@@ -15,16 +15,21 @@ import {
   classifyInvites,
   clientAccessLabel,
   clientAccessNames,
+  clientSelectionCount,
   CLIENT_ROSTER,
   CLIENT_USERS_COPY,
   delegateCandidates,
   DEPARTMENTS,
   departmentsInUse,
+  filterClientRoster,
   filterMembers,
+  hasDerivableName,
   holders,
   inhouseNotifyTargets,
   initialsFrom,
   inspectorApprovalLine,
+  INVITE_ERROR,
+  invitedNotice,
   isFiltering,
   isProtectedAdmin,
   isValidEmail,
@@ -35,6 +40,7 @@ import {
   removeMember,
   replaceMember,
   resolvePosition,
+  REVIEWER_HINT,
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
   seedMembers,
@@ -1581,5 +1587,146 @@ describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
     expect(CLIENT_USERS_COPY).toBe(
       'Give a contact at one of your clients read-only access, or approval rights on their own invoices.',
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// MEMB-01-06 — the invite modal's copy, its chip gate and its picker derivations
+// ---------------------------------------------------------------------------
+// MEMB-01-06 is `Test-first: no` and most of what it ships is rendering, whose oracle is the
+// deploy gate. These six are the exceptions — the parts that are FACTS rather than pixels:
+// three verbatim §3/§7 strings, one invented sentence, one search rule that must agree with
+// `filterMembers`, and the chip gate that settles DEFECT D1. All of them would otherwise live
+// inside a component `environment: node` cannot mount (§15.8).
+
+describe('MEMB-01-06 invite modal copy (T6.1-T6.2, §3/§7)', () => {
+  it("carries §3's Reviewer hint verbatim (T6.1)", () => {
+    // §3 calls this vocabulary load-bearing: role means "may act on approval steps at all",
+    // position means "which steps". A fluent paraphrase collapses that distinction and reads
+    // as correct to a reviewer's eye, which is the whole reason it is pinned as text.
+    expect(REVIEWER_HINT).toBe(
+      'Only members with the Reviewer role can act on approval steps. The position decides which steps.',
+    )
+  })
+
+  it("carries §7's three chip errors, one per non-ok verdict (T6.2)", () => {
+    expect(INVITE_ERROR.member).toBe('Already a member')
+    expect(INVITE_ERROR.invited).toBe('Already invited')
+    expect(INVITE_ERROR.malformed).toBe('Not a valid email')
+
+    // The pin, not a restatement: every verdict `classifyInvites` can actually produce for a
+    // FAILING chip must have a string here, so a fourth verdict cannot ship a blank error line
+    // under a red chip. Driven through the real classifier rather than asserted as a key list.
+    const list = firm()
+    const active = list[1]
+    const pending = list[5]
+    expect(active.status).toBe('active')
+    expect(pending.status).toBe('invited')
+
+    const verdicts = classifyInvites(list, [active.email, pending.email, 'not-an-email', 'new@x.ng'])
+    expect(verdicts).toEqual(['member', 'invited', 'malformed', 'ok'])
+    for (const v of verdicts) {
+      if (v === 'ok') continue
+      expect(INVITE_ERROR[v]).toBeTruthy()
+    }
+    // …and nothing else, so `ok` never acquires a string that would render as an error.
+    expect(Object.keys(INVITE_ERROR).sort()).toEqual(['invited', 'malformed', 'member'])
+  })
+})
+
+describe('hasDerivableName — DEFECT D1 settled without moving QA35 (T6.3-T6.4, §7)', () => {
+  it('rejects a separators-only local part, and leaves classifyInvites untouched (T6.3)', () => {
+    expect(hasDerivableName('...@x.ng')).toBe(false)
+    expect(hasDerivableName('-@x.ng')).toBe(false)
+    expect(hasDerivableName('._+-@x.ng')).toBe(false)
+
+    // The two facts it reconciles, restated here so the three move together. QA35 pins the
+    // classifier saying `ok` for this address; that stays LITERALLY true, because the gate is
+    // a sibling the modal applies on top of the verdict, not a new branch inside it.
+    expect(isValidEmail('...@x.ng')).toBe(true)
+    expect(classifyInvites(firm(), ['...@x.ng'])).toEqual(['ok'])
+
+    // And the gate is exactly "would this mint a nameless row?" — nothing wider.
+    expect(nameFromEmail('...@x.ng')).toBe('')
+    expect(initialsFrom('...@x.ng')).toBe('')
+  })
+
+  it('accepts every address the pipeline is meant to mint, and is not a validator (T6.4)', () => {
+    // Every seeded address in both modes, so the gate can never reject a real member's shape.
+    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email)).toBe(true)
+
+    // The awkward shapes the QA26-QA31 batch already pinned name/initials for.
+    for (const address of ['a@x.ng', 'c+tag@x.ng', 'MiXeD.CaSe@X.NG', 'o.adebanjo-ogunleye@okaforandpartners.com.ng']) {
+      expect(hasDerivableName(address)).toBe(true)
+      expect(nameFromEmail(address)).not.toBe('')
+    }
+
+    // NOT a validator on its own — `'nope'` derives a name and is not an address. The contract
+    // is about the COMPOSITION: `ok && hasDerivableName` is strictly narrower than `ok`, so
+    // applying it can only ever reject more, never admit something the classifier refused.
+    expect(hasDerivableName('nope')).toBe(true)
+    expect(isValidEmail('nope')).toBe(false)
+  })
+})
+
+describe('the firm client picker (T6.5-T6.7, §7)', () => {
+  it("matches filterMembers' rule — trimmed, case-insensitive substring (T6.5)", () => {
+    // Deliberately the same rule as the roster search box eight inches away (QA36). Two search
+    // inputs on one tab that disagreed about a trailing space would be indefensible.
+    expect(filterClientRoster('lagos').map((c) => c.id)).toEqual([0])
+    expect(filterClientRoster('LAGOS').map((c) => c.id)).toEqual([0])
+    expect(filterClientRoster('  foods  ').map((c) => c.id)).toEqual([1])
+    // A substring, not a prefix — and one that spans two rows, so the filter is really running.
+    expect(filterClientRoster('ltd').map((c) => c.name)).toEqual([
+      'Lagos Freight & Logistics Ltd',
+      'Sahara Foods Distribution Ltd',
+    ])
+    expect(filterClientRoster('zzz')).toEqual([])
+  })
+
+  it('treats a whitespace-only query as an EMPTY one, and always allocates (T6.6)', () => {
+    expect(filterClientRoster('')).toHaveLength(CLIENT_ROSTER.length)
+    expect(filterClientRoster('   ')).toHaveLength(CLIENT_ROSTER.length)
+    expect(filterClientRoster(' \n\t ').map((c) => c.id)).toEqual([0, 1, 2, 3, 4, 5])
+
+    // Never the module constant itself: `CLIENT_ROSTER` is readonly at the TYPE level only, and
+    // a caller handed the real array could sort or splice the roster for the whole session.
+    const all = filterClientRoster('')
+    expect(all).not.toBe(CLIENT_ROSTER)
+    all.length = 0
+    expect(CLIENT_ROSTER).toHaveLength(6)
+  })
+
+  it('counts against the ROSTER, not against what the search left showing (T6.7)', () => {
+    // §7's shape verbatim. The seed's roster is 6, which is the number §7 itself writes.
+    expect(CLIENT_ROSTER).toHaveLength(6)
+    expect(clientSelectionCount(3)).toBe('3 of 6 selected')
+
+    // The one that matters: filtering must not restate the denominator. A 3-client invite with
+    // "lagos" typed into the box still grants 3 of 6, not 1 of 1.
+    expect(filterClientRoster('lagos')).toHaveLength(1)
+    expect(clientSelectionCount(3)).toBe('3 of 6 selected')
+
+    // Both ends, including the zero that disables `Send invites` and the all-ticked case that
+    // is deliberately NOT collapsed into `All clients` — the user picked six, not "everyone".
+    expect(clientSelectionCount(0)).toBe('0 of 6 selected')
+    expect(clientSelectionCount(6)).toBe('6 of 6 selected')
+  })
+})
+
+describe('invitedNotice — the send confirmation (T6.8)', () => {
+  it('pluralises the person it invited, one and many (T6.8)', () => {
+    // INVENTED COPY, both halves. §7 says the modal closes when everything sends; it says
+    // nothing about what confirms it, so the sentence is a reconstruction and belongs where a
+    // spec holds it — same argument as `unassignedNotice`/`stepsWarning`'s singulars.
+    expect(invitedNotice(1)).toBe('Invited 1 person.')
+    expect(invitedNotice(3)).toBe('Invited 3 people.')
+
+    // Reachable: a partial send flashes the count that ACTUALLY landed while the failed chips
+    // stay in the modal, so this string is rendered for counts below the chip total too.
+    expect(invitedNotice(2)).toBe('Invited 2 people.')
+    // 0 is never rendered — the modal raises no flash when nothing sent — but the branch must
+    // not read "Invited 0 person." if that gate is ever loosened.
+    expect(invitedNotice(0)).toBe('Invited 0 people.')
   })
 })

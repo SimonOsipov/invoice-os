@@ -21,9 +21,10 @@ import { ACCESS_ROLES, CAPABILITY_FOOTNOTE, CAPABILITY_ROWS, CLIENT_USERS_COPY }
 // constant rather than joining the two strings in lib/members.ts.
 const MATRIX_HEADING = 'What can each role do?'
 
-// Both blocks are reference material read once, not scanned; capping them at the intro
-// paragraph's width (MembersView.tsx:83) keeps them from stretching to the roster's
-// 870/1036px and reading as another table.
+// Both blocks are reference material read once, not scanned; capping them keeps them from
+// stretching to the roster's 870/1036px and reading as another table. 620 is a judgement call
+// of its own, NOT the intro paragraph's width — that paragraph is `maxWidth: 560`
+// (MembersView.tsx:84), and this needs the extra room for four columns of capability rows.
 const BLOCK_WIDTH = 620
 
 // Every glyph in this app is `aria-hidden` (icons.tsx:25), so a bare tick is a cell that

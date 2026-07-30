@@ -12,12 +12,13 @@
 // The consequence, accepted rather than worked around: switching to another Settings tab
 // unmounts this one, so the search text and role filter reset.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
 import { ACCESS_ROLES, filterMembers, isFiltering, unassignedNotice, unassignedPositions, type AccessRole } from '../lib/members'
 import { roleOf } from '../lib/workflows'
+import { InviteMembersModal } from './InviteMembersModal'
 import { AmberNote } from './MemberParts'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
@@ -53,6 +54,11 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const { members, mode } = ctx
   const [query, setQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<AccessRole | 'all'>('all')
+  const [inviteOpen, setInviteOpen] = useState(false)
+  // `useCallback`, not an inline arrow: the modal feeds this straight to `useDismiss`, where it
+  // is an effect dependency (useDismiss.ts:36-37), and a fresh closure every render would tear
+  // down and re-register the Escape listener on every keystroke in the chip input.
+  const closeInvite = useCallback(() => setInviteOpen(false), [])
   // The invite actions' inline confirmation — the WorkflowBuilder saved-flash idiom
   // (WorkflowBuilder.tsx:72-78): one transient string plus one effect-owned timer, so a
   // second action restarts the flash instead of stacking a timer that would clear the
@@ -102,9 +108,10 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           onChange={(v) => setRoleFilter(v as AccessRole | 'all')}
           width={180}
         />
-        {/* Wired to the invite modal in MEMB-01-06. */}
         <button
           type="button"
+          onClick={() => setInviteOpen(true)}
+          data-testid="members-invite"
           className="v2-btn pf-btn"
           style={{ marginLeft: 'auto', flex: 'none', height: 38, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)', gap: 7 }}
         >
@@ -156,6 +163,13 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       {/* Firm only, and gated here beside this tab's other two mode forks: in-house
           renders no node at all, not a hidden one. */}
       {mode === 'firm' && <ClientUsersCard />}
+
+      {/* Rendered conditionally rather than mounted-and-hidden, the ClientsView/EntityFormModal
+          form — which is also what lets the modal call `useDismiss(true, …)` and register no
+          listener at all while closed. Its success confirmation goes through THIS tab's existing
+          flash, not a second mechanism: every other action here flashes, and the one that
+          actually changes the roster must not be the silent one. */}
+      {inviteOpen && <InviteMembersModal ctx={ctx} onClose={closeInvite} onFlash={setFlash} />}
     </>
   )
 }

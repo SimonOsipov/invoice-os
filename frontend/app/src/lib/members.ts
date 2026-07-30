@@ -756,6 +756,28 @@ export function nameFromEmail(email: string): string {
 }
 
 /**
+ * MEMB-01-06's extra chip gate — a local part of only separators derives no name.
+ *
+ * `isValidEmail` is deliberately minimal, so `'...@x.ng'` and `'-@x.ng'` pass it, classify
+ * `ok`, and mint a row whose `name` and `initials` are both empty: a blank Person cell and
+ * an empty initials circle in the table. QA35 pins that as RECORDED, NOT ENDORSED, and
+ * routes the product call here — the invite modal rejects the chip as `Not a valid email`.
+ *
+ * Deliberately a SIBLING rather than a fourth branch inside `classifyInvites`: QA35 pins
+ * that function returning `['ok']` for exactly this address, and that spec stays literally
+ * true — the classifier still says `ok`, the modal declines to mint. Widening `EMAIL_RE`
+ * instead is barred twice over: T2.7/T2.8 pin its accept/reject sets, and Decision
+ * `[email-validation-minimal]` keeps it matching the pattern rules.ts:189 advertises.
+ *
+ * Not a validator on its own — `'nope'` has a derivable name and is not an address. It is
+ * only ever applied ON TOP of an `ok` verdict, so the composition is strictly stricter than
+ * the classifier alone and can never let a bad row through.
+ */
+export function hasDerivableName(email: string): boolean {
+  return localTokens(email).length > 0
+}
+
+/**
  * Takes an EMAIL, not a name — a deliberate FORK of `initials(name)` (customers.ts:60-69)
  * rather than a reuse, and emphatically not a silent third variant. Two reasons, both
  * structural: that helper reads a NAME and strips non-alpha, so an email fed to it returns
@@ -873,4 +895,82 @@ export function filterMembers(list: readonly Member[], query: string, roleFilter
 export function isProtectedAdmin(list: readonly Member[], member: Member): boolean {
   if (member.role !== 'admin' || member.status !== 'active') return false
   return activeAdmins(list).length === 1
+}
+
+// ---------------------------------------------------------------------------
+// MEMB-01-06 — the invite modal's copy and its client-picker derivations
+// ---------------------------------------------------------------------------
+// Rendered by InviteMembersModal and nothing else, but living here rather than in it for
+// §15.8's reason: vitest is `environment: node`, so a string authored inside a component is
+// a string no spec can hold. Same argument that moved CAPABILITY_FOOTNOTE / CLIENT_USERS_COPY
+// (T5.1) and the three display derivations (QA40-QA46) into this module.
+//
+// The modal's own two title strings stay in the component, matching MATRIX_HEADING's posture
+// (MemberRoleMatrix.tsx:19-22): §7 names them as the surface's chrome, not as its content.
+
+/**
+ * §3 verbatim — the hint beneath the in-house Approval position select (AC#5).
+ *
+ * It is the sentence that keeps the two axes verbally distinct, which §3 calls load-bearing:
+ * `reviewer` means "may act on approval steps at all", a position means "which steps". A
+ * paraphrase reads as correct and quietly collapses the distinction, which is exactly the
+ * failure a screenshot gate cannot catch.
+ */
+export const REVIEWER_HINT =
+  'Only members with the Reviewer role can act on approval steps. The position decides which steps.'
+
+/**
+ * §7's three inline chip errors, keyed by the verdict that produces them. `ok` is excluded at
+ * the TYPE level: a chip that classified `ok` has no error to render, and a `Record` over the
+ * whole union would demand a fourth string that means nothing.
+ *
+ * `malformed` also carries the `hasDerivableName` downgrade. Both failures map to the same
+ * string deliberately — to the person typing, "this address cannot become a member" is one
+ * fact, and §7 supplies exactly three strings rather than a fourth for the rarer case.
+ */
+export const INVITE_ERROR: Record<Exclude<InviteVerdict, 'ok'>, string> = {
+  member: 'Already a member',
+  invited: 'Already invited',
+  malformed: 'Not a valid email',
+}
+
+/**
+ * The invite modal's client-picker search. Same rule as `filterMembers` — trimmed,
+ * case-insensitive substring (QA36) — so the two search boxes this tab ships cannot disagree
+ * about what a trailing space means.
+ *
+ * Narrows what is SHOWN and nothing else. The ticked set is the caller's state and this
+ * function never sees it: a filter that unticked a hidden client would silently revoke access
+ * the user had already granted, and the user would never see it happen.
+ */
+export function filterClientRoster(query: string): { id: number; name: string }[] {
+  const q = query.trim().toLowerCase()
+  // Copies rather than handing back the module constant, per §15.1 and this module's own
+  // docblock: `CLIENT_ROSTER` is readonly at the type level only, nothing freezes it.
+  if (!q) return CLIENT_ROSTER.slice()
+  return CLIENT_ROSTER.filter((c) => c.name.toLowerCase().includes(q))
+}
+
+/**
+ * §7's running count under the picker, in the shape the story writes it ("3 of 6 selected").
+ *
+ * The denominator is the ROSTER's length, never the filtered length: the sentence is about how
+ * much access this invite grants, and a search box cannot change that. Typing "lagos" must not
+ * make a 3-client invite read "1 of 1 selected".
+ */
+export function clientSelectionCount(selected: number): string {
+  return `${selected} of ${CLIENT_ROSTER.length} selected`
+}
+
+/**
+ * The flash MembersView raises after a successful send. INVENTED COPY — §7 says the modal
+ * closes and says nothing about what confirms it — so it is pinned here rather than left in a
+ * component, the same shape and the same reason as `unassignedNotice`'s singular.
+ *
+ * It exists because every other action on this tab already flashes (MembersTable's Resend
+ * invite / Copy invite link), and the one action that actually changes the roster must not be
+ * the silent one.
+ */
+export function invitedNotice(count: number): string {
+  return `Invited ${count} ${count === 1 ? 'person' : 'people'}.`
 }

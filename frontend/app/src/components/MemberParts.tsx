@@ -6,13 +6,13 @@
 // (§15.8).
 //
 // MEMB-01-06's invite modal and MEMB-01-07's drawer reuse `InitialsChip`,
-// `MemberStatusPill` and `useDismiss` from here; `RoleCards` joins them in -06.
+// `MemberStatusPill`, `RoleCards` and `useDismiss` from here.
 
 import { useId, useRef, type CSSProperties, type ReactNode } from 'react'
 
 import { moreGlyph } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
-import type { MemberStatus } from '../lib/members'
+import { ACCESS_ROLES, type AccessRole, type MemberStatus } from '../lib/members'
 
 // ---------------------------------------------------------------------------
 // Initials chip
@@ -143,6 +143,120 @@ export function AmberNote({ children, testId, style }: { children: ReactNode; te
       }}
     >
       {children}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Access-role cards
+// ---------------------------------------------------------------------------
+
+/**
+ * §7's access-role picker — three radio CARDS, each carrying an `ACCESS_ROLES` label and
+ * description. That copy is §3 verbatim and is already pinned by T1.39
+ * (members.test.ts:456-462), labels and descriptions alike, so nothing is re-pinned here.
+ *
+ * Shared from day one rather than inlined in the modal: MEMB-01-06's invite modal and
+ * MEMB-01-07's drawer render the same control, and `disabledIds` + `note` exist for the
+ * drawer's §9 last-admin lock — building that surface now is what stops -07 rewriting this
+ * file to add it.
+ *
+ * NATIVE RADIOS, and the app's first. `frontend/app/src` contains no `type="radio"`, no
+ * `role="radio"` and no `radiogroup`; the ARIA-on-button idiom it does have (RulesView.tsx:259,
+ * WorkflowParts.tsx:264) is for TOGGLES, not for a three-way exclusive choice, and would need
+ * hand-rolled arrow-key handling. A real radio group gives roving focus, form semantics and
+ * `:checked` for free. The card LOOK follows the app's selected-card idiom
+ * (CreateUpload.tsx:178-198); its ARIA does not — that one carries no selected state at all,
+ * and shipping that gap into the control that sets someone's permissions is not a precedent
+ * worth honouring.
+ *
+ * Unselected cards sit on --bg-1 rather than CreateUpload's --bg-2. Same rule, different
+ * ground: a card must be one step off the surface behind it, and this one is mounted on a
+ * --bg-2 modal panel where --bg-2 would be invisible. It is the pair `WfSelect` already uses
+ * for a control inside a panel (WorkflowParts.tsx:217).
+ */
+export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
+  value: AccessRole
+  onChange: (role: AccessRole) => void
+  /** MEMB-01-07 passes the two roles a sole admin may not switch to. */
+  disabledIds?: readonly AccessRole[]
+  /**
+   * §9's explanation, rendered as visible text beneath the cards. Set it whenever any card is
+   * disabled — the same contract as `MoreMenu`'s `note`, for the same reason: it is the only
+   * layer a screenshot, a keyboard user and a text assertion can all reach.
+   */
+  note?: string
+  /**
+   * Names the radio group, so the modal's three and the drawer's three can be mounted at the
+   * same time without one stealing the other's selection. Deliberately a caller-supplied
+   * string and not `useId()`: React emits `:r3:`, which needs escaping in a CSS selector and
+   * moves with the render tree, and these ids are the handle the browser-only gate uses to
+   * find the cards.
+   */
+  idPrefix: string
+}) {
+  const noteId = useId()
+
+  return (
+    <div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {ACCESS_ROLES.map((r) => {
+          const sel = value === r.id
+          const disabled = disabledIds?.includes(r.id) ?? false
+          return (
+            <label
+              key={r.id}
+              data-testid={`${idPrefix}-role-${r.id}`}
+              // Layer (2) of MoreMenu's four-layer disabled treatment, by CLASS OMISSION
+              // rather than by an inline override — the idiom's PURPOSE (a disabled control
+              // stops reacting to the pointer), not its form. `.pf-upcard:hover` is
+              // `border-color: var(--action) !important` (platform.css:134-136) and a React
+              // style object cannot emit `!important`, so unlike the unguarded
+              // `.pf-menu-item:hover` this one cannot be outranked inline and a dead card
+              // would still light up. Omitting the class costs nothing else: `.pf-upcard`
+              // carries only that hover, a transition and a font-family — every card's
+              // padding, radius, border and background is inline, here and at both other
+              // call sites. Adding a `[aria-disabled]` rule to the shared stylesheet would
+              // fix it globally for a state only -07 reaches, which is the edit
+              // MemberRoleMatrix.tsx:32-33 already declines to make. Do not restore it.
+              className={disabled ? undefined : 'pf-upcard'}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: '11px 13px',
+                borderRadius: 'var(--radius-md)',
+                border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`,
+                background: sel ? 'var(--action-tint)' : 'var(--bg-1)',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <input
+                type="radio"
+                name={`${idPrefix}-role`}
+                value={r.id}
+                checked={sel}
+                disabled={disabled}
+                onChange={() => onChange(r.id)}
+                title={disabled ? note : undefined}
+                aria-describedby={disabled && note ? noteId : undefined}
+                style={{ flex: 'none', margin: '2px 0 0' }}
+              />
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: disabled ? 'var(--fg-4)' : 'var(--fg-1)' }}>{r.label}</span>
+                <span style={{ display: 'block', fontSize: 11.5, lineHeight: 1.45, marginTop: 2, color: disabled ? 'var(--fg-4)' : 'var(--fg-3)' }}>
+                  {r.description}
+                </span>
+              </span>
+            </label>
+          )
+        })}
+      </div>
+      {note && (
+        <div id={noteId} style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+          {note}
+        </div>
+      )}
     </div>
   )
 }

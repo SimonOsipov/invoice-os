@@ -58,6 +58,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -1056,6 +1057,152 @@ func TestListHandler_NonBoolNeedsFix400(t *testing.T) {
 		}
 		if resp.Error == "" {
 			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_RuleKeyAndQLengthCap (QA Mode B, AC-6, task-282): the
+// implementation plan's own §1 param-contract table requires rule_key/q to
+// 400 with "rule_key is too long" / "q is too long" above a 200-char cap --
+// Stage 2.5 (RED) flagged that no test in the 11-row spec table pinned it,
+// and Stage 3 (execution) implemented the cap without adding one. Closes
+// that gap. Covers: the boundary (exactly 200 bytes accepted, 201 bytes
+// 400s), that the cap is a BYTE length and not a rune count (200 multi-byte
+// CJK runes is 600 bytes and must still 400 even though it is "200
+// characters" by a rune count), and that malformed input is REJECTED rather
+// than silently truncated -- every 400 sub-case here uses a store closure
+// that calls t.Fatal if invoked, so there is no code path where a truncated
+// value could reach Store.List.
+func TestListHandler_RuleKeyAndQLengthCap(t *testing.T) {
+	t.Run("rule_key exactly 200 bytes is accepted", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("a", 200)
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		v := url.Values{}
+		v.Set("rule_key", key)
+		rec, _ := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for a 200-byte rule_key (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatal("store.List was not called for a 200-byte rule_key")
+		}
+		if captured.RuleKey != key {
+			t.Errorf("captured ListFilter.RuleKey len = %d, want 200 (value must pass through unmutated, not truncated)", len(captured.RuleKey))
+		}
+	})
+
+	t.Run("rule_key 201 bytes 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("a", 201)
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when rule_key exceeds the 200-byte cap")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("rule_key", key)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 201-byte rule_key (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "rule_key is too long" {
+			t.Errorf("error = %q, want \"rule_key is too long\"", resp.Error)
+		}
+	})
+
+	t.Run("q exactly 200 bytes is accepted", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		q := strings.Repeat("b", 200)
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		v := url.Values{}
+		v.Set("q", q)
+		rec, _ := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for a 200-byte q (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatal("store.List was not called for a 200-byte q")
+		}
+		if captured.Query != q {
+			t.Errorf("captured ListFilter.Query len = %d, want 200 (value must pass through unmutated, not truncated)", len(captured.Query))
+		}
+	})
+
+	t.Run("q 201 bytes 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		q := strings.Repeat("b", 201)
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when q exceeds the 200-byte cap")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("q", q)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 201-byte q (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "q is too long" {
+			t.Errorf("error = %q, want \"q is too long\"", resp.Error)
+		}
+	})
+
+	// The cap is a BYTE length, not a rune count: 200 CJK runes is 200
+	// characters by any human count but 600 UTF-8 bytes (3 bytes/rune for
+	// U+6D4B), so it must still 400 -- a rune-counting implementation would
+	// wrongly accept this.
+	t.Run("rule_key 200 multi-byte runes (600 bytes) 400s -- byte cap, not rune cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("测", 200)
+		if n := len([]rune(key)); n != 200 {
+			t.Fatalf("test fixture bug: fixture has %d runes, want 200", n)
+		}
+		if n := len(key); n != 600 {
+			t.Fatalf("test fixture bug: fixture has %d bytes, want 600 (3 bytes/rune for U+6D4B)", n)
+		}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when rule_key exceeds the 200-BYTE cap, even at exactly 200 runes")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("rule_key", key)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 200-rune/600-byte rule_key (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "rule_key is too long" {
+			t.Errorf("error = %q, want \"rule_key is too long\"", resp.Error)
+		}
+	})
+
+	// Same byte-vs-rune proof for q, confirming the cap applies uniformly to
+	// both free-text params rather than only rule_key.
+	t.Run("q 200 multi-byte runes (600 bytes) 400s -- byte cap, not rune cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		q := strings.Repeat("测", 200)
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when q exceeds the 200-BYTE cap, even at exactly 200 runes")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("q", q)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 200-rune/600-byte q (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "q is too long" {
+			t.Errorf("error = %q, want \"q is too long\"", resp.Error)
 		}
 	})
 }

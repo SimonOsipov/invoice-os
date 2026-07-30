@@ -45,6 +45,8 @@
 //   qty/price (Number('abc') -> NaN via App.tsx:323-328's updateItem) crosses the wire as
 //   its raw String() and makes that line's line_total -- and every total -- null,
 //   mirroring payload.go's raw-string fallback.
+import type { ApiError } from '@invoice-os/api-client'
+
 import {
   addScaled,
   mulScaled,
@@ -149,4 +151,41 @@ export function draftToCreateRequest(
     total: total === null ? null : renderScaled(total),
     line_items: lineItems,
   }
+}
+
+// STUB (Mode A, RED-first, INVCR-01-03/task-279): fileDraftInvoice/fileDraftGate throw --
+// the executor implements the bodies in Stage 3. Body order IS the contract (task-279
+// plan §3): `if (inFlight.current) return` -> `inFlight.current = true` -> `onError(null)`
+// -> `onPending(true)` -> `await create(draftToCreateRequest(draft, entity))` ->
+// `onCreated(rec.id)` | `catch -> onError(toApiError(err))` -> `finally {
+// inFlight.current = false; onPending(false) }`. Never rejects -- failures land on
+// onError, never on the returned promise (SUBMIT-2). `create` is typed
+// `Promise<{id:string}>`, the structural minimum, so a spec fixture needn't build a
+// 20-field InvoiceRecord.
+export type FileDraftDeps = {
+  create: (input: InvoiceCreateInput) => Promise<{ id: string }>
+  inFlight: { current: boolean }
+  onPending: (pending: boolean) => void
+  onError: (error: ApiError | null) => void
+  onCreated: (invoiceId: string) => void
+}
+
+export async function fileDraftInvoice(
+  _draft: Draft,
+  _entity: Pick<Entity, 'id' | 'name' | 'tin'>,
+  _deps: FileDraftDeps,
+): Promise<void> {
+  throw new Error('not implemented')
+}
+
+// Precedence: entity first (unresolvable in-app -- no picker on this screen), invoice
+// number second (resolvable -- the field is editable) -- mirrors CreateMapping.tsx:
+// 98-111's `!canFile -> !invNumMapped` ordering. 'Filing needs a linked entity' and
+// 'Invoice number is required' are the exact copy CreateForm renders (task-279 plan
+// §8.5, §2).
+export function fileDraftGate(
+  _draft: Draft,
+  _entity: Pick<Entity, 'id' | 'name' | 'tin'> | null,
+): { canFile: true } | { canFile: false; reason: string } {
+  throw new Error('not implemented')
 }

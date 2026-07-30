@@ -251,6 +251,18 @@ describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
     expect(Object.keys(STAGE_OF)).not.toContain('parsing')
     expect(Object.keys(STAGE_OF)).toHaveLength(6)
   })
+
+  // STEP-1 (INVCR-01-03, task-279, Mode A — RED-first): 'validating'/'results' leave
+  // CreateStep here -- the mock validate/approve tail's own two steps. STAGE_OF stays a
+  // total Record over the shrunk union (4 keys: upload/mapping/form/report) -- see
+  // task-279 plan §5.6/§10. Genuinely RED at runtime today: STAGE_OF still carries both
+  // keys (6 total), so this discriminates against an INCOMPLETE deletion, not a wrong
+  // algorithm.
+  it("STEP-1: 'validating'/'results' leave the runtime step table, which stays a total 4-key Record", () => {
+    expect(Object.keys(STAGE_OF)).not.toContain('validating')
+    expect(Object.keys(STAGE_OF)).not.toContain('results')
+    expect(Object.keys(STAGE_OF)).toHaveLength(4)
+  })
 })
 
 // QA (M4-08-04): adversarial/edge coverage beyond the architect's FLOW-01..12,14
@@ -355,6 +367,50 @@ describe('the deleted PDF/JPG document mock does not creep back into frontend/ap
     // (types.ts) and its runtime STAGE_OF entry in this same deletion (task-277).
     const hits = scanForIdentifier(srcRoot, "'parsing'").filter((relPath) => relPath !== selfRelPath)
     expect(hits).toEqual([])
+  })
+
+  // DEL-1 (INVCR-01-03, task-279, Mode A — RED-first): the mock validate/approve
+  // tail's own permanence guard -- its two deleted components and the deleted label
+  // list must never creep back anywhere under src. Needles built from concatenated
+  // parts (same reason as QA-MOCK-2 above): a literal spelling in the needle -- or
+  // anywhere in this comment -- would let the scan match this file's own source and
+  // never fail even if the identifier were reintroduced elsewhere. Genuinely RED at
+  // runtime today: all three identifiers this spec checks for are still live in the
+  // tree (verified independently before authoring this spec) -- it discriminates
+  // against an INCOMPLETE deletion, not a wrong algorithm.
+  it('DEL-1: the deleted results/scanline components and the deleted label list never creep back', () => {
+    const needles = ['VAL_' + 'LABELS', 'Scanline' + 'Steps', 'Create' + 'Results']
+    needles.forEach((needle) => {
+      const hits = scanForIdentifier(srcRoot, needle).filter((relPath) => relPath !== selfRelPath)
+      expect(hits, needle).toEqual([])
+    })
+  })
+})
+
+// AC7-1 (INVCR-01-03, task-279, Mode A — RED-first): lib/validation.ts SURVIVES this
+// subtask (task-279 plan §1, [validation-module-survives]) -- lib/clients.ts needs it
+// for the mock dashboard's own failing-count. This is the ACHIEVABLE half of the
+// story's original zero-hits grep AC, rewritten to name the one legitimate importer
+// that must remain rather than assert nobody imports it at all (impossible while
+// clients.ts still does). Genuinely RED at runtime today: the validation module still
+// has TWO importers, App.tsx and lib/clients.ts -- discriminating against an
+// incomplete deletion, not a wrong algorithm.
+describe("lib/validation.ts's import specifier keeps exactly one surviving importer (INVCR-01-03, task-279, AC7-1)", () => {
+  const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+  const selfRelPath = path.join('lib', 'importFlow.test.ts')
+
+  it("AC7-1: only the mock dashboard module still imports it once the create flow's mock tail is deleted", () => {
+    // Needle built from concatenated parts, like DEL-1/QA-MOCK-2 above, so this file's
+    // own source text never literally contains the target substring -- a literal
+    // spelling here would self-match and could never fail even if a stray importer
+    // reappeared. The needle is a slash immediately followed by the six letters of the
+    // module's name and the specifier's own closing quote -- so a relative import
+    // whose last path segment is exactly that name hits, at any nesting depth, while a
+    // differently-named sibling module whose name merely starts the same way does not,
+    // because extra letters sit between the match and the closing quote there.
+    const needle = '/valid' + "ation'"
+    const hits = scanForIdentifier(srcRoot, needle).filter((relPath) => relPath !== selfRelPath)
+    expect(hits.sort()).toEqual(['lib/clients.ts'])
   })
 })
 

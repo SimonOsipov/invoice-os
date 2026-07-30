@@ -13,9 +13,12 @@
 // DRAFT-3 pins the C7 residual risk in place DELIBERATELY: it asserts the UNREPAIRED
 // pass-through. If it ever fails, that is a decision about C7 (see the story description
 // / QA Debate Log finding C7), not a bug to fix here.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { draftToCreateRequest } from './invoiceDraft'
+import { ApiError } from '@invoice-os/api-client'
+
+import { draftToCreateRequest, fileDraftGate, fileDraftInvoice, type FileDraftDeps } from './invoiceDraft'
+import { detailTarget, selectImported } from './importReport'
 import type { Entity } from './portfolio'
 import type { Draft } from '../types'
 
@@ -275,4 +278,140 @@ describe('draftToCreateRequest: wire key order', () => {
     ])
   })
 })
+
+// RED specs (INVCR-01-03, task-279, Mode A) -- pin fileDraftInvoice/fileDraftGate before
+// the executor implements their bodies in Stage 3 (lib/invoiceDraft.ts's stubs both
+// throw `new Error('not implemented')`). Every spec below fails on that throw today --
+// the correct RED reason (assertion / not-implemented), not an import/compile error.
+//
+// Red-first honesty (task-279 plan §10): SUBMIT-1/2/3 are genuinely discriminating --
+// each falsifies a specific plausible-wrong implementation (SUBMIT-1: affirming before
+// create() settles; SUBMIT-2: navigating in a `finally`, swallowing the error, or
+// letting the rejection escape the returned promise; SUBMIT-3: a state-flag guard, or a
+// re-entrancy check placed after the first `await`). GATE-1 is weak-but-real: any
+// careful first implementation passes it; its one real judgement is the
+// entity-before-number precedence.
+describe('fileDraftInvoice: ordering (SUBMIT-1)', () => {
+  it('SUBMIT-1 error/pending land BEFORE create() settles; created/pending:false land AFTER', async () => {
+    const log: string[] = []
+    const { promise, resolve } = deferred<{ id: string }>()
+    const deps: FileDraftDeps = {
+      create: () => promise,
+      inFlight: { current: false },
+      onPending: (p) => log.push(`pending:${p}`),
+      onError: (e) => log.push(`error:${e === null ? 'null' : e.message}`),
+      onCreated: (id) => log.push(`created:${id}`),
+    }
+
+    const call = fileDraftInvoice(baseDraft, baseEntity, deps)
+    // RED-phase hygiene only: today's throwing stub rejects `call` synchronously,
+    // before the mid-flight assertion below even runs, so without a handler attached
+    // here Node reports an unhandledRejection warning once this test fails and exits.
+    // `await call` further down still observes the real rejection/resolution --
+    // attaching `.catch` here does not swallow it. Once Stage 3 lands, `call` is
+    // genuinely pending at this point (create() has not settled), so this is a no-op.
+    void call.catch(() => {})
+
+    // Mid-flight: create() has been invoked but its promise is still open. This is the
+    // proof, not the end-state assertion below -- an implementation that affirms
+    // optimistically (calls onCreated, or advances past 'pending:true') before awaiting
+    // create() would already show that divergence right here, even though its FINAL
+    // log contents would be identical to a correct implementation's.
+    expect(log).toEqual(['error:null', 'pending:true'])
+
+    resolve({ id: 'u-1' })
+    await call
+
+    expect(log).toEqual(['error:null', 'pending:true', 'created:u-1', 'pending:false'])
+    expect(detailTarget(selectImported('u-1'))).toEqual({ kind: 'imported', invoiceId: 'u-1' })
+  })
+})
+
+describe('fileDraftInvoice: error path (SUBMIT-2)', () => {
+  it('SUBMIT-2 a rejected create() reports via onError with the real status/message, never calls onCreated, and the returned promise still resolves', async () => {
+    const err = new ApiError('http', 'duplicate invoice number', 409)
+    const create = vi.fn(() => Promise.reject(err))
+    const onPending = vi.fn()
+    const onError = vi.fn()
+    const onCreated = vi.fn()
+    const inFlight = { current: false }
+
+    await expect(
+      fileDraftInvoice(baseDraft, baseEntity, { create, inFlight, onPending, onError, onCreated }),
+    ).resolves.toBeUndefined()
+
+    expect(onCreated).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ status: 409, message: 'duplicate invoice number' }))
+    expect(onPending).toHaveBeenLastCalledWith(false)
+    expect(inFlight.current).toBe(false)
+  })
+})
+
+describe('fileDraftInvoice: re-entrancy (SUBMIT-3)', () => {
+  it('SUBMIT-3 a shared inFlight ref collapses two synchronous calls into one create(), and clears once settled so a third call fires again', async () => {
+    const inFlight = { current: false }
+    const first = deferred<{ id: string }>()
+    const create = vi.fn(() => first.promise)
+    const deps: FileDraftDeps = { create, inFlight, onPending: vi.fn(), onError: vi.fn(), onCreated: vi.fn() }
+
+    const call1 = fileDraftInvoice(baseDraft, baseEntity, deps)
+    const call2 = fileDraftInvoice(baseDraft, baseEntity, deps)
+    // RED-phase hygiene only -- see the identical note in SUBMIT-1 above.
+    void call1.catch(() => {})
+    void call2.catch(() => {})
+
+    // Both calls fired synchronously before either could await -- a state guard
+    // checked only after the first `await` would let both through.
+    expect(create).toHaveBeenCalledTimes(1)
+
+    first.resolve({ id: 'u-1' })
+    await call1
+    await call2
+
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(inFlight.current).toBe(false)
+
+    // A third call, after the first has fully settled, DOES fire -- proving the flag
+    // clears rather than latching permanently.
+    const second = deferred<{ id: string }>()
+    create.mockImplementationOnce(() => second.promise)
+    const call3 = fileDraftInvoice(baseDraft, baseEntity, deps)
+    void call3.catch(() => {})
+
+    expect(create).toHaveBeenCalledTimes(2)
+    second.resolve({ id: 'u-2' })
+    await call3
+  })
+})
+
+describe('fileDraftGate (GATE-1)', () => {
+  it('GATE-1 gates on the resolved entity first, the invoice number second', () => {
+    expect(fileDraftGate(baseDraft, null)).toEqual({ canFile: false, reason: 'Filing needs a linked entity' })
+    expect(fileDraftGate({ ...baseDraft, number: '' }, baseEntity)).toEqual({
+      canFile: false,
+      reason: 'Invoice number is required',
+    })
+    // Both fail at once -> entity wins: it is unresolvable in-app (no picker on this
+    // screen), while a blank number is resolvable (the field is editable) -- so entity
+    // is checked first.
+    expect(fileDraftGate({ ...baseDraft, number: '' }, null)).toEqual({
+      canFile: false,
+      reason: 'Filing needs a linked entity',
+    })
+    expect(fileDraftGate(baseDraft, baseEntity)).toEqual({ canFile: true })
+  })
+})
+
+// Local helper -- no shared 'deferred promise' convention exists yet elsewhere in this
+// repo's tests (grepped before adding this). `resolve` is captured out of the Promise
+// executor so a test can control exactly WHEN create() settles, independent of when it
+// is called -- the mechanism SUBMIT-1's mid-flight assertion and SUBMIT-3's
+// call-count-before-settling assertion both depend on.
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 

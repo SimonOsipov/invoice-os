@@ -450,7 +450,7 @@ function Row({
   const badge = verdict.badges[0]
 
   // Click-only row, matching the shipped InvoicesList.tsx precedent. Keyboard activation
-  // (role/tabIndex/onKeyDown) for BOTH row surfaces is task-294 — no AC here covers it,
+  // (role/tabIndex/onKeyDown) for BOTH row surfaces is task-302 — no AC here covers it,
   // and a fake `<a href>` is not an option: this SPA has no router.
   return (
     <div

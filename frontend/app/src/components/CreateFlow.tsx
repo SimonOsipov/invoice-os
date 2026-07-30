@@ -1,6 +1,6 @@
 // Create flow orchestrator — the wizard header + a step router keyed on `ctx.createStep`,
 // serving two paths: manual entry (a single 'form' step that files straight to the server)
-// and a server-backed spreadsheet import (upload → mapping → report). Ported from
+// and a server-backed spreadsheet import (upload → mapping → review). Ported from
 // Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
 //
 // The manual path has no step after 'form': INVCR-01-03 replaced the mock
@@ -15,8 +15,8 @@ import { CreateForm } from './CreateForm'
 import { CreateReport } from './CreateReport'
 import type { PlatformCtx } from '../types'
 
-// The wizard serves TWO paths with different step lists — the 5-step manual-entry wizard
-// and the 3-step Import/Map/Report import — so the header is resolved by wizardHeader
+// The wizard serves TWO paths with different step lists — the 2-step Enter/Review typed
+// path and the 3-step Import/Map/Review import — so the header is resolved by wizardHeader
 // (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which has no concept
 // of which path the user is on. STAGE_OF moved there with it: one table, one owner, no
 // second copy to drift. wizardHeader takes the step ALONE: the file arguments existed
@@ -55,7 +55,7 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
 
       {createStep === 'form' && <CreateForm ctx={ctx} />}
 
-      {createStep === 'report' && <CreateReport ctx={ctx} />}
+      {createStep === 'review' && <CreateReport ctx={ctx} />}
     </div>
   )
 }

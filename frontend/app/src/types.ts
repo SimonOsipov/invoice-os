@@ -153,14 +153,17 @@ export type Mode = 'firm' | 'inhouse'
 
 export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings'
 
-// 'report' added by M4-08-04 (plan B1/DRIFT-1) — one subtask ahead of story §6's
-// original assignment (M4-08-05), because wizardHeader's report->2 branch does not
-// compile against this union and lib/importFlow.ts's STAGE_OF is a total Record over it.
-// -05 still owns the CreateReport render branch; this commit adds only the member.
-// INVCR-01-03 dropped the mock validate/approve tail's own two steps: the manual path is
-// now ONE screen with one round trip, and the affirmation is the real invoice detail view
-// rendering the server's row — there is deliberately no step between 'form' and that.
-export type CreateStep = 'upload' | 'mapping' | 'form' | 'report'
+// 'review' was added by M4-08-04 under its former name (plan B1/DRIFT-1) — one subtask
+// ahead of story §6's original assignment (M4-08-05), because wizardHeader's index-2
+// branch does not compile against this union and lib/importFlow.ts's STAGE_OF is a total
+// Record over it. -05 still owns the CreateReport render branch; that commit added only
+// the member. INVCR-01-03 dropped the mock validate/approve tail's own two steps: the
+// manual path is now ONE screen with one round trip, and the affirmation is the real
+// invoice detail view rendering the server's row — there is deliberately no step between
+// 'form' and that. INVCR-01-04 renamed the last member to 'review' ([three-stages]): the
+// stage is the user's review surface, not the import-report payload CreateReport renders
+// on it — which is why CreateReport/ImportReport/ctx.report keep their own names.
+export type CreateStep = 'upload' | 'mapping' | 'form' | 'review'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier that recognition never guesses.

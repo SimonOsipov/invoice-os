@@ -146,11 +146,8 @@ export const CFG: ClientCfg[] = [
 /* ------------------------------------------------------------------ */
 
 export const WIZARD_STEPS: [string, string][] = [
-  ['1', 'Import'],
-  ['2', 'Map'],
-  ['3', 'Build'],
-  ['4', 'Validate'],
-  ['5', 'Approve'],
+  ['1', 'Enter'],
+  ['2', 'Review'],
 ]
 
 // Canonical invoice fields the Map step targets (Platform.dc.html ~L1115).

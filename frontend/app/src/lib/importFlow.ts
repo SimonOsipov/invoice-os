@@ -3,10 +3,11 @@
 // derivation the UI reads lives here so it is node-testable without jsdom (plan §C).
 // Pinned by importFlow.test.ts (FLOW-01..14). Plan §C/§E are authoritative.
 //
-// 'report' added to CreateStep here, not in M4-08-05 as story §6 originally assigned
-// (plan B1/DRIFT-1): wizardHeader's report->2 branch does not compile against the
-// pre-existing CreateStep union, and STAGE_OF below is the ONLY total
-// Record<CreateStep, number> in the frontend, so the union addition cascades to it too.
+// 'review' (added to CreateStep here by M4-08-04 under its former name, plan B1/DRIFT-1;
+// renamed by INVCR-01-04) lives here rather than in M4-08-05 as story §6 originally
+// assigned: wizardHeader's index-2 branch does not compile against the pre-existing
+// CreateStep union, and STAGE_OF below is the ONLY total Record<CreateStep, number> in
+// the frontend, so the union addition cascades to it too.
 
 import { WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
@@ -18,41 +19,39 @@ export type WizardPath = 'document' | 'import'
 export const IMPORT_STEPS: [string, string][] = [
   ['1', 'Import'],
   ['2', 'Map'],
-  ['3', 'Report'],
+  ['3', 'Review'],
 ]
 
 // MOVED here from CreateFlow.tsx:16-24 (one table, one owner — two copies would
 // drift). CreateFlow deletes its local STAGE_OF + wizardStage and calls wizardHeader
-// instead (M4-08-04 step 4). `report: 2` is unreachable via the document path —
-// wizardHeader routes 'report' to the import path unconditionally.
+// instead (M4-08-04 step 4).
+//
+// Do NOT "dedupe" this against IMPORT_STAGE_OF. `form` is the ONLY entry wizardHeader
+// ever reads here — DOCUMENT_ONLY_STEPS is ['form'], so every other step routes to
+// IMPORT_STAGE_OF instead. upload/mapping/review exist solely to keep the type a TOTAL
+// Record<CreateStep, number>: that totality is the compiler's exhaustiveness anchor (a
+// member added to CreateStep without a stage stops this file compiling) and it is the
+// ground truth two shipped deletion guards in importFlow.test.ts read via
+// Object.keys(STAGE_OF) to prove a deleted step never creeps back. Their values mirror
+// IMPORT_STAGE_OF's so the two tables can never disagree.
 export const STAGE_OF: Record<CreateStep, number> = {
   upload: 0,
   mapping: 1,
-  form: 2,
-  report: 2, // unreachable via 'document' — see wizardHeader
+  form: 0, // WIZARD_STEPS[0] = 'Enter' — the one entry that is actually read
+  review: 2, // mirrors IMPORT_STAGE_OF; present so the Record stays total
 }
 
-export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, mapping: 1, report: 2 }
+export const IMPORT_STAGE_OF: Partial<Record<CreateStep, number>> = { upload: 0, mapping: 1, review: 2 }
 
 // The header-path resolver ([wizard-steps-split], debate finding J1). Exact rule:
 // path = 'document' iff createStep === 'form'; otherwise 'import'. Total over CreateStep
 // via `?? 0` — a step added to the union without an IMPORT_STAGE_OF entry falls to the
 // import path at index 0 rather than ever returning undefined/NaN (FLOW-14).
 //
-// KNOWN AND TRANSIENT (updated by INVCR-01-03; originally INVCR-01-01 plan D-01d) — do NOT
-// "fix" this here, and in particular do NOT set STAGE_OF.form to 0. The manual path is now
-// a SINGLE step: INVCR-01-01 deleted the sandbox PDF/JPG document mock (the only writer of
-// the old `uploadFile` slot, so 'upload' lost its document-path tie-break), and
-// INVCR-01-03 deleted the mock validate/approve tail (its two steps left CreateStep
-// entirely). So this set is down to one member and 'form' still resolves to stageIndex 2:
-// the 5-step strip paints Build as current with Import/Map un-reached BEHIND it and
-// Validate/Approve permanently unreachable AHEAD of it.
-//
-// INVCR-01-04 — the very next subtask on this same branch, PR still draft, so no user ever
-// sees this state — replaces the strip outright with the two-stage `Enter · Review` model
-// and sets STAGE_OF.form = 0 as ONE coherent change. Doing that half here would light the
-// wrong label (Import, while the user types) and break import-wizard.spec.ts's strip
-// assertions for no gain. A workaround here would only have to be unpicked by 04.
+// The two strips it resolves between ([three-stages], INVCR-01-04): typing an invoice by
+// hand is `Enter · Review` and lights 'Enter'; dropping a file is `Import · Map · Review`.
+// 'Review' is the last stage on both paths — the real invoice detail view for a single
+// typed invoice, the import report for a batch.
 const DOCUMENT_ONLY_STEPS: readonly CreateStep[] = ['form']
 
 export function wizardHeader(createStep: CreateStep): { steps: [string, string][]; stageIndex: number } {

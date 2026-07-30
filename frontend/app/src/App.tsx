@@ -418,10 +418,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       .then(
         (res) => {
           setReport(res)
-          setCreateStep('report')
+          setCreateStep('review')
         },
         // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
-        // report step that has no report to show.
+        // review step that has no report to show.
         (err: unknown) => setImportError(toApiError(err)),
       )
       .finally(() => {

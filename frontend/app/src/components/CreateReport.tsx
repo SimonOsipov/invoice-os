@@ -1,4 +1,4 @@
-// Create flow · step "report" — what the server did with the uploaded spreadsheet
+// Create flow · step "review" — what the server did with the uploaded spreadsheet
 // (M4-08-05, Core AC3/AC4). PRESENTATION ONLY: every derivation lives in
 // lib/importReport.ts so it is node-testable, and this file renders what those functions
 // return. Nothing here recomputes a count, a verdict, or a severity label — the browser

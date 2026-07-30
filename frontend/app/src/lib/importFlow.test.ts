@@ -34,6 +34,7 @@ import { WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
 import {
   IMPORT_STEPS,
+  STAGE_OF,
   canReadColumns,
   canStartImport,
   columnLetter,
@@ -234,6 +235,19 @@ describe('wizardHeader (FLOW-11..14)', () => {
       expect(stageIndex).toBeGreaterThanOrEqual(0)
       expect(stageIndex).toBeLessThan(steps.length)
     })
+  })
+})
+
+// INVCR-01-01 (task-277, RALPH Stage 2.5 Mode A): the ONE genuinely RED-first spec in
+// that subtask's deletion of the sandbox PDF/JPG document mock. On today's code
+// STAGE_OF still carries a runtime `parsing: 0` entry (importFlow.ts:30) — this fails
+// now, and only the subtask's deletion of 'parsing' from CreateStep (and STAGE_OF)
+// makes it pass. Every other importFlow.test.ts change task-277 makes is a green→green
+// narrowing of a table that already passes; do not mistake those for red-first specs.
+describe("STAGE_OF runtime shape (task-277 AC-1, AC-8 — RED-first)", () => {
+  it("has no 'parsing' stage left in the runtime step tables", () => {
+    expect(Object.keys(STAGE_OF)).not.toContain('parsing')
+    expect(Object.keys(STAGE_OF)).toHaveLength(6)
   })
 })
 

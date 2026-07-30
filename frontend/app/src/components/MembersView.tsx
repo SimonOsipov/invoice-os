@@ -16,7 +16,7 @@ import { useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { ACCESS_ROLES, filterMembers, type AccessRole } from '../lib/members'
+import { ACCESS_ROLES, filterMembers, isFiltering, type AccessRole } from '../lib/members'
 import { WfSelect, type WfOption } from './WorkflowParts'
 import type { PlatformCtx } from '../types'
 
@@ -54,8 +54,10 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // just you" is a statement about the ROSTER, so it must never appear over a live
   // search — that reads as the search having deleted everyone. Filtered-to-zero always
   // gets the muted row instead: a dashed card says "nothing here yet", a muted line
-  // inside the table says "your filter excluded everyone".
-  const filtering = query.trim() !== '' || roleFilter !== 'all'
+  // inside the table says "your filter excluded everyone". The rule itself is NOT restated
+  // here — `isFiltering` is the same one `filterMembers` short-circuits on, so `shown` and
+  // this flag always answer to one definition of an empty query.
+  const filtering = isFiltering(query, roleFilter)
   const justYou = members.length === 1 && !filtering
 
   return (

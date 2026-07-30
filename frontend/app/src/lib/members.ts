@@ -779,8 +779,19 @@ export function setMemberStatus(list: readonly Member[], id: string, status: Mem
   return list.map((m) => (m.id === id ? { ...copyMember(m), status } : m))
 }
 
+// The ONE definition of "a filter is active". MembersView reads it to choose between the
+// roster-of-one empty state and the filtered-to-zero row, and `filterMembers` short-circuits
+// on it, so the two cannot disagree about what an empty query is. They did once, and the two
+// empty surfaces shadowed each other.
+export function isFiltering(query: string, roleFilter: AccessRole | 'all'): boolean {
+  return query.trim() !== '' || roleFilter !== 'all'
+}
+
 /** Name OR email, case-insensitive substring. `roleFilter: 'all'` disables the role predicate. */
 export function filterMembers(list: readonly Member[], query: string, roleFilter: AccessRole | 'all'): Member[] {
+  // Not a fast path — this is the pin. Neither predicate live means nobody is excluded, and
+  // saying so via `isFiltering` is what stops a caller re-deriving that rule. Copies, per §15.1.
+  if (!isFiltering(query, roleFilter)) return list.slice()
   const q = query.trim().toLowerCase()
   return list.filter((m) => {
     if (roleFilter !== 'all' && m.role !== roleFilter) return false

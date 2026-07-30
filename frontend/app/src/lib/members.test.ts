@@ -22,6 +22,7 @@ import {
   inhouseNotifyTargets,
   initialsFrom,
   inspectorApprovalLine,
+  isFiltering,
   isProtectedAdmin,
   isValidEmail,
   lastActiveLabel,
@@ -1006,6 +1007,45 @@ describe('filterMembers (T2.33–T2.39, §6)', () => {
     // row matches it via @honeywell.)
     expect(names(filterMembers(inhouse(), 'z', 'all'))).toEqual(['Ngozi Balogun', 'Emeka Uzowulu', 'Zainab Lawal'])
     expect(filterMembers(inhouse(), '', 'reviewer')).toHaveLength(8)
+  })
+})
+
+describe('isFiltering (QA39, §6/§10.7)', () => {
+  // Extracted so MembersView cannot re-derive filterMembers' emptiness rule across a module
+  // boundary. The answer picks between the roster-of-one EmptyState (§10.7) and the
+  // filtered-to-zero row; when the two rules drifted, those surfaces shadowed each other.
+  // Each case asserts the PAIR — the predicate's answer and what filterMembers actually did.
+
+  it('is false when neither predicate is live, and nobody is excluded', () => {
+    expect(isFiltering('', 'all')).toBe(false)
+    expect(filterMembers(inhouse(), '', 'all')).toHaveLength(16)
+  })
+
+  it('reads a whitespace-only query as no query at all — the case that already bit', () => {
+    expect(isFiltering('   ', 'all')).toBe(false)
+    expect(isFiltering(' \n\t ', 'all')).toBe(false)
+    expect(filterMembers(inhouse(), '   ', 'all')).toHaveLength(16)
+  })
+
+  it('is true on a non-empty query alone, padding notwithstanding', () => {
+    expect(isFiltering('ngozi', 'all')).toBe(true)
+    expect(isFiltering('  ngozi  ', 'all')).toBe(true)
+    expect(names(filterMembers(inhouse(), '  ngozi  ', 'all'))).toEqual(['Ngozi Balogun'])
+  })
+
+  it('is true on a role filter alone, with no query at all', () => {
+    expect(isFiltering('', 'admin')).toBe(true)
+    expect(isFiltering('   ', 'reviewer')).toBe(true)
+    expect(names(filterMembers(inhouse(), '', 'admin'))).toEqual(['Ngozi Balogun'])
+  })
+
+  it('still allocates on the not-filtering path', () => {
+    // The short-circuit must not hand back the caller's own array — the always-allocate rule
+    // the reducers above follow, which a bare `return list` would quietly break.
+    const list = inhouse()
+    const out = filterMembers(list, '  ', 'all')
+    expect(out).not.toBe(list)
+    expect(out).toEqual(list)
   })
 })
 

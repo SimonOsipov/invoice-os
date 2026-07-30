@@ -12,11 +12,14 @@
 // The consequence, accepted rather than worked around: switching to another Settings tab
 // unmounts this one, so the search text and role filter reset.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { ACCESS_ROLES, filterMembers, isFiltering, type AccessRole } from '../lib/members'
+import { ACCESS_ROLES, filterMembers, isFiltering, unassignedPositions, type AccessRole } from '../lib/members'
+import { roleOf } from '../lib/workflows'
+import { AmberNote } from './MemberParts'
+import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
 import type { PlatformCtx } from '../types'
 
@@ -45,11 +48,35 @@ const EMPTY_TITLE: Record<PlatformCtx['mode'], string> = {
 
 const EMPTY_MESSAGE = "Invite as many people as you need — you're priced by compliance need, not per seat."
 
+// §6's copy. The singular is reachable — MEMB-01-07's drawer can assign a position and
+// drive the count to 1 — and §6 supplies only the plural, so the singular is written to
+// match it phrase for phrase.
+function unassignedNotice(count: number): string {
+  return count === 1
+    ? '1 approval position has nobody assigned. Policies that use it will block.'
+    : `${count} approval positions have nobody assigned. Policies that use them will block.`
+}
+
 export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const { members, mode } = ctx
   const [query, setQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<AccessRole | 'all'>('all')
+  // The invite actions' inline confirmation — the WorkflowBuilder saved-flash idiom
+  // (WorkflowBuilder.tsx:72-78): one transient string plus one effect-owned timer, so a
+  // second action restarts the flash instead of stacking a timer that would clear the
+  // newer message early.
+  const [flash, setFlash] = useState<string | null>(null)
+  useEffect(() => {
+    if (!flash) return
+    const t = window.setTimeout(() => setFlash(null), 2600)
+    return () => window.clearTimeout(t)
+  }, [flash])
   const shown = filterMembers(members, query, roleFilter)
+  // Gated on MODE, not on the count. `unassignedPositions` counts every WF_ROLES position
+  // with no holder, and firm rows carry no position at all (members.test.ts:222) — so in
+  // firm mode it returns all eight, and a count-only guard would render "8 approval
+  // positions have nobody assigned" on a screen that has no approval positions.
+  const unassigned = mode === 'inhouse' ? unassignedPositions(members) : []
   // Two different empty surfaces, and whether a filter is running decides which. "It's
   // just you" is a statement about the ROSTER, so it must never appear over a live
   // search — that reads as the search having deleted everyone. Filtered-to-zero always
@@ -93,7 +120,24 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
         </button>
       </div>
 
-      {/* The table itself lands in MEMB-01-04, in the `shown.length > 0` case. */}
+      {flash && (
+        <div
+          data-testid="members-flash"
+          style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-green-bg)', border: '1px solid var(--status-green-border)', fontSize: 12.5, color: 'var(--status-green-text)' }}
+        >
+          {flash}
+        </div>
+      )}
+
+      {/* Above the table, and above the two empty surfaces too: it is a statement about the
+          workspace's approval coverage, which a search box cannot change. */}
+      {unassigned.length > 0 && (
+        <AmberNote testId="members-unassigned" style={{ marginBottom: 16 }}>
+          {unassignedNotice(unassigned.length)}{' '}
+          <span style={{ fontWeight: 600 }}>{unassigned.map((key) => roleOf(key).title).join(' · ')}</span>
+        </AmberNote>
+      )}
+
       {justYou ? (
         <EmptyState title={EMPTY_TITLE[mode]} message={EMPTY_MESSAGE} />
       ) : shown.length === 0 ? (
@@ -105,7 +149,9 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
             No members match this search.
           </div>
         </div>
-      ) : null}
+      ) : (
+        <MembersTable ctx={ctx} rows={shown} policies={ctx.policies} onFlash={setFlash} />
+      )}
     </>
   )
 }

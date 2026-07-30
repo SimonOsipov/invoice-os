@@ -352,6 +352,25 @@ export async function listInvoices(
   return res.invoices
 }
 
+// GET /v1/invoices/violation-summary?import_batch_id=... -- the review rail's rule-key
+// aggregate (08/task-284 AC-2, per 07's own R3). Unwraps `.rules` unconditionally,
+// mirroring listInvoices' `.invoices` unwrap and submitInvoices' `.results` unwrap
+// (:442). Server-ordered (count DESC / key ASC) and severity-agnostic -- never re-sorted
+// or re-filtered here, so the rail matches the `rule_key` filter it triggers. 08 STUB
+// (task-284, Stage 2.5) -- Stage 3 implements the body.
+export interface RuleCount {
+  rule_key: string
+  invoices: number
+}
+
+export async function violationSummary(
+  _authedFetch: AuthedFetch,
+  _base: string,
+  _importBatchId: string,
+): Promise<RuleCount[]> {
+  throw new Error('not implemented')
+}
+
 // The two action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a

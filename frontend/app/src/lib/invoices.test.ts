@@ -60,6 +60,7 @@ import {
   submitInvoices,
   toggleSelection,
   verdictStatus,
+  violationSummary,
   type BatchSubmitResultItem,
   type EditFieldKey,
   type InvoiceCreateInput,
@@ -68,6 +69,7 @@ import {
   type InvoiceLineItem,
   type InvoiceRecord,
   type InvoiceStatus,
+  type ListInvoicesOptions,
   type RejectionReason,
   type StatusChange,
 } from './invoices'
@@ -218,7 +220,7 @@ describe('listInvoices', () => {
 
     const result = await listInvoices(af, base, { needsAttention: true })
 
-    expect(result).toEqual([draftInvoice])
+    expect(result.invoices).toEqual([draftInvoice])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices?needs_attention=true')
@@ -235,7 +237,7 @@ describe('listInvoices', () => {
 
     const result = await listInvoices(af, base, {})
 
-    expect(result).toEqual([])
+    expect(result.invoices).toEqual([])
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices')
     expect(url).not.toContain('?')
@@ -256,7 +258,7 @@ describe('listInvoices', () => {
 
     const result = await listInvoices(af, base, { entityId: 'entity-1' })
 
-    expect(result).toEqual([draftInvoice])
+    expect(result.invoices).toEqual([draftInvoice])
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices?entity_id=entity-1')
   })
@@ -289,6 +291,163 @@ describe('listInvoices', () => {
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).not.toContain('entity_id')
+  })
+})
+
+// --- Stage 2.5 (Mode A, task-284) RED specs for the envelope + widened
+// ListInvoicesOptions (AC-1). I6/I7/the entityId spec above got a one-token value-half
+// edit (result -> result.invoices) forced by the envelope change; their URL-half
+// assertions are untouched. `as ListInvoicesOptions` casts below are necessary and
+// deliberate -- the type is not widened with the 7 new fields until Stage 3, so passing
+// them through the real (unwidened) signature needs an explicit cast, not a silent `any`.
+describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () => {
+  it('LIST-1a (green-before -- already covered by I7, restated for the option table): absent options ({}) emit no query params', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {})
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('?')
+  })
+
+  it('LIST-1b (the discriminating leg): explicitly-empty/false options (needsAttention:false, needsFix:false, importBatchId:"", ruleKey:"", q:"") still emit no query params', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {
+      needsAttention: false,
+      needsFix: false,
+      importBatchId: '',
+      ruleKey: '',
+      q: '',
+    } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('?')
+  })
+
+  it('LIST-2: the envelope is returned whole -- pagination.total is reachable, not discarded', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [draftInvoice], pagination: { limit: 50, offset: 0, total: 500 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listInvoices(af, base, {})
+
+    expect(result.pagination).toEqual({ limit: 50, offset: 0, total: 500 })
+  })
+
+  it('LIST-3: needsFix is emitted iff strictly true, mirroring the shipped needsAttention (I17) precedent', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { needsFix: false } as ListInvoicesOptions)
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).not.toContain('needs_fix')
+
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { needsFix: true } as ListInvoicesOptions)
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('needs_fix=true')
+  })
+
+  it('LIST-4: offset:0 is emitted, not dropped -- the classic falsy-zero bug (`!= null`, never truthiness)', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { limit: 50, offset: 0 } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url)
+    expect(parsed.searchParams.get('limit')).toBe('50')
+    expect(parsed.searchParams.get('offset')).toBe('0')
+  })
+
+  it('LIST-5: no client-side default -- an explicit limit/offset passes through untouched, but {} never synthesizes ?limit=50 (I7\'s guard against `opts.limit ?? 50`)', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const explicitMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 25, offset: 10, total: 0 } }),
+    })
+    await listInvoices(af, base, { limit: 25, offset: 10 } as ListInvoicesOptions)
+    const [explicitUrl] = explicitMock.mock.calls[0] as [string, RequestInit]
+    expect(explicitUrl).toContain('limit=25')
+    expect(explicitUrl).toContain('offset=10')
+
+    const absentMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, {})
+    const [absentUrl] = absentMock.mock.calls[0] as [string, RequestInit]
+    expect(absentUrl).not.toContain('limit')
+    expect(absentUrl).not.toContain('offset')
+  })
+})
+
+describe('violationSummary (AC-2, Stage 2.5)', () => {
+  it('SUMMARY-1: unwraps .rules and preserves the server order verbatim, never re-sorted', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          rules: [
+            { rule_key: 'zzz-rule', invoices: 5 },
+            { rule_key: 'aaa-rule', invoices: 5 },
+          ],
+        }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await violationSummary(af, base, 'batch-1')
+
+    expect(result).toEqual([
+      { rule_key: 'zzz-rule', invoices: 5 },
+      { rule_key: 'aaa-rule', invoices: 5 },
+    ])
+  })
+
+  it('ERR-1b: a 500 from violationSummary rejects ApiError{status:500} unchanged, not wrapped or swallowed', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.reject(new Error('no body')),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => violationSummary(af, base, 'batch-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(500)
   })
 })
 

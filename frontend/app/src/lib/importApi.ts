@@ -66,6 +66,7 @@
 // import under this app's `verbatimModuleSyntax`.
 import { ApiError } from '@invoice-os/api-client'
 import type { Session } from '../auth'
+import type { AuthedFetch } from './portfolio'
 
 export interface ImportPreview {
   format: string
@@ -117,6 +118,25 @@ export interface ImportReport {
   invoices_clean: number
   invoices_with_violations: number
   invoice_violations: InvoiceViolations[] // NORMALIZED: wire null -> []
+}
+
+// GET /v1/imports/{id} response (the import_batches row; 08/task-284 AC-2, per 07's own
+// R1/R2). Exactly 9 fields -- no `filename` (07 R1), no `ready_invoices`/
+// `invoices_clean`/`invoices_with_violations` (07 R2 -- those are live off the list
+// endpoint's own totals, never stored on the batch). `errors` is always `[]` on GET (07
+// spec 4), so getImportBatch does NOT run it through normalizeReport -- the POST's wire
+// null->[] coercion is a documented quirk of THAT endpoint only, not evidence the GET
+// might lie too.
+export interface ImportBatch {
+  id: string
+  entity_id: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  rows_total: number
+  rows_valid: number
+  rows_invalid: number
+  errors: RowError[]
+  rule_set_version: number | null
+  created_at: string
 }
 
 export type XhrCtor = new () => XMLHttpRequest
@@ -262,6 +282,16 @@ export async function createImport(
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)
+}
+
+// A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through
+// the typed authedFetch wrapper, not xhrJson (08/task-284 AC-2). `authedFetch` seam
+// first, `base` second -- repo convention. Non-2xx rejects with the underlying ApiError
+// unchanged; `rule_set_version` is never coerced to 0 (a null there means "nothing was
+// evaluated" and must stay null). 08 STUB (task-284, Stage 2.5) -- Stage 3 implements
+// the body.
+export async function getImportBatch(_authedFetch: AuthedFetch, _base: string, _id: string): Promise<ImportBatch> {
+  throw new Error('not implemented')
 }
 
 export function uploadPercent(p: UploadPhase): number | null {

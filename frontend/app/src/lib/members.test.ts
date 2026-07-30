@@ -1781,3 +1781,44 @@ describe('invitedNotice — the send confirmation (T6.8)', () => {
     expect(invitedNotice(0)).toBe('Invited 0 people.')
   })
 })
+
+// ---------------------------------------------------------------------------
+// QA47–QA48 — MEMB-01-06 QA (Mode B), the two node-reachable gaps T6.1–T6.12 left
+// ---------------------------------------------------------------------------
+// Mutation-tested: all ten mutations of the T6 batch's own subjects were caught, but
+// EIGHT mutations of the modal's WIRING survived all three gates, because vitest is
+// `environment: node` and the repo has no DOM component layer (docs/e2e-convention.md
+// also puts Settings out of scope for browser E2E). These two are what remains inside
+// this module's reach — everything else on that list is a Phase 3.5 gate item.
+
+describe('MEMB-01-06 QA — the picker filter is literal, and the position sentinel is free (QA47–QA48)', () => {
+  it('matches a LITERAL substring, not a pattern (QA47)', () => {
+    // T6.5 pins the trim / case / substring rule, but every one of its queries is a plain
+    // word, so `includes(q)` and `new RegExp(q).test(name)` agree on all of them and the
+    // spec cannot tell them apart. These two can:
+    //   '.' — a literal dot matches ONE roster name; as a pattern it matches all six.
+    expect(filterClientRoster('.').map((c) => c.name)).toEqual(['Nigerian Delta Supplies Co.'])
+    //   '(' — a literal paren matches nothing; as a pattern it THROWS SyntaxError, taking
+    //   the modal down mid-keystroke (AC#10) rather than showing NO_CLIENT_MATCH.
+    expect(filterClientRoster('(')).toEqual([])
+    expect(filterClientRoster('[a-z]')).toEqual([])
+    // And the ampersand two roster names actually contain, so "literal" is proven in both
+    // directions rather than only by what it refuses.
+    expect(filterClientRoster('&').map((c) => c.id)).toEqual([0, 3])
+  })
+
+  it("leaves the invite modal's `none` position sentinel un-collided (QA48)", () => {
+    // InviteMembersModal.tsx:56 declares `NO_POSITION = 'none'` and maps it back to `null`
+    // on the way out, because `InviteOptions.position` is `RoleKey | null`. That sentinel is
+    // only safe while no real position is keyed 'none' — and a colliding key fails twice,
+    // silently: POSITION_OPTIONS would carry two `value="none"` <option>s (a duplicate-key
+    // render, AC#10), and choosing the real position would submit `position: null`.
+    //
+    // HONEST SCOPE, so nobody reads more into this than it does. `RoleKey` is a closed
+    // union, so the collision needs a deliberate widening — and when that widening happens,
+    // three seed-integrity specs (T1.11, QA42, workflows.test.ts:175-182) go red too. This
+    // one adds no NEW detection; it adds the diagnosis, naming the sentinel at
+    // InviteMembersModal.tsx:56 that those three failures do not mention.
+    expect(WF_ROLES.map((r) => r.key)).not.toContain('none')
+  })
+})

@@ -135,6 +135,13 @@ export function ReviewInvoicesTab({
   // FIELDS, not the state object: the reducer returns the identical object on a no-op, so
   // field-wise comparison and object identity agree — but spelling the fields out makes
   // the refetch triggers readable at the call site.
+  //
+  // ⚠️ WHATEVER THIS PRODUCER READS MUST APPEAR IN `deps`. useAsync's fetch effect is
+  // keyed on `opts.deps` alone and never on `run`, so a producer that closes over some
+  // future piece of state left out of the list below would pin a STALE closure and keep
+  // serving the old query — silently, with no error and no loading state to notice.
+  // A superseded in-flight response is already safe (useAsync's own `runId` cleanup
+  // discards it before it can dispatch); this is the other half of that guarantee.
   const page = useAsync<InvoiceListResponse>(
     () => listInvoices(ctx.authedFetch, base, reviewPageQuery(batchId, filter)),
     { isEmpty: () => false, deps: [batchId, filter.pill, filter.ruleKey, filter.q, filter.offset] },
@@ -442,6 +449,9 @@ function Row({
   const verdict = verdictPill({ status: r.status, violations: r.violations })
   const badge = verdict.badges[0]
 
+  // Click-only row, matching the shipped InvoicesList.tsx precedent. Keyboard activation
+  // (role/tabIndex/onKeyDown) for BOTH row surfaces is task-294 — no AC here covers it,
+  // and a fake `<a href>` is not an option: this SPA has no router.
   return (
     <div
       onClick={onOpen}

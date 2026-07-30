@@ -11,14 +11,22 @@
 // company already chosen via the workspace switcher) instead of a second, separate
 // dropdown — that dropdown's list included archived entities the switcher
 // deliberately hides, so it could file a LIVE import under a company the switcher
-// itself would never let you select. A null active.entityId (in-house mode, or the
-// loading/error/zero-entity window before the switcher resolves) renders an explicit
-// blocked state rather than a permanently-disabled button with no explanation.
+// itself would never let you select.
+//
+// That coupling had a side effect this file used to enshrine: a null active.entityId
+// blanked the WHOLE upload surface behind a "No linked entity" empty state. In-house
+// workspaces have a permanently-null entityId (inhouseClient() hardcodes it — there is
+// no business_entities row, and no Clients screen to create one from), so an in-house
+// accountant could not open the wizard's first step at all while the firm could. But
+// nothing about reading a spreadsheet's columns needs an entity: the preview endpoint
+// takes the file alone. The gate therefore now sits where the entity is genuinely
+// required — the commit, on the Map step (CreateMapping's continueBtn + App.tsx's
+// startImport). Both personas get the dropzone and Read columns; only filing differs.
 // Ported shell from Platform.dc.html ~L407-448.
 
 import { useState } from 'react'
 
-import { EmptyState, gatewayBase } from '@invoice-os/api-client'
+import { gatewayBase } from '@invoice-os/api-client'
 
 import { SAMPLE_FILES } from '../data'
 import { importGlyph, tickGlyph13 } from '../glyphs'
@@ -26,23 +34,17 @@ import { canReadColumns, hasImportableExtension } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
-  const { active, mode, sandbox, uploadFile, entityId, importFile, importError } = ctx
+  const { active, sandbox, uploadFile, importFile, importError } = ctx
   const selFile = SAMPLE_FILES.find((f) => f.id === uploadFile) || null
   const hasFile = !!selFile
   const [dragOver, setDragOver] = useState(false)
 
-  // `base` still gates the "Read columns" button below (gateway-wide) — with no
-  // gateway configured, entitiesAsync never fires, `active` falls back to
-  // emptyClient() (entityId: null), and the blocked state below already covers that
-  // case; this is the second, button-level guard for the same condition.
+  // `base` gates the "Read columns" button below (gateway-wide): with no gateway
+  // configured there is nothing to POST the preview to.
   const base = gatewayBase()
 
-  const readReady = canReadColumns(entityId, importFile)
+  const readReady = canReadColumns(importFile)
   const badExtension = importFile !== null && !hasImportableExtension(importFile.name)
-  // active.entityId is string | null (types.ts) — null for in-house mode (no
-  // business_entities rows by design) and for the loading/error/zero-entity fallback
-  // (lib/clients.ts's emptyClient()) before the switcher resolves.
-  const blocked = active.entityId === null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -54,113 +56,97 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           </span>
         </div>
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {blocked ? (
-            <EmptyState
-              title="No linked entity"
-              message={
-                mode === 'inhouse'
-                  ? 'In-house workspaces have no linked business entity — import is unavailable here.'
-                  : "This workspace isn't linked to a business entity yet. Add one in Clients before importing."
-              }
-            />
-          ) : (
-            <>
-              {/* aria-label is load-bearing, not decoration. input[type=file] has an
-                  implicit role of BUTTON, and its accessible name is computed from its
-                  label — which now wraps the whole dropzone, so once a file is chosen
-                  that name would swallow the zone's prose ("…click Read columns
-                  below…"). getByRole('button', {name: 'Read columns'}) substring-matches,
-                  so the input collided with the real Read-columns button and every
-                  import spec died on a strict-mode violation. An explicit aria-label
-                  wins over the label in the accname algorithm: it keeps the name short,
-                  stable and free of any other control's name, and stops a screen reader
-                  announcing a paragraph of prose as the button's name. */}
-              <input
-                id="pf-import-file"
-                className="pf-file"
-                type="file"
-                accept=".csv,.xlsx"
-                aria-label="Choose a spreadsheet to import"
-                onChange={(e) => ctx.selectImportFile(e.target.files?.[0] ?? null)}
-              />
-              <label
-                htmlFor="pf-import-file"
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  setDragOver(true)
-                }}
-                // dragleave bubbles up from the label's OWN children (icon, copy), so a
-                // bare handler drops the highlight every time the pointer crosses one and
-                // the zone flickers for the whole drag. Only clear once the pointer has
-                // actually left the label's subtree — relatedTarget is null when it
-                // leaves the window, and contains(null) is false, so that still clears.
-                onDragLeave={(e) => {
-                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-                  setDragOver(false)
-                }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  setDragOver(false)
-                  ctx.selectImportFile(e.dataTransfer.files[0] ?? null)
-                }}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  textAlign: 'center',
-                  border: `1.5px dashed ${badExtension ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
-                  borderRadius: 'var(--radius-md)',
-                  padding: '30px 20px',
-                  background: dragOver ? 'var(--action-tint)' : 'var(--bg-1)',
-                  cursor: 'pointer',
-                }}
-              >
-                <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>
-                  {importGlyph}
-                </span>
-                {badExtension ? (
-                  <p style={{ fontSize: 12, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>
-                    {importFile?.name} is not a spreadsheet — choose a .csv or .xlsx file.
-                  </p>
-                ) : importFile ? (
-                  <>
-                    <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginBottom: 5, color: 'var(--fg-1)' }}>
-                      {importFile.name}
-                    </div>
-                    <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                      Selected — click Read columns below, or drop a different file to replace it.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag a spreadsheet here, or click to choose'}</div>
-                    <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                      .csv or .xlsx, one row per invoice — the server reads your columns on the next step.
-                    </p>
-                  </>
-                )}
-              </label>
+          {/* aria-label is load-bearing, not decoration. input[type=file] has an
+              implicit role of BUTTON, and its accessible name is computed from its
+              label — which now wraps the whole dropzone, so once a file is chosen
+              that name would swallow the zone's prose ("…click Read columns
+              below…"). getByRole('button', {name: 'Read columns'}) substring-matches,
+              so the input collided with the real Read-columns button and every
+              import spec died on a strict-mode violation. An explicit aria-label
+              wins over the label in the accname algorithm: it keeps the name short,
+              stable and free of any other control's name, and stops a screen reader
+              announcing a paragraph of prose as the button's name. */}
+          <input
+            id="pf-import-file"
+            className="pf-file"
+            type="file"
+            accept=".csv,.xlsx"
+            aria-label="Choose a spreadsheet to import"
+            onChange={(e) => ctx.selectImportFile(e.target.files?.[0] ?? null)}
+          />
+          <label
+            htmlFor="pf-import-file"
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            // dragleave bubbles up from the label's OWN children (icon, copy), so a
+            // bare handler drops the highlight every time the pointer crosses one and
+            // the zone flickers for the whole drag. Only clear once the pointer has
+            // actually left the label's subtree — relatedTarget is null when it
+            // leaves the window, and contains(null) is false, so that still clears.
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+              setDragOver(false)
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              ctx.selectImportFile(e.dataTransfer.files[0] ?? null)
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              border: `1.5px dashed ${badExtension ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
+              borderRadius: 'var(--radius-md)',
+              padding: '30px 20px',
+              background: dragOver ? 'var(--action-tint)' : 'var(--bg-1)',
+              cursor: 'pointer',
+            }}
+          >
+            <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>
+              {importGlyph}
+            </span>
+            {badExtension ? (
+              <p style={{ fontSize: 12, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>
+                {importFile?.name} is not a spreadsheet — choose a .csv or .xlsx file.
+              </p>
+            ) : importFile ? (
+              <>
+                <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginBottom: 5, color: 'var(--fg-1)' }}>
+                  {importFile.name}
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
+                  Selected — click Read columns below, or drop a different file to replace it.
+                </p>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag a spreadsheet here, or click to choose'}</div>
+                <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
+                  .csv or .xlsx, one row per invoice — the server reads your columns on the next step.
+                </p>
+              </>
+            )}
+          </label>
 
-              {importError && (
-                <p style={{ fontSize: 12.5, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>{importError.message}</p>
-              )}
-            </>
+          {importError && (
+            <p style={{ fontSize: 12.5, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>{importError.message}</p>
           )}
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            {!blocked && (
-              <button
-                onClick={ctx.readColumns}
-                disabled={base == null || !readReady}
-                className="v2-btn v2-btn-primary pf-btn"
-                style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
-              >
-                <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Read columns
-              </button>
-            )}
+            <button
+              onClick={ctx.readColumns}
+              disabled={base == null || !readReady}
+              className="v2-btn v2-btn-primary pf-btn"
+              style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}
+            >
+              <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Read columns
+            </button>
             {/* Load-bearing: the only from-scratch creation path (manual entry) must
-                render in BOTH live and sandbox, and independent of the entity guard
-                above — approve() is already a no-op for a null entityId. */}
+                render in BOTH live and sandbox — and for both personas. */}
             <button onClick={ctx.skipUpload} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38, padding: '0 16px' }}>
               Skip — enter manually
             </button>

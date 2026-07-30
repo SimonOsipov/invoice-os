@@ -8,7 +8,7 @@
 // is a real node global (-02 §A); no spec here touches a DOM or a component.
 //
 // Spec map (AC coverage complete — plan §E):
-//   FLOW-01  canReadColumns: gates on BOTH entity and file, neither alone           (AC3)
+//   FLOW-01  canReadColumns: gates on the file ONLY — no entity required            (AC3)
 //   FLOW-02  canReadColumns rejects a non-csv/xlsx extension (e.g. .pdf)          (AC1,3)
 //   FLOW-03  canStartImport: needs preview AND invoice_number placed, not all 11    (AC3)
 //   FLOW-04  canStartImport delegates to canSubmitMapping, never re-derives         (AC3)
@@ -61,19 +61,20 @@ const csvFile = new File([], 'invoice.csv')
 const pdfFile = new File([], 'scan.pdf')
 
 describe('canReadColumns (FLOW-01, FLOW-02)', () => {
-  // FLOW-01 — falsification: an impl gating on the file alone (the exact [entity-picker]
-  // failure: importing under a guessed entity) or on the entity alone.
-  it('requires BOTH a real entity and a real file — neither alone is enough', () => {
-    expect(canReadColumns(null, null)).toBe(false)
-    expect(canReadColumns('e1', null)).toBe(false)
-    expect(canReadColumns(null, csvFile)).toBe(false)
-    expect(canReadColumns('e1', csvFile)).toBe(true)
+  // FLOW-01 — the gate is the FILE, and only the file. Reading columns posts the bytes to
+  // /imports/preview, which takes no entity_id and persists nothing, so requiring an entity
+  // here bought no safety and cost in-house workspaces (permanently-null entityId) the
+  // wizard's entire first step. Falsification: an impl that reintroduces an entity clause,
+  // or one that accepts a null file.
+  it('requires a real file, and does NOT require an entity', () => {
+    expect(canReadColumns(null)).toBe(false)
+    expect(canReadColumns(csvFile)).toBe(true)
   })
 
   // FLOW-02 — falsification: an impl omitting the extension check, which lets a PDF
   // reach previewImport and 400 server-side.
-  it('rejects a non-csv/xlsx file even with a real entity chosen', () => {
-    expect(canReadColumns('e1', pdfFile)).toBe(false)
+  it('rejects a non-csv/xlsx file', () => {
+    expect(canReadColumns(pdfFile)).toBe(false)
   })
 })
 
@@ -330,14 +331,17 @@ describe('columnLetter — three-letter boundary (QA)', () => {
 describe('canReadColumns / canStartImport — truth tables (QA)', () => {
   const preview = mkPreview()
 
-  it('canReadColumns: rejects a non-csv/xlsx file even with an entity, and rejects every file when no entity is chosen', () => {
-    expect(canReadColumns(null, pdfFile)).toBe(false)
-    expect(canReadColumns('e1', pdfFile)).toBe(false)
-    expect(canReadColumns(null, csvFile)).toBe(false)
+  it('canReadColumns: rejects a non-csv/xlsx file, and a null file', () => {
+    expect(canReadColumns(pdfFile)).toBe(false)
+    expect(canReadColumns(null)).toBe(false)
   })
 
-  it('canReadColumns: an empty-string entity id is falsy, not a real selection — gate stays closed', () => {
-    expect(canReadColumns('', csvFile)).toBe(false)
+  // The in-house regression, stated as a unit fact: an entity-less workspace can still
+  // reach the preview. The entity is asserted at the COMMIT (App.tsx startImport) and
+  // surfaced by CreateMapping's canFile — never here.
+  it('canReadColumns: opens for a workspace with no entity at all — .csv and .xlsx alike', () => {
+    expect(canReadColumns(csvFile)).toBe(true)
+    expect(canReadColumns(new File([], 'ledger.xlsx'))).toBe(true)
   })
 
   it('canStartImport: false when mapping is null outright, and false when invoice_number is an empty string (falsy, not "placed")', () => {

@@ -170,7 +170,18 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
           ? { mode: 'firm', role, clientAccess: scope === 'all' ? 'all' : clientIds }
           : { mode: 'inhouse', role, department, position: position === NO_POSITION ? null : (position as RoleKey) }
       ctx.inviteMembers(ok.map((address) => memberFromInvite(address, opts, ctx.user.name)))
-      onFlash(invitedNotice(ok.length))
+      // Only when this modal is actually closing. MembersView renders the flash in normal
+      // document flow with no z-index (MembersView.tsx:122-129), so on a PARTIAL send — where
+      // §7 keeps the modal open — it paints BEHIND the scrim (zIndex 80, blurred) and its
+      // 2600ms timer expires before anyone could close the modal and look. Giving the flash a
+      // z-index instead would be worse: a transient success notice stacked on top of a modal
+      // the user is still correcting in. Nothing is lost — a partial send already reports
+      // itself through the red chips that stay put, which is §7's specified behaviour.
+      //
+      // `failed` is complete here: the classification loop above has already run to the end.
+      // The full-send case is unaffected — it takes the `onClose` branch just below, which
+      // batches into this same commit, so the scrim is gone by the time the flash paints.
+      if (failed.length === 0) onFlash(invitedNotice(ok.length))
     }
 
     if (failed.length === 0) {
@@ -307,7 +318,14 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
                 // comma / semicolon / whitespace / newline and survives a Windows CRLF paste
                 // (QA31), which a hand-rolled `[,;\s]` split does not.
                 e.preventDefault()
-                commit(e.clipboardData.getData('text'))
+                // The typed draft is MERGED, not replaced. `commit` clears the draft, so pasting
+                // over a half-typed address used to discard it silently — contradicting `pending`
+                // (:98), where the uncommitted draft already counts toward Send. A space
+                // is one of `ADDRESS_SEPARATORS`, so the joined string parses as two addresses,
+                // and `mergeChips` de-dupes them if they collide. With an empty draft this is
+                // byte-for-byte the previous behaviour.
+                const pasted = e.clipboardData.getData('text')
+                commit(draft ? `${draft} ${pasted}` : pasted)
               }}
               aria-label="Email addresses"
               data-testid="invite-email-input"

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { APPS } from './apps'
+import { signInUrl } from '../personas'
 import { resolveTarget } from '../targets'
 
 // One smoke test per deployed SPA: the main mock view renders and the page logs
@@ -45,7 +46,7 @@ for (const app of APPS) {
 // OPENS, not merely that a chevron is drawn — the whole point of the change is that the
 // affordance is honest.
 test('ops-console: the org card is a switcher whose menu opens', async ({ page }) => {
-  await page.goto(`${resolveTarget('OPS_CONSOLE_URL')}?persona=developer`)
+  await page.goto(signInUrl('developer'))
 
   const switcher = page.getByRole('button', { expanded: false }).filter({ hasText: 'Zephyr Pay' })
   await expect(switcher).toBeVisible()

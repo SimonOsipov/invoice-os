@@ -13,6 +13,7 @@ import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
 import { CreateReport } from './CreateReport'
+import { ImportProgress } from './ImportProgress'
 import type { PlatformCtx } from '../types'
 
 // The wizard serves TWO paths with different step lists — the 2-step Enter/Review typed
@@ -23,8 +24,25 @@ import type { PlatformCtx } from '../types'
 // only to disambiguate 'upload' between the two paths, and with the document mock deleted
 // (INVCR-01-01) 'upload' belongs unambiguously to the import path.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
-  const { createStep } = ctx
+  const { createStep, uploadPhase } = ctx
   const { steps, stageIndex } = wizardHeader(createStep)
+
+  // The in-flight import owns the whole body, not a corner of the mapping footer. The
+  // footer's two buttons already disabled themselves while uploading, but the GRID never
+  // did — and it could not usefully: startImport serializes the mapping into the request
+  // at the moment of the click, so dragging a field onto a different column mid-flight
+  // rearranges a screen whose contents have already been sent, with no effect whatsoever
+  // on what the server is doing. Leaving that live behind a small spinner is an offer the
+  // request cannot honour. The header strip stays — the user is still on the Map step,
+  // and this IS what that step is doing.
+  //
+  // The card cannot stick: createImport emits its terminal phase BEFORE the promise
+  // settles (importApi's stated ordering), and resetImport returns the phase to 'idle',
+  // so every exit from these two kinds is an exit from this branch. On FAILURE the phase
+  // is 'error', which falls through to CreateMapping below — preserving the shipped
+  // behaviour that a failed import stays on mapping and renders importError there rather
+  // than advancing to a review step with no report.
+  const importing = uploadPhase.kind === 'sending' || uploadPhase.kind === 'processing'
 
   return (
     <div style={{ padding: '24px 36px 56px' }}>
@@ -49,13 +67,19 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      {createStep === 'upload' && <CreateUpload ctx={ctx} />}
+      {importing ? (
+        <ImportProgress ctx={ctx} />
+      ) : (
+        <>
+          {createStep === 'upload' && <CreateUpload ctx={ctx} />}
 
-      {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
+          {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
 
-      {createStep === 'form' && <CreateForm ctx={ctx} />}
+          {createStep === 'form' && <CreateForm ctx={ctx} />}
 
-      {createStep === 'review' && <CreateReport ctx={ctx} />}
+          {createStep === 'review' && <CreateReport ctx={ctx} />}
+        </>
+      )}
     </div>
   )
 }

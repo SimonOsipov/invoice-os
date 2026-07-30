@@ -477,8 +477,23 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     })
   }
 
+  // The continue control used to swallow the click outright when invoice_number was
+  // unplaced: the button rendered `cursor: not-allowed` but was NOT disabled (only the
+  // no-entity case is), so a firm user clicked an armed-looking primary and nothing at
+  // all happened. It now ANSWERS the click by arming the one field it is waiting for —
+  // every unplaced column lights up as a drop target (CreateMapping's `dropHot` is
+  // driven by armedField alone, so no styling change was needed) and the footer note
+  // switches to the armed instruction.
+  //
+  // `setArmedField`, deliberately NOT `armField` — armField is a TOGGLE
+  // (`a === k ? null : k`, just above), so routing this through it would DIS-ARM on the
+  // second click and reproduce the exact do-nothing click this branch exists to delete.
+  // A set is idempotent; clicking continue five times leaves the chip armed five times.
   function continueMapping() {
-    if (!mapping || !mapping.invoice_number) return
+    if (!mapping || !mapping.invoice_number) {
+      setArmedField('invoice_number')
+      return
+    }
     startImport()
   }
 

@@ -78,6 +78,14 @@ export function hasImportableExtension(name: string): boolean {
 // here too, and because in-house workspaces have a permanently-null entityId (no
 // business_entities row) that belt-and-braces copy locked them out of the wizard's front
 // door: the dropzone never rendered at all. Preview gate = file only; commit gate = entity.
+//
+// Still exactly true after INVCR-01-05, and worth restating because that subtask makes it
+// LOOK otherwise: the upload screen now shows an entity-less workspace an amber "No linked
+// business entity" panel. That panel is INFORMATIONAL — it tells the user early what the
+// commit will refuse, and it disables nothing. Do not "make it consistent" by adding an
+// entity clause here or to anything upstream of `Read columns`; that is precisely the
+// belt-and-braces copy the paragraph above describes, and re-adding it re-closes the front
+// door on in-house workspaces.
 export function canReadColumns(file: File | null): boolean {
   return file !== null && hasImportableExtension(file.name)
 }

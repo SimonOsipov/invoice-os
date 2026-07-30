@@ -16,7 +16,6 @@
 import { CANON } from '../data'
 import { recognize } from '../lib/mapping'
 import { previewColumns } from '../lib/importFlow'
-import { uploadPercent } from '../lib/importApi'
 import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
@@ -61,7 +60,6 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     return dot > 0 ? importFile.name.slice(dot + 1).toUpperCase() : 'FILE'
   })()
 
-  const percent = uploadPercent(uploadPhase)
   const uploading = uploadPhase.kind === 'sending' || uploadPhase.kind === 'processing'
 
   const paletteChips = CANON.filter((c) => !mapping[c.key]).map((c) => {
@@ -96,13 +94,23 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // hence a real `disabled`, not just not-allowed styling, and copy that names the reason
   // rather than a button that looks armed and silently swallows the click.
   const canFile = entityId !== null
+  // The armed branch is the footer half of INVCR-01-05's arm-on-click: clicking the
+  // continue control with invoice_number unplaced no longer swallows the click, it arms
+  // the field (App.tsx's continueMapping). The columns light up on their own — `dropHot`
+  // above is driven by armedField — so this note is what tells the user what the lit
+  // columns are FOR. It sits after the !canFile branch on purpose: with no entity there
+  // is nothing to place a field towards, and the continue control is genuinely disabled
+  // there, so this state is unreachable in that workspace anyway.
+  const invNumArmed = armedField === 'invoice_number' && !invNumMapped
   const mapNote = !canFile
     ? { text: 'Columns read. Filing is unavailable in this workspace — it has no linked business entity to file the invoices against.', color: 'var(--status-muted-text)' }
-    : !invNumMapped
-      ? { text: 'Drag invoice_number onto a column to continue — the invoice number is never guessed for you.', color: 'var(--status-red-text)' }
-      : optionalUnmapped > 0
-        ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
-        : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
+    : invNumArmed
+      ? { text: 'invoice_number is armed — click the column that holds it. Nothing continues until you place it by hand.', color: 'var(--action)' }
+      : !invNumMapped
+        ? { text: 'Drag invoice_number onto a column to continue — the invoice number is never guessed for you.', color: 'var(--status-red-text)' }
+        : optionalUnmapped > 0
+          ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
+          : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
   const continueBtn = !canFile
     ? { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Filing needs a linked entity' }
     : {
@@ -261,25 +269,13 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
           )}
         </div>
         <div style={{ display: 'flex', gap: 10, flex: 'none', alignItems: 'center' }}>
-          {/* Two-phase, honest progress: a determinate bar ONLY while the transport
-              reports a computable byte total, then an indeterminate spinner once the
-              last byte is away — everything after that (server parse, DB writes, rule
-              evaluation) is unobservable, so there is no stage list to show. A run that
-              never fires a computable progress event simply spins the whole time. */}
-          {uploading &&
-            (percent !== null ? (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 90, height: 5, borderRadius: 99, background: 'var(--bg-3)', overflow: 'hidden' }}>
-                  <span style={{ display: 'block', height: '100%', width: `${percent}%`, background: 'var(--action)' }} />
-                </span>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{percent}%</span>
-              </span>
-            ) : (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--bg-3)', borderTopColor: 'var(--action)', display: 'block', animation: 'spin 0.7s linear infinite' }} />
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>Working…</span>
-              </span>
-            ))}
+          {/* The in-flight indicator used to live here — a determinate byte bar with an
+              indeterminate spinner fallback. INVCR-01-05 moved it out to ImportProgress,
+              which body-swaps this whole screen (CreateFlow) rather than tucking the
+              state of the request into the corner of a footer whose every control is
+              disabled while it runs. The reasoning about WHAT such an indicator may
+              honestly claim — no stage list, no row counter, no percentage — moved with
+              it and is recorded at the top of that file. */}
           <button onClick={ctx.backToImport} disabled={uploading} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 42, padding: '0 16px' }}>
             ← Back to import
           </button>

@@ -196,6 +196,32 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // 240s timeout at this line was exactly this). The trailing `*` comes from a
   // separate <span> for `required`, so a substring match also sidesteps any
   // accessible-name concatenation question.
+  // INVCR-01-05 arm-on-click oracle (AC-14), hosted here because this is the exact
+  // state it needs -- Map step, invoice_number unplaced -- and this is the only harness
+  // that can reach it at all: the behaviour is a closure inside App.tsx's continueMapping
+  // and this frontend's unit suite is node-only with no jsdom.
+  //
+  // The continue control is NOT disabled in this state (only the no-entity case is), it
+  // just used to do nothing at all when clicked. It now ARMS invoice_number. TWICE is the
+  // whole point: continueMapping must SET the armed field, not toggle it -- routing it
+  // through ctx.armField (which IS a toggle: `a === k ? null : k`) would dis-arm on the
+  // second click and reproduce the identical do-nothing click the fix deletes. Only the
+  // second assertion can catch that; the first passes either way.
+  const continueBtn = page.getByRole('button', { name: 'Map invoice number to continue' })
+  const armedNote = page.getByText('invoice_number is armed', { exact: false })
+  await continueBtn.click()
+  await expect(armedNote, 'first click arms invoice_number instead of swallowing the click').toBeVisible()
+  await continueBtn.click()
+  await expect(armedNote, 'second click must LEAVE it armed -- a toggle here would dis-arm').toBeVisible()
+
+  // Disarm before the click-to-place sequence below, restoring the exact precondition it
+  // has always assumed (nothing armed). The chip click at the next line goes through
+  // ctx.armField, which toggles -- from an already-armed state it would clear the field
+  // and the column click after it would then assign nothing. This click doubles as proof
+  // that armField itself is still a toggle, and is the reason continueMapping cannot be.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await expect(armedNote, 'the chip click toggles the same field back off').toHaveCount(0)
+
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
 
@@ -218,12 +244,38 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // seconds here (milliseconds on the small mixed fixture below, which is why that
   // test does not also assert this).
   //
-  // The companion "no invented PARSE_LABELS stage list renders here" absence
-  // assertions are GONE, not repointed (INVCR-01-01, plan D-01b): PARSE_LABELS was
-  // deleted with the document mock, so those two strings now exist in no code path at
-  // all and the assertions could never fail again. INVCR-01-05 introduces the honest
-  // server-stage list and owns asserting it positively.
-  await expect(page.getByText('Working…', { exact: true })).toBeVisible({ timeout: 60_000 })
+  // Repointed by INVCR-01-05: 'Working…' no longer exists anywhere. The footer spinner
+  // it named was deleted along with its determinate-bar sibling, replaced by the
+  // ImportProgress card that body-swaps this whole step.
+  //
+  // An earlier note here promised that INVCR-01-05 would "introduce the honest
+  // server-stage list and own asserting it positively". It deliberately does the
+  // opposite, and there is nothing left to assert positively, because there is no
+  // honest stage list to build:
+  //   - Nothing can drive one. POST /v1/imports is synchronous with no job to poll (no
+  //     GET/status route on the service, no Flusher or text/event-stream in
+  //     internal/importer, no EventSource/ReadableStream in the app). importApi.ts's own
+  //     progress contract already says everything after upload.onload is unobservable,
+  //     "so any stage label there would be invented".
+  //   - A STATIC list would misdescribe the server anyway: internal/importer/service.go
+  //     stores rows BEFORE it validates them, and it has a classify/quarantine step -- the
+  //     one that produces the whole structural-error channel this very test asserts on
+  //     later -- that no plausible four-item list includes.
+  // So the card claims nothing it cannot know. What it DOES render is asserted here.
+  //
+  // The title is the phase-stable anchor (both 'sending' and 'processing' show it); the
+  // phase word is asserted as either side of the single transition the transport really
+  // observes, since which one is on screen at any instant is a race with the network.
+  await expect(page.getByText('Importing ui-perf.csv', { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(/^(SENDING FILE|SERVER PROCESSING)$/)).toBeVisible()
+
+  // The honest denominator, and the proof it is a denominator rather than a counter:
+  // it is the server's OWN preview count of this fixture (500 invoices x 3 line-item
+  // rows, 11 header columns), rendered whole and unchanging. There is no numerator to
+  // pair it with -- UploadPhase carries bytes, never rows -- so a progress-shaped
+  // "N OF 1500" appearing here later would be invented, and this exact-text assertion
+  // is what would fail if someone added one.
+  await expect(page.getByText('1500 ROWS · 11 COLS', { exact: true })).toBeVisible()
 
   await importResp
   const wireMs = Date.now() - importT0
@@ -521,6 +573,14 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
 // Deliberately NOT asserted here: that an in-house import can be filed. Persistence for
 // entity-less workspaces is a separate story -- this spec pins that the wizard OPENS and
 // that the point where it stops is honest and legible, not a dead button.
+//
+// INVCR-01-05 moved WHEN that refusal is legible, not whether: the amber panel now states
+// it on step 1, instead of letting the user choose a file and map eleven columns before
+// meeting it at the commit. The panel is INFORMATIONAL and the distinction is the whole
+// point of this test -- "told earlier" and "blocked earlier" look identical in a
+// screenshot and are opposites in behaviour. So the assertions below are deliberately
+// paired: every claim that the panel is PRESENT is followed by a claim that the control it
+// sits next to still WORKS. Restoring the old gate under any new condition fails here.
 test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone and reads columns; filing is refused in words, not silence', async ({
   page,
 }) => {
@@ -532,13 +592,50 @@ test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
 
-  // The heart of it: the surface the blocked state used to replace. Paired with an explicit
-  // absence check on the old copy, so re-introducing the gate under a different condition
-  // still fails here rather than passing on a visible-but-wrong screen.
+  // The heart of it: the surface the blocked state used to replace.
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
   })
-  await expect(page.getByText('No linked entity', { exact: false })).toHaveCount(0)
+
+  // INVCR-01-05's amber panel, asserted POSITIVELY. What stood here was
+  // `getByText('No linked entity').toHaveCount(0)` -- an absence check meant to catch the
+  // old blocking empty state coming back. It was already vacuous (that exact string
+  // survives only in source comments) and it passed on this screen purely by luck: the new
+  // panel says "No linked business entity", which does not contain the substring it looked
+  // for. An absence assertion that cannot fail is worse than none, because it reads like
+  // coverage. The real guarantee was never "no such words appear" -- it is "the surface
+  // still WORKS", and every assertion below this block states that directly.
+  //
+  // Timeout: unlike the dropzone, this panel waits on the entities fetch to SETTLE. It is
+  // gated on `entitiesState` being 'ready'|'empty' as well as a null activeEntity,
+  // precisely so a firm user never sees an amber refusal flash while that fetch is in
+  // flight -- which means an in-house user sees it only once the fetch has answered.
+  await expect(page.getByText('No linked business entity', { exact: true }), 'the refusal is stated up front, on step 1').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByText('so there is nothing to file against', { exact: false })).toBeVisible()
+  await expect(
+    page.getByText('no way to link one from an in-house workspace', { exact: false }),
+    'and it says why THIS persona cannot resolve it',
+  ).toBeVisible()
+
+  // No dead control. NAV_CLIENTS is in the firm-only sidebar group and EntityFormModal
+  // mounts from ClientsView alone, so the firm's "Link a business entity →" CTA would send
+  // an in-house user to a screen they have no route to -- the exact dead end this panel
+  // exists to replace. In-house gets the sentence and no button.
+  await expect(
+    page.getByRole('button', { name: 'Link a business entity' }),
+    'no CTA to a screen this persona cannot reach',
+  ).toHaveCount(0)
+
+  // And the panel is INFORMATIONAL, not a gate: it is added to the card, it replaces
+  // nothing and disables nothing. This is the regression guard proper -- if the panel ever
+  // becomes blocking, this test fails here and at every assertion after it.
+  await expect(page.getByText('Manual entry has the same requirement', { exact: false }), 'the skip hint tells the truth about manual entry too').toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Skip — enter manually' }),
+    'manual entry stays enabled -- it names its own reason one screen later',
+  ).toBeEnabled()
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()

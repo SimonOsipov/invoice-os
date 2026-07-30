@@ -72,10 +72,14 @@ export type MemberStore = Record<WorkflowMode, Member[]>
 export type PolicySteps = { total: number; policies: { name: string; count: number }[] }
 
 /**
- * How an approval position resolves to a person. Exported load-bearingly: MEMB-01-08 types
- * `WorkflowCanvas`/`WorkflowInspector`'s new `resolve?: (position: RoleKey) =>
- * PositionResolution` prop with it. Those components are barred from *value*-importing this
- * module, not from `import type` — the same erased-at-compile idiom types.ts:5-6 records.
+ * How an approval position resolves to a person. Its readers are the two copy helpers below
+ * and `WorkflowBuilder` — the one Workflows component that imports this module at all.
+ *
+ * It is deliberately NOT the `resolve?:` prop type MEMB-01-08 was sketched with. The canvas
+ * and the inspector word the same resolution differently, so a prop carrying the raw variant
+ * would force one of them to re-derive copy this module already owns; and the AMBER tone
+ * (`kind !== 'ok'`) has to travel WITH the string. They therefore take an already-rendered
+ * `{ line, amber }` (WorkflowParts' `ResolvedLine`) and this type never leaves here.
  */
 export type PositionResolution =
   | { kind: 'none' }

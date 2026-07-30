@@ -89,11 +89,26 @@ export function nodeTitle(n: BranchNode): string {
   return 'Auto-approve'
 }
 
-export function nodeSub(n: BranchNode): string {
+/**
+ * An approval position already resolved to a person AND already worded for the surface that
+ * asked — the canvas and the inspector phrase the same resolution differently. The tone
+ * travels with the copy because both come from one `PositionResolution` the components never
+ * see: `lib/members.ts` is barred from the canvas and the inspector (MEMB-01 §15.2), so
+ * `WorkflowBuilder` renders the string and hands it down. `amber` is true for "nobody holds
+ * this position" and "the only holder is suspended" alike.
+ */
+export type ResolvedLine = { line: string; amber: boolean }
+
+/**
+ * `approvalLine` REPLACES the abstract role line ("Finance") with a resolved person, and is
+ * passed only in in-house mode. Called with one argument the output is byte-identical to
+ * before, which is what keeps firm-mode cards unchanged.
+ */
+export function nodeSub(n: BranchNode, approvalLine?: string): string {
   if (n.type === 'approval') {
     // roleOf's unknown-key fallback carries an empty line; joining unconditionally
     // would render a leading " · " on a card whose role went missing.
-    return [roleOf(n.role).line, slaText(n.sla)].filter(Boolean).join(' · ')
+    return [approvalLine ?? roleOf(n.role).line, slaText(n.sla)].filter(Boolean).join(' · ')
   }
   if (n.type === 'notify') return `Watcher · ${n.channel}`
   return 'Clears without manual sign-off'
@@ -150,7 +165,18 @@ export const CUST_OPTIONS: WfOption[] = [
   { value: 'false', label: 'Existing' },
 ]
 
+/**
+ * The FIRM notify list — a module constant with one consumer, and the object firm mode is
+ * handed by identity rather than by value (MEMB-01 §15.2). Editing it in place would change
+ * firm mode, which is exactly what the in-house fork must not do: in-house builds its own
+ * list from the member roster and passes it as the same prop.
+ */
 export const TARGET_OPTIONS: WfOption[] = ['Tax Team', 'Finance Team', 'Audit Committee', 'Internal Audit', 'Preparer'].map((t) => ({ value: t, label: t }))
+
+/** Self-labelling options — the shape the two roster-derived lists (notify, delegate) take. */
+export function toOptions(values: string[]): WfOption[] {
+  return values.map((v) => ({ value: v, label: v }))
+}
 
 export const CHANNEL_OPTIONS: WfOption[] = ['Email', 'In-app', 'SMS'].map((c) => ({ value: c, label: c }))
 

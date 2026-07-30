@@ -804,19 +804,58 @@ type violationSummaryResponse struct {
 	Rules []RuleCount `json:"rules"`
 }
 
-// ViolationSummaryHandler will become GET
-// /v1/invoices/violation-summary?import_batch_id=X (Stage 3, task-283, R6 --
-// a SEPARATE route, not a listResponse key: TestListHandler_
-// EnvelopeExactKeysAndEffectiveClampedValues pins listResponse at exactly 2
-// keys). import_batch_id is REQUIRED (400 if absent or malformed, via a
-// uuid.Parse guard BEFORE the store is ever called -- an unbounded
-// tenant-wide aggregation is not a supported query). Same identity-first-401
-// order as every handler above, then call summary, statusForErr, 200 +
-// violationSummaryResponse on success. Stub (Stage 2.5): always 501, never
-// touches r or summary.
+// ViolationSummaryHandler is GET
+// /v1/invoices/violation-summary?import_batch_id=X (task-283 R6) -- a
+// SEPARATE route, not a listResponse key:
+// TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues pins
+// listResponse at exactly 2 keys. It coexists with GET /v1/invoices/{id}
+// without any registration-order requirement: Go 1.22+ net/http.ServeMux
+// resolves by pattern specificity, and the literal "violation-summary"
+// segment always beats the {id} wildcard.
+//
+// import_batch_id is REQUIRED -- absent OR malformed is a 400 raised by a
+// uuid.Parse guard BEFORE the store is ever called, because an unbounded
+// tenant-wide aggregation is not a supported query. Same identity-first-401
+// order as every handler above, then summary -> statusForErr -> 200 +
+// violationSummaryResponse.
 func ViolationSummaryHandler(summary func(ctx context.Context, importBatchID string) ([]RuleCount, error), log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		importBatchID := r.URL.Query().Get("import_batch_id")
+		if importBatchID == "" {
+			writeError(w, http.StatusBadRequest, "import_batch_id is required")
+			return
+		}
+		if _, err := uuid.Parse(importBatchID); err != nil {
+			writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
+			return
+		}
+
+		rules, err := summary(r.Context(), importBatchID)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: violation summary", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		// Second nil guard, after Store.ViolationSummary's own: this handler
+		// is a factory over an arbitrary summary func, and a nil []RuleCount
+		// marshals to JSON null, not [].
+		if rules == nil {
+			rules = []RuleCount{}
+		}
+
+		writeJSON(w, http.StatusOK, violationSummaryResponse{Rules: rules})
 	}
 }
 

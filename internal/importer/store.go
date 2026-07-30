@@ -207,13 +207,75 @@ type Batch struct {
 	CreatedAt      time.Time
 }
 
-// GetBatch is not yet implemented (stub, Stage 2.5). Will become: the batch
-// row plus min(rule_set_versions.version) over the invoices linked to it by
-// import_batch_id -- NOT LIMIT 1, which is non-deterministic once a batch
-// holds invoices stamped against two different rule-set versions (task-283
-// R4) -- via EntitySupplier's WithinRequestTenantTx + ErrNoRows->ErrNotFound
-// shape PLUS CreateBatch's 22P02->ErrValidation mapping (EntitySupplier
-// alone would 500 on a malformed id -- task-283 R5).
+// GetBatch returns one import_batches row plus its DERIVED rule_set_version:
+// min(rule_set_versions.version) over the invoices linked to the batch by
+// import_batch_id.
+//
+// min(), NOT LIMIT 1. "One version per batch" holds at import time only:
+// POST /v1/invoices/{id}/validate re-stamps a single invoice with the
+// then-active version, so a batch imported under v2 with one re-validated
+// row holds two versions, and a LIMIT 1 without ORDER BY would return an
+// arbitrary one that can change between calls (task-283 R4). min() is
+// stable, and is also the semantically right answer for the review screen's
+// RULE SET sub-line -- the version the batch was IMPORTED under, since
+// re-validate only ever moves forward. A batch with no invoices yields SQL
+// NULL, which scans to a nil *int -- never a false 0 ([Stage-1 F2]).
+//
+// rule_set_versions is a GLOBAL reference table (no tenant_id, no RLS,
+// GRANT SELECT to invoice_app), so the subselect is scoped purely by the
+// RLS-visible invoices it joins through.
+//
+// Error mapping is EntitySupplier's lookup shape (WithinRequestTenantTx +
+// ErrNoRows->ErrNotFound, so a cross-tenant id is indistinguishable from a
+// nonexistent one -- no existence oracle, task-283 R5) PLUS CreateBatch's
+// 22P02->ErrValidation mapping: EntitySupplier's shape ALONE would 500 on a
+// malformed uuid. That second mapping is defence in depth -- GetHandler
+// rejects a malformed id with its own uuid.Parse guard before ever calling
+// here -- but a non-HTTP caller must not get a 500 either.
 func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
-	return Batch{}, nil
+	var b Batch
+	var rawErrors []byte
+
+	txErr := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT b.id, b.entity_id, b.status,
+			        b.rows_total, b.rows_valid, b.rows_invalid,
+			        b.errors, b.created_at,
+			        (SELECT min(rsv.version)
+			           FROM rule_set_versions rsv
+			           JOIN invoices i ON i.rule_set_version_id = rsv.id
+			          WHERE i.import_batch_id = b.id)
+			   FROM import_batches b
+			  WHERE b.id = $1`, id,
+		).Scan(
+			&b.ID, &b.EntityID, &b.Status,
+			&b.RowsTotal, &b.RowsValid, &b.RowsInvalid,
+			&rawErrors, &b.CreatedAt, &b.RuleSetVersion,
+		)
+	})
+	if txErr != nil {
+		if errors.Is(txErr, pgx.ErrNoRows) {
+			return Batch{}, ErrNotFound
+		}
+		if pgCode(txErr) == "22P02" {
+			return Batch{}, ErrValidation
+		}
+		return Batch{}, txErr
+	}
+
+	// Errors is never nil on the way out: the column is NOT NULL DEFAULT
+	// '[]'::jsonb and Finalize writes an empty array rather than null, but a
+	// jsonb null literal is still representable, and json.Unmarshal of one
+	// would leave the slice nil -- which marshals back out as JSON null, not
+	// [] (task-283 trap 4 / spec 4).
+	b.Errors = []RowError{}
+	if len(rawErrors) > 0 && string(rawErrors) != "null" {
+		if err := json.Unmarshal(rawErrors, &b.Errors); err != nil {
+			return Batch{}, err
+		}
+		if b.Errors == nil {
+			b.Errors = []RowError{}
+		}
+	}
+	return b, nil
 }

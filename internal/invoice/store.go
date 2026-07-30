@@ -641,22 +641,77 @@ type RuleCount struct {
 	Invoices int    `json:"invoices"`
 }
 
-// ViolationSummary is not yet implemented (stub, Stage 2.5). Will become:
-// one row per distinct rule_key among the violations of invoices linked to
-// importBatchID, count(DISTINCT invoice.id), ordered invoices DESC then
-// rule_key ASC -- reusing internal/dashboard/store.go:90-99's
-// jsonb_typeof(violations)='array' guard and its empty-rule_key nullif guard
-// (REQUIRED: jsonb_array_elements raises 22023 on non-array input, and
-// invoices carries no array CHECK on violations) but DELIBERATELY OMITTING
-// its v->>'severity'='error' clause, so the rail's count matches the
-// severity-agnostic Store.List{ImportBatchID,RuleKey} filter total the
-// rail's click-through triggers (task-283 R3 -- all 19 shipped rules are
-// today "error", so the two clauses coincide until the first warning-only
-// rule ships; do NOT "fix" this divergence by copying the dashboard's
-// clause back in). RLS-scoped like every other read here -- no manual
-// tenant predicate.
+// ViolationSummary returns one row per distinct rule_key among the
+// violations of the invoices linked to importBatchID, counted as
+// count(DISTINCT invoice.id) -- an invoice naming the same rule twice counts
+// ONCE -- ordered invoices DESC then rule_key ASC. importBatchID is
+// REQUIRED by the caller: an unbounded tenant-wide aggregation is not a
+// supported query (ViolationSummaryHandler rejects an absent one).
+//
+// Reuses internal/dashboard/store.go's Rollup aggregate shape, including
+// BOTH of its guards:
+//   - jsonb_typeof(violations) = 'array' is REQUIRED, not decorative:
+//     jsonb_array_elements RAISES 22023 on non-array input (unlike the `@>`
+//     predicate elsewhere in this file, which just returns false), and
+//     invoices carries no array CHECK on violations -- so one malformed row
+//     would 500 the whole rail without it.
+//   - the nullif guard on rule_key stops an empty key becoming a group.
+//
+// DIVERGENCE, deliberate: the dashboard's v->>'severity' = 'error' clause is
+// OMITTED. This aggregate is a PREVIEW OF A FILTER -- clicking a rail pill
+// issues ?import_batch_id=X&rule_key=K, and List's RuleKey filter above is
+// severity-agnostic. The rail must therefore use the same predicate as the
+// filter it triggers, or a warning-only rule shows 0 in the rail while the
+// table below shows its rows. All shipped rules are today severity "error",
+// so the two clauses coincide and a severity-filtered implementation would
+// pass every test written against today's data -- which is exactly why
+// TestViolationSummary_MatchesRuleKeyFilterTotalIncludingWarnings seeds a
+// warning-only rule. Do NOT "fix" this divergence by copying the
+// dashboard's clause back in; the dashboard asks a different question
+// (task-283 R3).
+//
+// RLS-scoped like every other read here -- no manual tenant predicate. A
+// cross-tenant batch id is therefore an empty result, not an error.
 func (s *Store) ViolationSummary(ctx context.Context, importBatchID string) ([]RuleCount, error) {
-	return nil, nil
+	// Never nil: the handler renders "rules":[] and a nil slice would
+	// marshal to null.
+	rules := []RuleCount{}
+
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
+			 FROM invoices i
+			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
+			 WHERE i.import_batch_id = $1
+			   AND jsonb_typeof(i.violations) = 'array'
+			   AND nullif(v->>'rule_key', '') IS NOT NULL
+			 GROUP BY 1
+			 ORDER BY 2 DESC, 1 ASC`,
+			importBatchID,
+		)
+		if err != nil {
+			// Defence in depth behind the handler's own uuid.Parse guard,
+			// mirroring List above: a malformed batch id must be a 400, not
+			// a 500.
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rc RuleCount
+			if err := rows.Scan(&rc.RuleKey, &rc.Invoices); err != nil {
+				return err
+			}
+			rules = append(rules, rc)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rules, nil
 }
 
 // Update applies only in's non-nil MBS-content fields to an invoices row and

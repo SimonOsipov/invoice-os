@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -371,17 +373,63 @@ type batchResponse struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// GetHandler will become GET /v1/imports/{id} (Stage 3, task-283):
-// identity-first-401 -> a handler-level uuid.Parse guard (400 BEFORE the
-// store is ever called -- a malformed id must never reach
-// Store.GetBatch's own 22P02 mapping, which would put a package-internal
-// "importer: validation" string on the wire) -> call get -> statusForErr ->
-// 200 + batchResponse on success. A cross-tenant OR unknown id must resolve
-// to a BYTE-IDENTICAL 404 (no existence oracle, task-283 R5). Stub
-// (Stage 2.5): always 501, never touches r or get.
+// GetHandler is GET /v1/imports/{id} (task-283): identity-first-401 -> a
+// handler-level uuid.Parse guard (400 BEFORE the store is ever called -- a
+// malformed id must never reach Store.GetBatch's own 22P02 mapping, which
+// would put the package-internal "importer: validation" string on the wire;
+// the wording here mirrors internal/invoice's ListHandler instead) -> get ->
+// statusForErr -> 200 + batchResponse on success.
+//
+// A cross-tenant id and an id that exists nowhere BOTH resolve to
+// ErrNotFound in the store, so both render the SAME 404 body -- that
+// byte-equality, not the 404 status itself, is what proves there is no
+// existence oracle (task-283 R5).
 func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		id := r.PathValue("id")
+		if _, err := uuid.Parse(id); err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+
+		batch, err := get(r.Context(), id)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: get batch", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		// Second nil guard, after Store.GetBatch's own: this handler is a
+		// factory over an arbitrary get func, and a nil []RowError marshals
+		// to JSON null, not [] (spec 4).
+		rowErrors := batch.Errors
+		if rowErrors == nil {
+			rowErrors = []RowError{}
+		}
+
+		writeJSON(w, http.StatusOK, batchResponse{
+			ID:          batch.ID,
+			EntityID:    batch.EntityID,
+			Status:      batch.Status,
+			RowsTotal:   batch.RowsTotal,
+			RowsValid:   batch.RowsValid,
+			RowsInvalid: batch.RowsInvalid,
+			Errors:      rowErrors,
+
+			RuleSetVersion: batch.RuleSetVersion,
+			CreatedAt:      batch.CreatedAt,
+		})
 	}
 }
 

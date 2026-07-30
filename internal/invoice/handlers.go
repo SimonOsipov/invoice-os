@@ -291,6 +291,19 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 	}
 }
 
+// maxFilterTextLen bounds ListHandler's two free-text filter params, rule_key
+// and q (INVCR-01-06 AC-6). 200 is an invented abuse bound with a wide margin:
+// the longest shipped rule key is ~24 chars, and no honest review-screen search
+// is longer. Over the cap is a 400, deliberately NOT a silent truncation --
+// truncating turns "find X" into "find some prefix of X" and returns rows the
+// caller never asked for. (Contrast limit>200, which DOES silently clamp: a
+// clamp there still answers the question asked, just less of it, and
+// pagination.limit reports the truncation on the wire.)
+//
+// This is a byte length, not a rune count: the cap exists to bound the input,
+// and bytes are what an abusive caller actually spends.
+const maxFilterTextLen = 200
+
 // ListHandler returns GET /v1/invoices. Same identity-first-401 order as
 // Create/GetHandler. Query params (portfolio's exact defaulting/clamping
 // rules, [D8]): limit (default 50, non-integer -> 400, <1 -> 400, >200
@@ -309,9 +322,30 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 // tenant-wide LIMIT-50 page in the browser instead (lib/invoices.ts) -- wrong:
 // that's filter-AFTER-paginate, so an entity's own invoices silently vanished
 // from Invoices/Reports/Customers whenever they weren't inside the newest 50
-// tenant-wide (the CI-caught regression this param fixes). No status filter
-// beyond that -- unlike portfolio's ListHandler, there is no q/status parsing
-// here.
+// tenant-wide (the CI-caught regression this param fixes).
+//
+// INVCR-01-06 ([D4], Core AC 7) adds the review screen's five, taking this to
+// nine params, ALL ANDed: import_batch_id (uuid.Parse, same shape as
+// entity_id), status (validated by the existing Status.valid(), reusing
+// TransitionHandler's byte-identical "unknown status" 400 rather than writing
+// a second copy of the 7-value list), needs_fix (strconv.ParseBool, same shape
+// as needs_attention), and the two free-text params rule_key and q, capped at
+// maxFilterTextLen.
+//
+// Two contract rules hold across all five. First, EMPTY IS ABSENT, not a 400
+// (`if raw != ""`), matching all four params that shipped before them -- so
+// `?import_batch_id=` applies no filter and returns the tenant-wide list. That
+// is safe only because the review route is `#review/<uuid>` and parseReviewHash
+// returns null for a non-uuid, so no request is ever issued without a batch id;
+// a caller must never render a review table from a response fetched without
+// one. Second, a MALFORMED value is always a 400 raised BEFORE the store is
+// called, never a silent ignore -- silently dropping a narrowing filter renders
+// a wrong page (too many rows, plausible total) instead of an honest error,
+// which is exactly the [entity-id-cut] failure mode.
+//
+// The response envelope is unchanged: exactly two top-level keys, "invoices"
+// and "pagination". Applied filters are deliberately NOT echoed back
+// (TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues pins len == 2).
 func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -372,7 +406,49 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			}
 		}
 
-		filter := ListFilter{Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention}
+		importBatchID := query.Get("import_batch_id")
+		if importBatchID != "" {
+			if _, err := uuid.Parse(importBatchID); err != nil {
+				writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
+				return
+			}
+		}
+
+		// statusFilter, not `status`: the error path below binds its own
+		// `status` from statusForErr, and shadowing it here reads as a bug.
+		statusFilter := Status(query.Get("status"))
+		if statusFilter != "" && !statusFilter.valid() {
+			writeError(w, http.StatusBadRequest, "unknown status")
+			return
+		}
+
+		needsFix := false
+		if raw := query.Get("needs_fix"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "needs_fix must be a boolean")
+				return
+			}
+			needsFix = b
+		}
+
+		ruleKey := query.Get("rule_key")
+		if len(ruleKey) > maxFilterTextLen {
+			writeError(w, http.StatusBadRequest, "rule_key is too long")
+			return
+		}
+
+		q := query.Get("q")
+		if len(q) > maxFilterTextLen {
+			writeError(w, http.StatusBadRequest, "q is too long")
+			return
+		}
+
+		filter := ListFilter{
+			Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention,
+			ImportBatchID: importBatchID, Status: statusFilter, NeedsFix: needsFix,
+			RuleKey: ruleKey, Query: q,
+		}
 
 		items, total, err := list(r.Context(), filter)
 		if err != nil {

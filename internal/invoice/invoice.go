@@ -228,9 +228,10 @@ type EditInput struct {
 // "not-needs-attention" branch).
 //
 // ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4], Core AC 7)
-// are the review-screen's five filters, declared here as Stage 2.5 compile
-// scaffolding -- Store.List does not yet apply them (that's Stage 3). Each
-// zero value ("" / false) applies no predicate, same convention as EntityID.
+// are the review-screen's five filters, ANDed with each other and with
+// EntityID/NeedsAttention. Each zero value ("" / false) applies no predicate,
+// same convention as EntityID -- so the zero ListFilter is still the
+// where-less, tenant-wide query it was before any of them existed.
 // NeedsFix is a NEW, separate predicate from NeedsAttention
 // ([needs-fix-is-a-new-predicate]) -- it must never be folded into the
 // needs_attention SQL fragment, which is byte-pinned to the dashboard rollup

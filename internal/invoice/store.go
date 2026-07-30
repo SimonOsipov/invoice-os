@@ -455,16 +455,40 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 	return result, nil
 }
 
+// escapeLike neutralises the LIKE/ILIKE metacharacters in a user-supplied
+// search string so it matches LITERALLY, for use with an explicit
+// ESCAPE '\' clause. Order matters: backslash FIRST, or the backslashes this
+// function itself introduces get escaped a second time.
+//
+// This deliberately diverges from internal/portfolio's List, whose q is bound
+// but NOT escaped -- a ruling pinned there by
+// TestStoreList_SearchQWildcardIsNotEscaped, whose own comment anticipated a
+// future story wanting literal-search semantics. This is that story
+// (INVCR-01-06): across a 500-row import review, a stray "%" silently
+// matching all 500 is a worse lie than 0 results. portfolio/* is NOT changed,
+// so the same typed "%" matches everything on Entities and nothing here --
+// an accepted, flagged divergence.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
 // List returns the caller's tenant's invoice HEADERS (LineItems left nil, [D7]),
 // ordered created_at DESC, id DESC (deterministic), paginated by f.Limit/f.Offset,
-// plus the total FILTERED count (matching f.EntityID/f.NeedsAttention, ignoring
-// limit/offset) for the pagination envelope. RLS (not a manual WHERE tenant_id)
+// plus the total FILTERED count (matching every predicate filter set on f,
+// ignoring limit/offset) for the pagination envelope. Every condition is
+// interpolated into BOTH the COUNT and the page query before LIMIT/OFFSET are
+// appended last, so total is the filtered total across all pages, never the
+// count of one page. RLS (not a manual WHERE tenant_id)
 // additionally scopes both the COUNT and the page to the caller's tenant. An
 // empty result is []Invoice{}, never a nil slice.
 //
 // f.EntityID ([entity-id-restored], regression fix) and f.NeedsAttention
-// (M4-09-02) are Store.List's two predicate filters ([D8]), ANDed together
-// when both are set. EntityID follows portfolio/store.go List's own
+// (M4-09-02) were Store.List's first two predicate filters ([D8]); INVCR-01-06
+// added five more (below). ALL of them AND together when more than one is set.
+// EntityID follows portfolio/store.go List's own
 // conditions/args idiom (fmt.Sprintf("entity_id = $%d", len(args)), never
 // string-interpolated) so it narrows the row set BEFORE LIMIT/OFFSET are ever
 // applied -- the fix for the CI-caught regression where the SPA instead
@@ -483,9 +507,38 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 // store.go Rollup, alias dropped -- List has no join) so the two surfaces can
 // never drift apart ([needs-attention-drift-guard],
 // TestStoreList_NeedsAttentionMatchesDashboardRollup). It carries no bind
-// params of its own. When both filters are false/absent (the zero
-// ListFilter), `where` is empty and both queries are byte-identical to before
-// either filter existed.
+// params of its own. When every filter is false/absent (the zero ListFilter),
+// `where` is empty and both queries are byte-identical to before any filter
+// existed.
+//
+// f.ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4]) are the
+// review screen's five filters. Four notes on them:
+//
+//   - NeedsFix is a NEW predicate, not a slice of NeedsAttention
+//     ([needs-fix-is-a-new-predicate]): draft AND a blocking violation, so a
+//     rejected/failed invoice is EXCLUDED where NeedsAttention includes it.
+//     It is written out separately rather than sharing a Go constant with the
+//     NeedsAttention fragment, precisely so a later change to one cannot
+//     silently move the dashboard's meaning too. ([D6]'s kept_as_is_at IS NULL
+//     clause lands in INVCR-01-15, not here.)
+//   - RuleKey is bound as a jsonb ARGUMENT (violations @> $n::jsonb), never
+//     interpolated. This is the one place NeedsAttention's idiom does NOT
+//     generalise: that fragment is a hardcoded literal with no bind param, and
+//     concatenating a caller-supplied key into its shape would be a direct
+//     injection path.
+//   - Query's fragment is wrapped in OUTER PARENTHESES. conditions are joined
+//     with " AND ", so a bare `a ILIKE $n OR b ILIKE $n` would bind as
+//     `(batch AND ...) OR (b ILIKE ...)` -- the other filters silently
+//     evaporate and the query goes tenant-wide with a plausible-looking total.
+//   - Query's wildcards are escaped (escapeLike + ESCAPE '\'), so a typed "%"
+//     finds a literal percent sign, not every row. See escapeLike for why this
+//     reverses portfolio's recorded ruling.
+//
+// A malformed (non-uuid) f.ImportBatchID raises 22P02 on the COUNT query and
+// maps to ErrValidation, exactly as f.EntityID does. A cross-tenant (or
+// nonexistent) batch id is NOT an error and NOT a 404: RLS has already scoped
+// the row set, so it narrows to an empty page with total 0 -- a 404 would be
+// an existence oracle for another tenant's data.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
@@ -499,6 +552,35 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		}
 		if f.NeedsAttention {
 			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
+		}
+		if f.ImportBatchID != "" {
+			args = append(args, f.ImportBatchID)
+			conditions = append(conditions, fmt.Sprintf("import_batch_id = $%d", len(args)))
+		}
+		if f.Status != "" {
+			args = append(args, string(f.Status))
+			conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
+		}
+		if f.NeedsFix {
+			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb)`)
+		}
+		if f.RuleKey != "" {
+			// json.Marshal, never fmt.Sprintf: a quote-bearing rule_key built by
+			// string formatting emits malformed JSON, which Postgres rejects as
+			// 22P02 (a 500) instead of returning the honest zero rows.
+			b, err := json.Marshal([]map[string]string{{"rule_key": f.RuleKey}})
+			if err != nil {
+				return err
+			}
+			args = append(args, string(b))
+			conditions = append(conditions, fmt.Sprintf("violations @> $%d::jsonb", len(args)))
+		}
+		if f.Query != "" {
+			args = append(args, escapeLike(f.Query))
+			conditions = append(conditions, fmt.Sprintf(
+				`(invoice_number ILIKE '%%'||$%d||'%%' ESCAPE '\' OR buyer_name ILIKE '%%'||$%d||'%%' ESCAPE '\')`,
+				len(args), len(args),
+			))
 		}
 
 		where := ""

@@ -448,6 +448,15 @@ describe('routeAfterImport (AC-9, task-285 Implementation Plan §3 — order is 
 
     expect(result).toEqual({ kind: 'review', batchId: 'batch-r8' })
   })
+
+  it('ROUTE-9 (QA Stage 4, mutation-found — closes a gap NOTHING in ROUTE-1..8 reaches): a non-completed status with EXACTLY one ready invoice and a resolved id is still rejected, never single — this is the one fixture combination that actually makes "status before count before id" observable. ROUTE-4/5 use counts other than 1, so reordering the status check to run AFTER the count===1-and-id branch (promoting `single` above `failed`) passes every other spec in this file and is only caught here', () => {
+    const report: ImportReport = { ...BASE_ROUTE_REPORT, id: 'batch-r9', status: 'failed', ready_invoices: 1 }
+
+    const result = routeAfterImport(report, 'u-7')
+
+    expect(result).toEqual({ kind: 'rejected', batchId: 'batch-r9' })
+    expect(result.kind).not.toBe('single')
+  })
 })
 
 describe('reviewHash (AC-1, HASH-3 — replaces SHELL-1, which cannot exist under environment:\'node\': no `location`, no React)', () => {
@@ -509,6 +518,21 @@ describe('reviewShellState (AC-7, resolves the AC-7/AC-9 divergence — task-285
 
     expect(reviewShellState(batch)).toBe('batch')
     expect(routeAfterImport(report, null)).toEqual({ kind: 'rejected', batchId: 'batch-quarantined' })
+  })
+})
+
+describe('reviewTabs + channelTiles on an all-quarantined batch (QA Stage 4 — SHELL-9 only proves reviewShellState/routeAfterImport; this proves the CLAIM §4 makes about what SHELL-9\'s "batch surface" actually renders: an empty Invoices tab alongside a fully populated Unreadable tab, not just that the shell picked "batch" over "rejected")', () => {
+  it('an all-quarantined batch (0 live invoices, 10 structural errors) renders Invoices (0) and Unreadable rows (10) — proving the batch surface is not merely selected but genuinely non-empty on the channel that matters', () => {
+    const batch: Pick<ImportBatch, 'errors' | 'rule_set_version'> = {
+      errors: Array.from({ length: 10 }, (_, i) => ({ row: i + 2, message: `row ${i + 2} failed` })),
+      rule_set_version: 5,
+    }
+
+    const tiles = channelTiles(batch, { cleanTotal: 0, failingTotal: 0 })
+    const tabs = reviewTabs({ invoices: 0, unreadable: tiles.frozen.unreadable })
+
+    expect(tiles.frozen.unreadable).toBe(10)
+    expect(tabs.map((t) => t.label)).toEqual(['Invoices (0)', 'Unreadable rows (10)'])
   })
 })
 

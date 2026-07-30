@@ -122,6 +122,55 @@ describe('verdictPill: warning-only stays passing, never failing (PILL-4, §10.1
   })
 })
 
+describe('verdictPill: the advisory arm is status-agnostic and its tone is derived (QA Stage 4, task-284 — pins the two judgment calls Stage 3 made but left unpinned)', () => {
+  it('PILL-6: a draft with only warning violations still gets an advisory badge, never suppressed just because the row has not been validated yet', () => {
+    const violations: Violation[] = [{ rule_key: 'r1', severity: 'warning', message: 'w1' }]
+    const input: VerdictInput = { status: 'draft', violations }
+
+    const result = verdictPill(input)
+
+    expect(result.status).toEqual(invoiceStatusStyle('draft'))
+    expect(result.badges.some((b) => b.kind === 'rules-failed')).toBe(false)
+    const advisory = result.badges.find((b) => b.kind === 'advisory')
+    expect(advisory).toBeDefined()
+    expect(advisory?.count).toBe(1)
+  })
+
+  it('PILL-7: an advisory set with only info-severity violations renders the muted info tone, not amber — proves the tone is derived from what is actually present, not hard-coded to warning', () => {
+    const violations: Violation[] = [{ rule_key: 'r1', severity: 'info', message: 'i1' }]
+    const input: VerdictInput = { status: 'validated', violations }
+
+    const result = verdictPill(input)
+
+    const advisory = result.badges.find((b) => b.kind === 'advisory')
+    expect(advisory).toBeDefined()
+    expect(advisory?.tone).toEqual({
+      bg: severityStyle('info').bg,
+      border: severityStyle('info').border,
+      text: severityStyle('info').text,
+    })
+  })
+
+  it('PILL-8: an advisory set mixing info and warning violations renders the warning tone, not info — warning dominates the derivation so an info-only-looking advisory never under-signals a real warning in the mix', () => {
+    const violations: Violation[] = [
+      { rule_key: 'r1', severity: 'info', message: 'i1' },
+      { rule_key: 'r2', severity: 'warning', message: 'w1' },
+    ]
+    const input: VerdictInput = { status: 'validated', violations }
+
+    const result = verdictPill(input)
+
+    const advisory = result.badges.find((b) => b.kind === 'advisory')
+    expect(advisory).toBeDefined()
+    expect(advisory?.count).toBe(2)
+    expect(advisory?.tone).toEqual({
+      bg: severityStyle('warning').bg,
+      border: severityStyle('warning').border,
+      text: severityStyle('warning').text,
+    })
+  })
+})
+
 describe('verdictPill: a kept row is KEPT · INVALID and does not stack (PILL-5)', () => {
   it('PILL-5: kept_as_is_at set REPLACES rules-failed with exactly one kept-invalid badge, never both', () => {
     const violations: Violation[] = [
@@ -229,6 +278,13 @@ describe('pagerLabels (AC-9)', () => {
     expect(result.showing).not.toContain('Infinity')
     expect(result.page).not.toContain('NaN')
     expect(result.page).not.toContain('Infinity')
+  })
+
+  it('PAGER-5 (QA Stage 4 gap — the `last < first` arm is reached by ANY offset >= total, not only limit<1): a stale page after a filter narrows the result set shows 0, not an inverted "51–10"', () => {
+    const result = pagerLabels({ limit: 50, offset: 50, total: 10 })
+
+    expect(result.showing).toBe('SHOWING 0 OF 10')
+    expect(result.page).toBe('PAGE 1 / 1')
   })
 })
 

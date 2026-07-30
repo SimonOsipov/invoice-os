@@ -104,16 +104,26 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     displayName: 'Chinedu Okafor',
     specToken: 'FIRM_PERSONA',
     tenantName: 'Okafor & Partners',
-    // The four surfaces a spec in the tree TODAY actually drives as the firm persona.
-    // Rules / Reports / Settings / Customers / Workflows / Approvals are deliberately
-    // absent at every grade: `grep -rn "'Rules'\|/Rules/\|'Reports'\|'Settings'" e2e/`
-    // returns nothing, so filing a cell for them would be a claim with no spec behind it.
-    // Later subtasks add each remaining cell in the SAME commit as the spec that covers it.
+    // The first four are the surfaces a spec in the tree actually DRIVES as the firm
+    // persona; the next four are only proven to EXIST for it (see their own note below).
+    // Workflows and Approvals stay absent at every grade -- Approvals is not a firm-mode
+    // surface at all, and Workflows is [PERSONA-01-04]'s. Each remaining cell is added in
+    // the SAME commit as the spec that covers it, never ahead of one.
     coverage: [
       { navConst: 'NAV_DASHBOARD', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_INVOICES', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_VALIDATION', grade: 'drives', coveredBy: 'e2e/topology/validation.spec.ts' },
       { navConst: 'NAV_CLIENTS', grade: 'drives', coveredBy: 'e2e/topology/portfolio.spec.ts' },
+      // nav-only, and honestly so (PERSONA-01-03): persona-surfaces.spec.ts's roster test
+      // asserts the firm sidebar's nav labels as an EXACT ordered list, so it pins that
+      // these four surfaces are present (and that Approvals is absent) for this persona --
+      // but it never opens them as the firm. Their firm-mode CONTENT is unproven, which is
+      // exactly what `nav-only` states. NAV_WORKFLOWS is deliberately still absent at every
+      // grade: [PERSONA-01-04] files it in the same commit as the spec that covers it.
+      { navConst: 'NAV_CUSTOMERS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_RULES', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_REPORTS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_SETTINGS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
     ],
   },
   inhouse: {
@@ -122,8 +132,20 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     displayName: 'Ngozi Balogun',
     specToken: 'INHOUSE_PERSONA',
     tenantName: 'Honeywell Group',
-    // No `coverage` key: the in-house persona has no spec that drives a surface yet. That
-    // absence is the honest statement, and it is what later subtasks in this story close.
+    // Seven of the in-house sidebar's eight surfaces, all DRIVEN (rendered content
+    // asserted, not a mount) by persona-surfaces.spec.ts's sweep -- PERSONA-01-03. The
+    // eighth, NAV_WORKFLOWS, is swept by that same file but its CELL belongs to
+    // [PERSONA-01-04], which files it alongside its own spec: a cell here today would
+    // claim coverage this story has not yet finished paying for.
+    coverage: [
+      { navConst: 'NAV_DASHBOARD', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_INVOICES', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_VALIDATION', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_RULES', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_REPORTS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_SETTINGS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+    ],
   },
 }
 

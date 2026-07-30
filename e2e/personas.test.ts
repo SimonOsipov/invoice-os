@@ -22,9 +22,16 @@ import {
   BOUNDARY_MATRIX,
   signInUrl,
   accepts,
+  type Grade,
   type PersonaId,
   type Destination,
 } from './personas'
+
+// The legal coverage grades, mirroring personas.ts's Grade union (row 8 / G4 below). Typed
+// as Grade[] so a value that is not a union member cannot be listed here; a member ADDED to
+// the union and not listed here goes red at row 8 the first time a cell uses it, which is
+// the loud direction to fail in.
+const LEGAL_GRADES: Grade[] = ['drives', 'nav-only']
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const LANDING_AUTH = join(REPO_ROOT, 'frontend/landing/src/auth.ts')
@@ -341,8 +348,21 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
 
     const failures: string[] = []
     for (const { cell, specToken } of cells) {
-      if (cell.grade !== 'drives') {
-        failures.push(`${cell.navConst}: expected grade 'drives', got '${cell.grade}'`)
+      // G4 checks that a cell's claim is filed against a REAL spec, at either grade -- the
+      // existsSync + label + specToken checks below all run for `nav-only` exactly as they
+      // do for `drives`, because a `nav-only` claim is just as capable of naming a file
+      // that does not exist or that never mentions the surface. This used to hard-reject
+      // any grade but 'drives', which was written when `drives` was the only grade in
+      // production use; PERSONA-01-03 files the first real `nav-only` cells (firm x
+      // Customers/Rules/Reports/Settings, covered by topology/persona-surfaces.spec.ts's
+      // roster test), and that rejection would have turned them red for no defect.
+      //
+      // Pinning WHICH cells are permitted to be `nav-only` is deliberately NOT done here:
+      // that is G6b's job in [PERSONA-01-07] (EXPECTED_NAV_ONLY). A second, weaker copy of
+      // that guard living in this row would drift from it. LEGAL_GRADES mirrors the Grade
+      // union in personas.ts -- no third `pending`/`planned` state ([no-pending-grade]).
+      if (!LEGAL_GRADES.includes(cell.grade)) {
+        failures.push(`${cell.navConst}: grade '${cell.grade}' is not one of ${LEGAL_GRADES.join('|')}`)
       }
       const specPath = join(REPO_ROOT, cell.coveredBy)
       if (!existsSync(specPath)) {

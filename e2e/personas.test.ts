@@ -33,6 +33,42 @@ import {
 // the loud direction to fail in.
 const LEGAL_GRADES: Grade[] = ['drives', 'nav-only']
 
+// --- G6b expectation sets (PERSONA-01-07, task-276) ------------------------------------
+//
+// Literal, HAND-WRITTEN sets living in THIS test file, never in e2e/personas.ts -- a
+// downgrade or a promotion becomes a visible diff to the guard's OWN expectations rather
+// than a quiet data change ([coverage-honesty]). Derived from the tree (personas.ts:126-129
+// for nav-only; :112-119 + :146-153 for drives) and confirmed against it, not copied out of
+// the implementation plan.
+
+// The complete nav-only set. Each entry carries its own one-line reason.
+const EXPECTED_NAV_ONLY = new Set<string>([
+  'firm:NAV_CUSTOMERS', // Core AC 7 is met by the roster assertion, not by driving it
+  'firm:NAV_RULES', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
+  'firm:NAV_REPORTS', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
+  'firm:NAV_SETTINGS', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
+])
+
+// The 8 in-house cells (Core AC 2, including inhouse:NAV_APPROVALS -> Core AC 3 and
+// inhouse:NAV_WORKFLOWS -> Core AC 4) plus firm:NAV_WORKFLOWS (Core AC 4). Given exactly
+// two grades and G6a's set equality, this set is LOGICALLY REDUNDANT: every cell not in
+// EXPECTED_NAV_ONLY must already be graded 'drives'. It is kept for two reasons that are
+// NOT logical necessity: (1) it is the only place Core ACs 2/3/4 are asserted BY NAME, so a
+// failure here names the AC rather than a bare set difference; (2) it becomes load-bearing
+// the day a third grade lands. Do not read this comment, or row 17 below, as claiming this
+// is an independent check of anything G6a/row 16 don't already guarantee.
+const EXPECTED_DRIVES_MIN = new Set<string>([
+  'inhouse:NAV_DASHBOARD',
+  'inhouse:NAV_INVOICES',
+  'inhouse:NAV_VALIDATION',
+  'inhouse:NAV_WORKFLOWS', // Core AC 4
+  'inhouse:NAV_RULES',
+  'inhouse:NAV_APPROVALS', // Core AC 3
+  'inhouse:NAV_REPORTS',
+  'inhouse:NAV_SETTINGS',
+  'firm:NAV_WORKFLOWS', // Core AC 4
+])
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const LANDING_AUTH = join(REPO_ROOT, 'frontend/landing/src/auth.ts')
 const SIDEBAR = join(REPO_ROOT, 'frontend/app/src/components/Sidebar.tsx')
@@ -225,6 +261,39 @@ function extractOperatorKeys(src: string, constName: string, srcLabel: string): 
     throw new Error(`G13: no top-level keys found inside ${constName} -- the anchors moved, update e2e/personas.test.ts`)
   }
   return keys
+}
+
+// --- G6c extraction helpers (e2e/personas.ts's own Grade union and Cell interface) -----
+//
+// A naive whole-file scan for "pending"/"planned"/"todo" goes RED on the UNMUTATED tree:
+// personas.ts:63-66 is a COMMENT explaining that no such state exists, and a substring scan
+// cannot tell a comment from a live field. Scoped instead to the two places a third grade
+// could actually be expressed: the `Grade` type's own right-hand side, and the `Cell`
+// interface's field list.
+
+// `export type Grade = 'drives' | 'nav-only'` is a single line; slice its right-hand side
+// and extract every quoted member.
+function extractGradeUnionMembers(src: string): string[] {
+  const match = src.match(/^export type Grade\s*=\s*(.+)$/m)
+  if (!match) {
+    throw new Error('G6c: `export type Grade =` anchor not found in e2e/personas.ts -- the anchors moved, update e2e/personas.test.ts')
+  }
+  return [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1])
+}
+
+// `export interface Cell { ... }`: slice from its declaration to the next column-0 `}` and
+// pull every top-level field name.
+function extractCellFieldNames(src: string): string[] {
+  const startIdx = src.indexOf('export interface Cell {')
+  if (startIdx === -1) {
+    throw new Error('G6c: `export interface Cell {` anchor not found in e2e/personas.ts -- the anchors moved, update e2e/personas.test.ts')
+  }
+  const endIdx = src.indexOf('\n}', startIdx)
+  if (endIdx === -1) {
+    throw new Error('G6c: closing column-0 `}` not found after Cell -- the anchors moved, update e2e/personas.test.ts')
+  }
+  const body = src.slice(startIdx, endIdx)
+  return [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1])
 }
 
 describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-270)', () => {
@@ -553,5 +622,98 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     const keys = extractOperatorKeys(operatorsFixture, 'FAKE_OPERATORS', 'fixture')
     expect(keys).toContain('alpha')
     expect(keys).not.toContain('beta')
+  })
+
+  // --- G6 (PERSONA-01-07, task-276): the guard that closes the door on Core AC 1 --------
+  //
+  // G6 guards data subtasks 01-06 already landed on this branch, so it is GREEN on the
+  // unmutated tree today (17 rendered pairs == 17 coverage cells) -- a trivially-failing
+  // import would prove nothing here. `Test-first: yes` is discharged by MUTATION-VERIFY
+  // instead: each assertion below was proven by making the exact break it exists to catch,
+  // confirming RED with the right message, then reverting. See task-276's implementation
+  // notes for the captured output of all seven mutations.
+
+  it('row 15 (G6a) -- the rendered (surface, persona) pairs and the coverage cells are the same set', () => {
+    const sidebarSrc = readFileSync(SIDEBAR, 'utf8')
+    const { firm, inhouse } = extractSidebarNavConsts(sidebarSrc)
+
+    // Persona<->mode mapping is a HARDCODED LITERAL, never read off PERSONA_IDS -- row 3's
+    // established reason: registry exports must not supply the pairs used to test the
+    // registry.
+    const rendered = new Set<string>([
+      ...firm.map((navConst) => `firm:${navConst}`),
+      ...inhouse.map((navConst) => `inhouse:${navConst}`),
+    ])
+
+    // Vacuity first, so a broken extraction diagnoses itself before the coverage diff does.
+    expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(9)
+    expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(8)
+    expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(17)
+
+    // Flattened over ALL FOUR personas (not just the two app ones): a stray cell filed
+    // against `developer`/`support` -- which render no sidebar at all -- must surface as an
+    // `extra` rather than being excluded from the comparison by construction.
+    const celled: string[] = []
+    for (const id of PERSONA_IDS) {
+      for (const cell of PERSONAS[id].coverage ?? []) {
+        celled.push(`${id}:${cell.navConst}`)
+      }
+    }
+
+    const celledSet = new Set(celled)
+    const uncovered = [...rendered].filter((key) => !celledSet.has(key))
+    expect(uncovered, `rendered pairs with no coverage cell: ${uncovered.join(', ')}`).toEqual([])
+
+    const extra = celled.filter((key) => !rendered.has(key))
+    expect(extra, `coverage cells naming a pair the sidebar does not render: ${extra.join(', ')}`).toEqual([])
+
+    const duplicateKeys = [...new Set(celled.filter((key, i) => celled.indexOf(key) !== i))]
+    expect(duplicateKeys, `duplicate coverage cell keys: ${duplicateKeys.join(', ')}`).toEqual([])
+  })
+
+  it('row 16 (G6b) -- the nav-only set equals EXPECTED_NAV_ONLY exactly', () => {
+    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(4)
+
+    const actualNavOnly = new Set<string>()
+    for (const id of PERSONA_IDS) {
+      for (const cell of PERSONAS[id].coverage ?? []) {
+        if (cell.grade === 'nav-only') actualNavOnly.add(`${id}:${cell.navConst}`)
+      }
+    }
+
+    // Two directions, reported separately: an unexpected nav-only cell is a silent
+    // downgrade; an EXPECTED_NAV_ONLY entry missing from the actual set is a promotion that
+    // left the guard's own expectations stale.
+    const unexpectedNavOnly = [...actualNavOnly].filter((key) => !EXPECTED_NAV_ONLY.has(key))
+    expect(unexpectedNavOnly, `graded nav-only but not in EXPECTED_NAV_ONLY: ${unexpectedNavOnly.join(', ')}`).toEqual([])
+
+    const missingFromActual = [...EXPECTED_NAV_ONLY].filter((key) => !actualNavOnly.has(key))
+    expect(missingFromActual, `in EXPECTED_NAV_ONLY but not graded nav-only: ${missingFromActual.join(', ')}`).toEqual([])
+  })
+
+  it('row 17 (G6b) -- the named drives minimum holds', () => {
+    expect(EXPECTED_DRIVES_MIN.size, 'EXPECTED_DRIVES_MIN entries (vacuity guard)').toBeGreaterThanOrEqual(9)
+
+    const actualDrives = new Set<string>()
+    for (const id of PERSONA_IDS) {
+      for (const cell of PERSONAS[id].coverage ?? []) {
+        if (cell.grade === 'drives') actualDrives.add(`${id}:${cell.navConst}`)
+      }
+    }
+
+    const notDriven = [...EXPECTED_DRIVES_MIN].filter((key) => !actualDrives.has(key))
+    expect(notDriven, `must be graded drives (Core AC 2/3/4): ${notDriven.join(', ')}`).toEqual([])
+  })
+
+  it('row 18 (G6c) -- the coverage map admits no third grade', () => {
+    const src = readFileSync(PERSONAS_SRC, 'utf8')
+
+    const gradeMembers = extractGradeUnionMembers(src)
+    expect(gradeMembers.length, 'Grade union members (vacuity guard)').toBe(2)
+    expect(new Set(gradeMembers)).toEqual(new Set(LEGAL_GRADES))
+
+    const fieldNames = extractCellFieldNames(src)
+    expect(fieldNames.length, 'Cell interface fields (vacuity guard)').toBe(3)
+    expect(new Set(fieldNames)).toEqual(new Set(['navConst', 'grade', 'coveredBy']))
   })
 })

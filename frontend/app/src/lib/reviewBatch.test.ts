@@ -831,3 +831,69 @@ describe('ReviewInvoicesTab.tsx source: none of the three D2-forbidden lifecycle
     }
   })
 })
+
+// --- QA Stage 4 (task-286) adversarial coverage — the reducer's `rule` arm and pagerNav's
+// single-page boundary. Both are genuine gaps in the frozen/authored table above, found by
+// mutation testing during verification (both mutations reddened nothing until these specs
+// were added): unlike `pill` and `search`, `rule` is documented as NEVER taking the
+// identity shortcut (a re-click IS a change — it toggles the filter off), but TAB-1d only
+// pins identity for `pill`/`search`; and PAGE-1/2/3 never exercise a batch that fits in one
+// page (total <= limit), which is the boundary a `total > 0` guard could get wrong in
+// either direction.
+describe('reviewFilterReducer: the `rule` arm never takes the identity shortcut (RULE-ID, task-286 QA Stage 4)', () => {
+  it('a repeated click on the SAME rule key (the clear-to-null transition) returns a NEW object, unlike pill/search — toggling off is a change, not a no-op', () => {
+    const withRule: ReviewFilterState = { pill: 'all', ruleKey: 'vat-standard-rate', q: '', offset: 0 }
+
+    const cleared = reviewFilterReducer(withRule, { type: 'rule', ruleKey: 'vat-standard-rate' })
+
+    expect(cleared.ruleKey).toBeNull()
+    // NOT `.toBe(withRule)` — a `rule` arm that took the identity shortcut here would
+    // still be functionally correct on THIS assertion alone (ruleKey does become null via
+    // a mutating shortcut only if one existed, which it structurally cannot: `s` is never
+    // mutated in place), so the discriminator is reference inequality, not the value.
+    expect(cleared).not.toBe(withRule)
+  })
+
+  it('setting a rule key from null also returns a NEW object', () => {
+    const state: ReviewFilterState = { pill: 'all', ruleKey: null, q: '', offset: 0 }
+
+    const next = reviewFilterReducer(state, { type: 'rule', ruleKey: 'vat-standard-rate' })
+
+    expect(next).not.toBe(state)
+    expect(next.ruleKey).toBe('vat-standard-rate')
+  })
+})
+
+// TAB-7b (above) scans ONLY ReviewInvoicesTab.tsx, per task-286 Stage 1's own plan
+// ("TAB-7b scans the source" — singular). But reviewBatch.ts's task-286-added section
+// (everything from its "INVCR-01-10 (task-286)" header down: the filter reducer, the
+// pill/rail/pager view-models) is equally NEW code from this subtask, and AC-7 says the
+// D2-forbidden names "appear nowhere, including in comments" — not "nowhere in the
+// component file". This guard closes that gap. Reads reviewBatch.ts BY PATH, matching
+// TAB-7b's own self-matching precaution (PILL-3b's idiom) — this describe block's
+// comments legitimately name all three forbidden words.
+describe('reviewBatch.ts source (task-286-added section): none of the three D2-forbidden lifecycle names appear (AC-7, LIB-SCAN-1)', () => {
+  it('LIB-SCAN-1: the reviewFilterReducer/reviewPills/railPills/pagerNav section contains no Pending/Approved/Transmitted, in any case, including in comments', () => {
+    const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+    const marker = '--- INVCR-01-10 (task-286)'
+    const taskSection = source.slice(source.indexOf(marker))
+    expect(taskSection.length, 'the task-286 marker comment must exist in reviewBatch.ts').toBeGreaterThan(0)
+
+    for (const forbidden of [/\bpending\b/i, /\bapproved\b/i, /\btransmitted\b/i]) {
+      expect(taskSection).not.toMatch(forbidden)
+    }
+  })
+})
+
+describe('pagerNav: single-page boundary — a batch that fits in one page (PAGE-4, task-286 QA Stage 4)', () => {
+  it('total <= limit at offset 0 disables BOTH buttons, not just canNext', () => {
+    // 30 invoices, limit 50: everything is already on screen. Neither PAGE-1 (500-row
+    // batch) nor PAGE-3 (total:0) exercises "some results, but fewer than one page".
+    expect(pagerNav({ limit: 50, offset: 0, total: 30 })).toMatchObject({ canPrev: false, canNext: false })
+  })
+
+  it('total exactly equal to limit at offset 0 also disables canNext (the boundary itself, not just under it)', () => {
+    expect(pagerNav({ limit: 50, offset: 0, total: 50 })).toMatchObject({ canPrev: false, canNext: false })
+  })
+})

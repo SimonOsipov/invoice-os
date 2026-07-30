@@ -111,8 +111,12 @@ test('firm Workflows (mock policy fixtures): the policy list renders, and the po
   //
   // The MIDDLE policy deliberately: the survivors are then not a PREFIX of the seed, so a
   // reseed fails on ORDER as well as on count. Deleting the last row would leave a prefix.
-  const deleted = MOCK_FIRM_POLICIES[1]
-  const survivors = [MOCK_FIRM_POLICIES[0], MOCK_FIRM_POLICIES[2]]
+  // Derived rather than hand-indexed, and the >=3 floor is what keeps "middle" meaningful:
+  // at two rows the middle IS the last row, and that non-prefix property silently vanishes.
+  expect(MOCK_FIRM_POLICIES.length, 'the middle-row delete needs >=3 policies to leave a non-prefix survivor set').toBeGreaterThanOrEqual(3)
+  const middle = Math.floor(MOCK_FIRM_POLICIES.length / 2)
+  const deleted = MOCK_FIRM_POLICIES[middle]
+  const survivors = MOCK_FIRM_POLICIES.filter((_, i) => i !== middle)
   // The row's own delete control (WorkflowsView.tsx:127-139), reached by its aria-label. A
   // LIST control, not a builder one -- it stopPropagation()s before onDelete, so the click
   // cannot fall through to the row's onEdit. If that ever regressed the builder would open

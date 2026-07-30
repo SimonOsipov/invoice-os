@@ -62,9 +62,14 @@ test('firm Workflows (mock policy fixtures): the policy list renders, and the po
   const rows = screen.locator('.pf-row')
 
   await signInAs(page, 'firm')
-  // Identity guard before touching the nav, the same one persona-surfaces.spec.ts's Tests
-  // 2/3/4 take: without it a slow or failed persona hand-off surfaces as an opaque timeout
-  // further down rather than as "the wrong workspace rendered".
+  // MODE guard before touching the nav, the same one persona-surfaces.spec.ts's Tests 2/3/4
+  // take: without it a slow or failed persona hand-off surfaces as an opaque timeout further
+  // down rather than as "the wrong workspace rendered". Stated as MODE and not tenant on
+  // purpose ([coverage-honesty]): in firm mode Sidebar.tsx:41 hardcodes the org label rather
+  // than reading the fetched tenant, so this string proves the FIRM branch drew (in-house
+  // would render 'HONEYWELL GROUP · FINANCE'), not that /v1/me returned this tenant. The
+  // live-tenant proof is signInAs's own /v1/me discriminator, which already ran. The weak
+  // guard is inherited, not introduced here -- recorded for [PERSONA-01-07].
   await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
   await goTo(page, 'Workflows')
 
@@ -129,6 +134,14 @@ test('firm Workflows (mock policy fixtures): the policy list renders, and the po
   // button, not a descendant, so neither locator can drift into it while it is open.
   const switcherName = switcher.locator('span > span:not(.mono)')
   const switcherTin = switcher.locator('span.mono')
+  // Wait out the portfolio fetch BEFORE capturing the baseline. signInAs only waits on
+  // /v1/me (personaSession.ts's `app` discriminator), not on the entity list, so until that
+  // second round trip lands `active` is emptyClient() -- short 'No client', tin '—'
+  // (App.tsx:158-161, lib/clients.ts:170-185). A baseline captured there would still make
+  // the assertions below go green, on a comparison that means nothing. Seeded TINs all begin
+  // with a digit (db/seed.dev.sql), the placeholder does not, so this retrying assertion is
+  // both the guard and the wait.
+  await expect(switcherTin, 'the switcher must be on a REAL client before the baseline is taken').toHaveText(/^TIN \d/)
   const beforeName = (await switcherName.innerText()).trim()
   const beforeTin = (await switcherTin.innerText()).trim()
 

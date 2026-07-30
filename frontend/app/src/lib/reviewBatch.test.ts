@@ -28,10 +28,22 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { invoiceStatusStyle, type InvoiceStatus, type RuleCount } from './invoices'
+import {
+  invoiceStatusStyle,
+  pruneSelection,
+  skipReasonLabel,
+  type BatchSubmitResultItem,
+  type InvoiceRecord,
+  type InvoiceStatus,
+  type RuleCount,
+} from './invoices'
 import { severityStyle, type Violation } from './validationApi'
 import type { ImportBatch, ImportReport, RowError } from './importApi'
 import {
+  BATCH_SUBMIT_MAX_IDS,
+  bulkBarView,
+  bulkOutcome,
+  bulkPhaseReducer,
   channelTiles,
   filterToQuery,
   formatReviewHash,
@@ -903,5 +915,283 @@ describe('pagerNav: single-page boundary — a batch that fits in one page (PAGE
 
   it('total exactly equal to limit at offset 0 also disables canNext (the boundary itself, not just under it)', () => {
     expect(pagerNav({ limit: 50, offset: 0, total: 50 })).toMatchObject({ canPrev: false, canNext: false })
+  })
+})
+
+// --- INVCR-01-11 (task-287, Stage 2.5/Mode A) — RED specs for the bulk-submit bar's pure
+// model: BATCH_SUBMIT_MAX_IDS, bulkPhaseReducer, bulkBarView, bulkOutcome. All three
+// functions throw `new Error('not implemented')` today (reviewBatch.ts's "11 STUB"
+// comment), so every spec below fails on that throw — the correct RED reason — except
+// BULK-14, which is GREEN-BEFORE by design (BATCH_SUBMIT_MAX_IDS is a real constant, not
+// a stub; see its own describe block).
+//
+// task-287 Stage 1 audited §7.3's frozen 8-row table and authored this 16-row one in its
+// place. THREE of the frozen rows are deliberately NOT re-authored here:
+//   - "two sequential submits -> two distinct keys" is DROPPED as a duplicate of
+//     already-green newIdempotencyKey distinctness coverage (invoices.test.ts's I-key-1,
+//     :704-712, and KEY-1, :1199-1210) AND as unimplementable under environment:'node'
+//     (it needs the component's click handlers, which have no node oracle — see BULK-15
+//     below for the reachable, structural substitute: a source scan pinning WHERE the key
+//     is minted).
+//   - "an unknown skip reason passes through verbatim" is DROPPED as a duplicate of
+//     already-green invoices.test.ts I-skip-1 (:746, `skipReasonLabel('wat') === 'wat'`).
+//     BULK-10 below covers the genuinely new claim built on top of it (the *result row*
+//     built from that label), which I-skip-1 does not touch.
+// lib/invoices.ts and lib/invoices.test.ts are NOT touched by this subtask — both rows
+// above are dropped specifically because they already have oracles there.
+
+// Local fixtures only — lib/invoices.test.ts's own `draftInvoice` is not imported or
+// reused (that file stays untouched by this subtask). Mirrors its shape.
+function mkRow(id: string, status: InvoiceStatus, overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
+  return {
+    id,
+    entity_id: 'e1',
+    import_batch_id: 'batch-1',
+    invoice_number: `INV-${id}`,
+    status,
+    issue_date: '2026-07-01T00:00:00Z',
+    supplier_tin: '00000000001',
+    supplier_name: 'Acme Ltd',
+    buyer_tin: '00000000002',
+    buyer_name: 'Beta Ltd',
+    currency: 'NGN',
+    subtotal: '1000.00',
+    vat: '75.00',
+    total: '1075.00',
+    violations: [],
+    rule_set_version_id: null,
+    created_at: '2026-07-01T00:00:00Z',
+    irn: null,
+    csid: null,
+    qr_payload: null,
+    rejection_reasons: [],
+    rule_set_version: null,
+    ...overrides,
+  }
+}
+
+function buildRows(count: number, status: InvoiceStatus): InvoiceRecord[] {
+  return Array.from({ length: count }, (_, i) => mkRow(`inv-${status}-${i}`, status))
+}
+
+// BULK-2/BULK-8's shared 50-row page: 12 validated, 20 draft+error, 8 draft clean, 6
+// queued, 4 rejected — every one of the 5 non-validated groups counted, not just the
+// failing ones. notReady = 50 - 12 = 38.
+function buildMixedReviewPage(): InvoiceRecord[] {
+  const validated = buildRows(12, 'validated')
+  const draftWithError = Array.from({ length: 20 }, (_, i) =>
+    mkRow(`inv-draft-err-${i}`, 'draft', { violations: [{ rule_key: 'r', severity: 'error', message: 'e' }] }),
+  )
+  const draftClean = buildRows(8, 'draft')
+  const queued = buildRows(6, 'queued')
+  const rejected = buildRows(4, 'rejected')
+  return [...validated, ...draftWithError, ...draftClean, ...queued, ...rejected]
+}
+
+describe('bulkBarView: eligible IS pruneSelection, not the raw selection (BULK-1, AC-2)', () => {
+  it('BULK-1: 5 selected ids, 2 of which left the page or are no longer validated, prune to the 3 survivors, in order', () => {
+    const rows = [mkRow('a', 'validated'), mkRow('b', 'validated'), mkRow('c', 'validated'), mkRow('d', 'queued')]
+    // 'e' is absent from `rows` entirely — it left the page. 'd' is present but no
+    // longer validated.
+    const selected = ['a', 'b', 'c', 'd', 'e']
+
+    const view = bulkBarView(selected, rows, 'idle', false)
+
+    expect(view.eligible).toEqual(pruneSelection(selected, rows))
+    expect(view.eligible).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('bulkBarView: notReady counts every non-selectable row, not just the failing ones (BULK-2, AC-2/8)', () => {
+  it('BULK-2: a page of 50 with 12 validated and 38 non-validated (draft+error, draft clean, queued, rejected) reports notReady === 38', () => {
+    const rows = buildMixedReviewPage()
+
+    const view = bulkBarView([], rows, 'idle', false)
+
+    expect(view.notReady).toBe(38)
+  })
+})
+
+describe('bulkPhaseReducer: a confirm that was never armed changes nothing (BULK-3, AC-3)', () => {
+  it("BULK-3: bulkPhaseReducer('idle', {confirm}) returns 'idle' — the component's `if (next === phase) return` fires zero requests", () => {
+    expect(bulkPhaseReducer('idle', { type: 'confirm' })).toBe('idle')
+  })
+})
+
+describe('bulkPhaseReducer: a second confirm cannot re-enter (BULK-4, AC-3/4)', () => {
+  it("BULK-4: bulkPhaseReducer('submitting', {confirm}) and ('submitting', {cancel}) both return identity — the double-click guard and \"the server already has it\", both structural", () => {
+    expect(bulkPhaseReducer('submitting', { type: 'confirm' })).toBe('submitting')
+    expect(bulkPhaseReducer('submitting', { type: 'cancel' })).toBe('submitting')
+  })
+})
+
+describe('bulkPhaseReducer: the rest of the phase table (BULK-5, AC-3)', () => {
+  it('BULK-5: arm idle->armed, armed->identity, submitting->identity; cancel armed->idle; settled from all three -> idle', () => {
+    expect(bulkPhaseReducer('idle', { type: 'arm' })).toBe('armed')
+    expect(bulkPhaseReducer('armed', { type: 'arm' })).toBe('armed')
+    expect(bulkPhaseReducer('submitting', { type: 'arm' })).toBe('submitting')
+    expect(bulkPhaseReducer('armed', { type: 'cancel' })).toBe('idle')
+    expect(bulkPhaseReducer('idle', { type: 'settled' })).toBe('idle')
+    expect(bulkPhaseReducer('armed', { type: 'settled' })).toBe('idle')
+    expect(bulkPhaseReducer('submitting', { type: 'settled' })).toBe('idle')
+  })
+})
+
+describe('bulkBarView: the stale-page gate — this subtask\'s primary correctness requirement (BULK-6, AC-1/2)', () => {
+  it('BULK-6: canSubmit and canSubmitAll are both false while the page is loading, both true once it settles, and both false with nothing eligible', () => {
+    const rows = buildRows(12, 'validated')
+    const selected = rows.map((r) => r.id)
+
+    // Select 5 (well, 12) -> Next -> submit before the response lands: canSubmit/
+    // canSubmitAll must close this window, not just the row checkboxes.
+    const whileLoading = bulkBarView(selected, rows, 'armed', true)
+    expect(whileLoading.canSubmit).toBe(false)
+    expect(whileLoading.canSubmitAll).toBe(false)
+
+    const settled = bulkBarView(selected, rows, 'armed', false)
+    expect(settled.canSubmit).toBe(true)
+    expect(settled.canSubmitAll).toBe(true)
+
+    // Zero eligible: a page with no validated rows at all — nothing to submit, loading
+    // or not.
+    const nothingEligible = bulkBarView([], buildRows(5, 'queued'), 'armed', false)
+    expect(nothingEligible.canSubmit).toBe(false)
+    expect(nothingEligible.canSubmitAll).toBe(false)
+  })
+})
+
+describe('bulkBarView: the count label carries its own scope (BULK-7, AC-1)', () => {
+  it("BULK-7: 12 eligible -> countLabel === '12 selected on this page' — the scope is IN the string, not implied", () => {
+    const rows = buildRows(12, 'validated')
+    const view = bulkBarView(rows.map((r) => r.id), rows, 'idle', false)
+
+    expect(view.countLabel).toBe('12 selected on this page')
+  })
+})
+
+describe('bulkBarView: the note is absent at zero and names VALIDATED from the shipped helper, never a literal (BULK-8, AC-1)', () => {
+  it('BULK-8: notReady:0 -> note is null; the BULK-2 page -> the exact page-scoped disclosure, with the status word sourced from invoiceStatusStyle', () => {
+    const allValidated = buildRows(5, 'validated')
+    expect(bulkBarView([], allValidated, 'idle', false).note).toBeNull()
+
+    const mixed = buildMixedReviewPage()
+    const view = bulkBarView([], mixed, 'idle', false)
+    const expectedNote = `Only ${invoiceStatusStyle('validated').label} rows can be sent. 38 of the 50 on this page cannot.`
+
+    expect(view.note).toBe(expectedNote)
+    expect(view.note).toContain(invoiceStatusStyle('validated').label)
+  })
+})
+
+describe('bulkBarView: the confirm names the count, the action, the outcome and the irreversibility (BULK-9, AC-3)', () => {
+  it('BULK-9: 12 eligible -> the exact confirm copy, including QUEUED sourced from invoiceStatusStyle; 1 eligible -> the singular form', () => {
+    const rows12 = buildRows(12, 'validated')
+    const view12 = bulkBarView(rows12.map((r) => r.id), rows12, 'idle', false)
+
+    expect(view12.confirmPrompt).toBe('Send 12 invoices for transmission?')
+    expect(view12.confirmLabel).toBe('Yes, send 12 now')
+    expect(view12.confirmDetail).toContain(invoiceStatusStyle('queued').label)
+    expect(view12.confirmDetail).toContain('pull them back')
+
+    const rows1 = buildRows(1, 'validated')
+    const view1 = bulkBarView(rows1.map((r) => r.id), rows1, 'idle', false)
+    expect(view1.confirmPrompt).toBe('Send 1 invoice for transmission?')
+  })
+})
+
+describe('bulkOutcome: each result row is built from enqueued + reason, never from status (BULK-10, AC-5)', () => {
+  it('BULK-10: an enqueued item, a skipped item with a known reason, and a skipped item with no reason resolve to distinct labels; an id absent from numbersById falls back to the raw id', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'a', enqueued: true, status: 'queued' },
+      { invoice_id: 'b', enqueued: false, status: 'validated', reason: 'not_validated' },
+      { invoice_id: 'c', enqueued: false, status: 'validated' },
+    ]
+    const numbersById = new Map([
+      ['a', 'INV-A'],
+      ['b', 'INV-B'],
+      // 'c' deliberately absent.
+    ])
+
+    const outcome = bulkOutcome({ ok: true, items }, numbersById)
+
+    expect(outcome.results).toEqual([
+      { invoiceNumber: 'INV-A', label: 'Queued', enqueued: true },
+      { invoiceNumber: 'INV-B', label: skipReasonLabel('not_validated'), enqueued: false },
+      { invoiceNumber: 'c', label: 'Not queued', enqueued: false },
+    ])
+    expect(outcome.clearSelection).toBe(true)
+  })
+})
+
+describe('bulkOutcome: a response claiming queued for a SKIPPED item cannot reach the panel (BULK-11, AC-5)', () => {
+  it("BULK-11: M5-11's exact shape (enqueued:false, status:'queued', reason:'not_validated') resolves to the SKIP label, and the row carries no `status` key at all", () => {
+    const items: BatchSubmitResultItem[] = [{ invoice_id: 'x', enqueued: false, status: 'queued', reason: 'not_validated' }]
+
+    const outcome = bulkOutcome({ ok: true, items }, new Map())
+
+    expect(outcome.results).not.toBeNull()
+    const row = outcome.results![0]
+    expect(row.label).toBe(skipReasonLabel('not_validated'))
+    // Structural, not remembered: `status` is not a key on SubmitResultRow at all, so
+    // batch_submit.go's M5-11 hard-coded value is unrepresentable in the output.
+    expect(Object.keys(row).sort()).toEqual(['enqueued', 'invoiceNumber', 'label'])
+  })
+})
+
+describe('bulkOutcome: a malformed 2xx resolves to [], never a throw (BULK-12, AC-5)', () => {
+  it("BULK-12: SUB-3's pinned shape ({ok:true, items: undefined}) resolves to results:[], clearSelection:true", () => {
+    const outcome = bulkOutcome({ ok: true, items: undefined }, new Map())
+
+    expect(outcome.results).toEqual([])
+    expect(outcome.clearSelection).toBe(true)
+  })
+})
+
+describe('bulkOutcome: a request-level failure keeps the selection and shows no panel (BULK-13, AC-6)', () => {
+  it('BULK-13: {ok:false} -> {results: null, clearSelection: false}', () => {
+    expect(bulkOutcome({ ok: false }, new Map())).toEqual({ results: null, clearSelection: false })
+  })
+})
+
+describe('BATCH_SUBMIT_MAX_IDS: the page size can never exceed the server\'s id cap (BULK-14, AC-8, GREEN-BEFORE — a drift guard, not coverage)', () => {
+  it('BULK-14: BATCH_SUBMIT_MAX_IDS mirrors handlers.go:718\'s 200, and REVIEW_PAGE_SIZE never exceeds it', () => {
+    expect(BATCH_SUBMIT_MAX_IDS).toBe(200)
+    expect(REVIEW_PAGE_SIZE).toBeLessThanOrEqual(BATCH_SUBMIT_MAX_IDS)
+  })
+})
+
+// Source scan, matching TAB-7b/LIB-SCAN-1's own by-path idiom above (never imports the
+// component — Stage 3 hasn't built the bulk bar yet, and a node environment cannot
+// render it anyway). ReviewInvoicesTab.tsx already exists (task-286 shipped it) but
+// contains no `submitInvoices(` call yet — that is Stage 3's job — so this is a genuine
+// value mismatch (0 occurrences today, not 1), not an ENOENT the way TAB-7b's first run
+// was.
+describe('ReviewInvoicesTab.tsx source: the idempotency key is minted inline in the confirm handler, never held (BULK-15, AC-4)', () => {
+  it('BULK-15: exactly one submitInvoices( call, with newIdempotencyKey() inside its own argument list, and no useState/useRef initialiser holds the key', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const callSites = source.match(/submitInvoices\(/g) ?? []
+    expect(callSites, 'exactly one submitInvoices( call site').toHaveLength(1)
+
+    const call = /submitInvoices\(([^)]*newIdempotencyKey\(\)[^)]*)\)/.exec(source)
+    expect(call, 'newIdempotencyKey() must appear inside submitInvoices(...)\'s own argument list').not.toBeNull()
+
+    expect(source).not.toMatch(/use(?:State|Ref)\([^)]*\bnewIdempotencyKey\b/)
+  })
+})
+
+describe('bulkBarView: the page-scoped submit-all disables at zero eligible (BULK-16, AC-7)', () => {
+  it('BULK-16: a page with no validated rows disables canSubmitAll; 12 validated on the page enables it and names the count, independent of the current selection', () => {
+    const noneValidated = buildRows(5, 'queued')
+    expect(bulkBarView([], noneValidated, 'idle', false).canSubmitAll).toBe(false)
+
+    const rows = buildRows(12, 'validated')
+    // Nothing currently selected — canSubmitAll/submitAllLabel are page-scoped off
+    // `rows`, not off `selected`: clicking "Submit all" is what selects them.
+    const view = bulkBarView([], rows, 'idle', false)
+
+    expect(view.submitAllLabel).toBe('Submit all 12 on this page for transmission')
+    expect(view.canSubmitAll).toBe(true)
   })
 })

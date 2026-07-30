@@ -34,7 +34,14 @@
 // App-facing composer over them. The `window.location.hash` read/write itself lives at
 // exactly TWO call sites in App.tsx (the boot initializer and the mirror effect) -- this
 // module stays DOM-free so it is node-testable with no jsdom.
-import { invoiceStatusStyle, type ListInvoicesOptions, type InvoiceStatus, type RuleCount } from './invoices'
+import {
+  invoiceStatusStyle,
+  type BatchSubmitResultItem,
+  type InvoiceRecord,
+  type ListInvoicesOptions,
+  type InvoiceStatus,
+  type RuleCount,
+} from './invoices'
 import { severityStyle, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
@@ -586,4 +593,70 @@ export function pagerNav(p: { limit: number; offset: number; total: number }): P
     prevOffset: Math.max(0, p.offset - p.limit),
     nextOffset: p.offset + p.limit,
   }
+}
+
+// --- INVCR-01-11 (task-287): the bulk-submit bar's pure model ---
+//
+// 11 STUB (task-287, Stage 2.5/Mode A) -- bulkPhaseReducer/bulkBarView/bulkOutcome throw
+// `new Error('not implemented')` below; Stage 3 implements the bodies. `eligible` is
+// `pruneSelection(selected, rows)` (lib/invoices.ts) CONSUMED, never re-derived -- it IS
+// the wire payload the confirm handler sends. `notReady`/`canSubmitAll`/`submitAllLabel`
+// are page-scoped off `rows` via `selectableIds`, independent of the current selection.
+// `BATCH_SUBMIT_MAX_IDS` is NOT a stub -- its value is a documented mirror of
+// handlers.go:718's server constant (a drift guard, not behaviour Stage 3 implements),
+// so BULK-14 is GREEN-BEFORE by design, same idiom PILL-3b already uses in this file.
+
+export const BATCH_SUBMIT_MAX_IDS = 200 // handlers.go:718 -- documented mirror + drift guard, NOT a runtime clamp
+
+export type BulkPhase = 'idle' | 'armed' | 'submitting'
+export type BulkAction = { type: 'arm' } | { type: 'cancel' } | { type: 'confirm' } | { type: 'settled' }
+
+export function bulkPhaseReducer(_p: BulkPhase, _a: BulkAction): BulkPhase {
+  throw new Error('not implemented')
+}
+
+export interface BulkBarView {
+  visible: boolean
+  eligible: string[]
+  notReady: number
+  countLabel: string
+  note: string | null
+  submitLabel: string
+  confirmPrompt: string
+  confirmDetail: string
+  confirmLabel: string
+  canSubmit: boolean
+  submitAllLabel: string
+  canSubmitAll: boolean
+}
+
+export function bulkBarView(
+  _selected: string[],
+  _rows: InvoiceRecord[],
+  _phase: BulkPhase,
+  _pageLoading: boolean,
+): BulkBarView {
+  throw new Error('not implemented')
+}
+
+// NO `status` field, by design (AC-5): batch_submit.go's duplicate-request branch
+// hard-codes a known-wrong `queued` status on a SKIPPED item (M5-11) -- omitting the
+// field here makes that wrong value unrepresentable in the output, rather than merely
+// asserted against.
+export interface SubmitResultRow {
+  invoiceNumber: string
+  label: string
+  enqueued: boolean
+}
+
+export interface BulkOutcome {
+  results: SubmitResultRow[] | null
+  clearSelection: boolean
+}
+
+export function bulkOutcome(
+  _res: { ok: true; items: BatchSubmitResultItem[] | undefined } | { ok: false },
+  _numbersById: Map<string, string>,
+): BulkOutcome {
+  throw new Error('not implemented')
 }

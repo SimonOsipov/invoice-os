@@ -424,10 +424,13 @@ export function unreadableCsv(rows: UnreadableRow[]): string {
   return [UNREADABLE_CSV_HEADER, ...lines].join('\n')
 }
 
-// 10 STUB (task-286, Stage 2.5/Mode A) -- every export below throws `new Error('not
-// implemented')` before Stage 3 implements it; mirrors the 08/09 STUB idiom already used
-// in this file. Unused params are underscore-prefixed to satisfy noUnusedParameters until
-// Stage 3 fills the bodies in.
+// --- INVCR-01-10 (task-286): the review Invoices tab's whole model ---
+//
+// Everything below is what makes ReviewInvoicesTab.tsx a dumb renderer: the filter state
+// machine, the request composer, the pill row, the failing-rules rail and the pager's
+// two disable gates. Nothing here filters, counts, sorts or pages client-side
+// ([filters-are-server-side]) -- every one of these outputs either describes a request
+// the SERVER will answer, or renders a number the server already sent.
 
 // --- Filter state (AC-2/3/4/10, Implementation Plan §3) ---
 //
@@ -456,8 +459,32 @@ export type ReviewFilterAction =
   | { type: 'search'; q: string }
   | { type: 'page'; offset: number }
 
-export function reviewFilterReducer(_s: ReviewFilterState, _a: ReviewFilterAction): ReviewFilterState {
-  throw new Error('not implemented')
+export function reviewFilterReducer(s: ReviewFilterState, a: ReviewFilterAction): ReviewFilterState {
+  switch (a.type) {
+    // Re-clicking the ACTIVE pill returns `s` itself, not a copy: the component feeds
+    // this state straight into useAsync's `deps`, so a `{...s}` here would refetch the
+    // identical page on every redundant click.
+    case 'pill':
+      return a.pill === s.pill ? s : { ...s, pill: a.pill, offset: 0 }
+    // A re-clicked rule key IS a change -- it clears the filter -- so this arm never
+    // takes the identity shortcut. Toggling is the whole contract (AC-4).
+    case 'rule':
+      return { ...s, ruleKey: s.ruleKey === a.ruleKey ? null : a.ruleKey, offset: 0 }
+    case 'search': {
+      // TRIM here, not in the component: `q: ' '` is truthy in JS and non-empty in Go,
+      // so it survives every emission rule and reaches `ILIKE '% %'`, silently returning
+      // only rows whose number or buyer contains a space. Trimming in the reducer also
+      // makes a trailing-space keystroke a no-op via the identity return below, instead
+      // of a refetch.
+      const q = a.q.trim()
+      return q === s.q ? s : { ...s, q, offset: 0 }
+    }
+    // The ONLY arm that may produce a non-zero offset. Clamped at 0 because pagerNav's
+    // `prevOffset` is the only intended caller and a synthetic negative would go
+    // straight to a handler that 400s on it.
+    case 'page':
+      return { ...s, offset: Math.max(0, a.offset) }
+  }
 }
 
 // The single composer 10's component uses to build the page request -- consumes the
@@ -465,8 +492,15 @@ export function reviewFilterReducer(_s: ReviewFilterState, _a: ReviewFilterActio
 // blank `q` is therefore absent at three layers (this reducer's trim -> reviewQuery's
 // truthiness -> listInvoices' truthiness) before the server's own `if raw != ""`
 // absence rule.
-export function reviewPageQuery(_batchId: string, _s: ReviewFilterState): ListInvoicesOptions {
-  throw new Error('not implemented')
+export function reviewPageQuery(batchId: string, s: ReviewFilterState): ListInvoicesOptions {
+  return reviewQuery(batchId, s.pill, {
+    // `?? undefined` rather than `as string`: reviewQuery's `ruleKey` is optional and a
+    // literal `null` would be emitted by neither its truthiness check nor listInvoices'.
+    ruleKey: s.ruleKey ?? undefined,
+    q: s.q,
+    limit: REVIEW_PAGE_SIZE,
+    offset: s.offset,
+  })
 }
 
 // --- Pills (AC-2, D3) ---
@@ -481,11 +515,31 @@ export interface ReviewPillView {
   active: boolean
 }
 
+const REVIEW_PILL_LABELS: Record<ReviewPill, string> = {
+  all: 'All',
+  'needs-fix': 'Needs a fix',
+  ready: 'Ready to submit',
+  queued: 'Queued',
+}
+
+// Declared as an explicit array rather than `Object.keys(REVIEW_PILL_LABELS)`: the pill
+// ORDER is a §7.3 fact, and key-insertion order is not a contract worth resting it on.
+const REVIEW_PILL_ORDER: ReviewPill[] = ['all', 'needs-fix', 'ready', 'queued']
+
 export function reviewPills(
-  _t: { allTotal: number; cleanTotal: number; failingTotal: number; queuedTotal: number },
-  _active: ReviewPill,
+  t: { allTotal: number; cleanTotal: number; failingTotal: number; queuedTotal: number },
+  active: ReviewPill,
 ): ReviewPillView[] {
-  throw new Error('not implemented')
+  // `cleanTotal` is the `ready` (status=validated) query's total and `failingTotal` is
+  // the `needs_fix` one's -- the two are easy to swap and the swap is invisible on any
+  // batch where they happen to be close.
+  const counts: Record<ReviewPill, number> = {
+    all: t.allTotal,
+    'needs-fix': t.failingTotal,
+    ready: t.cleanTotal,
+    queued: t.queuedTotal,
+  }
+  return REVIEW_PILL_ORDER.map((id) => ({ id, label: REVIEW_PILL_LABELS[id], count: counts[id], active: id === active }))
 }
 
 // --- Failing-rules rail (AC-4, store.go:661-671) ---
@@ -502,8 +556,12 @@ export interface RailPill {
   active: boolean
 }
 
-export function railPills(_summary: RuleCount[], _activeRuleKey: string | null): RailPill[] {
-  throw new Error('not implemented')
+export function railPills(summary: RuleCount[], activeRuleKey: string | null): RailPill[] {
+  // A bare positional `map` -- no sort, no filter, no dedupe. Every one of those would
+  // be a client opinion about a set the server already ordered, and the rail is a
+  // PREVIEW of the `rule_key` query each of its pills fires, so any divergence here
+  // shows the user a count they can never reproduce by clicking it.
+  return summary.map((r) => ({ ruleKey: r.rule_key, count: r.invoices, active: r.rule_key === activeRuleKey }))
 }
 
 // --- Pager (AC-5) ---
@@ -518,6 +576,14 @@ export interface PagerNav {
   nextOffset: number
 }
 
-export function pagerNav(_p: { limit: number; offset: number; total: number }): PagerNav {
-  throw new Error('not implemented')
+export function pagerNav(p: { limit: number; offset: number; total: number }): PagerNav {
+  return {
+    canPrev: p.offset > 0,
+    // `+ limit < total`, never `<=`: at offset 450 of 500 with a limit of 50 the last
+    // row is already on screen, so a `<=` here would offer a Next that lands on an
+    // empty page and a `SHOWING 0 OF 500`.
+    canNext: p.offset + p.limit < p.total,
+    prevOffset: Math.max(0, p.offset - p.limit),
+    nextOffset: p.offset + p.limit,
+  }
 }

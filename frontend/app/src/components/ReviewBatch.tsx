@@ -15,8 +15,8 @@
 //  2. The left channel's counts are LIVE `pagination.total`s off filtered list queries,
 //     not the batch's frozen counters, so a tile MOVES when a row is fixed (AC-2).
 //
-// ONE useAsync over a Promise.all of four requests, not four hooks: the shell either has
-// its numbers or it does not, and four independent hooks give four partial renders where
+// ONE useAsync over a Promise.all of five requests, not five hooks: the shell either has
+// its numbers or it does not, and five independent hooks give five partial renders where
 // the header shows one channel before the other. Every list query goes through
 // `reviewQuery` — this is its first real caller, which is what finally cashes 06's
 // required-`batchId` guard (an empty batch id would otherwise list the whole tenant).
@@ -47,6 +47,7 @@ import {
   unreadableRows,
   type ReviewTab,
 } from '../lib/reviewBatch'
+import { ReviewInvoicesTab } from './ReviewInvoicesTab'
 import { ReviewUnreadableTab } from './ReviewUnreadableTab'
 import type { PlatformCtx } from '../types'
 
@@ -55,6 +56,11 @@ interface ReviewShellData {
   allTotal: number
   cleanTotal: number
   failingTotal: number
+  // The fourth filter-pill count (INVCR-01-10). Fetched HERE rather than inside the tab
+  // so all four pill counts come from ONE Promise.all with one loading state — a tab
+  // that self-fetched `queued` would give four numbers from two sources, and one pill
+  // could render while the other three were still pending.
+  queuedTotal: number
 }
 
 // One channel tile. `dashed` and `muted` are RENDER decisions taken here, in the
@@ -97,19 +103,21 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             // `limit: 1`, never 0 — ListHandler 400s on `limit < 1`. Only
             // `pagination.total` is read; the one returned row is discarded.
             //
-            // THREE list queries, not two: `all` cannot be `clean + failing`, because
+            // FOUR list queries, not two: `all` cannot be `clean + failing`, because
             // `needs_fix` and `status=validated` are two independent server predicates
             // and neither covers queued/submitted/accepted. Deriving the tab count as a
             // sum would silently under-count the moment subtask 11's bulk submit moves a
-            // row past `validated`.
+            // row past `validated` — which is also exactly what the fourth query counts.
             listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'all', { limit: 1 })),
             listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'ready', { limit: 1 })),
             listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'needs-fix', { limit: 1 })),
-          ]).then(([batch, all, ready, fix]) => ({
+            listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'queued', { limit: 1 })),
+          ]).then(([batch, all, ready, fix, queued]) => ({
             batch,
             allTotal: all.pagination.total,
             cleanTotal: ready.pagination.total,
             failingTotal: fix.pagination.total,
+            queuedTotal: queued.pagination.total,
           }))
         : Promise.reject(new Error('no gateway configured')),
     { immediate: shouldFetchInvoices(base) && batchId != null, deps: [batchId] },
@@ -132,7 +140,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   if (shell.error) return <ErrorState error={shell.error} onRetry={shell.run} />
   if (shell.data == null) return <Loading label="Reading the import…" />
 
-  const { batch, allTotal, cleanTotal, failingTotal } = shell.data
+  const { batch, allTotal, cleanTotal, failingTotal, queuedTotal } = shell.data
 
   // The SOLE owner of §7.5-vs-batch, keyed on the batch GET alone — never on
   // routeAfterImport's `kind`, which answers a different question ("is there ONE invoice
@@ -237,12 +245,18 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
         })}
       </div>
 
+      {/* Rendered inside this branch and genuinely UNMOUNTED otherwise, never CSS-hidden:
+          the re-homed E2E-04 subset witness (import-wizard.spec.ts:410) asserts a clean
+          invoice number is absent — as a SUBSTRING match over the page — while the
+          Unreadable rows tab is the open one. An always-mounted, hidden table fails it,
+          and nothing on this branch can catch that before the PR leaves draft. */}
       {activeTab === 'invoices' && (
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '14px 18px', fontSize: 13, color: 'var(--fg-3)' }}>
-          {/* Subtask 10 replaces this line with the invoice table + filter rail. It is a
-              true statement, not a placeholder apology: the rows ARE stored (§10.10). */}
-          {allTotal} invoices are stored in this batch.
-        </div>
+        <ReviewInvoicesTab
+          ctx={ctx}
+          base={base}
+          batchId={batchId}
+          totals={{ allTotal, cleanTotal, failingTotal, queuedTotal }}
+        />
       )}
 
       {activeTab === 'unreadable' && (

@@ -283,7 +283,8 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   const wireMs = Date.now() - importT0
   // Re-anchored by INVCR-01-09: the `Stat` tile grid this used to wait on
   // ('Ready invoices') is gone with CreateReport.tsx. The review shell's title is the
-  // equivalent arrival signal -- it renders only once all four of its requests resolve.
+  // equivalent arrival signal -- it renders only once all FIVE of its requests resolve
+  // (four since INVCR-01-10 added the `queued` pill count to the shell's Promise.all).
   await expect(page.getByRole('heading', { name: '500 invoices imported' })).toBeVisible({ timeout: 60_000 })
   const renderedMs = Date.now() - importT0
 
@@ -375,9 +376,13 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   // first leg; a mislabelled one fails the second.
   //
   // The CONTENT half of the old assertion (`vat-standard-rate` under "Rule violations")
-  // has no home in 09: the review shell's Invoices tab is a single summary line until
-  // subtask 10 builds the table with its per-row verdicts and rule rail. Asserting it
-  // here would be asserting a surface this subtask does not ship.
+  // still has no home HERE. INVCR-01-10 has since built the Invoices tab -- the table
+  // with its per-row verdicts, the batch-wide failing-rules rail (where a
+  // `vat-standard-rate` pill now genuinely renders) and the pager -- but none of it runs
+  // on this branch until the PR leaves draft, and asserting a rail pill from inside
+  // E2E-04, whose whole subject is the two channels being separated by NAVIGATION, would
+  // blur two claims into one spec. Subtask 16 owns asserting the tab's content on the
+  // deployed run.
   const structuralMsg = 'rows disagree on issue_date'
   await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
   const unreadableTab = page.getByRole('button', { name: /^Unreadable rows \(\d+\)$/ })
@@ -412,10 +417,13 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   // E2E-05 is DELETED here, not rescoped. Its subject was the click-through from a
   // rule-violation row in the import report to the live InvoiceDetail, and the review
   // shell has no such row: the content channel moved off the frozen 201 payload onto
-  // live per-invoice verdicts (D4), and no table renders them yet. Two owners, both
+  // live per-invoice verdicts (D4), and 09 rendered no table for them. Two owners, both
   // downstream on this branch:
   //   - subtask 10 owns the invoices-table row click-through, which is the direct
-  //     successor of this assertion.
+  //     successor of this assertion. NOW BUILT (ReviewInvoicesTab.tsx: a `review-row`
+  //     click calls the same ctx.openImportedInvoice this exercised), but still
+  //     UNASSERTED -- nothing on this branch runs until the PR leaves draft, so subtask
+  //     16 owns proving it on the deployed run.
   //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice/detailTarget
   //     seam this exercised (import a one-invoice file -> land on the real InvoiceDetail,
   //     never the review shell), which is the highest-value uncovered path in 09.

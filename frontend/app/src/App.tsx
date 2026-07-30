@@ -248,14 +248,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // resetImport() snapshots active.entityId at openCreate so a company switch cannot
   // silently retarget an import already in flight. But that snapshot can be taken
   // BEFORE the entities fetch resolves — click "New invoice" fast enough (cold fleet,
-  // slow link) and `active` is still emptyClient(), so the snapshot is null. The upload
-  // step reads active.entityId LIVE for its blocked state, so it un-blocks the moment
-  // entities land, while this null entityId persists and canReadColumns stays false —
-  // a dropzone that accepts a file and a Read-columns button that can never enable.
+  // slow link) and `active` is still emptyClient(), so the snapshot is null. Reading
+  // columns no longer depends on it (the preview endpoint takes the file alone), but
+  // FILING does: a stale-null snapshot would carry a firm user all the way to the Map
+  // step and then refuse the commit, even though their entities had long since landed.
   // Before [import-upload-unify] the entity <select> was the escape hatch; there is no
   // longer one, so re-seed on exactly that null -> resolved transition. Confined to the
   // upload step: past it the columns are already read against the snapshot, and moving
-  // the target then is the retarget resetImport exists to prevent.
+  // the target then is the retarget resetImport exists to prevent. In-house stays null
+  // through this — active.entityId is null there too, so the guard's third clause holds.
   useEffect(() => {
     if (createStep !== 'upload' || entityId !== null || active.entityId === null) return
     setEntityId(active.entityId)
@@ -389,7 +390,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     const base = gatewayBase()
     // base == null is the no-gateway build: zero network, and the button is disabled
     // too — this is the second of the two guards, not the only one.
-    if (base == null || !importFile || !canReadColumns(entityId, importFile)) return
+    // No entityId clause: preview neither sends nor needs one (see canReadColumns).
+    // `!importFile` stays for the type narrowing previewImport's File param needs.
+    if (base == null || !importFile || !canReadColumns(importFile)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
     setImportError(null)

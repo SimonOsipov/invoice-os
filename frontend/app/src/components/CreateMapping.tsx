@@ -21,7 +21,7 @@ import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
-  const { active, preview, importFile, mapping, armedField, dragField, uploadPhase, importError } = ctx
+  const { active, preview, importFile, mapping, armedField, dragField, uploadPhase, importError, entityId } = ctx
   if (!preview || !mapping || !importFile) return null
 
   const dropHot = !!(armedField || dragField)
@@ -86,17 +86,31 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // No invoice count: how many invoices these rows resolve to is the SERVER's verdict,
   // reported after the import, and computing it in the browser first is exactly the
   // duplicated-judgement this story removes (Core AC3). Rows are the honest unit here.
-  const mapNote = !invNumMapped
-    ? { text: 'Drag invoice_number onto a column to continue — the invoice number is never guessed for you.', color: 'var(--status-red-text)' }
-    : optionalUnmapped > 0
-      ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
-      : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
-  const continueBtn = {
-    bg: invNumMapped ? 'var(--action)' : 'var(--bg-3)',
-    color: invNumMapped ? 'var(--text-on-dark)' : 'var(--fg-4)',
-    cursor: invNumMapped ? 'pointer' : 'not-allowed',
-    label: invNumMapped ? `Import ${preview.rows_total} rows` : 'Map invoice number to continue',
-  }
+  // The commit gate — and the one step of the wizard that genuinely needs an entity.
+  // Upload and mapping do not (the preview endpoint takes the file alone), but the import
+  // writes import_batches.entity_id and invoices.entity_id, both NOT NULL, so with no
+  // linked entity there is nothing to file the rows against: startImport() returns early
+  // and the click does nothing whatsoever. An in-house workspace is exactly that case
+  // (null entityId, no business_entities row, no Clients screen to add one from), so
+  // unlike the unmapped-invoice-number case below the user cannot resolve it from here —
+  // hence a real `disabled`, not just not-allowed styling, and copy that names the reason
+  // rather than a button that looks armed and silently swallows the click.
+  const canFile = entityId !== null
+  const mapNote = !canFile
+    ? { text: 'Columns read. Filing is unavailable in this workspace — it has no linked business entity to file the invoices against.', color: 'var(--status-muted-text)' }
+    : !invNumMapped
+      ? { text: 'Drag invoice_number onto a column to continue — the invoice number is never guessed for you.', color: 'var(--status-red-text)' }
+      : optionalUnmapped > 0
+        ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
+        : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
+  const continueBtn = !canFile
+    ? { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Filing needs a linked entity' }
+    : {
+        bg: invNumMapped ? 'var(--action)' : 'var(--bg-3)',
+        color: invNumMapped ? 'var(--text-on-dark)' : 'var(--fg-4)',
+        cursor: invNumMapped ? 'pointer' : 'not-allowed',
+        label: invNumMapped ? `Import ${preview.rows_total} rows` : 'Map invoice number to continue',
+      }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -271,7 +285,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
           </button>
           <button
             onClick={ctx.continueMapping}
-            disabled={uploading}
+            disabled={uploading || !canFile}
             className="v2-btn pf-btn"
             style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: continueBtn.bg, color: continueBtn.color, cursor: continueBtn.cursor }}
           >

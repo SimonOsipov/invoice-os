@@ -68,10 +68,20 @@ export function hasImportableExtension(name: string): boolean {
   return n.endsWith('.csv') || n.endsWith('.xlsx')
 }
 
-// = !!entityId && file !== null && hasImportableExtension(file.name). One predicate is
-// the sole gate — the extension rule is not also duplicated in the setter.
-export function canReadColumns(entityId: string | null, file: File | null): boolean {
-  return !!entityId && file !== null && hasImportableExtension(file.name)
+// = file !== null && hasImportableExtension(file.name). One predicate is the sole gate —
+// the extension rule is not also duplicated in the setter.
+//
+// Deliberately does NOT gate on an entity. POST /api/invoice/v1/imports/preview sends the
+// file and nothing else (importApi.previewImport), and the server's PreviewHandler is
+// documented "no entity_id, no mapping, no persistence" (internal/importer/handlers.go) —
+// reading columns is a pure inspection of the uploaded bytes. The entity requirement lives
+// on the COMMIT step instead (startImport()'s !entityId guard, which is what writes
+// invoices.entity_id / import_batches.entity_id — both NOT NULL). It used to be asserted
+// here too, and because in-house workspaces have a permanently-null entityId (no
+// business_entities row) that belt-and-braces copy locked them out of the wizard's front
+// door: the dropzone never rendered at all. Preview gate = file only; commit gate = entity.
+export function canReadColumns(file: File | null): boolean {
+  return file !== null && hasImportableExtension(file.name)
 }
 
 // = preview !== null && canSubmitMapping(mapping). Delegates to M4-08-03's shipped

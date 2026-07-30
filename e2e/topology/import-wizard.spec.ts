@@ -57,7 +57,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { APP_URL, FIRM_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildMixedCsv, buildPerfCsv, PERF_HEADER, statValue } from '../importFixtures'
 
 // MixedImportResponse: the subset of POST /v1/imports's success body (internal/
@@ -91,14 +91,28 @@ function collectErrors(page: Page): string[] {
   return errors
 }
 
-async function signInFirm(page: Page): Promise<void> {
+async function signInPersona(page: Page, param: string): Promise<void> {
   // The landing page is the single sign-in front door, so the app has no picker to click
   // on a deployed build; ?persona= IS the sign-in, exactly as landing destUrl() hands off.
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  const url = `${APP_URL}?persona=${param}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
   expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+}
+
+async function signInFirm(page: Page): Promise<void> {
+  await signInPersona(page, FIRM_PERSONA.param)
+}
+
+// The in-house counterpart, added by [inhouse-can-start]. Every functional spec in this
+// package drove the FIRM persona only -- in-house appeared in exactly one assertion in
+// the whole browser suite (auth.spec.ts's identity-switch regression, which reads the
+// sidebar tenant label and never navigates further). That is precisely why an in-house
+// accountant could reach the New-invoice wizard and find its first step replaced by a
+// dead end without a single test going red.
+async function signInInhouse(page: Page): Promise<void> {
+  await signInPersona(page, INHOUSE_PERSONA.param)
 }
 
 // selectEntity(): a second copy of invoice-surfaces.spec.ts's own helper of the same
@@ -455,12 +469,11 @@ test('[import-upload-unify] LIVE: document preview gated, manual entry survives,
   await expect(page.getByText('Import a document ·', { exact: false })).toHaveCount(0)
   await expect(page.getByText('lagos-freight-INV-0482.pdf', { exact: true })).toHaveCount(0)
 
-  // Wait for the zone itself, not just the card: until the entities fetch resolves,
-  // active.entityId is null and the card renders its blocked state INSTEAD of the
-  // dropzone. Dropping before that lands would fail in page.evaluate on a missing
-  // label -- and this assertion is also the regression guard for the null -> resolved
-  // re-seed (App.tsx), without which Read columns below can never enable.
-  await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders once the entity resolves').toBeVisible({
+  // Wait for the zone itself, not just the card. The dropzone no longer depends on the
+  // entities fetch at all -- reading columns needs only the file ([inhouse-can-start]) --
+  // but the card still mounts a tick before the surrounding data settles, and dropping
+  // before the label exists would fail inside page.evaluate.
+  await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({
     timeout: 30_000,
   })
 
@@ -485,6 +498,78 @@ test('[import-upload-unify] LIVE: document preview gated, manual entry survives,
   // step's own primary is 'Run validation' (CreateForm), which no earlier step renders.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
   await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable in LIVE').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// [inhouse-can-start] — the regression this whole persona gap produced, asserted on the
+// deployed build as the IN-HOUSE accountant.
+//
+// Both personas must be able to START creating an invoice. The upload surface used to be
+// gated on `active.entityId !== null`, and inhouseClient() hardcodes that to null (an
+// in-house tenant has no business_entities row and no Clients screen to add one from), so
+// step 1 rendered "No linked entity -- import is unavailable here" and the firm alone got
+// a dropzone. Reading columns never needed an entity: POST /imports/preview takes the file
+// and nothing else, and its handler persists nothing. So the gate moved to the COMMIT,
+// which is the step that really does write import_batches.entity_id / invoices.entity_id
+// (both NOT NULL).
+//
+// Deliberately NOT asserted here: that an in-house import can be filed. Persistence for
+// entity-less workspaces is a separate story -- this spec pins that the wizard OPENS and
+// that the point where it stops is honest and legible, not a dead button.
+test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone and reads columns; filing is refused in words, not silence', async ({
+  page,
+}) => {
+  const errors = collectErrors(page)
+
+  await signInInhouse(page)
+  await expect(page.locator('aside.pf-sidebar')).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
+
+  // The heart of it: the surface the blocked state used to replace. Paired with an explicit
+  // absence check on the old copy, so re-introducing the gate under a different condition
+  // still fails here rather than passing on a visible-but-wrong screen.
+  await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByText('No linked entity', { exact: false })).toHaveCount(0)
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
+
+  // Same synthetic-DataTransfer approach as the firm test above (real drag is flaky here).
+  await page.evaluate(() => {
+    const label = document.querySelector('label[for="pf-import-file"]')
+    if (!label) throw new Error('dropzone label[for="pf-import-file"] not found')
+    const dt = new DataTransfer()
+    dt.items.add(new File(['invoice_number,subtotal\nINH-1,100\n'], 'inhouse.csv', { type: 'text/csv' }))
+    label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  })
+  await expect(page.getByText('inhouse.csv', { exact: true })).toBeVisible()
+
+  // The gate is gone from the front door: with no entity anywhere in this tenant, Read
+  // columns still arms purely on the file. This is the assertion the old contract made
+  // impossible -- canReadColumns required an entity, so it could never enable here.
+  await expect(readColumnsBtn, 'Read columns arms on the file alone, with no entity').toBeEnabled()
+
+  // And it genuinely works server-side: the preview round-trips without an entity_id.
+  await readColumnsBtn.click()
+  await expect(page.getByText('Map fields to columns ·', { exact: false }), 'preview succeeded with no entity').toBeVisible({
+    timeout: 60_000,
+  })
+
+  // Where it must stop, and how. Not a primary that looks armed and swallows the click:
+  // named reason + actually disabled, because an in-house user cannot resolve this in-app.
+  const commitBtn = page.getByRole('button', { name: 'Filing needs a linked entity' })
+  await expect(commitBtn, 'commit names why it cannot file').toBeVisible()
+  await expect(commitBtn, 'and is truly disabled, not a silent no-op').toBeDisabled()
+
+  // Manual entry stays reachable for in-house as well.
+  await page.getByRole('button', { name: '← Back to import' }).click()
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable for in-house').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

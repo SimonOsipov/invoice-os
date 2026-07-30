@@ -50,11 +50,13 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const [query, setQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<AccessRole | 'all'>('all')
   const shown = filterMembers(members, query, roleFilter)
-  // "It's just you" is a property of the ROSTER, not of the current search, so it is
-  // checked against the whole list and takes precedence over the no-match row below.
-  // The two are deliberately different treatments: a dashed card says "nothing here
-  // yet", a muted line inside the table says "your filter excluded everyone".
-  const justYou = members.length <= 1
+  // Two different empty surfaces, and whether a filter is running decides which. "It's
+  // just you" is a statement about the ROSTER, so it must never appear over a live
+  // search — that reads as the search having deleted everyone. Filtered-to-zero always
+  // gets the muted row instead: a dashed card says "nothing here yet", a muted line
+  // inside the table says "your filter excluded everyone".
+  const filtering = query.trim() !== '' || roleFilter !== 'all'
+  const justYou = members.length === 1 && !filtering
 
   return (
     <>

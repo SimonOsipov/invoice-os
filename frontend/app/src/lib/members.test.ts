@@ -8,6 +8,7 @@ import {
   activeAdmins,
   activeHolders,
   addMembers,
+  approvalInvolvement,
   blockedPositions,
   canvasApprovalLine,
   CAPABILITY_FOOTNOTE,
@@ -1997,5 +1998,48 @@ describe('needsClientPick — §7\'s zero-selected rule, now read by two compone
     expect(needsClientPick(scoped)).toBe(false)
     expect(needsClientPick(scoped.slice(0, 1))).toBe(false)
     expect(needsClientPick(scoped.slice(0, 0))).toBe(true)
+  })
+})
+
+describe('approvalInvolvement — the drawer gate itself, not just its inputs (T7.9)', () => {
+  it('answers null for a position no policy names, and the steps for one they do (T7.9)', () => {
+    // T7.6 pins `stepsFor`'s zeros; this pins what the DRAWER does with them. The gate used
+    // to be `steps != null && steps.total > 0` inside MemberDrawer.tsx — a rule vitest could
+    // not reach, so dropping it changed nothing any spec could see (§15.8).
+    const list = inhouse()
+    const policies = SEED_INHOUSE_POLICIES as Policy[]
+    const held = (name: string): RoleKey => {
+      const position = list.filter((m) => m.name === name)[0]?.position
+      if (position == null) throw new Error(`${name} holds no position`)
+      return position
+    }
+
+    // The three rows the gate exists for. Each one HOLDS a position, so the trigger §8 and
+    // AC#5 phrase literally — "when the member holds a position" — lets all three through
+    // and renders "Named in 0 approval steps" above an empty policy list.
+    for (const name of ['Tunde Adeyemi', 'Ibrahim Bello', 'Zainab Lawal']) {
+      expect(stepsFor(policies, held(name)).total).toBe(0)
+      expect(approvalInvolvement(policies, held(name))).toBeNull()
+    }
+
+    // §8's own example row — Adebayo, suspended, cfo. When it answers at all it answers with
+    // exactly what `stepsFor` returned, because the drawer renders `total` AND every policy
+    // name off the one value; a bare boolean would make it compute this twice.
+    const cfo = approvalInvolvement(policies, held('Adebayo Ogunlesi'))
+    expect(cfo).toEqual(stepsFor(policies, 'cfo'))
+    expect(stepsNamedLine(cfo?.total ?? 0)).toBe('Named in 2 approval steps')
+    expect(cfo?.policies.map((p) => p.name)).toEqual(['Company approval policy', 'Capital expenditure'])
+
+    // The gate's other half, which the drawer no longer forks on itself. "No position" ships
+    // in TWO shapes and both must reach the same answer: `undefined` on every firm row, which
+    // carries no such column (T1.6), and `null` on an in-house row holding no position.
+    expect(you(firm()).position).toBeUndefined()
+    expect(list.filter((m) => m.name === 'Chidi Anyanwu')[0].position).toBeNull()
+    expect(approvalInvolvement(policies, undefined)).toBeNull()
+    expect(approvalInvolvement(policies, null)).toBeNull()
+
+    // Stated without the seed too, so the rule outlives a Workflows edit that changes which
+    // positions the shipped policies name.
+    expect(approvalInvolvement([], 'cfo')).toBeNull()
   })
 })

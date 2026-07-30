@@ -1075,6 +1075,37 @@ export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will blo
 export const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else first."
 
 /**
+ * §8's Approval-involvement gate: the steps the section renders, or `null` for "render
+ * nothing at all".
+ *
+ * THE GATE IS THE COUNT, NOT THE POSITION. §8 and AC#5 both phrase the trigger as "when the
+ * member holds a position", and three shipped in-house rows hold a position no policy names
+ * (T7.6) — Tunde Adeyemi, Ibrahim Bello and Zainab Lawal. Taken literally, their drawers
+ * would read "Named in 0 approval steps" above an empty policy list. Holding a position is
+ * necessary, not sufficient.
+ *
+ * BOTH halves of that rule live here rather than in `MemberDrawer`, where the count half was
+ * first written. §15.8's reason and this module's own header's: vitest is `environment:
+ * node`, so a rule derived inside a component is a rule no spec can hold — and this is the
+ * one that decides whether three shipped drawers read correctly or read "0". Same argument
+ * that moved QA40-QA46's three display derivations out of MEMB-01-04's components.
+ *
+ * Hands back `stepsFor`'s result unchanged when it answers at all, rather than a boolean: the
+ * drawer renders `total` AND every policy name off it, so a predicate would only make the
+ * caller run `stepsFor` a second time to get what this call already computed.
+ *
+ * `position` is absent in TWO shapes and both mean the same thing here — `undefined` on every
+ * firm row, which carries no such column (T1.6), and `null` on an in-house row holding no
+ * approval position. `stepsFor` stays exported and separately called: MembersTable reads it
+ * under §10.4's DIFFERENT gate, which fires only for a suspended row.
+ */
+export function approvalInvolvement(policies: readonly Policy[], position: RoleKey | null | undefined): PolicySteps | null {
+  if (position == null) return null
+  const steps = stepsFor(policies, position)
+  return steps.total > 0 ? steps : null
+}
+
+/**
  * §8's Approval-involvement line — the bare count, with no consequence clause.
  *
  * NOT `stepsWarning`. That one is §10.4's ROW sentence and carries the ` · those steps

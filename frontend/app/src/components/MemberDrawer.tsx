@@ -32,6 +32,7 @@ import { useId, useState } from 'react'
 import { closeGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
+  approvalInvolvement,
   DEPARTMENTS,
   isProtectedAdmin,
   joinedLabel,
@@ -39,7 +40,6 @@ import {
   PROTECTED_ADMIN_NOTE,
   REMOVE_EXPLANATION,
   removeConfirmQuestion,
-  stepsFor,
   stepsNamedLine,
   SUSPEND_EXPLANATION,
   SUSPENDED_STEPS_NOTE,
@@ -81,15 +81,15 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
     ? ACCESS_ROLES.filter((r) => r.id !== row.role).map((r) => r.id)
     : undefined
 
-  // Gated on the member HOLDING a position, not on mode — firm rows carry no position at all
-  // (members.test.ts:222), so this is already mode-proof. `ctx.policies` is the CURRENT
-  // workspace's set (App.tsx); `seedPolicies()` would never reflect a Workflows edit.
-  const steps = row.position != null ? stepsFor(ctx.policies, row.position) : null
-  // §8 and AC#5 phrase the trigger as "when the member holds a position", but the count is
-  // what the section renders, and three shipped in-house rows hold a position no policy names
-  // (T7.6) — Tunde Adeyemi, Ibrahim Bello and Zainab Lawal. Taken literally, their drawers
-  // would read "Named in 0 approval steps" over an empty policy list. Gate on the count.
-  const involved = steps != null && steps.total > 0
+  // BOTH halves of the gate — holding a position, and actually being named in a step — are
+  // `approvalInvolvement`'s, not this component's. It is the rule that stops three shipped
+  // in-house drawers reading "Named in 0 approval steps" (T7.9), and a rule derived here is a
+  // rule no spec can hold (§15.8, and this file's header). `null` means render nothing; the
+  // gate below is that null, never a re-derived count. Gated on the position rather than on
+  // mode — firm rows carry no position at all (members.test.ts:222) — so it is mode-proof.
+  // `ctx.policies` is the CURRENT workspace's set (App.tsx); `seedPolicies()` would never
+  // reflect a Workflows edit.
+  const steps = approvalInvolvement(ctx.policies, row.position)
 
   // §6's rule, and a SEPARATE one from the last-admin lock: your own row has no Remove.
   // Load-bearing rather than cosmetic — `dropMember` is an unguarded pass-through by design
@@ -229,7 +229,7 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
             <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{row.invitedBy}</span>
           </div>
 
-          {involved && (
+          {steps && (
             <>
               <div className="label" style={{ margin: '20px 0 6px' }}>
                 Approval involvement

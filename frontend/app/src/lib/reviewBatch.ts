@@ -34,7 +34,7 @@
 // App-facing composer over them. The `window.location.hash` read/write itself lives at
 // exactly TWO call sites in App.tsx (the boot initializer and the mirror effect) -- this
 // module stays DOM-free so it is node-testable with no jsdom.
-import { invoiceStatusStyle, type ListInvoicesOptions, type InvoiceStatus } from './invoices'
+import { invoiceStatusStyle, type ListInvoicesOptions, type InvoiceStatus, type RuleCount } from './invoices'
 import { severityStyle, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
@@ -422,4 +422,102 @@ export function unreadableCsv(rows: UnreadableRow[]): string {
     [r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
   )
   return [UNREADABLE_CSV_HEADER, ...lines].join('\n')
+}
+
+// 10 STUB (task-286, Stage 2.5/Mode A) -- every export below throws `new Error('not
+// implemented')` before Stage 3 implements it; mirrors the 08/09 STUB idiom already used
+// in this file. Unused params are underscore-prefixed to satisfy noUnusedParameters until
+// Stage 3 fills the bodies in.
+
+// --- Filter state (AC-2/3/4/10, Implementation Plan §3) ---
+//
+// `reviewFilterReducer` is the SOLE place `offset:0` is written on a filter change --
+// only `type:'page'` may ever produce a non-zero offset; `pill`/`rule`/`search` all reset
+// to 0. Each arm returns the IDENTICAL state object when nothing changed (a re-clicked
+// active pill, a trimmed `q` equal to the current one) -- this stops a redundant click
+// refetching AND neutralises the debounce effect's mount-time `{type:'search', q:''}`
+// dispatch. `rule` TOGGLES: the same key clicked twice clears it to null. `search` TRIMS
+// the draft -- `q:' '` is truthy in JS and non-empty in Go, and would reach
+// `ILIKE '% %'` untrimmed, silently returning only rows with a literal space.
+export const REVIEW_PAGE_SIZE = 50
+
+export interface ReviewFilterState {
+  pill: ReviewPill
+  ruleKey: string | null
+  q: string
+  offset: number
+}
+
+export const initialReviewFilter: ReviewFilterState = { pill: 'all', ruleKey: null, q: '', offset: 0 }
+
+export type ReviewFilterAction =
+  | { type: 'pill'; pill: ReviewPill }
+  | { type: 'rule'; ruleKey: string }
+  | { type: 'search'; q: string }
+  | { type: 'page'; offset: number }
+
+export function reviewFilterReducer(_s: ReviewFilterState, _a: ReviewFilterAction): ReviewFilterState {
+  throw new Error('not implemented')
+}
+
+// The single composer 10's component uses to build the page request -- consumes the
+// SHIPPED `reviewQuery` (08) above rather than re-implementing its emission rules. A
+// blank `q` is therefore absent at three layers (this reducer's trim -> reviewQuery's
+// truthiness -> listInvoices' truthiness) before the server's own `if raw != ""`
+// absence rule.
+export function reviewPageQuery(_batchId: string, _s: ReviewFilterState): ListInvoicesOptions {
+  throw new Error('not implemented')
+}
+
+// --- Pills (AC-2, D3) ---
+//
+// Takes the four TOTALS, no rows parameter -- "no count is derived from a row length" is
+// enforced by the signature, not by discipline. Labels are D3's, superseding §7.3's
+// `Ready to approve` / `Approved`.
+export interface ReviewPillView {
+  id: ReviewPill
+  label: string
+  count: number
+  active: boolean
+}
+
+export function reviewPills(
+  _t: { allTotal: number; cleanTotal: number; failingTotal: number; queuedTotal: number },
+  _active: ReviewPill,
+): ReviewPillView[] {
+  throw new Error('not implemented')
+}
+
+// --- Failing-rules rail (AC-4, store.go:661-671) ---
+//
+// Takes NO page and NO invoice array -- page-derivation is unrepresentable by this
+// signature. Server order (count DESC, rule_key ASC) is passed through UNTOUCHED: no
+// sort, no filter, no dedupe, no severity clause -- store.go:661-671 makes the summary
+// severity-agnostic ON PURPOSE, so "fixing" that here would make the rail disagree with
+// the query it fires. `active` is exact string equality; an `activeRuleKey` absent from
+// `summary` marks nothing and is NEVER synthesised into a pill.
+export interface RailPill {
+  ruleKey: string
+  count: number
+  active: boolean
+}
+
+export function railPills(_summary: RuleCount[], _activeRuleKey: string | null): RailPill[] {
+  throw new Error('not implemented')
+}
+
+// --- Pager (AC-5) ---
+//
+// Fed the RESPONSE's echoed pagination, never REVIEW_PAGE_SIZE, so a server clamp stays
+// visible. `prevOffset` never goes negative; `canNext`/`canPrev` are the disable gates
+// the two buttons read directly.
+export interface PagerNav {
+  canPrev: boolean
+  canNext: boolean
+  prevOffset: number
+  nextOffset: number
+}
+
+export function pagerNav(_p: { limit: number; offset: number; total: number }): PagerNav {
+  throw new Error('not implemented')
 }

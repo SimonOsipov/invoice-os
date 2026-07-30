@@ -28,17 +28,24 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { invoiceStatusStyle } from './invoices'
+import { invoiceStatusStyle, type InvoiceStatus, type RuleCount } from './invoices'
 import { severityStyle, type Violation } from './validationApi'
 import type { ImportBatch, ImportReport, RowError } from './importApi'
 import {
   channelTiles,
   filterToQuery,
   formatReviewHash,
+  initialReviewFilter,
   pagerLabels,
+  pagerNav,
   parseReviewHash,
+  railPills,
+  reviewFilterReducer,
   reviewHash,
   reviewHeader,
+  reviewPageQuery,
+  reviewPills,
+  REVIEW_PAGE_SIZE,
   reviewQuery,
   reviewShellState,
   reviewTabs,
@@ -46,6 +53,7 @@ import {
   unreadableCsv,
   unreadableRows,
   verdictPill,
+  type ReviewFilterState,
   type UnreadableRow,
   type VerdictInput,
 } from './reviewBatch'
@@ -595,5 +603,231 @@ describe('unreadableCsv (AC-5, CSV-1 — the §7.4 "Download this list (CSV)" se
     expect(lines[0]).toBe('Row,Field,Why it could not be read')
     expect(lines[1]).toBe('5,—,"rows disagree, and say ""why"""')
     expect(lines[2]).not.toContain('null')
+  })
+})
+
+// --- INVCR-01-10 (task-286, Stage 2.5/Mode A) — RED specs for the 5 new exports
+// (reviewFilterReducer, reviewPageQuery, reviewPills, railPills, pagerNav), added by 10
+// on top of everything 08/09 already shipped above. Every one of the five throws
+// `new Error('not implemented')` (reviewBatch.ts's "10 STUB" comment), so specs against
+// them fail on that throw — the correct RED reason (assertion / not-implemented, never
+// an import/compile error).
+//
+// task-286's Stage 1 audited its own frozen 7-row table and retired two of them, neither
+// re-authored here:
+//   - TAB-4 ("the rail is batch-wide, not page-derived") is VACUOUS as written: its
+//     fixture supplied a page AND a summary so a wrong impl could be caught reading the
+//     page, but `railPills` takes NO page parameter at all — a function that cannot
+//     accept a page cannot be tested for ignoring one. Replaced by RAIL-1/RAIL-2/RAIL-3
+//     below, which catch the real wrong impls (a re-sort, a synthesised active pill, a
+//     non-empty rail from an empty summary).
+//   - TAB-6 ("paging prunes a departed selection") is a DUPLICATE and GREEN-BEFORE:
+//     `pruneSelection` ships at invoices.ts:802 and invoices.test.ts:772 + :1110-1134
+//     already pin this exactly, including the `→ []` leg. The new fact this subtask adds
+//     — that the component calls it on every `rows` change — has no node oracle (no
+//     jsdom, no renders); declared as a gap in §7, not re-tested here.
+//
+// TAB-7 was WEAK in the frozen table (its stated form duplicates shipped PILL-1/PILL-3a).
+// Kept as two legs below — TAB-7a (green-before) and TAB-7b (the only leg that can
+// actually fail) — per Stage 1's narrowing.
+describe('reviewFilterReducer (AC-2/3/4/10, task-286 §3) — offset:0 is structural, not remembered', () => {
+  it('TAB-1a: a pill change resets the offset — asserted end-to-end through the real reviewPageQuery composer, not just the reducer output', () => {
+    const state: ReviewFilterState = { pill: 'all', ruleKey: null, q: '', offset: 450 }
+
+    const next = reviewFilterReducer(state, { type: 'pill', pill: 'needs-fix' })
+
+    expect(reviewPageQuery('batch-1', next)).toEqual({
+      importBatchId: 'batch-1',
+      needsFix: true,
+      limit: REVIEW_PAGE_SIZE,
+      offset: 0,
+    })
+  })
+
+  it('TAB-1b: a rail click resets the offset — closes the gap the frozen table left open (it only covered the pill arm)', () => {
+    const state: ReviewFilterState = { pill: 'all', ruleKey: null, q: '', offset: 450 }
+
+    const next = reviewFilterReducer(state, { type: 'rule', ruleKey: 'vat-standard-rate' })
+
+    expect(next.offset).toBe(0)
+    expect(next.ruleKey).toBe('vat-standard-rate')
+  })
+
+  it('TAB-1c: a search commit resets the offset — same gap, the search arm', () => {
+    const state: ReviewFilterState = { pill: 'all', ruleKey: null, q: '', offset: 450 }
+
+    const next = reviewFilterReducer(state, { type: 'search', q: 'ACME' })
+
+    expect(next.offset).toBe(0)
+    expect(next.q).toBe('ACME')
+  })
+
+  it("TAB-1d: a no-op action preserves state IDENTITY — catches a `{...s}` spread that would refetch on every redundant click and re-fire the debounce effect's mount-time dispatch", () => {
+    const activePill: ReviewFilterState = { pill: 'needs-fix', ruleKey: null, q: '', offset: 0 }
+    expect(reviewFilterReducer(activePill, { type: 'pill', pill: 'needs-fix' })).toBe(activePill)
+
+    const committedSearch: ReviewFilterState = { pill: 'all', ruleKey: null, q: 'ACME', offset: 0 }
+    expect(reviewFilterReducer(committedSearch, { type: 'search', q: 'ACME' })).toBe(committedSearch)
+
+    // The debounce effect's own mount-time dispatch: q is already '' and the effect
+    // commits '' again on mount. Must be a no-op, or every tab mount would refetch once
+    // for free before the user has typed anything.
+    expect(reviewFilterReducer(initialReviewFilter, { type: 'search', q: '' })).toBe(initialReviewFilter)
+  })
+})
+
+describe('reviewFilterReducer + reviewPageQuery: whitespace-only search is ABSENT, not empty (AC-3/10, QUERY-2)', () => {
+  it("QUERY-2: a whitespace-only search commit trims q to '' and the resulting query carries NO q key at all — ' ' is truthy in JS and non-empty in Go, and would reach ILIKE '% %'", () => {
+    const state: ReviewFilterState = { pill: 'all', ruleKey: null, q: 'ACME', offset: 450 }
+
+    const next = reviewFilterReducer(state, { type: 'search', q: '   ' })
+
+    expect(next.q).toBe('')
+    expect(next.offset).toBe(0)
+    const query = reviewPageQuery('batch-1', next)
+    expect('q' in query).toBe(false)
+  })
+})
+
+describe('reviewPageQuery: all four filters compose into ONE ANDed options object (AC-2/3/4, QUERY-3)', () => {
+  it('QUERY-3: pill + rule + search + page 3 compose without dropping any of the four or the batch id — catches a client-side filter and a dropped batch id', () => {
+    const state: ReviewFilterState = { pill: 'needs-fix', ruleKey: 'vat-standard-rate', q: 'ACME', offset: 100 }
+
+    const query = reviewPageQuery('batch-1', state)
+
+    expect(query).toEqual({
+      importBatchId: 'batch-1',
+      needsFix: true,
+      ruleKey: 'vat-standard-rate',
+      q: 'ACME',
+      limit: REVIEW_PAGE_SIZE,
+      offset: 100,
+    })
+  })
+})
+
+describe('reviewPills (AC-2, D3) — takes the four totals only, no rows parameter', () => {
+  it('TAB-2: pill counts come from the four supplied totals, not a row length — 20 vs 474 catches a clean/failing swap', () => {
+    const totals = { allTotal: 500, cleanTotal: 474, failingTotal: 20, queuedTotal: 6 }
+
+    const pills = reviewPills(totals, 'all')
+
+    expect(pills).toEqual([
+      { id: 'all', label: 'All', count: 500, active: true },
+      { id: 'needs-fix', label: 'Needs a fix', count: 20, active: false },
+      { id: 'ready', label: 'Ready to submit', count: 474, active: false },
+      { id: 'queued', label: 'Queued', count: 6, active: false },
+    ])
+  })
+
+  it('TAB-2b: the pill labels are D3\'s, not §7.3\'s — no "Ready to approve", no "Approved"', () => {
+    const totals = { allTotal: 500, cleanTotal: 474, failingTotal: 20, queuedTotal: 6 }
+
+    const labels = reviewPills(totals, 'all').map((p) => p.label)
+
+    expect(labels).toEqual(['All', 'Needs a fix', 'Ready to submit', 'Queued'])
+    expect(labels).not.toContain('Ready to approve')
+    expect(labels).not.toContain('Approved')
+  })
+})
+
+describe('reviewFilterReducer: a rule pill TOGGLES (AC-4, TAB-3)', () => {
+  it('TAB-3: clicking a rule key sets it; clicking the SAME key again clears it — the param is present on the query, then absent', () => {
+    const on = reviewFilterReducer(initialReviewFilter, { type: 'rule', ruleKey: 'vat-standard-rate' })
+    expect(on.ruleKey).toBe('vat-standard-rate')
+    expect(reviewPageQuery('batch-1', on)).toHaveProperty('ruleKey', 'vat-standard-rate')
+
+    const off = reviewFilterReducer(on, { type: 'rule', ruleKey: 'vat-standard-rate' })
+    expect(off.ruleKey).toBeNull()
+    expect('ruleKey' in reviewPageQuery('batch-1', off)).toBe(false)
+  })
+})
+
+describe('railPills (AC-4, store.go:661-671) — takes NO page and NO invoice array; replaces the retired TAB-4', () => {
+  it('RAIL-1: server order and counts pass through UNTOUCHED — catches a client re-sort or a severity filter, either of which would make the rail disagree with the query it fires', () => {
+    const summary: RuleCount[] = [
+      { rule_key: 'b-rule', invoices: 5 },
+      { rule_key: 'a-rule', invoices: 5 },
+      { rule_key: 'c-rule', invoices: 1 },
+    ]
+
+    const pills = railPills(summary, null)
+
+    expect(pills).toEqual([
+      { ruleKey: 'b-rule', count: 5, active: false },
+      { ruleKey: 'a-rule', count: 5, active: false },
+      { ruleKey: 'c-rule', count: 1, active: false },
+    ])
+  })
+
+  it('RAIL-2: the active key marks EXACTLY one pill and is NEVER synthesised — an active key absent from the summary strands the user filtered with no rail pill to click off, which this helper must not paper over', () => {
+    const summary: RuleCount[] = [
+      { rule_key: 'a-rule', invoices: 5 },
+      { rule_key: 'b-rule', invoices: 3 },
+    ]
+
+    expect(railPills(summary, 'a-rule').map((p) => p.active)).toEqual([true, false])
+    expect(railPills(summary, null).map((p) => p.active)).toEqual([false, false])
+
+    const absent = railPills(summary, 'zzz-absent-key')
+    expect(absent.map((p) => p.active)).toEqual([false, false])
+    expect(absent).toHaveLength(2)
+  })
+
+  it("RAIL-3: an empty summary is an empty rail — pairs with the component's isEmpty:()=>false ruling (§4), which keeps \"no rules failed\" from reading as null/loading", () => {
+    expect(railPills([], null)).toEqual([])
+    expect(railPills([], 'some-key')).toEqual([])
+  })
+})
+
+describe("pagerNav (AC-5) — fed the RESPONSE's echoed pagination, never REVIEW_PAGE_SIZE", () => {
+  it('PAGE-1: disables at both ends', () => {
+    expect(pagerNav({ limit: 50, offset: 0, total: 500 })).toMatchObject({ canPrev: false, canNext: true })
+    expect(pagerNav({ limit: 50, offset: 450, total: 500 })).toMatchObject({ canPrev: true, canNext: false })
+  })
+
+  it("PAGE-2: offsets step by the RESPONSE's limit — catches offset-1/offset+1 and an unclamped prev going negative", () => {
+    expect(pagerNav({ limit: 50, offset: 100, total: 500 })).toMatchObject({ prevOffset: 50, nextOffset: 150 })
+    expect(pagerNav({ limit: 50, offset: 0, total: 500 }).prevOffset).toBe(0)
+  })
+
+  it('PAGE-3: a zero total AND a stale offset both disable Next — pairs with the shipped PAGER-5, which proves the LABELS stay honest in the same state', () => {
+    expect(pagerNav({ limit: 50, offset: 0, total: 0 }).canNext).toBe(false)
+    expect(pagerNav({ limit: 50, offset: 50, total: 10 }).canNext).toBe(false)
+  })
+})
+
+describe("verdictPill: every renderable status label is one of invoiceStatusStyle's 7 (AC-7, TAB-7a — GREEN-BEFORE: verdictPill and invoiceStatusStyle both shipped in 08; kept here because nothing else in this file iterates the full InvoiceStatus union against verdictPill specifically, which is the form this subtask's own AC-7 states)", () => {
+  it('TAB-7a: all 7 canonical statuses, through verdictPill, render a label drawn from the shipped 7 — never an invented lifecycle name', () => {
+    const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+    const SHIPPED_LABELS = new Set(['DRAFT', 'VALIDATED', 'QUEUED', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'FAILED'])
+
+    for (const status of ALL_STATUSES) {
+      const label = verdictPill({ status, violations: [] }).status.label
+      expect(SHIPPED_LABELS.has(label)).toBe(true)
+    }
+  })
+})
+
+// TAB-7b (AC-7, GUARD — red-before ONLY because ReviewInvoicesTab.tsx does not exist yet;
+// task-286 Stage 1 states this is NOT coverage of any behaviour, just a fact of Stage
+// 2.5's timing relative to Stage 3. `readFileSync` throws ENOENT today, which is a
+// legitimate red for a DIFFERENT reason than every other spec in this file (a thrown
+// not-implemented, or a genuine value mismatch) — this failure does not mean "the
+// assertion caught a bug", only "the file to scan doesn't exist yet". Once Stage 3
+// creates the component, this becomes the ONLY leg in this entire suite that can catch
+// this subtask's own wrong impl writing one of the three D2-forbidden lifecycle names
+// (`Pending`/`Approved`/`Transmitted`, story decision D2) into the new file. Reads the
+// component BY PATH, never this test file, to avoid self-matching (PILL-3b's shipped
+// idiom, reviewBatch.ts:104) — this describe block's own comments legitimately mention
+// all three forbidden names.
+describe('ReviewInvoicesTab.tsx source: none of the three D2-forbidden lifecycle names appear (AC-7, TAB-7b)', () => {
+  it('TAB-7b: the component file contains no Pending/Approved/Transmitted, in any case, including in comments', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    for (const forbidden of [/\bpending\b/i, /\bapproved\b/i, /\btransmitted\b/i]) {
+      expect(source).not.toMatch(forbidden)
+    }
   })
 })

@@ -26,6 +26,10 @@
 // canReadColumns/canStartImport/isMappableColumn/columnLetter/previewColumns's stub
 // bodies throw `new Error('not implemented')` before ever returning anything — that IS
 // the correct RED reason (assertion / not-implemented), not an import/compile error.
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import { WIZARD_STEPS } from '../data'
@@ -270,7 +274,110 @@ describe('wizardHeader — full truth table over every CreateStep (QA)', () => {
       expect(wizardHeader(step)).toEqual({ steps: IMPORT_STEPS, stageIndex: idx })
     })
   })
+
+  // QA (Stage 4, task-277): STAGE_OF is typed Record<CreateStep, number> — a compiler-
+  // enforced EXHAUSTIVE mapped type. Add or remove a CreateStep member without updating
+  // STAGE_OF and the file fails to compile, so STAGE_OF's own key set is ground truth
+  // for "every CreateStep member that currently exists" — unlike the hand-maintained
+  // ALL_STEPS/table arrays scattered through this file, which are plain literals the
+  // compiler does not check against the union at all. This pins those hand-written lists
+  // to the compiler-enforced source, so a future CreateStep addition that updates
+  // STAGE_OF but forgets DOCUMENT_ONLY_STEPS/IMPORT_STAGE_OF is caught by a set-equality
+  // failure here, rather than only by silently falling through the `?? 0` fallback
+  // (covered separately below).
+  it('QA-WH-KEYS: the document/import partition covers exactly the members STAGE_OF is compiler-required to have — no member left un-partitioned', () => {
+    const documentSet: CreateStep[] = ['form', 'validating', 'results']
+    const importSet: CreateStep[] = ['upload', 'mapping', 'report']
+    expect([...documentSet, ...importSet].slice().sort()).toEqual(Object.keys(STAGE_OF).sort())
+    // Positive companion: the two sets are actually disjoint, so the equality above
+    // isn't hiding a step counted (or miscounted) on both sides.
+    expect(documentSet.filter((s) => (importSet as string[]).includes(s))).toEqual([])
+  })
+
+  // QA (Stage 4, task-277): none of the 6 real CreateStep members exercises the `?? 0`
+  // fallback today — STAGE_OF is total (every document-only step has a real entry) and
+  // IMPORT_STAGE_OF's 3 keys are exactly the 3 steps NOT in DOCUMENT_ONLY_STEPS, so
+  // `IMPORT_STAGE_OF[createStep] ?? 0` is currently DEAD for every value the type system
+  // can actually produce. The comment above wizardHeader promises this fallback protects
+  // a FUTURE union member added without a matching IMPORT_STAGE_OF entry (FLOW-14's own
+  // docstring, carried over from task-173) — the only way to prove that promise without
+  // waiting for such a member to exist for real is a type-unsafe cast, deliberately
+  // isolated to this one test and nowhere else in the file.
+  it('QA-WH-FALLBACK: a hypothetical CreateStep absent from IMPORT_STAGE_OF resolves to the import path at index 0 — never undefined or NaN', () => {
+    const hypotheticalStep = 'reconcile' as unknown as CreateStep
+    const result = wizardHeader(hypotheticalStep)
+    expect(result).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+    expect(Number.isNaN(result.stageIndex)).toBe(false)
+    expect(result.stageIndex).not.toBeUndefined()
+  })
 })
+
+// QA (Stage 4, task-277): a source-scanning meta test in the style of
+// invoices.test.ts:1514-1532's scanForIdentifier/INV-06-T11b — the single highest-value
+// guard for a DELETION subtask, because every other test above can only prove the
+// current implementation is correct; it cannot stop the deleted mock's identifiers from
+// creeping back into a later, unrelated change. Makes the deletion permanent rather than
+// a one-off.
+describe('the deleted PDF/JPG document mock does not creep back into frontend/app/src (QA adversarial, task-277)', () => {
+  // Root resolved from THIS file's own location, never process.cwd() — vitest may run
+  // from the monorepo root or from frontend/app, and cwd-relative traversal would
+  // silently scan the wrong subtree depending on which (same rationale as
+  // invoices.test.ts's own scanForIdentifier root).
+  const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+  const selfRelPath = path.join('lib', 'importFlow.test.ts')
+
+  it('QA-MOCK-1: sanity — the scan actually walks and reads real files (positive companion)', () => {
+    // A walker that silently visited nothing (wrong root, swallowed error, empty dir)
+    // would make every negative assertion below pass vacuously. 'wizardHeader' is known
+    // to exist in this very directory.
+    expect(scanForIdentifier(srcRoot, 'wizardHeader').length).toBeGreaterThan(0)
+  })
+
+  it('QA-MOCK-2: the deleted sample-file list, its label list, and its type export never reappear as identifiers anywhere under src', () => {
+    // Built from parts so this test's own source text never literally contains the
+    // needles verbatim — a literal spelling in the needle itself (or in this test's own
+    // title/comments) would make the scan match this file and could never fail even if
+    // the identifier were reintroduced elsewhere. Self-excluded defensively too, the
+    // same way QA-MOCK-3 below is, in case a future edit ever spells one out here.
+    const needles = ['SAMPLE' + '_FILES', 'PARSE' + '_LABELS', 'Sample' + 'FileDef']
+    needles.forEach((needle) => {
+      const hits = scanForIdentifier(srcRoot, needle).filter((relPath) => relPath !== selfRelPath)
+      expect(hits, needle).toEqual([])
+    })
+  })
+
+  it("QA-MOCK-3: the quoted CreateStep literal 'parsing' does not reappear outside this file's own runtime-shape regression guard", () => {
+    // This file is deliberately excluded: the 'STAGE_OF runtime shape (task-277 AC-1,
+    // AC-8 — RED-first)' describe block above must spell the literal 'parsing' to assert
+    // against the real runtime STAGE_OF object, and its surrounding prose names the
+    // deleted union member too. Everywhere else in frontend/app/src the quoted string has
+    // zero legitimate reason to exist any more: 'parsing' left the CreateStep union whole
+    // (types.ts) and its runtime STAGE_OF entry in this same deletion (task-277).
+    const hits = scanForIdentifier(srcRoot, "'parsing'").filter((relPath) => relPath !== selfRelPath)
+    expect(hits).toEqual([])
+  })
+})
+
+// Recursively walks `rootDir`, reading every .ts/.tsx file, and returns the relative
+// paths of every file whose text contains `needle` as a literal substring. Same
+// implementation as invoices.test.ts's scanForIdentifier — duplicated locally rather
+// than imported/shared because these are test-only helpers in two independently owned
+// spec files, not production code (no shared module would be surgical here).
+function scanForIdentifier(rootDir: string, needle: string): string[] {
+  const hits: string[] = []
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+      } else if (/\.(ts|tsx)$/.test(entry.name) && readFileSync(full, 'utf8').includes(needle)) {
+        hits.push(path.relative(rootDir, full))
+      }
+    }
+  }
+  walk(rootDir)
+  return hits
+}
 
 describe('previewColumns — adversarial edge cases (QA)', () => {
   it('returns an empty array for a zero-column preview', () => {

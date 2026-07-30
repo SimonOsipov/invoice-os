@@ -9,8 +9,9 @@ import type { ImportPreview, ImportReport, UploadPhase } from './lib/importApi'
 // Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
 // `./data`, both of which type-import this file, so `Member` closes the loop
 // members -> auth/data -> types -> members. Benign only because every edge in it is
-// erased at compile — this file has zero runtime exports. A plain value import here
-// would be emitted verbatim (`verbatimModuleSyntax`) and break the bundle.
+// erased at compile — this file has zero runtime exports. `tsc` is what enforces it
+// (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
+// value import here and emits a byte-identical bundle.
 import type { Member } from './lib/members'
 import type { CustomRule, Suggestion } from './lib/rules'
 import type { Policy } from './lib/workflows'

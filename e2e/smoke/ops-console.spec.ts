@@ -131,21 +131,29 @@ test('ops-console: Re-drive all clears the dead-letter queue everywhere it is re
   await signInAs(page, 'developer')
   await openSubmissions(page)
 
-  const badge = deadLetterBadge(page)
-  const n = Number((await badge.textContent())?.trim())
+  // The count is READ from the sub-stat tile rather than the badge, because the tile always
+  // renders (Submissions.tsx:26-31) and the badge does not: at zero the badge is absent, so
+  // reading it there would hang to the test timeout instead of failing on the guard below.
+  const tile = deadLetterTile(page)
+  const n = Number(((await tile.textContent()) ?? '').trim())
   // Vacuity guard: with nothing in the dead-letter queue there is no callout, no button and
   // nothing to clear, so every assertion below would pass without exercising anything.
-  expect(n, 'the sidebar must report a non-zero dead-letter count for this test to mean anything').toBeGreaterThan(0)
+  expect(n, 'the dead-letter queue must be non-empty for this test to mean anything').toBeGreaterThan(0)
 
-  // The callout names the same number. The singular is ungrammatical at n=1 ("1 submissions
-  // in the dead-letter queue") — that is a faithful port, Submissions.tsx:72 does not
-  // pluralise, and the support console's equivalent does. Asserting the rendered string
-  // rather than a tidied one is what keeps this a test of the product.
-  const callout = page.getByText(new RegExp(`^${n} submissions in the dead-letter queue$`))
-  await expect(callout).toBeVisible()
+  // The sidebar badge agrees — a second consumer, counting the jobs array independently
+  // (App.tsx:92 vs Submissions.tsx:17).
+  const badge = deadLetterBadge(page)
+  await expect(badge).toHaveText(String(n))
 
-  // ...and so does the sub-stat tile, which counts the jobs array a second time.
-  await expect(deadLetterTile(page)).toHaveText(String(n))
+  // ...and so does the callout. The singular is ungrammatical at n=1 ("1 submissions in the
+  // dead-letter queue") — that is a faithful port, Submissions.tsx:72 does not pluralise,
+  // and the support console's equivalent does. Asserting the rendered string rather than a
+  // tidied one is what keeps this a test of the product.
+  //
+  // An exact STRING, not an anchored regex: Playwright matches strings against normalized
+  // text but regexes against raw textContent (elementText().full), so `^…$` would break
+  // silently the day someone reflows that JSX across lines.
+  await expect(page.getByText(`${n} submissions in the dead-letter queue`, { exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: 'Re-drive all' }).click()
 
@@ -153,14 +161,14 @@ test('ops-console: Re-drive all clears the dead-letter queue everywhere it is re
   // placed ahead of it would race. This console's Toast carries no role (Toast.tsx) —
   // unlike the support console's — so it is matched by its text, which is derived from the
   // number of rows actually transformed (App.tsx:111-113), not from the badge.
-  await expect(page.getByText(new RegExp(`^Re-drove ${n} dead-letter submissions$`))).toBeVisible()
+  await expect(page.getByText(`Re-drove ${n} dead-letter submissions`, { exact: true })).toBeVisible()
 
   // Every reporter of the count now agrees it is empty. The badge and the button are not
   // rendered at all at zero, so these are absence assertions, not "shows 0" assertions.
   await expect(badge).toHaveCount(0)
   await expect(page.getByText(/submissions in the dead-letter queue/)).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Re-drive all' })).toHaveCount(0)
-  await expect(deadLetterTile(page)).toHaveText('0')
+  await expect(tile).toHaveText('0')
 
   expect(errors, `console errors re-driving the ops dead-letter queue:\n${errors.join('\n')}`).toEqual([])
 })
@@ -216,8 +224,11 @@ test('ops-console: opening a job row opens that job\'s drawer, with the payload 
   await openSubmissions(page)
 
   // The dead-letter row is chosen by its rendered state, not by a hardcoded seed id, so the
-  // expected payload below stays correct if data.tsx is reseeded.
-  const row = rows(page).filter({ hasText: 'DEAD-LETTER' }).first()
+  // expected payload below stays correct if data.tsx is reseeded. Matched on the state
+  // PILL — an element whose whole text is the label — rather than `hasText`, which scans the
+  // row's error column too and would pick the wrong row if a seeded error message ever
+  // mentioned the dead-letter queue.
+  const row = rows(page).filter({ has: page.getByText('DEAD-LETTER', { exact: true }) }).first()
   await expect(row).toBeVisible()
   const jobId = ((await row.locator('.mono').first().textContent()) ?? '').trim()
   expect(jobId, 'the first cell of a job row is its id').toMatch(/^sub_\w+$/)

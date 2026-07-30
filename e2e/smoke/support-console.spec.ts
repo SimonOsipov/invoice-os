@@ -149,17 +149,28 @@ test('support-console: Re-drive all clears the dead-letter queue everywhere it i
   const errors = collectErrors(page)
   await signInAs(page, 'support') // lands on Submissions ops
 
-  const badge = deadLetterBadge(page)
-  const n = Number((await badge.textContent())?.trim())
+  // The count is READ from the sub-stat tile rather than the badge, because the tile always
+  // renders (Submissions.tsx:29-34) and the badge does not: at zero the badge is absent, so
+  // reading it there would hang to the test timeout instead of failing on the guard below.
+  const tile = deadLetterTile(page)
+  const n = Number(((await tile.textContent()) ?? '').trim())
   // Vacuity guard: with nothing in the dead-letter queue there is no callout, no button and
   // nothing to clear, so every assertion below would pass without exercising anything.
-  expect(n, 'the sidebar must report a non-zero dead-letter count for this test to mean anything').toBeGreaterThan(0)
+  expect(n, 'the dead-letter queue must be non-empty for this test to mean anything').toBeGreaterThan(0)
 
-  // The callout names the same number. This one DOES pluralise (Submissions.tsx:89) where
-  // the ops console's does not — asserting each console's rendered string rather than a
-  // shared tidied one is what keeps these tests of the product.
-  await expect(page.getByText(new RegExp(`^${n} jobs? in the dead-letter queue$`))).toBeVisible()
-  await expect(deadLetterTile(page)).toHaveText(String(n))
+  // The sidebar badge agrees — a second consumer, counting the jobs array independently
+  // (App.tsx:88 vs Submissions.tsx:23-24).
+  const badge = deadLetterBadge(page)
+  await expect(badge).toHaveText(String(n))
+
+  // ...and so does the callout. This one DOES pluralise (Submissions.tsx:89) where the ops
+  // console's does not, so the expected plural is computed here rather than papered over
+  // with `jobs?` — a regex that accepts both forms could not catch a broken plural.
+  //
+  // An exact STRING, not an anchored regex: Playwright matches strings against normalized
+  // text but regexes against raw textContent (elementText().full), so `^…$` would break
+  // silently the day someone reflows that JSX across lines.
+  await expect(page.getByText(`${n} ${n === 1 ? 'job' : 'jobs'} in the dead-letter queue`, { exact: true })).toBeVisible()
 
   // Third consumer, on another screen.
   await goTo(page, 'System health', 'System health')
@@ -176,14 +187,14 @@ test('support-console: Re-drive all clears the dead-letter queue everywhere it i
   // page. The message's number comes from the rows actually transformed (App.tsx:110-112),
   // not from the badge.
   const toast = page.getByRole('status')
-  await expect(toast).toContainText(new RegExp(`^Re-drove ${n} dead-letter jobs?`))
+  await expect(toast).toContainText(`Re-drove ${n} dead-letter ${n === 1 ? 'job' : 'jobs'}`)
   await expect(toast).toContainText('AUDIT LOGGED')
 
   // Every reporter of the count now agrees it is empty. The badge is not rendered at all at
   // zero, so that one is an absence assertion, not a "shows 0" assertion.
   await expect(badge).toHaveCount(0)
   await expect(page.getByText(/in the dead-letter queue/)).toHaveCount(0)
-  await expect(deadLetterTile(page)).toHaveText('0')
+  await expect(tile).toHaveText('0')
 
   // ...including the card on the other screen, whose STATUS WORD is derived from the same
   // live count (data.tsx healthCards()) and so must flip with it.
@@ -285,8 +296,11 @@ test('support-console: tenant search narrows the list, selection fills the detai
   await expect(list.first()).toContainText(selectedName)
   await expect(list.first()).toHaveAttribute('aria-pressed', 'true')
   // The whole record re-resolved, not just the name: the TIN line is rendered from the
-  // selected tenant's own fields plus its entity/plan summary (Tenants.tsx:102).
-  await expect(page.getByRole('main').getByText(new RegExp(`^TIN ${targetTin} · .+$`))).toBeVisible()
+  // selected tenant's own fields plus its entity/plan summary (Tenants.tsx:102). Requiring
+  // the "· " to follow is what makes this an assertion about the summary too. The row's own
+  // TIN span carries no "TIN " prefix, so this resolves to the detail pane alone.
+  const tinLine = page.getByRole('main').locator('.mono').filter({ hasText: `TIN ${targetTin} · ` })
+  await expect(tinLine, 'the detail pane shows the selected tenant TIN and entity/plan summary').toHaveCount(1)
 
   // View-as is a cross-tenant read, which is why it is audited. Scoping to role=status is
   // mandatory: the tenant name is simultaneously in the list row and the <h2>, so a bare

@@ -270,13 +270,19 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(page.getByText('tax summary, period to date', { exact: false })).toContainText(INHOUSE_PERSONA.tenantName)
 
   // --- Settings -------------------------------------------------------------------------
-  // Pins STATIC COPY (SETTINGS_TABS, data.tsx:282-286), not a backend contract --
-  // connectors/API keys/certificates are all mock. [workflows-included]'s trade-off.
+  // Pins STATIC COPY (SETTINGS_TABS, data.tsx:285-290), not a backend contract --
+  // members/connectors/API keys/certificates are all mock. [workflows-included]'s trade-off.
+  //
+  // MEMB-01 added Members as a FOURTH tab, first in the strip and the default one Settings
+  // opens on, and rewrote the subtitle to name people. Both strings below moved with it:
+  // the subtitle gained a leading "People," and a trailing full stop, and the tab loop
+  // gained 'Members'. Kept as an exact-copy assertion rather than loosened to a substring --
+  // this surface has no backend to check against, so the copy IS the contract.
   await goTo(page, 'Settings')
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByText('WORKSPACE CONFIGURATION', { exact: true })).toBeVisible()
-  await expect(page.getByText('Integrations, developer access, and signing certificates', { exact: true })).toBeVisible()
-  for (const tab of ['ERP connectors', 'API & webhooks', 'Signing & certificates']) {
+  await expect(page.getByText('People, integrations, developer access, and signing certificates.', { exact: true })).toBeVisible()
+  for (const tab of ['Members', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
     await expect(page.getByRole('button', { name: tab, exact: true })).toBeVisible()
   }
 

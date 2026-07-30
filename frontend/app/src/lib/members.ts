@@ -466,10 +466,15 @@ export function seedMembers(): MemberStore {
 /**
  * `clientAccess` is the only nested value a `Member` carries, so it is the only thing a
  * `{...m}` spread would leave aliased to the seed — mirroring `cloneNode`'s own
- * `then`/`else` copy (workflows.ts:214-216).
+ * `then`/`else` copy (workflows.ts:214-216). Shared with the row-building reducers
+ * (`setMemberRole`/`setMemberStatus`), which face exactly the same hazard.
  */
+function copyMember(m: Member): Member {
+  return Array.isArray(m.clientAccess) ? { ...m, clientAccess: m.clientAccess.slice() } : { ...m }
+}
+
 function cloneMembers(list: readonly Member[]): Member[] {
-  return list.map((m) => (Array.isArray(m.clientAccess) ? { ...m, clientAccess: m.clientAccess.slice() } : { ...m }))
+  return list.map((m) => copyMember(m))
 }
 
 // ---------------------------------------------------------------------------
@@ -617,17 +622,6 @@ export function activeAdmins(list: readonly Member[]): Member[] {
 // ---------------------------------------------------------------------------
 // MEMB-01-02 — invite pipeline, reducers, filter and the last-admin guard
 // ---------------------------------------------------------------------------
-// SIGNATURE-ONLY STUBS, authored ahead of the implementation (test-first). The T2 suite
-// in members.test.ts asserts against these today and is RED by construction: every body
-// throws, so no T2 spec can pass by accident before the behaviour exists. The signatures
-// are the contract — MEMB-01-02's execution pass fills the bodies in and deletes
-// `notImplemented`, whose disappearance `noUnusedLocals` then enforces.
-
-/** MEMB-01-02 stub marker. Reads its arguments so the stubs keep real parameter names. */
-function notImplemented(...args: unknown[]): never {
-  void args
-  throw new Error('not implemented')
-}
 
 /** One verdict per pasted address, in input order. */
 export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
@@ -643,60 +637,160 @@ export type InviteOptions =
   | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | number[] }
   | { mode: 'inhouse'; role: AccessRole; department: Department; position: RoleKey | null }
 
+/**
+ * Deliberately minimal (Decision `[email-validation-minimal]`): one `@`, a dot in the
+ * domain, no whitespace on either side. Same shape as the pattern rules.ts:189 shows the
+ * user as display copy, so what the invite box accepts cannot drift from what the rules
+ * screen advertises.
+ */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/** Comma, semicolon and any whitespace — newlines included — all separate addresses. */
+const ADDRESS_SEPARATORS = /[,;\s]+/
+
+/** `. _ - +` all read as word breaks inside the local part. */
+const LOCAL_PART_SEPARATORS = /[._+-]+/
+
 /** Splits on comma / semicolon / whitespace / newline; trims, drops empties, de-dupes. */
 export function parseEmailInput(raw: string): string[] {
-  return notImplemented(raw)
+  const out: string[] = []
+  const seen = new Set<string>()
+  // `\s` inside the separator class does the trimming for us: whitespace can never survive
+  // into a fragment, so the only cleanup left is dropping the empties that repeated or
+  // leading/trailing separators leave behind.
+  for (const address of raw.split(ADDRESS_SEPARATORS)) {
+    if (!address) continue
+    // De-duped case-insensitively but stored VERBATIM — the first spelling seen is the one
+    // the chip renders, and the address is what will be mailed.
+    const key = address.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(address)
+  }
+  return out
 }
 
 export function isValidEmail(value: string): boolean {
-  return notImplemented(value)
+  return EMAIL_RE.test(value)
+}
+
+/** The local part, split into words. Shared by `nameFromEmail` and `initialsFrom`. */
+function localTokens(email: string): string[] {
+  return email.split('@')[0].split(LOCAL_PART_SEPARATORS).filter(Boolean)
 }
 
 /** §7's "name derived from the local part" — local part, split, capitalised, space-joined. */
 export function nameFromEmail(email: string): string {
-  return notImplemented(email)
+  return localTokens(email)
+    .map((t) => t[0].toUpperCase() + t.slice(1).toLowerCase())
+    .join(' ')
 }
 
-/** Takes an EMAIL, not a name — see MEMB-01-02's fork rationale against `initials()`. */
+/**
+ * Takes an EMAIL, not a name — a deliberate FORK of `initials(name)` (customers.ts:60-69)
+ * rather than a reuse, and emphatically not a silent third variant. Two reasons, both
+ * structural: that helper reads a NAME and strips non-alpha, so an email fed to it returns
+ * garbage; and Decision `[name-from-local-part]` wants a single-token local part to yield
+ * its first TWO letters (`zainab` → `ZA`), where one-letter-per-token gives `Z`. Composing
+ * it as `initials(nameFromEmail(x))` fails for that same second reason.
+ */
 export function initialsFrom(email: string): string {
-  return notImplemented(email)
+  const tokens = localTokens(email)
+  const source = tokens.length === 1 ? tokens[0] : tokens.map((t) => t[0]).join('')
+  return source.slice(0, 2).toUpperCase()
 }
 
 export function classifyInvites(existing: readonly Member[], addresses: readonly string[]): InviteVerdict[] {
-  return notImplemented(existing, addresses)
+  return addresses.map((address): InviteVerdict => {
+    if (!isValidEmail(address)) return 'malformed'
+    // Lower-cased on BOTH sides: the stored spelling is whatever was typed when the row was
+    // created, so a raw `===` would let the same person be invited twice.
+    const match = existing.find((m) => m.email.toLowerCase() === address.toLowerCase())
+    if (!match) return 'ok'
+    return match.status === 'invited' ? 'invited' : 'member'
+  })
+}
+
+// Fresh ids, mirroring `newNodeId`/`newPolicyId` (workflows.ts:287-296): a module-level
+// counter started ABOVE the hand-written seed range (`mf1`…`mf7` / `mh1`…`mh16`) so a minted
+// id can never collide with one, prefixed per mode so ids stay unique across a mode switch
+// too (QA16). Deliberately NOT `Date.now()`: MEMB-01-06 maps `memberFromInvite` over a whole
+// chip list in one tick, which would emit duplicate ids that `replaceMember`/`removeMember`
+// would then apply to the wrong row.
+let memberSeq = 100
+
+function newMemberId(mode: WorkflowMode): string {
+  return `${mode === 'firm' ? 'mf' : 'mh'}${memberSeq++}`
 }
 
 /** The inviter's name arrives as an ARGUMENT — this module never reaches for ctx. */
 export function memberFromInvite(email: string, opts: InviteOptions, inviterName: string): Member {
-  return notImplemented(email, opts, inviterName)
+  const base: Member = {
+    id: newMemberId(opts.mode),
+    name: nameFromEmail(email),
+    initials: initialsFrom(email),
+    email,
+    role: opts.role,
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    // Always the real inviter, never the em dash: QA17 pins `invitedBy === '—'` IFF `isYou`,
+    // and an invited row is never `isYou`.
+    invitedBy: inviterName,
+    isYou: false,
+  }
+  // A branch, not `department: opts.department` on one flat object — the latter leaves the
+  // key PRESENT holding `undefined`, which ships an in-house column into the firm table.
+  if (opts.mode === 'firm') {
+    // Copied rather than aliased: MEMB-01-06 maps this over a chip list from a SINGLE `opts`,
+    // which would otherwise leave every minted row sharing one array.
+    return { ...base, clientAccess: Array.isArray(opts.clientAccess) ? opts.clientAccess.slice() : opts.clientAccess }
+  }
+  return { ...base, department: opts.department, position: opts.position }
 }
 
+// Reducers. All five allocate UNCONDITIONALLY (`map` / `filter` / spread), so a miss returns
+// a new array holding the same values rather than the input reference — that is the
+// `replacePolicy`/`removePolicy` form (workflows.ts:396-402), picked over rules.ts:253-268's
+// `return rules as CustomRule[]` because the two house precedents disagree and only the
+// always-allocate one satisfies §15.1. Every reducer keys off `id`, never email.
+
 export function replaceMember(list: readonly Member[], next: Member): Member[] {
-  return notImplemented(list, next)
+  return list.map((m) => (m.id === next.id ? next : m))
 }
 
 export function addMembers(list: readonly Member[], added: readonly Member[]): Member[] {
-  return notImplemented(list, added)
+  return [...list, ...added]
 }
 
 export function removeMember(list: readonly Member[], id: string): Member[] {
-  return notImplemented(list, id)
+  return list.filter((m) => m.id !== id)
 }
 
+// `setMemberRole`/`setMemberStatus` build their new row through `copyMember` because a bare
+// `{...m}` would leave it sharing `clientAccess` with the row it replaced. `replaceMember`
+// cannot do the same — its row is caller-built, so the caller owns that copy.
+
 export function setMemberRole(list: readonly Member[], id: string, role: AccessRole): Member[] {
-  return notImplemented(list, id, role)
+  return list.map((m) => (m.id === id ? { ...copyMember(m), role } : m))
 }
 
 export function setMemberStatus(list: readonly Member[], id: string, status: MemberStatus): Member[] {
-  return notImplemented(list, id, status)
+  return list.map((m) => (m.id === id ? { ...copyMember(m), status } : m))
 }
 
 /** Name OR email, case-insensitive substring. `roleFilter: 'all'` disables the role predicate. */
 export function filterMembers(list: readonly Member[], query: string, roleFilter: AccessRole | 'all'): Member[] {
-  return notImplemented(list, query, roleFilter)
+  const q = query.trim().toLowerCase()
+  return list.filter((m) => {
+    if (roleFilter !== 'all' && m.role !== roleFilter) return false
+    if (!q) return true
+    return m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q)
+  })
 }
 
 /** §9 — true iff `member` is an active admin and they are the only one. */
 export function isProtectedAdmin(list: readonly Member[], member: Member): boolean {
-  return notImplemented(list, member)
+  if (member.role !== 'admin' || member.status !== 'active') return false
+  return activeAdmins(list).length === 1
 }

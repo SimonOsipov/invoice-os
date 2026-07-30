@@ -35,8 +35,8 @@
 // stays DOM-free so it is node-testable with no jsdom.
 import { invoiceStatusStyle, type ListInvoicesOptions, type InvoiceStatus } from './invoices'
 import { severityStyle, type Severity, type Violation } from './validationApi'
-import { rowErrorRows, type RowError, type ImportBatch } from './importApi'
-import type { StatusStyle } from '../types'
+import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
+import type { StatusStyle, View, CreateStep } from '../types'
 
 export interface VerdictInput {
   status: InvoiceStatus
@@ -279,4 +279,100 @@ export function reviewQuery(
   if (extra.limit != null) opts.limit = extra.limit
   if (extra.offset != null) opts.offset = extra.offset
   return opts
+}
+
+// 09 STUB (task-285, Stage 2.5/Mode A) -- every export below throws `new Error('not
+// implemented')` before Stage 3 implements it; that IS the correct RED reason (mirrors
+// the 08 STUB idiom this file already used, and the validationApi.ts/importApi.ts
+// convention it was copied from). Unused params are underscore-prefixed to satisfy
+// noUnusedParameters until Stage 3 fills the bodies in.
+
+// --- Post-import routing (AC-9, task-285 Implementation Plan §3) ---
+//
+// The SOLE decision boundary between "startImport succeeded" and where the app lands.
+// Order is load-bearing: status first (call the shipped reportSummary -- never a second
+// `status !== 'completed'` copy, that is the fork AC-10 forbids), then count, then id.
+// Truthiness on `resolvedInvoiceId`, NEVER `!= null` -- `''` is a string and a null-check
+// would let it fall through into 'single' with an empty invoiceId.
+export type PostImportRoute =
+  | { kind: 'single'; invoiceId: string }
+  | { kind: 'review'; batchId: string }
+  | { kind: 'rejected'; batchId: string }
+
+export function routeAfterImport(_report: ImportReport, _resolvedInvoiceId: string | null): PostImportRoute {
+  throw new Error('not implemented')
+}
+
+// --- §7.5-vs-batch resolution (AC-7, resolves the AC-7/AC-9 divergence -- §4) ---
+//
+// The SOLE owner of the §7.5-vs-batch decision, keyed on the batch GET alone -- NEVER on
+// routeAfterImport's `kind` and NEVER on `ready_invoices` -- so both arrival paths
+// (POST-then-route, and a deep-link revisit that never calls routeAfterImport at all)
+// run the identical derivation. An all-quarantined batch (`completed`, `ready_invoices:
+// 0`, `rows_invalid > 0`) therefore renders the BATCH surface: routeAfterImport answers
+// a different question ("is there one invoice to open") and legitimately says `rejected`
+// for the same import -- the two are not required to agree.
+export type ReviewShellState = 'batch' | 'rejected'
+
+export function reviewShellState(_batch: Pick<ImportBatch, 'status'>): ReviewShellState {
+  throw new Error('not implemented')
+}
+
+// --- Header copy (AC-2, §7.1) ---
+//
+// Takes NO file/filename parameter at all -- import_batches has no filename column (D4
+// forbids a migration) and the "from {{file}}" clause is unconstructible here, not
+// merely dropped by a conditional. `allTotal` is the LIVE total (the `all` query's
+// pagination.total), never `report.ready_invoices` -- one source feeds both arrival
+// paths.
+export interface ReviewHeader {
+  title: string
+  batchId: string
+  subline: string
+}
+
+export function reviewHeader(
+  _batch: Pick<ImportBatch, 'id' | 'rows_total' | 'rule_set_version' | 'created_at'>,
+  _live: { allTotal: number },
+): ReviewHeader {
+  throw new Error('not implemented')
+}
+
+// --- Tabs (AC-4, §7.2) ---
+//
+// The second tab is OMITTED from the returned array entirely at zero unreadable rows,
+// not hidden with CSS -- the array's own length is the fact 09/10 render off.
+// `invoices` is the `all` query's pagination.total; `unreadable` is the caller's
+// channelTiles(...).frozen.unreadable (the expansion count) -- never `batch.rows_invalid`
+// -- one number feeding the tile, the tab and the footer.
+export interface ReviewTab {
+  id: 'invoices' | 'unreadable'
+  label: string
+}
+
+export function reviewTabs(_counts: { invoices: number; unreadable: number }): ReviewTab[] {
+  throw new Error('not implemented')
+}
+
+// --- Hash codec, the App-facing half (AC-1, §2) ---
+//
+// Mirrors App.tsx's mirror effect exactly: the hash is written iff view==='create' AND
+// createStep==='review' AND reviewBatchId is a NON-EMPTY string; every other combination
+// clears it. This is what stops the hash lingering after `Finish` or any other exit from
+// review -- App.tsx has ONE effect calling this, not N call sites each responsible for
+// remembering to clear it. `window` itself is never touched here -- only at the two call
+// sites this function's own module comment (top of file) names in App.tsx.
+export function reviewHash(_view: View, _createStep: CreateStep, _reviewBatchId: string | null): string | null {
+  throw new Error('not implemented')
+}
+
+// --- Unreadable-rows CSV (AC-5, §7.4 "Download this list (CSV)") ---
+//
+// RFC-4180 quoting: a field is wrapped in double quotes, with embedded double quotes
+// doubled, whenever it contains a comma, a double quote or a newline. Header row is
+// exactly `Row,Field,Why it could not be read`; `row: null` renders as an empty cell,
+// never the string 'null' -- there are no *rows* to download once the raw source line is
+// gone (`[raw-source-line-dropped]`), only this rendered table.
+export function unreadableCsv(_rows: UnreadableRow[]): string {
+  throw new Error('not implemented')
 }

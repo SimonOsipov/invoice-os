@@ -5,7 +5,9 @@
       "rule_key": "currency-allowed",
       "severity": "error",
       "message": "Currency must be NGN.",
-      "path": "currency"
+      "path": "currency",
+      "expected": "NGN",
+      "actual": "USD"
     },
     {
       "rule_key": "invoice-number-required",
@@ -22,7 +24,9 @@
     {
       "rule_key": "line-items-sum-subtotal",
       "severity": "error",
-      "message": "Line item amounts must sum to the invoice subtotal."
+      "message": "Line item amounts must sum to the invoice subtotal.",
+      "expected": "1005",
+      "actual": "-5"
     },
     {
       "rule_key": "no-duplicate-line-items",
@@ -33,7 +37,9 @@
       "rule_key": "subtotal-non-negative",
       "severity": "error",
       "message": "Subtotal must be zero or positive.",
-      "path": "subtotal"
+      "path": "subtotal",
+      "expected": "\u003e= 0",
+      "actual": "-5"
     },
     {
       "rule_key": "supplier-name-required",
@@ -45,12 +51,15 @@
       "rule_key": "supplier-tin-format",
       "severity": "error",
       "message": "Supplier TIN must be in the format NNNNNNNN-NNNN (8 digits, hyphen, 4 digits).",
-      "path": "supplier.tin"
+      "path": "supplier.tin",
+      "expected": "^[0-9]{8}-[0-9]{4}$"
     },
     {
       "rule_key": "vat-standard-rate",
       "severity": "error",
-      "message": "VAT must equal 7.5% of the subtotal."
+      "message": "VAT must equal 7.5% of the subtotal.",
+      "expected": "-0.375",
+      "actual": "999"
     }
   ]
 }

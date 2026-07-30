@@ -117,9 +117,13 @@ func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
 
 	rate := decimal.NewFromFloat(*params.Rate)
 	tolerance := decimal.NewFromFloat(params.Tolerance)
-	mismatch := expected.Sub(base.Mul(rate)).Abs()
+	computed := base.Mul(rate)
+	mismatch := expected.Sub(computed).Abs()
 	if mismatch.GreaterThan(tolerance) {
-		return violation(r), nil
+		// Expected = base*rate (what the tax SHOULD be); Actual = the
+		// resolved "expected"(param) operand (what the invoice states) --
+		// both exact decimal strings ([D13]), never floats.
+		return violation(r, withExpected(computed.String()), withActual(expected.String())), nil
 	}
 	return nil, nil
 }
@@ -243,14 +247,21 @@ func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
 
 	expectedVal, present := resolvePath(p, params.Expected)
 	if !present {
+		// No natural Expected/Actual: nothing to compare sum against.
 		return violation(r), nil
 	}
 	expectedF, ok := toFloat(expectedVal)
 	if !ok {
 		return violation(r), nil
 	}
-	if sum.Sub(decimal.NewFromFloat(expectedF)).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
-		return violation(r), nil
+	// Hoisted ONCE and reused in both the comparison below and the
+	// violation's Actual, so the reported Actual can never disagree with
+	// the number the rule actually judged (Stage 2 correction C3).
+	declared := decimal.NewFromFloat(expectedF)
+	if sum.Sub(declared).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
+		// Expected = the folded line total (sum); Actual = the declared
+		// "expected"(param) field -- both exact decimal strings ([D13]).
+		return violation(r, withExpected(sum.String()), withActual(declared.String())), nil
 	}
 	return nil, nil
 }

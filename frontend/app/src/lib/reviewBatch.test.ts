@@ -1195,3 +1195,87 @@ describe('bulkBarView: the page-scoped submit-all disables at zero eligible (BUL
     expect(view.canSubmitAll).toBe(true)
   })
 })
+
+// --- QA Stage 4 (task-287) adversarial coverage — four component-wiring claims that have
+// no unit oracle under environment:'node' (no jsdom, no render) but ARE reachable as
+// static source scans, matching TAB-7b/BULK-15's own by-path idiom above (never imports
+// the component). Each one pins a decision the executor made beyond the plan's own §9-§11
+// (recorded in task-287's Implementation Notes, "four decisions the plan did not
+// specify") and would regress silently — passing every other spec in this file — if a
+// future "simplification" touched the wrong line.
+describe('ReviewInvoicesTab.tsx source: disarm() is wired to EVERY selection-changing action, not just a rows/page change (QA-1, Stage 4 — pins the executor\'s unplanned decision #1)', () => {
+  it('QA-1: disarm() is called from toggleAll, the Clear button and the row checkbox\'s onToggle — three call sites plus its own definition, four occurrences total. Losing any one reopens: arm 3 -> untick all 3 -> tick 5 others leaves the bar armed on a set nobody confirmed', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const allOccurrences = source.match(/disarm\(\)/g) ?? []
+    expect(allOccurrences, 'exactly one definition + three call sites').toHaveLength(4)
+
+    expect(source, 'toggleAll must disarm on every select-all/clear-all click').toMatch(
+      /function toggleAll\(\)\s*\{[^}]*disarm\(\)[^}]*\}/,
+    )
+    expect(source, 'the bulk bar\'s own Clear button must disarm').toMatch(
+      /data-testid="review-bulk-clear"[\s\S]{0,200}?disarm\(\)[\s\S]{0,350}?data-testid="review-bulk-submit"/,
+    )
+    expect(source, 'a single row\'s checkbox toggle must disarm — the exact scenario an unplanned re-tick would otherwise leave armed').toMatch(
+      /onToggle=\{\(\) => \{[\s\S]{0,120}?disarm\(\)/,
+    )
+  })
+})
+
+describe('ReviewInvoicesTab.tsx source: the post-await "settled" dispatch always reads the FUNCTIONAL setPhase form, never the stale click-closure `phase` (QA-2, Stage 4 — pins the bug the executor caught and fixed itself)', () => {
+  it('QA-2: both the success leg and the catch leg dispatch settled as `setPhase((p) => bulkPhaseReducer(p, ...))` — never `setPhase(bulkPhaseReducer(phase, ...))`, which would fire off the closure captured at click time rather than the phase React holds after the await', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const functionalSettled = source.match(/setPhase\(\s*\(\s*p\s*\)\s*=>\s*bulkPhaseReducer\(\s*p\s*,\s*\{\s*type:\s*'settled'\s*\}\s*\)\s*\)/g) ?? []
+    expect(functionalSettled, 'one functional settled dispatch on the success leg, one on the catch leg').toHaveLength(2)
+
+    // The bug pattern: bulkPhaseReducer read the click-time `phase` variable directly and
+    // handed setPhase a plain value, which is what a stale closure looks like after an
+    // `await` re-enters the handler with a phase React has since moved on from.
+    expect(source).not.toMatch(/setPhase\(\s*bulkPhaseReducer\(\s*phase\s*,/)
+  })
+})
+
+describe('ReviewInvoicesTab.tsx source: the results panel is replaced ONLY by the next submit outcome, never cleared by a selection change (QA-3, Stage 4 — pins the "survives a new arm" deliberate non-change)', () => {
+  it('QA-3: setResults is called exactly twice, both inside submit()\'s own try/catch — never from disarm/toggleAll/Clear/a row toggle, which is what lets an operator re-pick rows off a stale receipt\'s skip labels without losing them', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const callSites = source.match(/setResults\(/g) ?? []
+    expect(callSites, 'exactly two setResults( call sites, one per submit() outcome leg').toHaveLength(2)
+
+    const submitBody = /async function submit\(\)[\s\S]*?\n  \}\n/.exec(source)?.[0] ?? ''
+    const setResultsInSubmit = submitBody.match(/setResults\(/g) ?? []
+    expect(setResultsInSubmit, 'both call sites must be inside submit() itself').toHaveLength(2)
+  })
+})
+
+describe('ReviewInvoicesTab.tsx source: the results panel renders no count derived from the selection (QA-4, Stage 4 — pins the "no headline count" structural absence)', () => {
+  it("QA-4: the results-panel JSX block (between its own testid and the error panel's) never references `selected` — a `{selected.length} submitted` headline is the other route to reporting a server-skipped invoice as sent, and this block has no oracle for it once it exists because bulkOutcome's own signature already forbids reading `selected`", () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const start = source.indexOf('data-testid="review-submit-results"')
+    const end = source.indexOf('data-testid="review-submit-error"')
+    expect(start, 'the results panel testid must exist').toBeGreaterThan(0)
+    expect(end, 'the error panel testid must exist').toBeGreaterThan(start)
+
+    const panelBlock = source.slice(start, end)
+    expect(panelBlock).not.toMatch(/\bselected\b/)
+    expect(panelBlock).not.toMatch(/\bsubmitted\b/i)
+  })
+})
+
+describe('ReviewInvoicesTab.tsx source: a synchronous double-click guard exists around the submit request (QA-5, Stage 4 — existence only; the race itself has no unit oracle under environment:\'node\', see task-287 §13)', () => {
+  it("QA-5: submitInFlight is declared, checked, set and reset around the await — losing any of the four would reopen the window `disabled` alone cannot close (React batches state updates, so a fast double-click re-enters the handler before `disabled` re-renders). This does NOT prove the race is closed; it only prevents the ref itself from being silently deleted", () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewInvoicesTab.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    expect(source).toMatch(/const submitInFlight = useRef\(false\)/)
+    expect(source).toMatch(/if \(submitInFlight\.current\) return/)
+    expect(source).toMatch(/submitInFlight\.current = true/)
+    expect(source).toMatch(/submitInFlight\.current = false/)
+  })
+})

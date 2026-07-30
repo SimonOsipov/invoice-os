@@ -1016,3 +1016,103 @@ export function clientSelectionCount(selected: number): string {
 export function invitedNotice(count: number): string {
   return `Invited ${count} ${count === 1 ? 'person' : 'people'}.`
 }
+
+// ---------------------------------------------------------------------------
+// MEMB-01-07 — the member drawer's copy, and the three facts it must not derive
+// ---------------------------------------------------------------------------
+// §8's danger-zone copy is the single most important text in this story, and none of it
+// existed in the repo before this subtask. It lives here for §15.8's reason and for no
+// other: vitest is `environment: node`, so a sentence authored inside `MemberDrawer.tsx`
+// is a sentence no spec can hold, and the drawer's oracle is a screenshot — which is
+// exactly the gate a fluent paraphrase walks straight through. Same argument that moved
+// CAPABILITY_FOOTNOTE (T5.1), REVIEWER_HINT / NO_CLIENTS_NOTE (T6.12) and QA40-QA46's
+// three display derivations into this module.
+//
+// Every string below was byte-checked against §8/§9 in the vault, not against the
+// subtask description that quotes them.
+
+/**
+ * §8's `Suspend` explanation, verbatim.
+ *
+ * Rendered under the suspend control in BOTH of its states. It describes what suspension
+ * IS — the state — not the direction of travel, so it is equally true beside `Reactivate`,
+ * which undoes exactly what it describes. §8 supplies no second sentence for reactivation
+ * and AC#6 is a verbatim gate, so inventing one would add an unspec'd string to satisfy a
+ * requirement nothing states.
+ */
+export const SUSPEND_EXPLANATION = 'Blocks sign-in and keeps all history. Their name stays on every invoice they touched.'
+
+/**
+ * §8's `Remove` explanation, verbatim.
+ *
+ * The semicolon is load-bearing: the second clause is what makes the first survivable, and
+ * splitting it into two sentences (or dropping "audit history is never rewritten") is the
+ * paraphrase this constant exists to prevent.
+ */
+export const REMOVE_EXPLANATION =
+  'Revokes access permanently. Their name stays on every invoice they touched; audit history is never rewritten.'
+
+/**
+ * §8's confirm sentence. A FUNCTION, not a constant — §8 writes it with the member's name
+ * interpolated ("Remove {name}? …"), so there is no name-free form of this string.
+ */
+export function removeConfirmQuestion(name: string): string {
+  return `Remove ${name}? Access is revoked immediately. Their name stays on every invoice they touched.`
+}
+
+/** §8/§10.4's amber note beneath the drawer's Approval involvement section, verbatim. */
+export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will block until someone else holds this position.'
+
+/**
+ * §9's explanation, and the tab's most-repeated sentence: the `⋯` menu, the drawer's role
+ * cards and the drawer's danger zone all carry it.
+ *
+ * MOVED here from `MembersTable.tsx:91`, where it was a component-local constant no spec
+ * could see. Four call sites across two components is exactly the divergence QA41 caught
+ * for `accessRoleLabel` — one copy edited, the other left behind, and a screenshot of
+ * either one looking right.
+ */
+export const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else first."
+
+/**
+ * §8's Approval-involvement line — the bare count, with no consequence clause.
+ *
+ * NOT `stepsWarning`. That one is §10.4's ROW sentence and carries the ` · those steps
+ * will block` suffix; in the drawer the blocking fact is carried separately, and only when
+ * the member is actually suspended, by `SUSPENDED_STEPS_NOTE`. Rendering the row's
+ * sentence here would state the consequence twice for a suspended member and state it
+ * wrongly for an active one, who blocks nothing.
+ *
+ * §8 supplies the PLURAL verbatim ("Named in 2 approval steps"); the singular is the same
+ * steps→step reconstruction `stepsWarning` and `unassignedNotice` already make, and is
+ * reachable the moment a Workflows edit leaves one step naming the position.
+ */
+export function stepsNamedLine(total: number): string {
+  return total === 1 ? 'Named in 1 approval step' : `Named in ${total} approval steps`
+}
+
+/**
+ * The drawer's Activity section is the first and only consumer of `joined`, which is
+ * `null` on every invited row. Returns the same `'—'` `lastActiveLabel` returns for a
+ * missing value, so the three Activity cells cannot disagree about how absence renders.
+ */
+export function joinedLabel(member: Member): string {
+  return member.joined ?? '—'
+}
+
+/**
+ * §7's zero-selected rule, as a predicate over the value the client picker EMITS.
+ *
+ * It moved out of `InviteMembersModal` when MEMB-01-07 extracted `ClientAccessPicker`: the
+ * rule now has two readers — the picker, which shows `NO_CLIENTS_NOTE`, and the modal,
+ * which disables `Send invites` — and the modal can no longer see the picker's internal
+ * `scope`. It does not need to. `'all' | number[]` is a discriminated union, not a
+ * convention: `'all'` IS scope-all and an array IS scope-selected, so `access !== 'all'`
+ * answers the question the modal used to answer with its own state.
+ *
+ * `[]` is representable and meaningful — `clientAccessLabel([])` renders 'No clients'. It
+ * is simply not sendable.
+ */
+export function needsClientPick(access: 'all' | readonly number[]): boolean {
+  return access !== 'all' && access.length === 0
+}

@@ -1,18 +1,36 @@
 // Settings › Members — the shared row atoms.
 //
-// Everything here takes what it renders as a prop. No derivation lives in this file:
-// vitest is `environment: node` in this project, so a fact computed inside a component is
-// a fact no test can reach — the members derivations all sit in lib/members.ts with specs
-// (§15.8).
+// No derivation and no copy is DEFINED in this file: vitest is `environment: node` in this
+// project, so a fact computed — or a sentence written — inside a component is a fact no test
+// can reach. Everything these atoms render is either a prop or a call into lib/members.ts,
+// where the specs are (§15.8). `ClientAccessPicker` is the one that holds state rather than
+// taking it all as props, and its docblock says why.
 //
 // MEMB-01-06's invite modal and MEMB-01-07's drawer reuse `InitialsChip`,
-// `MemberStatusPill`, `RoleCards` and `useDismiss` from here.
+// `MemberStatusPill`, `RoleCards`, `ClientAccessPicker`, `PositionFields` and `useDismiss`
+// from here. The last two arrived in MEMB-01-07: they were the invite modal's own JSX until
+// the drawer became their second call site, which is when extraction stops being
+// speculative (see their docblocks).
 
-import { useId, useRef, type CSSProperties, type ReactNode } from 'react'
+import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { moreGlyph } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
-import { ACCESS_ROLES, type AccessRole, type MemberStatus } from '../lib/members'
+import {
+  ACCESS_ROLES,
+  clientSelectionCount,
+  DEPARTMENTS,
+  filterClientRoster,
+  needsClientPick,
+  NO_CLIENT_MATCH,
+  NO_CLIENTS_NOTE,
+  REVIEWER_HINT,
+  type AccessRole,
+  type Department,
+  type MemberStatus,
+} from '../lib/members'
+import { ROLE_OPTIONS, WfSelect, type WfOption } from './WorkflowParts'
+import type { RoleKey } from '../lib/workflows'
 
 // ---------------------------------------------------------------------------
 // Initials chip
@@ -258,6 +276,174 @@ export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
         </div>
       )}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Client access picker (FIRM) — §7's scope radios + searchable multi-select
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracted from `InviteMembersModal` in MEMB-01-07, when the member drawer became its
+ * second call site. Not speculative abstraction: this control carries five decisions a
+ * second copy would have to re-make and could silently get wrong —
+ *
+ *   1. toggling back to `All clients` KEEPS the ticked set (a mis-click must not destroy a
+ *      selection assembled one checkbox at a time);
+ *   2. filtering never unticks — the search narrows what is SHOWN and `ids` is untouched;
+ *   3. the running count's denominator is the ROSTER, never the filtered length;
+ *   4. `Selected clients` with nothing ticked is representable but not grantable;
+ *   5. the `.pf-row` checkbox rows.
+ *
+ * (1) and (2) are exactly what MEMB-01-06's QA put on the gate list, so duplicating the
+ * JSX would duplicate both of them out of coverage. The derivations themselves already
+ * live in lib/members.ts with specs — only the markup was ever at stake here.
+ *
+ * `scope` and the ticked `ids` are OWN state, seeded once from `value`, and that split is
+ * load-bearing: `value` alone cannot be the source of truth, because collapsing "scope is
+ * all" and "nothing is ticked" into one representation is what destroys the set on a
+ * mis-click. What it emits is the union the caller stores — `'all'`, or a FRESH array. A
+ * caller that re-mounts the picker for a different subject passes `key`.
+ */
+export function ClientAccessPicker({ value, onChange, idPrefix }: {
+  value: 'all' | readonly number[]
+  /** Always a new array in the `selected` case — no caller ever receives this control's own state. */
+  onChange: (next: 'all' | number[]) => void
+  /** Names the scope radio group and every `data-testid` here, exactly as `RoleCards` does. */
+  idPrefix: string
+}) {
+  const [scope, setScope] = useState<'all' | 'selected'>(value === 'all' ? 'all' : 'selected')
+  const [ids, setIds] = useState<number[]>(() => (value === 'all' ? [] : value.slice()))
+  const [query, setQuery] = useState('')
+
+  const shown = filterClientRoster(query)
+  const emptyPick = needsClientPick(scope === 'all' ? 'all' : ids)
+
+  // The ONE writer, so the emitted value can never disagree with what the checkboxes show.
+  function pick(nextScope: 'all' | 'selected', nextIds: number[]) {
+    setScope(nextScope)
+    setIds(nextIds)
+    onChange(nextScope === 'all' ? 'all' : [...nextIds])
+  }
+
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        {(['all', 'selected'] as const).map((s) => (
+          <label key={s} data-testid={`${idPrefix}-scope-${s}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name={`${idPrefix}-scope`}
+              value={s}
+              checked={scope === s}
+              // Toggling back to `All clients` KEEPS the ticked set — `ids` is carried
+              // through untouched, so switching back re-emits exactly what was ticked.
+              onChange={() => pick(s, ids)}
+              style={{ flex: 'none' }}
+            />
+            {s === 'all' ? 'All clients' : 'Selected clients'}
+          </label>
+        ))}
+      </div>
+
+      {scope === 'selected' && (
+        <div style={{ marginTop: 10, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)', padding: 10 }}>
+          <input
+            type="text"
+            className="pf-input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search clients"
+            aria-label="Search clients"
+            data-testid={`${idPrefix}-client-search`}
+            style={{ height: 34, fontSize: 13, marginBottom: 8 }}
+          />
+          {shown.length === 0 ? (
+            <div data-testid={`${idPrefix}-client-empty`} style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--fg-3)' }}>
+              {NO_CLIENT_MATCH}
+            </div>
+          ) : (
+            shown.map((c) => (
+              <label
+                key={c.id}
+                className="pf-row"
+                data-testid={`${idPrefix}-client-row`}
+                style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 10px', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--fg-1)' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={ids.includes(c.id)}
+                  // `toggleSelection` (invoices.ts:654) is the nearest shipped helper and is
+                  // typed `string[]`; CLIENT_ROSTER ids are numbers, so it cannot be reused.
+                  // Filtering never unticks: the search narrows `shown`, not `ids`.
+                  onChange={() => pick('selected', ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id])}
+                  style={{ flex: 'none' }}
+                />
+                {c.name}
+              </label>
+            ))
+          )}
+          <div data-testid={`${idPrefix}-client-count`} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line-1)', fontSize: 12, color: 'var(--fg-3)' }}>
+            {clientSelectionCount(ids.length)}
+            {emptyPick && <span style={{ color: 'var(--status-amber-text)' }}> · {NO_CLIENTS_NOTE}</span>}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Department + approval position (IN-HOUSE)
+// ---------------------------------------------------------------------------
+
+// `position` is `RoleKey | null`, so `None` is a SENTINEL option mapped back to null on the
+// way out — the `'all'`-as-just-another-option idiom MembersView.tsx:27-33 records, where the
+// caller narrows on the way back. `department` gets no sentinel: it is required and
+// non-nullable on both call sites, so there is no unassigned value for a placeholder to
+// stand for. Moved here from InviteMembersModal.tsx:56-58 with the control itself, so the
+// sentinel mapping exists in exactly one place — which is what QA48 guards.
+const NO_POSITION = 'none'
+const POSITION_OPTIONS: WfOption[] = [{ value: NO_POSITION, label: 'None' }, ...ROLE_OPTIONS]
+const DEPARTMENT_OPTIONS: WfOption[] = DEPARTMENTS.map((d) => ({ value: d, label: d }))
+
+/**
+ * §7/§8's in-house pair — Department, Approval position, and §3's Reviewer hint beneath the
+ * second. Extracted alongside `ClientAccessPicker` for the same reason and one more of its
+ * own: the sentinel above must not be re-derived in a second file.
+ *
+ * Fully controlled, unlike its sibling — there is no internal state a mis-click could
+ * destroy here, so the caller owns both values outright.
+ */
+export function PositionFields({ department, position, onDepartment, onPosition, idPrefix }: {
+  department: Department
+  position: RoleKey | null
+  onDepartment: (next: Department) => void
+  onPosition: (next: RoleKey | null) => void
+  /** Names the hint's `data-testid`, so two mounts cannot claim the same handle. */
+  idPrefix: string
+}) {
+  return (
+    <>
+      <WfSelect
+        label="Department"
+        value={department}
+        options={DEPARTMENT_OPTIONS}
+        onChange={(v) => onDepartment(v as Department)}
+        width="100%"
+        marginBottom={16}
+      />
+      <WfSelect
+        label="Approval position"
+        value={position ?? NO_POSITION}
+        options={POSITION_OPTIONS}
+        onChange={(v) => onPosition(v === NO_POSITION ? null : (v as RoleKey))}
+        width="100%"
+      />
+      <div data-testid={`${idPrefix}-reviewer-hint`} style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+        {REVIEWER_HINT}
+      </div>
+    </>
   )
 }
 

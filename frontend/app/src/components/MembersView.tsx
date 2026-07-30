@@ -19,6 +19,7 @@ import { plusGlyph } from '../glyphs'
 import { ACCESS_ROLES, filterMembers, isFiltering, unassignedNotice, unassignedPositions, type AccessRole } from '../lib/members'
 import { roleOf } from '../lib/workflows'
 import { InviteMembersModal } from './InviteMembersModal'
+import { MemberDrawer } from './MemberDrawer'
 import { AmberNote } from './MemberParts'
 import { ClientUsersCard, MemberRoleMatrix } from './MemberRoleMatrix'
 import { MembersTable } from './MembersTable'
@@ -55,10 +56,15 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const [query, setQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<AccessRole | 'all'>('all')
   const [inviteOpen, setInviteOpen] = useState(false)
-  // `useCallback`, not an inline arrow: the modal feeds this straight to `useDismiss`, where it
-  // is an effect dependency (useDismiss.ts:36-37), and a fresh closure every render would tear
-  // down and re-register the Escape listener on every keystroke in the chip input.
+  // The member whose drawer is open — the ID, never the row. A captured row goes stale the
+  // instant `saveMember` replaces it, and resolving by id also auto-closes the drawer when
+  // `dropMember` takes the row away, which is exactly what a confirmed Remove wants.
+  const [drawerId, setDrawerId] = useState<string | null>(null)
+  // `useCallback`, not an inline arrow: both overlays feed these straight to `useDismiss`, where
+  // they are effect dependencies (useDismiss.ts:36-37), and a fresh closure every render would
+  // tear down and re-register the Escape listener on every keystroke in the chip input.
   const closeInvite = useCallback(() => setInviteOpen(false), [])
+  const closeDrawer = useCallback(() => setDrawerId(null), [])
   // The invite actions' inline confirmation — the WorkflowBuilder saved-flash idiom
   // (WorkflowBuilder.tsx:72-78): one transient string plus one effect-owned timer, so a
   // second action restarts the flash instead of stacking a timer that would clear the
@@ -149,7 +155,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           </div>
         </div>
       ) : (
-        <MembersTable ctx={ctx} rows={shown} policies={ctx.policies} onFlash={setFlash} />
+        <MembersTable ctx={ctx} rows={shown} policies={ctx.policies} onOpen={setDrawerId} onFlash={setFlash} />
       )}
 
       {/* AFTER the ternary, not inside its last arm — so both render over the
@@ -170,6 +176,18 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           flash, not a second mechanism: every other action here flashes, and the one that
           actually changes the roster must not be the silent one. */}
       {inviteOpen && <InviteMembersModal ctx={ctx} onClose={closeInvite} onFlash={setFlash} />}
+
+      {/* Same conditional-mount form, for the same two reasons. The drawer raises no flash of
+          its own: §8's rule is that every change persists IMMEDIATELY and is visible in the
+          table behind it, so the table is the confirmation and a green banner over it would be
+          a second, slower one.
+
+          `key={drawerId}` is one mechanism doing two jobs: it re-seeds `ClientAccessPicker`,
+          whose ticked set is own state seeded once from `value`, and it clears the drawer's
+          remove-confirm — both of which would otherwise carry over from the previous subject.
+          Opening another member without closing first is unreachable behind the scrim today,
+          which is exactly why a key is the right guard rather than two effects. */}
+      {drawerId != null && <MemberDrawer key={drawerId} ctx={ctx} memberId={drawerId} onClose={closeDrawer} />}
     </>
   )
 }

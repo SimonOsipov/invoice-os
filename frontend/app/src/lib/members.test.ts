@@ -33,14 +33,19 @@ import {
   isFiltering,
   isProtectedAdmin,
   isValidEmail,
+  joinedLabel,
   lastActiveLabel,
   memberFromInvite,
   mergeChips,
   nameFromEmail,
+  needsClientPick,
   NO_CLIENT_MATCH,
   NO_CLIENTS_NOTE,
   parseEmailInput,
+  PROTECTED_ADMIN_NOTE,
+  removeConfirmQuestion,
   removeMember,
+  REMOVE_EXPLANATION,
   replaceMember,
   resolvePosition,
   REVIEWER_HINT,
@@ -50,7 +55,10 @@ import {
   setMemberRole,
   setMemberStatus,
   stepsFor,
+  stepsNamedLine,
   stepsWarning,
+  SUSPEND_EXPLANATION,
+  SUSPENDED_STEPS_NOTE,
   unassignedNotice,
   unassignedPositions,
   type InviteOptions,
@@ -1820,5 +1828,174 @@ describe('MEMB-01-06 QA — the picker filter is literal, and the position senti
     // one adds no NEW detection; it adds the diagnosis, naming the sentinel at
     // InviteMembersModal.tsx:56 that those three failures do not mention.
     expect(WF_ROLES.map((r) => r.key)).not.toContain('none')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T7.1–T7.8 — MEMB-01-07, the member drawer
+// ---------------------------------------------------------------------------
+// The drawer itself is unreachable from here (`environment: node`), so what these specs
+// hold is the half that is NOT rendering: §8/§9's copy, and the three facts the drawer is
+// forbidden to derive inside itself. Every literal below was byte-checked against the
+// story in the vault.
+
+describe("§8's danger-zone copy — the most important text in the story (T7.1–T7.3)", () => {
+  it('reproduces both explanations verbatim (T7.1)', () => {
+    // §8's two bullets, character for character. This is the text a buyer reads to decide
+    // whether removing someone destroys their audit trail, and the answer is no — which is
+    // a promise the product keeps only if the sentence keeps saying it.
+    expect(SUSPEND_EXPLANATION).toBe('Blocks sign-in and keeps all history. Their name stays on every invoice they touched.')
+    expect(REMOVE_EXPLANATION).toBe(
+      'Revokes access permanently. Their name stays on every invoice they touched; audit history is never rewritten.',
+    )
+
+    // The shared clause, pinned as a PAIR. §8 says it twice on purpose: whichever button
+    // you are looking at, the reassurance is in front of you. A copy edit that "de-duplicates"
+    // it would silently make one of the two acts look like it erases history.
+    const shared = 'Their name stays on every invoice they touched'
+    expect(SUSPEND_EXPLANATION).toContain(shared)
+    expect(REMOVE_EXPLANATION).toContain(shared)
+
+    // The semicolon, not a full stop. `Remove`'s second clause is what makes the first
+    // survivable, and a sentence break demotes it to an afterthought.
+    expect(REMOVE_EXPLANATION).toContain('touched; audit history is never rewritten.')
+  })
+
+  it("interpolates the member's real name into the confirm question (T7.2)", () => {
+    // §8 writes this one with the name inside it, which is why it is a function. The
+    // template placeholder must never survive into the rendered string.
+    expect(removeConfirmQuestion('Folake Adesina')).toBe(
+      'Remove Folake Adesina? Access is revoked immediately. Their name stays on every invoice they touched.',
+    )
+    expect(removeConfirmQuestion('Adebayo Ogunlesi')).toBe(
+      'Remove Adebayo Ogunlesi? Access is revoked immediately. Their name stays on every invoice they touched.',
+    )
+    expect(removeConfirmQuestion('Folake Adesina')).not.toContain('{name}')
+
+    // The confirm carries the SAME reassurance as the button it guards, and a DIFFERENT
+    // consequence clause ('revoked immediately' vs 'permanently') — both deliberate.
+    expect(removeConfirmQuestion('X')).toContain('Their name stays on every invoice they touched.')
+    expect(removeConfirmQuestion('X')).toContain('Access is revoked immediately.')
+
+    // Names in the shipped seed carry hyphens; nothing escapes or truncates them.
+    expect(removeConfirmQuestion('Oluwafunmilayo Ademola-Oyediran')).toContain('Remove Oluwafunmilayo Ademola-Oyediran?')
+  })
+
+  it("pins §9's note and §8's amber steps note, both verbatim (T7.3)", () => {
+    // MOVED out of MembersTable.tsx:91, where no spec could see it, because MEMB-01-07
+    // needs the same sentence at three more places. A straight apostrophe, as the story
+    // writes it — a smart quote here renders identically and fails a text assertion.
+    expect(PROTECTED_ADMIN_NOTE).toBe("You're the only admin. Promote someone else first.")
+    expect(PROTECTED_ADMIN_NOTE).toContain("You're")
+    expect(PROTECTED_ADMIN_NOTE).not.toContain('’')
+
+    // §8's amber note. It names the REMEDY ('until someone else holds this position'),
+    // which is the half that makes it actionable rather than merely alarming.
+    expect(SUSPENDED_STEPS_NOTE).toBe('They are suspended, so those steps will block until someone else holds this position.')
+  })
+})
+
+describe('stepsNamedLine — the drawer line that is NOT the row warning (T7.4–T7.5)', () => {
+  it("gives §8's bare count on both sides of the plural boundary (T7.4)", () => {
+    // §8 supplies the plural verbatim; the singular is the same steps→step reconstruction
+    // `stepsWarning` and `unassignedNotice` already make.
+    expect(stepsNamedLine(2)).toBe('Named in 2 approval steps')
+    expect(stepsNamedLine(1)).toBe('Named in 1 approval step')
+    expect(stepsNamedLine(3)).toBe('Named in 3 approval steps')
+    // Never rendered — the drawer gates the whole section on `total > 0` — but the branch
+    // must not read 'Named in 0 approval step' if that gate is ever loosened.
+    expect(stepsNamedLine(0)).toBe('Named in 0 approval steps')
+  })
+
+  it("carries no consequence clause, which is the whole reason it is not `stepsWarning` (T7.5)", () => {
+    // The mistake this function exists to prevent: §10.4's ROW sentence rendered in the
+    // drawer, where the blocking fact is carried separately by SUSPENDED_STEPS_NOTE and
+    // only for a member who is actually suspended.
+    expect(stepsWarning(2)).toBe('Named in 2 approval steps · those steps will block')
+    expect(stepsNamedLine(2)).not.toContain('·')
+    expect(stepsNamedLine(2)).not.toContain('will block')
+    expect(stepsNamedLine(1)).not.toContain('will block')
+    // The two agree on their shared prefix and diverge only in the suffix — so a future
+    // pluralisation change to one is visible as a divergence from the other.
+    expect(stepsWarning(2).startsWith(stepsNamedLine(2))).toBe(true)
+    expect(stepsWarning(1).startsWith(stepsNamedLine(1))).toBe(true)
+  })
+})
+
+describe('the drawer\'s Approval-involvement gate is the COUNT, not the position (T7.6)', () => {
+  it('answers 0 for three shipped in-house rows that hold a position (T7.6)', () => {
+    // The correction this spec exists for. AC#5 and §8 both phrase the trigger as "when the
+    // member holds a position" — taken literally, these three drawers would render
+    // "Named in 0 approval steps" above an empty policy list, because the two in-house
+    // policies name only line_mgr / fin_dir / cfo / ceo (workflows.ts:167-193).
+    const list = inhouse()
+    const policies = SEED_INHOUSE_POLICIES as Policy[]
+    const held = (name: string): RoleKey => {
+      const position = list.filter((m) => m.name === name)[0]?.position
+      if (position == null) throw new Error(`${name} holds no position`)
+      return position
+    }
+    expect(held('Tunde Adeyemi')).toBe('controller')
+    expect(held('Ibrahim Bello')).toBe('compliance')
+    expect(held('Zainab Lawal')).toBe('preparer')
+    for (const name of ['Tunde Adeyemi', 'Ibrahim Bello', 'Zainab Lawal']) {
+      expect(stepsFor(policies, held(name)).total).toBe(0)
+      expect(stepsFor(policies, held(name)).policies).toEqual([])
+    }
+
+    // And the row §8 writes its own example from: Adebayo, suspended, cfo — "Named in 2
+    // approval steps", with BOTH policy names beside it and the amber note beneath.
+    const adebayo = list.filter((m) => m.name === 'Adebayo Ogunlesi')[0]
+    expect(adebayo.status).toBe('suspended')
+    const steps = stepsFor(policies, held('Adebayo Ogunlesi'))
+    expect(stepsNamedLine(steps.total)).toBe('Named in 2 approval steps')
+    expect(steps.policies.map((p) => p.name)).toEqual(['Company approval policy', 'Capital expenditure'])
+  })
+})
+
+describe("joinedLabel — the Activity section's first look at `joined` (T7.7)", () => {
+  it('renders the date, and never the word "null" (T7.7)', () => {
+    const list = firm()
+    // Every active/suspended seed row carries a real date string.
+    expect(joinedLabel(list.filter((m) => m.name === 'Folake Adesina')[0])).toBe('18 Mar 2024')
+    expect(joinedLabel(you(list))).toBe('4 Feb 2024')
+
+    // The branch that matters. `joined` is null on every invited row, and a bare
+    // `{member.joined}` renders nothing at all — an empty Activity cell reads as a layout
+    // bug, not as "they have not joined yet".
+    const invited = list.filter((m) => m.status === 'invited')
+    expect(invited.length).toBeGreaterThan(0)
+    for (const m of invited) {
+      expect(m.joined).toBeNull()
+      expect(joinedLabel(m)).toBe('—')
+    }
+    // The SAME em-dash `lastActiveLabel` returns for a missing value, so the three Activity
+    // cells cannot disagree about how absence renders.
+    expect(joinedLabel(invited[0])).toBe(lastActiveLabel({ ...invited[0], status: 'active', lastActive: null }))
+  })
+})
+
+describe('needsClientPick — §7\'s zero-selected rule, now read by two components (T7.8)', () => {
+  it("treats 'all' and [] as the discriminated union they are (T7.8)", () => {
+    // It moved into this module when MEMB-01-07 extracted `ClientAccessPicker`: the picker
+    // shows NO_CLIENTS_NOTE and the modal disables `Send invites` off ONE rule, and the
+    // modal can no longer see the picker's internal scope.
+    expect(needsClientPick('all')).toBe(false)
+    expect(needsClientPick([])).toBe(true)
+    expect(needsClientPick([0])).toBe(false)
+    expect(needsClientPick([0, 1, 3])).toBe(false)
+
+    // `[]` is representable and meaningful — it is simply not sendable. The pairing below
+    // is the point: 'No clients' is a real label for a real state, and this predicate is
+    // what stops that state being granted by accident.
+    expect(clientAccessLabel([])).toBe('No clients')
+    expect(clientAccessLabel('all')).toBe('All clients')
+
+    // The seed's subset row is sendable, and stays sendable after the drawer unticks two
+    // of its three — but not after it unticks the third.
+    const scoped = scopedIds(firm(), 1)
+    expect(needsClientPick(scoped)).toBe(false)
+    expect(needsClientPick(scoped.slice(0, 1))).toBe(false)
+    expect(needsClientPick(scoped.slice(0, 0))).toBe(true)
   })
 })

@@ -22,6 +22,7 @@ import {
   clientAccessNames,
   isProtectedAdmin,
   lastActiveLabel,
+  PROTECTED_ADMIN_NOTE,
   stepsFor,
   stepsWarning,
   type Member,
@@ -87,10 +88,7 @@ const MENU_CLEARANCE = 168
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-// §9, verbatim. Carried by the menu as visible text, not only as a tooltip.
-const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else first."
-
-export function MembersTable({ ctx, rows, policies, onFlash }: {
+export function MembersTable({ ctx, rows, policies, onOpen, onFlash }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
@@ -101,6 +99,8 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
    * on the Workflows screen.
    */
   policies: Policy[]
+  /** Opens that member's drawer. MembersView owns the open id (types.ts:255-265). */
+  onOpen: (id: string) => void
   /** Raises the top-bar confirmation flash; MembersView owns the state and the timer. */
   onFlash: (message: string) => void
 }) {
@@ -130,9 +130,10 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
       ]
     }
     const items: MenuAction[] = [
-      // Opens the drawer in MEMB-01-07. Rendered now and wired next, the same shape the
-      // Invite people button already ships with (MembersView.tsx:86).
-      { label: 'Edit' },
+      // The same target as the row click below. `MoreMenu` calls `onClose()` after
+      // `onSelect()`, so the menu is gone in the commit that opens the drawer and no two
+      // Escape listeners are ever live at once.
+      { label: 'Edit', onSelect: () => onOpen(m.id) },
       // A shallow spread is safe for the row being replaced: `replaceMember` discards the
       // old object and nothing else holds its `clientAccess` array (ctx.members is already
       // `seedMembers()`'s deep clone), which is the aliasing `copyMember` guards against.
@@ -147,6 +148,13 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
     // "No members match this search." with no search running. This rule is the only thing
     // that keeps that state unreachable.
     if (!m.isYou) {
+      // UNCONFIRMED, deliberately — and the drawer's own `Remove` is confirmed. §6 lists this
+      // menu item as a removal action and §9 requires it to be DISABLABLE, which a
+      // drawer-opener would have nothing to disable; §8's confirm sentence sits under the
+      // heading "Member drawer" and is scoped there. So the story really does ask for two
+      // postures. FLAGGED FOR THE HUMAN at the Phase 3.5 gate rather than averaged here: the
+      // faster path to remove someone is the one that never shows them §8's explanation. If
+      // the human agrees, the fix is this one `onSelect`.
       items.push({ label: 'Remove', danger: true, disabled: protectedAdmin, onSelect: () => ctx.dropMember(m.id) })
     }
     return items
@@ -169,8 +177,8 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
             a single column (platform.css:264-276) that would fight the minWidth this table
             depends on, and Members is a desktop surface. `.pf-row` is taken on the body rows
             for its hover highlight — with a `⋯` sitting hundreds of pixels from the name it
-            acts on, the row highlight is what ties the two together — and MEMB-01-07 gives
-            the row its own click. */}
+            acts on, the row highlight is what ties the two together — and its
+            `cursor: pointer` is now honest: MEMB-01-07 gave the row its own click. */}
         <div
           style={{
             display: 'grid',
@@ -205,6 +213,18 @@ export function MembersTable({ ctx, rows, policies, onFlash }: {
               <div
                 className="pf-row"
                 data-testid="member-row"
+                // What makes `.pf-row`'s `cursor: pointer` (platform.css:69) honest — until
+                // now this was the app's only row that claimed to be clickable and was not.
+                // The InvoicesList.tsx:388-389 / RulesView.tsx:251 shape: `onClick` straight
+                // on the row div. No guard is needed against the `⋯` column — the trigger,
+                // the panel and every item already `stopPropagation` (MemberParts.tsx).
+                //
+                // Keyboard reachability is NOT added here. A `div` with `onClick` is not
+                // focusable, but the menu's `Edit` is a real <button> so a keyboard path to
+                // the drawer exists, and InvoicesList.tsx:385-386 records row-level keyboard
+                // access as an app-wide follow-up. Inventing a `role="button"`/`tabIndex`
+                // shape on this one table would be this screen deciding it alone.
+                onClick={() => onOpen(m.id)}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: COLS[mode],

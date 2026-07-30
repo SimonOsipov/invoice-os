@@ -20,25 +20,20 @@ import { useRef, useState } from 'react'
 import { closeGlyph, crossGlyph } from '../glyphs'
 import {
   classifyInvites,
-  clientSelectionCount,
   DEPARTMENTS,
-  filterClientRoster,
   hasDerivableName,
   INVITE_ERROR,
   invitedNotice,
   memberFromInvite,
   mergeChips,
-  NO_CLIENT_MATCH,
-  NO_CLIENTS_NOTE,
+  needsClientPick,
   parseEmailInput,
-  REVIEWER_HINT,
   type AccessRole,
   type Department,
   type InviteOptions,
 } from '../lib/members'
 import { useDismiss } from '../lib/useDismiss'
-import { RoleCards } from './MemberParts'
-import { ROLE_OPTIONS, WfSelect, type WfOption } from './WorkflowParts'
+import { ClientAccessPicker, PositionFields, RoleCards } from './MemberParts'
 import type { RoleKey } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
@@ -47,15 +42,6 @@ import type { PlatformCtx } from '../types'
 // §7 names them as the modal's chrome, not as its content.
 const TITLE = 'Invite people'
 const EYEBROW = "THEY'LL RECEIVE AN EMAIL INVITE"
-
-// `position` is `RoleKey | null`, so `None` is a SENTINEL option mapped back to null on the way
-// out — the `'all'`-as-just-another-option idiom MembersView.tsx:27-33 already records, where
-// the caller narrows on the way back. `department` gets no sentinel: `InviteOptions` declares it
-// REQUIRED and non-nullable, so there is no unassigned value for a placeholder to stand for and
-// it defaults to a real department instead.
-const NO_POSITION = 'none'
-const POSITION_OPTIONS: WfOption[] = [{ value: NO_POSITION, label: 'None' }, ...ROLE_OPTIONS]
-const DEPARTMENT_OPTIONS: WfOption[] = DEPARTMENTS.map((d) => ({ value: d, label: d }))
 
 export function InviteMembersModal({ ctx, onClose, onFlash }: {
   ctx: PlatformCtx
@@ -74,11 +60,12 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
   // connectors, certificates — is the one wrong answer. `preparer` is also the modal role in
   // both seeds.
   const [role, setRole] = useState<AccessRole>('preparer')
-  const [scope, setScope] = useState<'all' | 'selected'>('all')
-  const [clientIds, setClientIds] = useState<number[]>([])
-  const [clientQuery, setClientQuery] = useState('')
+  // The value `ClientAccessPicker` emits, not its internals. `'all' | number[]` is exactly
+  // `InviteOptions['clientAccess']`, so this state IS the field — no scope/ids reassembly on
+  // the way out, and no second place that could disagree with what the picker is showing.
+  const [clientAccess, setClientAccess] = useState<'all' | number[]>('all')
   const [department, setDepartment] = useState<Department>(DEPARTMENTS[0])
-  const [position, setPosition] = useState<string>(NO_POSITION)
+  const [position, setPosition] = useState<RoleKey | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -96,11 +83,11 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
   // pressing Enter has asked to invite them, and a button that silently did nothing would be a
   // bug rather than a lesson about chip inputs.
   const pending = mergeChips(chips, parseEmailInput(draft))
-  const shownClients = filterClientRoster(clientQuery)
-  // §7's zero-selected rule: `Selected clients` with nothing ticked is an invite that grants
-  // access to nothing, which is not a thing to send. `clientAccessLabel([])` renders 'No clients'
-  // rather than 'All clients', so the empty array is representable — it is just not sendable.
-  const needsClients = ctx.mode === 'firm' && scope === 'selected' && clientIds.length === 0
+  // §7's zero-selected rule, now a lib predicate: `Selected clients` with nothing ticked is an
+  // invite that grants access to nothing, which is not a thing to send. The picker renders the
+  // amber explanation off the same function, so the disabled button and the sentence that says
+  // why can never disagree.
+  const needsClients = ctx.mode === 'firm' && needsClientPick(clientAccess)
   const canSend = pending.length > 0 && !needsClients
 
   function commit(raw: string) {
@@ -166,9 +153,7 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
       // from a module-private counter (T2.22/QA24), so a whole list minted in one tick still
       // gets distinct ids. Neither needs re-implementing here.
       const opts: InviteOptions =
-        ctx.mode === 'firm'
-          ? { mode: 'firm', role, clientAccess: scope === 'all' ? 'all' : clientIds }
-          : { mode: 'inhouse', role, department, position: position === NO_POSITION ? null : (position as RoleKey) }
+        ctx.mode === 'firm' ? { mode: 'firm', role, clientAccess } : { mode: 'inhouse', role, department, position }
       ctx.inviteMembers(ok.map((address) => memberFromInvite(address, opts, ctx.user.name)))
       // Only when this modal is actually closing. MembersView renders the flash in normal
       // document flow with no z-index (MembersView.tsx:122-129), so on a PARTIAL send — where
@@ -349,90 +334,20 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
               <div className="label" style={{ margin: '16px 0 6px' }}>
                 Client access
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                {(['all', 'selected'] as const).map((s) => (
-                  <label key={s} data-testid={`invite-scope-${s}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
-                    <input
-                      type="radio"
-                      name="invite-scope"
-                      value={s}
-                      checked={scope === s}
-                      // Toggling back to `All clients` KEEPS the ticked set — a mis-click must
-                      // not destroy a selection the user assembled one checkbox at a time.
-                      onChange={() => setScope(s)}
-                      style={{ flex: 'none' }}
-                    />
-                    {s === 'all' ? 'All clients' : 'Selected clients'}
-                  </label>
-                ))}
-              </div>
-
-              {scope === 'selected' && (
-                <div style={{ marginTop: 10, border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-1)', padding: 10 }}>
-                  <input
-                    type="text"
-                    className="pf-input"
-                    value={clientQuery}
-                    onChange={(e) => setClientQuery(e.target.value)}
-                    placeholder="Search clients"
-                    aria-label="Search clients"
-                    data-testid="invite-client-search"
-                    style={{ height: 34, fontSize: 13, marginBottom: 8 }}
-                  />
-                  {shownClients.length === 0 ? (
-                    <div data-testid="invite-client-empty" style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--fg-3)' }}>
-                      {NO_CLIENT_MATCH}
-                    </div>
-                  ) : (
-                    shownClients.map((c) => (
-                      <label
-                        key={c.id}
-                        className="pf-row"
-                        data-testid="invite-client-row"
-                        style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 10px', borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--fg-1)' }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={clientIds.includes(c.id)}
-                          // `toggleSelection` (invoices.ts:654) is the nearest shipped helper and
-                          // is typed `string[]`; CLIENT_ROSTER ids are numbers, so it cannot be
-                          // reused. Filtering never unticks: the search narrows what is SHOWN,
-                          // and `clientIds` is untouched by it.
-                          onChange={() => setClientIds((cur) => (cur.includes(c.id) ? cur.filter((x) => x !== c.id) : [...cur, c.id]))}
-                          style={{ flex: 'none' }}
-                        />
-                        {c.name}
-                      </label>
-                    ))
-                  )}
-                  <div data-testid="invite-client-count" style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line-1)', fontSize: 12, color: 'var(--fg-3)' }}>
-                    {clientSelectionCount(clientIds.length)}
-                    {needsClients && <span style={{ color: 'var(--status-amber-text)' }}> · {NO_CLIENTS_NOTE}</span>}
-                  </div>
-                </div>
-              )}
+              {/* `idPrefix="invite"` reproduces every `data-testid` this control shipped with
+                  before MEMB-01-07 lifted it into MemberParts — invite-scope-all/-selected,
+                  invite-client-search/-empty/-row/-count — so the extraction is invisible to
+                  MEMB-01-06's gate items. */}
+              <ClientAccessPicker idPrefix="invite" value={clientAccess} onChange={setClientAccess} />
             </>
           ) : (
-            <>
-              <WfSelect
-                label="Department"
-                value={department}
-                options={DEPARTMENT_OPTIONS}
-                onChange={(v) => setDepartment(v as Department)}
-                width="100%"
-                marginBottom={16}
-              />
-              <WfSelect
-                label="Approval position"
-                value={position}
-                options={POSITION_OPTIONS}
-                onChange={setPosition}
-                width="100%"
-              />
-              <div data-testid="invite-reviewer-hint" style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
-                {REVIEWER_HINT}
-              </div>
-            </>
+            <PositionFields
+              idPrefix="invite"
+              department={department}
+              position={position}
+              onDepartment={setDepartment}
+              onPosition={setPosition}
+            />
           )}
         </div>
 

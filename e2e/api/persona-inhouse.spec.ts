@@ -2,21 +2,24 @@
 // for the first time — through the SAME typed seam (api/client.ts) every api/ spec shares.
 //
 // WHY THIS FILE EXISTS. `PERSONAS.B` appears 8 times across e2e/api/'s spec files, and
-// **no test in this suite has that tenant as its SUBJECT** — every appearance is a control
-// propping up a NEGATIVE claim:
+// **no test in this suite has that tenant as its SUBJECT**: every appearance sits inside a
+// test whose DECLARED purpose is a cross-tenant isolation pair, where this tenant's
+// positive assertions exist only as CONTROLS keeping the negative claim non-vacuous. Read
+// one by one:
 //   - 5 are bare `login(PERSONAS.B)` setup calls (isolation.spec.ts:57, :79, :98, :127;
 //     dashboard.spec.ts:141) — neither positive nor foil on their own;
-//   - 1 is already a positive identity assertion (isolation.spec.ts:67-70 — id, name,
-//     kind, role), owned by that file's AC1 test;
+//   - 1 IS a positive identity assertion (isolation.spec.ts:67-70 — id, name, kind, role),
+//     but as that pair's own control, inside a test named for the isolation claim;
 //   - 1 is the cross-tenant foil (isolation.spec.ts:92);
 //   - 1 never mints a token for this tenant at all (contract-tenancy.spec.ts:104 borrows
 //     its SUBJECT id into another tenant's login, for a non-member 403 probe).
-// The enclosing tests carry positive controls for it too (isolation.spec.ts:89, :101-108,
-// :120-122; dashboard.spec.ts:159) — and both files say in their own comments that those
-// controls exist only to keep the negative claim non-vacuous (isolation.spec.ts:104-106,
-// dashboard.spec.ts:143-146). This file is the first where this tenant's own data IS the
-// claim. (The parent story's "all 8 uses are isolation foils" is falsifiable by reading
-// isolation.spec.ts:67-70; the statement above is the accurate one.)
+// The same holds for the positive assertions that don't grep as `PERSONAS.B`
+// (isolation.spec.ts:89, :101-108, :120-122; dashboard.spec.ts:159): both files say in
+// their own comments that those exist to keep the NEGATIVE claim non-vacuous
+// (isolation.spec.ts:104-106, dashboard.spec.ts:143-146). This file is the first where
+// this tenant's own data IS the claim. (The parent story's "all 8 uses are isolation
+// foils" is falsifiable by reading isolation.spec.ts:67-70; the above is the accurate
+// statement, and the citations are kept because they ARE the correction's evidence.)
 //
 // WHAT THIS FILE IS *NOT* ABOUT: the tenant's KIND. Nothing server-side branches on
 // `tenants.kind` — it is SELECTed once (internal/tenancy/store.go:39) and echoed into the
@@ -123,13 +126,17 @@ async function createValidatedInvoice(
 // non-containment would then read as an RLS/list defect rather than as paging. Same shape
 // as perf.spec.ts:138-149's findInvoiceId; limit 200 is the server's clamp maximum.
 async function findEntityById(token: string, id: string): Promise<Entity | undefined> {
-  const pageSize = 200
   let offset = 0
   for (;;) {
-    const { entities, pagination } = await listEntities(token, { limit: pageSize, offset })
+    const { entities, pagination } = await listEntities(token, { limit: 200, offset })
     const hit = entities.find((e) => e.id === id)
     if (hit) return hit
-    offset += pageSize
+    // Advance by the rows actually RETURNED, not by the requested page size: the server
+    // clamps `limit` (portfolio.go:233-234) and the envelope echoes the EFFECTIVE value,
+    // so a hardcoded stride would silently skip rows if that clamp ever moved below 200.
+    // A short/empty page is the end of the list.
+    if (entities.length === 0) return undefined
+    offset += entities.length
     if (offset >= pagination.total) return undefined
   }
 }
@@ -300,11 +307,14 @@ test.describe('the in-house tenant as a first-class API subject (API E2E, over t
     // dev-env.yml runs it BEFORE the topology suite, so nothing mutates this tenant between
     // the two reads — and it stays sound on a CI retry, which re-measures its own bracket.
     const before = await rollup(token)
-    // Key-set guard, presence only (never a value — the shape contract itself is
-    // dashboard.spec.ts:84-96): a renamed or typo'd key would make both reads `undefined`
-    // and the delta NaN, failing with a message that names nothing.
-    expect(Object.keys(before.totals.counts).sort()).toEqual(
-      ['accepted', 'draft', 'failed', 'queued', 'rejected', 'submitted', 'validated'].sort(),
+    // Legibility guard for the delta, NOT a shape claim: a renamed or missing key would
+    // make both reads `undefined` and the subtraction NaN, failing with a message that
+    // names nothing. Deliberately narrower than the 7-key set — that wire shape is
+    // tenant-independent and already owned by dashboard.spec.ts:84-96, so re-copying it
+    // here would claim nothing new about this tenant while creating a second copy to keep
+    // in lockstep if an 8th status ever lands.
+    expect(typeof before.totals.counts.validated, 'counts.validated must be a number for the delta below').toBe(
+      'number',
     )
 
     const validatedNumbers = [`INV-P01-06-VAL-1-${freshTin()}`, `INV-P01-06-VAL-2-${freshTin()}`]

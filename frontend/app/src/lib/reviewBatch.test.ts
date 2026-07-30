@@ -872,16 +872,24 @@ describe('reviewFilterReducer: the `rule` arm never takes the identity shortcut 
 // component file". This guard closes that gap. Reads reviewBatch.ts BY PATH, matching
 // TAB-7b's own self-matching precaution (PILL-3b's idiom) — this describe block's
 // comments legitimately name all three forbidden words.
-describe('reviewBatch.ts source (task-286-added section): none of the three D2-forbidden lifecycle names appear (AC-7, LIB-SCAN-1)', () => {
-  it('LIB-SCAN-1: the reviewFilterReducer/reviewPills/railPills/pagerNav section contains no Pending/Approved/Transmitted, in any case, including in comments', () => {
+//
+// SCOPE (QA Stage 4 re-verify, task-286): scans the WHOLE file, not just the
+// task-286-added section below the marker. A marker-to-EOF slice left the ~426 lines
+// ABOVE the marker (pre-existing `channelTiles`/`reviewHeader`/`reviewShellState`/
+// `reviewTabs`/`unreadableRows`, shipped by earlier subtasks) covered by no guard at
+// all — clean today, but silently so, and a future edit up there would go unchecked.
+// Whole-file is strictly safer and costs nothing: `source` is already read in full.
+// The marker-existence check is kept as a structural sanity check, decoupled from the
+// scan itself.
+describe('reviewBatch.ts source (whole file): none of the three D2-forbidden lifecycle names appear (AC-7, LIB-SCAN-1)', () => {
+  it('LIB-SCAN-1: the whole file contains no Pending/Approved/Transmitted, in any case, including in comments', () => {
     const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
     const source = readFileSync(srcPath, 'utf8')
     const marker = '--- INVCR-01-10 (task-286)'
-    const taskSection = source.slice(source.indexOf(marker))
-    expect(taskSection.length, 'the task-286 marker comment must exist in reviewBatch.ts').toBeGreaterThan(0)
+    expect(source.indexOf(marker), 'the task-286 marker comment must exist in reviewBatch.ts').toBeGreaterThanOrEqual(0)
 
     for (const forbidden of [/\bpending\b/i, /\bapproved\b/i, /\btransmitted\b/i]) {
-      expect(taskSection).not.toMatch(forbidden)
+      expect(source).not.toMatch(forbidden)
     }
   })
 })

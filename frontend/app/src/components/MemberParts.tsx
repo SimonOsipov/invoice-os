@@ -302,8 +302,13 @@ export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
  * `scope` and the ticked `ids` are OWN state, seeded once from `value`, and that split is
  * load-bearing: `value` alone cannot be the source of truth, because collapsing "scope is
  * all" and "nothing is ticked" into one representation is what destroys the set on a
- * mis-click. What it emits is the union the caller stores — `'all'`, or a FRESH array. A
- * caller that re-mounts the picker for a different subject passes `key`.
+ * mis-click. What it emits is the union the caller stores — `'all'`, or a FRESH array, so
+ * no caller ever receives this control's own state to alias.
+ *
+ * THE CONTRACT THAT FOLLOWS FROM THAT: `value` is read ONCE, on mount, and every later
+ * change to it is ignored. To point this control at a different subject you must REMOUNT
+ * it — `key` on this element, or on whatever wraps it (MembersView keys the whole drawer).
+ * Passing a new `value` to a live instance silently keeps the old subject's ticked set.
  */
 export function ClientAccessPicker({ value, onChange, idPrefix }: {
   value: 'all' | readonly number[]

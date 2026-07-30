@@ -377,15 +377,29 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// E2E-10 (FLOW-07, [wizard-steps-split]): the header path resolver, re-anchored. The
-// sample-PDF click that used to flip the strip is deleted with the mock, so manual entry
-// ('Skip — enter manually' -> skipUpload -> createStep 'form') is now the only way to
-// reach a DOCUMENT_ONLY_STEP and is therefore the oracle. No SANDBOX toggle: with the
-// document card gone, LIVE and SANDBOX render an identical first step.
+// E2E-10 (FLOW-07, [wizard-steps-split], INVCR-01-04/task-280): the header path
+// resolver, re-anchored again. `Build`/`Validate`/`Approve`/`Report` are retired by
+// this subtask -- the typed path is now the 2-item `Enter · Review` strip and the
+// import path is `Import · Map · Review`, sharing the `Review` label between them.
+// The sample-PDF click that used to flip the strip is deleted with the mock, so
+// manual entry ('Skip — enter manually' -> skipUpload -> createStep 'form') is still
+// the only way to reach a DOCUMENT_ONLY_STEP. No SANDBOX toggle: with the document
+// card gone, LIVE and SANDBOX render an identical first step.
+//
+// A label-presence check alone cannot prove STAGE_OF.form === 0: with a 2-item
+// strip, stageIndex 0 and stageIndex 2 (the retired 5-item index) render the SAME
+// two labels -- only the highlight differs. So this also asserts computed `color`,
+// token-agnostic (`--fg-1` vs `--fg-3`, verified genuinely distinct:
+// oklch(16% .03 210) vs oklch(45% .02 210)) rather than a class or token name.
+// Verified no exact-text collision for Import/Map/Review/Enter anywhere else on this
+// screen: CreateUpload's card title is 'Import invoices · X', CreateMapping's are
+// 'Map fields to columns · X' / 'Import N rows' / 'Map invoice number to continue' --
+// none is an exact match for the bare word -- and ConnectorDetail.tsx's own 'Review'
+// is a different, unmounted view.
 //
 // E2E-08 is deliberately NOT replaced -- its subject (the sample-PDF parse -> form ->
-// validate -> results run) is deleted by this subtask, so nothing is left to guard.
-test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-step import path on entry and the 5-step document path once manual entry is chosen', async ({
+// validate -> results run) is deleted by an earlier subtask, so nothing is left to guard.
+test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-step import path on entry and the 2-step typed path once manual entry is chosen', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -393,26 +407,43 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
   await signInFirm(page)
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  // Leg 1 -- createStep 'upload' is NOT in DOCUMENT_ONLY_STEPS, so IMPORT_STEPS renders.
-  // All THREE document-only labels are checked absent (the old :398 checked one of three).
-  await expect(page.getByText('Report', { exact: true }), '3-step IMPORT_STEPS strip expected on entry').toBeVisible({ timeout: 30_000 })
-  await expect(page.getByText('Build', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Validate', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Approve', { exact: true })).toHaveCount(0)
+  // Leg 1 -- createStep 'upload' is NOT in DOCUMENT_ONLY_STEPS, so IMPORT_STEPS
+  // (Import/Map/Review) renders; the typed-path-only 'Enter' label is absent.
+  await expect(page.getByText('Import', { exact: true }), '3-step IMPORT_STEPS strip expected on entry').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('Map', { exact: true })).toBeVisible()
+  await expect(page.getByText('Review', { exact: true })).toBeVisible()
+  await expect(page.getByText('Enter', { exact: true })).toHaveCount(0)
 
-  // Leg 2 -- 'form' IS in DOCUMENT_ONLY_STEPS, so wizardHeader must return WIZARD_STEPS
-  // at STAGE_OF.form === 2, and the import-only 'Report' label must disappear.
+  const colorOf = (t: string) => page.getByText(t, { exact: true }).evaluate((el) => getComputedStyle(el).color)
+
+  // Positive companion: exactly one of the three is lit, at index 0 -- proves the
+  // color-comparison technique itself discriminates before leg 2's assertion relies
+  // on it. Map (idx 1) and Review (idx 2) are both un-lit, so their colors match;
+  // Import (idx 0, current) differs from both.
+  expect(await colorOf('Import')).not.toBe(await colorOf('Map'))
+  expect(await colorOf('Map')).toBe(await colorOf('Review'))
+
+  // Leg 2 -- 'form' IS in DOCUMENT_ONLY_STEPS, so wizardHeader must return
+  // WIZARD_STEPS (Enter/Review) at STAGE_OF.form === 0, and the import-only
+  // 'Import'/'Map' labels must disappear.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByText('Build', { exact: true }), '5-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
-  await expect(page.getByText('Validate', { exact: true })).toBeVisible()
-  await expect(page.getByText('Approve', { exact: true })).toBeVisible()
-  await expect(page.getByText('Report', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Enter', { exact: true }), '2-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
+  await expect(page.getByText('Review', { exact: true })).toBeVisible()
+  await expect(page.getByText('Import', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Map', { exact: true })).toHaveCount(0)
 
-  // Not just the strip: the build step's BODY rendered underneath it. A resolver that
-  // returned the right labels over a blank step router would otherwise pass. Same
-  // smallest-match text idiom as :465/:529's 'Import invoices ·'; the header CTA's name
-  // is exactly 'New invoice' with no '·', so there is no collision.
-  await expect(page.getByText('New invoice ·', { exact: false }), 'the build step body rendered').toBeVisible()
+  // The label pair alone is indistinguishable from a regressed stageIndex 2: with
+  // only two entries (indices 0/1), index 2 matches neither, so BOTH labels would
+  // fall to the same muted --fg-3 and this comparison would be equal -- only the
+  // correct stageIndex 0 lights Enter and leaves Review muted, producing a genuine
+  // color inequality.
+  expect(await colorOf('Enter'), 'STAGE_OF.form must be 0').not.toBe(await colorOf('Review'))
+
+  // Not just the strip: the Enter step's BODY rendered underneath it. A resolver
+  // that returned the right labels over a blank step router would otherwise pass.
+  // Same smallest-match text idiom as :465/:529's 'Import invoices ·'; the header
+  // CTA's name is exactly 'New invoice' with no '·', so there is no collision.
+  await expect(page.getByText('New invoice ·', { exact: false }), 'the Enter step body rendered').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

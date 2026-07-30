@@ -35,6 +35,7 @@ import { describe, expect, it } from 'vitest'
 import { WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
 import {
+  IMPORT_STAGE_OF,
   IMPORT_STEPS,
   STAGE_OF,
   canReadColumns,
@@ -211,13 +212,28 @@ describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
     expect(IMPORT_STEPS.length).toBe(3)
   })
 
+  // FLOW-14, rewritten (INVCR-01-04, task-280, Mode A — RED). The old loop's
+  // `toBeGreaterThanOrEqual(3)` breaks the moment WIZARD_STEPS shrinks to 2
+  // entries, and relaxing it to `>= 1` would assert nothing — replaced with
+  // the exact [step, len, idx] table (plan §5). 'review' is not yet a member
+  // of CreateStep; cast per this file's own QA-WH-FALLBACK precedent below
+  // ('reconcile' as unknown as CreateStep), dropped in the GREEN commit. RED
+  // today: the 'form' row throws first (actual steps.length is 5, not 2 —
+  // WIZARD_STEPS hasn't shrunk yet), so the loop never even reaches the
+  // 'review' row, which would independently fail too (stageIndex resolves to
+  // 0 via the `?? 0` fallback, not the real 2).
   it('is total over every CreateStep literal — stageIndex is always a valid index', () => {
-    const ALL_STEPS: CreateStep[] = ['upload', 'mapping', 'form', 'report']
-    ALL_STEPS.forEach((step) => {
+    const ALL: Array<[CreateStep, number, number]> = [
+      ['upload', 3, 0],
+      ['mapping', 3, 1],
+      ['form', 2, 0],
+      ['review' as unknown as CreateStep, 3, 2],
+    ]
+    ALL.forEach(([step, len, idx]) => {
       const { steps, stageIndex } = wizardHeader(step)
-      expect(steps.length).toBeGreaterThanOrEqual(3)
+      expect(steps.length, step).toBe(len)
+      expect(stageIndex, step).toBe(idx)
       expect(Number.isInteger(stageIndex)).toBe(true)
-      expect(stageIndex).toBeGreaterThanOrEqual(0)
       expect(stageIndex).toBeLessThan(steps.length)
     })
   })
@@ -233,6 +249,113 @@ describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
     // 2-arg signature, which does not compile once uploadFile/importFile are dropped (D-01a).
     const twoArg = wizardHeader('upload', null)
     expect(twoArg).toEqual({ steps: IMPORT_STEPS, stageIndex: 0 })
+  })
+})
+
+// ============================================================================
+// INVCR-01-04 (task-280), Mode A — RED-FIRST specs authored BEFORE the rename
+// lands. Every assertion below fails at RUNTIME against the pre-rename tables
+// at e08fb68 (verified independently before authoring), never at compile
+// time. 'review' is not yet a member of CreateStep; where a value of that
+// type is required this reuses the file's own QA-WH-FALLBACK precedent
+// further down ('reconcile' as unknown as CreateStep) rather than widening
+// the union here — the union widens, and the casts drop, in the GREEN commit
+// only. Nothing here re-derives an expectation from the code under test:
+// STAGE_OF/IMPORT_STAGE_OF/WIZARD_STEPS/IMPORT_STEPS' target values are the
+// literal tables from the plan.
+// ============================================================================
+describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', () => {
+  const reviewStep = 'review' as unknown as CreateStep
+
+  // AC-1. Falsification: an impl that leaves 'Report' as the third label, or
+  // reorders/renames either of the other two. RED today: IMPORT_STEPS[2][1]
+  // is still 'Report'.
+  it('STEPS-1: import strip is Import · Map · Review', () => {
+    expect(IMPORT_STEPS).toEqual([
+      ['1', 'Import'],
+      ['2', 'Map'],
+      ['3', 'Review'],
+    ])
+  })
+
+  // AC-1. Falsification: an impl that keeps the 5-entry Build/Validate/
+  // Approve strip, or collapses to a single 'Enter' item (D-04a rejects both
+  // — [three-stages] keeps 2 items on the typed path). RED today:
+  // WIZARD_STEPS has 5 entries, not the 2 above.
+  it('STEPS-2: typed strip is Enter · Review', () => {
+    expect(WIZARD_STEPS).toEqual([
+      ['1', 'Enter'],
+      ['2', 'Review'],
+    ])
+  })
+
+  // AC-2. STAGE_OF must stay a TOTAL Record<CreateStep, number>, not become
+  // partial — an impl that drops a key, or renames the TYPE member but
+  // leaves the runtime key as 'report', both fail this. RED today: form is
+  // still 2 (not 0) and the runtime key is still 'report' (not 'review').
+  it('STEPS-3: STAGE_OF is total, renamed to review, and form resolves to 0', () => {
+    expect(STAGE_OF).toEqual({ upload: 0, mapping: 1, form: 0, review: 2 })
+    expect(Object.keys(STAGE_OF)).not.toContain('report')
+    expect(Object.keys(STAGE_OF)).toHaveLength(4)
+  })
+
+  // AC-2. RED today: IMPORT_STAGE_OF's third key is still 'report'.
+  it('STEPS-3b: IMPORT_STAGE_OF is upload/mapping/review', () => {
+    expect(IMPORT_STAGE_OF).toEqual({ upload: 0, mapping: 1, review: 2 })
+  })
+
+  // AC-3. The case that actually exercises the rename through wizardHeader:
+  // IMPORT_STAGE_OF must carry a REAL 'review' entry rather than resolve
+  // through the `?? 0` fallback that QA-WH-FALLBACK (below) proves exists
+  // for a step NOT in the union — 'review' IS in the union post-rename, so
+  // it must not need that fallback. RED today: IMPORT_STAGE_OF has no
+  // 'review' key, so stageIndex resolves to 0 via the fallback, not the
+  // real 2.
+  it('STEPS-4: review resolves to the import path at index 2', () => {
+    expect(wizardHeader(reviewStep)).toEqual({ steps: IMPORT_STEPS, stageIndex: 2 })
+  })
+
+  // AC-3. RED today: STAGE_OF.form is still 2 (the old 5-item index), so
+  // wizardHeader('form') returns stageIndex 2, not 0.
+  it('STEPS-5: typed path lights Enter at index 0', () => {
+    expect(wizardHeader('form')).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
+  })
+
+  // AC-4. Falsification: an impl that renames the type member but leaves any
+  // one of the four retired labels sitting in either table. RED today: all
+  // four retired labels are still present (Build/Validate/Approve in
+  // WIZARD_STEPS, Report in IMPORT_STEPS) and 'Review' appears zero times,
+  // not twice.
+  it('STEPS-6: no removed stage name survives in either table', () => {
+    const labels = [...IMPORT_STEPS, ...WIZARD_STEPS].map(([, label]) => label)
+    expect(labels).not.toContain('Build')
+    expect(labels).not.toContain('Validate')
+    expect(labels).not.toContain('Approve')
+    expect(labels).not.toContain('Report')
+    expect(labels.filter((l) => l === 'Review')).toHaveLength(2)
+  })
+
+  // AC-6. The ONLY runtime proof that App.tsx:421's setCreateStep('report')
+  // and CreateFlow.tsx:58's `createStep === 'report'` branch actually
+  // changed — every spec above pins a VALUE the compiler doesn't force,
+  // but these two call sites compile unchanged either way (they don't
+  // reference STAGE_OF/WIZARD_STEPS/IMPORT_STEPS at all). Needle built from
+  // concatenated parts and self-excluded, same idiom as QA-MOCK-2/QA-DEL-2
+  // below: THIS file still spells the quoted literal itself (FLOW-12's
+  // `wizardHeader('report')` above) until the executor updates it in the
+  // GREEN commit. Verified NOT to false-positive on importReport/
+  // ImportReport/reportSummary/ctx.report/setReport (no closing quote
+  // immediately follows "report" in any of those) or on CreateReport.tsx's
+  // `// step "report"` comment (double-quoted — a different needle
+  // entirely). RED today: 4 real hits — App.tsx, types.ts, CreateFlow.tsx,
+  // lib/importFlow.ts (verified independently via a standalone source scan
+  // before authoring this spec).
+  it("STEPS-7: the quoted CreateStep literal 'report' is gone from frontend/app/src", () => {
+    const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+    const selfRelPath = path.join('lib', 'importFlow.test.ts')
+    const needle = "'rep" + "ort'"
+    const hits = scanForIdentifier(srcRoot, needle).filter((relPath) => relPath !== selfRelPath)
+    expect(hits.sort()).toEqual([])
   })
 })
 

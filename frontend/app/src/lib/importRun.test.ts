@@ -35,6 +35,7 @@ import {
   canReadColumnsAll,
   capRefusal,
   markRunFailed,
+  markRunRouted,
   removeFile,
   routeAfterRun,
   runBatchIds,
@@ -45,6 +46,12 @@ import {
 } from './importRun'
 import type { FileOutcome, ImportRun, PickedFile, RunFile } from './importRun'
 import type { ImportReport } from './importApi'
+// Read-only cross-module import: filesStrip is reviewBatch.ts's, not this module's,
+// but the ONE describe block below that uses it exists to pin the actual App.tsx
+// wiring bug (BULK-01-07) at the one honest layer this no-jsdom suite can reach — see
+// that block's own comment. Nothing here writes to lib/reviewBatch.ts or its own test
+// file.
+import { filesStrip } from './reviewBatch'
 
 // Builds fixture PickedFile[] with stable, human-readable ids derived from the file's own
 // name — good enough for these specs, which only ever look an id up by the very entry
@@ -766,9 +773,11 @@ describe("runIsActive — 'running'/'finished' are active, 'idle'/'failed' are n
 
 describe('markRunFailed — flips status only, files/cursor survive intact (task-308 correction, AC #9)', () => {
   // Falsification: an impl that resets `files`/`cursor` alongside `status` (mirroring
-  // the 'single'/'review' routes' `{files:[],cursor:0,status:'idle'}` reset) would wipe
-  // the exact failure history CreateMapping needs to render — runFailures would come
-  // back empty and the operator would see no reason for the run they just watched fail.
+  // the 'single' route's `{files:[],cursor:0,status:'idle'}` reset — 'review' used
+  // that same literal reset too until BULK-01-07's markRunRouted below replaced it,
+  // for the identical reason) would wipe the exact failure history CreateMapping
+  // needs to render — runFailures would come back empty and the operator would see no
+  // reason for the run they just watched fail.
   it('a two-file run where both files failed keeps every failure readable after markRunFailed', () => {
     let run = startRun([pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv')])
     run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'network error' } })
@@ -797,5 +806,81 @@ describe('markRunFailed — flips status only, files/cursor survive intact (task
     const landed = markRunFailed(failedRun)
     expect(landed).not.toBe(failedRun)
     expect(failedRun.status).toBe('finished')
+  })
+})
+
+// ============================================================================
+// Executor correction (BULK-01-07, task-307) — App.tsx's applyRoute reached the
+// 'review' branch by resetting `run` to the literal `{files:[],cursor:0,status:'idle'}`
+// — the exact shape markRunFailed's own falsification comment above already names as
+// the wrong move. BULK-06-16 (reviewBatch.test.ts) pins that filesStrip(batches, run)
+// reports a run-only failure — a file whose upload request itself failed before any
+// batch ever existed, so nothing in `batches` represents it — but that spec calls
+// filesStrip directly against a hand-built run and was never wired through
+// applyRoute's actual reset, so it stayed green while the real app discarded that
+// same data the instant a run finished. markRunRouted retires the literal reset the
+// same way markRunFailed already retired it for the 'none' route.
+// ============================================================================
+
+describe('markRunRouted — flips status only, files/cursor survive intact (BULK-01-07 wiring correction)', () => {
+  // Falsification: an impl that resets `files`/`cursor` alongside `status` (the exact
+  // literal reset applyRoute's 'review' branch used before this fix) would wipe a
+  // run-only failure the instant the run finished, reproducing the Core AC 5 miss
+  // this fix retires.
+  it('a mixed two-file run (one request-level failure, one imported) keeps both readable after markRunRouted', () => {
+    let run = startRun([pendingFile('f1', 'bad.csv'), pendingFile('f2', 'ok.csv')])
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'network error' } })
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2' } },
+    })
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'review', batchIds: ['b2'] })
+
+    const routed = markRunRouted(run)
+
+    expect(routed.status).toBe('idle')
+    expect(routed.cursor).toBe(run.cursor)
+    expect(routed.files).toEqual(run.files)
+    expect(runIsActive(routed)).toBe(false)
+  })
+
+  // Falsification: an impl that mutates the run object in place instead of returning a
+  // new one — App.tsx's `setRun(markRunRouted)` relies on a fresh reference so React
+  // actually re-renders off the status change (same reasoning as markRunFailed's own
+  // identity spec above).
+  it('returns a new object rather than mutating the run passed in', () => {
+    const run = startRun([pendingFile('f1', 'a.csv')])
+    const finishedRun = { ...run, status: 'finished' as const }
+    const routed = markRunRouted(finishedRun)
+    expect(routed).not.toBe(finishedRun)
+    expect(finishedRun.status).toBe('finished')
+  })
+})
+
+describe("filesStrip still reports a run-only failure after markRunRouted (BULK-01-07 wiring correction, Core AC 5) — the fix's actual integration point", () => {
+  // applyRoute itself is component-level (App.tsx) and this suite runs under
+  // vitest's node environment with no jsdom (vitest.config.ts:5, this file's own
+  // header comment) — there is no oracle here that mounts CreateFlow/ReviewBatch and
+  // drives a route through them. What IS honestly provable at this layer: filesStrip
+  // (lib/reviewBatch.ts) reads `run.files` regardless of `run.status`, so a run-only
+  // failure that survives markRunRouted's status-only change is one filesStrip can
+  // still report. Falsification: had this spec run against the OLD literal
+  // `{files:[],cursor:0,status:'idle'}` reset instead of markRunRouted's output, the
+  // run-only row below would come back empty — exactly the bug this fix retires.
+  it('a file that failed before any batch existed still produces its own filesStrip row after markRunRouted', () => {
+    let run = startRun([pendingFile('f1', 'rejected-before-batch.csv'), pendingFile('f2', 'ok.csv')])
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'the gateway refused this upload' } })
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2' } },
+    })
+
+    const routed = markRunRouted(run)
+    // `batches: []` on purpose -- the whole point of a run-only failure is that no
+    // batch was ever created for it, so the ONE row it can produce comes from `run`
+    // alone, never from a batches array this spec would otherwise have to fabricate.
+    const rows = filesStrip([], routed)
+
+    expect(rows).toEqual([{ id: 'f1', filename: 'rejected-before-batch.csv', reason: 'the gateway refused this upload' }])
   })
 })

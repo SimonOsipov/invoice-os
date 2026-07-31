@@ -256,3 +256,30 @@ export function routeAfterRun(run: ImportRun, resolvedInvoiceId: string | null):
 export function markRunFailed(run: ImportRun): ImportRun {
   return { ...run, status: 'failed' }
 }
+
+// The 'review' landing's counterpart to markRunFailed above (BULK-01-07 wiring gap,
+// found because BULK-06-16's filesStrip spec passes at the node level while App.tsx's
+// own applyRoute still discarded the very data that spec exercises). App.tsx's
+// applyRoute calls this on a 'review' route INSTEAD OF the literal
+// `{files:[],cursor:0,status:'idle'}` reset it used before -- that reset wiped
+// `files` the instant a run finished, so a run-only failure (a file whose upload
+// request itself failed before any batch ever existed -- FileOutcome's 'failed' kind
+// carries no batchId, so nothing in `batches` represents it either) could never
+// reach ReviewBatch's `filesStrip(batches, ctx.run)` (Core AC 5: "reports each
+// failure against its own filename, with the reason"). `files`/`cursor` now survive
+// exactly as the run ended, same discipline as markRunFailed; only `status` moves,
+// to 'idle' -- the SAME value the old reset already produced (App.tsx's own run-
+// state comment already documents 'idle' as "once applyRoute has drained a finished
+// run into reviewBatchIds/an opened invoice"), so runIsActive(run) still goes false
+// and CreateFlow's body-swap gate still lets the review screen render in place of
+// ImportProgress. The two landings differ only in which terminal status they choose
+// and which RunRoute kind calls them -- 'failed' for `none` (every file failed
+// outright), 'idle' here for `review` (at least one batch exists, however it fared).
+//
+// 'single' is NOT given the same treatment and keeps the literal reset (App.tsx's own
+// applyRoute comment explains why): it only ever fires for a one-file run whose one
+// file IMPORTED, and it unmounts the whole create flow, so there is no failure left
+// for it to be dropping.
+export function markRunRouted(run: ImportRun): ImportRun {
+  return { ...run, status: 'idle' }
+}

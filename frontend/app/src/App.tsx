@@ -14,6 +14,7 @@ import {
   addFiles,
   canReadColumnsAll,
   markRunFailed,
+  markRunRouted,
   removeFile,
   routeAfterRun,
   runReducer,
@@ -561,10 +562,26 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Where a finished RUN lands (INVCR-01-09, BULK-01-05, Core AC 8). `review` and
   // `rejected` batches are handled IDENTICALLY on purpose: both are the review step,
   // and which SURFACE it renders there is decided by reviewShellState(batch) off the
-  // batch GET alone — never by this route's `kind`. `single`/`review` reset `run` to
-  // idle — their data is already drained into importedInvoiceId/reviewBatchIds, and
-  // both CreateFlow's body-swap and CreateMapping's upload-disable gate (both
-  // runIsActive(run)) must go false so the newly-set createStep/view actually render.
+  // batch GET alone — never by this route's `kind`.
+  //
+  // `review` moves `run` to idle via lib/importRun.ts's markRunRouted (BULK-01-07
+  // wiring correction) rather than the literal `{files:[],cursor:0,status:'idle'}`
+  // reset it used before — `files`/`cursor` now survive untouched, same discipline as
+  // markRunFailed below, because ReviewBatch's `filesStrip(batches, ctx.run)` still
+  // needs to read a run-only failure off THIS run: a file whose upload request itself
+  // failed before any batch ever existed carries no batchId, so nothing in `batches`
+  // represents it either (Core AC 5). The literal reset used to wipe that the instant
+  // the run finished, so that failure could never reach the review screen at all.
+  // `status` still ends at 'idle' — the same value the old reset already produced —
+  // so runIsActive(run) still goes false and CreateFlow's body-swap gate still lets
+  // 'review' render in place of ImportProgress.
+  //
+  // `single` still resets `run` to a literal empty idle state, deliberately NOT given
+  // the same treatment: openImportedInvoice sets `view` to 'detail', unmounting the
+  // whole create flow (ImportProgress, ReviewBatch, everything that reads `run`) —
+  // and routeAfterRun only ever returns 'single' for a one-file run whose one file
+  // IMPORTED (BULK-05-8's run-size gate), so there is no failure this route could
+  // ever be dropping.
   //
   // `none` (every file in the run failed at the request level) does NOT reset `run`
   // the same way — lib/importRun.ts's markRunFailed (BULK-01-05 QA correction,
@@ -584,7 +601,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     if (route.kind === 'review') {
       setReviewBatchIds(route.batchIds)
       setCreateStep('review')
-      setRun({ files: [], cursor: 0, status: 'idle' })
+      setRun(markRunRouted)
       return
     }
     setRun(markRunFailed)

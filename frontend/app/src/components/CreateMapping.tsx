@@ -10,8 +10,8 @@
 // derivation lives in previewColumns (lib/importFlow.ts) so it has a node oracle under
 // the no-jsdom constraint and this component stays a dumb renderer with one call site.
 //
-// The guard below therefore requires `preview` and `importFile`: this screen is
-// reachable only from the import path, which sets both.
+// The guard below therefore requires `preview` and `mapping`: this screen is reachable
+// only from the import path, which sets both.
 
 import { CANON } from '../data'
 import { recognize } from '../lib/mapping'
@@ -21,8 +21,8 @@ import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
-  const { active, preview, importFile, mapping, armedField, dragField, uploadPhase, importError, entityId, groups, groupIndex, pickedFiles } = ctx
-  if (!preview || !mapping || !importFile) return null
+  const { active, preview, mapping, armedField, dragField, run, importError, entityId, groups, groupIndex, pickedFiles } = ctx
+  if (!preview || !mapping) return null
 
   // BULK-01-04: which group this screen is showing, and the fileId -> filename lookup
   // coverageSentence (and the split control below) render off. `activeGroup` is
@@ -35,8 +35,10 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   const sentence = activeGroup ? coverageSentence(activeGroup, names) : ''
   // A short, honest label for the header row below — the full statement of which files
   // this mapping covers lives in the coverage-sentence block, not here. Falls back to
-  // the transitional `importFile.name` only if activeGroup is somehow null (see above).
-  const primaryFileName = activeGroup ? (names[activeGroup.fileIds[0]] ?? importFile.name) : importFile.name
+  // the first picked file's own name (BULK-01-05 deleted the `importFile` shim this used
+  // to read) only if activeGroup is somehow null (see above).
+  const fallbackFileName = pickedFiles[0]?.file.name ?? ''
+  const primaryFileName = activeGroup ? (names[activeGroup.fileIds[0]] ?? fallbackFileName) : fallbackFileName
 
   const dropHot = !!(armedField || dragField)
   const recognized = recognize(preview.columns)
@@ -75,7 +77,11 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     return dot > 0 ? primaryFileName.slice(dot + 1).toUpperCase() : 'FILE'
   })()
 
-  const uploading = uploadPhase.kind === 'sending' || uploadPhase.kind === 'processing'
+  // BULK-01-05: mirrors CreateFlow's own `run.status !== 'idle'` body-swap gate — this
+  // screen is never actually mounted while a run is live (CreateFlow renders
+  // ImportProgress instead), so this stays the same always-false-in-practice guard it
+  // was before, now read off `run` rather than the retired `uploadPhase`.
+  const uploading = run.status !== 'idle'
 
   const paletteChips = CANON.filter((c) => !mapping[c.key]).map((c) => {
     const armed = armedField === c.key
@@ -249,10 +255,10 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             {/* A short, representative label — the full statement of which files this
                 mapping covers is the coverage sentence above, not this row. Reading off
                 `primaryFileName` (the active group's own first covered file) rather than
-                the transitional `importFile` shim matters here: `importFile` is always
-                pickedFiles[0], so on any group past the first this row would otherwise
-                keep naming a file that already finished mapping — a visible
-                contradiction with the correct coverage sentence one line above it. */}
+                a bare `pickedFiles[0]` matters here: that fallback is always the FIRST
+                picked file, so on any group past the first this row would otherwise keep
+                naming a file that already finished mapping — a visible contradiction
+                with the correct coverage sentence one line above it. */}
             <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {primaryFileName}
               {activeGroup && activeGroup.fileIds.length > 1 ? ` +${activeGroup.fileIds.length - 1} more` : ''}

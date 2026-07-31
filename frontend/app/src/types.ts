@@ -5,8 +5,8 @@
 // import here would form a cycle. `AuthedFetch`/`Entity` are only ever used as types below.
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
-import type { ImportPreview, UploadPhase } from './lib/importApi'
-import type { PickedFile } from './lib/importRun'
+import type { ImportPreview } from './lib/importApi'
+import type { ImportRun, PickedFile } from './lib/importRun'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
@@ -175,7 +175,7 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflow
 // 'form' and that. INVCR-01-04 renamed the last member to 'review' ([three-stages]): the
 // stage is the user's REVIEW SURFACE, not an import-report payload rendered on it — and
 // INVCR-01-09 cashed that distinction by deleting CreateReport.tsx outright. 'review' now
-// renders ReviewBatch.tsx off `reviewBatchId` + two live GETs, which is also why the step
+// renders ReviewBatch.tsx off `reviewBatchIds` + two live GETs, which is also why the step
 // is reachable by URL (`#review/<uuid>`) where the payload-backed one never could be.
 export type CreateStep = 'upload' | 'mapping' | 'form' | 'review'
 
@@ -327,19 +327,11 @@ export type PlatformCtx = {
   // picker of its own since [import-upload-unify] — it mirrors `active` — but it is
   // read at createImport time, so it must survive that unmount too.)
   entityId: string | null
-  // TRANSITIONAL (BULK-01-03): derived shim (pickedFiles[0]?.file ?? null, set in App.tsx)
-  // so CreateMapping/ImportProgress/startImport keep compiling. BULK-01-04 (task-309)
-  // rewired CreateMapping + readColumns->readAllColumns; CreateMapping now reads a
-  // representative filename off the active MappingGroup (via `groups`/`pickedFiles`)
-  // instead of this shim for display, but the shim itself is still what gates its null
-  // check and what ImportProgress reads directly. BULK-01-05 rewires ImportProgress +
-  // startImport->startRun and must delete this shim entirely.
-  importFile: File | null
   // The run's ordered file selection (BULK-01-03, Core AC 1) — CreateUpload's
   // chosen-files list, per-file remove controls and per-file bad-extension notes all
   // render off this. Lives on ctx, not CreateUpload's local state, for the same reason
-  // `importFile` did before it ([multi-invoice import path] below): CreateUpload
-  // UNMOUNTS when createStep leaves 'upload'.
+  // `entityId` does ([multi-invoice import path] above): CreateUpload UNMOUNTS when
+  // createStep leaves 'upload'.
   pickedFiles: PickedFile[]
   // The refusal text from the most recent addPickedFiles call (lib/importRun's
   // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
@@ -356,15 +348,29 @@ export type PlatformCtx = {
   // complete mapping and starts the run only once it is the LAST group.
   groupIndex: number
   preview: ImportPreview | null
-  uploadPhase: UploadPhase
+  // The sequential run's whole state (BULK-01-05, task-308) — one createImport in
+  // flight at a time, one outcome per file, continuation through failures
+  // ([partial-success-kept]). App.tsx's startRun() is the sole writer, via
+  // lib/importRun.ts's runReducer; every view over it (runBatchIds/runFailures/
+  // runFileRows/routeAfterRun) is a pure derivation of THIS value, never re-computed
+  // ad hoc by a component. `status: 'idle'` both before a run starts and once
+  // applyRoute has drained a finished run into `reviewBatchIds`/an opened invoice —
+  // `'finished'` survives ONLY across a `none` route (AC #9), so ImportProgress keeps
+  // rendering the per-file failure list until the user backs out via
+  // restartImport/resetImport.
+  run: ImportRun
   importError: ApiError | null
-  // The batch the review step is showing (INVCR-01-09). REPLACES the old
-  // `report: ImportReport | null`, which was the POST's frozen 201 payload held in
-  // memory: D4 made the review screen revisitable by URL (`#review/<uuid>`), so it
-  // re-fetches from GET /v1/imports/{id} + the list endpoint's own totals instead, and
-  // a stale in-memory report is exactly the frozen-counter source that replaced. An id
-  // is all any consumer needs; nothing may resurrect the payload.
-  reviewBatchId: string | null
+  // The batches the review step is showing (INVCR-01-09, widened BULK-01-05).
+  // REPLACES the old singular `reviewBatchId: string | null` — a run's `review` route
+  // (lib/importRun's routeAfterRun) carries every batch id created in the run, in run
+  // order, and none may be dropped just because the review screen itself is not yet
+  // widened to read more than the first (BULK-01-06). REPLACES the old
+  // `report: ImportReport | null` before that, which was the POST's frozen 201 payload
+  // held in memory: D4 made the review screen revisitable by URL (`#review/<uuid>`),
+  // so it re-fetches from GET /v1/imports/{id} + the list endpoint's own totals
+  // instead, and a stale in-memory report is exactly the frozen-counter source that
+  // replaced. An id is all any consumer needs; nothing may resurrect the payload.
+  reviewBatchIds: string[]
   // Set by openImportedInvoice (M4-08-05) when the user clicks through to a real
   // invoice. Mutually exclusive with `selectedId` by construction — both are members
   // of one DetailSelection atom in App.tsx (lib/importReport.ts), so neither can be left

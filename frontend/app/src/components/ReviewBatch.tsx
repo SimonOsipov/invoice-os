@@ -101,7 +101,11 @@ function Tile({
 
 export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
-  const batchId = ctx.reviewBatchId
+  // BULK-01-05 widened ctx.reviewBatchIds to carry every batch a run created; THIS
+  // screen is not yet widened to show more than one (BULK-01-06's job) — read only the
+  // first, matching what the URL hash carries for the same reason (App.tsx's mirror
+  // effect).
+  const batchId = ctx.reviewBatchIds[0] ?? null
   const [tab, setTab] = useState<ReviewTab['id']>('invoices')
 
   const shell = useAsync<ReviewShellData>(

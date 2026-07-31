@@ -8,19 +8,22 @@ import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
-import { parseReviewHash, reviewHash, reviewQuery, routeAfterImport, type PostImportRoute } from './lib/reviewBatch'
+import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
-import { canStartImport } from './lib/importFlow'
-import { addFiles, canReadColumnsAll, removeFile, type PickedFile } from './lib/importRun'
-import { groupByLayout, splitOut, type MappingGroup } from './lib/mappingGroups'
-import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
-  createImport,
-  makeImportAuth,
-  previewImport,
-  type ImportPreview,
-  type UploadPhase,
-} from './lib/importApi'
+  addFiles,
+  canReadColumnsAll,
+  removeFile,
+  routeAfterRun,
+  runReducer,
+  type ImportRun,
+  type PickedFile,
+  type RunFile,
+  type RunRoute,
+} from './lib/importRun'
+import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
+import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
+import { createImport, makeImportAuth, previewImport, type ImportPreview } from './lib/importApi'
 import {
   addMembers,
   removeMember,
@@ -216,7 +219,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [view, setView] = useState<View>(bootBatchId ? 'create' : 'dashboard')
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>(bootBatchId ? 'review' : 'form')
-  const [reviewBatchId, setReviewBatchId] = useState<string | null>(bootBatchId)
+  // Widened from a single `reviewBatchId` (BULK-01-05, task-308): a run's `review`
+  // route (lib/importRun's routeAfterRun) carries every batch id created in the run.
+  // `reviewHash` below is NOT widened yet — that is BULK-01-06's job — so only the
+  // FIRST id round-trips through the URL until then; every id still lands here.
+  const [reviewBatchIds, setReviewBatchIds] = useState<string[]>(bootBatchId ? [bootBatchId] : [])
   // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
   // decision [shared-mapping-shown]) — readAllColumns (below) previews every picked file
   // and lib/mappingGroups.ts's groupByLayout buckets them, preserving first-appearance
@@ -283,25 +290,26 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Still never carried over from a PREVIOUS run in the same session — resetImport
   // reseeds from `active` every time, not from whatever this state last held.
   const [entityId, setEntityId] = useState<string | null>(null)
-  // The run's ordered file selection (BULK-01-03, Core AC 1) — replaces the old
-  // single-file `importFile` state below. `filesRefusal` holds the most recent
-  // addPickedFiles call's refusal text (lib/importRun's capRefusal), or null.
+  // The run's ordered file selection (BULK-01-03, Core AC 1). `filesRefusal` holds the
+  // most recent addPickedFiles call's refusal text (lib/importRun's capRefusal), or
+  // null.
   const [pickedFiles, setPickedFiles] = useState<PickedFile[]>([])
   const [filesRefusal, setFilesRefusal] = useState<string | null>(null)
-  // TRANSITIONAL (BULK-01-03): derived shim so CreateMapping/ImportProgress/startImport
-  // keep compiling. BULK-01-04 (task-309) rewired CreateMapping + readColumns->
-  // readAllColumns — CreateMapping now reads a representative filename off the active
-  // MappingGroup instead of this shim for display, but ImportProgress still reads it
-  // directly. BULK-01-05 rewires ImportProgress + startImport->startRun and must delete
-  // this shim entirely.
-  const importFile = pickedFiles[0]?.file ?? null
   // The active group's preview/mapping (BULK-01-04) — DERIVED reads, never their own
   // state. Both are null whenever `groups` is empty or `groupIndex` is out of range
   // (before readAllColumns has ever resolved, or after a resetImport).
   const activeGroup = groups[groupIndex] ?? null
   const preview = activeGroup?.preview ?? null
   const mapping = activeGroup?.mapping ?? null
-  const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
+  // The sequential run's whole state (BULK-01-05, task-308) — REPLACES the old
+  // single-file `uploadPhase` state. `startRun` (below) is the sole writer, via
+  // lib/importRun's runReducer; `run` is tracked in a local variable inside that
+  // function's own async loop (a `setState` call does not resolve synchronously) and
+  // mirrored here purely for rendering — same discipline readAllColumns' local
+  // `previewed` array already uses. `'idle'` both before a run starts and once
+  // applyRoute has drained a finished run into `reviewBatchIds`/an opened invoice;
+  // `'finished'` survives ONLY across a `none` route (AC #9).
+  const [run, setRun] = useState<ImportRun>({ files: [], cursor: 0, status: 'idle' })
   const [importError, setImportError] = useState<ApiError | null>(null)
 
   // The manual form's one round trip (INVCR-01-03). `filing` renders the disabled/spinner
@@ -351,9 +359,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // At boot this rewrites the identical URL (the three initializers above already agree
   // with the hash it parses), so the first pass is a no-op rather than a navigation.
   useEffect(() => {
-    const h = reviewHash(view, createStep, reviewBatchId)
+    // BULK-01-06 widens the hash to carry every id in the run.
+    const h = reviewHash(view, createStep, reviewBatchIds[0] ?? null)
     window.history.replaceState(null, '', window.location.pathname + window.location.search + (h ?? ''))
-  }, [view, createStep, reviewBatchId])
+  }, [view, createStep, reviewBatchIds])
 
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
@@ -377,7 +386,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     // A batch belongs to ONE entity. Leaving this set would keep the review screen's
     // deep-link id pointing at the company just left — and the mirror effect above would
     // keep writing its hash into the URL from the incoming company's dashboard.
-    setReviewBatchId(null)
+    setReviewBatchIds([])
     // A failed filing's message named the company just left. `filing` is deliberately NOT
     // cleared: a request already in flight is still in flight, and it will land on the
     // invoice it was fired for — under the PREVIOUS company. Leaving the button disabled
@@ -414,13 +423,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setFilesRefusal(null)
     setGroups([])
     setGroupIndex(0)
-    setUploadPhase({ kind: 'idle' })
+    setRun({ files: [], cursor: 0, status: 'idle' })
     setImportError(null)
     // Per-run, sitting exactly where `setReport(null)` sat: a second import must not
     // inherit the first one's batch, and `Import a corrected file` routes back through
-    // here specifically so a deep-link arrival — which carries no importFile, preview or
-    // mapping at all — cannot open the upload step on another run's state.
-    setReviewBatchId(null)
+    // here specifically so a deep-link arrival — which carries no picked files, preview
+    // or mapping at all — cannot open the upload step on another run's state.
+    setReviewBatchIds([])
   }
 
   function closeCreate() {
@@ -534,68 +543,142 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     })()
   }
 
-  // Where a classified import LANDS (INVCR-01-09, Core AC 8). `review` and `rejected`
-  // are handled IDENTICALLY on purpose: both are the review step, and which SURFACE it
-  // renders there is decided by reviewShellState(batch) off the batch GET alone — never
-  // by this route's `kind`. That single ownership is what makes the POST-arrival path and
-  // a deep-link revisit (which never calls routeAfterImport at all) run one derivation.
-  function applyRoute(route: PostImportRoute) {
+  // Where a finished RUN lands (INVCR-01-09, BULK-01-05, Core AC 8). `review` and
+  // `rejected` batches are handled IDENTICALLY on purpose: both are the review step,
+  // and which SURFACE it renders there is decided by reviewShellState(batch) off the
+  // batch GET alone — never by this route's `kind`. `none` (every file in the run
+  // failed) deliberately does NOT reset `run`: leaving it at its finished, all-failed
+  // state is what keeps ImportProgress rendering the per-file failure list on the
+  // 'mapping' step (AC #9) until the user backs out via restartImport/resetImport.
+  // `single`/`review` DO reset it — their data is already drained into
+  // importedInvoiceId/reviewBatchIds, and CreateFlow's body-swap (run.status !==
+  // 'idle') must go false so the newly-set createStep/view actually render.
+  function applyRoute(route: RunRoute) {
     if (route.kind === 'single') {
       openImportedInvoice(route.invoiceId)
+      setRun({ files: [], cursor: 0, status: 'idle' })
       return
     }
-    setReviewBatchId(route.batchId)
-    setCreateStep('review')
+    if (route.kind === 'review') {
+      setReviewBatchIds(route.batchIds)
+      setCreateStep('review')
+      setRun({ files: [], cursor: 0, status: 'idle' })
+    }
   }
 
-  function startImport() {
+  // The sequential run (BULK-01-05, task-308): one createImport in flight at a time,
+  // each file its own outcome, continuation through failures ([partial-success-kept]).
+  // Replaces the single-file startImport.
+  //
+  // `[sequential-not-parallel]`: each file is AWAITED before the next one starts —
+  // NEVER Promise.all, never fire-and-forget. internal/importer/service.go's
+  // ExistingNumbers duplicate precheck is a synchronous, against-stored DB read per
+  // file, committed before Import() returns — only a sequentially-awaited next file's
+  // precheck actually sees the previous file's committed rows; running them
+  // concurrently would race straight past it into a raw 23505.
+  //
+  // `entityId` is read ONCE here and passed to EVERY file's createImport call
+  // ([entity-picker] step 3 of 3, extended to a run — Core AC 6: a run never spans
+  // entities and never asks again). There is no per-file entity anywhere in this
+  // function (AC #7).
+  //
+  // reqInFlight is taken ONCE for the whole run and released ONCE in a `finally` after
+  // the loop (and the routing it decides) exits — same shape as readAllColumns above,
+  // extended from "one request" to "the whole sequential run" (AC #8).
+  function startRun() {
     const base = gatewayBase()
-    if (base == null || !importFile || !entityId || !mapping || !canStartImport(preview, mapping)) return
+    if (base == null || !entityId || !canSubmitAllMappings(groups)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
     setImportError(null)
-    // Seed 'sending' with an unknown total: uploadPercent maps total 0 to null, so the
-    // UI opens on the indeterminate spinner and only flips to a determinate bar if the
-    // transport actually reports a computable length. Zero progress events is legal
-    // (importApi IMPAPI-08), so nothing here may assume a determinate frame ever lands.
-    setUploadPhase({ kind: 'sending', loaded: 0, total: 0 })
-    createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase)
-      .then(
-        (res) => {
-          // Core AC 8: exactly ONE ready invoice goes straight to that invoice, so the
-          // single-invoice path never makes the user read a batch report about a batch of
-          // one. The id is NOT in the 201 body on this path — Go appends InvoiceViolations
-          // only when a violation exists, so a CLEAN single invoice is counted and never
-          // listed — which is why it takes a follow-up list page to resolve.
-          //
-          // Fired ONLY at ready_invoices === 1. At any other count its answer is
-          // discarded, so asking is pure cost.
-          if (res.status === 'completed' && res.ready_invoices === 1) {
-            // RETURNED, not floating: `.finally` below releases reqInFlight, and an
-            // un-returned promise would release it mid-flight and re-arm the button
-            // while this chain is still resolving.
-            return listInvoices(authedFetch, base, reviewQuery(res.id, 'all', { limit: 1 }))
-              .then(
-                (r) => r.invoices[0]?.id ?? null,
-                // DEGRADES to null, never setImportError. The import SUCCEEDED and the
-                // rows are in the ledger; an error banner here would say "failed" about
-                // data that landed. routeAfterImport turns a null id into the review
-                // surface, which is the honest fallback — the batch is real either way.
-                () => null,
-              )
-              .then((id) => applyRoute(routeAfterImport(res, id)))
+
+    // Snapshotted once, same discipline as readAllColumns' `files` snapshot: this run
+    // sends exactly the files and group mappings confirmed at click time.
+    const filesSnapshot = pickedFiles
+    const groupsSnapshot = groups
+    const runFiles: RunFile[] = filesSnapshot.map((pf) => ({
+      id: pf.id,
+      name: pf.file.name,
+      groupId: groupOfFile(groupsSnapshot, pf.id)?.id ?? '',
+      outcome: { kind: 'pending' },
+    }))
+
+    // Tracked in a local variable, not read back off React state mid-loop: `setRun`
+    // below is for RENDERING only. The loop's own control flow (which file is next,
+    // whether the run just finished) reads THIS variable — same discipline
+    // readAllColumns' local `previewed` array uses, for the same reason (a `setState`
+    // call does not resolve synchronously).
+    let localRun: ImportRun = runReducer({ files: [], cursor: 0, status: 'idle' }, { type: 'start', files: runFiles })
+    setRun(localRun)
+
+    void (async () => {
+      try {
+        for (const rf of runFiles) {
+          const file = filesSnapshot.find((pf) => pf.id === rf.id)?.file
+          const group = groupOfFile(groupsSnapshot, rf.id)
+          if (!file || !group) {
+            // Should never happen: every picked file is bucketed into a group by
+            // readAllColumns before the Map step (and this function) is reachable at
+            // all. Recorded as a failed outcome rather than throwing, so the loop
+            // keeps going ([partial-success-kept]) instead of leaving the run stuck
+            // 'running' forever with reqInFlight never released.
+            localRun = runReducer(localRun, {
+              type: 'settled',
+              outcome: { kind: 'failed', message: 'no mapping found for this file' },
+            })
+            setRun(localRun)
+            continue
           }
-          applyRoute(routeAfterImport(res, null))
-        },
-        // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
-        // review step with no batch to show. Note this is the REQUEST's error arm — the
-        // server's own "the file was rejected" verdict arrives as a resolved 201 and is
-        // classified by routeAfterImport above, not here.
-        (err: unknown) => setImportError(toApiError(err)),
-      )
-      .finally(() => {
+          try {
+            // Each file is sent with its OWN group's toImportMapping(mapping) (AC #7)
+            // — never a second, per-file entity field.
+            const report = await createImport(
+              importAuth,
+              base,
+              { file, entityId, mapping: toImportMapping(group.mapping) },
+              (phase) => {
+                localRun = runReducer(localRun, { type: 'phase', phase })
+                setRun(localRun)
+              },
+            )
+            localRun = runReducer(localRun, {
+              type: 'settled',
+              outcome: { kind: 'imported', batchId: report.id, report },
+            })
+          } catch (err) {
+            // A REQUEST-level failure (network/http/malformed) — never ends the run
+            // early; the loop moves on to the next file regardless
+            // ([partial-success-kept]).
+            localRun = runReducer(localRun, {
+              type: 'settled',
+              outcome: { kind: 'failed', message: toApiError(err).message },
+            })
+          }
+          setRun(localRun)
+        }
+
+        // Core AC 8's single-invoice shortcut, extended to a run: fired ONLY when the
+        // run holds exactly one file that came back with exactly one ready invoice —
+        // any other shape discards the answer in routeAfterRun anyway, so asking is
+        // pure cost.
+        let resolvedInvoiceId: string | null = null
+        const onlyFile = localRun.files.length === 1 ? localRun.files[0] : null
+        if (onlyFile && onlyFile.outcome.kind === 'imported' && onlyFile.outcome.report.status === 'completed' && onlyFile.outcome.report.ready_invoices === 1) {
+          const soleReport = onlyFile.outcome.report
+          resolvedInvoiceId = await listInvoices(authedFetch, base, reviewQuery(soleReport.id, 'all', { limit: 1 })).then(
+            (r) => r.invoices[0]?.id ?? null,
+            // DEGRADES to null, never setImportError. The import SUCCEEDED and the
+            // rows are in the ledger; an error banner here would say "failed" about
+            // data that landed. routeAfterRun turns a null id into the review
+            // surface, which is the honest fallback — the batch is real either way.
+            () => null,
+          )
+        }
+        applyRoute(routeAfterRun(localRun, resolvedInvoiceId))
+      } finally {
         reqInFlight.current = false
-      })
+      }
+    })()
   }
 
   function armField(k: string) {
@@ -685,8 +768,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // no second gate is introduced here either). On an incomplete mapping the answer is
   // unchanged. On a complete one, this now advances groupIndex to the next group instead
   // of always starting the run — the run itself starts only once the LAST group's
-  // mapping is confirmed complete (startImport() itself is unmodified single-file scope,
-  // BULK-01-05's job to extend to every group).
+  // mapping is confirmed complete (startRun(), BULK-01-05, sends every group in
+  // sequence).
   function continueMapping() {
     if (!canSubmitMapping(mapping)) {
       setArmedField('invoice_number')
@@ -696,7 +779,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       setGroupIndex((i) => i + 1)
       return
     }
-    startImport()
+    startRun()
   }
 
   function backToImport() {
@@ -711,8 +794,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // preview would be a regression.
   //
   // The reset is what makes this safe from a DEEP LINK: an arrival by URL carries no
-  // importFile, no preview and no mapping at all, so the upload step must not open on
-  // whatever a previous run in this session happened to leave behind.
+  // picked files, no preview and no mapping at all, so the upload step must not open
+  // on whatever a previous run in this session happened to leave behind.
   function restartImport() {
     resetImport()
     setCreateStep('upload')
@@ -736,7 +819,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // disabled button with a named reason, so a blocked click never reaches here. `base ==
   // null` is the no-gateway build (zero network), and the `activeEntity == null` clause is
   // redundant with the gate but required for the narrowing draftToCreateRequest's
-  // `Pick<Entity, …>` parameter needs — the same reason readColumns keeps `!importFile`.
+  // `Pick<Entity, …>` parameter needs.
   function fileDraft() {
     const base = gatewayBase()
     if (base == null || activeEntity == null || !fileDraftGate(draft, activeEntity).canFile) return
@@ -917,15 +1000,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     editingPolicyId,
     members,
     entityId,
-    importFile,
     pickedFiles,
     filesRefusal,
     groups,
     groupIndex,
     preview,
-    uploadPhase,
+    run,
     importError,
-    reviewBatchId,
+    reviewBatchIds,
     importedInvoiceId: detailSel.importedInvoiceId,
     nav,
     setFilter,

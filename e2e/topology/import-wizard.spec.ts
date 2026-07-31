@@ -269,19 +269,28 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   //     later -- that no plausible four-item list includes.
   // So the card claims nothing it cannot know. What it DOES render is asserted here.
   //
-  // The title is the phase-stable anchor (both 'sending' and 'processing' show it); the
-  // phase word is asserted as either side of the single transition the transport really
-  // observes, since which one is on screen at any instant is a race with the network.
-  await expect(page.getByText('Importing ui-perf.csv', { exact: true })).toBeVisible({ timeout: 60_000 })
+  // BULK-01-05 (task-308) turned the single-file card into a per-file LIST
+  // (ImportProgress.tsx, lib/importRun.ts's runFileRows) -- these three assertions are
+  // invalidated by that rewrite itself, not by a later multi-file subtask (BULK-01-08
+  // adds the genuinely multi-file journeys; this run is still exactly one file). The
+  // title is now phase-stable across the WHOLE run rather than naming one file (states
+  // the run's size, "Importing 1 file" here); the filename moved onto its own row
+  // alongside the phase word, asserted separately so a rename of either one fails on
+  // its own line.
+  await expect(page.getByText('Importing 1 file', { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('ui-perf.csv', { exact: true })).toBeVisible()
+  // The phase word is asserted as either side of the single transition the transport
+  // really observes, since which one is on screen at any instant is a race with the
+  // network.
   await expect(page.getByText(/^(SENDING FILE|SERVER PROCESSING)$/)).toBeVisible()
 
-  // The honest denominator, and the proof it is a denominator rather than a counter:
-  // it is the server's OWN preview count of this fixture (500 invoices x 3 line-item
-  // rows, 11 header columns), rendered whole and unchanging. There is no numerator to
-  // pair it with -- UploadPhase carries bytes, never rows -- so a progress-shaped
-  // "N OF 1500" appearing here later would be invented, and this exact-text assertion
-  // is what would fail if someone added one.
-  await expect(page.getByText('1500 ROWS · 11 COLS', { exact: true })).toBeVisible()
+  // The old "1500 ROWS · 11 COLS" denominator is GONE, not renamed: lib/importRun.ts's
+  // RunFileRow (the per-file list's own type, BULK-01-05) deliberately carries nothing
+  // beyond a filename for a queued/sending/processing row -- a run's files can come
+  // from DIFFERENT mapping groups with different preview facts, so there is no single
+  // row-count/column-count left to state honestly at this per-file layer once the list
+  // generalizes past one file. The equivalent server-confirmed fact reappears per
+  // file, AFTER it settles, as that row's own ready-invoice count.
 
   await importResp
   const wireMs = Date.now() - importT0

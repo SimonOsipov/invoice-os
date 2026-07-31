@@ -61,24 +61,17 @@ export function canReadColumnsAll(files: PickedFile[]): boolean {
 }
 
 // ============================================================================
-// RUN-REDUCER HALF (BULK-01-05, task-308) — STUBS ONLY, test-first
+// RUN-REDUCER HALF (BULK-01-05, task-308)
 // ============================================================================
 //
 // Extends this module (BULK-01-03 created the selection half above) with the
 // sequential-run state machine: one createImport in flight at a time, each file its
 // own outcome, continuation through failures ([partial-success-kept], Core AC 2/5/6).
-//
-// Every export below is a STUB (BULK-01-05, test-first) — importRun.test.ts's
-// BULK-05-* RED specs pin the contract before these bodies exist. Throwing (rather
-// than a wrong-but-plausible guess) makes every spec fail on an assertion/thrown-error
-// mismatch, never an import/compile error — same precedent as this file's own
-// addFiles/removeFile/capRefusal/canReadColumnsAll STUBs before BULK-01-03 landed, and
-// lib/importFlow.ts's computeNoEntity STUB (task-304, INVCR-01-19).
-//
-// No import of routeAfterImport (lib/reviewBatch.ts) yet, deliberately: it is unused
-// until routeAfterRun's real body calls it, and this file's tsconfig sets
-// noUnusedLocals -- an unused runtime import would fail `tsc --noEmit` before a single
-// spec ever ran. The implementation lands it alongside routeAfterRun's real body.
+// App.tsx's startRun() is the only writer of RunAction — it awaits each createImport
+// in turn (never Promise.all — [sequential-not-parallel]) and dispatches 'phase'/
+// 'settled' off that one call, so this reducer never has to reason about more than one
+// in-flight request at a time.
+import { routeAfterImport } from './reviewBatch'
 import type { ImportReport, UploadPhase } from './importApi'
 
 // One file's state within a run. 'pending' before its turn; 'uploading' while
@@ -113,29 +106,61 @@ export type RunAction =
   | { type: 'phase'; phase: UploadPhase }
   | { type: 'settled'; outcome: Extract<FileOutcome, { kind: 'imported' } | { kind: 'failed' }> }
 
-// STUB (BULK-01-05, test-first). [partial-success-kept]: `settled` ALWAYS advances the
-// cursor, regardless of outcome.kind -- a failure cannot end the run early (AC #1).
-// Only the LAST settle (the new cursor reaching files.length) may flip status to
-// 'finished' (AC #2). `phase` writes onto files[cursor] ONLY, leaving every other
-// file's outcome untouched (AC #2), and is a total no-op -- returns the SAME run
+// One helper so 'start' and 'settled' can never disagree about when a run counts as
+// finished — the cursor has walked past the last file. Applying it at 'start' too
+// means a (never-expected-in-practice) zero-file run resolves to 'finished' rather
+// than a 'running' state nothing will ever advance out of.
+function runStatus(fileCount: number, cursor: number): ImportRun['status'] {
+  return cursor >= fileCount ? 'finished' : 'running'
+}
+
+// [partial-success-kept]: `settled` ALWAYS advances the cursor, regardless of
+// outcome.kind -- a failure cannot end the run early (AC #1). Only the settle whose
+// new cursor reaches files.length flips status to 'finished' (AC #2); every earlier
+// settle leaves it 'running'. `phase` writes onto files[cursor] ONLY, leaving every
+// other file's outcome untouched (AC #2), and is a total no-op -- returns the SAME run
 // instance, not a copy -- once status is 'finished': a late phase event from a
-// settled/aborted request must not resurrect a row or re-render anything.
-export function runReducer(_run: ImportRun, _a: RunAction): ImportRun {
-  throw new Error('not implemented')
+// settled/aborted request must not resurrect a row or re-render anything (BULK-05-4's
+// identity check).
+export function runReducer(run: ImportRun, a: RunAction): ImportRun {
+  switch (a.type) {
+    case 'start':
+      return { files: a.files, cursor: 0, status: runStatus(a.files.length, 0) }
+    case 'phase': {
+      if (run.status === 'finished') return run
+      return {
+        ...run,
+        files: run.files.map((f, i) => (i === run.cursor ? { ...f, outcome: { kind: 'uploading', phase: a.phase } } : f)),
+      }
+    }
+    case 'settled': {
+      const files = run.files.map((f, i) => (i === run.cursor ? { ...f, outcome: a.outcome } : f))
+      const cursor = run.cursor + 1
+      return { files, cursor, status: runStatus(files.length, cursor) }
+    }
+  }
 }
 
-// STUB (BULK-01-05, test-first). AC #3: the ids of 'imported' outcomes, in run order,
-// omitting 'failed'/'pending'/'uploading' entries. A `ready_invoices: 0` batch still
-// counts -- its outcome kind is 'imported', not 'failed' (BULK-05-10).
-export function runBatchIds(_run: ImportRun): string[] {
-  throw new Error('not implemented')
+// AC #3: the ids of 'imported' outcomes, in run order, omitting 'failed'/'pending'/
+// 'uploading' entries. A `ready_invoices: 0` batch still counts -- its outcome kind is
+// 'imported', not 'failed' (BULK-05-10).
+export function runBatchIds(run: ImportRun): string[] {
+  const ids: string[] = []
+  for (const f of run.files) {
+    if (f.outcome.kind === 'imported') ids.push(f.outcome.batchId)
+  }
+  return ids
 }
 
-// STUB (BULK-01-05, test-first). AC #4: `{name, message}` per 'failed' outcome, in run
-// order. `name` is the RunFile's own name (never re-derived from the request);
-// `message` is the outcome's message VERBATIM, never re-worded.
-export function runFailures(_run: ImportRun): { name: string; message: string }[] {
-  throw new Error('not implemented')
+// AC #4: `{name, message}` per 'failed' outcome, in run order. `name` is the RunFile's
+// own name (never re-derived from the request); `message` is the outcome's message
+// VERBATIM, never re-worded.
+export function runFailures(run: ImportRun): { name: string; message: string }[] {
+  const failures: { name: string; message: string }[] = []
+  for (const f of run.files) {
+    if (f.outcome.kind === 'failed') failures.push({ name: f.name, message: f.outcome.message })
+  }
+  return failures
 }
 
 // One row's shape per honesty-preserving state (ImportProgress.tsx's own header
@@ -153,29 +178,49 @@ export type RunFileRow =
   | { name: string; kind: 'imported'; count: number }
   | { name: string; kind: 'failed'; reason: string }
 
-// STUB (BULK-01-05, test-first). AC #10: one row per file, TOTAL over the whole run
-// (BULK-05-12) -- every file appears regardless of its own outcome kind, in file
-// order. An 'uploading' outcome maps any UploadPhase kind other than 'sending' to
-// 'processing' -- the same ternary ImportProgress.tsx's own header comment already
-// uses for UploadPhase, never a third label invented here.
-export function runFileRows(_run: ImportRun): RunFileRow[] {
-  throw new Error('not implemented')
+// AC #10: one row per file, TOTAL over the whole run (BULK-05-12) -- every file
+// appears regardless of its own outcome kind, in file order. An 'uploading' outcome
+// maps any UploadPhase kind other than 'sending' to 'processing' -- the same ternary
+// ImportProgress.tsx's own header comment already uses for UploadPhase, never a third
+// label invented here.
+export function runFileRows(run: ImportRun): RunFileRow[] {
+  return run.files.map((f): RunFileRow => {
+    switch (f.outcome.kind) {
+      case 'pending':
+        return { name: f.name, kind: 'queued' }
+      case 'uploading':
+        return { name: f.name, kind: f.outcome.phase.kind === 'sending' ? 'sending' : 'processing' }
+      case 'imported':
+        return { name: f.name, kind: 'imported', count: f.outcome.report.ready_invoices }
+      case 'failed':
+        return { name: f.name, kind: 'failed', reason: f.outcome.message }
+    }
+  })
 }
 
 export type RunRoute = { kind: 'single'; invoiceId: string } | { kind: 'review'; batchIds: string[] } | { kind: 'none' }
 
-// STUB (BULK-01-05, test-first). AC #5, order is load-bearing:
+// AC #5, order is load-bearing:
 //  1. No batch ids at all (every file failed) -> 'none'.
 //  2. EXACTLY one file in the run AND routeAfterImport(thatReport, resolvedInvoiceId)
 //     .kind === 'single' -> 'single'. routeAfterImport itself is UNCHANGED
 //     (lib/reviewBatch.ts) -- this never re-derives its truthiness-on-
-//     resolvedInvoiceId rule, it only calls it (BULK-05-9).
+//     resolvedInvoiceId rule, it only calls it (BULK-05-9). Gated on `run.files.length`
+//     (the RUN's own size), never on runBatchIds().length -- a 2-file run where one
+//     file failed and the other alone would have routed 'single' must still fall
+//     through to 'review' (BULK-05-8's "run-size gate").
 //  3. Otherwise -> 'review' with EVERY batch id, in run order -- including a batch
 //     whose own ready_invoices is 0 (BULK-05-10): joining the review is not
 //     conditioned on what routeAfterImport would have said about that one file alone.
-// `routeAfterImport` is imported unmodified so this arm never re-derives its own copy
-// of the truthiness/count/status logic (the same fork-avoidance discipline
-// reviewShellState's own header comment names for a sibling decision).
-export function routeAfterRun(_run: ImportRun, _resolvedInvoiceId: string | null): RunRoute {
-  throw new Error('not implemented')
+export function routeAfterRun(run: ImportRun, resolvedInvoiceId: string | null): RunRoute {
+  const batchIds = runBatchIds(run)
+  if (batchIds.length === 0) return { kind: 'none' }
+  if (run.files.length === 1) {
+    const outcome = run.files[0].outcome
+    if (outcome.kind === 'imported') {
+      const route = routeAfterImport(outcome.report, resolvedInvoiceId)
+      if (route.kind === 'single') return { kind: 'single', invoiceId: route.invoiceId }
+    }
+  }
+  return { kind: 'review', batchIds }
 }

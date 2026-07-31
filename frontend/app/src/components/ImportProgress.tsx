@@ -3,8 +3,16 @@
 // request actually is, and squeezed into a row where it read as a detail of the button
 // beside it rather than the state of the whole screen.
 //
-// WHAT THIS CARD DELIBERATELY DOES NOT SHOW, and why each one is a lie rather than a
-// missing feature:
+// BULK-01-05 (task-308) turned this from a single-file card into a PER-FILE LIST: one
+// row per file in the run, in run order (lib/importRun.ts's runFileRows), live while the
+// run is executing and left on screen (CreateFlow's body-swap gate, `run.status !==
+// 'idle'`) even once the run has finished if EVERY file failed (AC #9) — so the operator
+// can read which files failed and why without the card disappearing back into
+// CreateMapping. The rewrite is additive to the card's own honesty rules, not a
+// relaxation of them.
+//
+// WHAT THIS CARD DELIBERATELY DOES NOT SHOW, ON ANY ROW, and why each one is a lie
+// rather than a missing feature:
 //
 // 1. NO STAGE LIST — not ticked, not even static. Two independent reasons.
 //    (a) Nothing can drive one. `POST /v1/imports` is synchronous with no job to poll:
@@ -24,92 +32,111 @@
 //        A plausible-sounding four-item list would teach the user a wrong model of the
 //        one thing on this screen they might later have to reason about.
 //
-// 2. NO ROW COUNTER. UploadPhase carries BYTES, never rows (importApi.ts's UploadPhase):
-//    `sending` has loaded/total bytes, `processing` has nothing. The denominator is known
-//    (preview.rows_total, the server's own count) but the NUMERATOR has no source
-//    anywhere on either side of the wire. An "N OF M ROWS" pair with an invented N is the
-//    single most misleading thing this card could render.
+// 2. NO ROW COUNTER, on any row. UploadPhase carries BYTES, never rows (importApi.ts's
+//    UploadPhase): `sending` has loaded/total bytes, `processing` has nothing. A queued/
+//    sending/processing row therefore carries NOTHING beyond the filename (lib/
+//    importRun.ts's RunFileRow) — an "N OF M ROWS" pair with an invented N is the single
+//    most misleading thing any row here could render. An `imported` row's count is a
+//    DIFFERENT fact at a DIFFERENT moment: the server's own ready-invoice count, read
+//    back AFTER that one file has settled, never a guess made while it is still in
+//    flight.
 //
 // 3. NO BYTE COUNTER either. It is genuinely available — but only sometimes
 //    (lengthComputable can be false, and zero progress events is legal, IMPAPI-08), and a
 //    mono `X OF Y` in this slot reads as rows-read whatever noun sits next to it. An
 //    honest number in a slot that is read as a different number is not honest.
 //
-// 4. NO PERCENTAGE. Same reason: the only computable fraction is bytes UPLOADED, which
-//    on a fast link hits 100% while the server has not started, and then sits at 100%
-//    for the entire wait. A bar that fills and stops is worse than one that never claims.
+// 4. NO PERCENTAGE, per row or across the whole run. The only computable fraction is
+//    bytes UPLOADED, which on a fast link hits 100% while the server has not started, and
+//    then sits at 100% for the entire wait. A bar that fills and stops is worse than one
+//    that never claims.
 //
-// 5. NO RULE-SET VERSION. It is decided by the server DURING the request this card is
-//    showing — structurally after this screen — and there is no rules endpoint to ask
-//    beforehand. The only build-time value in the app is a mock literal that already
-//    disagrees with the real active version. The review screen renders the real one,
-//    read back off GET /v1/imports/{id} (INVCR-01-09) rather than off the 201 body: it
-//    is revisitable by URL, so it re-derives everything from the server.
+// 5. NO RULE-SET VERSION. It is decided by the server DURING the request each row
+//    represents — structurally after this screen — and there is no rules endpoint to ask
+//    beforehand. The review screen renders the real one per batch, read back off GET
+//    /v1/imports/{id} (INVCR-01-09) rather than off any row here.
 //
-// What IS rendered: the server's own preview facts stated as WHAT IS BEING IMPORTED and
-// never as progress, one phase word for the single transition the transport genuinely
-// observes (last byte handed to the socket), and an indeterminate barber-pole that
-// claims nothing about how far along anything is.
+// What IS rendered, per row: the filename, one word for the transition the transport
+// genuinely observes (queued / sending / server processing), and — only once that file
+// has actually settled — either the server's own ready-invoice count or its failure
+// reason verbatim. Zero `sending` events for a given file is legal (IMPAPI-08), so no row
+// may assume a minimum number of phase events before it settles.
 
+import { runFileRows } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
 
 export function ImportProgress({ ctx }: { ctx: PlatformCtx }) {
-  const { preview, importFile, uploadPhase } = ctx
-  // Reachable only from the import path, which sets both — same guard shape as
-  // CreateMapping, which this card body-swaps for while the request is in flight.
-  if (!preview || !importFile) return null
+  const rows = runFileRows(ctx.run)
+  if (rows.length === 0) return null
 
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <span className="card-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          Importing {importFile.name}
-        </span>
-        <span className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--action)', letterSpacing: '0.06em' }}>
-          {uploadPhase.kind === 'sending' ? 'SENDING FILE' : 'SERVER PROCESSING'}
-        </span>
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)' }}>
+        <span className="card-title">{rows.length === 1 ? 'Importing 1 file' : `Importing ${rows.length} files`}</span>
       </div>
-      <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* Indeterminate by construction: a repeating gradient twice the width of its
-            box, slid end to end forever. It encodes no position, so there is no number
-            it could be wrong about.
-
-            --action / --action-tint (teal), NOT --accent: --accent is the amber
-            confirmation/focus colour, and --accent-tint DOES NOT EXIST — it was dropped
-            in the design-system rebuild, and an undefined custom property resolves to
-            nothing with no build error, no runtime error and no failing test. Using it
-            here would have shipped an invisible bar that every check passed on.
-
-            The `shimmer` keyframe is global (styles/platform.css) and was already
-            defined; this is its first consumer. Global keyframe + inline `animation` is
-            this app's existing idiom (the spinner it replaces did the same) — no new
-            @keyframes, no scoped <style>. */}
-        <span
-          style={{
-            display: 'block',
-            height: 6,
-            borderRadius: 99,
-            overflow: 'hidden',
-            background: 'repeating-linear-gradient(115deg, var(--action) 0 12px, var(--action-tint) 12px 26px)',
-            backgroundSize: '200% 100%',
-            animation: 'shimmer 1.15s linear infinite',
-          }}
-        />
-        {/* The server's own count, from the preview it already returned — stated as the
-            size of the job, never as how much of it is done. */}
-        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-          {preview.rows_total} ROWS · {preview.columns.length} COLS
-        </span>
+      <div>
+        {rows.map((row, i) => (
+          // Keyed by INDEX, not name: two picked files may share an identical filename
+          // (BULK-01-03 QA coverage) and each is still its own row here, same reasoning
+          // as CreateMapping's own column grid a few files up.
+          <div
+            key={i}
+            style={{ padding: '12px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{row.name}</span>
+            {row.kind === 'queued' && (
+              <span className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
+                QUEUED
+              </span>
+            )}
+            {(row.kind === 'sending' || row.kind === 'processing') && (
+              <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Indeterminate by construction: a repeating gradient twice the width of
+                    its box, slid end to end forever. It encodes no position, so there is
+                    no number it could be wrong about. --action / --action-tint (teal),
+                    NOT --accent: --accent-tint does not exist in the rebuilt design
+                    system, and an undefined custom property resolves to nothing with no
+                    build error. The `shimmer` keyframe is global (styles/platform.css);
+                    this row reuses it, same idiom as the single-file card it replaces. */}
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: 28,
+                    height: 6,
+                    borderRadius: 99,
+                    overflow: 'hidden',
+                    background: 'repeating-linear-gradient(115deg, var(--action) 0 6px, var(--action-tint) 6px 13px)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 1.15s linear infinite',
+                  }}
+                />
+                <span className="mono" style={{ fontSize: 10.5, color: 'var(--action)', letterSpacing: '0.06em' }}>
+                  {row.kind === 'sending' ? 'SENDING FILE' : 'SERVER PROCESSING'}
+                </span>
+              </span>
+            )}
+            {row.kind === 'imported' && (
+              <span className="mono" style={{ flex: 'none', fontSize: 11, color: 'var(--status-green-text)', letterSpacing: '0.04em' }}>
+                {row.count} IMPORTED
+              </span>
+            )}
+            {row.kind === 'failed' && (
+              <span style={{ flex: 'none', maxWidth: 240, fontSize: 12, color: 'var(--status-red-text)', textAlign: 'right', lineHeight: 1.4 }}>{row.reason}</span>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>
-          Remaining time is unknown — the server reads, groups, stores and validates the whole file in one request, and how long that takes depends on the file.
+          Remaining time is unknown — the server reads, groups, stores and validates each file in one request, and how long that takes depends on the file.
         </p>
         {/* Not a politeness. handlers.go runs the import on r.Context(), so a client
-            disconnect CANCELS it mid-flight — after CreateBatch and some rows have
-            already committed. The story's original copy said the opposite ("leaving this
-            page does not cancel the import"), which would have invited exactly the action
-            that corrupts the batch. */}
+            disconnect CANCELS the request mid-flight — after CreateBatch and some rows
+            have already committed. Still true one file at a time in a run: leaving mid-
+            run can leave the file CURRENTLY sending half-written, even though every file
+            that already settled stays committed regardless ([partial-success-kept]). */}
         <p style={{ fontSize: 12.5, color: 'var(--status-amber-text)', margin: 0, lineHeight: 1.55 }}>
-          Do not close this tab — the import runs on this request, and closing it can leave the batch half-written.
+          Do not close this tab — each file imports on its own request, and closing it can leave the file in progress half-written.
         </p>
       </div>
     </div>

@@ -586,14 +586,6 @@ func escapeLike(s string) string {
 // batch id is NOT an error and NOT a 404: RLS has already scoped the row
 // set, so it narrows to an empty page with total 0 -- a 404 would be an
 // existence oracle for another tenant's data.
-//
-// STUB (BULK-01-02, test-first): List itself still narrows on only
-// f.ImportBatchIDs[0] via plain "=" (below) -- the several-ids union
-// (`= ANY($n)`) is deliberately NOT implemented yet, so every BULK-02-1/4/5/6
-// multi-id spec fails on membership/total or on a nil error where
-// ErrValidation is wanted, never on a compile or setup error. A one-element
-// slice (every migrated batch_filter_test.go/batch_filter_adversarial_test.go
-// site, i.e. today's shipped single-id behaviour) is UNAFFECTED.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
@@ -609,8 +601,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
 		}
 		if len(f.ImportBatchIDs) > 0 {
-			args = append(args, f.ImportBatchIDs[0])
-			conditions = append(conditions, fmt.Sprintf("import_batch_id = $%d", len(args)))
+			args = append(args, f.ImportBatchIDs)
+			conditions = append(conditions, fmt.Sprintf("import_batch_id = ANY($%d)", len(args)))
 		}
 		if f.Status != "" {
 			args = append(args, string(f.Status))
@@ -748,28 +740,17 @@ func (s *Store) ViolationSummary(ctx context.Context, importBatchIDs []string) (
 	// marshal to null.
 	rules := []RuleCount{}
 
-	// STUB (BULK-01-02, test-first): only importBatchIDs[0] is honoured, bound
-	// with plain "=" below -- the several-batches union (`= ANY($1)`, AC-4)
-	// is deliberately NOT implemented yet, so BULK-02-11's cross-batch spec
-	// fails on Invoices count, never on a compile or setup error. A
-	// one-element slice (every migrated violation_summary_test.go site, i.e.
-	// today's shipped single-batch behaviour) is UNAFFECTED.
-	var importBatchID string
-	if len(importBatchIDs) > 0 {
-		importBatchID = importBatchIDs[0]
-	}
-
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
 			 FROM invoices i
 			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
-			 WHERE i.import_batch_id = $1
+			 WHERE i.import_batch_id = ANY($1)
 			   AND jsonb_typeof(i.violations) = 'array'
 			   AND nullif(v->>'rule_key', '') IS NOT NULL
 			 GROUP BY 1
 			 ORDER BY 2 DESC, 1 ASC`,
-			importBatchID,
+			importBatchIDs,
 		)
 		if err != nil {
 			// Defence in depth behind the handler's own uuid.Parse guard,

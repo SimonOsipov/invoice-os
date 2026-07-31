@@ -315,6 +315,16 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 // and bytes are what an abusive caller actually spends.
 const maxFilterTextLen = 200
 
+// maxImportBatchIDs bounds the number of repeated import_batch_id values
+// ListHandler/ViolationSummaryHandler will accept in one request (BULK-01-02,
+// [one-review-screen]). An invented abuse bound, same shape as
+// maxFilterTextLen/maxKeepAsIsReasonLen: set well above the product's 5-file
+// run cap so raising that cap needs no server change. Checked BEFORE
+// uuid.Parse (a resource guard must not be payable in unbounded parse work)
+// and counts only USABLE (non-empty) values -- an empty value is not an id,
+// so it can never itself trip the cap.
+const maxImportBatchIDs = 25
+
 // ListHandler returns GET /v1/invoices. Same identity-first-401 order as
 // Create/GetHandler. Query params (portfolio's exact defaulting/clamping
 // rules, [D8]): limit (default 50, non-integer -> 400, <1 -> 400, >200
@@ -428,20 +438,27 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			}
 		}
 
-		// STUB (BULK-01-02, test-first): reads only the FIRST import_batch_id
-		// value (query.Get), same as before this subtask -- the repeated-param
-		// read (query["import_batch_id"]), the maxImportBatchIDs cap and the
-		// cap-before-malformed precedence (Decision 3) are deliberately NOT
-		// implemented yet, so every BULK-02-6b/8/9/9b multi-value spec fails on
-		// status/store-called, never on a compile or setup error.
-		importBatchID := query.Get("import_batch_id")
+		// query["import_batch_id"] reads EVERY value of the repeated param
+		// (query.Get would return only the first). "" is skipped PER VALUE
+		// (empty-is-absent, unchanged: ?import_batch_id= alone still applies
+		// no filter). The cap is checked BEFORE uuid.Parse, over USABLE
+		// (non-empty) ids only, so it is never payable in unbounded parse
+		// work and 30 empty values never trip it (Decision 3).
 		var importBatchIDs []string
-		if importBatchID != "" {
-			if _, err := uuid.Parse(importBatchID); err != nil {
+		for _, raw := range query["import_batch_id"] {
+			if raw != "" {
+				importBatchIDs = append(importBatchIDs, raw)
+			}
+		}
+		if len(importBatchIDs) > maxImportBatchIDs {
+			writeError(w, http.StatusBadRequest, "import_batch_id exceeds the 25 cap")
+			return
+		}
+		for _, batchID := range importBatchIDs {
+			if _, err := uuid.Parse(batchID); err != nil {
 				writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
 				return
 			}
-			importBatchIDs = []string{importBatchID}
 		}
 
 		// statusFilter, not `status`: the error path below binds its own
@@ -969,21 +986,33 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 			return
 		}
 
-		// STUB (BULK-01-02, test-first): reads only a single import_batch_id
-		// value (r.URL.Query().Get), same as before this subtask -- see
-		// ListHandler's own STUB note above for what's deliberately not
-		// implemented yet.
-		importBatchID := r.URL.Query().Get("import_batch_id")
-		if importBatchID == "" {
+		// Same repeated-param read as ListHandler's own (query["import_batch_id"],
+		// not query.Get, "" skipped per value) -- see its doc comment above.
+		// REQUIRED stays required: zero usable ids (absent OR every value "")
+		// is a 400 BEFORE the cap/uuid.Parse guards, because an unbounded
+		// tenant-wide aggregation is not a supported query.
+		var importBatchIDs []string
+		for _, raw := range r.URL.Query()["import_batch_id"] {
+			if raw != "" {
+				importBatchIDs = append(importBatchIDs, raw)
+			}
+		}
+		if len(importBatchIDs) == 0 {
 			writeError(w, http.StatusBadRequest, "import_batch_id is required")
 			return
 		}
-		if _, err := uuid.Parse(importBatchID); err != nil {
-			writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
+		if len(importBatchIDs) > maxImportBatchIDs {
+			writeError(w, http.StatusBadRequest, "import_batch_id exceeds the 25 cap")
 			return
 		}
+		for _, batchID := range importBatchIDs {
+			if _, err := uuid.Parse(batchID); err != nil {
+				writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
+				return
+			}
+		}
 
-		rules, err := summary(r.Context(), []string{importBatchID})
+		rules, err := summary(r.Context(), importBatchIDs)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

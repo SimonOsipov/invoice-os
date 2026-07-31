@@ -929,12 +929,10 @@ func TestListHandler_MalformedImportBatchID400(t *testing.T) {
 
 // --- BULK-01-02 (task-306): several import_batch_id values on the wire -----
 //
-// ListHandler's own Mode A stub still reads only the FIRST import_batch_id
-// value (query.Get) -- see its "STUB (BULK-01-02, test-first)" comment,
-// handlers.go. The repeated-param read, the 25-id cap and the
-// cap-before-malformed precedence are deliberately NOT implemented yet, so
-// every spec below except the "still 200"/"never trips the cap" legs fails
-// on status/store-called, never on a compile or setup error.
+// ListHandler reads every import_batch_id value via the multi-value query
+// map (query["import_batch_id"], not query.Get), capped at maxImportBatchIDs
+// USABLE (non-empty) ids, cap checked BEFORE uuid.Parse -- see its doc
+// comment, handlers.go.
 
 // TestListHandler_SecondImportBatchIDValueMalformed400 (BULK-02-6b, AC-3): a
 // SECOND repeated import_batch_id value that is malformed must still 400

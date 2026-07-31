@@ -236,3 +236,149 @@ describe('canSubmitAllMappings', () => {
     expect(canSubmitAllMappings([mkGroup(['f3'], { invoice_number: 'Invoice No' })])).toBe(true)
   })
 })
+
+// ============================================================================
+// QA Mode B (task-309) — adversarial/edge coverage beyond the architect's Test
+// Specs table (BULK-04-1..12). Every mutation-tested spec above (BULK-04-5,
+// BULK-04-9, BULK-04-10, BULK-04-11) was hand-verified to turn red on the
+// targeted line before this coverage was added; these specs target failure
+// modes the original table left unexercised.
+// ============================================================================
+
+describe('columnSignature edges (QA Mode B)', () => {
+  // Falsification: an impl that signs only column COUNT or only the header set,
+  // rather than the full ordered array — both would wrongly equate a file with one
+  // extra trailing column to its shorter sibling.
+  it('a trailing extra column produces a different signature from its shorter sibling', () => {
+    const shorter = columnSignature(['Invoice No', 'Total'])
+    const longer = columnSignature(['Invoice No', 'Total', 'Currency'])
+    expect(shorter).not.toBe(longer)
+  })
+
+  // Falsification: an impl that de-duplicates headers before signing (e.g. via a Set),
+  // which would wrongly equate a file with a repeated header to its deduped sibling —
+  // and CreateMapping.tsx keys its column grid by INDEX specifically because duplicate
+  // headers are preserved verbatim, so the signature must preserve them too.
+  it('a duplicate header is not signature-equal to its deduped form', () => {
+    const withDup = columnSignature(['A', 'A', 'B'])
+    const deduped = columnSignature(['A', 'B'])
+    expect(withDup).not.toBe(deduped)
+  })
+
+  // Falsification: an impl that strips falsy/empty entries before signing, which would
+  // wrongly equate a file with a blank-named column to one without that column at all —
+  // isMappableColumn treats '' as unmappable but groupByLayout must still see it as a
+  // real, present column for grouping purposes.
+  it('an empty-string column is not signature-equal to a file missing that column', () => {
+    const withBlank = columnSignature(['A', ''])
+    const withoutBlank = columnSignature(['A'])
+    expect(withBlank).not.toBe(withoutBlank)
+  })
+})
+
+describe('groupByLayout — whitespace vs blank headers are never collapsed (QA Mode B)', () => {
+  // Falsification: an impl that trims headers before signing (e.g. `h.trim()`), which
+  // would collapse a whitespace-only header and a blank header into the same group even
+  // though lib/importFlow.ts's isMappableColumn treats them oppositely (blank
+  // unmappable, whitespace mappable) — a merged group here would misstate which file's
+  // columns are actually being shown.
+  it('a whitespace-only header and an empty header stay in two separate groups', () => {
+    const groups = groupByLayout([
+      { fileId: 'f1', preview: mkPreview(['A', ' ']) },
+      { fileId: 'f2', preview: mkPreview(['A', '']) },
+    ])
+    expect(groups).toHaveLength(2)
+    expect(groups[0].fileIds).toEqual(['f1'])
+    expect(groups[1].fileIds).toEqual(['f2'])
+  })
+})
+
+describe('groupByLayout — zero previews (QA Mode B)', () => {
+  // Falsification: an impl that assumes `previewed` is non-empty (e.g. reads
+  // previewed[0] unconditionally for some fast-path), which would throw instead of
+  // returning the empty run readAllColumns can, in principle, hand it.
+  it('an empty previewed list returns an empty array, not a throw', () => {
+    expect(() => groupByLayout([])).not.toThrow()
+    expect(groupByLayout([])).toEqual([])
+  })
+})
+
+describe('splitOut churn (QA Mode B)', () => {
+  // Falsification: an impl whose single-file guard checks something other than the
+  // CURRENT group's fileIds.length (e.g. a stale count captured before the first
+  // split), which would still try to split a now-lone file on the second call.
+  it('splitting the same file a second time, now alone, is a no-op', () => {
+    const shared = mkGroup(['f1', 'f2'], initMappingFromHeaders(LAGOS_COLS))
+    const once = splitOut([shared], 'f2')
+    expect(once).toHaveLength(2)
+    const twice = splitOut(once, 'f2')
+    expect(twice).toHaveLength(2)
+    expect(twice).toEqual(once)
+  })
+
+  // Falsification: an impl that snapshots the mapping once at the FIRST split and
+  // reuses it for every later split off the same original group (rather than reading
+  // the shared group's CURRENT mapping at each split's own moment), or one that lets a
+  // later edit to the shared group retroactively mutate an already-split-off group's
+  // mapping (i.e. shares a reference instead of copying).
+  it('three sequential splits off a 3-file group each freeze the mapping the shared group held at THAT split, not an earlier or later one', () => {
+    const seed = initMappingFromHeaders(LAGOS_COLS)
+    const afterFirstPlacement: Mapping = { ...seed, invoice_number: 'Invoice No' }
+    let groups: MappingGroup[] = [mkGroup(['f1', 'f2', 'f3'], afterFirstPlacement)]
+
+    // Split f3 off first, while the shared group holds afterFirstPlacement.
+    groups = splitOut(groups, 'f3')
+    const f3Group = groupOfFile(groups, 'f3')!
+    expect(f3Group.mapping).toEqual(afterFirstPlacement)
+
+    // The operator places a SECOND field on the still-shared group (f1, f2) before the
+    // next split -- f3's already-split group must not see this. `subtotal` (not
+    // `total`) on purpose: mapping.ts's ALIAS table auto-recognizes 'Total' for the
+    // `total` field, so `total` would already be identical between the two snapshots
+    // and this assertion would pass vacuously; `subtotal` has no ALIAS entry.
+    const sharedGroup = groupOfFile(groups, 'f1')!
+    const afterSecondPlacement: Mapping = { ...sharedGroup.mapping, subtotal: 'Total' }
+    groups = groups.map((g) => (g.id === sharedGroup.id ? { ...g, mapping: afterSecondPlacement } : g))
+
+    // Split f2 off now -- its frozen mapping must be afterSecondPlacement, never
+    // afterFirstPlacement (the earlier snapshot f3 got) and never a fresh re-seed.
+    groups = splitOut(groups, 'f2')
+    const f2Group = groupOfFile(groups, 'f2')!
+    expect(f2Group.mapping).toEqual(afterSecondPlacement)
+    expect(f2Group.mapping).not.toEqual(afterFirstPlacement)
+
+    // f1 is now alone -- splitting it is a no-op, but it still carries
+    // afterSecondPlacement (the mapping the shared group held when it became lone).
+    groups = splitOut(groups, 'f1')
+    const f1Group = groupOfFile(groups, 'f1')!
+    expect(f1Group.fileIds).toEqual(['f1'])
+    expect(f1Group.mapping).toEqual(afterSecondPlacement)
+
+    // End state: three single-file groups, and f3's earlier snapshot was never
+    // retroactively touched by either later edit.
+    expect(groups).toHaveLength(3)
+    groups.forEach((g) => expect(g.fileIds).toHaveLength(1))
+    expect(groupOfFile(groups, 'f3')!.mapping).toEqual(afterFirstPlacement)
+  })
+})
+
+describe('canSubmitAllMappings — empty group list (QA Mode B)', () => {
+  // Pinned answer: an empty run has nothing ready to submit. Falsification: an impl
+  // whose `.every()` over an empty array vacuously returns true with no length guard,
+  // which would report an empty run as "ready to submit".
+  it('an empty group list is NOT ready to submit', () => {
+    expect(canSubmitAllMappings([])).toBe(false)
+  })
+})
+
+describe('coverageSentence — missing name lookup (QA Mode B)', () => {
+  // Falsification: an impl that reads `names[id]` directly with no fallback, which
+  // would interpolate the literal string "undefined" into the sentence for any fileId
+  // the lookup doesn't have an entry for yet (e.g. a render racing the names map).
+  it('a fileId absent from the names lookup falls back to the id, never the literal "undefined"', () => {
+    const group = mkGroup(['f9-unlisted'], initMappingFromHeaders(LAGOS_COLS))
+    const sentence = coverageSentence(group, {})
+    expect(sentence).not.toContain('undefined')
+    expect(sentence).toContain('f9-unlisted')
+  })
+})

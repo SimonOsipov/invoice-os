@@ -378,6 +378,19 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	); err != nil {
 		t.Fatalf("clear stale probe row (precondition): %v", err)
 	}
+
+	// Precondition, made explicit rather than left implicit in the post-Seed
+	// count below: foreignTenantID must have ZERO business_entities rows of
+	// its own BEFORE this test plants its probe. If db/seed.dev.sql is ever
+	// edited to seed Tenant A something of its own, this fails LOUDLY and
+	// immediately, naming the actual cause -- rather than surfacing later as
+	// a confusing "want 1, got N+1" from the post-Seed assertion, which would
+	// look like a Seed bug rather than what it actually is (this test's
+	// "foreign tenant" stand-in silently stopped being neutral).
+	if pre := fetchDemoBusinessEntities(t, pool, foreignTenantID); len(pre) != 0 {
+		t.Fatalf("precondition: tenant %s already has %d business_entities row(s) before this test ran — it is no longer a neutral \"foreign tenant\" stand-in (has db/seed.dev.sql started seeding it something?); pick a different tenant for this test", foreignTenantID, len(pre))
+	}
+
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, 'QA Foreign Tenant Probe', $2, 'active')`,
 		foreignTenantID, probeTIN,

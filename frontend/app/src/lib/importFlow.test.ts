@@ -781,3 +781,21 @@ describe('computeNoEntity (FLOW-15..17, task-304 AC-6)', () => {
     expect(computeNoEntity(null, 'ready', 0, 0)).toBe(true)
   })
 })
+
+// BULK-03-11 (BULK-01-03, task-310) — REGRESSION assertion, not a RED-first spec.
+// canReadColumns is UNMODIFIED by BULK-01-03: Core AC 6 ("every file in a run is filed
+// against the already-selected entity; the run never asks again") is answered by
+// lib/importRun.ts's canReadColumnsAll delegating to this function per-file, never by
+// touching it. Restates FLOW-01's no-entity claim under BULK-01-03's own id so a future
+// edit made in this subtask's own PR trail cannot silently weaken FLOW-01 without a
+// second, independently-authored assertion also failing — same reasoning as STEPS-3/
+// STEPS-3b's mirrored-literal guards above. Deliberately GREEN the moment it is authored:
+// canReadColumns already ships this behavior today, so there is no stub here to turn RED.
+// Keep this green, never weaken it — it is exactly the past regression
+// ([inhouse-can-start]) that locked in-house workspaces out of the wizard's front door.
+describe('canReadColumns — entity contract did not move (BULK-03-11, BULK-01-03 regression)', () => {
+  it('BULK-03-11: a valid file, with no entity anywhere in scope, still opens the read gate', () => {
+    expect(canReadColumns(new File([], 'ledger.csv'))).toBe(true)
+    expect(canReadColumns(new File([], 'ledger.xlsx'))).toBe(true)
+  })
+})

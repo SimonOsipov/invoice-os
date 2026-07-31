@@ -59,11 +59,43 @@
 // InvoicesList.tsx), and this file's own selectEntity() helper (a copy of
 // invoice-surfaces.spec.ts's, see its doc comment) now uses them -- role/exact-text is
 // no longer the exclusive idiom in this file, just the original one.
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
 import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
+
+// BULK-01-08 (task-312) fixtures -- COMMITTED files, referenced by path, deliberately
+// NEVER regenerated in memory the way importFixtures.ts's builders are. This is a
+// declared, one-story deviation from that convention (Core AC 7 requires spreadsheets
+// that are literally committed to the repo), and it is safe ONLY under two conditions
+// that hold for every test below:
+//   1. Every test mints its OWN fresh entity via createEntity + freshTin() before
+//      page.goto (same discipline as every other test in this file).
+//   2. no-duplicate-invoice-number (internal/importer/service.go) is scoped PER ENTITY.
+// Together, a static invoice number baked into a committed file (e.g. BULK-LAG-001)
+// cannot collide across separate runs of this suite, and -- critically -- cannot
+// collide across a CI retry of the SAME test either, because a retry mints its own new
+// entity via the same freshTin() call. Do NOT "fix" these fixtures back into an
+// in-memory generator: that would silently reintroduce the cross-run collision risk
+// this file header exists to rule out.
+//
+// Path resolution follows e2e/package.test.ts:11 and e2e/personas.test.ts:10-12 (also
+// e2e/api/no-db-access.test.ts): e2e/ is an ESM package ("type":"module",
+// "module":"ESNext"), so `__dirname` does not exist, and setInputFiles(relativeString)
+// resolves against `process.cwd()` -- which is `e2e/` under CI's `pnpm --filter`
+// invocation but the repo root for a developer running from there. import.meta.url,
+// computed once at module scope, is the only cwd-independent anchor.
+const BULK_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/bulk')
+const SHARED_LAYOUT_LAGOS = join(BULK_FIXTURES, 'shared-layout-lagos.csv')
+const SHARED_LAYOUT_ABUJA = join(BULK_FIXTURES, 'shared-layout-abuja.csv')
+const LAYOUT_A_TILL = join(BULK_FIXTURES, 'layout-a-till.csv')
+const LAYOUT_B_TERMINAL = join(BULK_FIXTURES, 'layout-b-terminal.csv')
+const PARTIAL_FIRST = join(BULK_FIXTURES, 'partial-first.csv')
+const PARTIAL_DUPE = join(BULK_FIXTURES, 'partial-dupe.csv')
 
 // MixedImportResponse: the subset of POST /v1/imports's success body (internal/
 // importer/handlers.go's importResponse) E2E-04 reads to assert that a REAL import
@@ -1149,6 +1181,311 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   await page.getByTestId('review-select-all').click()
   await expect(cleanRow.getByTestId('review-select')).toBeChecked()
   await expect(violateRow.getByTestId('review-select')).not.toBeChecked()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// BULK-01-08 (task-312) -- the FINAL subtask of BULK-01 (multi-file import), and the
+// deployed oracle for Core AC 7: the user made it an explicit acceptance criterion that
+// multi-file import is covered by e2e specs run against spreadsheets COMMITTED to the
+// repo (the BULK_FIXTURES constants above), across three shapes -- a shared column
+// layout, two different layouts, and a partial cross-file failure. Also serves as the
+// deployed oracle for Core AC 1-6 (BULK-01-01 .. BULK-01-07), the same role INVCR-01-16
+// played for M4-08/INVCR-01 above.
+//
+// Same "cannot run locally" oracle as every other Mode-A block in this file: this
+// package's "No Local Server" policy plus the ephemeral per-PR Railway environment mean
+// `pnpm --filter @invoice-os/e2e typecheck` + `playwright test --list` (topology config)
+// collecting these three tests is the whole local oracle. The first REAL run is the
+// deploy gate on this PR, once it leaves draft.
+//
+// Only `invoice_number` is ever click-mapped below, in every group, on every fixture --
+// it is the ONLY field canSubmitMapping (lib/mapping.ts) gates the commit on, and none of
+// the three shapes below asserts anything about rule violations or verdict pills, so
+// there is no reason to also hand-map `subtotal` the way E2E-04's buildMixedCsv fixture
+// needs to (that fixture's whole point is a clean/violating SPLIT this one does not
+// care about). Leaving every other canonical field unmapped is the documented,
+// non-blocking "optional fields unmapped" path (CreateMapping.tsx's own mapNote branch).
+
+// BULK-E2E-01 (BULK-E2E-01a..01d/01e/01f): a shared-layout multi-file run.
+test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-refuse, remove in order, map once, one review screen for both files', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BULK-01 shared ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const fileInput = page.locator('input[type="file"][accept=".csv,.xlsx"]')
+  const fileRow = (name: string) => page.locator('ul li').filter({ hasText: name })
+  const fileNames = page.locator('ul li div.mono')
+
+  // BULK-E2E-01a: several files really are selected -- both filenames listed after one
+  // setInputFiles([lagos, abuja]) call.
+  await fileInput.setInputFiles([SHARED_LAYOUT_LAGOS, SHARED_LAYOUT_ABUJA])
+  await expect(fileRow('shared-layout-lagos.csv'), 'both filenames listed after one multi-file pick').toBeVisible()
+  await expect(fileRow('shared-layout-abuja.csv')).toBeVisible()
+
+  // BULK-E2E-01b: the cap refuses out loud. Adding four MORE files on top of the two
+  // already selected (2 + 4 = 6) exceeds the five-file cap by exactly one. This second
+  // setInputFiles call replaces the <input> element's OWN native FileList, never the
+  // component's selection state -- addFiles (lib/importRun.ts) appends the newly
+  // dispatched files onto the EXISTING React state, which is exactly the "drop more
+  // files to add them" path the dropzone's own copy names, so this is a real exercise
+  // of that path, not a shortcut around it.
+  await fileInput.setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL, PARTIAL_FIRST, PARTIAL_DUPE])
+  await expect(
+    page.getByText('A run accepts at most 5 files — 1 file was not added.', { exact: true }),
+    'the cap names itself and the one dropped file, never a silent truncation',
+  ).toBeVisible()
+  await expect(fileNames, 'exactly five files kept, in pick order').toHaveText([
+    'shared-layout-lagos.csv',
+    'shared-layout-abuja.csv',
+    'layout-a-till.csv',
+    'layout-b-terminal.csv',
+    'partial-first.csv',
+  ])
+
+  // BULK-E2E-01c: removing one leaves four, in order.
+  await fileRow('layout-a-till.csv').getByRole('button', { name: 'Remove' }).click()
+  await expect(fileNames, 'four remain, order preserved after one removal').toHaveText([
+    'shared-layout-lagos.csv',
+    'shared-layout-abuja.csv',
+    'layout-b-terminal.csv',
+    'partial-first.csv',
+  ])
+
+  // Cleanup, not re-asserted beyond the identity check right after: drop the two files
+  // that belong to the OTHER two shapes (02/03), leaving exactly the two files 01a
+  // already proved were selected -- this test's own shared-layout shape.
+  await fileRow('layout-b-terminal.csv').getByRole('button', { name: 'Remove' }).click()
+  await fileRow('partial-first.csv').getByRole('button', { name: 'Remove' }).click()
+  await expect(fileNames).toHaveText(['shared-layout-lagos.csv', 'shared-layout-abuja.csv'])
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // BULK-E2E-01d: a shared layout maps once -- no group pager renders (mappingGroups.ts's
+  // own [coverage-sentence-is-unconditional] pairs with CreateMapping's own
+  // `groups.length > 1` gate on the pager: this run's ONE group renders NO "GROUP X OF Y"
+  // span at all), and the coverage sentence names both files by filename.
+  await expect(page.getByText(/^GROUP \d+ OF \d+$/), 'a single-group run renders no group pager').toHaveCount(0)
+  await expect(
+    page.getByText('This mapping applies to 2 files: shared-layout-lagos.csv and shared-layout-abuja.csv.', { exact: true }),
+  ).toBeVisible()
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+
+  // Per-file progress (Core AC 2). This card's title/rows are written SYNCHRONOUSLY by
+  // startRun()'s own runReducer 'start' dispatch, before the sequential loop's first
+  // `await createImport(...)` even begins (App.tsx) -- so it renders on the very next
+  // tick after the click, never racing either file's network round trip the way a
+  // single small file's transient phase word can (see E2E-04's own note above on why it
+  // does not assert the phase word).
+  await expect(page.getByText('Importing 2 files', { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('shared-layout-lagos.csv', { exact: true })).toBeVisible()
+  await expect(page.getByText('shared-layout-abuja.csv', { exact: true })).toBeVisible()
+
+  await importResp
+
+  // BULK-E2E-01e: one review, all invoices -- both files' invoices land on ONE screen.
+  await expect(page.getByRole('heading', { name: '4 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('review-files-strip')).toBeVisible()
+  const stripRows = page.getByTestId('review-files-strip-row')
+  await expect(stripRows).toHaveCount(2)
+  await expect(stripRows.filter({ hasText: 'shared-layout-lagos.csv' })).toBeVisible()
+  await expect(stripRows.filter({ hasText: 'shared-layout-abuja.csv' })).toBeVisible()
+
+  // BULK-E2E-01f: rows trace to their file -- showsSourceFile(batches) fires here
+  // (batches.length === 2), so ReviewRow's own review-row-source-file testid names the
+  // resolved filename, per row, off the row's OWN import_batch_id.
+  const abujaRow = page.getByTestId('review-row').filter({ hasText: 'BULK-ABJ-001' })
+  await expect(abujaRow).toBeVisible()
+  await expect(abujaRow.getByTestId('review-row-source-file')).toHaveText('shared-layout-abuja.csv')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// BULK-E2E-02 (BULK-E2E-02a/02b): two files with different column layouts.
+test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column mapping does not silently cover the other, yet still land on one review screen', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BULK-01 layouts ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  await page.locator('input[type="file"][accept=".csv,.xlsx"]').setInputFiles([LAYOUT_A_TILL, LAYOUT_B_TERMINAL])
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // BULK-E2E-02a, group 1 of 2 -- names ONLY layout-a-till.csv, never the other file.
+  await expect(page.getByText('GROUP 1 OF 2', { exact: true })).toBeVisible()
+  await expect(page.getByText('This mapping applies to 1 file: layout-a-till.csv.', { exact: true })).toBeVisible()
+  await expect(page.getByText('layout-b-terminal.csv', { exact: false }), "the OTHER file's name never leaks onto this group's screen").toHaveCount(0)
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  // Not the last group -- continueMapping only advances groupIndex, no network call and
+  // nothing imported yet (App.tsx's continueMapping).
+  await page.getByRole('button', { name: 'Continue to next file' }).click()
+
+  // group 2 of 2 -- names ONLY layout-b-terminal.csv now.
+  await expect(page.getByText('GROUP 2 OF 2', { exact: true })).toBeVisible()
+  await expect(page.getByText('This mapping applies to 1 file: layout-b-terminal.csv.', { exact: true })).toBeVisible()
+  await expect(page.getByText('layout-a-till.csv', { exact: false }), "the FIRST file's name is gone from this group's screen").toHaveCount(0)
+
+  // invoice_number is never auto-recognized regardless of header spelling ("the invoice
+  // number is never guessed" -- CreateMapping's own copy), so this group needs its own
+  // manual placement too, onto ITS OWN header's own column name ("Ref", not "Invoice No").
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Ref', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  // BULK-E2E-02b: still one review screen, both files' invoices on it.
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  const stripRows = page.getByTestId('review-files-strip-row')
+  await expect(stripRows).toHaveCount(2)
+  await expect(stripRows.filter({ hasText: 'layout-a-till.csv' })).toBeVisible()
+  await expect(stripRows.filter({ hasText: 'layout-b-terminal.csv' })).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'BULK-TILL-001' })).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'BULK-TERM-001' })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// BULK-E2E-03 (BULK-E2E-03a..03d): the cross-file, against-stored duplicate.
+//
+// partial-first.csv imports BULK-DUP-001/002 cleanly; partial-dupe.csv's only invoice
+// number (BULK-DUP-001) already exists for this run's entity by the time its OWN
+// createImport call runs -- [sequential-not-parallel] (App.tsx's startRun never
+// Promise.all's the per-file calls) is what makes this reachable at all: a concurrent
+// implementation would let both files' ExistingNumbers precheck race the same DB read
+// and both would succeed. Verified directly against internal/importer/service.go: this
+// second batch still finalizes 'completed' (:923) with ready_invoices/rows_valid 0 --
+// the rowsTotal==0 early-'failed' finalize (:782-790) is a DIFFERENT path, for a file
+// with literally zero data rows, which partial-dupe.csv (one real data row) never hits.
+// reviewShellStateAll (lib/reviewBatch.ts) is 'batch' iff ANY batch is 'completed', so
+// partial-first.csv's own completed batch keeps this run on the normal batch surface --
+// RejectedRun (ReviewBatch.tsx) is never reached, and partial-dupe.csv's reason
+// (`batch.errors`, [reason-comes-from-errors-not-status]) surfaces in
+// review-files-strip-row instead. BULK-E2E-03b/03d assert on that reason TEXT below,
+// never on a 'failed' status this shape does not emit.
+test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel]): a cross-file duplicate quarantines one file while the run keeps its earlier successes, named by reason not status', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BULK-01 partial ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  await page.locator('input[type="file"][accept=".csv,.xlsx"]').setInputFiles([PARTIAL_FIRST, PARTIAL_DUPE])
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // Same shared header on both files -- one group, one Map step (mirrors BULK-E2E-01d).
+  await expect(page.getByText(/^GROUP \d+ OF \d+$/)).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  // The FIRST of two sequential createImport calls this click triggers (partial-first.csv,
+  // sent before partial-dupe.csv even starts) -- proves the gateway-prefixed URL
+  // (Core AC/AC-8); the heading assertion below's generous timeout is what actually
+  // waits out BOTH sequential requests, not this single wait.
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  // BULK-E2E-03c: the run continued -- it reaches the ordinary review screen, never
+  // RejectedRun (the all-rejected multi-file surface), because partial-first.csv's own
+  // batch DID complete.
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('review-rejected-run')).toHaveCount(0)
+
+  // BULK-E2E-03a: partial-first.csv's two invoices are on the review screen -- the
+  // successes were kept, not discarded because a LATER file in the same run failed.
+  await expect(page.getByTestId('review-row').filter({ hasText: 'BULK-DUP-001' })).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'BULK-DUP-002' })).toBeVisible()
+
+  // BULK-E2E-03b: partial-dupe.csv is named in the files strip with ZERO invoices and
+  // the duplicate reason -- read off REASON TEXT, never a 'failed' status the server
+  // does not emit for this shape.
+  const stripRows = page.getByTestId('review-files-strip-row')
+  await expect(stripRows).toHaveCount(2)
+  const firstFileRow = stripRows.filter({ hasText: 'partial-first.csv' })
+  const dupeFileRow = stripRows.filter({ hasText: 'partial-dupe.csv' })
+  await expect(firstFileRow).toContainText('Imported')
+  await expect(dupeFileRow).toContainText('Rejected')
+  await expect(dupeFileRow, "the server's own reason string, never re-authored").toContainText(
+    'An invoice with this number already exists for this entity.',
+  )
+
+  // BULK-E2E-03d: the deep link survives -- reloading re-derives both channels from a
+  // FRESH GET, never from the run this tab already held (which the reload discards), and
+  // partial-dupe.csv's reason is still shown -- it lives in batch.errors, not in `run`.
+  const batchRefetch = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/api\/invoice\/v1\/imports\/[0-9a-fA-F-]+$/.test(new URL(r.url()).pathname),
+  )
+  await page.reload()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await batchRefetch
+
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('review-row').filter({ hasText: 'BULK-DUP-001' })).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'BULK-DUP-002' })).toBeVisible()
+  await expect(
+    page.getByTestId('review-files-strip-row').filter({ hasText: 'partial-dupe.csv' }),
+    'the reason survives the reload -- it was never sourced from `run`',
+  ).toContainText('An invoice with this number already exists for this entity.')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

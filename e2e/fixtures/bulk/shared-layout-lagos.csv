@@ -1,0 +1,3 @@
+Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price
+BULK-LAG-001,2026-01-15,87654321-0002,BULK-01 Lagos Buyer,NGN,1000.00,75.00,1075.00,Line item,10,100.00
+BULK-LAG-002,2026-01-15,87654321-0002,BULK-01 Lagos Buyer,NGN,1000.00,75.00,1075.00,Line item,10,100.00

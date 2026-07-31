@@ -41,6 +41,7 @@ import {
 import { severityStyle, type Violation } from './validationApi'
 import type { ImportBatch, ImportReport, RowError } from './importApi'
 import { MAX_RUN_FILES, type ImportRun } from './importRun'
+import { fmtDateTime } from './format'
 import {
   BATCH_SUBMIT_MAX_IDS,
   bulkBarView,
@@ -1755,6 +1756,29 @@ function mkBatch(id: string, filename: string | null, overrides: Partial<ImportB
   }
 }
 
+// QA-311-4's fixture only: a minimal 'imported' outcome report, fields beyond `id` are
+// unread by the scenario under test (the batch never lands in `batches`).
+function mkReport(id: string, overrides: Partial<ImportReport> = {}): ImportReport {
+  return {
+    id,
+    status: 'completed',
+    format: 'csv',
+    delimiter: ',',
+    encoding: 'utf-8',
+    rows_total: 1,
+    rows_valid: 1,
+    rows_invalid: 0,
+    ready_invoices: 1,
+    quarantined_invoices: 0,
+    errors: [],
+    rule_set_version: 5,
+    invoices_clean: 1,
+    invoices_with_violations: 0,
+    invoice_violations: [],
+    ...overrides,
+  }
+}
+
 describe('parseReviewHash: widened to a run (BULK-01-06, AC-1)', () => {
   it('BULK-06-1: a shipped single-uuid deep link still parses — parseReviewHash(\'#review/<uuid>\') is a one-element array', () => {
     const id = mkUuid(1)
@@ -1806,21 +1830,20 @@ describe('REVIEW_HASH_MAX_IDS: mirrors importRun.ts\'s MAX_RUN_FILES (drift guar
 })
 
 describe('reviewQueryAll: the tenant-wide-leak argument survives widened to an array (BULK-01-06, AC-4)', () => {
-  // GREEN-BEFORE, structurally, not by coincidence of the fixture (unlike PILL-3b/
-  // BULK-14's own green-before specs above, which are green because the thing they pin
-  // already exists): a `.toThrow()`-only assertion cannot discriminate "throws because
-  // the real empty/blank-id validation caught it" from "throws because the STUB always
-  // throws `not implemented`, unconditionally, for every input" -- every call below
-  // throws today, including the one this subtask's own AC-4 does NOT want to throw once
-  // implemented (a real `['a','b']`). This is an unavoidable property of writing a
-  // negative-only `.toThrow()` spec against a not-implemented stub (adding a
-  // conditional throw now would be implementation, which Mode A forbids) — QA Mode B
-  // must re-verify this throws for the RIGHT reason (and that a valid array does NOT
-  // throw) once BULK-01-06's own implementation lands.
-  it("BULK-06-7: an empty query cannot leak the tenant — reviewQueryAll([]), (['']) and ([id,'']) all throw", () => {
+  // QA Mode B (task-311): re-verified against the real implementation, not the Mode A
+  // stub. A `.toThrow()`-only assertion cannot discriminate "throws because the real
+  // empty/blank-id validation caught it" from "throws because a stub always throws
+  // `not implemented`, unconditionally, for every input" -- so this spec now also
+  // asserts the positive case (a real `['batch-1','batch-2']` must NOT throw, and must
+  // produce the exact composed query) in the SAME `it`, so it can never again pass
+  // against an unconditionally-throwing implementation.
+  it("BULK-06-7: an empty query cannot leak the tenant — reviewQueryAll([]), (['']) and ([id,'']) all throw; a valid array does not", () => {
     expect(() => reviewQueryAll([], 'all')).toThrow()
     expect(() => reviewQueryAll([''], 'all')).toThrow()
     expect(() => reviewQueryAll(['batch-1', ''], 'all')).toThrow()
+
+    expect(() => reviewQueryAll(['batch-1', 'batch-2'], 'all')).not.toThrow()
+    expect(reviewQueryAll(['batch-1', 'batch-2'], 'all')).toEqual({ importBatchIds: ['batch-1', 'batch-2'] })
   })
 
   it('BULK-06-8: reviewQueryAll carries EVERY id, and the pill filter still applies', () => {
@@ -2066,5 +2089,124 @@ describe('sourceFileLabel / showsSourceFile: per-row source attribution (BULK-01
   it('BULK-06-20: showsSourceFile is the sole owner of the "only when >1 batch" rule — false at one batch, true at two', () => {
     expect(showsSourceFile([mkBatch('b1', 'a.csv')])).toBe(false)
     expect(showsSourceFile([mkBatch('b1', 'a.csv'), mkBatch('b2', 'b.csv')])).toBe(true)
+  })
+})
+
+// QA Mode B adversarial coverage (task-311). BULK-06-1..23 above are the architect's own
+// Test Specs table (authored RED in Mode A, now re-verified green); everything below is
+// QA-authored edge/negative/ordering coverage the table did not ask for.
+describe('QA-311-1: filesStrip over the zero-row early-"failed" batch (service.go:787 — no spec constructs this fixture)', () => {
+  it('a header-only file (rows_total:0, rows_valid:0, status:"failed", errors:[]) still gets exactly one row, and the current fallback reads "0 of 0 rows produced an invoice"', () => {
+    const zeroRowBatch = mkBatch('b1', 'headers-only.csv', {
+      status: 'failed',
+      rows_total: 0,
+      rows_valid: 0,
+      rows_invalid: 0,
+      errors: [],
+    })
+
+    const rows = filesStrip([zeroRowBatch], null)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].filename).toBe('headers-only.csv')
+    // Pinning CURRENT behaviour, not endorsing it: "0 of 0 rows produced an invoice" is
+    // technically true but reads as if nothing was wrong (QA finding, not an AC — no
+    // spec pins this literal string). If batchReason's fallback branch is ever reworded
+    // for this zero-row case, this is the spec to update alongside it.
+    expect(rows[0].reason).toBe('0 of 0 rows produced an invoice')
+  })
+})
+
+describe('QA-311-2: reviewHeaderAll pins its timestamp choice at N>1 batches (no spec constrains this — executor used batches[0]?.created_at, run order)', () => {
+  it('the subline date is the FIRST batch\'s created_at, not the last, not the max/min, when batches carry different timestamps', () => {
+    const first = mkBatch('b1', 'a.csv', { created_at: '2026-01-01T00:00:00Z' })
+    const second = mkBatch('b2', 'b.csv', { created_at: '2026-06-15T12:00:00Z' })
+
+    const header = reviewHeaderAll([first, second], { allTotal: 10 })
+
+    expect(header.subline).toContain(fmtDateTime(first.created_at))
+    expect(header.subline).not.toContain(fmtDateTime(second.created_at))
+
+    // Reversing array order reverses which timestamp wins — confirms the rule is
+    // genuinely "array position 0", not e.g. "earliest" or "latest" by value.
+    const reversed = reviewHeaderAll([second, first], { allTotal: 10 })
+    expect(reversed.subline).toContain(fmtDateTime(second.created_at))
+    expect(reversed.subline).not.toContain(fmtDateTime(first.created_at))
+  })
+})
+
+describe('QA-311-3: filesStrip row order — batches array order wins, run-only failures always trail', () => {
+  it('rows follow the `batches` array\'s own order (not created_at, not id), with run-only failures appended after in run.files order', () => {
+    const bZ = mkBatch('bZ', 'z-file.csv', { created_at: '2026-01-01T00:00:00Z' })
+    const bA = mkBatch('bA', 'a-file.csv', { created_at: '2026-06-01T00:00:00Z' })
+    const run: ImportRun = {
+      files: [
+        { id: 'f1', name: 'first-refused.csv', groupId: 'g1', outcome: { kind: 'failed', message: 'refused: bad header' } },
+        { id: 'f2', name: 'second-refused.csv', groupId: 'g2', outcome: { kind: 'failed', message: 'refused: no rows' } },
+      ],
+      cursor: 2,
+      status: 'finished',
+    }
+
+    // `batches` deliberately passed in z-before-a order (neither alphabetical nor
+    // created_at order) to prove filesStrip does not silently re-sort.
+    const rows = filesStrip([bZ, bA], run)
+
+    expect(rows.map((r) => r.filename)).toEqual(['z-file.csv', 'a-file.csv', 'first-refused.csv', 'second-refused.csv'])
+  })
+})
+
+describe('QA-311-4: a batch known to `run` but absent from `batches` (in-flight GET), and the reverse, neither throws', () => {
+  it('an "imported" run outcome whose batch has not yet landed in `batches` produces no crash — its row is simply absent until the batch GET resolves', () => {
+    const otherBatch = mkBatch('b-other', 'other.csv')
+    const run: ImportRun = {
+      files: [{ id: 'f1', name: 'in-flight.csv', groupId: 'g1', outcome: { kind: 'imported', batchId: 'b-missing', report: mkReport('b-missing') } }],
+      cursor: 1,
+      status: 'finished',
+    }
+
+    // `b-missing` is referenced by the run's outcome but `batches` (the GET results)
+    // does not contain it yet -- filesStrip must not throw, and (documenting current
+    // behaviour, not endorsing it) the file is silently absent from the strip rather
+    // than rendering a placeholder row, because batchRows is sourced from `batches`
+    // alone and runOnlyFailures only reads 'failed' outcomes.
+    expect(() => filesStrip([otherBatch], run)).not.toThrow()
+    const rows = filesStrip([otherBatch], run)
+    expect(rows.map((r) => r.id)).toEqual(['b-other'])
+    expect(rows.find((r) => r.filename === 'in-flight.csv')).toBeUndefined()
+  })
+
+  it('a batch present in `batches` but never mentioned by `run` at all renders normally — no throw, no drop', () => {
+    const staleBatch = mkBatch('b-stale', 'stale.csv')
+    const run: ImportRun = {
+      files: [{ id: 'f1', name: 'unrelated.csv', groupId: 'g1', outcome: { kind: 'failed', message: 'refused' } }],
+      cursor: 1,
+      status: 'finished',
+    }
+
+    expect(() => filesStrip([staleBatch], run)).not.toThrow()
+    const rows = filesStrip([staleBatch], run)
+    expect(rows.map((r) => r.filename).sort()).toEqual(['stale.csv', 'unrelated.csv'])
+  })
+})
+
+describe('QA-311-5: unreadableRowsAll across two files erroring on the SAME row number — both survive, each attributed to its own file', () => {
+  it('row 3 in file A and row 3 in file B both appear, not deduped, not merged, each carrying its own file label', () => {
+    const fileA: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'bA',
+      filename: 'a.csv',
+      errors: [{ row: 3, message: 'bad date in A' }],
+    }
+    const fileB: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'bB',
+      filename: 'b.csv',
+      errors: [{ row: 3, message: 'bad date in B' }],
+    }
+
+    const result = unreadableRowsAll([fileA, fileB])
+
+    expect(result).toHaveLength(2)
+    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in A', file: 'a.csv' })
+    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in B', file: 'b.csv' })
   })
 })

@@ -1084,6 +1084,145 @@ func TestListHandler_ImportBatchIDsCapPrecedesMalformedEmptiesNeverCount(t *test
 	})
 }
 
+// TestListHandler_WhitespaceOnlyImportBatchIDIsMalformedNotAbsent (QA Mode B
+// adversarial, task-306): pins the ONE deliberate reading of "empty" this
+// package uses. The skip-per-value guard (handlers.go) tests `raw != ""`
+// (a literal empty string) -- it does NOT strings.TrimSpace first, so
+// `?import_batch_id=%20` (a single space, decoded off the wire by
+// net/url.Values before the handler ever sees it) is NOT "" and is therefore
+// NOT skipped as absent: it is treated as a USABLE id, fails uuid.Parse, and
+// 400s with the same "must be a well-formed uuid" message a garbage value
+// does. This is a deliberate pin, not an assumption -- the alternative
+// (trimming first) would silently swallow a client bug that sends a stray
+// space instead of a real id, turning a caller error into an unfiltered
+// tenant-wide page.
+func TestListHandler_WhitespaceOnlyImportBatchIDIsMalformedNotAbsent(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		t.Fatal("store.List must not run when import_batch_id is whitespace-only (it is not a well-formed uuid, and is not \"\" either)")
+		return nil, 0, nil
+	}
+	rec, resp := doInvoiceList(t, list, &id, "?import_batch_id=%20")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 -- a whitespace-only value is a malformed uuid, not an absent filter (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != "import_batch_id must be a well-formed uuid" {
+		t.Errorf("error = %q, want \"import_batch_id must be a well-formed uuid\"", resp.Error)
+	}
+}
+
+// TestViolationSummaryHandler_WhitespaceOnlyImportBatchIDIsMalformedNotRequired
+// (QA Mode B adversarial, task-306): the SAME whitespace-only pin as
+// TestListHandler_WhitespaceOnlyImportBatchIDIsMalformedNotAbsent above,
+// for ViolationSummaryHandler's own copy of the skip-per-value loop -- a
+// single space is a USABLE (non-empty) value, so it clears the "required"
+// zero-ids guard and fails on uuid.Parse instead, with the malformed
+// message, not the "is required" one.
+func TestViolationSummaryHandler_WhitespaceOnlyImportBatchIDIsMalformedNotRequired(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
+		t.Fatal("store.ViolationSummary must not run when import_batch_id is whitespace-only")
+		return nil, nil
+	}
+	rec, resp := doViolationSummary(t, summary, &id, "?import_batch_id=%20")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != "import_batch_id must be a well-formed uuid" {
+		t.Errorf("error = %q, want \"import_batch_id must be a well-formed uuid\" (NOT \"is required\" -- a whitespace value is usable, not absent)", resp.Error)
+	}
+}
+
+// TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle
+// (QA Mode B adversarial, task-306, AC-9): wires the REAL Store.List into
+// the REAL ListHandler (not a spy) -- tenant 1's identity, querying
+// import_batch_id for BOTH its own batch and tenant 2's real batch. Must be
+// 200 (never 404), pagination.total/invoices must count ONLY tenant 1's own
+// rows, and the response must be BYTE-IDENTICAL to the same request against
+// a made-up, entirely nonexistent batch id in tenant 2's place -- proving
+// the endpoint cannot be used as an existence oracle (a caller cannot tell
+// "that batch id belongs to another tenant" apart from "that batch id does
+// not exist at all").
+func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenant1 := seedTenant(t, super, "HTTP-RLS-MULTI tenant 1")
+	tenant2 := seedTenant(t, super, "HTTP-RLS-MULTI tenant 2")
+	entity1 := seedEntity(t, super, tenant1, "HTTP-RLS-MULTI entity 1")
+	entity2 := seedEntity(t, super, tenant2, "HTTP-RLS-MULTI entity 2")
+
+	batchOwn := seedImportBatch(t, super, tenant1, entity1)
+	batchOther := seedImportBatch(t, super, tenant2, entity2)
+
+	var wantIDs []string
+	for i := 0; i < 2; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAndStatus(t, super, tenant1, entity1, fmt.Sprintf("HTTP-RLS-MULTI-OWN-%d", i), batchOwn, string(StatusDraft), `[]`))
+	}
+	for i := 0; i < 3; i++ {
+		seedInvoiceWithBatchAndStatus(t, super, tenant2, entity2, fmt.Sprintf("HTTP-RLS-MULTI-OTHER-%d", i), batchOther, string(StatusDraft), `[]`)
+	}
+
+	store := NewStore(app)
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1}
+
+	doReal := func() (*httptest.ResponseRecorder, listInvoicesResponse) {
+		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+batchOther, nil)
+		r = r.WithContext(auth.WithIdentity(ctx, identity))
+		rec := httptest.NewRecorder()
+		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		var resp listInvoicesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+		return rec, resp
+	}
+	doNonexistent := func() (*httptest.ResponseRecorder, listInvoicesResponse) {
+		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+uuid.NewString(), nil)
+		r = r.WithContext(auth.WithIdentity(ctx, identity))
+		rec := httptest.NewRecorder()
+		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		var resp listInvoicesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+		return rec, resp
+	}
+
+	rec, resp := doReal()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (never 404 for a cross-tenant batch id) (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Pagination.Total != 2 {
+		t.Fatalf("pagination.total = %d, want 2 (tenant 1's own rows only; tenant 2's 3 rows must not count)", resp.Pagination.Total)
+	}
+	if len(resp.Invoices) != 2 {
+		t.Fatalf("len(invoices) = %d, want 2", len(resp.Invoices))
+	}
+	got := map[string]bool{}
+	for _, inv := range resp.Invoices {
+		got[inv.ID] = true
+	}
+	for _, id := range wantIDs {
+		if !got[id] {
+			t.Errorf("response is missing tenant 1's own invoice %s", id)
+		}
+	}
+
+	recNonexistent, respNonexistent := doNonexistent()
+	if recNonexistent.Code != rec.Code {
+		t.Fatalf("status for a made-up nonexistent batch id (%d) differs from a REAL cross-tenant batch id (%d) -- existence oracle", recNonexistent.Code, rec.Code)
+	}
+	if respNonexistent.Pagination.Total != resp.Pagination.Total {
+		t.Fatalf("pagination.total for a made-up nonexistent batch id (%d) differs from a REAL cross-tenant batch id (%d) -- existence oracle", respNonexistent.Pagination.Total, resp.Pagination.Total)
+	}
+	if len(respNonexistent.Invoices) != len(resp.Invoices) {
+		t.Fatalf("invoices length for a made-up nonexistent batch id (%d) differs from a REAL cross-tenant batch id (%d) -- existence oracle", len(respNonexistent.Invoices), len(resp.Invoices))
+	}
+}
+
 // TestListHandler_MultiImportBatchIDEnvelopeStillTwoKeys (BULK-02-10, AC-8):
 // a request carrying several import_batch_id values must still render the
 // same two-key {invoices,pagination} envelope

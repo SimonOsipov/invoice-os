@@ -19,6 +19,7 @@ package invoice
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -279,4 +280,239 @@ func TestStoreList_SeveralImportBatchIDsANDNeedsFix(t *testing.T) {
 			t.Errorf("List (ImportBatchIDs: [batch1, batch2], NeedsFix: true) returned an unexpected invoice: %s", inv.ID)
 		}
 	}
+}
+
+// TestStoreList_SeveralImportBatchIDsOrderIndependent (QA Mode B adversarial,
+// task-306, AC-1): `= ANY($n)` is a SET membership test, not a positional
+// one -- [batch1, batch2] and [batch2, batch1] must return the identical
+// row set and total. An implementation that (wrongly) special-cased the
+// first or last element of the slice would diverge between the two orders;
+// `= ANY(...)` itself cannot.
+func TestStoreList_SeveralImportBatchIDsOrderIndependent(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-ORDER tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-ORDER entity")
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+
+	var wantIDs []string
+	for i := 0; i < 2; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, fmt.Sprintf("ORDER-B1-%d", i), batch1, string(StatusDraft), `[]`))
+	}
+	wantIDs = append(wantIDs, seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "ORDER-B2-0", batch2, string(StatusDraft), `[]`))
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	forward, forwardTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch2}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2]): %v", err)
+	}
+	reversed, reversedTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch2, batch1}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch2, batch1]): %v", err)
+	}
+
+	if forwardTotal != 3 || reversedTotal != 3 {
+		t.Fatalf("total = %d (forward) / %d (reversed), want 3 for both orderings", forwardTotal, reversedTotal)
+	}
+	forwardIDs := map[string]bool{}
+	for _, inv := range forward {
+		forwardIDs[inv.ID] = true
+	}
+	reversedIDs := map[string]bool{}
+	for _, inv := range reversed {
+		reversedIDs[inv.ID] = true
+	}
+	if !reflect.DeepEqual(forwardIDs, reversedIDs) {
+		t.Fatalf("row set differs by order: forward=%v reversed=%v, want identical sets", forwardIDs, reversedIDs)
+	}
+	for _, id := range wantIDs {
+		if !forwardIDs[id] {
+			t.Errorf("forward-order result is missing expected invoice %s", id)
+		}
+	}
+}
+
+// TestStoreList_SeveralImportBatchIDsDuplicatesDoNotDoubleCount (QA Mode B
+// adversarial, task-306, AC-1/AC-5): the SAME batch id repeated in
+// ImportBatchIDs must not double-count or duplicate rows -- `import_batch_id
+// = ANY(['A','A'])` evaluates the predicate once PER INVOICE ROW regardless
+// of how many times 'A' appears in the bound array, so [batchA] and
+// [batchA, batchA] must yield byte-identical total AND row sets. Proven
+// against the real DB rather than assumed from the SQL semantics alone,
+// since Store.List's own Go-level construction of `args`/`conditions` is
+// what could (in principle) introduce a second condition or duplicate a row
+// in application code even though the SQL primitive itself cannot.
+func TestStoreList_SeveralImportBatchIDsDuplicatesDoNotDoubleCount(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-DUP tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-DUP entity")
+	batchA := seedImportBatch(t, super, tenantID, entityID)
+
+	var wantIDs []string
+	for i := 0; i < 3; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, fmt.Sprintf("DUP-A-%d", i), batchA, string(StatusDraft), `[]`))
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	once, onceTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batchA]): %v", err)
+	}
+	if onceTotal != 3 || len(once) != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batchA]) total/len = %d/%d, want 3/3 -- fixture assumption broken", onceTotal, len(once))
+	}
+
+	tripled, tripledTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA, batchA, batchA}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batchA, batchA, batchA]): %v", err)
+	}
+	if tripledTotal != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batchA, batchA, batchA]).total = %d, want 3 (unchanged, not 9) -- duplicate ids must not multiply the count", tripledTotal)
+	}
+	if len(tripled) != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batchA, batchA, batchA]) len = %d, want 3 (each row exactly once, not duplicated in the page)", len(tripled))
+	}
+	seen := map[string]int{}
+	for _, inv := range tripled {
+		seen[inv.ID]++
+	}
+	for _, id := range wantIDs {
+		if seen[id] != 1 {
+			t.Errorf("invoice %s appeared %d times in the tripled-id result, want exactly 1", id, seen[id])
+		}
+	}
+}
+
+// TestStoreList_SeveralImportBatchIDsANDsWithOtherFilters (QA Mode B
+// adversarial, task-306, AC-1): TestStoreList_SeveralImportBatchIDsANDNeedsFix
+// above already proves ImportBatchIDs ANDs (never ORs) against NeedsFix.
+// This extends the same discriminating shape -- a distractor row OUTSIDE
+// the id list that satisfies the OTHER predicate ALONE, which an
+// OR-composed implementation would leak into the result -- to the three
+// remaining review filters Decision 2/3 name: NeedsAttention, Status,
+// RuleKey, and Query. Each subtest seeds three rows: a target (in-list AND
+// predicate-matching), an in-list non-match (predicate fails, proving the
+// predicate is genuinely enforced, not just the batch id), and an
+// out-of-list match (predicate passes, wrong batch -- the OR-discriminator:
+// under OR this row would appear, strictly INCREASING the row count above
+// the correct total of 1).
+func TestStoreList_SeveralImportBatchIDsANDsWithOtherFilters(t *testing.T) {
+	const vatErrorViolation = `[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`
+	const otherRuleViolation = `[{"rule_key":"currency-allowed","severity":"error","message":"bad currency"}]`
+
+	t.Run("needs_attention", func(t *testing.T) {
+		super, app := dbTestPools(t)
+		ctx := context.Background()
+		tenantID := seedTenant(t, super, "BATCH-FILTER-AND-NA tenant")
+		entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-AND-NA entity")
+		batchIn := seedImportBatch(t, super, tenantID, entityID)
+		batchOut := seedImportBatch(t, super, tenantID, entityID)
+
+		target := seedInvoiceFull(t, super, tenantID, entityID, "AND-NA-TARGET", &batchIn, string(StatusRejected), `[]`, "irrelevant")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-NA-INLIST-CLEAN", &batchIn, string(StatusValidated), `[]`, "irrelevant")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-NA-OUTLIST-NEEDSATTN", &batchOut, string(StatusRejected), `[]`, "irrelevant")
+
+		store := NewStore(app)
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchIn}, NeedsAttention: true, Limit: 50})
+		if err != nil {
+			t.Fatalf("List (ImportBatchIDs: [batchIn], NeedsAttention: true): %v", err)
+		}
+		if total != 1 {
+			t.Fatalf("total = %d, want 1 -- an OR-composed filter would leak the out-of-list needs-attention row in (total 2)", total)
+		}
+		if len(items) != 1 || items[0].ID != target {
+			t.Fatalf("items = %+v, want exactly [%s]", items, target)
+		}
+	})
+
+	t.Run("status", func(t *testing.T) {
+		super, app := dbTestPools(t)
+		ctx := context.Background()
+		tenantID := seedTenant(t, super, "BATCH-FILTER-AND-STATUS tenant")
+		entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-AND-STATUS entity")
+		batchIn := seedImportBatch(t, super, tenantID, entityID)
+		batchOut := seedImportBatch(t, super, tenantID, entityID)
+
+		target := seedInvoiceFull(t, super, tenantID, entityID, "AND-STATUS-TARGET", &batchIn, string(StatusValidated), `[]`, "irrelevant")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-STATUS-INLIST-DRAFT", &batchIn, string(StatusDraft), `[]`, "irrelevant")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-STATUS-OUTLIST-VALIDATED", &batchOut, string(StatusValidated), `[]`, "irrelevant")
+
+		store := NewStore(app)
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchIn}, Status: StatusValidated, Limit: 50})
+		if err != nil {
+			t.Fatalf("List (ImportBatchIDs: [batchIn], Status: validated): %v", err)
+		}
+		if total != 1 {
+			t.Fatalf("total = %d, want 1 -- an OR-composed filter would leak the out-of-list validated row in (total 2)", total)
+		}
+		if len(items) != 1 || items[0].ID != target {
+			t.Fatalf("items = %+v, want exactly [%s]", items, target)
+		}
+	})
+
+	t.Run("rule_key", func(t *testing.T) {
+		super, app := dbTestPools(t)
+		ctx := context.Background()
+		tenantID := seedTenant(t, super, "BATCH-FILTER-AND-RULEKEY tenant")
+		entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-AND-RULEKEY entity")
+		batchIn := seedImportBatch(t, super, tenantID, entityID)
+		batchOut := seedImportBatch(t, super, tenantID, entityID)
+
+		target := seedInvoiceFull(t, super, tenantID, entityID, "AND-RULEKEY-TARGET", &batchIn, string(StatusDraft), vatErrorViolation, "irrelevant")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-RULEKEY-INLIST-OTHERRULE", &batchIn, string(StatusDraft), otherRuleViolation, "irrelevant")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-RULEKEY-OUTLIST-SAMERULE", &batchOut, string(StatusDraft), vatErrorViolation, "irrelevant")
+
+		store := NewStore(app)
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchIn}, RuleKey: "vat-standard-rate", Limit: 50})
+		if err != nil {
+			t.Fatalf("List (ImportBatchIDs: [batchIn], RuleKey: vat-standard-rate): %v", err)
+		}
+		if total != 1 {
+			t.Fatalf("total = %d, want 1 -- an OR-composed filter would leak the out-of-list same-rule row in (total 2)", total)
+		}
+		if len(items) != 1 || items[0].ID != target {
+			t.Fatalf("items = %+v, want exactly [%s]", items, target)
+		}
+	})
+
+	t.Run("query", func(t *testing.T) {
+		super, app := dbTestPools(t)
+		ctx := context.Background()
+		tenantID := seedTenant(t, super, "BATCH-FILTER-AND-QUERY tenant")
+		entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-AND-QUERY entity")
+		batchIn := seedImportBatch(t, super, tenantID, entityID)
+		batchOut := seedImportBatch(t, super, tenantID, entityID)
+
+		target := seedInvoiceFull(t, super, tenantID, entityID, "AND-QUERY-TARGET", &batchIn, string(StatusDraft), `[]`, "Acme Query Ltd")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-QUERY-INLIST-OTHERBUYER", &batchIn, string(StatusDraft), `[]`, "Zebra Buyer")
+		seedInvoiceFull(t, super, tenantID, entityID, "AND-QUERY-OUTLIST-SAMEBUYER", &batchOut, string(StatusDraft), `[]`, "Acme Query Ltd")
+
+		store := NewStore(app)
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+		items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchIn}, Query: "acme", Limit: 50})
+		if err != nil {
+			t.Fatalf("List (ImportBatchIDs: [batchIn], Query: acme): %v", err)
+		}
+		if total != 1 {
+			t.Fatalf("total = %d, want 1 -- an OR-composed filter would leak the out-of-list same-buyer row in (total 2)", total)
+		}
+		if len(items) != 1 || items[0].ID != target {
+			t.Fatalf("items = %+v, want exactly [%s]", items, target)
+		}
+	})
 }

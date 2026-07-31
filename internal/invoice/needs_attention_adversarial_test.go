@@ -328,3 +328,33 @@ func TestListHandler_NeedsAttentionFalseExplicitMatchesAbsent(t *testing.T) {
 		t.Errorf("captured ListFilter differs between absent (%+v) and explicit false (%+v), want identical", absent, explicitFalse)
 	}
 }
+
+// TestListFilterDeepEqualStillDiscriminates_ImportBatchIDsDivergence (QA
+// Mode B, BULK-01-02 task-306): TestListFilterDeepEqualStillDiscriminates
+// above proves the swap catches a diverging SCALAR field (Limit). This is
+// the field that actually FORCED the == -> DeepEqual swap -- ImportBatchIDs
+// itself, a []string, which `==` could never even compile-check. Three
+// legs: same content/same order -> equal; a genuinely different member ->
+// unequal; and the SAME members in a DIFFERENT order -> unequal too (a
+// reflect.DeepEqual slice comparison is order-sensitive, unlike a set) --
+// worth pinning explicitly since ImportBatchIDs' own union semantics
+// (Store.List, `= ANY($n)`) are order-INDEPENDENT, so a future reader could
+// wrongly assume the equality check is too.
+func TestListFilterDeepEqualStillDiscriminates_ImportBatchIDsDivergence(t *testing.T) {
+	base := ListFilter{Limit: 50, ImportBatchIDs: []string{"b1", "b2"}}
+
+	same := ListFilter{Limit: 50, ImportBatchIDs: []string{"b1", "b2"}}
+	if !reflect.DeepEqual(base, same) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = false, want true for identical ImportBatchIDs (same content, same order)", base, same)
+	}
+
+	differentMember := ListFilter{Limit: 50, ImportBatchIDs: []string{"b1", "b3"}}
+	if reflect.DeepEqual(base, differentMember) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = true, want false -- a diverging ImportBatchIDs member must still be caught", base, differentMember)
+	}
+
+	reordered := ListFilter{Limit: 50, ImportBatchIDs: []string{"b2", "b1"}}
+	if reflect.DeepEqual(base, reordered) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = true, want false -- DeepEqual is order-sensitive even though ANY($n) is not", base, reordered)
+	}
+}

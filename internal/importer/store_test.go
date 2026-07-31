@@ -549,3 +549,99 @@ func TestServiceImport_ZeroRowEarlyFinalizePathPersistsFilename(t *testing.T) {
 		t.Errorf("persisted filename (early-finalize/zero-row path) = %v, want %q -- attributable too, not just the main path", gotFilename, wantFilename)
 	}
 }
+
+// --- QA Mode B additions (task-305) --------------------------------------
+
+// TestStoreGetBatch_FilenamePopulatesBatchStructDirectly (QA companion to
+// BULK-01-2/3): Mode A's own doc comments on both specs flagged that neither
+// asserts on Batch.Filename DIRECTLY -- BULK-01-2's "store-level pin" reads
+// the raw `filename` COLUMN via a bare SQL SELECT (bypassing GetBatch
+// entirely), and its "wire-level pin" only reaches Batch.Filename
+// indirectly, through GetHandler's JSON serialization. Neither ever asserts
+// on the Go field itself. This calls Store.GetBatch DIRECTLY (no HTTP layer,
+// no JSON) for both a batch with a filename and a pre-existing batch with
+// none, so a future regression that broke ONLY the Scan-into-Batch.Filename
+// wiring (while leaving the raw column and the JSON tag both correct) would
+// still be caught here.
+func TestStoreGetBatch_FilenamePopulatesBatchStructDirectly(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "QA-DIRECT-FILENAME tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-DIRECT-FILENAME entity")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	const wantFilename = "direct-field-check.csv"
+	batchID, err := store.CreateBatch(c, entityID, wantFilename)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	batch, err := store.GetBatch(c, batchID)
+	if err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if batch.Filename == nil || *batch.Filename != wantFilename {
+		t.Errorf("GetBatch(...).Filename = %v, want %q (direct field, not via JSON)", batch.Filename, wantFilename)
+	}
+
+	// Pre-existing row, no filename column value at all -- Batch.Filename
+	// must scan to nil directly, not merely render as JSON null downstream.
+	var noFilenameID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO import_batches (tenant_id, entity_id, status, rows_total, rows_valid, rows_invalid, errors)
+		 VALUES ($1, $2, 'completed', 0, 0, 0, '[]'::jsonb) RETURNING id`,
+		tenantID, entityID,
+	).Scan(&noFilenameID); err != nil {
+		t.Fatalf("seed pre-existing import_batches row: %v", err)
+	}
+
+	noFilenameBatch, err := store.GetBatch(c, noFilenameID)
+	if err != nil {
+		t.Fatalf("GetBatch (pre-existing row): %v", err)
+	}
+	if noFilenameBatch.Filename != nil {
+		t.Errorf("GetBatch(...).Filename = %q, want nil (direct field)", *noFilenameBatch.Filename)
+	}
+}
+
+// TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename (QA-added,
+// AC #9 companion): a header-only (zero data rows) file under dry_run=true
+// exercises a subtlety BULK-01-10's own test doesn't: service.go's `if
+// dryRun` branch returns UNCONDITIONALLY before the `rowsTotal == 0`
+// early-finalize branch is ever reached (see service.go's control flow --
+// the dry-run check comes first). So even the "mint an auditable failed
+// batch" logic that BULK-01-11 pins for the REAL path must never fire here:
+// a dry run creates ZERO import_batches rows, never a 'failed' one, and
+// therefore no filename is ever written either.
+func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "QA-DRYRUN-HEADERONLY tenant")
+	entityID := seedEntity(t, super, tenantID, "QA-DRYRUN-HEADERONLY entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", stdMapping, stdHeader, nil, true)
+	if err != nil {
+		t.Fatalf("Import (dry-run, zero data rows): %v", err)
+	}
+	if res.ID != "" {
+		t.Errorf("dry-run BatchResult.ID = %q, want \"\" (a dry run never mints a batch, not even the zero-row 'failed' one)", res.ID)
+	}
+	if res.Status != "" {
+		t.Errorf("dry-run BatchResult.Status = %q, want \"\"", res.Status)
+	}
+
+	var batchCount int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, entityID).Scan(&batchCount); err != nil {
+		t.Fatalf("count import_batches: %v", err)
+	}
+	if batchCount != 0 {
+		t.Errorf("import_batches rows for entity = %d, want 0 (dry run + header-only file must persist nothing, no filename included)", batchCount)
+	}
+}

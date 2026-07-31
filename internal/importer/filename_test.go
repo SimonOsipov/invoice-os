@@ -87,3 +87,125 @@ func TestSanitizeFilename_TruncatesTo255Runes(t *testing.T) {
 		t.Errorf("len([]rune(sanitizeFilename(<5000-rune name>))) = %d, want 255", n)
 	}
 }
+
+// --- QA Mode B additions (task-305): adversarial/edge coverage beyond the
+// 11 Test Specs -- these hunt for siblings of the filepath.Base("") -> "."
+// footgun the executor already guarded (step 1's doc comment), plus
+// encoding/length adversarials the spec table didn't enumerate. -----------
+
+// TestSanitizeFilename_DotAndDotDotSegmentsPassThroughUnchanged: "." and ".."
+// are NOT the filepath.Base("") footgun (that only bites an EMPTY input,
+// which step 1 special-cases) -- filepath.Base(".") and filepath.Base("..")
+// return the string unchanged, and neither is a C0 control, invalid UTF-8, or
+// over the rune cap, so both round-trip as themselves. Locked in explicitly
+// so a future edit that "fixes" the empty-input special case broadly (e.g.
+// by removing the `s != ""` guard) doesn't silently start mangling these too.
+func TestSanitizeFilename_DotAndDotDotSegmentsPassThroughUnchanged(t *testing.T) {
+	for _, in := range []string{".", ".."} {
+		if got := sanitizeFilename(in); got != in {
+			t.Errorf("sanitizeFilename(%q) = %q, want %q (unchanged)", in, got, in)
+		}
+	}
+}
+
+// TestSanitizeFilename_LoneAndTrailingSeparators: siblings of BULK-01-4's own
+// path-stripping cases, at the boundary where the separator IS (or is nearly)
+// the entire input.
+//   - "/" -> "/": filepath.Base("/") returns "/" itself (Base's own
+//     documented rule: "if the path consists entirely of slashes, Base
+//     returns \"/\"") -- there is no backslash to cut on afterward, so this
+//     is the one single-character input step 1 does NOT reduce to "".
+//   - "\\" (a lone backslash) -> "": on this OS, filepath.Base does not treat
+//     backslash as a separator (it is Unix-only in this build), so Base
+//     returns "\\" unchanged; the SECOND cut (LastIndexByte on '\\') then
+//     removes everything up to and including it, leaving "".
+//   - "a/" -> "a", "a\\" -> "": the same two rules composed with one leading
+//     real character.
+func TestSanitizeFilename_LoneAndTrailingSeparators(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"/", "/"},
+		{"\\", ""},
+		{"a/", "a"},
+		{"a\\", ""},
+	}
+	for _, tc := range tests {
+		if got := sanitizeFilename(tc.in); got != tc.want {
+			t.Errorf("sanitizeFilename(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestSanitizeFilename_OnlyControlCharactersYieldsEmpty: a name that is
+// NOTHING but C0 controls/DEL (no ordinary characters at all) must reduce to
+// "" rather than, say, panicking or leaving a non-empty garbage remnant --
+// the general case BULK-01-5's own `"a\x00b.csv"` doesn't exercise (that
+// input has real characters surrounding the NUL).
+func TestSanitizeFilename_OnlyControlCharactersYieldsEmpty(t *testing.T) {
+	if got := sanitizeFilename("\x00\x01\x02\x1F\x7F"); got != "" {
+		t.Errorf("sanitizeFilename(<all C0/DEL>) = %q, want \"\"", got)
+	}
+}
+
+// TestSanitizeFilename_RTLOverridePassesThroughUncoveredByAC3: a Unicode
+// bidi-override character (U+202E RIGHT-TO-LEFT OVERRIDE) is NOT a C0
+// control/DEL, not invalid UTF-8, and not over the rune cap -- so AC #3, as
+// specified, does not require it to be touched, and sanitizeFilename does not
+// touch it. This is a DELIBERATE scope note, not a silent gap: a bidi
+// override in a rendered filename can visually disguise an extension (e.g.
+// "invoice<RLO>exe.csv" can render as if the extension were reversed) --
+// worth flagging to the executor as an optional hardening follow-up, but
+// out of scope for this AC, which only names C0 controls and DEL.
+func TestSanitizeFilename_RTLOverridePassesThroughUncoveredByAC3(t *testing.T) {
+	const in = "invoice‮exe.csv"
+	if got := sanitizeFilename(in); got != in {
+		t.Errorf("sanitizeFilename(%q) = %q, want %q unchanged (AC #3 scopes control-stripping to C0/DEL only, not bidi controls)", in, got, in)
+	}
+}
+
+// TestSanitizeFilename_CombiningCharactersTruncationStaysValidUTF8: a name
+// built from many two-rune grapheme clusters (a base letter + a combining
+// acute accent, i.e. NFD "é") that exceeds 255 runes must still
+// truncate to EXACTLY 255 runes and remain valid UTF-8 -- even though the
+// rune-based cut can (and here does) land mid-grapheme, leaving a lone
+// combining mark at the end. That is within spec (truncate to 255 RUNES, not
+// grapheme clusters) -- this pins "never invalid UTF-8", not grapheme
+// integrity.
+func TestSanitizeFilename_CombiningCharactersTruncationStaysValidUTF8(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 130; i++ { // 130 * 2 runes = 260 runes, over the 255 cap
+		b.WriteString("é")
+	}
+	long := b.String()
+	if n := utf8.RuneCountInString(long); n != 260 {
+		t.Fatalf("fixture assumption broken: input has %d runes, want 260", n)
+	}
+
+	got := sanitizeFilename(long)
+	if !utf8.ValidString(got) {
+		t.Fatalf("sanitizeFilename(<260-rune combining-char name>) = %q, not valid UTF-8", got)
+	}
+	if n := utf8.RuneCountInString(got); n != 255 {
+		t.Errorf("utf8.RuneCountInString(sanitizeFilename(...)) = %d, want 255", n)
+	}
+}
+
+// TestSanitizeFilename_EmojiAtRuneBoundaryNeverSplitsACodepoint: a name whose
+// 255th rune is a single non-BMP emoji (U+1F600, one rune in Go regardless of
+// its 4-byte UTF-8 encoding -- Go strings have no UTF-16 surrogate-pair
+// concept to split) must keep that whole emoji and drop only what comes
+// after it, never emit a truncated/invalid byte sequence.
+func TestSanitizeFilename_EmojiAtRuneBoundaryNeverSplitsACodepoint(t *testing.T) {
+	name := strings.Repeat("a", 254) + "\U0001F600" + "\U0001F601" // 256 runes total
+	if n := utf8.RuneCountInString(name); n != 256 {
+		t.Fatalf("fixture assumption broken: input has %d runes, want 256", n)
+	}
+
+	got := sanitizeFilename(name)
+	if !utf8.ValidString(got) {
+		t.Fatalf("sanitizeFilename(<emoji at boundary>) = %q, not valid UTF-8", got)
+	}
+	want := strings.Repeat("a", 254) + "\U0001F600"
+	if got != want {
+		t.Errorf("sanitizeFilename(<emoji at boundary>) = %q, want %q (keep the 255th rune whole, drop the 256th)", got, want)
+	}
+}

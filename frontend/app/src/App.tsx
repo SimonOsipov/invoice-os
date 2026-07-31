@@ -337,13 +337,33 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // BEFORE the entities fetch resolves — click "New invoice" fast enough (cold fleet,
   // slow link) and `active` is still emptyClient(), so the snapshot is null. Reading
   // columns no longer depends on it (the preview endpoint takes the file alone), but
-  // FILING does: a stale-null snapshot would carry a firm user all the way to the Map
-  // step and then refuse the commit, even though their entities had long since landed.
+  // FILING does: a stale-null snapshot would carry a firm OR in-house user all the way
+  // to the Map step and then refuse the commit, even though their entities had long
+  // since landed.
+  //
   // Before [import-upload-unify] the entity <select> was the escape hatch; there is no
-  // longer one, so re-seed on exactly that null -> resolved transition. Confined to the
-  // upload step: past it the columns are already read against the snapshot, and moving
-  // the target then is the retarget resetImport exists to prevent. In-house stays null
-  // through this — active.entityId is null there too, so the guard's third clause holds.
+  // longer one, so re-seed on exactly that null -> resolved transition, below. This
+  // comment used to describe that re-seed without the effect existing at all — the gap
+  // is what a deployed topology run caught ([inhouse-can-file] LIVE, dev-env.yml run
+  // 30667013148): GET .../portfolio/v1/entities started at (test-relative) ~45214ms and
+  // did not resolve until ~45567ms, while "New invoice" was clicked at ~45325ms — squarely
+  // inside that window, on this run's real network timing. The click's resetImport()
+  // snapshot therefore captured null, `active.entityId` resolved to a real id ~240ms
+  // later while CreateFlow was still mid readAllColumns (still on 'upload'), and with no
+  // re-seed the wizard's own `entityId` stayed null for the rest of the session even
+  // though the live header already showed the resolved company — CreateMapping's
+  // `canFile = entityId !== null` then refused a workspace that plainly had an entity.
+  //
+  // Confined to the upload step: past it the columns are already read against the
+  // snapshot, and moving the target then is the retarget resetImport exists to prevent.
+  // Gated on `entityId === null` (not a bare active.entityId mirror) so it can only ever
+  // fill a stale-null snapshot in — it never overwrites an already-resolved snapshot if
+  // `active` itself changes mid-upload-step.
+  useEffect(() => {
+    if (createStep === 'upload' && entityId === null && active.entityId !== null) {
+      setEntityId(active.entityId)
+    }
+  }, [createStep, entityId, active.entityId])
   // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the WRITE half ---------
   //
   // ONE writer, mirroring state to the URL, rather than a `location.hash = …` at every

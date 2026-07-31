@@ -29,8 +29,20 @@
 // wizardHeader/canReadColumns/canStartImport stubs before M4-08-04 landed.
 import { describe, expect, it } from 'vitest'
 
-import { MAX_RUN_FILES, addFiles, canReadColumnsAll, capRefusal, removeFile } from './importRun'
-import type { PickedFile } from './importRun'
+import {
+  MAX_RUN_FILES,
+  addFiles,
+  canReadColumnsAll,
+  capRefusal,
+  removeFile,
+  routeAfterRun,
+  runBatchIds,
+  runFailures,
+  runFileRows,
+  runReducer,
+} from './importRun'
+import type { FileOutcome, ImportRun, PickedFile, RunFile } from './importRun'
+import type { ImportReport } from './importApi'
 
 // Builds fixture PickedFile[] with stable, human-readable ids derived from the file's own
 // name — good enough for these specs, which only ever look an id up by the very entry
@@ -287,5 +299,314 @@ describe('canReadColumnsAll — extension-rule edges routed through the shipped 
 
   it('a file with no extension at all is not readable', () => {
     expect(canReadColumnsAll(mkPicked(['ledger']))).toBe(false)
+  })
+})
+
+// ============================================================================
+// RED specs (BULK-01-05, task-308, Test-first) — the run-reducer half. Pin
+// runReducer/runBatchIds/runFailures/runFileRows/routeAfterRun's contract before the
+// executor implements the bodies (currently STUBs in importRun.ts, throwing 'not
+// implemented'). Plan's Test Specs table (BULK-05-1..12) is authoritative; this
+// section transcribes it row by row and does not exceed it — adversarial/edge
+// coverage beyond this table is QA Mode B's job, once the implementation lands.
+//
+// Fixture note: BASE_RUN_REPORT mirrors reviewBatch.test.ts's own BASE_ROUTE_REPORT
+// fixture (same 13-field ImportReport shape) — duplicated locally rather than
+// imported, same reason scanForIdentifier is duplicated across test files in this
+// codebase: these are test-only fixtures in independently owned spec files, not
+// production code a shared module would be surgical over.
+const BASE_RUN_REPORT: ImportReport = {
+  id: 'batch-run-base',
+  status: 'completed',
+  format: 'csv',
+  delimiter: ',',
+  encoding: 'utf-8',
+  rows_total: 10,
+  rows_valid: 10,
+  rows_invalid: 0,
+  ready_invoices: 1,
+  quarantined_invoices: 0,
+  errors: [],
+  rule_set_version: 5,
+  invoices_clean: 1,
+  invoices_with_violations: 0,
+  invoice_violations: [],
+}
+
+// Builds a RunFile with a caller-given id/name/outcome, defaulting groupId to a single
+// shared group -- no spec below exercises per-group routing, so a constant keeps every
+// fixture terse without implying group identity matters to any of these functions.
+function mkRunFile(id: string, name: string, outcome: FileOutcome, groupId = 'g1'): RunFile {
+  return { id, name, groupId, outcome }
+}
+
+function pendingFile(id: string, name: string): RunFile {
+  return mkRunFile(id, name, { kind: 'pending' })
+}
+
+// Dispatches the 'start' action so every spec below begins from the SAME entry point
+// the real App.startRun() would use, rather than hand-assembling an already-running
+// ImportRun object -- if 'start' itself is wrong (e.g. cursor seeded at something other
+// than 0), every spec here inherits that RED rather than masking it.
+function startRun(files: RunFile[]): ImportRun {
+  return runReducer({ files: [], cursor: 0, status: 'idle' }, { type: 'start', files })
+}
+
+describe('runReducer — settled advances the cursor without branching on outcome kind (BULK-05-1, [partial-success-kept])', () => {
+  // Falsification: an impl that branches on outcome.kind and only advances the cursor
+  // on 'imported' (or worse, jumps straight to status:'finished' on the first
+  // failure) -- exactly the early-stop [partial-success-kept] exists to forbid. The
+  // spec asserts BOTH cursor and status, per the task's own instruction: a passing
+  // cursor with a wrongly-flipped status would still be a real bug.
+  it('BULK-05-1: a failed settle at file 1 of 3 advances the cursor and keeps the run running', () => {
+    const files = [pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv'), pendingFile('f3', 'c.csv')]
+    const started = startRun(files)
+    const afterFirst = runReducer(started, { type: 'settled', outcome: { kind: 'failed', message: 'boom' } })
+    expect(afterFirst.cursor).toBe(1)
+    expect(afterFirst.status).toBe('running')
+    expect(afterFirst.status).not.toBe('finished')
+  })
+})
+
+describe('runReducer — the run only finishes after the LAST file settles (BULK-05-2)', () => {
+  // Falsification: an impl that flips to 'finished' on ANY settle, or one that never
+  // flips at all (cursor keeps climbing past files.length forever).
+  it('BULK-05-2: three files stay running through the first two settles and finish on the third', () => {
+    const files = [pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv'), pendingFile('f3', 'c.csv')]
+    let run = startRun(files)
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } },
+    })
+    expect(run.status).toBe('running')
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'x' } })
+    expect(run.status).toBe('running')
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b3', report: { ...BASE_RUN_REPORT, id: 'b3' } },
+    })
+    expect(run.status).toBe('finished')
+    expect(run.cursor).toBe(3)
+  })
+})
+
+describe('runReducer — phase applies to the cursor file only (BULK-05-3)', () => {
+  // Falsification: an impl that writes the phase onto the WRONG index (e.g. cursor-1,
+  // or files[0] unconditionally), or one that mutates an already-settled file's
+  // outcome in place instead of leaving f1/f2 untouched.
+  it('BULK-05-3: after two settles, a phase action writes onto file 3 only, leaving f1/f2 outcomes untouched', () => {
+    const files = [pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv'), pendingFile('f3', 'c.csv')]
+    let run = startRun(files)
+    const f1Outcome: FileOutcome = { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } }
+    const f2Outcome: FileOutcome = { kind: 'failed', message: 'nope' }
+    run = runReducer(run, { type: 'settled', outcome: f1Outcome })
+    run = runReducer(run, { type: 'settled', outcome: f2Outcome })
+
+    const phase = { kind: 'sending' as const, loaded: 10, total: 100 }
+    const afterPhase = runReducer(run, { type: 'phase', phase })
+
+    expect(afterPhase.files[0].outcome).toEqual(f1Outcome)
+    expect(afterPhase.files[1].outcome).toEqual(f2Outcome)
+    expect(afterPhase.files[2].outcome).toEqual({ kind: 'uploading', phase })
+  })
+})
+
+describe('runReducer — a late phase on a finished run is a total no-op (BULK-05-4)', () => {
+  // Falsification: an impl that always returns a fresh `{...run}` (or a fresh
+  // `{...run, files:[...run.files]}`) regardless of status -- a deep-equal check
+  // alone would pass that impl. The identity assertion (`toBe`) is what actually
+  // discriminates "ignored" from "recomputed to the same values": a component
+  // memoizing off reference equality would re-render needlessly under the latter,
+  // and AC #2's "ignored" reads as identity, not coincidental equality.
+  it('BULK-05-4: a phase action on a finished run returns the IDENTICAL state object', () => {
+    const files = [pendingFile('f1', 'a.csv')]
+    let run = startRun(files)
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } },
+    })
+    expect(run.status).toBe('finished')
+
+    const after = runReducer(run, { type: 'phase', phase: { kind: 'sending', loaded: 1, total: 2 } })
+
+    expect(after).toBe(run)
+    expect(after).toEqual(run)
+  })
+})
+
+describe('runBatchIds — successes in run order (BULK-05-5)', () => {
+  // Falsification: an impl that sorts, dedupes, or includes the failed file's id (it
+  // has none), or one that returns ids in settle-completion order rather than the
+  // run's own file order (the two coincide here, which is exactly why BULK-05-11's
+  // identity check below matters too).
+  it('BULK-05-5: f1 imported, f2 failed, f3 imported yields runBatchIds [b1, b3]', () => {
+    const files = [pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv'), pendingFile('f3', 'c.csv')]
+    let run = startRun(files)
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } },
+    })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'nope' } })
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b3', report: { ...BASE_RUN_REPORT, id: 'b3' } },
+    })
+    expect(runBatchIds(run)).toEqual(['b1', 'b3'])
+  })
+})
+
+describe('runFailures — filename + reason, in run order (BULK-05-6)', () => {
+  // Falsification: an impl that re-words the server's message, drops the filename, or
+  // reads the name off the outcome instead of the RunFile (the outcome carries no
+  // name field at all in the 'failed' variant -- runFailures must reach for
+  // RunFile.name).
+  it("BULK-05-6: a failed file's name and the server's message survive verbatim", () => {
+    const files = [pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv')]
+    let run = startRun(files)
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } },
+    })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'duplicate invoice number 42' } })
+    expect(runFailures(run)).toEqual([{ name: 'b.csv', message: 'duplicate invoice number 42' }])
+  })
+})
+
+describe('routeAfterRun — order is load-bearing (BULK-05-7..10)', () => {
+  // BULK-05-7 — falsification: an impl that falls through to 'review' with an empty
+  // batchIds array instead of the distinct 'none' kind CreateFlow needs to know to
+  // stay on 'mapping' (AC #9).
+  it('BULK-05-7: two files, both failed, routes to none -- no batch was ever created', () => {
+    const files = [pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv')]
+    let run = startRun(files)
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'x' } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'y' } })
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'none' })
+  })
+
+  // BULK-05-8 — falsification: an impl that checks `report.ready_invoices === 1` (or
+  // calls routeAfterImport) WITHOUT first checking the run itself holds exactly one
+  // file. The identical report/id resolves 'single' alone and 'review' as one of two
+  // -- proving the run-size gate is real, not coincidental to the report's own shape.
+  it('BULK-05-8: the single shortcut only fires when the run has exactly one file', () => {
+    const soleReport: ImportReport = { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1 }
+
+    let soloRun = startRun([pendingFile('f1', 'a.csv')])
+    soloRun = runReducer(soloRun, { type: 'settled', outcome: { kind: 'imported', batchId: 'b1', report: soleReport } })
+    expect(routeAfterRun(soloRun, 'inv-7')).toEqual({ kind: 'single', invoiceId: 'inv-7' })
+
+    let pairRun = startRun([pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv')])
+    pairRun = runReducer(pairRun, { type: 'settled', outcome: { kind: 'imported', batchId: 'b1', report: soleReport } })
+    pairRun = runReducer(pairRun, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2', ready_invoices: 1 } },
+    })
+    expect(routeAfterRun(pairRun, 'inv-7').kind).toBe('review')
+    expect(routeAfterRun(pairRun, 'inv-7')).toEqual({ kind: 'review', batchIds: ['b1', 'b2'] })
+  })
+
+  // BULK-05-9 — falsification: an impl using `resolvedInvoiceId != null` instead of
+  // truthiness, which would let '' through into 'single' with an empty invoiceId --
+  // routeAfterImport's own ROUTE-7 guards this at the single-file layer; this spec
+  // guards that routeAfterRun does not reintroduce the bug by handling the id itself
+  // instead of delegating.
+  it("BULK-05-9: a resolved id of '' degrades to review, never single with an empty id", () => {
+    let run = startRun([pendingFile('f1', 'a.csv')])
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1 } },
+    })
+    const result = routeAfterRun(run, '')
+    expect(result).toEqual({ kind: 'review', batchIds: ['b1'] })
+    expect(result.kind).not.toBe('single')
+  })
+
+  // BULK-05-10 — falsification: an impl that treats a `ready_invoices: 0` outcome as
+  // equivalent to 'failed' and drops its batch id from the review -- f2's own
+  // createImport SUCCEEDED (an 'imported' outcome), it just produced zero ready
+  // invoices; BULK-01-08's partial-failure e2e depends on both ids landing in the
+  // same review.
+  it('BULK-05-10: a batch with ready_invoices:0 (everything quarantined) still joins the review with BOTH ids', () => {
+    let run = startRun([pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv')])
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 3 } },
+    })
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: {
+        kind: 'imported',
+        batchId: 'b2',
+        report: { ...BASE_RUN_REPORT, id: 'b2', ready_invoices: 0, quarantined_invoices: 5 },
+      },
+    })
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'review', batchIds: ['b1', 'b2'] })
+  })
+})
+
+describe('partial success is kept intact through a mixed run (BULK-05-11)', () => {
+  // Falsification: an impl whose settled arm mutates a shared object, or rebuilds
+  // `files` in a way that loses a previously-settled entry's own batchId/report (e.g.
+  // collapsing every 'imported' outcome onto the LAST one written).
+  it('BULK-05-11: every imported outcome retains its own batchId and report after later settles', () => {
+    const report1: ImportReport = { ...BASE_RUN_REPORT, id: 'b1' }
+    const report3: ImportReport = { ...BASE_RUN_REPORT, id: 'b3', ready_invoices: 7 }
+    let run = startRun([pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv'), pendingFile('f3', 'c.csv')])
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'imported', batchId: 'b1', report: report1 } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'x' } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'imported', batchId: 'b3', report: report3 } })
+
+    expect(run.files[0].outcome).toEqual({ kind: 'imported', batchId: 'b1', report: report1 })
+    expect(run.files[2].outcome).toEqual({ kind: 'imported', batchId: 'b3', report: report3 })
+  })
+})
+
+describe('runFileRows — one row per file, total over the run, and no honesty-constraint field ever appears (BULK-05-12, AC #10)', () => {
+  // Falsification (row count/kind mapping): an impl that skips a file, reorders rows,
+  // or maps 'processing' onto the same label as 'sending' (or vice versa) instead of
+  // the two-word distinction ImportProgress.tsx's own header already renders.
+  //
+  // Falsification (shape): an impl that widens ANY row -- 'queued'/'sending'/
+  // 'processing' picking up a loaded/total/percent field, 'imported' picking up a row
+  // count instead of the server's own ready_invoices, or ANY row gaining a rule-set
+  // field. `toEqual` is a deep structural check, so a row carrying one extra key
+  // fails even where that key's value looks harmless -- which is the whole point:
+  // this is the one spec standing between the five honesty constraints in
+  // ImportProgress.tsx's header comment and a future PR quietly widening RunFileRow.
+  it('BULK-05-12: pending/uploading(sending)/uploading(processing)/imported/failed each render their own row shape, nothing more', () => {
+    const report: ImportReport = { ...BASE_RUN_REPORT, id: 'b4', ready_invoices: 4 }
+    const files: RunFile[] = [
+      pendingFile('f1', 'a.csv'),
+      mkRunFile('f2', 'b.csv', { kind: 'uploading', phase: { kind: 'sending', loaded: 10, total: 100 } }),
+      mkRunFile('f3', 'c.csv', { kind: 'uploading', phase: { kind: 'processing' } }),
+      mkRunFile('f4', 'd.csv', { kind: 'imported', batchId: 'b4', report }),
+      mkRunFile('f5', 'e.csv', { kind: 'failed', message: 'nope' }),
+    ]
+    const run: ImportRun = { files, cursor: 3, status: 'running' }
+
+    const rows = runFileRows(run)
+
+    expect(rows).toHaveLength(5)
+    expect(rows[0]).toEqual({ name: 'a.csv', kind: 'queued' })
+    expect(rows[1]).toEqual({ name: 'b.csv', kind: 'sending' })
+    expect(rows[2]).toEqual({ name: 'c.csv', kind: 'processing' })
+    expect(rows[3]).toEqual({ name: 'd.csv', kind: 'imported', count: 4 })
+    expect(rows[4]).toEqual({ name: 'e.csv', kind: 'failed', reason: 'nope' })
+
+    // Belt-and-suspenders beyond the toEqual checks above: names each forbidden field
+    // explicitly (percent/loaded/total/rows/bytes/stage/rule-set) so a future reader
+    // of a failing diff sees WHICH honesty constraint broke, not just "shape
+    // mismatch".
+    rows.forEach((row) => {
+      expect(row).not.toHaveProperty('percent')
+      expect(row).not.toHaveProperty('loaded')
+      expect(row).not.toHaveProperty('total')
+      expect(row).not.toHaveProperty('rows')
+      expect(row).not.toHaveProperty('rowsRead')
+      expect(row).not.toHaveProperty('bytes')
+      expect(row).not.toHaveProperty('stage')
+      expect(row).not.toHaveProperty('ruleSetVersion')
+      expect(row).not.toHaveProperty('rule_set_version')
+    })
   })
 })

@@ -432,8 +432,26 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                 has a non-null offsetParent, so isFocusable's tabIndex clause is the
                 other half. Uncontrolled and read straight off the form in handleSubmit;
                 its value never reaches `lead`. */}
+            {/* autoComplete="new-password" (not "off") plus the four vendor data-*
+                attributes below are deliberate, not decoration: Chrome profile
+                autofill and every major password manager ignore autocomplete="off"
+                (Chromium issue 40223868), so a browser or password manager that
+                autofills this field turns a REAL human's lead into a silent drop.
+                "new-password" is safe here because password-manager "suggest a
+                strong password" UI is gated on type="password", and this input
+                stays type="text". Do not "tidy" these away. */}
             <div style={{ position: 'absolute', left: -9999, width: 1, height: 1, overflow: 'hidden' }}>
-              <input type="text" name="website" tabIndex={-1} aria-hidden="true" autoComplete="off" />
+              <input
+                type="text"
+                name="website"
+                tabIndex={-1}
+                aria-hidden="true"
+                autoComplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+                data-form-type="other"
+              />
             </div>
 
             <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 18, cursor: 'pointer', gap: 9 }}>

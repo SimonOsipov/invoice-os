@@ -86,8 +86,15 @@ describe('DemoModal SSR render (LAND-02-02)', () => {
     // assumed): unlike tabIndex (-> lowercase "tabindex"), autoComplete is NOT
     // case-normalized by React and serializes camelCase, same as the existing
     // autoComplete="name"/"email"/"organization" inputs already in this file.
-    expect(honeypot).toContain('autoComplete="off"')
+    expect(honeypot).toContain('autoComplete="new-password"')
     expect(hasAttr(honeypot, 'required')).toBe(false)
+    // Vendor password-manager ignore attributes: autocomplete alone is not honored
+    // by password managers (they ignore autocomplete semantics entirely), so these
+    // are the only surgical defence against LastPass/1Password/Bitwarden/Dashlane.
+    expect(honeypot).toContain('data-lpignore="true"')
+    expect(honeypot).toContain('data-1p-ignore="true"')
+    expect(honeypot).toContain('data-bwignore="true"')
+    expect(honeypot).toContain('data-form-type="other"')
   })
 
   it('R5: the honeypot exists (guard), then — given that — no label targets it and its wrapper is not display:none', () => {

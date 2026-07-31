@@ -6,6 +6,7 @@
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview, UploadPhase } from './lib/importApi'
+import type { PickedFile } from './lib/importRun'
 // Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
 // `./data`, both of which type-import this file, so `Member` closes the loop
 // members -> auth/data -> types -> members. Benign only because every edge in it is
@@ -318,7 +319,21 @@ export type PlatformCtx = {
   // picker of its own since [import-upload-unify] — it mirrors `active` — but it is
   // read at createImport time, so it must survive that unmount too.)
   entityId: string | null
+  // TRANSITIONAL (BULK-01-03): derived shim (pickedFiles[0]?.file ?? null, set in App.tsx)
+  // so CreateMapping/ImportProgress/readColumns/startImport keep compiling. BULK-01-04
+  // rewires CreateMapping + readColumns->readAllColumns; BULK-01-05 rewires
+  // ImportProgress + startImport->startRun. Must be GONE when BULK-01-05 lands.
   importFile: File | null
+  // The run's ordered file selection (BULK-01-03, Core AC 1) — CreateUpload's
+  // chosen-files list, per-file remove controls and per-file bad-extension notes all
+  // render off this. Lives on ctx, not CreateUpload's local state, for the same reason
+  // `importFile` did before it ([multi-invoice import path] below): CreateUpload
+  // UNMOUNTS when createStep leaves 'upload'.
+  pickedFiles: PickedFile[]
+  // The refusal text from the most recent addPickedFiles call (lib/importRun's
+  // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
+  // lives on ctx, the component renders it verbatim.
+  filesRefusal: string | null
   preview: ImportPreview | null
   uploadPhase: UploadPhase
   importError: ApiError | null
@@ -358,7 +373,12 @@ export type PlatformCtx = {
   clickCol: (header: string) => void
   unmap: (header: string) => void
   continueMapping: () => void
-  selectImportFile: (f: File | null) => void
+  // Multi-file selection (BULK-01-03): addPickedFiles appends onto `pickedFiles` via
+  // lib/importRun's addFiles (capped at MAX_RUN_FILES, never silently truncating —
+  // `filesRefusal` carries the refusal text when it drops any). removePickedFile removes
+  // one entry by id, preserving the order of the rest.
+  addPickedFiles: (files: File[]) => void
+  removePickedFile: (id: string) => void
   readColumns: () => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected

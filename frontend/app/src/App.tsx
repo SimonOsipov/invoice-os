@@ -11,6 +11,7 @@ import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery, routeAfterImport, type PostImportRoute } from './lib/reviewBatch'
 import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
+import { addFiles, removeFile, type PickedFile } from './lib/importRun'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
   createImport,
@@ -274,7 +275,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Still never carried over from a PREVIOUS run in the same session — resetImport
   // reseeds from `active` every time, not from whatever this state last held.
   const [entityId, setEntityId] = useState<string | null>(null)
-  const [importFile, setImportFile] = useState<File | null>(null)
+  // The run's ordered file selection (BULK-01-03, Core AC 1) — replaces the old
+  // single-file `importFile` state below. `filesRefusal` holds the most recent
+  // addPickedFiles call's refusal text (lib/importRun's capRefusal), or null.
+  const [pickedFiles, setPickedFiles] = useState<PickedFile[]>([])
+  const [filesRefusal, setFilesRefusal] = useState<string | null>(null)
+  // TRANSITIONAL (BULK-01-03): derived shim so CreateMapping/ImportProgress/readColumns/
+  // startImport keep compiling. BULK-01-04 rewires CreateMapping + readColumns->readAllColumns;
+  // BULK-01-05 rewires ImportProgress + startImport->startRun. Must be GONE when BULK-01-05 lands.
+  const importFile = pickedFiles[0]?.file ?? null
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [importError, setImportError] = useState<ApiError | null>(null)
@@ -386,7 +395,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // under the first run's entity.
   function resetImport() {
     setEntityId(active.entityId)
-    setImportFile(null)
+    setPickedFiles([])
+    setFilesRefusal(null)
     setPreview(null)
     setUploadPhase({ kind: 'idle' })
     setImportError(null)
@@ -434,14 +444,21 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDraft((d) => (d.items.length <= 1 ? d : { ...d, items: d.items.filter((_it, idx) => idx !== i) }))
   }
 
-  // Stores whatever the input yielded — the extension rule lives in canReadColumns
-  // alone, so there is exactly one gate that can be right or wrong, not two that can
-  // disagree. A rejected file still lands here and the Import panel explains why.
-  // Choosing a different file invalidates any preview already read from the old one.
-  function selectImportFile(f: File | null) {
-    setImportFile(f)
-    setPreview(null)
-    setImportError(null)
+  // Appends onto the run's file selection (BULK-01-03) via lib/importRun's addFiles —
+  // capped at MAX_RUN_FILES, never silently truncating. `filesRefusal` carries the
+  // refusal text CreateUpload renders verbatim whenever the cap drops any incoming file;
+  // a rejected-extension file still lands in `pickedFiles` and the per-file note
+  // explains why (that gate is canReadColumnsAll, not selection).
+  function addPickedFiles(files: File[]) {
+    const result = addFiles(pickedFiles, files)
+    setPickedFiles(result.files)
+    setFilesRefusal(result.refusal)
+  }
+
+  // Removes one entry by id, preserving the order of the rest (lib/importRun's
+  // removeFile). An unknown id is a no-op.
+  function removePickedFile(id: string) {
+    setPickedFiles((cur) => removeFile(cur, id))
   }
 
   function readColumns() {
@@ -820,6 +837,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     members,
     entityId,
     importFile,
+    pickedFiles,
+    filesRefusal,
     preview,
     uploadPhase,
     importError,
@@ -843,7 +862,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clickCol,
     unmap,
     continueMapping,
-    selectImportFile,
+    addPickedFiles,
+    removePickedFile,
     readColumns,
     backToImport,
     restartImport,

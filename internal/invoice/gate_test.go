@@ -303,7 +303,13 @@ func TestGate_ValidateAfterUpdateFixToGreenRevalidatesToValidated(t *testing.T) 
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "GAPI-13 tenant")
-	entityID := seedEntity(t, super, tenantID, "GAPI-13 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): see
+	// TestApplyValidation_LinedDraftValidatesWithoutStaleFingerprint's
+	// identical note (apply_validation_test.go) -- gapiValidInvoiceInput's
+	// zero-violations premise needs the entity to carry its "12345678-0001"/
+	// "Acme Ltd" fixture values, since Store.Create now derives supplier_tin/
+	// supplier_name from the entity rather than trusting CreateInput.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Acme Ltd", "12345678-0001")
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "GAPI-13")

@@ -129,6 +129,35 @@ func seedEntity(t *testing.T, super *pgxpool.Pool, tenantID, name string) string
 	return id
 }
 
+// seedEntityWithTIN is seedEntity plus a raw-SQL tin column value (INVCR-01-17,
+// C7 fix): Store.Create now derives supplier_tin/supplier_name FROM the
+// entity ([supplier-from-entity]), so a handful of pre-existing specs that
+// used arbitrary placeholder supplier fields purely as CreateInput fixture
+// data (unrelated to what they actually test) need the entity itself to
+// carry the placeholder instead. The tin is written EXACTLY as given, NOT
+// through portfolio.ValidateTIN -- fine for these callers because their
+// fixture strings ("SUP-TIN-1") are not a 12-bare-digit shape, so
+// MBSSupplierTIN leaves them untouched and the derived value equals the old
+// placeholder byte-for-byte. A spec that needs the REAL canonicalize ->
+// restore round trip (the actual C7 regression) must go through
+// portfolio.Store.Create instead -- see createEntityViaRealPortfolioStore
+// (supplier_tin_test.go).
+func seedEntityWithTIN(t *testing.T, super *pgxpool.Pool, tenantID, name, tin string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3) RETURNING id`,
+		tenantID, name, tin,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed business_entities (with tin): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, id)
+	})
+	return id
+}
+
 // seedInvoice inserts one invoices row directly (bypassing Store.Create,
 // which is itself under test) as the superuser, for specs that exercise
 // Get/List/Update against a known-good row without depending on Create's
@@ -539,7 +568,14 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 		InvoiceNumber: "INV-STORE-05",
 		Subtotal:      strPtr("-5.00"),
 		Currency:      nil,
-		SupplierName:  strPtr(""),
+		// BuyerName, NOT SupplierName (INVCR-01-17, C7 fix): supplier_name is
+		// now DERIVED from the entity ([supplier-from-entity]), so it can no
+		// longer demonstrate "blank content stored, not rejected" -- a
+		// business_entities row always carries a non-blank NOT NULL name.
+		// buyer_name is still caller-controlled (the story's scope fence is
+		// supplier fields ONLY), so it keeps exercising the same store-invalid-
+		// faithfully contract this spec is actually about.
+		BuyerName: strPtr(""),
 	})
 	if err != nil {
 		t.Fatalf("Create (store-invalid content): want success (AC-6, no content CHECK), got: %v", err)
@@ -550,15 +586,15 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 	if inv.Currency != nil {
 		t.Errorf("Create returned currency = %q, want nil", *inv.Currency)
 	}
-	if inv.SupplierName == nil || *inv.SupplierName != "" {
-		t.Errorf("Create returned supplier_name = %v, want empty string (blank content stored, not rejected)", inv.SupplierName)
+	if inv.BuyerName == nil || *inv.BuyerName != "" {
+		t.Errorf("Create returned buyer_name = %v, want empty string (blank content stored, not rejected)", inv.BuyerName)
 	}
 
-	var subtotal, supplierName string
+	var subtotal, buyerName string
 	var currency *string
 	if err := super.QueryRow(ctx,
-		`SELECT subtotal::text, currency, supplier_name FROM invoices WHERE id = $1`, inv.ID,
-	).Scan(&subtotal, &currency, &supplierName); err != nil {
+		`SELECT subtotal::text, currency, buyer_name FROM invoices WHERE id = $1`, inv.ID,
+	).Scan(&subtotal, &currency, &buyerName); err != nil {
 		t.Fatalf("read back invoice: %v", err)
 	}
 	if subtotal != "-5.00" {
@@ -567,8 +603,8 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 	if currency != nil {
 		t.Errorf("currency read back = %q, want NULL", *currency)
 	}
-	if supplierName != "" {
-		t.Errorf("supplier_name read back = %q, want empty string", supplierName)
+	if buyerName != "" {
+		t.Errorf("buyer_name read back = %q, want empty string", buyerName)
 	}
 }
 

@@ -87,15 +87,22 @@ func scanStatusChange(row scanner, sc *StatusChange) error {
 // (M4-06-03 -- mirrors the importer's EntitySupplier idiom,
 // internal/importer/store.go, and closes the direct-path gap the "22P02 does
 // not disambiguate" note below used to accept: a cross-tenant OR nonexistent
-// entity_id now returns ErrValidation HERE, before any row is written); (1)
-// the invoices row (tenant_id from the caller's identity, status left to the
-// column DEFAULT 'draft', MBS-content passed through un-rejected incl.
-// NULL/negative — store-invalid-faithfully, AC-6); (2) one line_items row per
-// CreateInput.LineItems entry with a system-assigned line_no = 1..N by array
-// position ([D10]); (3) the genesis invoice_status_history row (from_status
-// NULL -> to_status 'draft', actor = the caller's Subject, [D5]); (4) an
-// "invoice.created" audit.Record. Because all these writes share one
-// transaction, a later failure rolls the earlier ones back too (INV-STORE-07).
+// entity_id now returns ErrValidation HERE, before any row is written), WIDENED
+// by INVCR-01-17 (C7 fix) to also resolve the entity's name/tin and OVERWRITE
+// in.SupplierTIN/in.SupplierName with them (MBSSupplierTIN-restored for a
+// 12-bare-digit FIRS tin, unchanged for a 10-digit JTB tin or no tin at all) --
+// whatever the caller sent in those two fields is discarded, never trusted
+// ([supplier-from-entity]; CreateHandler's own doc comment records the
+// override-not-400 ruling); (1) the invoices row (tenant_id from the caller's
+// identity, status left to the column DEFAULT 'draft', MBS-content passed
+// through un-rejected incl. NULL/negative — store-invalid-faithfully, AC-6 --
+// EXCEPT supplier_tin/supplier_name, which step 0 already overwrote); (2) one
+// line_items row per CreateInput.LineItems entry with a system-assigned
+// line_no = 1..N by array position ([D10]); (3) the genesis
+// invoice_status_history row (from_status NULL -> to_status 'draft', actor =
+// the caller's Subject, [D5]); (4) an "invoice.created" audit.Record. Because
+// all these writes share one transaction, a later failure rolls the earlier
+// ones back too (INV-STORE-07).
 //
 // The pre-check is a friendly early exit, not the enforcement mechanism: the
 // composite (tenant_id, entity_id) FK (invoices_tenant_entity_fk, added
@@ -107,10 +114,10 @@ func scanStatusChange(row scanner, sc *StatusChange) error {
 // unique_violation (23505) on invoices_tenant_entity_number_uq -> ErrDuplicateNumber
 // (INSERT only), a foreign_key_violation (23503, a non-existent entity_id or
 // import_batch_id -- the pre-check turns the entity_id case into ErrValidation
-// earlier via the exists=false branch above, so this INSERT-time 23503 in practice
-// now only fires for import_batch_id) or an invalid_text_representation (22P02, a
-// malformed entity_id/import_batch_id uuid, OR a malformed numeric MBS-content
-// value; the pre-check maps its own 22P02 the same way for entity_id) ->
+// earlier via its own zero-rows (pgx.ErrNoRows) branch, so this INSERT-time 23503
+// in practice now only fires for import_batch_id) or an invalid_text_representation
+// (22P02, a malformed entity_id/import_batch_id uuid, OR a malformed numeric
+// MBS-content value; the pre-check maps its own 22P02 the same way for entity_id) ->
 // ErrValidation. 22P02 at the INSERT does not disambiguate which input was bad; the
 // importer avoids this ambiguity by pre-validating entity_id itself and
 // quarantining the row on ANY Create error. The line_items/history/audit errors
@@ -137,26 +144,58 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// db.ErrNoTenant otherwise.
 		id, _ := auth.IdentityFromContext(ctx)
 
-		// Tenant-scoped ownership pre-check: RLS scopes this SELECT to the
-		// caller's tenant (same mechanism EntitySupplier relies on,
+		// Tenant-scoped ownership pre-check, WIDENED by INVCR-01-17 (C7 fix)
+		// to also resolve the entity's name/tin: RLS scopes this SELECT to
+		// the caller's tenant (same mechanism EntitySupplier relies on,
 		// internal/importer/store.go), so a foreign OR nonexistent entity_id
-		// both come back exists=false. This rejects the cross-tenant case
-		// EARLY, as a friendly ErrValidation with NO row written and NO audit
-		// row -- the composite (tenant_id, entity_id) FK below is the
-		// DB-authoritative backstop (see this func's doc comment; M4-06-03
-		// closes the direct-path gap noted there).
-		var exists bool
+		// both come back zero rows -- pgx.ErrNoRows, mapped to ErrValidation
+		// exactly as the old bare EXISTS check's !exists branch was. This
+		// rejects the cross-tenant case EARLY, as a friendly ErrValidation
+		// with NO row written and NO audit row -- the composite (tenant_id,
+		// entity_id) FK below is the DB-authoritative backstop (see this
+		// func's doc comment; M4-06-03 closes the direct-path gap noted
+		// there). Widening this query's SELECT list (rather than adding a
+		// SECOND lookup) means AC #9's cross-tenant refusal is still the
+		// pre-existing coverage (TestStoreCreate_CrossTenantEntityIDRejected
+		// and its no-partial-write sibling) -- no new lookup was introduced.
+		var entityName string
+		var entityTIN *string
 		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM business_entities WHERE id = $1)`, in.EntityID,
-		).Scan(&exists); err != nil {
+			`SELECT name, tin FROM business_entities WHERE id = $1`, in.EntityID,
+		).Scan(&entityName, &entityTIN); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrValidation
+			}
 			if pgCode(err) == "22P02" {
 				return ErrValidation
 			}
 			return err
 		}
-		if !exists {
-			return ErrValidation
-		}
+
+		// [supplier-from-entity], INVCR-01-17 (C7 fix): supplier_tin/
+		// supplier_name are ALWAYS derived from the entity this pre-check
+		// just resolved, OVERRIDING whatever the caller sent in
+		// in.SupplierTIN/in.SupplierName -- the architect ruling CreateHandler's
+		// own doc comment records (AC #8: override, not a 400, so the
+		// existing e2e harness that already sends these fields keeps
+		// working). Supplier identity is the FIRM's own data, never the
+		// caller's -- true for every Store.Create caller, not just the HTTP
+		// handler, which is why this lives here rather than in CreateHandler
+		// alone: internal/importer's buildCreateInput already computes the
+		// identical value via EntitySupplier + MBSSupplierTIN before calling
+		// Create (needed for its own dry-run preview, which never reaches
+		// this method), so this re-derivation is a no-op recompute for that
+		// caller, not a behavior change. MBSSupplierTIN restores the MBS
+		// wire spelling (NNNNNNNN-NNNN) of a 12-bare-digit canonical FIRS
+		// TIN; a 10-digit JTB TIN or a nil TIN passes through unchanged --
+		// nil overrides a caller-supplied value too (there is no fallback to
+		// the caller when the entity has none of its own).
+		//
+		// buyer_tin/buyer_name are NOT touched here (scope fence, AC #4/#7):
+		// they stay exactly what the caller sent, so a malformed buyer TIN
+		// still violates buyer-tin-format faithfully.
+		in.SupplierTIN = MBSSupplierTIN(entityTIN)
+		in.SupplierName = &entityName
 
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices

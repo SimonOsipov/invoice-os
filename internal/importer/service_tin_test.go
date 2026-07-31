@@ -46,7 +46,7 @@ import (
 // tinFixFIRSTIN is a Luhn-VALID hyphenated 8+4 FIRS TIN, so portfolio's
 // ValidateTIN ACCEPTS it (the point of these tests is what happens AFTER
 // acceptance). It canonicalizes to "100123450007" -- 12 bare digits, which is
-// exactly what supplier-tin-format rejects without mbsSupplierTIN.
+// exactly what supplier-tin-format rejects without invoice.MBSSupplierTIN.
 const tinFixFIRSTIN = "10012345-0007"
 
 // tinFixJTBTIN is a Luhn-valid 10-digit JTB TIN -- the shape tin.go accepts
@@ -163,7 +163,7 @@ func TestServiceImport_APICreatedEntityCleanFileHasNoFalseTinFormatViolation(t *
 
 // TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation pins
 // the DELIBERATE non-fix for the 10-digit JTB shape. A JTB TIN has no hyphen
-// to restore, and mbsSupplierTIN must NOT invent an 8+4 split -- that would
+// to restore, and invoice.MBSSupplierTIN must NOT invent an 8+4 split -- that would
 // fabricate a FIRS TIN out of a JTB one. It therefore cannot satisfy
 // supplier-tin-format (^[0-9]{8}-[0-9]{4}$), and the resulting violation is
 // GENUINE: a real signal about a real MBS-vs-JTB mismatch, not a formatting
@@ -189,7 +189,7 @@ func TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation(t *te
 
 	if got := violationKeys(res); len(got) != 1 || got[0] != "supplier-tin-format" {
 		t.Errorf("violations for a JTB-TIN entity = %v, want exactly [supplier-tin-format] -- "+
-			"a 10-digit JTB TIN genuinely cannot satisfy the MBS 8+4 rule. If mbsSupplierTIN ever "+
+			"a 10-digit JTB TIN genuinely cannot satisfy the MBS 8+4 rule. If MBSSupplierTIN ever "+
 			"hyphenates a JTB TIN it would fabricate a FIRS TIN and this must fail.", got)
 	}
 	if res.InvoicesClean != 0 {
@@ -197,12 +197,19 @@ func TestServiceImport_APICreatedJTBEntityReportsGenuineTinFormatViolation(t *te
 	}
 }
 
-// TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN is the DRIFT GUARD, and
-// the reason mbsSupplierTIN may safely live in internal/importer as a local
-// helper instead of beside tin.go: it round-trips through the REAL
-// portfolio.ValidateTIN, so any change to tin.go's canonicalization
-// (tinShapePattern gaining a shape, Replace's count changing) reds THIS test
-// rather than silently re-arming the false-violation trap in production.
+// TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN is the DRIFT GUARD:
+// invoice.MBSSupplierTIN round-trips through the REAL portfolio.ValidateTIN,
+// so any change to tin.go's canonicalization (tinShapePattern gaining a
+// shape, Replace's count changing) reds THIS test rather than silently
+// re-arming the false-violation trap in production. Kept HERE (rather than
+// moved wholesale into internal/invoice) even though the function itself
+// moved there (INVCR-01-17, C7 fix: internal/invoice.Store.Create needed the
+// identical restoration internal/importer already had, and importer imports
+// invoice -- never the reverse -- so invoice is the only legal shared home)
+// -- this file already has the portfolio-as-test-oracle import and the
+// TestImporter_DoesNotImportPortfolioInProduction guard below, and testing
+// invoice.MBSSupplierTIN as an ordinary external caller exercises it exactly
+// as internal/invoice's own Store.Create does.
 //
 // Pure and DB-free: ValidateTIN is a pure function, so this runs in every
 // `go test ./...` even without DATABASE_URL -- unlike the DB-backed specs
@@ -218,9 +225,9 @@ func TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ValidateTIN(%q): %v (fixture must be a VALID TIN)", spelling, err)
 		}
-		got := mbsSupplierTIN(&canonical)
+		got := invoice.MBSSupplierTIN(&canonical)
 		if got == nil || *got != "10012345-0007" {
-			t.Errorf("mbsSupplierTIN(ValidateTIN(%q)=%q) = %v, want %q -- the inverse has drifted from tin.go",
+			t.Errorf("MBSSupplierTIN(ValidateTIN(%q)=%q) = %v, want %q -- the inverse has drifted from tin.go",
 				spelling, canonical, derefOrNil(got), "10012345-0007")
 		}
 	}
@@ -230,8 +237,8 @@ func TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateTIN(%q): %v", tinFixJTBTIN, err)
 	}
-	if got := mbsSupplierTIN(&canonicalJTB); got == nil || *got != tinFixJTBTIN {
-		t.Errorf("mbsSupplierTIN(JTB %q) = %v, want it UNCHANGED -- hyphenating a JTB TIN "+
+	if got := invoice.MBSSupplierTIN(&canonicalJTB); got == nil || *got != tinFixJTBTIN {
+		t.Errorf("MBSSupplierTIN(JTB %q) = %v, want it UNCHANGED -- hyphenating a JTB TIN "+
 			"fabricates a FIRS TIN", tinFixJTBTIN, derefOrNil(got))
 	}
 }
@@ -242,8 +249,8 @@ func TestMBSSupplierTIN_IsTheExactInverseOfValidateTIN(t *testing.T) {
 // through untouched -- store-invalid-faithfully: we do not rewrite values we
 // did not canonicalize.
 func TestMBSSupplierTIN_LeavesUncanonicalizedValuesAlone(t *testing.T) {
-	if got := mbsSupplierTIN(nil); got != nil {
-		t.Errorf("mbsSupplierTIN(nil) = %v, want nil (a TIN-less entity must still fire supplier-tin-required)", *got)
+	if got := invoice.MBSSupplierTIN(nil); got != nil {
+		t.Errorf("MBSSupplierTIN(nil) = %v, want nil (a TIN-less entity must still fire supplier-tin-required)", *got)
 	}
 	for _, raw := range []string{
 		"10223456-0022", // db/seed.dev.sql's already-hyphenated curated literal (row #22)
@@ -253,9 +260,9 @@ func TestMBSSupplierTIN_LeavesUncanonicalizedValuesAlone(t *testing.T) {
 		"1234567890123", // 13 digits: not a shape we produce
 	} {
 		v := raw
-		got := mbsSupplierTIN(&v)
+		got := invoice.MBSSupplierTIN(&v)
 		if got == nil || *got != raw {
-			t.Errorf("mbsSupplierTIN(%q) = %v, want it unchanged", raw, derefOrNil(got))
+			t.Errorf("MBSSupplierTIN(%q) = %v, want it unchanged", raw, derefOrNil(got))
 		}
 	}
 }
@@ -295,8 +302,9 @@ func TestImporter_DoesNotImportPortfolioInProduction(t *testing.T) {
 		for _, line := range strings.Split(string(out), "\n") {
 			if strings.TrimSpace(line) == "github.com/SimonOsipov/invoice-os/internal/portfolio" {
 				t.Errorf("%s imports internal/portfolio in PRODUCTION -- forbidden: importer (cmd/invoice) "+
-					"and portfolio (cmd/portfolio) are separate services. mbsSupplierTIN is a local helper "+
-					"precisely so this edge never exists; the portfolio import here is TEST-ONLY.", pkg)
+					"and portfolio (cmd/portfolio) are separate services. EntitySupplier is a local helper "+
+					"(store.go) and invoice.MBSSupplierTIN needs only internal/invoice, precisely so this edge "+
+					"never exists; the portfolio import here is TEST-ONLY.", pkg)
 			}
 		}
 	}

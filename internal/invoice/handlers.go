@@ -121,6 +121,16 @@ type listResponse struct {
 // pre-tx guard is the defense-in-depth backstop for the importer-reuse path,
 // [D3]), calls create, maps errors via statusForErr, 201 + Invoice (with
 // line_items) on success.
+//
+// req.SupplierTIN/req.SupplierName (INVCR-01-17, C7 fix): passed through to
+// CreateInput unchanged here, but Store.Create OVERRIDES them with the
+// resolved entity's own tin (MBS-hyphen-restored)/name before the INSERT --
+// this handler does not reject a caller-supplied value with a 400, it is
+// silently superseded. Architect ruling (task-293 AC #8): supplier identity
+// is the firm's own data, never the caller's wire body, and a 400 here would
+// break e2e/api/client.ts's CreateInvoiceInput, which has sent these two
+// fields since M4-07-05 -- override keeps that harness green while closing
+// the false supplier-tin-format violation for API-created entities.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()

@@ -912,7 +912,13 @@ func TestApplyValidation_LinedDraftValidatesWithoutStaleFingerprint(t *testing.T
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "INV-02-T10 tenant")
-	entityID := seedEntity(t, super, tenantID, "INV-02-T10 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): Store.Create
+	// now derives supplier_tin/supplier_name from the entity, so the entity
+	// must carry gapiValidInvoiceInput's own "12345678-0001"/"Acme Ltd" for
+	// this fixture to still produce zero violations (a bare seedEntity has no
+	// tin, which now overrides gapiValidInvoiceInput's SupplierTIN with nil
+	// and fires supplier-tin-required).
+	entityID := seedEntityWithTIN(t, super, tenantID, "Acme Ltd", "12345678-0001")
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	// gapiValidInvoiceInput (gate_test.go) carries exactly 2 line items --

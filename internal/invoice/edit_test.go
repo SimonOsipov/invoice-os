@@ -266,20 +266,26 @@ func TestStoreEdit_ValidatedNoOpStaysValidated(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "EDIT-04 tenant")
-	entityID := seedEntity(t, super, tenantID, "EDIT-04 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): Store.Create now
+	// derives supplier_tin/supplier_name from the entity, so the entity itself
+	// must carry the "SUP-TIN-1"/"Supplier Co" fixture values this test's Edit
+	// call re-sends below as a no-op. "SUP-TIN-1" is not a 12-bare-digit shape,
+	// so MBSSupplierTIN leaves it untouched -- the derived value equals this
+	// placeholder byte-for-byte.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Supplier Co", "SUP-TIN-1")
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
 		InvoiceNumber: "EDIT-04",
-		SupplierTIN:   strPtr("SUP-TIN-1"),
-		SupplierName:  strPtr("Supplier Co"),
-		BuyerTIN:      strPtr("BUY-TIN-1"),
-		BuyerName:     strPtr("Buyer Co"),
-		Currency:      strPtr("NGN"),
-		Subtotal:      strPtr("100.00"),
-		VAT:           strPtr("7.00"),
-		Total:         strPtr("107.00"),
+		// SupplierTIN/SupplierName intentionally OMITTED: Store.Create derives
+		// them from the entity above regardless of what's sent (C7 fix).
+		BuyerTIN:  strPtr("BUY-TIN-1"),
+		BuyerName: strPtr("Buyer Co"),
+		Currency:  strPtr("NGN"),
+		Subtotal:  strPtr("100.00"),
+		VAT:       strPtr("7.00"),
+		Total:     strPtr("107.00"),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -713,21 +719,24 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "EDIT-12 tenant")
-	entityID := seedEntity(t, super, tenantID, "EDIT-12 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): see EDIT-04's
+	// identical note above -- the entity now supplies the "SUP-TIN-1"/
+	// "Supplier Co" values the sibling-field assertions below expect.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Supplier Co", "SUP-TIN-1")
 	subject := uuid.NewString()
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
 		InvoiceNumber: "EDIT-12",
-		SupplierTIN:   strPtr("SUP-TIN-1"),
-		SupplierName:  strPtr("Supplier Co"),
-		BuyerTIN:      strPtr("BUY-TIN-1"),
-		BuyerName:     strPtr("Buyer Co"),
-		Currency:      strPtr("NGN"),
-		Subtotal:      strPtr("100.00"),
-		VAT:           strPtr("7.00"),
-		Total:         strPtr("107.00"),
+		// SupplierTIN/SupplierName intentionally OMITTED: Store.Create derives
+		// them from the entity above regardless of what's sent (C7 fix).
+		BuyerTIN:  strPtr("BUY-TIN-1"),
+		BuyerName: strPtr("Buyer Co"),
+		Currency:  strPtr("NGN"),
+		Subtotal:  strPtr("100.00"),
+		VAT:       strPtr("7.00"),
+		Total:     strPtr("107.00"),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

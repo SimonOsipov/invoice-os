@@ -8,7 +8,7 @@
 // none is read anywhere else in the render output. They are intentionally omitted here;
 // dropping them changes nothing about what's rendered.
 
-import type { CanonField, ClientCfg, FieldMapRow, SectorDef, SectorKey } from './types'
+import type { CanonField, ClientCfg, FieldMapRow, SectorDef, SectorKey, SettingsTab } from './types'
 
 export const SECTORS: Record<SectorKey, SectorDef> = {
   logistics: {
@@ -241,7 +241,11 @@ export const CONNECTOR_TAX_CODES: { code: string; desc: string; rate: string }[]
   { code: 'WH10', desc: 'Withholding — rent & royalties', rate: '10%' },
 ]
 
-export const SETTINGS_TABS: { id: 'connectors' | 'api' | 'signing'; label: string }[] = [
+// Array order IS tab order (SettingsView maps this straight through). Annotated with
+// `SettingsTab` rather than an inline copy of that union, so widening the union can
+// never again leave two places to edit.
+export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: 'members', label: 'Members' },
   { id: 'connectors', label: 'ERP connectors' },
   { id: 'api', label: 'API & webhooks' },
   { id: 'signing', label: 'Signing & certificates' },

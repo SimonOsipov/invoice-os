@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Playwright smoke suite for the three deployed SPAs (M1-08): each app loads its main mock view with no console errors.",
+  "description": "E2E suites against the deployed fleet: three Playwright projects (smoke = SPA render + console coverage + persona boundaries, api = typed HTTP contract suite over the gateway, topology = browser-verified gateway round trips) plus deployment-free vitest unit tests for this package's own seams. See e2e/README.md.",
   "scripts": {
     "test": "playwright test",
     "test:smoke": "playwright test",

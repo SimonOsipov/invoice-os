@@ -37,10 +37,14 @@
 // .../imports/preview, NOT /v1/imports -- every waitForResponse predicate below
 // matches on that prefixed path, never a bare /v1/... one.
 //
-// fullyParallel:true (playwright.topology.config.ts), retries:1 in CI: each test
-// below creates its OWN fresh entity (own freshTin()) and its own page/sign-in, so no
-// two tests contend for one entity, and a retry's fixed invoice numbers never collide
-// across attempts -- no-duplicate-invoice-number is scoped per entity
+// fullyParallel:false / workers:1 (playwright.topology.config.ts:21-22 -- conformed to
+// the convention's "one browser, serial" rule by M4-14-01, with its own rationale at
+// :18-20; this comment said fullyParallel:true until PERSONA-01 corrected it), retries:1
+// in CI: each test below creates its OWN fresh entity (own freshTin()) and its own
+// page/sign-in, so no two tests contend for one entity -- which still matters under
+// workers:1, because the entity is what keeps a RETRY of a test from colliding with its
+// own earlier attempt's fixed invoice numbers -- no-duplicate-invoice-number is scoped
+// per entity
 // (internal/importer/service.go's msgDuplicateInvoiceNumber). The one exception is
 // E2E-04/E2E-09 below, which share ONE page/session (the F6 hijack E2E-09 guards
 // against is session-scoped) -- both live in a single test with labelled assertion

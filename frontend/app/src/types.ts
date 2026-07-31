@@ -6,6 +6,13 @@
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview, UploadPhase } from './lib/importApi'
+// Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
+// `./data`, both of which type-import this file, so `Member` closes the loop
+// members -> auth/data -> types -> members. Benign only because every edge in it is
+// erased at compile — this file has zero runtime exports. `tsc` is what enforces it
+// (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
+// value import here and emits a byte-identical bundle.
+import type { Member } from './lib/members'
 import type { CustomRule, Suggestion } from './lib/rules'
 import type { Policy } from './lib/workflows'
 
@@ -179,11 +186,13 @@ export type CanonField = { key: string; required?: boolean }
 // named VAT" is untransmittable. See task-177.
 export type Mapping = Record<string, string | null>
 
-// 'company' (task-304, INVCR-01-19) is IN-HOUSE ONLY — SettingsView adds it to the tab
-// strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
+// Declaration order (minus 'company') is the rendered tab order (SETTINGS_TABS maps it
+// straight through), and 'members' is also the tab Settings opens on (App.tsx's initial
+// settingsTab). 'company' (task-304, INVCR-01-19) is IN-HOUSE ONLY — SettingsView adds it
+// to the tab strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
 // (data.tsx). A firm workspace already has a dedicated multi-entity portfolio screen
 // (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
-export type SettingsTab = 'connectors' | 'api' | 'signing' | 'company'
+export type SettingsTab = 'members' | 'connectors' | 'api' | 'signing' | 'company'
 
 export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
 
@@ -289,6 +298,18 @@ export type PlatformCtx = {
   /** Id of the policy open in the builder; null shows the policy list. */
   editingPolicyId: string | null
 
+  // --- Settings › Members tab -----------------------------------------------
+  // The CURRENT WORKSPACE's people, already resolved out of the per-mode store in
+  // App.tsx — per mode, not per client, the same reasoning as `policies` above.
+  // Held on ctx rather than in MembersView because in-house Workflows resolves
+  // approval positions to these people, so two surfaces read the one list.
+  //
+  // Everything transient inside the tab — search text, the role filter, which drawer
+  // or menu is open, the invite modal — is local to MembersView, following the
+  // SettingsView precedent at SettingsView.tsx:6-9 rather than the openRuleKey /
+  // editingPolicyId one: those are screens reachable by nav, this is a tab panel.
+  members: Member[]
+
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two
   // halves of the flow are two components: the file is chosen in CreateUpload, which
@@ -376,5 +397,12 @@ export type PlatformCtx = {
   createPolicy: () => void
   deletePolicy: (id: string) => void
   savePolicy: (next: Policy) => void
+  // Settings › Members. Same one-funnel contract as `savePolicy`: the tab composes the
+  // next Member(s) with the pure reducers in lib/members.ts and hands whole objects
+  // back, so App.tsx never needs to know a member's shape. Deliberately no
+  // suspend/reactivate/setRole pair — those are `saveMember` with a different row.
+  saveMember: (next: Member) => void
+  inviteMembers: (next: Member[]) => void
+  dropMember: (id: string) => void
   signOut: () => void
 }

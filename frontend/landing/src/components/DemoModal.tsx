@@ -48,7 +48,7 @@ type DemoStep = 'form' | 'submitting' | 'success' | 'error'
 
 // A focusable element is eligible for the Tab-trap if it isn't disabled and is
 // actually rendered (offsetParent is null for display:none / detached nodes).
-function isFocusable(el: HTMLElement): boolean {
+export function isFocusable(el: HTMLElement): boolean {
   return !(el as HTMLButtonElement).disabled && el.offsetParent !== null
 }
 

@@ -86,31 +86,41 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
       submitTimer.current = setTimeout(resolve, 1300)
     })
 
-  // Close on Escape (never a native dialog); focus the first field on open (added —
-  // SignInModal lacks this); clear any pending submit timer on unmount; restore
-  // focus to whatever opened the modal so keyboard users land back where they were.
+  // Close on Escape (never a native dialog); clear any pending submit timer on
+  // unmount; restore focus to whatever opened the modal so keyboard users land back
+  // where they were. Opening focus is NOT set here — see the panel effect below.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
-    const focusTimer = setTimeout(() => document.getElementById('dm-name')?.focus(), 60)
     return () => {
       window.removeEventListener('keydown', onKey)
-      clearTimeout(focusTimer)
       if (submitTimer.current) clearTimeout(submitTimer.current)
       mounted.current = false
       opener?.focus?.()
     }
   }, [onClose])
 
-  // On reaching a terminal panel (success/error) the <form> — and whatever held
-  // focus — unmounts, dropping focus to <body> and silently breaking the Tab-trap
-  // (document.activeElement no longer matches the trap's first/last node). Move
-  // focus onto that panel's primary button so the trap keeps working.
+  // Whichever panel is showing owns the focus, and it takes it exactly once — when
+  // that panel appears. On reaching a terminal panel (success/error) the <form> — and
+  // whatever held focus — unmounts, dropping focus to <body> and silently breaking the
+  // Tab-trap (document.activeElement no longer matches the trap's first/last node), so
+  // focus moves onto that panel's primary button. The 'form' branch is the same claim
+  // for the panel that is showing on open and again after "Try again".
+  //
+  // DELIBERATELY an effect keyed on demoStep, never a setTimeout. Both the open focus
+  // and the retry focus used to be deferred 60ms, which made them land AFTER a submit
+  // that happened inside that window: handleSubmit would correctly focus the first
+  // field at fault, then the stale timer would yank focus back to #dm-name and leave it
+  // there. That is a real defect for all four validated keys — it just only shows up on
+  // email/company/consent, since a name-at-fault submit lands on #dm-name either way.
+  // Keyed on demoStep, this runs once per panel and cannot outlive its own render: a
+  // failed validation does not change demoStep, so nothing re-fires behind the submit.
   useEffect(() => {
-    if (demoStep === 'success') document.getElementById('dm-success-done')?.focus()
+    if (demoStep === 'form') document.getElementById('dm-name')?.focus()
+    else if (demoStep === 'success') document.getElementById('dm-success-done')?.focus()
     else if (demoStep === 'error') document.getElementById('dm-error-retry')?.focus()
   }, [demoStep])
 
@@ -179,9 +189,10 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
     }
   }
 
+  // The form panel does not exist yet at this point — the effect above focuses #dm-name
+  // once React has put it back in the DOM.
   function retry() {
     setDemoStep('form')
-    setTimeout(() => document.getElementById('dm-name')?.focus(), 60)
   }
 
   // Tab focus-trap within the card (added — SignInModal lacks this): Tab on the

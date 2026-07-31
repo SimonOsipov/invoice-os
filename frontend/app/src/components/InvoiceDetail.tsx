@@ -563,7 +563,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       <img
                         data-testid="fiscal-qr"
                         src={`data:image/png;base64,${inv.qr_png_base64}`}
-                        alt="FIRS QR code"
+                        alt="NRS QR code"
                         width={132}
                         height={132}
                         style={{ imageRendering: 'pixelated' }}

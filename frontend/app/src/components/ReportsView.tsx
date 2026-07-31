@@ -254,7 +254,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
               <span className="card-title">Export &amp; filings</span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                FIRS-READY FORMATS
+                NRS-READY FORMATS
               </span>
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

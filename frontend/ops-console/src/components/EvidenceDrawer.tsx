@@ -75,7 +75,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
         >
           {SHIELD_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--status-green-text)', letterSpacing: '0.03em' }}>
-            ACCEPTED BY FIRS/MBS · SIGNED & HASH-CHAINED · IMMUTABLE
+            ACCEPTED BY NRS/MBS · SIGNED & HASH-CHAINED · IMMUTABLE
           </span>
         </div>
 

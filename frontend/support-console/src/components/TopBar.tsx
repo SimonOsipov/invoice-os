@@ -27,7 +27,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--status-amber-border)',
         text: 'var(--status-amber-text)',
         icon: SANDBOX_ICON,
-        msg: 'Sandbox — operating against the FIRS test adapter. Re-drives and kill-switches affect simulated traffic only.',
+        msg: 'Sandbox — operating against the NRS test adapter. Re-drives and kill-switches affect simulated traffic only.',
         tag: 'CROSS-TENANT · ALL ENTITIES',
       }
     : {

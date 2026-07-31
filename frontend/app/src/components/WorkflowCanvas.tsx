@@ -114,7 +114,7 @@ export function WorkflowCanvas(api: CanvasProps) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--bg-2)', border: '1.5px solid var(--action)', borderRadius: 14, padding: '12px 16px', boxShadow: 'var(--shadow-card)' }}>
           <span style={{ flex: 'none', width: 34, height: 34, borderRadius: 12, background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center' }}>{wfSendGlyph}</span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Transmit to FIRS / MBS</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Transmit to NRS / MBS</div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
               SIGN · STAMP · SUBMIT
             </div>

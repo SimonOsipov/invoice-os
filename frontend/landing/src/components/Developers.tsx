@@ -27,7 +27,7 @@ export function Developers() {
             Compliance as an API. Drop it into any ERP.
           </h2>
           <p style={{ fontSize: 16, lineHeight: 1.65, color: 'var(--slate-300)', margin: '0 0 28px' }}>
-            REST endpoints, signed webhooks, OAuth2, and a sandbox MBS/FIRS adapter. Send invoice data in, get a
+            REST endpoints, signed webhooks, OAuth2, and a sandbox MBS/NRS adapter. Send invoice data in, get a
             validated, transmit-ready document back — with a full audit trail.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 30 }}>

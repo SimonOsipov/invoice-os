@@ -41,7 +41,7 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
           <div style={{ minWidth: 0 }}>
             <div className="card-title">Edit field mapping</div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 3 }}>
-              ERP FIELD → FIRS UBL PATH
+              ERP FIELD → NRS UBL PATH
             </div>
           </div>
           <button
@@ -70,7 +70,7 @@ export function FieldMappingModal({ ctx, def, onClose }: { ctx: PlatformCtx; def
                 </span>
                 <label style={{ minWidth: 0 }}>
                   <div className="label" style={{ marginBottom: 5 }}>
-                    FIRS UBL target
+                    NRS UBL target
                   </div>
                   <input className="pf-input" value={r.ubl} onChange={(e) => updateRow(i, 'ubl', e.target.value)} style={{ ...MONO_INPUT, color: 'var(--action)' }} />
                 </label>

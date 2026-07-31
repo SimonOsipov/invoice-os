@@ -10,6 +10,13 @@ interface ImportMetaEnv {
   readonly VITE_OPS_URL?: string
   // The support-console service — the cross-tenant internal console.
   readonly VITE_SUPPORT_URL?: string
+  // The HubSpot portal that owns the Book-a-Demo form (LAND-02). Unset means
+  // hubspotTarget() returns null (see hubspot.ts) and the demo form never posts —
+  // which is what keeps a PR/fork build from writing into the sales pipeline.
+  readonly VITE_HUBSPOT_PORTAL_ID?: string
+  // The GUID of that portal's Book-a-Demo form. Both this and the portal id must be
+  // set, or the gate stays closed.
+  readonly VITE_HUBSPOT_FORM_GUID?: string
 }
 
 interface ImportMeta {

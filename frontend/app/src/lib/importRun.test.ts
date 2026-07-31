@@ -29,7 +29,7 @@
 // wizardHeader/canReadColumns/canStartImport stubs before M4-08-04 landed.
 import { describe, expect, it } from 'vitest'
 
-import { MAX_RUN_FILES, addFiles, canReadColumnsAll, removeFile } from './importRun'
+import { MAX_RUN_FILES, addFiles, canReadColumnsAll, capRefusal, removeFile } from './importRun'
 import type { PickedFile } from './importRun'
 
 // Builds fixture PickedFile[] with stable, human-readable ids derived from the file's own
@@ -146,5 +146,146 @@ describe('canReadColumnsAll — the gate on Read columns (BULK-03-8..10)', () =>
   // vacuously true over an empty array — exactly the trap this spec exists to catch.
   it('BULK-03-10: an empty selection cannot read columns', () => {
     expect(canReadColumnsAll([])).toBe(false)
+  })
+})
+
+// ============================================================================
+// QA Mode B (task-310) — adversarial/edge coverage beyond the architect's Test
+// Specs table (BULK-03-1..10). Every mutation below was hand-verified to turn
+// the corresponding BULK-03 spec red before this coverage was added; these
+// specs target failure modes the original table left unexercised.
+// ============================================================================
+
+describe('addFiles — cap boundary adversarials (QA Mode B)', () => {
+  // Falsification: an impl whose refusal text is generic ("cap reached") instead of
+  // naming ALL 3 dropped files, or one that mutates/reorders the untouched selection
+  // while refusing.
+  it('adding to an already-full selection drops every incoming file and names all of them', () => {
+    const full = mkPicked(['a.csv', 'b.csv', 'c.csv', 'd.csv', 'e.csv'])
+    const x = new File([], 'x.csv')
+    const y = new File([], 'y.csv')
+    const z = new File([], 'z.csv')
+    const result = addFiles(full, [x, y, z])
+    expect(result.files).toHaveLength(5)
+    expect(result.files.map((pf) => pf.file.name)).toEqual(['a.csv', 'b.csv', 'c.csv', 'd.csv', 'e.csv'])
+    expect(result.refusal).not.toBeNull()
+    expect(result.refusal).toContain('3')
+    expect(result.refusal).toContain(String(MAX_RUN_FILES))
+  })
+
+  // Falsification: an off-by-one in the room calculation (`room = current.length -
+  // MAX_RUN_FILES` or similar) that refuses the exact-fit case Core AC 1 says must be
+  // silent, distinct from BULK-03-4 (empty selection) by starting from a partial one.
+  it('adding exactly the remaining room onto a partial selection is accepted silently', () => {
+    const threeAlready = mkPicked(['a.csv', 'b.csv', 'c.csv'])
+    const x = new File([], 'x.csv')
+    const y = new File([], 'y.csv')
+    const result = addFiles(threeAlready, [x, y])
+    expect(result.files).toHaveLength(5)
+    expect(result.files.map((pf) => pf.file.name)).toEqual(['a.csv', 'b.csv', 'c.csv', 'x.csv', 'y.csv'])
+    expect(result.refusal).toBeNull()
+  })
+
+  // Falsification: an impl that only checks the cap against `incoming.length` in
+  // isolation (e.g. a `for` loop that breaks without counting the rest), which could
+  // under- or over-report the dropped count on a single large batch.
+  it('a single addFiles call with 20 files at once still caps at 5 and names the 15 dropped', () => {
+    const twenty = Array.from({ length: 20 }, (_unused, i) => new File([], `f${i}.csv`))
+    const result = addFiles([], twenty)
+    expect(result.files).toHaveLength(MAX_RUN_FILES)
+    expect(result.files.map((pf) => pf.file.name)).toEqual(['f0.csv', 'f1.csv', 'f2.csv', 'f3.csv', 'f4.csv'])
+    expect(result.refusal).not.toBeNull()
+    expect(result.refusal).toContain('15')
+    expect(result.refusal).toContain(String(MAX_RUN_FILES))
+  })
+})
+
+describe('addFiles/removeFile — identity and duplicate-name behaviour (QA Mode B)', () => {
+  // A user dropping the very same File twice (e.g. two overlapping drag events) must
+  // not silently collapse to one entry — the list is keyed by a fresh id per pick, not
+  // by File identity or name. Falsification: an impl that dedupes by object reference
+  // or reuses one id for both entries.
+  it('adding the exact same File object twice keeps both as separate entries with unique ids', () => {
+    const f = new File([], 'dup.csv')
+    const result = addFiles([], [f, f])
+    expect(result.files).toHaveLength(2)
+    expect(result.files[0].file).toBe(f)
+    expect(result.files[1].file).toBe(f)
+    const ids = result.files.map((pf) => pf.id)
+    expect(new Set(ids).size).toBe(2)
+    expect(result.refusal).toBeNull()
+  })
+
+  // Two distinct files that merely share a filename (common with exported reports)
+  // must both be kept and independently removable. Falsification: an impl that keys
+  // removal by name instead of id, which would remove both or the wrong one.
+  it('two distinct File objects sharing the same name are both kept, and removeFile removes exactly one', () => {
+    const f1 = new File([], 'same.csv')
+    const f2 = new File([], 'same.csv')
+    const added = addFiles([], [f1, f2])
+    expect(added.files).toHaveLength(2)
+    expect(added.files.map((pf) => pf.file.name)).toEqual(['same.csv', 'same.csv'])
+    const ids = added.files.map((pf) => pf.id)
+    expect(new Set(ids).size).toBe(2)
+
+    const afterRemove = removeFile(added.files, added.files[0].id)
+    expect(afterRemove).toHaveLength(1)
+    expect(afterRemove[0].id).toBe(added.files[1].id)
+    expect(afterRemove[0].file).toBe(f2)
+  })
+})
+
+describe('order stability under add/remove churn (QA Mode B)', () => {
+  // Falsification: any impl backed by a Set, a Map keyed by insertion re-sort, or a
+  // removeFile that re-appends survivors in a different order than they started in.
+  it('add, remove-from-middle, add-again lands in exactly the order a user would predict', () => {
+    const a = new File([], 'a.csv')
+    const b = new File([], 'b.csv')
+    const c = new File([], 'c.csv')
+    const d = new File([], 'd.csv')
+    const step1 = addFiles([], [a, b, c])
+    const bId = step1.files[1].id
+    const step2 = removeFile(step1.files, bId)
+    const step3 = addFiles(step2, [d])
+    expect(step3.files.map((pf) => pf.file.name)).toEqual(['a.csv', 'c.csv', 'd.csv'])
+    expect(step3.refusal).toBeNull()
+  })
+})
+
+describe('capRefusal — the copy names both numbers (QA Mode B)', () => {
+  // Falsification: a future edit that reduces the message to a vague "some files were
+  // not added" — these pin that both MAX_RUN_FILES and the dropped count are always
+  // present in the rendered text, not just asserted indirectly via addFiles.
+  it('names the cap and the dropped count for a single dropped file', () => {
+    const msg = capRefusal(1)
+    expect(msg).toContain(String(MAX_RUN_FILES))
+    expect(msg).toContain('1')
+  })
+
+  it('names the cap and the dropped count for several dropped files', () => {
+    const msg = capRefusal(4)
+    expect(msg).toContain(String(MAX_RUN_FILES))
+    expect(msg).toContain('4')
+  })
+})
+
+describe('canReadColumnsAll — extension-rule edges routed through the shipped canReadColumns (QA Mode B)', () => {
+  // Pins that the delegation in canReadColumnsAll does not accidentally re-derive a
+  // stricter/looser extension rule than the shipped hasImportableExtension. Falsification:
+  // an impl that re-implements the check with case-sensitive or different-segment logic.
+  it('an uppercase .CSV extension is still readable', () => {
+    expect(canReadColumnsAll(mkPicked(['REPORT.CSV']))).toBe(true)
+  })
+
+  it('a double extension like a.csv.bak is not readable — last segment only', () => {
+    expect(canReadColumnsAll(mkPicked(['a.csv.bak']))).toBe(false)
+  })
+
+  it('a name that is exactly .csv is readable', () => {
+    expect(canReadColumnsAll(mkPicked(['.csv']))).toBe(true)
+  })
+
+  it('a file with no extension at all is not readable', () => {
+    expect(canReadColumnsAll(mkPicked(['ledger']))).toBe(false)
   })
 })

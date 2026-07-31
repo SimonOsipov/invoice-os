@@ -117,7 +117,9 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-                <div style={{ flex: 1 }}>
+                {/* minWidth: 0 — see the guard on the value below. Without it this flex item keeps
+                    min-width:auto, is floored at its own content width, and squeezes its sibling. */}
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="label" style={{ marginBottom: 6 }}>
                     Taxpayer size <span style={{ color: 'var(--fg-4)' }}>(opt.)</span>
                   </div>
@@ -135,7 +137,17 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                       color: 'var(--fg-2)',
                     }}
                   >
-                    {DEFAULT_TAXPAYER_SIZE} <span style={{ color: 'var(--fg-3)' }}>▾</span>
+                    {/* OVERFLOW GUARD — do not remove. The band string is ~2.7x the 'Medium' this
+                        fixed height:42 box was sized for, so unguarded it wraps to 2-3 lines between
+                        ~921 and ~1150 and below ~500, and bleeds ~4.5px out of the box. The value
+                        needs its OWN element: a bare text node is an ANONYMOUS flex item, which can
+                        take neither min-width:0 (so it never shrinks) nor text-overflow (not
+                        inherited) — so on the bare node the guard silently does nothing but clip the
+                        ▾ caret out of the box. Measured at seven widths by landing-demo.spec.ts E6. */}
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                      {DEFAULT_TAXPAYER_SIZE}
+                    </span>
+                    <span style={{ color: 'var(--fg-3)' }}>▾</span>
                   </div>
                 </div>
                 <div style={{ flex: 1 }}>

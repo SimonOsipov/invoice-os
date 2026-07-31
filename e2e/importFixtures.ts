@@ -125,3 +125,40 @@ export function buildMixedCsv(): string {
   )
   return lines.join('\n')
 }
+
+// buildSingleInvoiceCsv(): INVCR-01-16 (task-292) AC-2's fixture -- ONE clean invoice, one
+// line item. `ready_invoices===1` on a real import (internal/importer/service.go's
+// ValidateBatch auto-promotes a zero-violation row to `validated`), which is exactly what
+// makes routeAfterImport (lib/reviewBatch.ts) resolve `{kind:'single'}` and land the wizard
+// on the real InvoiceDetail instead of the review shell (Core AC 8). VAT 75.00 against
+// Subtotal 1000.00 * 7.5% reconciles exactly, mirroring buildMixedCsv's own INV-UI-MIX-CLEAN
+// row -- no violation may fire here, or ready_invoices would still be 1 but the id would not
+// resolve the same way through App.tsx's follow-up list call.
+//
+// `invoiceNumber` is caller-supplied (Date.now()-suffixed at the call site) rather than a
+// fixed literal, mirroring this file's own per-run-uniqueness discipline: this suite reruns
+// against a shared, never-reset dev DB, and a fixed literal would collide with an earlier
+// run's (tenant, entity, invoice_number) the moment two runs share an entity.
+export function buildSingleInvoiceCsv(invoiceNumber: string): string {
+  const lines: string[] = [PERF_HEADER]
+  lines.push(
+    [invoiceNumber, '2026-01-15', '87654321-0002', 'M4-08 UI Single Co', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00'].join(','),
+  )
+  return lines.join('\n')
+}
+
+// buildHeaderOnlyCsv(): INVCR-01-16 (task-292) AC-4's §7.5 rejected-file fixture -- the
+// header row alone, zero data rows. internal/importer/service_adversarial_test.go's
+// TestServiceImport_ZeroDataRowsRealImportFinalizesFailed pins the server side: a real
+// (non-dry-run) import given zero rows still mints an auditable import_batches row, but
+// finalizes it straight to `status:'failed'` with every counter at Go zero -- reportSummary
+// AND reviewShellState (lib/reviewBatch.ts) both key off `status !== 'completed'`, so this
+// is the one fixture that reaches ReviewBatch.tsx's RejectedFile branch from a FRESH import,
+// never a deep link to an already-quarantined batch. Columns still echo for real
+// (internal/importer/handlers_preview_test.go's PRV-07: a header-only CSV yields non-empty
+// columns and zero rows, no error) -- the wizard's Map step still renders and
+// invoice_number is still placed by hand exactly like every other fixture in this file;
+// only the final Import response differs.
+export function buildHeaderOnlyCsv(): string {
+  return PERF_HEADER
+}

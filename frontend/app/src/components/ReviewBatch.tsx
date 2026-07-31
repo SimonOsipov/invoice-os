@@ -62,7 +62,7 @@ interface ReviewShellData {
   // The fourth filter-pill count (INVCR-01-10). Fetched HERE rather than inside the tab
   // so all four pill counts come from ONE Promise.all with one loading state — a tab
   // that self-fetched `queued` would give four numbers from two sources, and one pill
-  // could render while the other three were still pending.
+  // could render while the other three were still unresolved.
   queuedTotal: number
   // The footer's "N kept as-is" count (INVCR-01-15, D6, task-291) -- a real server
   // total (`ListFilter.KeptAsIs`, store.go), never an arithmetic derivation of the

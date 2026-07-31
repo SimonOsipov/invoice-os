@@ -59,7 +59,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
-import { buildMixedCsv, buildPerfCsv, PERF_HEADER } from '../importFixtures'
+import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
 
 // MixedImportResponse: the subset of POST /v1/imports's success body (internal/
 // importer/handlers.go's importResponse) E2E-04 reads to assert that a REAL import
@@ -419,14 +419,17 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   // shell has no such row: the content channel moved off the frozen 201 payload onto
   // live per-invoice verdicts (D4), and 09 rendered no table for them. Two owners, both
   // downstream on this branch:
-  //   - subtask 10 owns the invoices-table row click-through, which is the direct
-  //     successor of this assertion. NOW BUILT (ReviewInvoicesTab.tsx: a `review-row`
-  //     click calls the same ctx.openImportedInvoice this exercised), but still
-  //     UNASSERTED -- nothing on this branch runs until the PR leaves draft, so subtask
-  //     16 owns proving it on the deployed run.
+  //   - subtask 10 owned the invoices-table row's disclosure, but NOT as a
+  //     click-through: task-290 ([navigate-vs-expand]) built a whole-row click as the
+  //     row-EXPANSION toggle (§7.3's fix loop) instead, never a navigation to
+  //     InvoiceDetail -- ctx.openImportedInvoice stays wired everywhere else
+  //     (InvoicesList.tsx, the N=1 route below) but is no longer what a review-row click
+  //     does. Proven on the deployed run by subtask 16's own INVCR-E2E-1 (the row-switch
+  //     expand/fix/re-validate loop) above.
   //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice/detailTarget
   //     seam this exercised (import a one-invoice file -> land on the real InvoiceDetail,
-  //     never the review shell), which is the highest-value uncovered path in 09.
+  //     never the review shell), which is the highest-value uncovered path in 09 --
+  //     INVCR-E2E-2 above.
   // Deleting rather than leaving a weakened version is deliberate: a spec that asserts
   // less than its name claims is worse than an absent one.
   //
@@ -728,6 +731,397 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 
   await expect(page.getByTestId('invoice-detail'), 'manual filing succeeded too, for in-house').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(manualNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// INVCR-01-16 (task-292) -- Core AC 11's closing subtask. The five tests below discharge
+// the story's rewritten ACs 1/2/4/6/7 against a deployed build (AC-3/AC-5/AC-9/AC-10 live
+// in invoice-surfaces.spec.ts; AC-5's own in-house happy path is [inhouse-can-file] above
+// -- task-304 -- NOT duplicated here, this subtask only verifies it runs green).
+//
+// ReviewRow.tsx's row (`data-testid="review-row"`) and its row-expansion panel
+// (`data-testid="review-row-expansion"`, and everything inside it) are SIBLINGS in the
+// DOM, not parent/child (ReviewRow.tsx returns `<>{row}{expanded && <ExpandedFixPanel/>}
+// </>`) -- so every panel-internal testid below (`review-fix-card`/`review-fix-input`/
+// `review-fix-save`/`review-revalidate`/`review-row-passing`/`review-keep-reason`/
+// `review-keep`/`review-kept-banner`) is queried PAGE-SCOPED, never scoped off a row
+// locator. This is safe because ReviewInvoicesTab.tsx's `expandedId` is singular -- at
+// most one row's panel exists in the DOM at any moment -- unlike `review-verdict`/
+// `review-select`, which genuinely are children of the row's own grid div and so ARE
+// scoped off the row locator throughout.
+
+// AC-1: the full firm N>1 loop, driven for real for the first time -- import a mixed
+// batch, filter the review table by a failing RULE (the rail, not a pill), expand a row,
+// fix the field the server flagged, re-validate, watch the verdict pill move, select the
+// now-eligible set, confirm, and prove the row badges only move once a REAL re-fetch
+// lands (never derived off the submit response -- bulkOutcome's own documented
+// discipline, lib/reviewBatch.ts: batch_submit.go's duplicate-request branch hard-codes a
+// known-wrong status on a skipped item, M5-11).
+//
+// Also closes the coverage gap task-290's own Implementation Notes flagged and this
+// subtask's own notes repeat: switching the row-expansion slot between two rows must not
+// leak one row's fetched detail/draft into the other. Verified by CODE READING only until
+// now -- vitest here is environment:'node' (no jsdom/RTL), so there is no unit oracle for
+// this, and this is the first time it runs against a live DOM at all.
+test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-validate -> select -> submit, badges from a re-fetch', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 loop ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'e2e-loop.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  const resp = await importResp
+  const body = (await resp.json()) as { id: string }
+  const batchId = body.id
+
+  // Lands on the review shell -- 2 ready invoices (CLEAN and VIOLATE; STRUCT never
+  // becomes an invoice at all), both §7.1 channels rendered.
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('1 valid', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 failed a rule', { exact: true })).toBeVisible()
+  await expect(page.getByText(/^[1-9]\d* unreadable rows$/)).toBeVisible()
+
+  const violateRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
+  const cleanRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })
+  await expect(violateRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  // Row-switch non-leak (coverage gap): expand VIOLATE, note its (wrong) VAT value,
+  // switch to CLEAN, and back -- neither panel may show the other's data.
+  const fixCard = page.getByTestId('review-fix-card')
+  const fixInput = page.getByTestId('review-fix-input')
+  const rowPassing = page.getByTestId('review-row-passing')
+
+  await violateRow.click()
+  await expect(fixCard).toContainText('vat-standard-rate')
+  await expect(fixInput).toHaveValue('0.00')
+
+  await cleanRow.click()
+  await expect(rowPassing, "CLEAN never inherits VIOLATE's fix card").toBeVisible()
+  await expect(fixCard).toHaveCount(0)
+
+  await violateRow.click()
+  await expect(rowPassing).toHaveCount(0)
+  await expect(fixInput, 'switching back re-fetches VIOLATE fresh, not a ghost of CLEAN').toHaveValue('0.00')
+
+  // Filter by the failing RULE (the rail, not the "Needs a fix" pill) -- narrows the
+  // server-paged table to VIOLATE alone.
+  const railPill = page.getByTestId('review-rail-pill').filter({ hasText: 'vat-standard-rate' })
+  await expect(railPill).toBeVisible()
+  await railPill.click()
+  await expect(cleanRow).toHaveCount(0)
+  await expect(violateRow).toBeVisible()
+
+  // Fix the field the server flagged, save.
+  await expect(fixInput).toHaveValue('0.00')
+  await fixInput.fill('75.00')
+  await page.getByTestId('review-fix-save').click()
+  await expect(fixInput, 'the panel re-fetches the saved value').toHaveValue('75.00')
+
+  // Re-validate -- the verdict pill moves.
+  await page.getByTestId('review-revalidate').click()
+  await expect(rowPassing, 'clean after the fix').toBeVisible()
+
+  // Toggle the SAME rule filter back off -- the invoice no longer matches it, so this is
+  // also what makes the moved verdict observable again.
+  await railPill.click()
+  await expect(cleanRow).toBeVisible()
+  await expect(violateRow).toBeVisible()
+  await expect(violateRow.getByTestId('review-verdict'), 'the verdict pill moved to VALIDATED').toContainText('VALIDATED')
+  await expect(violateRow.getByTestId('review-verdict')).not.toContainText('RULES FAILED')
+
+  // Select the (now fully) eligible subset and submit.
+  await page.getByTestId('review-select-all').click()
+  await expect(page.getByTestId('review-bulk-submit')).toContainText('Submit 2 for transmission')
+  await page.getByTestId('review-bulk-submit').click()
+  await expect(page.getByTestId('review-bulk-confirm')).toContainText('Yes, send 2 now')
+
+  const submitResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions'),
+  )
+  // The re-fetch this whole AC pins as the badge source -- registered BEFORE the click so
+  // it cannot be satisfied by a request that already landed.
+  const refetchResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('import_batch_id') === batchId,
+  )
+  await page.getByTestId('review-bulk-confirm').click()
+  await submitResp
+  await refetchResp
+
+  await expect(
+    violateRow.getByTestId('review-verdict'),
+    'the badge only moves once the re-fetch lands, never off the submit response',
+  ).toContainText('QUEUED')
+  await expect(cleanRow.getByTestId('review-verdict')).toContainText('QUEUED')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-2: Core AC 8's N=1 route, proven on the deployed build for the first time -- a
+// single-invoice CSV lands directly on the real InvoiceDetail, asserted by PRESENCE of
+// its own data-testid and status-history, never by the review table's absence alone
+// ([E2E-must-not] #4).
+test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, never a one-row review grid', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 single ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const invoiceNumber = `INV-E2E-SINGLE-${Date.now()}`
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'single.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(invoiceNumber), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await expect(page.getByTestId('invoice-detail'), 'N=1 routes to the real detail').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+  await expect(page.getByTestId('status-history'), 'the real detail carries a status-history panel').toBeVisible()
+  await expect(page.getByTestId('review-table')).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-4: a header-only file (a real spreadsheet, real bytes, zero data rows) is refused
+// honestly -- §7.5's "Nothing was imported" with three zeroed tiles, and no Map-step
+// retry offered from the rejected screen (only re-upload or manual entry).
+test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step retry offered', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 rejected ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'header-only.csv', mimeType: 'text/csv', buffer: Buffer.from(buildHeaderOnlyCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // A header-only file still echoes real columns (PRV-07) -- invoice_number is placed by
+  // hand exactly as every other fixture in this file, at 0 rows.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  const importBtn = page.getByRole('button', { name: 'Import 0 rows' })
+  await expect(importBtn).toBeEnabled()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  await importResp
+
+  await expect(page.getByText('Nothing was imported', { exact: true }), "§7.5's rejected-file state").toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('Invoices created', { exact: true })).toBeVisible()
+  await expect(page.getByText('Rows stored', { exact: true })).toBeVisible()
+  await expect(page.getByText('Rows quarantined', { exact: true })).toBeVisible()
+  // Three ZEROED tiles -- a header-only file creates nothing, stores nothing, quarantines
+  // nothing (it fails before any per-row classification runs at all).
+  await expect(page.getByText('0', { exact: true })).toHaveCount(3)
+
+  // No Map-step retry from here: the only two recovery actions are re-upload and manual
+  // entry (ctx.restartImport / ctx.skipUpload) -- never a "go back and remap" affordance.
+  await expect(page.getByRole('button', { name: 'Choose another file' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Enter one invoice instead' })).toBeVisible()
+  await expect(page.getByText('Map fields to columns', { exact: false })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-6: the review screen is addressable and REVISITABLE (D4) -- a reload on
+// `#review/<batchId>` restores it with BOTH channels re-derived from a fresh GET, never
+// from memory the tab already held.
+test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derives both channels', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 deep-link ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'e2e-deep-link.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page).toHaveURL(/#review\//)
+
+  // Registered BEFORE reload: D4's whole point is that a revisit re-derives from the
+  // server rather than reading a frozen import-time payload, so a genuine GET must fire
+  // for the batch AND the invoices list, not merely a client-side re-render of memory
+  // this page already held.
+  const batchRefetch = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/api\/invoice\/v1\/imports\/[0-9a-fA-F-]+$/.test(new URL(r.url()).pathname),
+  )
+  const invoicesRefetch = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+  )
+  await page.reload()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await batchRefetch
+  await invoicesRefetch
+
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('1 valid', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 failed a rule', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('review-table')).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-7: keeping a failing invoice as-is drops it out of "Needs a fix" but the row -- and
+// its checkbox -- stay on screen, DISABLED, never absent (task-291's own QA finding; the
+// plan's older "checkbox is absent" wording is wrong and the rewritten AC corrects it).
+test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disabled, never absent', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 keep ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'e2e-keep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+
+  const violateRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
+  const cleanRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })
+  await expect(violateRow).toBeVisible()
+
+  await violateRow.click()
+  const keepReason = page.getByTestId('review-keep-reason')
+  await expect(keepReason).toBeVisible()
+  await keepReason.fill('Buyer confirmed the VAT discrepancy is intentional; will not recur.')
+  await page.getByTestId('review-keep').click()
+
+  // The pill flips, and the reason surfaces verbatim (KEEP-3's own live proof).
+  await expect(violateRow.getByTestId('review-verdict')).toContainText('KEPT')
+  await expect(page.getByTestId('review-kept-banner')).toContainText('Buyer confirmed the VAT discrepancy is intentional')
+
+  // It drops out of "Needs a fix" ...
+  await page.getByTestId('review-filter-pill').filter({ hasText: 'Needs a fix' }).click()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })).toHaveCount(0)
+
+  // ... but stays PRESENT and DISABLED on "All", never absent.
+  await page.getByTestId('review-filter-pill').filter({ hasText: 'All' }).click()
+  await expect(violateRow).toBeVisible()
+  await expect(violateRow.getByTestId('review-select'), 'the checkbox renders -- it is not absent').toBeVisible()
+  await expect(
+    violateRow.getByTestId('review-select'),
+    'but it is disabled -- a kept row stays non-selectable (isRowSelectable)',
+  ).toBeDisabled()
+
+  // select-all excludes it (status stays non-validated even though kept) and still picks
+  // up the still-eligible CLEAN row.
+  await page.getByTestId('review-select-all').click()
+  await expect(cleanRow.getByTestId('review-select')).toBeChecked()
+  await expect(violateRow.getByTestId('review-select')).not.toBeChecked()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

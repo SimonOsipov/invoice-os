@@ -1648,3 +1648,30 @@ describe('ReviewRow.tsx source: none of the three D2-forbidden lifecycle names a
     }
   })
 })
+
+// BATCH-7b (INVCR-01-16, task-292, AC-11) -- the scanner-coverage gap the story's own
+// Implementation Notes tracked from task-287 QA Stage 4 onward: ReviewBatch.tsx sits
+// under NEITHER of the two file-scoped scanners above (TAB-7b watches only
+// ReviewInvoicesTab.tsx, LIB-SCAN-1 only reviewBatch.ts) nor ROW-7b (ReviewRow.tsx only)
+// -- so a D2-forbidden name introduced into ReviewBatch.tsx ships silently, the exact
+// failure mode that bounced INVCR-01-10 (subtask 10), in the one review-surface file no
+// scanner watched. Mirrors ROW-7b's own by-path, whole-file idiom byte-for-byte (reads
+// the component BY PATH, never this test file, to avoid self-matching -- PILL-3b's
+// shipped idiom) -- this describe block's own comments legitimately name all three
+// forbidden words.
+//
+// A pre-existing forbidden word already sat in this exact file's doc comments (from
+// INVCR-01-10, commit 4fa8874: "...could render while the other three were still
+// pending.") -- reworded to "unresolved" (this subtask, INVCR-01-16) specifically so
+// this new scanner does not red on day-one inherited debt, per the task's own
+// Implementation Notes warning.
+describe('ReviewBatch.tsx source: none of the three D2-forbidden lifecycle names appear (AC-11, BATCH-7b)', () => {
+  it('BATCH-7b: the component file contains no Pending/Approved/Transmitted, in any case, including in comments', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    for (const forbidden of [/\bpending\b/i, /\bapproved\b/i, /\btransmitted\b/i]) {
+      expect(source).not.toMatch(forbidden)
+    }
+  })
+})

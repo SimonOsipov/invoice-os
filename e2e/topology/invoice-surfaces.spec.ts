@@ -97,14 +97,22 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
   await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
-// A supplier/buyer/line-item shape that fires EXACTLY
+// A supplier/buyer/line-item shape that ORIGINALLY fired EXACTLY
 // ['supplier-tin-format', 'vat-standard-rate'] against the active v2 rule set
-// (fixtures.ts's BAD_INVOICE_KEYS, re-verified here against the flat
-// createInvoice wire shape): a malformed supplier TIN plus a VAT that isn't
-// 7.5% of the subtotal. Every OTHER v1/v2 rule (the required/format/range
-// rules, line-items-required, line-items-sum-subtotal, line-cost-non-negative)
-// is satisfied so no incidental third violation sneaks in and breaks an
-// exact-key assertion.
+// (fixtures.ts's BAD_INVOICE_KEYS): a malformed supplier TIN plus a VAT that isn't 7.5%
+// of the subtotal. Every OTHER v1/v2 rule (the required/format/range rules,
+// line-items-required, line-items-sum-subtotal, line-cost-non-negative) is satisfied so
+// no incidental third violation sneaks in and breaks an exact-key assertion.
+//
+// REVISED (INVCR-01-16, task-292, AC-10): true only through the STATELESS /v1/validate
+// path (unaffected, e2e/api/validation.spec.ts's own use). Every caller HERE goes
+// through createInvoice -- and task-293's C7 fix ([supplier-from-entity]) makes
+// Store.Create discard any caller-supplied supplier_tin and re-derive it from the
+// invoice's own entity -- so 'BADTIN' never reaches storage and supplier-tin-format can
+// never fire for either of this file's two createInvoice call sites (the list-surface
+// test only checks needs_attention/status badges, unaffected either way; the
+// detail-surface test's own exact-key assertion is the one this subtask fixed). Only
+// vat-standard-rate genuinely fires through createInvoice now.
 function badInvoiceFields(invoiceNumber: string) {
   return {
     invoice_number: invoiceNumber,
@@ -335,23 +343,27 @@ test('detail surface: violations render against the rule-set version, the fix lo
   //    promotion, no new history row) while the violations table now renders
   //    the real verdict against the live rule-set version.
   //
-  //    KNOWN PRE-EXISTING GAP (INVCR-01-17/task-293's own QA finding,
-  //    tracked on task-292, NOT touched by INVCR-01-18/task-303): Store.
-  //    Create now derives supplier_tin from the entity ([supplier-from-
-  //    entity]) rather than trusting badInvoiceFields()'s 'BADTIN', so
-  //    supplier-tin-format no longer actually fires here -- this loop's
-  //    'supplier-tin-format' iteration is expected to fail until task-292
-  //    updates the fixture/assertion. Left as-is rather than fixed here: it
-  //    is a CREATE-path consequence of a different subtask, outside this
-  //    one's scope.
+  //    RESOLVED (INVCR-01-16, task-292, AC-10): the KNOWN PRE-EXISTING GAP task-293's QA
+  //    found (and INVCR-01-18/task-303 deliberately left untouched, outside its own
+  //    scope) is fixed here. Store.Create now derives supplier_tin from the entity
+  //    ([supplier-from-entity]) rather than trusting badInvoiceFields()'s 'BADTIN', so
+  //    'BADTIN' never reaches storage and supplier-tin-format can never fire from this
+  //    fixture again. vat-standard-rate is unaffected -- a wrong VAT is a value the
+  //    client genuinely controls -- and stays the sole assertion this loop needs; the
+  //    fixture stays broken via VAT alone rather than being redesigned around a second
+  //    violation (the simpler of AC-10's two named options).
   const violationsTable = page.getByTestId('violations-table')
   await page.getByTestId('revalidate').click()
   await expect(violationsTable).toBeVisible()
   await expect(page.getByTestId('not-validated')).toHaveCount(0)
-  for (const key of ['supplier-tin-format', 'vat-standard-rate']) {
-    await expect(violationsTable).toContainText(key)
-  }
+  await expect(violationsTable).toContainText('vat-standard-rate')
   await expect(violationsTable.locator('tbody tr').first().locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
+  // INVCR-01-16 AC-9: discharges task-289's own deferred empirical check -- v3 fills
+  // `target` on vat-standard-rate (blank under v2), so the Path column (ViolationsTable's
+  // 4th <td>) must render it here, on this LIVE invoice-detail mount of the table, not
+  // the em-dash placeholder a blank target would leave.
+  const vatRow = violationsTable.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
+  await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expect(page.getByTestId('status-history-row')).toHaveCount(1)
 
@@ -1004,6 +1016,54 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
   await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// INVCR-01-16 (task-292) AC-3 -- Core AC 1's ordering claim ("no success copy before the
+// response") made OBSERVABLE rather than merely asserted. CreateForm.tsx's own header
+// comment states the contract: "NOTHING here may affirm a filing. There is no success
+// banner, no tick, no optimistic row: the affirmation is the real invoice detail screen
+// rendering the server's own row, reached only after the 201." An unthrottled assertion
+// of "no success copy yet" would almost always pass VACUOUSLY on a real deployed round
+// trip (the 201 can easily have already landed by the time Playwright looks) --
+// page.route delays the create POST by a fixed window so the pre-response gap is real,
+// matching this subtask's own "must not race" constraint (§14 #5).
+test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the response', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  await signInFirm(page)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+
+  const invoiceNumber = `INV-E2E-MANUAL-${Date.now()}`
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+
+  // Delay ONLY the create POST -- nothing else on this screen requests this same path.
+  await page.route('**/api/invoice/v1/invoices', async (route) => {
+    if (route.request().method() === 'POST') await new Promise((r) => setTimeout(r, 2_000))
+    await route.continue()
+  })
+
+  const createResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+    { timeout: 30_000 },
+  )
+  const fileBtn = page.getByRole('button', { name: 'File invoice' })
+  await expect(fileBtn).toBeEnabled()
+  await fileBtn.click()
+
+  // The 2s route delay makes this window real, not a race: fileDraftInvoice
+  // (lib/invoiceDraft.ts) sets the in-flight flag SYNCHRONOUSLY before its one `await`,
+  // so "Filing…" renders immediately, while nothing that could only come from the 201 --
+  // the real detail screen -- exists yet.
+  await expect(page.getByRole('button', { name: 'Filing…' }), 'the in-flight state renders immediately on click').toBeVisible()
+  await expect(page.getByTestId('invoice-detail'), 'no success copy before the response').toHaveCount(0)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(0)
+
+  await createResp
+  await expect(page.getByTestId('invoice-detail'), 'the real detail renders once the 201 lands').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

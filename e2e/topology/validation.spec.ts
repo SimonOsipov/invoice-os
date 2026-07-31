@@ -69,6 +69,13 @@ test('deployed app: validation playground round-trips the live engine', async ({
   const firstRow = table.locator('tbody tr').first()
   await expect(firstRow.locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
 
+  // INVCR-01-16 (task-292) AC-9: discharges task-289's own deferred empirical check --
+  // v3 (migrations/20260731090000_rule_set_v3.sql) fills `target` on vat-standard-rate
+  // (blank under v2), so the Path column (ViolationsTable's 4th <td>) must render it on
+  // this live, deployed round trip, not the em-dash placeholder a blank target leaves.
+  const vatRow = table.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
+  await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
+
   // Every rule in the ACTIVE seeded MBS set is error severity -- v1's 17 base rules
   // (migrations/20260711121327_seed_mbs_v1.sql) and the two line-item rules v2 re-issues
   // (20260716185106_rule_set_v2.sql) alike -- so this claim needs no version label to stay

@@ -33,6 +33,7 @@ import {
   pruneSelection,
   skipReasonLabel,
   type BatchSubmitResultItem,
+  type EditFieldKey,
   type InvoiceRecord,
   type InvoiceStatus,
   type RuleCount,
@@ -45,7 +46,10 @@ import {
   bulkOutcome,
   bulkPhaseReducer,
   channelTiles,
+  EDIT_FIELD_LABELS,
   filterToQuery,
+  fixCard,
+  fixEditPatch,
   formatReviewHash,
   initialReviewFilter,
   pagerLabels,
@@ -61,6 +65,7 @@ import {
   reviewQuery,
   reviewShellState,
   reviewTabs,
+  rowExpansionView,
   routeAfterImport,
   unreadableCsv,
   unreadableRows,
@@ -1277,5 +1282,289 @@ describe('ReviewInvoicesTab.tsx source: a synchronous double-click guard exists 
     expect(source).toMatch(/if \(submitInFlight\.current\) return/)
     expect(source).toMatch(/submitInFlight\.current = true/)
     expect(source).toMatch(/submitInFlight\.current = false/)
+  })
+})
+
+// --- INVCR-01-14 (task-290, Stage 2.5/Mode A) — RED specs for the row-expansion fix
+// editor's pure model: fixCard, rowExpansionView, fixEditPatch, EDIT_FIELD_LABELS. All
+// three functions throw `new Error('not implemented')` today (reviewBatch.ts's own STUB
+// header), so every spec below fails on that throw — the correct RED reason — except
+// ROW-7b, which fails on ENOENT for a DIFFERENT, legitimate reason (TAB-7b's own
+// precedent above: ReviewRow.tsx does not exist until Stage 3 creates it).
+//
+// D8/D9 recap, this subtask's whole reason for existing: field targeting is
+// mbsPathToEditField(violation.path) ALONE — no rule-key map is authored here or
+// anywhere in this file. `line_items`/`invoice_number`/any APP-only path resolves to
+// `null`, and the card's own `message` still carries the reason in full — `null` means
+// "no field to flag", never "drop the reason".
+function mkViolation(overrides: Partial<Violation> = {}): Violation {
+  return { rule_key: 'r', severity: 'error', message: 'm', ...overrides }
+}
+
+describe('fixCard: field targeting is mbsPathToEditField alone — no rule-key map (AC-2, FIX-1..4)', () => {
+  it("FIX-1: vat-standard-rate (path 'vat', expected '84375') resolves to the vat field and carries the expectation", () => {
+    const v = mkViolation({
+      rule_key: 'vat-standard-rate',
+      path: 'vat',
+      expected: '84375',
+      message: 'VAT must equal 7.5% of the taxable base.',
+    })
+
+    const card = fixCard(v)
+
+    expect(card.field).toBe('vat')
+    expect(card.hint).toBe('Expected 84375')
+    expect(card.message).toBe('VAT must equal 7.5% of the taxable base.')
+    expect(card.blocking).toBe(true)
+  })
+
+  it("FIX-2: line-items-sum-subtotal (path 'subtotal', expected '1120000') resolves to the subtotal field", () => {
+    const v = mkViolation({ rule_key: 'line-items-sum-subtotal', path: 'subtotal', expected: '1120000' })
+
+    const card = fixCard(v)
+
+    expect(card.field).toBe('subtotal')
+    expect(card.hint).toBe('Expected 1120000')
+  })
+
+  it('FIX-3: an unmappable path (line_items) renders field:null and the message unabridged — never dropped, never an invented field name', () => {
+    const v = mkViolation({
+      rule_key: 'line-cost-non-negative',
+      path: 'line_items',
+      message: 'A line item cannot carry a negative amount.',
+    })
+
+    const card = fixCard(v)
+
+    expect(card.field).toBeNull()
+    expect(card.message).toBe('A line item cannot carry a negative amount.')
+  })
+
+  it('FIX-4: a path-less violation still renders — no crash, field:null, message intact', () => {
+    const v = mkViolation({ rule_key: 'x', path: undefined, message: 'Something failed.' })
+
+    expect(() => fixCard(v)).not.toThrow()
+    const card = fixCard(v)
+    expect(card.field).toBeNull()
+    expect(card.message).toBe('Something failed.')
+  })
+
+  it('FIX-10: a warning-severity violation is non-blocking — the advisory path (§10.12), synthetic since all 19 shipped rules are error today ([warning-pill-unreachable-today])', () => {
+    const v = mkViolation({ severity: 'warning', message: 'Advisory only.' })
+
+    const card = fixCard(v)
+
+    expect(card.severity).toBe('warning')
+    expect(card.blocking).toBe(false)
+  })
+
+  it('FIX-10b: a WARNING-ONLY invoice is not labelled failing at the row-expansion level either (AC-8, §10.12) — rowExpansionView carries a distinct advisory sectionLabel, never the "Failed rules" one', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'warning' })], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view.blocking).toBe(false)
+    expect(view.sectionLabel).not.toContain('Failed')
+    expect(view.cards).toHaveLength(1)
+    expect(view.cards[0].blocking).toBe(false)
+  })
+
+  it('FIX-10c: an invoice mixing a blocking error with an advisory warning is treated as blocking overall — sectionLabel is the "Failed rules" one', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'warning' }), mkViolation({ severity: 'error' })], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.blocking).toBe(true)
+    expect(view.sectionLabel).toBe('Failed rules · fix here, then re-validate this invoice only')
+  })
+
+  it('a violation carrying neither expected nor actual has hint:null, never an empty string', () => {
+    const v = mkViolation({ path: 'currency' })
+
+    expect(fixCard(v).hint).toBeNull()
+  })
+
+  it('a violation carrying BOTH expected and actual composes them — decimal strings passed through raw, never re-parsed/re-formatted ([D13])', () => {
+    const v = mkViolation({ expected: '84375.00', actual: '80000.00' })
+
+    expect(fixCard(v).hint).toBe('Expected 84375.00 · got 80000.00')
+  })
+})
+
+describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human label (AC-2)', () => {
+  it('all nine keys are present, matching InvoiceDetail.tsx\'s own edit-form labels verbatim', () => {
+    const expected: Record<EditFieldKey, string> = {
+      issue_date: 'Issue date',
+      supplier_tin: 'Supplier TIN',
+      supplier_name: 'Supplier name',
+      buyer_tin: 'Buyer TIN',
+      buyer_name: 'Buyer name',
+      currency: 'Currency',
+      subtotal: 'Subtotal',
+      vat: 'VAT',
+      total: 'Total',
+    }
+
+    expect(EDIT_FIELD_LABELS).toEqual(expected)
+  })
+})
+
+describe('rowExpansionView: a clean invoice (zero violations) is the passing line, never a card list (AC-6, FIX-9)', () => {
+  it('FIX-9: rule_set_version 3 -> passing, summary is "Every rule in NG-MBS v3 passed.", zero cards', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: 3 },
+      { can_revalidate: false, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(true)
+    expect(view.summary).toBe('Every rule in NG-MBS v3 passed.')
+    expect(view.cards).toEqual([])
+  })
+
+  it('a null rule_set_version (never evaluated) still renders honestly, not v0', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.summary).toBe('Every rule in not evaluated passed.')
+  })
+})
+
+// FIX-9's own "the string v8 appears nowhere in the module" -- scoped to the literal
+// FULL fake label ("NG-MBS v8"), not the bare substring "v8": reviewBatch.ts's own
+// INVCR-01-08-era comment (RULE_SET_NAME's own doc, above) legitimately says `v8` in
+// prose (explaining why lib/rules.ts's GOLDEN_SET is NOT imported here) and a bare-"v8"
+// scan would red on that pre-existing, correct line for the wrong reason. The full label
+// is what a hardcoded fallback would actually emit, and it is genuinely absent today.
+describe('reviewBatch.ts source (whole file): the fake "NG-MBS v8" label is never hardcoded (FIX-9b guard)', () => {
+  it('FIX-9b: the literal string "NG-MBS v8" appears nowhere in reviewBatch.ts -- the passing line must derive the version from the server, never repeat D1\'s deleted fake', () => {
+    const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    expect(source).not.toMatch(/NG-MBS v8/i)
+  })
+})
+
+describe('rowExpansionView: a failing invoice carries one card per violation, in server order (AC-1)', () => {
+  it('two violations -> not passing, two cards, in the order the server sent them', () => {
+    const violations: Violation[] = [
+      mkViolation({ rule_key: 'buyer-tin-format', path: 'buyer.tin' }),
+      mkViolation({ rule_key: 'vat-standard-rate', path: 'vat' }),
+    ]
+
+    const view = rowExpansionView(
+      { violations, rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view.summary).toBeNull()
+    expect(view.cards.map((c) => c.ruleKey)).toEqual(['buyer-tin-format', 'vat-standard-rate'])
+    expect(view.cards.map((c) => c.field)).toEqual(['buyer_tin', 'vat'])
+  })
+})
+
+describe('rowExpansionView: the re-validate gate is read off the wire, byte-identical, never mirrored (AC-4, FIX-6)', () => {
+  it('FIX-6: can_revalidate:false with a reason -> disabled:true, reason rendered byte-identically', () => {
+    const reason = 'invoice is validated, the gate is draft-only'
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: 3 },
+      { can_revalidate: false, revalidate_blocked_reason: reason },
+    )
+
+    expect(view.revalidateDisabled).toBe(true)
+    expect(view.revalidateReason).toBe(reason)
+  })
+
+  it("can_revalidate:true -> disabled:false and no reason, matching the wire's own null exactly (never an authored fallback)", () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation()], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.revalidateDisabled).toBe(false)
+    expect(view.revalidateReason).toBeNull()
+  })
+})
+
+describe('rowExpansionView: §7.3\'s provenance/scope note always renders while expanded (AC-7)', () => {
+  it('the note is the exact §7.3 copy, on both the passing and failing branches', () => {
+    const passing = rowExpansionView(
+      { violations: [], rule_set_version: 3 },
+      { can_revalidate: false, revalidate_blocked_reason: null },
+    )
+    const failing = rowExpansionView(
+      { violations: [mkViolation()], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(passing.note).toBe('Re-validating touches this invoice only — the rest of the import stays as it is.')
+    expect(failing.note).toBe(passing.note)
+  })
+})
+
+describe("fixEditPatch: only genuinely-changed fields reach the wire — mirrors InvoiceDetail.tsx's diffEditInput (AC-5)", () => {
+  const original: Pick<InvoiceRecord, EditFieldKey> = {
+    issue_date: '2026-07-01T00:00:00Z',
+    supplier_tin: '00000000001',
+    supplier_name: 'Acme Ltd',
+    buyer_tin: '00000000002',
+    buyer_name: 'Beta Ltd',
+    currency: 'NGN',
+    subtotal: '1000.00',
+    vat: '75.00',
+    total: '1075.00',
+  }
+
+  it('FIXPATCH-1: a draft equal to the original produces an empty patch', () => {
+    expect(fixEditPatch(original, { vat: '75.00' })).toEqual({})
+  })
+
+  it('FIXPATCH-2: a genuinely changed field is the only key in the patch', () => {
+    expect(fixEditPatch(original, { vat: '84375.00' })).toEqual({ vat: '84375.00' })
+  })
+
+  it('FIXPATCH-3: only the touched fields are considered — two touched fields both land, and touching one never drags in another', () => {
+    expect(fixEditPatch(original, { vat: '84375.00', subtotal: '1120000.00' })).toEqual({
+      vat: '84375.00',
+      subtotal: '1120000.00',
+    })
+    expect(Object.keys(fixEditPatch(original, { subtotal: '1120000.00' }))).toEqual(['subtotal'])
+  })
+
+  it("FIXPATCH-4: a bare YYYY-MM-DD issue_date normalizes to midnight UTC RFC3339, mirroring InvoiceDetail.tsx's own normalization", () => {
+    expect(fixEditPatch(original, { issue_date: '2026-08-15' })).toEqual({ issue_date: '2026-08-15T00:00:00Z' })
+  })
+
+  it('FIXPATCH-5: a cleared issue_date is OMITTED, never sent as "" — the PATCH cannot represent an explicit clear (JSON "null" and an absent key both mean "leave unchanged")', () => {
+    expect(fixEditPatch(original, { issue_date: '' })).toEqual({})
+    expect(fixEditPatch(original, { issue_date: '   ' })).toEqual({})
+  })
+
+  it('FIXPATCH-6: a null original value compares against "" — a field stored NULL and left untouched (the draft seeds "") never appears', () => {
+    const withNulls: Pick<InvoiceRecord, EditFieldKey> = { ...original, buyer_tin: null }
+    expect(fixEditPatch(withNulls, { buyer_tin: '' })).toEqual({})
+  })
+})
+
+// ROW-7b (AC-7, GUARD — red-before ONLY because ReviewRow.tsx does not exist yet; this
+// subtask's own Stage 1 states this is NOT coverage of any behaviour, just a fact of
+// Stage 2.5's timing relative to Stage 3, matching TAB-7b's own precedent above.
+// ReviewRow.tsx is NEW in this subtask and is scanned by NEITHER TAB-7b (scoped to
+// ReviewInvoicesTab.tsx only) NOR LIB-SCAN-1 (scoped to reviewBatch.ts only) — this
+// closes that gap the moment the file exists, the same way TAB-7b closed it for
+// ReviewInvoicesTab.tsx in task-286.
+describe('ReviewRow.tsx source: none of the three D2-forbidden lifecycle names appear (AC-7, ROW-7b)', () => {
+  it('ROW-7b: the component file contains no Pending/Approved/Transmitted, in any case, including in comments', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewRow.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    for (const forbidden of [/\bpending\b/i, /\bapproved\b/i, /\btransmitted\b/i]) {
+      expect(source).not.toMatch(forbidden)
+    }
   })
 })

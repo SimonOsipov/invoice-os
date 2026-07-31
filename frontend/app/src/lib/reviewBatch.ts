@@ -40,6 +40,8 @@ import {
   selectableIds,
   skipReasonLabel,
   type BatchSubmitResultItem,
+  type EditFieldKey,
+  type InvoiceEditInput,
   type InvoiceRecord,
   type ListInvoicesOptions,
   type InvoiceStatus,
@@ -776,4 +778,121 @@ export function bulkOutcome(
     })),
     clearSelection: true,
   }
+}
+
+// --- INVCR-01-14 (task-290): row expansion — inline fix editor + per-invoice re-validate
+//
+// Field targeting is ENTIRELY server-driven (D8): fixCard reads violation.path through
+// the SHIPPED mbsPathToEditField (lib/invoices.ts) alone -- no rule-key map is authored
+// here or anywhere in this file, and none of the three rules §7.3's illustrative table
+// invents (buyer-address-required, currency-enum, issue-date-open-period) are named
+// below ([fix-editor-is-rule-agnostic]). A path with no counterpart (`line_items`,
+// `invoice_number`, any APP-only vocabulary) resolves to `null`; the card's own
+// `message` still carries the server's reason in full regardless -- `null` means "no
+// field to flag", never "drop the reason".
+
+// `hint` composes expected/actual (D9) as opaque strings, NEVER parsed or reformatted:
+// both are decimal STRINGS end-to-end ([D13]), and re-running them through a numeric
+// formatter here would risk the exact precision loss the string typing exists to avoid.
+// `null` when `expected` is absent, matching the wire's own `omitempty` -- never an
+// empty string, which would render as an expectation carrying nothing.
+export interface FixCard {
+  ruleKey: string
+  severity: Severity
+  message: string
+  blocking: boolean
+  field: EditFieldKey | null
+  hint: string | null
+}
+
+// `blocking` is `severity === 'error'` alone -- the SAME predicate verdictPill uses
+// (§10.12's trap), never `true` unconditionally: a warning-only violation still gets a
+// card (so the operator can review and, where mappable, fix it), just styled
+// non-blocking/advisory rather than suppressed.
+export function fixCard(_v: Violation): FixCard {
+  throw new Error('not implemented') // STUB -- task-290 Stage 4 implements
+}
+
+// Field labels for the inline editor's own input, VERBATIM from InvoiceDetail.tsx's edit
+// form labels -- a FIELD-name label, not a rule-key label, so this is generic across
+// whichever of the 19 rules happens to flag that field and is not the client rule-key map
+// D8 forbids. Kept here rather than duplicated per-card inline, per this file's own
+// [bulk-copy-lives-in-the-lib] convention (see the INVCR-01-11 section header above).
+export const EDIT_FIELD_LABELS = {} as Record<EditFieldKey, string> // STUB -- task-290 Stage 4 implements
+
+// §7.3's exact provenance/scope copy (AC-7), verbatim.
+export const ROW_EXPANSION_NOTE = 'Re-validating touches this invoice only — the rest of the import stays as it is.'
+
+export const ROW_EXPANSION_COPY = {
+  sectionLabel: 'Failed rules · fix here, then re-validate this invoice only',
+  // AC-8/§10.12's trap: a WARNING-ONLY invoice (zero errors, ≥1 warning) is not
+  // "failing" -- the top-level verdict pill already renders it VALIDATED + advisory
+  // (verdictPill above), and this section label must not contradict that by calling
+  // its violations "failed rules". Synthetic today (all 19 shipped rules are error),
+  // exercised only by FIX-10b/c's fixtures -- see `[warning-pill-unreachable-today]`.
+  advisorySectionLabel: 'Advisory notes · nothing here is blocking this invoice',
+  revalidateLabel: 'Re-validate this invoice',
+  revalidating: 'Revalidating…',
+  saveLabel: 'Save changes',
+  saving: 'Saving…',
+  // A WARNING beside Re-validate, never a gate (product-advisor review, pre-push): AC-4
+  // pins the button's disabled state to `!inv.can_revalidate` alone, so an unsaved edit
+  // must not block the click -- it only explains that clicking now re-checks the
+  // invoice as LAST SAVED, not as currently typed.
+  unsavedHint: 'You have unsaved changes — save them first, or re-validating will check the invoice as last saved.',
+} as const
+
+export interface RowExpansionView {
+  passing: boolean
+  // True iff at least one violation is `severity === 'error'` -- the SAME predicate
+  // verdictPill/fixCard use (§10.12's trap). Drives which of the two non-passing
+  // section labels renders; a mix of one error and any number of warnings is still
+  // blocking overall, matching verdictPill's own errorCount-first precedence.
+  blocking: boolean
+  summary: string | null
+  // `null` iff `passing` -- the green summary line replaces it entirely, never both.
+  sectionLabel: string | null
+  cards: FixCard[]
+  revalidateDisabled: boolean
+  revalidateReason: string | null
+  note: string
+}
+
+// The row-expansion panel's WHOLE model, mirroring bulkBarView's own one-function
+// composite: ReviewRow.tsx reads every field off THIS, never re-deriving any of it,
+// including which of the two non-passing section labels to show. `passing` is
+// `violations.length === 0` -- a genuinely CLEAN invoice, distinct from a warning-only
+// one (which still renders its violations as non-blocking cards under the ADVISORY
+// label, §10.12's trap) -- so the green summary line is unreachable while anything,
+// even a single warning, fired. `can_revalidate`/`revalidate_blocked_reason` are
+// consumed AS GIVEN -- this function performs no `?? false`/fallback-string authoring
+// of its own; that discipline lives at the wire boundary (getInvoice, lib/invoices.ts)
+// and is not repeated here.
+export function rowExpansionView(
+  _invoice: { violations: Violation[]; rule_set_version: number | null | undefined },
+  _gate: { can_revalidate: boolean; revalidate_blocked_reason: string | null },
+): RowExpansionView {
+  throw new Error('not implemented') // STUB -- task-290 Stage 4 implements
+}
+
+// The row editor's own patch builder -- mirrors InvoiceDetail.tsx's private
+// diffEditInput. That file is out of scope for this subtask (§14: no redesign of the
+// invoice detail screen, and its helper is unexported besides), so this is a deliberate,
+// documented duplication of its normalization rules, not independent reinvention.
+// Iterates the DRAFT's own keys, never the full EDIT_FIELD_KEYS set -- this editor only
+// ever touches the specific field(s) a fired rule flagged, so a field the operator never
+// opened an editor for cannot appear in the patch even if some unrelated value happens
+// to differ from `original`.
+//
+// issue_date is special-cased identically to InvoiceDetail.tsx: PATCH /v1/invoices/{id}
+// decodes IssueDate into a *time.Time, which only accepts a full RFC3339 string, so a
+// bare "YYYY-MM-DD" is normalized to midnight UTC before it is sent. A cleared ("")
+// issue_date is DROPPED, never sent as "" -- JSON "null" and an absent key both decode to
+// "leave unchanged" ([D9]), so an explicit clear cannot be represented over this PATCH at
+// all, and sending "" would only surface a confusing decode failure.
+export function fixEditPatch(
+  _original: Pick<InvoiceRecord, EditFieldKey>,
+  _draft: Partial<Record<EditFieldKey, string>>,
+): InvoiceEditInput {
+  throw new Error('not implemented') // STUB -- task-290 Stage 4 implements
 }

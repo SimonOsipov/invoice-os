@@ -1856,6 +1856,71 @@ describe('diffLineItems (adversarial, QA)', () => {
   })
 })
 
+// --- INVCR-01-14 (task-290, Stage 2.5/Mode A) — RED specs for the row-expansion fix
+// editor's two data-access integration points: a per-invoice re-validate that never
+// touches the import, and the editInvoice+diffLineItems composition the row editor
+// uses. FIX-7 closes a genuine gap: INV-06-T10 (above) already proves an OMITTED
+// can_revalidate normalizes to false, but `?? false` and `=== true` behave IDENTICALLY
+// on `undefined` -- omission alone cannot discriminate the two implementations. Only a
+// non-boolean TRUTHY value (T10c's own technique, there applied to can_edit only) does.
+
+describe('revalidateInvoice: a per-invoice re-validate never touches the import (FIX-5, INVCR-01-14)', () => {
+  it("FIX-5: re-validating 'u-9' fires exactly one POST .../invoices/u-9/validate and no import-endpoint call — fixing a row never restarts the import", async () => {
+    const validated: InvoiceRecord = { ...draftInvoice, id: 'u-9', status: 'validated', rule_set_version: 3 }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(validated) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await revalidateInvoice(af, base, 'u-9')
+
+    expect(result).toEqual(validated)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/u-9/validate')
+    expect(url).not.toContain('/imports')
+    expect(init.method).toBe('POST')
+  })
+})
+
+describe('getInvoice: can_revalidate specifically fails closed on a non-boolean truthy value (FIX-7, INVCR-01-14)', () => {
+  it('FIX-7: a stringly-typed "false" can_revalidate normalizes to false — the mutation oracle for === true over ?? false on THIS flag (INV-06-T10c only covers can_edit)', async () => {
+    const wire = { ...draftInvoice, can_edit: true, can_revalidate: 'false', revalidate_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_revalidate).toBe(false)
+    // Positive companion, mirroring T10c's own shape: can_edit's genuine `true` on the
+    // SAME payload still passes through, proving the denial is about can_revalidate's
+    // own value, not a side effect that zeroes every flag.
+    expect(result.can_edit).toBe(true)
+  })
+})
+
+describe('editInvoice + diffLineItems together: the row-expansion editor\'s own composition (FIX-8, INVCR-01-14)', () => {
+  it('FIX-8: changing only vat, with line items run through diffLineItems unchanged, produces a wire body carrying vat and NO line_items key', async () => {
+    const lines: LineFields[] = [lineFields()]
+    const updated: InvoiceRecord = { ...draftInvoice, vat: '999.00' }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    // The row-expansion editor never touches line items — it always diffs the SAME
+    // content it loaded against itself, which diffLineItems (INV-06-T7) already pins as
+    // undefined. Asserted again HERE as the exact composition the fix editor performs:
+    // build the header patch, conditionally attach diffLineItems' result, then call
+    // editInvoice once.
+    const patch: InvoiceEditInput = { vat: '999.00' }
+    const diffed = diffLineItems(lines, lines)
+    if (diffed !== undefined) patch.line_items = diffed
+
+    await editInvoice(af, base, 'inv-1', patch)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe(JSON.stringify({ vat: '999.00' }))
+    expect(init.body).not.toContain('line_items')
+  })
+})
+
 // Recursively walks `rootDir`, reading every .ts/.tsx file, and returns the relative paths
 // of every file whose text contains `needle` as a literal substring.
 function scanForIdentifier(rootDir: string, needle: string): string[] {

@@ -335,6 +335,89 @@ func TestStoreList_NeedsFixIsDraftWithBlockingViolation(t *testing.T) {
 	}
 }
 
+// TestStoreList_NeedsFixExcludesKept (INVCR-01-15, D6, task-291, AC #9): two erroring
+// drafts, one kept -- {NeedsFix: true} must return ONLY the un-kept one. D6: a kept
+// row records a human decision to stop working on it and drops OUT of "Needs a fix",
+// even though it still matches needs_fix's base shape (draft + a blocking violation).
+func TestStoreList_NeedsFixExcludesKept(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-NEEDSFIX-KEPT tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-NEEDSFIX-KEPT entity")
+
+	const violationsJSON = `[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`
+	unkeptID := seedInvoiceWithViolations(t, super, tenantID, entityID, "BATCH-FILTER-NEEDSFIX-KEPT-unkept", string(StatusDraft), violationsJSON)
+	keptID := seedInvoiceWithViolations(t, super, tenantID, entityID, "BATCH-FILTER-NEEDSFIX-KEPT-kept", string(StatusDraft), violationsJSON)
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'triaged' WHERE id = $1`, keptID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{NeedsFix: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (NeedsFix: true): %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("List (NeedsFix: true).total = %d, want 1 (the kept row must drop out)", total)
+	}
+	if len(items) != 1 || items[0].ID != unkeptID {
+		t.Fatalf("List (NeedsFix: true) items = %+v, want exactly [%s]", items, unkeptID)
+	}
+	for _, inv := range items {
+		if inv.ID == keptID {
+			t.Errorf("List (NeedsFix: true) incorrectly returned the kept invoice %s", keptID)
+		}
+	}
+}
+
+// TestStoreList_KeptAsIsFilterMatchesColumn (extra, task-291): the review shell's
+// footer counter query -- {KeptAsIs: true} must return exactly the kept row, not the
+// unkept one carrying the identical violations. Not named in the architect's Test
+// Specs table (that table only names the needs_fix exclusion); added because
+// ListFilter.KeptAsIs/the `kept_as_is` query param are this subtask's own addition
+// (task notes record why: AC #10's footer count needs a real server total, never an
+// arithmetic derivation of the other totals, [filters-are-server-side]).
+func TestStoreList_KeptAsIsFilterMatchesColumn(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-KEPTASIS tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-KEPTASIS entity")
+
+	const violationsJSON = `[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`
+	unkeptID := seedInvoiceWithViolations(t, super, tenantID, entityID, "BATCH-FILTER-KEPTASIS-unkept", string(StatusDraft), violationsJSON)
+	keptID := seedInvoiceWithViolations(t, super, tenantID, entityID, "BATCH-FILTER-KEPTASIS-kept", string(StatusDraft), violationsJSON)
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'triaged' WHERE id = $1`, keptID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{KeptAsIs: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (KeptAsIs: true): %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("List (KeptAsIs: true).total = %d, want 1", total)
+	}
+	if len(items) != 1 || items[0].ID != keptID {
+		t.Fatalf("List (KeptAsIs: true) items = %+v, want exactly [%s]", items, keptID)
+	}
+	for _, inv := range items {
+		if inv.ID == unkeptID {
+			t.Errorf("List (KeptAsIs: true) incorrectly returned the un-kept invoice %s", unkeptID)
+		}
+	}
+}
+
 // TestStoreList_RuleKeyFilterIsParameterised (spec 5, AC-3): one invoice
 // violates vat-standard-rate, another violates currency-allowed.
 // {RuleKey: "vat-standard-rate"} must return exactly the first. A

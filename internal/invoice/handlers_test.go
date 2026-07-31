@@ -1955,6 +1955,10 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		// every other Invoice field here. FAILS today (19 raw keys vs. this
 		// slice's 23) since none of the four exist on Invoice yet.
 		"irn", "csid", "qr_payload", "rejection_reasons",
+		// INVCR-01-15 (D6, task-291): +3 -- kept_as_is_at/by/reason join
+		// Invoice as direct top-level siblings too, same no-omitempty
+		// flattened-embed shape as every field above.
+		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -3472,6 +3476,11 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
 		"vat", "total", "violations", "rule_set_version_id", "created_at", "line_items",
 		"irn", "csid", "qr_payload", "rejection_reasons",
+		// INVCR-01-15 (D6, task-291): joins Invoice as direct top-level
+		// siblings, same no-omitempty flattened-embed shape as every field
+		// above -- "pre-existing" here means "already on Invoice", which this
+		// story makes true.
+		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"rule_set_version", "qr_png_base64",
 	}
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason"}
@@ -3607,7 +3616,12 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"id", "entity_id", "import_batch_id", "invoice_number", "status", "issue_date",
 		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
 		"vat", "total", "violations", "rule_set_version_id", "created_at",
-		"irn", "csid", "qr_payload", "rejection_reasons", "line_items",
+		"irn", "csid", "qr_payload", "rejection_reasons",
+		// INVCR-01-15 (D6, task-291): kept_as_is_at/by/reason are declared
+		// between RejectionReasons and LineItems on Invoice, so they land
+		// here in wire order too.
+		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
+		"line_items",
 		// getResponse's own fields, in declaration order -- the three
 		// action-flag keys MUST be last (AC #5's additive/position clause).
 		"rule_set_version", "qr_png_base64",

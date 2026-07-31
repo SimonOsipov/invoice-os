@@ -863,6 +863,13 @@ export const ROW_EXPANSION_COPY = {
   // must not block the click -- it only explains that clicking now re-checks the
   // invoice as LAST SAVED, not as currently typed.
   unsavedHint: 'You have unsaved changes — save them first, or re-validating will check the invoice as last saved.',
+  // INVCR-01-15 (D6, task-291): the Keep as-is action, alongside Re-validate --
+  // [bulk-copy-lives-in-the-lib] applies to this section exactly as it does to the
+  // rest of ROW_EXPANSION_COPY above.
+  keepLabel: 'Keep as-is',
+  keeping: 'Keeping…',
+  keepReasonPlaceholder: 'Why are you keeping this despite the failure? (required)',
+  keptPrefix: 'Kept as-is — ',
 } as const
 
 export interface RowExpansionView {
@@ -879,6 +886,13 @@ export interface RowExpansionView {
   revalidateDisabled: boolean
   revalidateReason: string | null
   note: string
+  // keptReason (INVCR-01-15, D6, task-291): the persisted reason, VERBATIM, iff this
+  // invoice is currently kept -- `null` both when un-kept AND (belt-and-suspenders,
+  // never a fabricated fallback) when kept_as_is_at is set but the server somehow sent
+  // no reason. "The reason text is the point": this is the one field on this view-model
+  // that exists solely so ReviewRow.tsx never has to read the server's copy off
+  // anything other than this string.
+  keptReason: string | null
 }
 
 // The row-expansion panel's WHOLE model, mirroring bulkBarView's own one-function
@@ -892,7 +906,17 @@ export interface RowExpansionView {
 // of its own; that discipline lives at the wire boundary (getInvoice, lib/invoices.ts)
 // and is not repeated here.
 export function rowExpansionView(
-  invoice: { violations: Violation[]; rule_set_version: number | null | undefined },
+  invoice: {
+    violations: Violation[]
+    rule_set_version: number | null | undefined
+    // Optional (INVCR-01-15, D6, task-291), mirroring VerdictInput.kept_as_is_at's own
+    // optionality above: every REAL caller is InvoiceDetailRecord, which always carries
+    // both, but every existing test call site in this file's own suite predates this
+    // subtask and passes neither -- widening these as required would force each of
+    // those to change for no behavioural reason of their own.
+    kept_as_is_at?: string | null
+    kept_as_is_reason?: string | null
+  },
   gate: { can_revalidate: boolean; revalidate_blocked_reason: string | null },
 ): RowExpansionView {
   const passing = invoice.violations.length === 0
@@ -909,7 +933,29 @@ export function rowExpansionView(
     revalidateDisabled: !gate.can_revalidate,
     revalidateReason: gate.revalidate_blocked_reason,
     note: ROW_EXPANSION_NOTE,
+    // Verbatim from the server, never a client-authored fallback -- `?? null` only
+    // guards the (should-never-happen) case where kept_as_is_at is set but the reason
+    // came back empty; it never SUBSTITUTES a made-up string for a real one.
+    keptReason: invoice.kept_as_is_at != null ? (invoice.kept_as_is_reason ?? null) : null,
   }
+}
+
+// --- INVCR-01-15 (D6, task-291): `Keep as-is` ---
+//
+// canKeepAsIs is the WHOLE client-side gate for the Keep as-is action (KEEP-2): a
+// reason is REQUIRED, and this is the ONE place that decides what "required" means --
+// non-empty after trimming, so a click with only whitespace typed produces no request,
+// exactly like reviewFilterReducer's own search-trim discipline above. ReviewRow.tsx
+// consults this BEFORE calling keepInvoiceAsIs (lib/invoices.ts) and disables the
+// button on the same predicate, so "no arm => no request" holds here the same way
+// bulkPhaseReducer's identity-return makes it hold for the bulk bar.
+//
+// Server-side validation (KeepAsIsHandler, handlers.go) is the authoritative guard --
+// this is advisory only, same division of labour as canRevalidate/can_revalidate
+// elsewhere in this file: never trusted alone, but what stops an obviously-empty
+// click from ever reaching the network.
+export function canKeepAsIs(reason: string): boolean {
+  return reason.trim().length > 0
 }
 
 // The row editor's own patch builder -- mirrors InvoiceDetail.tsx's private

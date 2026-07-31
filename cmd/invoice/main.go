@@ -66,6 +66,10 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/violation-summary", invoice.ViolationSummaryHandler(store.ViolationSummary, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/transitions", invoice.TransitionHandler(store.Transition, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/invoices/{id}", invoice.EditHandler(store.Edit, app.Logger))
+	// POST/DELETE /v1/invoices/{id}/keep-as-is -- D6's auditable-triage write
+	// (INVCR-01-15, task-291): never touches status or legalTransitions.
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/keep-as-is", invoice.KeepAsIsHandler(store.KeepAsIs, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/invoices/{id}/keep-as-is", invoice.UnkeepAsIsHandler(store.UnkeepAsIs, app.Logger))
 
 	// POST /v1/invoices/{id}/validate -- THE validate gate ([gate-endpoint],
 	// M4-04): the ONLY route by which an invoice reaches validated, and the

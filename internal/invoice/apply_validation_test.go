@@ -199,6 +199,67 @@ func TestApplyValidation_CleanEvaluationPromotesAndStampsVersion(t *testing.T) {
 	}
 }
 
+// TestApplyValidation_ClearsKeepMarksOnPromotion (INVCR-01-15, D6, task-291, AC #7): a
+// kept draft, fixed and re-evaluated clean, must promote to validated with all three
+// kept_as_is_* columns NULL -- and, critically, with NO 23514. The
+// invoices_kept_as_is_draft_only CHECK FORCES this: transitionTx's promoting UPDATE
+// sets status='validated' in the SAME statement that must null the marks, or the
+// write itself violates the CHECK it is trying to satisfy (kept_as_is_at set + status
+// no longer draft). A forgotten clear is therefore a loud CI red here, never a stale
+// KEPT badge surviving into validated.
+func TestApplyValidation_ClearsKeepMarksOnPromotion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "KEEP-GATE-CLEAR tenant")
+	entityID := seedEntity(t, super, tenantID, "KEEP-GATE-CLEAR entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "KEEP-GATE-CLEAR"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// The fingerprint is taken BEFORE the raw seed below -- contentFingerprint hashes
+	// only header+lines (payload.go), never violations/kept_as_is_*, so seeding those
+	// two afterward cannot stale it.
+	fp := contentFingerprint(inv, inv.LineItems)
+
+	// Force-seed a "kept, blocking" draft directly (bypassing Store.KeepAsIs, which
+	// is kept_as_is_test.go's own concern) -- an operator kept this invoice earlier,
+	// and it is now being re-validated clean (e.g. after an upstream fix).
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET violations = $1::jsonb, kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'was kept before the fix' WHERE id = $2`,
+		`[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`, inv.ID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	versionID := seedRuleSetVersionID(t, super)
+
+	got, err := store.ApplyValidation(c, inv.ID, []Violation{}, versionID, fp)
+	if err != nil {
+		t.Fatalf("ApplyValidation (clean, promoting a previously-kept invoice): want success with NO 23514, got: %v", err)
+	}
+	if got.Status != StatusValidated {
+		t.Errorf("ApplyValidation returned status = %q, want %q", got.Status, StatusValidated)
+	}
+	if got.KeptAsIsAt != nil || got.KeptAsIsBy != nil || got.KeptAsIsReason != nil {
+		t.Errorf("ApplyValidation return kept_as_is triple = (at=%v by=%v reason=%v), want all nil (cleared on promotion)",
+			got.KeptAsIsAt, got.KeptAsIsBy, got.KeptAsIsReason)
+	}
+
+	var at, by, reason *string
+	if err := super.QueryRow(ctx,
+		`SELECT kept_as_is_at::text, kept_as_is_by, kept_as_is_reason FROM invoices WHERE id = $1`, inv.ID,
+	).Scan(&at, &by, &reason); err != nil {
+		t.Fatalf("read back kept_as_is triple: %v", err)
+	}
+	if at != nil || by != nil || reason != nil {
+		t.Errorf("stored kept_as_is triple after promotion = (at=%v by=%v reason=%v), want all NULL", at, by, reason)
+	}
+}
+
 // GATE-02: after a clean ApplyValidation, audit_log has BOTH
 // invoice.validated and invoice.transitioned rows for the tenant, actor ==
 // the caller's Subject on both -- the same-tx pairing Core AC #2 requires.

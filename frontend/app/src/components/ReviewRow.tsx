@@ -42,6 +42,7 @@ import {
   editInvoice,
   getInvoice,
   isRowSelectable,
+  keepInvoiceAsIs,
   revalidateInvoice,
   type EditFieldKey,
   type InvoiceDetailRecord,
@@ -49,6 +50,7 @@ import {
   type InvoiceRecord,
 } from '../lib/invoices'
 import {
+  canKeepAsIs,
   EDIT_FIELD_LABELS,
   fixEditPatch,
   rowExpansionView,
@@ -101,11 +103,10 @@ export function Row({
   // copy/naming debt in task-290's notes rather than renamed here.
   onChanged: () => void
 }) {
-  // `kept_as_is_at` is deliberately NOT passed: it is not on InvoiceRecord, subtask 15
-  // owns putting it on the wire, and typing it as present now would repeat the shipped
-  // `rule_set_version` trap (typed `number | null`, reads `undefined` on list rows —
-  // which is also why no rule-set version is rendered per row here).
-  const verdict = verdictPill({ status: r.status, violations: r.violations })
+  // `kept_as_is_at` (INVCR-01-15, D6, task-291): now on InvoiceRecord/the list wire
+  // for real (invoices.ts) -- passed through so a kept row's pill renders
+  // KEPT · INVALID instead of the row's raw N RULES FAILED badge.
+  const verdict = verdictPill({ status: r.status, violations: r.violations, kept_as_is_at: r.kept_as_is_at })
   const badge = verdict.badges[0]
 
   // Click-only row, matching the shipped InvoicesList.tsx precedent this table's OLD
@@ -255,6 +256,12 @@ function ExpandedFixPanel({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [revalidating, setRevalidating] = useState(false)
   const [revalidateError, setRevalidateError] = useState<string | null>(null)
+  // Keep as-is (INVCR-01-15, D6, task-291) -- its own draft/loading/error triple,
+  // parallel to Save's and Re-validate's above rather than sharing either: keeping is
+  // a THIRD, independent action, not a variant of saving or revalidating.
+  const [keepReason, setKeepReason] = useState('')
+  const [keeping, setKeeping] = useState(false)
+  const [keepError, setKeepError] = useState<string | null>(null)
 
   const inv = detail.data
 
@@ -311,6 +318,28 @@ function ExpandedFixPanel({
       setRevalidateError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally {
       setRevalidating(false)
+    }
+  }
+
+  // canKeepAsIs (lib/reviewBatch.ts) is the WHOLE gate (KEEP-2): a trimmed-empty
+  // reason both disables the button AND short-circuits here, so "no arm => no
+  // request" holds even if a caller somehow bypassed the disabled attribute (a
+  // stray Enter keypress, a test driving the handler directly). Re-keeping an
+  // already-kept invoice is legal (a changed mind about the reason) -- there is no
+  // "already kept" guard here, matching Store.KeepAsIs's own server-side contract.
+  async function handleKeep() {
+    if (inv == null || keeping || !canKeepAsIs(keepReason)) return
+    setKeeping(true)
+    setKeepError(null)
+    try {
+      await keepInvoiceAsIs(ctx.authedFetch, base, invoiceId, keepReason.trim())
+      setKeepReason('')
+      detail.run()
+      onChanged()
+    } catch (err) {
+      setKeepError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+    } finally {
+      setKeeping(false)
     }
   }
 
@@ -391,7 +420,21 @@ function ExpandedFixPanel({
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, borderTop: view.passing ? undefined : '1px solid var(--line-2)', paddingTop: view.passing ? 0 : 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* The persisted reason, verbatim (INVCR-01-15, D6) — shown ABOVE the action
+            row, before Keep as-is's own input, so the operator sees the existing
+            triage decision before typing a new one. Amber, mirroring KEPT · INVALID's
+            own tone (verdictPill, lib/reviewBatch.ts) rather than inventing a second
+            colour for the same fact. */}
+        {view.keptReason != null && (
+          <div
+            data-testid="review-kept-banner"
+            style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+          >
+            {ROW_EXPANSION_COPY.keptPrefix}
+            {view.keptReason}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           {/* Disabled-with-reason, following InvoiceDetail.tsx:308,:426-444's shipped
               pattern: the real `disabled` attribute, an inline mute (this codebase's
               `.v2-btn-ghost` has an unguarded `:hover` rule with no `:not(:disabled)`
@@ -414,11 +457,45 @@ function ExpandedFixPanel({
           >
             {revalidating ? ROW_EXPANSION_COPY.revalidating : ROW_EXPANSION_COPY.revalidateLabel}
           </button>
+          {/* Keep as-is (INVCR-01-15, D6): only offered while the row is actually
+              blocking -- Store.KeepAsIs 409s a clean invoice (there is nothing to
+              suppress), so this avoids a click that is guaranteed to 409. §7.3 puts
+              "Keep as-is" beside Re-validate for a reason: it is only ever a
+              fix-loop alternative, not a general-purpose action. */}
+          {view.blocking && (
+            <>
+              <input
+                type="text"
+                data-testid="review-keep-reason"
+                placeholder={ROW_EXPANSION_COPY.keepReasonPlaceholder}
+                value={keepReason}
+                onChange={(e) => setKeepReason(e.target.value)}
+                disabled={keeping}
+                className="pf-input"
+                style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+              />
+              <button
+                type="button"
+                data-testid="review-keep"
+                onClick={() => void handleKeep()}
+                disabled={keeping || !canKeepAsIs(keepReason)}
+                className="v2-btn v2-btn-ghost pf-btn"
+                style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+              >
+                {keeping ? ROW_EXPANSION_COPY.keeping : ROW_EXPANSION_COPY.keepLabel}
+              </button>
+            </>
+          )}
         </div>
         {/* The backend's copy, verbatim — never an SPA-authored fallback. */}
         {view.revalidateReason != null && (
           <div id={REVALIDATE_REASON_ID} data-testid="review-revalidate-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
             {view.revalidateReason}
+          </div>
+        )}
+        {keepError != null && (
+          <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+            {keepError}
           </div>
         )}
         {/* A WARNING, never a gate (product-advisor review, pre-push): AC-4 pins

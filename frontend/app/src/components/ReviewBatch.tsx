@@ -15,11 +15,14 @@
 //  2. The left channel's counts are LIVE `pagination.total`s off filtered list queries,
 //     not the batch's frozen counters, so a tile MOVES when a row is fixed (AC-2).
 //
-// ONE useAsync over a Promise.all of five requests, not five hooks: the shell either has
-// its numbers or it does not, and five independent hooks give five partial renders where
-// the header shows one channel before the other. Every list query goes through
-// `reviewQuery` — this is its first real caller, which is what finally cashes 06's
-// required-`batchId` guard (an empty batch id would otherwise list the whole tenant).
+// ONE useAsync over a Promise.all of requests (five, now six with INVCR-01-15's own
+// kept-as-is total), not one hook per request: the shell either has its numbers or it
+// does not, and independent hooks give partial renders where the header shows one
+// channel before the other. Every TOOLBAR list query goes through `reviewQuery` — this
+// is its first real caller, which is what finally cashes 06's required-`batchId` guard
+// (an empty batch id would otherwise list the whole tenant); the kept-as-is total is
+// the one exception, composed directly (see its own comment below) since it is not one
+// of the four toolbar pills reviewQuery/filterToQuery cover.
 //
 // NO `entity_id` and NO `gateByActiveEntity`, unlike InvoicesList. The batch id already
 // narrows to one entity and RLS bounds the tenant; narrowing AGAIN by the workspace
@@ -61,6 +64,12 @@ interface ReviewShellData {
   // that self-fetched `queued` would give four numbers from two sources, and one pill
   // could render while the other three were still pending.
   queuedTotal: number
+  // The footer's "N kept as-is" count (INVCR-01-15, D6, task-291) -- a real server
+  // total (`ListFilter.KeptAsIs`, store.go), never an arithmetic derivation of the
+  // other totals ([filters-are-server-side]). NOT one of the four toolbar pills
+  // (System Design §7's own table only names All/Needs a fix/Ready to submit/Queued),
+  // so it is fetched here rather than through reviewQuery/filterToQuery.
+  keptTotal: number
 }
 
 // One channel tile. `dashed` and `muted` are RENDER decisions taken here, in the
@@ -112,12 +121,18 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'ready', { limit: 1 })),
             listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'needs-fix', { limit: 1 })),
             listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'queued', { limit: 1 })),
-          ]).then(([batch, all, ready, fix, queued]) => ({
+            // Sixth leg, NOT built through reviewQuery/filterToQuery -- `kept_as_is`
+            // is not one of the four ReviewPill toolbar filters those helpers cover
+            // (INVCR-01-15, D6), so this composes ListInvoicesOptions directly, the
+            // same way `all` above narrows by importBatchId alone.
+            listInvoices(ctx.authedFetch, base, { importBatchId: batchId, keptAsIs: true, limit: 1 }),
+          ]).then(([batch, all, ready, fix, queued, kept]) => ({
             batch,
             allTotal: all.pagination.total,
             cleanTotal: ready.pagination.total,
             failingTotal: fix.pagination.total,
             queuedTotal: queued.pagination.total,
+            keptTotal: kept.pagination.total,
           }))
         : Promise.reject(new Error('no gateway configured')),
     { immediate: shouldFetchInvoices(base) && batchId != null, deps: [batchId] },
@@ -159,7 +174,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   const shellData = shell.data ?? lastShell.current
   if (shellData == null) return <Loading label="Reading the import…" />
 
-  const { batch, allTotal, cleanTotal, failingTotal, queuedTotal } = shellData
+  const { batch, allTotal, cleanTotal, failingTotal, queuedTotal, keptTotal } = shellData
 
   // The SOLE owner of §7.5-vs-batch, keyed on the batch GET alone — never on
   // routeAfterImport's `kind`, which answers a different question ("is there ONE invoice
@@ -283,10 +298,10 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
         <ReviewUnreadableTab rows={rows} rowsTotal={batch.rows_total} batchId={batch.id} onImportCorrected={ctx.restartImport} />
       )}
 
-      {/* Footer. `N kept as-is` is OMITTED ENTIRELY rather than rendered as 0 —
-          `kept_as_is_at` reaches the wire in subtask 15, and a counter the server does
-          not yet send, printed as a zero, is exactly the false zero this story's counter
-          discipline exists to prevent. */}
+      {/* Footer. `N kept as-is` (INVCR-01-15, D6, task-291) is now a REAL server total
+          (keptTotal, the shell's sixth list query) -- the false-zero concern the prior
+          subtask's comment here raised no longer applies, since the count is genuinely
+          fetched rather than hardcoded. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', paddingTop: 4 }}>
         {/* `N queued for transmission` rather than AC-7's literal `N submitted`: the only
             count this screen has is `status=queued`, and the worker advances rows past
@@ -294,7 +309,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             for a fully-sent batch on a revisit, the exact false zero this story's counter
             discipline exists to prevent. QUEUED is D2's own real name for the state. */}
         <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>
-          {allTotal} invoices stored · {cleanTotal} ready to submit · {queuedTotal} queued for transmission · {failingTotal} awaiting a fix
+          {allTotal} invoices stored · {cleanTotal} ready to submit · {queuedTotal} queued for transmission · {failingTotal} awaiting a fix · {keptTotal} kept as-is
         </span>
         {/* NAVIGATION ONLY. The invoices were persisted at import time (§10.10), so a
             "Finish writes the batch" step would be a lie about when the data landed. */}

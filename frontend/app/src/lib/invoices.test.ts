@@ -40,6 +40,7 @@ import {
   invoicesViewState,
   isInFlight,
   isRowSelectable,
+  keepInvoiceAsIs,
   LIVE_POLL_MS,
   listInvoices,
   mbsPathToEditField,
@@ -131,6 +132,9 @@ const draftInvoice: InvoiceRecord = {
   csid: null,
   qr_payload: null,
   rejection_reasons: [],
+  kept_as_is_at: null,
+  kept_as_is_by: null,
+  kept_as_is_reason: null,
   rule_set_version: null,
 }
 
@@ -370,6 +374,28 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     expect(trueUrl).toContain('needs_fix=true')
   })
 
+  it('LIST-KEEP-1 (INVCR-01-15, D6, task-291): keptAsIs is emitted iff strictly true, mirroring LIST-3\'s needsFix precedent', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { keptAsIs: false } as ListInvoicesOptions)
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).not.toContain('kept_as_is')
+
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { keptAsIs: true } as ListInvoicesOptions)
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('kept_as_is=true')
+  })
+
   it('LIST-4: offset:0 is emitted, not dropped -- the classic falsy-zero bug (`!= null`, never truthiness)', async () => {
     const fetchMock = mockFetchOnce({
       ok: true,
@@ -561,6 +587,44 @@ describe('editInvoice', () => {
     expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1')
     expect(init.method).toBe('PATCH')
     expect(init.body).toBe(JSON.stringify({ supplier_tin: 'x' }))
+  })
+})
+
+describe('keepInvoiceAsIs (INVCR-01-15, D6, task-291)', () => {
+  it('KEEP-INV-1: POST .../invoices/{id}/keep-as-is with {reason} as the whole body', async () => {
+    const kept: InvoiceRecord = {
+      ...draftInvoice,
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(kept) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await keepInvoiceAsIs(af, base, 'inv-1', 'Buyer confirmed the discrepancy is intentional.')
+
+    expect(result).toEqual(kept)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1/keep-as-is')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ reason: 'Buyer confirmed the discrepancy is intentional.' }))
+  })
+
+  it('KEEP-INV-2: a 409 (clean invoice / not draft) rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: () => Promise.resolve({ error: 'invoice must be a draft with a blocking violation to be kept as-is' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => keepInvoiceAsIs(af, base, 'inv-1', 'some reason'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(409)
   })
 })
 
@@ -1257,7 +1321,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 22 keys mirrored from invoice.go:83-105, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 25 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -1286,6 +1350,12 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       'csid',
       'qr_payload',
       'rejection_reasons',
+      // INVCR-01-15 (D6, task-291): +3 -- kept_as_is_at/by/reason join Invoice as
+      // direct top-level siblings, no omitempty, same flattened shape as every
+      // field above.
+      'kept_as_is_at',
+      'kept_as_is_by',
+      'kept_as_is_reason',
       'rule_set_version',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).

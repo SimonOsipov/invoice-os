@@ -45,6 +45,7 @@ import {
   bulkBarView,
   bulkOutcome,
   bulkPhaseReducer,
+  canKeepAsIs,
   channelTiles,
   EDIT_FIELD_LABELS,
   filterToQuery,
@@ -215,6 +216,31 @@ describe('verdictPill: a kept row is KEPT · INVALID and does not stack (PILL-5)
 
     expect(result.badges).toHaveLength(1)
     expect(result.badges[0].kind).toBe('kept-invalid')
+  })
+
+  // KEEP-1 (INVCR-01-15, D6, task-291): pins the ONE dimension PILL-5 above (task-286)
+  // leaves unasserted -- the badge's actual COLOUR. PILL-5 proves kept-invalid wins
+  // the precedence fight; this proves it renders amber (severityStyle('warning')), the
+  // Test Specs table's own "(amber)" parenthetical. Also pins the exact label and the
+  // count (the number of BLOCKING violations kept despite, per verdictPill's own
+  // count-is-errorCount contract), neither of which PILL-5 checks either.
+  it('KEEP-1: a kept row renders KEPT · INVALID in the amber (severity warning) tone, with count = the blocking-violation count', () => {
+    const violations: Violation[] = [
+      { rule_key: 'r1', severity: 'error', message: 'e1' },
+      { rule_key: 'r2', severity: 'error', message: 'e2' },
+      { rule_key: 'r3', severity: 'warning', message: 'w1' },
+    ]
+    const input: VerdictInput = { status: 'draft', violations, kept_as_is_at: '2026-07-30T00:00:00Z' }
+
+    const result = verdictPill(input)
+
+    expect(result.badges[0].label).toBe('KEPT · INVALID')
+    expect(result.badges[0].count).toBe(2)
+    expect(result.badges[0].tone).toEqual({
+      bg: severityStyle('warning').bg,
+      border: severityStyle('warning').border,
+      text: severityStyle('warning').text,
+    })
   })
 })
 
@@ -970,6 +996,9 @@ function mkRow(id: string, status: InvoiceStatus, overrides: Partial<InvoiceReco
     csid: null,
     qr_payload: null,
     rejection_reasons: [],
+    kept_as_is_at: null,
+    kept_as_is_by: null,
+    kept_as_is_reason: null,
     rule_set_version: null,
     ...overrides,
   }
@@ -1504,6 +1533,57 @@ describe('rowExpansionView: §7.3\'s provenance/scope note always renders while 
 
     expect(passing.note).toBe('Re-validating touches this invoice only — the rest of the import stays as it is.')
     expect(failing.note).toBe(passing.note)
+  })
+})
+
+// KEEP-3 (INVCR-01-15, D6, task-291 -- beyond the architect's named KEEP-1/KEEP-2
+// pair, added because "the reason text is the point" (this story's own founder
+// ruling) requires it to actually be RENDERED, verbatim, somewhere -- ReviewRow.tsx
+// reads it off `keptReason` alone, so this is the one spec proving that field is
+// correct rather than merely present).
+describe('rowExpansionView: the kept-as-is reason surfaces verbatim, never a fabricated fallback (KEEP-3)', () => {
+  it('KEEP-3a: kept_as_is_at set carries kept_as_is_reason through to keptReason byte-identically', () => {
+    const reason = 'Buyer confirmed the discrepancy is intentional; will not recur.'
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'error' })], rule_set_version: null, kept_as_is_at: '2026-07-30T00:00:00Z', kept_as_is_reason: reason },
+      { can_revalidate: false, revalidate_blocked_reason: null },
+    )
+
+    expect(view.keptReason).toBe(reason)
+  })
+
+  it('KEEP-3b: an un-kept row (kept_as_is_at absent/null) always carries keptReason: null, even if a reason were somehow present', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'error' })], rule_set_version: null, kept_as_is_reason: 'should never render' },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.keptReason).toBeNull()
+  })
+
+  it('KEEP-3c: kept_as_is_at set but no reason on the wire yields null, never a client-authored fallback string', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'error' })], rule_set_version: null, kept_as_is_at: '2026-07-30T00:00:00Z', kept_as_is_reason: null },
+      { can_revalidate: false, revalidate_blocked_reason: null },
+    )
+
+    expect(view.keptReason).toBeNull()
+  })
+})
+
+// KEEP-2 (INVCR-01-15, D6, task-291): the WHOLE client-side "a reason is required"
+// gate. ReviewRow.tsx consults this alone before ever calling keepInvoiceAsIs, so this
+// is what proves "no arm => no request" for the keep action, mirroring
+// bulkPhaseReducer's own identity-return idiom (INVCR-01-11) for the bulk bar.
+describe('canKeepAsIs: a reason is required (KEEP-2)', () => {
+  it('KEEP-2: an empty or whitespace-only reason is rejected; any real text is accepted', () => {
+    expect(canKeepAsIs('')).toBe(false)
+    expect(canKeepAsIs('   ')).toBe(false)
+    expect(canKeepAsIs('\t\n')).toBe(false)
+    expect(canKeepAsIs('Approved by finance, one-off exception.')).toBe(true)
+    // Leading/trailing whitespace around real content is still a real reason -- the
+    // gate trims to CHECK, it does not require the caller to have trimmed already.
+    expect(canKeepAsIs('  a real reason  ')).toBe(true)
   })
 })
 

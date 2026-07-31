@@ -183,6 +183,14 @@ export interface InvoiceRecord {
   csid: string | null
   qr_payload: string | null
   rejection_reasons: RejectionReason[]
+  // kept_as_is_at/by/reason (INVCR-01-15, D6) -- Invoice's own three new columns
+  // (invoice.go), no omitempty, so all three are present as explicit null on an
+  // un-kept row, same convention as irn/csid/qr_payload above. `kept_as_is_at` is
+  // what verdictPill's kept-invalid badge reads (lib/reviewBatch.ts); `_by`/`_reason`
+  // are surfaced so the row-expansion panel can render the persisted reason verbatim.
+  kept_as_is_at: string | null
+  kept_as_is_by: string | null
+  kept_as_is_reason: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
 }
@@ -268,6 +276,12 @@ export interface ListInvoicesOptions {
   needsFix?: boolean
   ruleKey?: string
   q?: string
+  // keptAsIs (INVCR-01-15, D6) -- the review shell's "N kept as-is" footer counter
+  // query (ListFilter.KeptAsIs, store.go), same [needs-attention-bool-true-only]
+  // shape as needsFix/needsAttention. Deliberately NOT one of the four toolbar
+  // pills (System Design §7's own table) -- see reviewBatch.ts's ReviewPill union,
+  // which is unchanged by this field.
+  keptAsIs?: boolean
 }
 
 // One entry of editInvoice's optional `line_items` array (lineItemReq,
@@ -401,6 +415,7 @@ export async function listInvoices(
   if (opts.needsFix === true) params.set('needs_fix', 'true')
   if (opts.ruleKey) params.set('rule_key', opts.ruleKey)
   if (opts.q) params.set('q', opts.q)
+  if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
   return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
 }
@@ -493,6 +508,27 @@ export async function revalidateInvoice(
   id: string,
 ): Promise<InvoiceRecord> {
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST' })
+}
+
+// POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6, KeepAsIsHandler handlers.go) --
+// D6's auditable-triage write, never a lifecycle transition. `reason` is sent as
+// received; the caller (ReviewRow.tsx) is expected to have already gated the click on
+// canKeepAsIs (lib/reviewBatch.ts) so an empty reason never reaches this call at all
+// ([must-not-allow-empty-reason], KEEP-2) -- this wrapper does no trimming/validation
+// of its own, matching editInvoice/revalidateInvoice's own thin-wrapper shape.
+//
+// DELETE .../keep-as-is (UnkeepAsIsHandler) has NO caller here: AC #10's named UI
+// surface is the keep action only, and the backend endpoint exists with no frontend
+// caller yet -- the same precedent createInvoice/POST /v1/invoices itself sat on for
+// two stories before INVCR-01-02 wired it up. Flagged in this subtask's notes, not
+// silently dropped.
+export async function keepInvoiceAsIs(
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  reason: string,
+): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/keep-as-is`, { method: 'POST', body: { reason } })
 }
 
 // POST /v1/invoices/submissions -- the batch-submit trigger ([trigger-surface] /

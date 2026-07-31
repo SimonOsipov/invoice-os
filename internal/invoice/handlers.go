@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -444,10 +445,24 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			return
 		}
 
+		// kept_as_is (INVCR-01-15, D6): the review shell's "N kept as-is" footer
+		// counter query -- same empty-is-absent/strconv.ParseBool shape as
+		// needs_fix/needs_attention above, deliberately NOT one of the four
+		// toolbar pills (System Design §7).
+		keptAsIs := false
+		if raw := query.Get("kept_as_is"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "kept_as_is must be a boolean")
+				return
+			}
+			keptAsIs = b
+		}
+
 		filter := ListFilter{
 			Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention,
 			ImportBatchID: importBatchID, Status: statusFilter, NeedsFix: needsFix,
-			RuleKey: ruleKey, Query: q,
+			RuleKey: ruleKey, Query: q, KeptAsIs: keptAsIs,
 		}
 
 		items, total, err := list(r.Context(), filter)
@@ -667,6 +682,99 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			status, msg := statusForErr(err)
 			if status >= http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "invoice: edit", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// keepAsIsRequest is the POST /v1/invoices/{id}/keep-as-is wire body (INVCR-01-15, D6):
+// a single free-text reason. Deliberately has NO `by`/`actor` field -- the actor is
+// ALWAYS auth.Identity.Subject (KeepAsIsHandler never reads one off the body), so a
+// client-supplied "by" is silently ignored by json.Decode rather than accepted
+// (TestKeepAsIsHandler_ActorIsIdentityNotBody).
+type keepAsIsRequest struct {
+	Reason string `json:"reason"`
+}
+
+// maxKeepAsIsReasonLen bounds the free-text reason (task-291 AC #3's "400 on an
+// empty/oversized reason"). An invented abuse bound, mirroring maxFilterTextLen's own
+// "wide margin" reasoning above: a genuine compliance note explaining why a failing
+// invoice was kept can run to a couple of sentences, so 1000 bytes leaves ample room
+// without opening the door to an unbounded audit-log payload.
+const maxKeepAsIsReasonLen = 1000
+
+// KeepAsIsHandler returns POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6,
+// task-291). Same identity-first-401 order as every handler above, then decodes the
+// body (400 on decode error), trims the reason and 400s on empty/oversized BEFORE
+// keep is ever called ([must-not-allow-empty-reason], mirrors BatchSubmitHandler's own
+// pre-tx idempotency_key guard) -- keep itself never sees an empty or over-length
+// reason. Errors map via statusForErr, including the new ErrNotKeepable->409 case
+// (AC #3's "409 unless draft AND carries a blocking violation") -- 200 + the updated
+// Invoice (kept_as_is_at/by/reason now stamped) on success.
+func KeepAsIsHandler(keep func(ctx context.Context, id, reason string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var req keepAsIsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		reason := strings.TrimSpace(req.Reason)
+		if reason == "" {
+			writeError(w, http.StatusBadRequest, "reason is required")
+			return
+		}
+		if len(reason) > maxKeepAsIsReasonLen {
+			writeError(w, http.StatusBadRequest, "reason exceeds the 1000-char bound")
+			return
+		}
+
+		inv, err := keep(r.Context(), r.PathValue("id"), reason)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: keep as-is", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// UnkeepAsIsHandler returns DELETE /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6,
+// task-291) -- KeepAsIsHandler's un-do. Same identity-first-401 order; no body to
+// decode, matching HistoryHandler/ValidateHandler's own no-body GET/POST shape. 200 +
+// the updated Invoice (kept_as_is_at/by/reason now NULL) on success, idempotent when
+// the invoice was not kept to begin with (Store.UnkeepAsIs's own no-op branch).
+func UnkeepAsIsHandler(unkeep func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		inv, err := unkeep(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: unkeep as-is", slog.Any("err", err))
 			}
 			writeError(w, status, msg)
 			return
@@ -900,6 +1008,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice changed during validation"
 	case errors.Is(err, ErrNotFixable):
 		return http.StatusConflict, "invoice is not in a fixable state"
+	case errors.Is(err, ErrNotKeepable):
+		return http.StatusConflict, "invoice must be a draft with a blocking violation to be kept as-is"
 	case errors.Is(err, ErrUpstream):
 		return http.StatusBadGateway, "validation service unavailable"
 	case errors.Is(err, ErrNoActiveRuleSet):

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,7 +48,8 @@ const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, 
 	`issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name, ` +
 	`currency, subtotal::text, vat::text, total::text, ` +
 	`violations, rule_set_version_id, created_at, ` +
-	`irn, csid, qr_payload, rejection_reasons`
+	`irn, csid, qr_payload, rejection_reasons, ` +
+	`kept_as_is_at, kept_as_is_by, kept_as_is_reason`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -56,6 +58,7 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.Currency, &inv.Subtotal, &inv.VAT, &inv.Total,
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
 		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
+		&inv.KeptAsIsAt, &inv.KeptAsIsBy, &inv.KeptAsIsReason,
 	)
 }
 
@@ -562,7 +565,19 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
 		}
 		if f.NeedsFix {
-			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb)`)
+			// AND kept_as_is_at IS NULL (INVCR-01-15, D6, [needs-fix-is-a-new-predicate]):
+			// a kept row still matches the base needs_fix shape (draft + a blocking
+			// violation) but has left the "needs a fix" working set by operator decision --
+			// this clause lands ONLY here, never on needs_attention's verbatim-pinned
+			// fragment above (which stays byte-identical to the dashboard rollup,
+			// TestStoreList_NeedsAttentionMatchesDashboardRollup).
+			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb AND kept_as_is_at IS NULL)`)
+		}
+		if f.KeptAsIs {
+			// The review shell's footer counter query ("N kept as-is") -- a real server
+			// total, never derived by arithmetic over the other totals
+			// ([filters-are-server-side]).
+			conditions = append(conditions, `kept_as_is_at IS NOT NULL`)
 		}
 		if f.RuleKey != "" {
 			// json.Marshal, never fmt.Sprintf: a quote-bearing rule_key built by
@@ -1002,6 +1017,27 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 			return nil
 		}
 
+		// 6b. [kept-marks-clear-on-edit] (INVCR-01-15, D6, AC #8): a genuine content
+		// change invalidates any recorded keep-as-is reason. Gated on `before` --
+		// the pre-edit, locked row -- actually carrying a mark: the marks can only
+		// ever be set on a draft (invoices_kept_as_is_draft_only), so this never
+		// fires for a validated/rejected `before`, and skipping it for the
+		// overwhelmingly common un-kept case avoids a pointless UPDATE on every
+		// ordinary edit. A standalone statement (not folded into updateContentTx,
+		// which Store.Update also shares and which this story does not touch) so
+		// it applies uniformly whether this edit changed header fields, lines
+		// only, or both -- a lines-only edit never runs updateContentTx at all.
+		// `after` is safe to overwrite here: step 9 re-attaches afterLines LAST
+		// regardless of what happened in between.
+		if before.KeptAsIsAt != nil {
+			if err := scanInvoice(tx.QueryRow(ctx,
+				`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+				 WHERE id = $1 RETURNING `+invoiceColumns, id,
+			), &after); err != nil {
+				return err
+			}
+		}
+
 		// 7. the content change is real -- audit it. `fields` lists what was
 		// SUBMITTED (updateContentTx's own list), plus "line_items" whenever an
 		// array was sent ([audit-fields-includes-line-items]); a lines-only
@@ -1258,9 +1294,24 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	// the outcome callback BEFORE transitionTx (actor.go) -- so clearing on
 	// rejected here would wipe the reasons MarkRejectedTx had just written
 	// moments earlier in the SAME tx, destroying every APP rejection reason.
+	// [kept-marks-clear-on-promote] (INVCR-01-15, D6, task-291): draft has exactly
+	// ONE outgoing edge (draft->validated, legalTransitions), so target ==
+	// StatusValidated unambiguously means "promoting a draft" -- no other status
+	// transitions into validated. The invoices_kept_as_is_draft_only CHECK
+	// FORCES this clear to happen: a kept invoice promoted without it would
+	// 23514 on this very UPDATE (status becomes non-draft while the marks are
+	// still set) -- the intended failure mode, a loud CI red rather than a
+	// stale KEPT badge on a validated row. Nulling all three unconditionally
+	// (never gated on "was it actually kept") is deliberate: it is a no-op
+	// on the overwhelmingly common un-kept case and keeps this single UPDATE
+	// the SAME UPDATE that promotes, per the story's own requirement, rather
+	// than a second statement that could be forgotten or fail independently.
 	setClause := "status = $1"
-	if target == StatusAccepted {
+	switch target {
+	case StatusAccepted:
 		setClause = "status = $1, rejection_reasons = '[]'"
+	case StatusValidated:
+		setClause = "status = $1, kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL"
 	}
 
 	var inv Invoice
@@ -1456,6 +1507,124 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			"outcome":             outcome,
 			"violation_count":     len(vs),
 		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
+}
+
+// KeepAsIs is D6's auditable-triage write (INVCR-01-15, task-291): records who/when/why
+// an operator chose to keep a failing draft rather than fix it, WITHOUT touching status
+// or legalTransitions at all -- this method never calls transitionTx. Inside ONE
+// db.WithinRequestTenantTx:
+//
+//  1. SELECT <invoiceColumns> ... FOR UPDATE -- RLS-scoped, so a cross-tenant VALID uuid
+//     0-rows exactly like a genuinely nonexistent one (pgx.ErrNoRows -> ErrNotFound); a
+//     malformed non-uuid id raises 22P02 -> ErrValidation, mirroring every other
+//     lock-and-read method in this file.
+//  2. the keepable guard -- draft AND at least one severity:"error" violation, else
+//     ErrNotKeepable, NOTHING written. Keeping a clean invoice is meaningless (there is
+//     nothing being suppressed); a non-draft invoice cannot reach here in practice
+//     either (invoices_kept_as_is_draft_only would refuse the write anyway, but this
+//     guard is what turns that DB-level refusal into an honest 409 instead of a raw
+//     23514 surfacing as a 500).
+//  3. UPDATE ... SET the triple, RETURNING <invoiceColumns> -- re-keeping an
+//     already-kept invoice is legal (a changed mind about the reason), overwriting the
+//     prior at/by/reason.
+//  4. audit.Record(ctx, tx, subject, "invoice.kept_as_is", {id, reason}) in the SAME
+//     transaction as the column write (this package's standing convention,
+//     invoice.go:1-9 / the audit_log CHECKs' own actor-length failure mode) -- a failed
+//     audit write rolls the column write back too.
+//
+// reason arrives already trimmed and non-empty/within-bound (KeepAsIsHandler's own
+// pre-tx guard, mirroring BatchSubmitHandler's idempotency_key validation) -- this
+// method does not re-validate it, matching Store.Edit/Store.Update's own division of
+// labour between handler-level shape checks and store-level domain guards.
+func (s *Store) KeepAsIs(ctx context.Context, id, reason string) (Invoice, error) {
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		var vs []Violation
+		if err := json.Unmarshal(locked.Violations, &vs); err != nil {
+			return err
+		}
+		if locked.Status != StatusDraft || !hasBlockingViolation(vs) {
+			return ErrNotKeepable
+		}
+
+		now := time.Now().UTC()
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = $1, kept_as_is_by = $2, kept_as_is_reason = $3
+			 WHERE id = $4 RETURNING `+invoiceColumns,
+			now, callerID.Subject, reason, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.kept_as_is", map[string]any{
+			"id":     id,
+			"reason": reason,
+		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
+}
+
+// UnkeepAsIs is KeepAsIs's un-do (INVCR-01-15, task-291): clears the triple and audits
+// "invoice.unkept_as_is". Inside ONE db.WithinRequestTenantTx: the same RLS-scoped
+// lock+read as KeepAsIs (cross-tenant/unknown -> ErrNotFound, malformed id ->
+// ErrValidation), then an IDEMPOTENT no-op when the invoice is not currently kept
+// (locked.KeptAsIsAt == nil) -- nothing written, nothing audited, mirroring
+// markTerminalTx's own already-at-target short-circuit (actor.go) -- else the clearing
+// UPDATE plus the audit row, same transaction.
+func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if locked.KeptAsIsAt == nil {
+			inv = locked
+			return nil
+		}
+
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+			 WHERE id = $1 RETURNING `+invoiceColumns, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{"id": id})
 	})
 	if err != nil {
 		return Invoice{}, err

@@ -275,7 +275,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button
-              onClick={ctx.readColumns}
+              onClick={ctx.readAllColumns}
               disabled={base == null || !readReady}
               className="v2-btn v2-btn-primary pf-btn"
               style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}

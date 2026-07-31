@@ -16,12 +16,27 @@
 import { CANON } from '../data'
 import { recognize } from '../lib/mapping'
 import { previewColumns } from '../lib/importFlow'
+import { coverageSentence } from '../lib/mappingGroups'
 import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
-  const { active, preview, importFile, mapping, armedField, dragField, uploadPhase, importError, entityId } = ctx
+  const { active, preview, importFile, mapping, armedField, dragField, uploadPhase, importError, entityId, groups, groupIndex, pickedFiles } = ctx
   if (!preview || !mapping || !importFile) return null
+
+  // BULK-01-04: which group this screen is showing, and the fileId -> filename lookup
+  // coverageSentence (and the split control below) render off. `activeGroup` is
+  // guaranteed non-null here in practice — `preview`/`mapping` above are themselves
+  // `groups[groupIndex]?.… ?? null` reads, so the guard just above already requires it —
+  // but it is looked up again rather than threaded through ctx as a fourth value, since
+  // `groups`/`groupIndex` are already the two sources of truth ctx exposes.
+  const activeGroup = groups[groupIndex] ?? null
+  const names: Record<string, string> = Object.fromEntries(pickedFiles.map((pf) => [pf.id, pf.file.name]))
+  const sentence = activeGroup ? coverageSentence(activeGroup, names) : ''
+  // A short, honest label for the header row below — the full statement of which files
+  // this mapping covers lives in the coverage-sentence block, not here. Falls back to
+  // the transitional `importFile.name` only if activeGroup is somehow null (see above).
+  const primaryFileName = activeGroup ? (names[activeGroup.fileIds[0]] ?? importFile.name) : importFile.name
 
   const dropHot = !!(armedField || dragField)
   const recognized = recognize(preview.columns)
@@ -56,8 +71,8 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   })
 
   const fileExt = (() => {
-    const dot = importFile.name.lastIndexOf('.')
-    return dot > 0 ? importFile.name.slice(dot + 1).toUpperCase() : 'FILE'
+    const dot = primaryFileName.lastIndexOf('.')
+    return dot > 0 ? primaryFileName.slice(dot + 1).toUpperCase() : 'FILE'
   })()
 
   const uploading = uploadPhase.kind === 'sending' || uploadPhase.kind === 'processing'
@@ -112,13 +127,24 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
         : optionalUnmapped > 0
           ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
           : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
+  // BULK-01-04: on every group EXCEPT the last, clicking Continue only advances to the
+  // next group's mapping screen (App.tsx's continueMapping) — it does not import
+  // anything yet. Claiming `Import N rows` there would be a lie about what the click
+  // does, the same class of dishonesty [shared-mapping-shown] forbids for silent
+  // sharing. Gated on `groups`/`groupIndex` (BULK-01-04) rather than a single-group
+  // literal so a single-group run (the common case) still reads exactly as shipped.
+  const isLastGroup = groupIndex >= groups.length - 1
   const continueBtn = !canFile
     ? { bg: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', label: 'Filing needs a linked entity' }
     : {
         bg: invNumMapped ? 'var(--action)' : 'var(--bg-3)',
         color: invNumMapped ? 'var(--text-on-dark)' : 'var(--fg-4)',
         cursor: invNumMapped ? 'pointer' : 'not-allowed',
-        label: invNumMapped ? `Import ${preview.rows_total} rows` : 'Map invoice number to continue',
+        label: invNumMapped
+          ? isLastGroup
+            ? `Import ${preview.rows_total} rows`
+            : 'Continue to next file'
+          : 'Map invoice number to continue',
       }
 
   return (
@@ -175,11 +201,62 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
+      {/* Coverage sentence + group pager + split control (BULK-01-04, Core AC 3, decision
+          [shared-mapping-shown]) — additive only, inserted between the palette card and
+          the column-grid card; neither of those two cards nor anything inside them is
+          touched. Renders UNCONDITIONALLY, including for a group of one
+          ([coverage-sentence-is-unconditional]): showing it only when this group covers
+          more than one file would make its absence read as "nothing is shared", which is
+          exactly the silent share this decision forbids.
+
+          <span className="mono">, never a new <div className="mono"> — e2e/topology/
+          import-wizard.spec.ts's E2E-02 asserts `page.locator('main div.mono')` resolves
+          to exactly ONE element, the column header cell below (:210 in this file). */}
+      {activeGroup && (
+        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>{sentence}</p>
+            {groups.length > 1 && (
+              <span className="mono" style={{ flex: 'none', fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+                GROUP {groupIndex + 1} OF {groups.length}
+              </span>
+            )}
+          </div>
+          {/* Split is a no-op on a single-file group (lib/mappingGroups.ts's splitOut),
+              so the control renders only where it can do something. */}
+          {activeGroup.fileIds.length > 1 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {activeGroup.fileIds.map((fid) => (
+                <button
+                  key={fid}
+                  type="button"
+                  onClick={() => ctx.splitOutFile(fid)}
+                  className="pf-btn"
+                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 'var(--radius-input)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', color: 'var(--fg-2)', cursor: 'pointer' }}
+                >
+                  Map {names[fid] ?? fid} separately
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <span style={{ flex: 'none', width: 30, height: 30, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 8.5, fontWeight: 700 }}>{fileExt}</span>
-            <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{importFile.name}</span>
+            {/* A short, representative label — the full statement of which files this
+                mapping covers is the coverage sentence above, not this row. Reading off
+                `primaryFileName` (the active group's own first covered file) rather than
+                the transitional `importFile` shim matters here: `importFile` is always
+                pickedFiles[0], so on any group past the first this row would otherwise
+                keep naming a file that already finished mapping — a visible
+                contradiction with the correct coverage sentence one line above it. */}
+            <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {primaryFileName}
+              {activeGroup && activeGroup.fileIds.length > 1 ? ` +${activeGroup.fileIds.length - 1} more` : ''}
+            </span>
           </span>
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{mapFacts}</span>
         </div>

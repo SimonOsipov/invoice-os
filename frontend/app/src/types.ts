@@ -7,6 +7,10 @@ import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 import type { ImportPreview, UploadPhase } from './lib/importApi'
 import type { PickedFile } from './lib/importRun'
+// Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
+// `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
+// TS1484), same shape as the pre-existing PickedFile/Member edges.
+import type { MappingGroup } from './lib/mappingGroups'
 // Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
 // `./data`, both of which type-import this file, so `Member` closes the loop
 // members -> auth/data -> types -> members. Benign only because every edge in it is
@@ -252,6 +256,10 @@ export type PlatformCtx = {
   view: View
   draft: Draft
   createStep: CreateStep
+  // The active group's mapping (BULK-01-04) — a DERIVED read of
+  // `groups[groupIndex]?.mapping ?? null` in App.tsx, not its own state any more.
+  // `assign`/`unmap` write back into `groups[groupIndex].mapping` instead of a
+  // standalone setter. See `groups`/`groupIndex` below.
   mapping: Mapping | null
   armedField: string | null
   dragField: string | null
@@ -320,9 +328,12 @@ export type PlatformCtx = {
   // read at createImport time, so it must survive that unmount too.)
   entityId: string | null
   // TRANSITIONAL (BULK-01-03): derived shim (pickedFiles[0]?.file ?? null, set in App.tsx)
-  // so CreateMapping/ImportProgress/readColumns/startImport keep compiling. BULK-01-04
-  // rewires CreateMapping + readColumns->readAllColumns; BULK-01-05 rewires
-  // ImportProgress + startImport->startRun. Must be GONE when BULK-01-05 lands.
+  // so CreateMapping/ImportProgress/startImport keep compiling. BULK-01-04 (task-309)
+  // rewired CreateMapping + readColumns->readAllColumns; CreateMapping now reads a
+  // representative filename off the active MappingGroup (via `groups`/`pickedFiles`)
+  // instead of this shim for display, but the shim itself is still what gates its null
+  // check and what ImportProgress reads directly. BULK-01-05 rewires ImportProgress +
+  // startImport->startRun and must delete this shim entirely.
   importFile: File | null
   // The run's ordered file selection (BULK-01-03, Core AC 1) — CreateUpload's
   // chosen-files list, per-file remove controls and per-file bad-extension notes all
@@ -334,6 +345,16 @@ export type PlatformCtx = {
   // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
   // lives on ctx, the component renders it verbatim.
   filesRefusal: string | null
+  // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
+  // decision [shared-mapping-shown]) — App.tsx's readAllColumns previews every picked
+  // file, then lib/mappingGroups.ts's groupByLayout buckets them by columnSignature,
+  // preserving first-appearance order. `mapping`/`preview` above/below are DERIVED reads
+  // of `groups[groupIndex]`, not their own state. `MappingGroup` is pure client state
+  // ([run-is-client-state]) — no table, no endpoint, no group id crosses the wire.
+  groups: MappingGroup[]
+  // Which group the mapping step currently shows. `continueMapping` advances this on a
+  // complete mapping and starts the run only once it is the LAST group.
+  groupIndex: number
   preview: ImportPreview | null
   uploadPhase: UploadPhase
   importError: ApiError | null
@@ -376,10 +397,21 @@ export type PlatformCtx = {
   // Multi-file selection (BULK-01-03): addPickedFiles appends onto `pickedFiles` via
   // lib/importRun's addFiles (capped at MAX_RUN_FILES, never silently truncating —
   // `filesRefusal` carries the refusal text when it drops any). removePickedFile removes
-  // one entry by id, preserving the order of the rest.
+  // one entry by id, preserving the order of the rest, and also clears `filesRefusal` —
+  // a refusal names files that were NOT added, so removing one already-added file can
+  // never be what that message is still talking about.
   addPickedFiles: (files: File[]) => void
   removePickedFile: (id: string) => void
-  readColumns: () => void
+  // Previews every picked file one at a time (BULK-01-04) and, on success, buckets them
+  // into `groups` via lib/mappingGroups.ts's groupByLayout. A preview failure sets
+  // `importError` naming the failing file and stays on 'upload' — never silently drops
+  // the file, never carries it into the run. Renamed from the single-file `readColumns`.
+  readAllColumns: () => void
+  // Splits `fileId` out of whichever group currently holds it
+  // (lib/mappingGroups.ts's splitOut) — a no-op on a single-file group. The split
+  // group's mapping is a COPY of the shared group's mapping at split time, never a
+  // fresh seed ([split-copies-the-mapping]).
+  splitOutFile: (fileId: string) => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected
   // file", §7.5's "Choose another file"): resetImport THEN backToImport, as one action so

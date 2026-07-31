@@ -2,16 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
-import { gatewayBase, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
+import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery, routeAfterImport, type PostImportRoute } from './lib/reviewBatch'
-import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
-import { canReadColumns, canStartImport } from './lib/importFlow'
-import { addFiles, removeFile, type PickedFile } from './lib/importRun'
+import { canSubmitMapping, toImportMapping } from './lib/mapping'
+import { canStartImport } from './lib/importFlow'
+import { addFiles, canReadColumnsAll, removeFile, type PickedFile } from './lib/importRun'
+import { groupByLayout, splitOut, type MappingGroup } from './lib/mappingGroups'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
   createImport,
@@ -216,7 +217,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>(bootBatchId ? 'review' : 'form')
   const [reviewBatchId, setReviewBatchId] = useState<string | null>(bootBatchId)
-  const [mapping, setMapping] = useState<Mapping | null>(null)
+  // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
+  // decision [shared-mapping-shown]) — readAllColumns (below) previews every picked file
+  // and lib/mappingGroups.ts's groupByLayout buckets them, preserving first-appearance
+  // order. `groupIndex` is which group the mapping step currently shows; `mapping`/
+  // `preview` below are DERIVED reads of the active group, not their own state any more
+  // — assign/unmap (below) write back into groups[groupIndex].mapping instead.
+  const [groups, setGroups] = useState<MappingGroup[]>([])
+  const [groupIndex, setGroupIndex] = useState(0)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
   // ONE atom for what the detail view renders, never two loose fields
@@ -280,11 +288,19 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // addPickedFiles call's refusal text (lib/importRun's capRefusal), or null.
   const [pickedFiles, setPickedFiles] = useState<PickedFile[]>([])
   const [filesRefusal, setFilesRefusal] = useState<string | null>(null)
-  // TRANSITIONAL (BULK-01-03): derived shim so CreateMapping/ImportProgress/readColumns/
-  // startImport keep compiling. BULK-01-04 rewires CreateMapping + readColumns->readAllColumns;
-  // BULK-01-05 rewires ImportProgress + startImport->startRun. Must be GONE when BULK-01-05 lands.
+  // TRANSITIONAL (BULK-01-03): derived shim so CreateMapping/ImportProgress/startImport
+  // keep compiling. BULK-01-04 (task-309) rewired CreateMapping + readColumns->
+  // readAllColumns — CreateMapping now reads a representative filename off the active
+  // MappingGroup instead of this shim for display, but ImportProgress still reads it
+  // directly. BULK-01-05 rewires ImportProgress + startImport->startRun and must delete
+  // this shim entirely.
   const importFile = pickedFiles[0]?.file ?? null
-  const [preview, setPreview] = useState<ImportPreview | null>(null)
+  // The active group's preview/mapping (BULK-01-04) — DERIVED reads, never their own
+  // state. Both are null whenever `groups` is empty or `groupIndex` is out of range
+  // (before readAllColumns has ever resolved, or after a resetImport).
+  const activeGroup = groups[groupIndex] ?? null
+  const preview = activeGroup?.preview ?? null
+  const mapping = activeGroup?.mapping ?? null
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [importError, setImportError] = useState<ApiError | null>(null)
 
@@ -381,7 +397,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setCreateStep('upload')
     setDraft(defaultDraft(active))
     setFilingError(null)
-    setMapping(null)
     setSwitcherOpen(false)
     resetImport()
   }
@@ -397,7 +412,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setEntityId(active.entityId)
     setPickedFiles([])
     setFilesRefusal(null)
-    setPreview(null)
+    setGroups([])
+    setGroupIndex(0)
     setUploadPhase({ kind: 'idle' })
     setImportError(null)
     // Per-run, sitting exactly where `setReport(null)` sat: a second import must not
@@ -456,33 +472,66 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   // Removes one entry by id, preserving the order of the rest (lib/importRun's
-  // removeFile). An unknown id is a no-op.
+  // removeFile). An unknown id is a no-op. Also clears `filesRefusal`: that message
+  // names files that were NOT added past the five-file cap, and removing an
+  // already-added file can never be what it is still talking about — left uncleared, it
+  // used to linger on screen after the very removal that (partially) makes room for more
+  // (BULK-01-03 QA gap, dfc3a19).
   function removePickedFile(id: string) {
     setPickedFiles((cur) => removeFile(cur, id))
+    setFilesRefusal(null)
   }
 
-  function readColumns() {
+  // Previews every picked file ONE AT A TIME (BULK-01-04, Core AC 3), then buckets them
+  // into `groups` via lib/mappingGroups.ts's groupByLayout. Renamed from the single-file
+  // `readColumns` this replaces.
+  //
+  // reqInFlight is taken ONCE here, not once per file: the old single-shot readColumns
+  // took the guard and released it in one `.then/.finally` pair around ONE request, and
+  // looping by calling that function N times would deadlock on this very ref (each call
+  // early-returns on `if (reqInFlight.current) return`). This is one async function that
+  // takes the guard once at the top and releases it once in a `finally` around the whole
+  // per-file loop.
+  function readAllColumns() {
     const base = gatewayBase()
     // base == null is the no-gateway build: zero network, and the button is disabled
-    // too — this is the second of the two guards, not the only one.
-    // No entityId clause: preview neither sends nor needs one (see canReadColumns).
-    // `!importFile` stays for the type narrowing previewImport's File param needs.
-    if (base == null || !importFile || !canReadColumns(importFile)) return
+    // too — this is the second of the two guards, not the only one. No entityId clause:
+    // preview neither sends nor needs one (see canReadColumns, wrapped here by
+    // canReadColumnsAll — the same predicate CreateUpload's own gate reads).
+    if (base == null || !canReadColumnsAll(pickedFiles)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
     setImportError(null)
-    previewImport(importAuth, base, importFile)
-      .then(
-        (res) => {
-          setPreview(res)
-          setMapping(initMappingFromHeaders(res.columns))
-          setCreateStep('mapping')
-        },
-        (err: unknown) => setImportError(toApiError(err)),
-      )
-      .finally(() => {
+
+    // Snapshotted once, same discipline as the old readColumns closing over a fixed
+    // `importFile`: this run previews exactly the files picked at click time.
+    const files = pickedFiles
+
+    void (async () => {
+      try {
+        const previewed: { fileId: string; preview: ImportPreview }[] = []
+        for (const pf of files) {
+          let result: ImportPreview
+          try {
+            result = await previewImport(importAuth, base, pf.file)
+          } catch (err) {
+            // AC6: names the failing file, stays on 'upload' — never silently drops it,
+            // never carries it into the run. The already-previewed files ahead of it in
+            // the loop are discarded too (no partial groups), so a retry click re-reads
+            // every file fresh, matching the old single-file all-or-nothing behaviour.
+            const wrapped = toApiError(err)
+            setImportError(new ApiError(wrapped.kind, `${pf.file.name}: ${wrapped.message}`, wrapped.status, wrapped.body))
+            return
+          }
+          previewed.push({ fileId: pf.id, preview: result })
+        }
+        setGroups(groupByLayout(previewed))
+        setGroupIndex(0)
+        setCreateStep('mapping')
+      } finally {
         reqInFlight.current = false
-      })
+      }
+    })()
   }
 
   // Where a classified import LANDS (INVCR-01-09, Core AC 8). `review` and `rejected`
@@ -563,16 +612,24 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   // A field lives on exactly one column: assigning clears whatever else held
   // this column, so duplicate mappings are structurally impossible.
+  //
+  // Writes into groups[groupIndex].mapping (BULK-01-04) rather than a standalone
+  // setMapping — `mapping` is now a DERIVED read of the active group, so the only place
+  // a placement can live is back on that group. Every other group's mapping is
+  // untouched, matching CreateMapping.tsx's own guard ([layout-signature-is-ordered]):
+  // this screen renders ONE group at a time.
   function assign(field: string, header: string) {
-    setMapping((m) => {
-      if (!m) return m
-      const next: Mapping = { ...m }
-      Object.keys(next).forEach((k) => {
-        if (next[k] === header) next[k] = null
-      })
-      next[field] = header
-      return next
-    })
+    setGroups((gs) =>
+      gs.map((g, i) => {
+        if (i !== groupIndex) return g
+        const next: Mapping = { ...g.mapping }
+        Object.keys(next).forEach((k) => {
+          if (next[k] === header) next[k] = null
+        })
+        next[field] = header
+        return { ...g, mapping: next }
+      }),
+    )
     setArmedField(null)
     setDragField(null)
   }
@@ -587,14 +644,27 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   function unmap(header: string) {
-    setMapping((m) => {
-      if (!m) return m
-      const next: Mapping = { ...m }
-      Object.keys(next).forEach((k) => {
-        if (next[k] === header) next[k] = null
-      })
-      return next
-    })
+    setGroups((gs) =>
+      gs.map((g, i) => {
+        if (i !== groupIndex) return g
+        const next: Mapping = { ...g.mapping }
+        Object.keys(next).forEach((k) => {
+          if (next[k] === header) next[k] = null
+        })
+        return { ...g, mapping: next }
+      }),
+    )
+  }
+
+  // Splits `fileId` out of whichever group currently holds it
+  // (lib/mappingGroups.ts's splitOut) — a no-op on a single-file group. The split
+  // group's mapping is a COPY of the shared group's mapping at split time, never a
+  // fresh initMappingFromHeaders ([split-copies-the-mapping]): the operator splits to
+  // change one field, and discarding their existing placements would be a punishment,
+  // not a clarification. The split group is appended at the end of `groups`, so
+  // `groupIndex` (and therefore the screen the operator is currently on) is unaffected.
+  function splitOutFile(fileId: string) {
+    setGroups((gs) => splitOut(gs, fileId))
   }
 
   // The continue control used to swallow the click outright when invoice_number was
@@ -609,9 +679,21 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // (`a === k ? null : k`, just above), so routing this through it would DIS-ARM on the
   // second click and reproduce the exact do-nothing click this branch exists to delete.
   // A set is idempotent; clicking continue five times leaves the chip armed five times.
+  //
+  // BULK-01-04: gates on the ACTIVE group's mapping (canSubmitMapping, the same
+  // invoice_number-only structural check `mapping`/`preview` above already delegate to —
+  // no second gate is introduced here either). On an incomplete mapping the answer is
+  // unchanged. On a complete one, this now advances groupIndex to the next group instead
+  // of always starting the run — the run itself starts only once the LAST group's
+  // mapping is confirmed complete (startImport() itself is unmodified single-file scope,
+  // BULK-01-05's job to extend to every group).
   function continueMapping() {
-    if (!mapping || !mapping.invoice_number) {
+    if (!canSubmitMapping(mapping)) {
       setArmedField('invoice_number')
+      return
+    }
+    if (groupIndex < groups.length - 1) {
+      setGroupIndex((i) => i + 1)
       return
     }
     startImport()
@@ -638,7 +720,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   function skipUpload() {
     setCreateStep('form')
-    setMapping(null)
   }
 
   // The manual path's one round trip. Replaces the mock approve(), which wrote the draft
@@ -839,6 +920,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     importFile,
     pickedFiles,
     filesRefusal,
+    groups,
+    groupIndex,
     preview,
     uploadPhase,
     importError,
@@ -864,7 +947,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     continueMapping,
     addPickedFiles,
     removePickedFile,
-    readColumns,
+    readAllColumns,
+    splitOutFile,
     backToImport,
     restartImport,
     skipUpload,

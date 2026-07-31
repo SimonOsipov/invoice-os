@@ -10,23 +10,22 @@
 // persisted entity — no new table, no new endpoint, no group id ever crosses the wire
 // ([run-is-client-state]).
 //
-// Every export below is a STUB (BULK-01-04, test-first) — mappingGroups.test.ts's RED
-// specs (BULK-04-1..12) pin the contract before these bodies exist. Throwing (rather
-// than a wrong-but-plausible guess) makes every spec fail on an assertion/thrown-error
-// mismatch, never an import/compile error — same precedent as lib/importFlow.ts's
-// computeNoEntity STUB (task-304, INVCR-01-19) and lib/importRun.ts's selection-half
-// STUBs (BULK-01-03).
+// Implemented (BULK-01-04, task-309) against the RED specs (BULK-04-1..12) authored in
+// mappingGroups.test.ts before these bodies existed — same precedent as
+// lib/importFlow.ts's computeNoEntity (task-304, INVCR-01-19) and lib/importRun.ts's
+// selection-half (BULK-01-03).
 
+import { canSubmitMapping, initMappingFromHeaders } from './mapping'
 import type { ImportPreview } from './importApi'
 import type { Mapping } from '../types'
 
-// STUB (BULK-01-04, test-first). The exact, ordered, case-sensitive column list —
-// JSON.stringify of the array, no sorting, no case-folding. Two files share a group
-// IFF their signatures are equal ([layout-signature-is-ordered]: the mapping screen
-// renders one file's column grid, so claiming coverage of a differently-ordered/cased
-// file states a share the operator cannot verify by eye).
-export function columnSignature(_columns: string[]): string {
-  throw new Error('not implemented')
+// The exact, ordered, case-sensitive column list — JSON.stringify of the array, no
+// sorting, no case-folding. Two files share a group IFF their signatures are equal
+// ([layout-signature-is-ordered]: the mapping screen renders one file's column grid, so
+// claiming coverage of a differently-ordered/cased file states a share the operator
+// cannot verify by eye).
+export function columnSignature(columns: string[]): string {
+  return JSON.stringify(columns)
 }
 
 export interface MappingGroup {
@@ -37,42 +36,85 @@ export interface MappingGroup {
   mapping: Mapping
 }
 
-// STUB (BULK-01-04, test-first). Walks `previewed` in pick order and buckets by
-// columnSignature, preserving first-appearance order of groups. Each new group's
-// mapping is seeded with the shipped initMappingFromHeaders(preview.columns) — never a
-// blank mapping.
-export function groupByLayout(_previewed: { fileId: string; preview: ImportPreview }[]): MappingGroup[] {
-  throw new Error('not implemented')
+// Walks `previewed` in pick order and buckets by columnSignature, preserving
+// first-appearance order of groups. Each new group's mapping is seeded with the shipped
+// initMappingFromHeaders(preview.columns) — never a blank mapping.
+export function groupByLayout(previewed: { fileId: string; preview: ImportPreview }[]): MappingGroup[] {
+  const groups: MappingGroup[] = []
+  const bySignature = new Map<string, MappingGroup>()
+  previewed.forEach(({ fileId, preview }) => {
+    const signature = columnSignature(preview.columns)
+    const existing = bySignature.get(signature)
+    if (existing) {
+      existing.fileIds.push(fileId)
+      return
+    }
+    const group: MappingGroup = {
+      id: crypto.randomUUID(),
+      signature,
+      fileIds: [fileId],
+      preview,
+      mapping: initMappingFromHeaders(preview.columns),
+    }
+    bySignature.set(signature, group)
+    groups.push(group)
+  })
+  return groups
 }
 
-// STUB (BULK-01-04, test-first). No-op on a single-file group (returns the identical
-// group list — nothing appended for a lone file). On a multi-file group, removes
-// `fileId` from the shared group's fileIds and appends a new single-file group whose
-// mapping is a DEEP COPY of the shared group's mapping at split time
-// ([split-copies-the-mapping] — never a fresh initMappingFromHeaders; the operator
+// No-op on a single-file group (returns the identical group list — nothing appended for
+// a lone file, and no unknown/already-removed fileId does anything either). On a
+// multi-file group, removes `fileId` from the shared group's fileIds and appends a new
+// single-file group whose mapping is a DEEP COPY of the shared group's mapping at split
+// time ([split-copies-the-mapping] — never a fresh initMappingFromHeaders; the operator
 // splits to change one field, and discarding their existing placements would be a
-// punishment, not a clarification).
-export function splitOut(_groups: MappingGroup[], _fileId: string): MappingGroup[] {
-  throw new Error('not implemented')
+// punishment, not a clarification). `Mapping` is flat/primitive-valued (types.ts), so a
+// shallow spread IS a deep copy here.
+export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[] {
+  const idx = groups.findIndex((g) => g.fileIds.includes(fileId))
+  if (idx === -1) return groups
+  const group = groups[idx]
+  if (group.fileIds.length <= 1) return groups
+
+  const remaining: MappingGroup = { ...group, fileIds: group.fileIds.filter((id) => id !== fileId) }
+  const split: MappingGroup = {
+    id: crypto.randomUUID(),
+    signature: group.signature,
+    fileIds: [fileId],
+    preview: group.preview,
+    mapping: { ...group.mapping },
+  }
+
+  const next = groups.slice()
+  next[idx] = remaining
+  next.push(split)
+  return next
 }
 
-// STUB (BULK-01-04, test-first). Renders on EVERY group, including a group of one
+// Renders on EVERY group, including a group of one
 // ([coverage-sentence-is-unconditional] — showing it only when >1 file is covered would
 // make its absence read as "no sharing", which is exactly the silent share
 // [shared-mapping-shown] forbids). Names every file in group.fileIds via `names`.
-export function coverageSentence(_group: MappingGroup, _names: Record<string, string>): string {
-  throw new Error('not implemented')
+export function coverageSentence(group: MappingGroup, names: Record<string, string>): string {
+  const fileNames = group.fileIds.map((id) => names[id] ?? id)
+  const list =
+    fileNames.length === 1
+      ? fileNames[0]
+      : `${fileNames.slice(0, -1).join(', ')} and ${fileNames[fileNames.length - 1]}`
+  const noun = fileNames.length === 1 ? 'file' : 'files'
+  return `This mapping applies to ${fileNames.length} ${noun}: ${list}.`
 }
 
-// STUB (BULK-01-04, test-first). Looks up which group currently owns a file id — after
-// a split, resolves to the new split group, not the original.
-export function groupOfFile(_groups: MappingGroup[], _fileId: string): MappingGroup | null {
-  throw new Error('not implemented')
+// Looks up which group currently owns a file id — after a split, resolves to the new
+// split group, not the original. Unknown fileId resolves to null.
+export function groupOfFile(groups: MappingGroup[], fileId: string): MappingGroup | null {
+  return groups.find((g) => g.fileIds.includes(fileId)) ?? null
 }
 
-// STUB (BULK-01-04, test-first). Delegates to the shipped lib/mapping.ts canSubmitMapping
-// (invoice_number-only structural gate matching resolveMapping) for EVERY group — no
-// second, parallel gate is introduced.
-export function canSubmitAllMappings(_groups: MappingGroup[]): boolean {
-  throw new Error('not implemented')
+// Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only
+// structural gate matching resolveMapping) for EVERY group — no second, parallel gate is
+// introduced. Mirrors lib/importRun.ts's canReadColumnsAll idiom: an empty group list has
+// nothing ready to submit.
+export function canSubmitAllMappings(groups: MappingGroup[]): boolean {
+  return groups.length > 0 && groups.every((g) => canSubmitMapping(g.mapping))
 }

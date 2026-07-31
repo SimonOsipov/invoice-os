@@ -85,7 +85,7 @@ type importBatchBody struct {
 // importFunc is the exact signature CreateHandler's imp parameter expects
 // ((*Service).Import's signature) -- named here purely to keep the test
 // helpers below readable.
-type importFunc = func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error)
+type importFunc = func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error)
 
 // --- request-building helpers -------------------------------------------
 
@@ -228,7 +228,7 @@ func doImportCreate(t *testing.T, imp importFunc, id *auth.Identity, query, cont
 // TestCreateHandler_NoIdentity401). RED against the 501 stub: the status
 // assertion fails (got 501, want 401).
 func TestCreateHandler_NoIdentity401(t *testing.T) {
-	imp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run without an identity")
 		return BatchResult{}, nil
 	}
@@ -354,7 +354,7 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 // stub: the status assertion fails (got 501, want 413).
 func TestCreateHandler_OversizedBody413(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	imp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run when the request body exceeds the 10 MiB cap")
 		return BatchResult{}, nil
 	}
@@ -390,7 +390,7 @@ func TestCreateHandler_BadMapping400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-			imp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when mapping is missing or malformed")
 				return BatchResult{}, nil
 			}
@@ -495,7 +495,15 @@ type batchResponseBody struct {
 	Errors         []RowError `json:"errors"`
 	RuleSetVersion *int       `json:"rule_set_version"`
 	CreatedAt      time.Time  `json:"created_at"`
-	Error          string     `json:"error"`
+	// Filename (BULK-01-01, GAP 2, QA Stage 4): json.Unmarshal silently
+	// ignores an unknown key, so without this field BULK-01-2/3 would decode
+	// successfully and pass while asserting nothing -- this field must be
+	// present for those specs to be meaningful. Production batchResponse
+	// (handlers.go) does NOT gain a Filename field/json key yet (AC #6 is the
+	// executor's job); until then no response ever carries "filename" at all,
+	// so resp.Filename below always decodes to nil.
+	Filename *string `json:"filename"`
+	Error    string  `json:"error"`
 }
 
 // doImportGetBatch builds the GET /v1/imports/{id} request, injects id into
@@ -585,5 +593,117 @@ func TestGetBatchHandler_NoIdentity401(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// --- BULK-01-01 (task-305): filename threaded from the multipart part -----
+
+// TestCreateHandler_PassesSanitizedPartFilenameToImp (BULK-01-9): the
+// uploaded file part's OWN filename (sanitised) must reach imp -- not the
+// entity_id form field, not left blank. A spy imp records both so a
+// transposition (filename where entity_id belongs) would also be caught.
+// RED against the CreateHandler stub: the call site threads a hardcoded ""
+// rather than sanitizeFilename(fh.Filename), so capturedFilename never
+// matches the uploaded name.
+func TestCreateHandler_PassesSanitizedPartFilenameToImp(t *testing.T) {
+	var capturedEntityID, capturedFilename string
+	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		capturedEntityID = entityID
+		capturedFilename = filename
+		return BatchResult{}, nil
+	}
+	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
+	if err != nil {
+		t.Fatalf("marshal mapping: %v", err)
+	}
+	seededEntityID := uuid.NewString()
+	body, contentType := buildMultipartBody(t, seededEntityID, string(mappingJSON), "report.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	rec, _ := doImportCreate(t, imp, &id, "", contentType, body)
+
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("unexpected 401 (body=%s)", rec.Body.String())
+	}
+	if capturedFilename != "report.csv" {
+		t.Errorf("imp received filename = %q, want %q (the uploaded part's own sanitised name)", capturedFilename, "report.csv")
+	}
+	if capturedEntityID != seededEntityID {
+		t.Errorf("imp received entityID = %q, want %q", capturedEntityID, seededEntityID)
+	}
+	if capturedFilename == capturedEntityID {
+		t.Fatalf("fixture assumption broken: filename and entityID must differ to prove no transposition (%q == %q)", capturedFilename, capturedEntityID)
+	}
+}
+
+// TestCreateHandler_DryRunFilenameThreadedButNothingPersisted (BULK-01-10,
+// AC #9): ?dry_run=true with a filename present must still thread the
+// sanitised filename to imp (CreateHandler's imp call site is UNCONDITIONAL
+// on dry_run -- a single call site serves both paths, so a careless
+// implementation that only wires filename on the real path would be caught
+// here) AND must create no batch (leg 2, DB-backed real Service). RED
+// against the stubs: leg 1's capturedFilename never matches (CreateHandler
+// always threads "").
+func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
+	// Leg 1 (spy, no DB): filename threading survives the dry-run path.
+	var capturedFilename string
+	var capturedDryRun bool
+	spy := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		capturedFilename = filename
+		capturedDryRun = dryRun
+		return BatchResult{RowsTotal: len(rows), RowsValid: len(rows)}, nil
+	}
+	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
+	if err != nil {
+		t.Fatalf("marshal mapping: %v", err)
+	}
+	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "dryrun-report.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	rec, resp := doImportCreate(t, spy, &id, "?dry_run=true", contentType, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for ?dry_run=true (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !capturedDryRun {
+		t.Fatal("fixture assumption broken: imp was not called with dryRun=true")
+	}
+	if capturedFilename != "dryrun-report.csv" {
+		t.Errorf("imp received filename = %q, want %q even on the dry-run path", capturedFilename, "dryrun-report.csv")
+	}
+	if resp.RowsTotal != 1 || resp.RowsValid != 1 {
+		t.Errorf("counts = (total=%d valid=%d), want (1,1) (shipped body shape preserved)", resp.RowsTotal, resp.RowsValid)
+	}
+
+	// Leg 2 (DB-backed, real Service): the same shape through the REAL
+	// Service/Store must persist zero import_batches rows.
+	super, app := dbTestPools(t)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
+
+	tenantID := seedTenant(t, super, "BULK-01-10 tenant")
+	entityID := seedEntity(t, super, tenantID, "BULK-01-10 entity")
+	realID := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+
+	header := []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}
+	rows := [][]string{{"BULK-01-10-1", "2026-01-15", "Acme Ltd", "100.00", "19.00", "119.00"}}
+	mapping := map[string]string{
+		"invoice_number": "Inv No", "issue_date": "Date", "buyer_name": "Buyer",
+		"subtotal": "Subtotal", "vat": "VAT", "total": "Total",
+	}
+	realMappingJSON, err := json.Marshal(mapping)
+	if err != nil {
+		t.Fatalf("marshal mapping: %v", err)
+	}
+	realBody, realContentType := buildMultipartBody(t, entityID, string(realMappingJSON), "dryrun-report.csv", "", csvBody(t, header, rows))
+	realRec, _ := doImportCreate(t, svc.Import, &realID, "?dry_run=true", realContentType, realBody)
+	if realRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for ?dry_run=true (body=%s)", realRec.Code, realRec.Body.String())
+	}
+
+	ctx := context.Background()
+	var batchCount int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, entityID).Scan(&batchCount); err != nil {
+		t.Fatalf("count import_batches: %v", err)
+	}
+	if batchCount != 0 {
+		t.Errorf("import_batches rows for entity = %d, want 0 (dry run with a filename present must still persist nothing)", batchCount)
 	}
 }

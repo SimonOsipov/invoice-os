@@ -71,7 +71,15 @@ func pgCode(err error) string {
 // an invalid_text_representation (22P02, a malformed entity_id uuid) maps to
 // ErrValidation, mirroring internal/invoice.Store.Create's entity_id
 // handling — a bogus entity_id must never 500.
-func (s *Store) CreateBatch(ctx context.Context, entityID string) (string, error) {
+//
+// STUB (BULK-01-01, test-first): filename is accepted but deliberately NOT
+// written -- the INSERT below does not reference the import_batches.filename
+// column at all, so every BULK-01-1/5/8/11 persistence spec fails on a value
+// mismatch (column stays NULL regardless of input) rather than a compile or
+// setup error. Real implementation must add filename to the column list and
+// wrap it in Postgres's nullif($3, ...) against the empty string (AC #4: an
+// unusable/empty name persists as SQL NULL, never the empty string).
+func (s *Store) CreateBatch(ctx context.Context, entityID, filename string) (string, error) {
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		identity, _ := auth.IdentityFromContext(ctx)

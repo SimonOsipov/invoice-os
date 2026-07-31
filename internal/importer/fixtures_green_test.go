@@ -54,7 +54,7 @@ func importGreenFixture(t *testing.T, path, tenantLabel, entityName string) (res
 		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
 	})
 
-	res, err = svc.Import(c, entityID, stdMapping, header, rows, false)
+	res, err = svc.Import(c, entityID, "", stdMapping, header, rows, false)
 	if err != nil {
 		t.Fatalf("Import %s: %v", path, err)
 	}

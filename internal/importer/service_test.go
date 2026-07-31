@@ -292,7 +292,7 @@ func TestServiceImport_NonContiguousRowsGroupIntoOneInvoiceWithOrderedLineItems(
 		mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget C", "1", "100.00"),  // sheet 6
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestServiceImport_GroupDisagreeingOnTotalQuarantinedOthersCommit(t *testing
 		mkRow("INV-BAD", "2026-02-01", "TIN-D", "Bad Co", "NGN", "100.00", "0.00", "200.00", "BadItem2", "1", "200.00"),   // sheet 6 -- total differs
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestServiceImport_CollidesWithPreSeededStoredInvoiceQuarantinedSiblingCommi
 		mkRow("INV-CLEAN2", "2026-01-12", "TIN-F", "Clean2 Co", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"), // sheet 4
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestServiceImport_HeaderFieldConflictRowErrorCitesExactSheetRows(t *testing
 		mkRow("INV-CONFLICT", "2026-01-10", "TIN-B", "Conflict Co", "NGN", "40.00", "4.00", "44.00", "ItemB", "1", "40.00"), // sheet 8 -- buyer_tin differs
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestServiceImport_SubtotalPersistsVerbatimNotDerivedFromLineItems(t *testin
 		mkRow("INV-NODERIVE", "2026-01-10", "TIN-G", "NoDerive Co", "NGN", "100", "0", "100", "LineB", "1", "50.00"), // sheet 3 -- 40+50=90 != 100
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestServiceImport_DryRunClassifiesOnlyDBUnchanged(t *testing.T) {
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, mixedFileFixture(), true)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, mixedFileFixture(), true)
 	if err != nil {
 		t.Fatalf("Import (dry-run): %v", err)
 	}
@@ -632,7 +632,7 @@ func TestServiceImport_SameMixedFileRealImportMatchesDryRunVerdict(t *testing.T)
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, mixedFileFixture(), false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, mixedFileFixture(), false)
 	if err != nil {
 		t.Fatalf("Import (real): %v", err)
 	}
@@ -680,7 +680,7 @@ func TestServiceImport_BlankInvoiceNumberRowQuarantinedUngroupableScalarRow(t *t
 		mkRow("", "2026-01-10", "T2", "B2", "NGN", "5.00", "0.00", "5.00", "Blank", "1", "5.00"),          // sheet 3 -- blank invoice_number
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -731,7 +731,7 @@ func TestServiceImport_MappingMissingInvoiceNumberValidationBeforeAnyWrite(t *te
 		mkRow("INV-X", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
 	}
 
-	res, err := svc.Import(c, entityID, mapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", mapping, stdHeader, rows, false)
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Import err = %v, want ErrValidation (mapping has no invoice_number)", err)
 	}
@@ -769,7 +769,7 @@ func TestServiceImport_MappingReferencesAbsentHeaderValidationBeforeAnyWrite(t *
 		mkRow("INV-X", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
 	}
 
-	res, err := svc.Import(c, entityID, mapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", mapping, stdHeader, rows, false)
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Import err = %v, want ErrValidation (mapped header string absent from row 1)", err)
 	}
@@ -813,7 +813,7 @@ func TestServiceImport_MappingUnknownKeyValidationBeforeAnyWrite(t *testing.T) {
 		mkRow("INV-X", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
 	}
 
-	res, err := svc.Import(c, entityID, mapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", mapping, stdHeader, rows, false)
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Import err = %v, want ErrValidation (mapping key %q is not a recognized canonical field)", err, "totla")
 	}
@@ -851,7 +851,7 @@ func TestServiceImport_TinLessEntityCommitsWithNilSupplierTIN(t *testing.T) {
 		mkRow("INV-TINLESS", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestServiceImport_ConcurrentDuplicateAtCreateTimeQuarantinesLoser(t *testin
 			raceRow := [][]string{
 				mkRow("INV-RACE", "2026-01-10", "TIN-RACE", "Racer", "NGN", "100.00", "0.00", "100.00", fmt.Sprintf("RaceItem%d", i), "1", "100.00"),
 			}
-			results[i], errs[i] = svc.Import(c, entityID, stdMapping, stdHeader, raceRow, false)
+			results[i], errs[i] = svc.Import(c, entityID, "", stdMapping, stdHeader, raceRow, false)
 		}(i)
 	}
 	go func() {
@@ -930,7 +930,7 @@ func TestServiceImport_ConcurrentDuplicateAtCreateTimeQuarantinesLoser(t *testin
 		cleanRow := [][]string{
 			mkRow("INV-RACE-CLEAN", "2026-01-10", "TIN-CLEAN", "Clean", "NGN", "50.00", "0.00", "50.00", "CleanItem", "1", "50.00"),
 		}
-		results[racers], errs[racers] = svc.Import(c, entityID, stdMapping, stdHeader, cleanRow, false)
+		results[racers], errs[racers] = svc.Import(c, entityID, "", stdMapping, stdHeader, cleanRow, false)
 	}()
 	close(start)
 	wg.Wait()
@@ -996,7 +996,7 @@ func TestServiceImport_AllInvalidSourcesMixedCountersExactNoDoubleCount(t *testi
 		mkRow("INV-CONFLICT", "2026-01-13", "T4", "Beta Co", "NGN", "30.00", "3.00", "33.00", "ConflictItem2", "1", "30.00"),  // sheet 7 -- buyer_name differs
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -1075,7 +1075,7 @@ func TestServiceImport_AccountingFormattedSubtotalNormalizesAndCommits(t *testin
 		mkRow("INV-ACCTFMT", "2026-01-10", "T1", "B1", "NGN", "1,058,875.00", "0.00", "1,058,875.00", "BigItem", "1", "1058875.00"),
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -1114,7 +1114,7 @@ func TestServiceImport_NonNumericTotalQuarantinesViaCreateErrorOthersCommit(t *t
 		mkRow("INV-CLEAN3", "2026-01-11", "T2", "B2", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"), // sheet 3
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -1177,7 +1177,7 @@ func TestServiceImport_EntityScopedDedupSameNumberUnderDifferentEntityNotDuplica
 		mkRow("INV-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
 	}
 
-	res, err := svc.Import(c, entityA, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityA, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -1253,7 +1253,7 @@ func TestServiceImport_DryRunExactVerdictForNonNumericField(t *testing.T) {
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	dryRes, err := svc.Import(c, entityID, stdMapping, stdHeader, nonNumericTotalFixture(), true)
+	dryRes, err := svc.Import(c, entityID, "", stdMapping, stdHeader, nonNumericTotalFixture(), true)
 	if err != nil {
 		t.Fatalf("Import (dry-run): %v", err)
 	}
@@ -1268,7 +1268,7 @@ func TestServiceImport_DryRunExactVerdictForNonNumericField(t *testing.T) {
 		t.Errorf("dry-run wrote %d invoices rows, want 0", got)
 	}
 
-	realRes, err := svc.Import(c, entityID, stdMapping, stdHeader, nonNumericTotalFixture(), false)
+	realRes, err := svc.Import(c, entityID, "", stdMapping, stdHeader, nonNumericTotalFixture(), false)
 	if err != nil {
 		t.Fatalf("Import (real): %v", err)
 	}
@@ -1328,7 +1328,7 @@ func TestServiceImport_OperationalCreateFailureAbortsRunNotQuarantined(t *testin
 		mkRow("INV-OPFAIL", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err == nil {
 		t.Fatal("Import: err = nil, want the raw operational error to propagate (not be swallowed into a RowError)")
 	}

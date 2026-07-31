@@ -91,7 +91,7 @@ func TestServiceImport_500InvoicePerfBudget(t *testing.T) {
 	}
 
 	start := time.Now()
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	elapsed := time.Since(start)
 	t.Logf("IMP-PERF: Service.Import(500 invoices / 1500 rows, dryRun=false) took %s", elapsed)
 

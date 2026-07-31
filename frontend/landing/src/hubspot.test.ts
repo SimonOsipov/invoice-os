@@ -25,6 +25,11 @@ import {
   type DemoLead,
   type HubSpotTarget,
 } from './hubspot'
+// Test-only import: AC #8 forbids hubspot.ts (the implementation) from importing
+// src/components/, not this test file. Used solely by the parity spec below to
+// prove hubspot.ts's module-private splitLeadName never drifts from this
+// exported implementation.
+import { splitName } from './components/demoForm'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -92,6 +97,17 @@ describe('isProductionHost', () => {
     for (const h of ['www.ascomply.com.attacker.example', 'evil-www.ascomply.com', 'ascomply.com']) {
       expect(isProductionHost(h), h).toBe(false)
     }
+  })
+
+  // QA addition (task-313 Mode B): a homograph attack swaps a Latin letter for a
+  // visually-identical character from another script. Exact string equality
+  // already defeats this (the code points differ), but the class of attack is
+  // distinct enough from U13's suffix/substring impostors to warrant its own
+  // pinned case — a future "helpful" normalisation (e.g. Unicode NFKC folding,
+  // confusable-skeleton mapping) could silently reopen this hole.
+  it('QA-U28: a Cyrillic-homograph lookalike hostname fails — normalisation never folds unicode confusables', () => {
+    const homograph = 'www.аscomply.com' // Cyrillic а (U+0430), not Latin a (U+0061)
+    expect(isProductionHost(homograph)).toBe(false)
   })
 })
 
@@ -188,6 +204,100 @@ describe('buildSubmission', () => {
     const result = buildSubmission(FULL_LEAD, CONSENT_TEXT_FIXTURE)
     expect(result.legalConsentOptions.consent.text).toBe(CONSENT_TEXT_FIXTURE)
   })
+
+  // QA additions (task-313 Mode B): the RED stage's U19-U24 always fixture
+  // `consent: true`, so nothing pins the false path or the trimming behaviour the
+  // executor flagged as undertested in its hand-off notes.
+
+  it('QA-U29: consentToProcess mirrors lead.consent — never hardcoded true', () => {
+    const lead: DemoLead = { ...FULL_LEAD, consent: false }
+    const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
+    expect(result.legalConsentOptions.consent.consentToProcess).toBe(false)
+  })
+
+  it('QA-U30: field values are trimmed of surrounding whitespace before being sent', () => {
+    const lead: DemoLead = {
+      ...FULL_LEAD,
+      email: '  ada@okafor.ng  ',
+      company: '  Okafor & Partners  ',
+      role: '  Finance or Accounting lead  ',
+    }
+    const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
+    expect(result.fields.find((f) => f.name === 'email')?.value).toBe('ada@okafor.ng')
+    expect(result.fields.find((f) => f.name === 'company')?.value).toBe('Okafor & Partners')
+    expect(result.fields.find((f) => f.name === 'jobtitle')?.value).toBe('Finance or Accounting lead')
+  })
+
+  it('QA-U31: whitespace-only values are dropped exactly like empty ones (tabs, not just spaces)', () => {
+    const lead: DemoLead = { ...FULL_LEAD, role: '   ', size: '\t', volume: '' }
+    const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
+    const names = result.fields.map((f) => f.name)
+    expect(names).not.toContain('jobtitle')
+    expect(names).not.toContain('company_size')
+    expect(names).not.toContain('monthly_invoice_volume')
+  })
+
+  it('QA-U32: a lead with every field blank emits zero fields but a well-formed consent block', () => {
+    const lead: DemoLead = { name: '', email: '', company: '', role: '', size: '', volume: '', consent: false }
+    const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
+    expect(result.fields).toEqual([])
+    expect(result.legalConsentOptions.consent).toEqual({
+      consentToProcess: false,
+      text: CONSENT_TEXT_FIXTURE,
+      communications: [],
+    })
+  })
+
+  it('QA-U33: a unicode/diacritic name splits and maps correctly', () => {
+    const lead: DemoLead = { ...FULL_LEAD, name: 'Ọlábísí Adébáyọ̀' }
+    const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
+    expect(result.fields.find((f) => f.name === 'firstname')?.value).toBe('Ọlábísí')
+    expect(result.fields.find((f) => f.name === 'lastname')?.value).toBe('Adébáyọ̀')
+  })
+
+  it('QA-U34: a very long field value passes through untruncated', () => {
+    const longCompany = 'A'.repeat(5000)
+    const lead: DemoLead = { ...FULL_LEAD, company: longCompany }
+    const result = buildSubmission(lead, CONSENT_TEXT_FIXTURE)
+    expect(result.fields.find((f) => f.name === 'company')?.value).toBe(longCompany)
+  })
+
+  // QA addition (task-313 Mode B, gap #3): hubspot.ts carries a module-private
+  // splitLeadName duplicating demoForm.ts's exported splitName (forced by AC #8 +
+  // AC #1's "exactly 11 exports" — see Implementation Notes). That duplication is
+  // a real drift risk: if the two implementations diverge, the payload's
+  // firstname/lastname stop matching what the form showed the visitor. This pins
+  // buildSubmission's derived firstname/lastname to demoForm.ts's splitName
+  // across the same input set (multi-token surname, collapsed whitespace,
+  // single-token, empty/whitespace-only) so a divergence fails CI instead of
+  // shipping silently.
+  it('QA-U35: buildSubmission\'s name split stays identical to demoForm.ts\'s exported splitName', () => {
+    const names = [
+      'Ada Okafor',
+      '  Ngozi   Adaeze  Balogun ',
+      'Ada',
+      '',
+      '   ',
+      'Ọlábísí Adébáyọ̀ Extra Name',
+    ]
+    for (const name of names) {
+      const expected = splitName(name)
+      const result = buildSubmission({ ...FULL_LEAD, name }, CONSENT_TEXT_FIXTURE)
+      const firstnameField = result.fields.find((f) => f.name === 'firstname')
+      const lastnameField = result.fields.find((f) => f.name === 'lastname')
+
+      if (expected.firstName) {
+        expect(firstnameField?.value, name).toBe(expected.firstName)
+      } else {
+        expect(firstnameField, name).toBeUndefined()
+      }
+      if (expected.lastName) {
+        expect(lastnameField?.value, name).toBe(expected.lastName)
+      } else {
+        expect(lastnameField, name).toBeUndefined()
+      }
+    }
+  })
 })
 
 describe('submitDemoLead', () => {
@@ -240,5 +350,14 @@ describe('submitDemoLead', () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal)
     expect(JSON.parse(init?.body as string)).toEqual(buildSubmission(FULL_LEAD, CONSENT_TEXT_FIXTURE))
     expectNoConsoleCalls(spies)
+  })
+
+  it('QA-U36: submitDemoLead requests a 15-second AbortSignal.timeout, not an unbounded signal', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }))
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+
+    await submitDemoLead(TARGET, FULL_LEAD, CONSENT_TEXT_FIXTURE)
+
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000)
   })
 })

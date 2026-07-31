@@ -153,9 +153,17 @@ export function Row({
         {/* The status badge is InvoicesList.tsx:425-433's markup verbatim, driven entirely
             by verdictPill(...).status — no colour and no label is authored here. The
             derived badge stacks BENEATH rather than beside it: 124px cannot hold both. */}
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+        {/* `data-testid="review-verdict"` sits on this OUTER span, not the inner status
+            pill alone -- "the verdict pill" (this file's own doc comments, and the e2e
+            suite's) means status label + badge TOGETHER: a kept/failing/advisory badge
+            is a fact ABOUT the verdict, not a separate one. Scoping the testid to the
+            inner span only would make 'KEPT'/'RULES FAILED'/'ADVISORY' structurally
+            unreachable through this locator regardless of whether verdictPill computed
+            them correctly (found live, INVCR-E2E-7: kept-as-is's badge never surfaced
+            through `review-verdict` even though the wire and verdictPill were both
+            already correct). */}
+        <span data-testid="review-verdict" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
           <span
-            data-testid="review-verdict"
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: verdict.status.bg, border: `1px solid ${verdict.status.border}`, borderRadius: 999, padding: '3px 9px' }}
           >
             <span style={{ width: 6, height: 6, borderRadius: 99, background: verdict.status.text }} />

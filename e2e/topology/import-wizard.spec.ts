@@ -396,9 +396,14 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   await expect(page.getByText(structuralMsg)).toHaveCount(0)
 
   // Leg 2: it is on the other one, verbatim -- the browser never re-authors the
-  // server's own reason string.
+  // server's own reason string. TWO matches, not one, and that is the fixture's own
+  // doc comment (importFixtures.ts, buildMixedCsv): INV-UI-MIX-STRUCT is two rows that
+  // both disagree on issue_date, so the "Why it could not be read" table renders the
+  // identical reason once per row (row 2 and row 3) -- a bare `getByText` would throw a
+  // strict-mode violation on the legitimate second match rather than proving anything
+  // about the message being re-authored.
   await unreadableTab.click()
-  await expect(page.getByText(structuralMsg)).toBeVisible()
+  await expect(page.getByText(structuralMsg)).toHaveCount(2)
 
   // §7.1's amber "Not imported" channel renders its own NON-ZERO count off the batch's
   // structural errors, independent of the tab body -- the tile, the tab and the footer
@@ -850,15 +855,24 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   await page.getByTestId('review-fix-save').click()
   await expect(fixInput, 'the panel re-fetches the saved value').toHaveValue('75.00')
 
-  // Re-validate -- the verdict pill moves.
+  // Re-validate -- the verdict pill moves. ReviewInvoicesTab is entirely server-filtered
+  // ([filters-are-server-side], its own file header) -- the fixed invoice no longer
+  // matches vat-standard-rate, so the refetch this triggers (onChanged -> page.run())
+  // drops it out of THIS filtered view the instant it lands, taking its expanded panel
+  // with it. Proven explicitly, not assumed, before un-filtering: asserting
+  // `rowPassing` visible here (while still filtered) would be asserting a fact about a
+  // row that just left the DOM.
   await page.getByTestId('review-revalidate').click()
-  await expect(rowPassing, 'clean after the fix').toBeVisible()
+  await expect(violateRow, 'the fixed row drops out of the still-active rule filter').toHaveCount(0)
 
   // Toggle the SAME rule filter back off -- the invoice no longer matches it, so this is
-  // also what makes the moved verdict observable again.
+  // also what makes the moved verdict (and the still-expanded row's passing panel)
+  // observable again. `expandedId` (ReviewInvoicesTab.tsx) is untouched by the filter
+  // round-trip, so the SAME row re-expands rather than starting collapsed.
   await railPill.click()
   await expect(cleanRow).toBeVisible()
   await expect(violateRow).toBeVisible()
+  await expect(rowPassing, 'clean after the fix').toBeVisible()
   await expect(violateRow.getByTestId('review-verdict'), 'the verdict pill moved to VALIDATED').toContainText('VALIDATED')
   await expect(violateRow.getByTestId('review-verdict')).not.toContainText('RULES FAILED')
 

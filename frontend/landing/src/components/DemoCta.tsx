@@ -1,3 +1,5 @@
+import { DEFAULT_TAXPAYER_SIZE } from './demoForm'
+
 export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
   // No texture here: the system sanctions exactly one, on the hero band only.
   return (
@@ -133,7 +135,7 @@ export function DemoCta({ onBookDemo }: { onBookDemo: () => void }) {
                       color: 'var(--fg-2)',
                     }}
                   >
-                    Medium <span style={{ color: 'var(--fg-3)' }}>▾</span>
+                    {DEFAULT_TAXPAYER_SIZE} <span style={{ color: 'var(--fg-3)' }}>▾</span>
                   </div>
                 </div>
                 <div style={{ flex: 1 }}>

@@ -216,15 +216,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // reconcile (hash hand-deleted while the review screen is still mounted). Recorded
   // limitation: pasting a review hash into an already-open tab's address bar does not
   // navigate until reload.
-  const [bootBatchId] = useState<string | null>(() => parseReviewHash(window.location.hash))
-  const [view, setView] = useState<View>(bootBatchId ? 'create' : 'dashboard')
+  const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
+  const [view, setView] = useState<View>(bootBatchIds.length > 0 ? 'create' : 'dashboard')
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
-  const [createStep, setCreateStep] = useState<CreateStep>(bootBatchId ? 'review' : 'form')
+  const [createStep, setCreateStep] = useState<CreateStep>(bootBatchIds.length > 0 ? 'review' : 'form')
   // Widened from a single `reviewBatchId` (BULK-01-05, task-308): a run's `review`
   // route (lib/importRun's routeAfterRun) carries every batch id created in the run.
-  // `reviewHash` below is NOT widened yet — that is BULK-01-06's job — so only the
-  // FIRST id round-trips through the URL until then; every id still lands here.
-  const [reviewBatchIds, setReviewBatchIds] = useState<string[]>(bootBatchId ? [bootBatchId] : [])
+  // `reviewHash`/`parseReviewHash` are widened in place (BULK-01-06), so every id now
+  // round-trips through the URL, not just the first.
+  const [reviewBatchIds, setReviewBatchIds] = useState<string[]>(bootBatchIds)
   // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
   // decision [shared-mapping-shown]) — readAllColumns (below) previews every picked file
   // and lib/mappingGroups.ts's groupByLayout buckets them, preserving first-appearance
@@ -361,9 +361,11 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // with the hash it parses), so the first pass is a no-op rather than a navigation.
   useEffect(() => {
     // BULK-01-06 widens the hash to carry every id in the run.
-    const h = reviewHash(view, createStep, reviewBatchIds[0] ?? null)
+    const h = reviewHash(view, createStep, reviewBatchIds)
     window.history.replaceState(null, '', window.location.pathname + window.location.search + (h ?? ''))
-  }, [view, createStep, reviewBatchIds])
+    // `reviewBatchIds.join(',')`, never the array reference itself: a fresh array every
+    // render would otherwise re-run this effect on every render forever.
+  }, [view, createStep, reviewBatchIds.join(',')])
 
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }

@@ -40,6 +40,7 @@ import {
 } from './invoices'
 import { severityStyle, type Violation } from './validationApi'
 import type { ImportBatch, ImportReport, RowError } from './importApi'
+import { MAX_RUN_FILES, type ImportRun } from './importRun'
 import {
   BATCH_SUBMIT_MAX_IDS,
   bulkBarView,
@@ -47,7 +48,9 @@ import {
   bulkPhaseReducer,
   canKeepAsIs,
   channelTiles,
+  channelTilesAll,
   EDIT_FIELD_LABELS,
+  filesStrip,
   filterToQuery,
   fixCard,
   fixEditPatch,
@@ -57,22 +60,32 @@ import {
   pagerNav,
   parseReviewHash,
   railPills,
+  REVIEW_HASH_MAX_IDS,
   reviewFilterReducer,
   reviewHash,
   reviewHeader,
+  reviewHeaderAll,
   reviewPageQuery,
+  reviewPageQueryAll,
   reviewPills,
   REVIEW_PAGE_SIZE,
   reviewQuery,
+  reviewQueryAll,
   reviewShellState,
+  reviewShellStateAll,
   reviewTabs,
   rowExpansionView,
   routeAfterImport,
+  showsSourceFile,
+  sourceFileLabel,
   unreadableCsv,
+  unreadableCsvAll,
   unreadableRows,
+  unreadableRowsAll,
   verdictPill,
   type ReviewFilterState,
   type UnreadableRow,
+  type UnreadableRowAll,
   type VerdictInput,
 } from './reviewBatch'
 
@@ -347,11 +360,17 @@ describe('pagerLabels (AC-9)', () => {
 })
 
 describe('parseReviewHash / formatReviewHash (AC-4)', () => {
+  // Updated in place for BULK-01-06's widening (formatReviewHash now takes an array,
+  // parseReviewHash now returns one) -- this spec's own target functions are exactly
+  // the two this subtask changes in place (unlike reviewQuery/channelTiles/reviewHeader,
+  // which get additive `...All` siblings instead because five OTHER call sites outside
+  // App.tsx would not compile). A single-id array still formats byte-identically to the
+  // shipped `#review/x` (AC-2), which is what keeps this a widening, not a break.
   it('HASH-1: round-trips a uuid with case preserved verbatim (never lower-cased); a foreign hash and empty string are null', () => {
     const id = 'A1B2C3D4-E5F6-47A8-89AB-CDEF01234567'
 
-    expect(formatReviewHash(id)).toBe(`#review/${id}`)
-    expect(parseReviewHash(formatReviewHash(id))).toBe(id)
+    expect(formatReviewHash([id])).toBe(`#review/${id}`)
+    expect(parseReviewHash(formatReviewHash([id]))).toEqual([id])
     expect(parseReviewHash('#somewhere-else')).toBeNull()
     expect(parseReviewHash('')).toBeNull()
   })
@@ -511,12 +530,19 @@ describe('routeAfterImport (AC-9, task-285 Implementation Plan §3 — order is 
 })
 
 describe('reviewHash (AC-1, HASH-3 — replaces SHELL-1, which cannot exist under environment:\'node\': no `location`, no React)', () => {
-  it('HASH-3: the hash is written ONLY on view=create + createStep=review with a non-empty batch id, and cleared on every other combination — including view=invoices (the Finish / ← Invoices exit, where a lingering hash would bounce a reload straight back into review)', () => {
-    expect(reviewHash('create', 'review', 'u-1')).toBe('#review/u-1')
-    expect(reviewHash('invoices', 'review', 'u-1')).toBeNull()
-    expect(reviewHash('create', 'form', 'u-1')).toBeNull()
-    expect(reviewHash('create', 'review', null)).toBeNull()
-    expect(reviewHash('create', 'review', '')).toBeNull()
+  // Updated in place for BULK-01-06's widening: the third param is now every id in the
+  // run (App.tsx's `reviewBatchIds` state), not one -- a single-id array still writes
+  // byte-identically to the shipped `#review/u-1` (AC-2), and several ids join with a
+  // comma (HASH-3b, new).
+  it('HASH-3: the hash is written ONLY on view=create + createStep=review with a non-empty id array, and cleared on every other combination — including view=invoices (the Finish / ← Invoices exit, where a lingering hash would bounce a reload straight back into review)', () => {
+    expect(reviewHash('create', 'review', ['u-1'])).toBe('#review/u-1')
+    expect(reviewHash('invoices', 'review', ['u-1'])).toBeNull()
+    expect(reviewHash('create', 'form', ['u-1'])).toBeNull()
+    expect(reviewHash('create', 'review', [])).toBeNull()
+  })
+
+  it('HASH-3b (NEW — several ids in the run all round-trip through the mirror): a two-id array joins with a comma', () => {
+    expect(reviewHash('create', 'review', ['u-1', 'u-2'])).toBe('#review/u-1,u-2')
   })
 })
 
@@ -1673,5 +1699,372 @@ describe('ReviewBatch.tsx source: none of the three D2-forbidden lifecycle names
     for (const forbidden of [/\bpending\b/i, /\bapproved\b/i, /\btransmitted\b/i]) {
       expect(source).not.toMatch(forbidden)
     }
+  })
+})
+
+// --- BULK-01-06 (task-311, Stage 2.5/Mode A) — RED specs for the run-widened review
+// derivations. Every function marked STUB in reviewBatch.ts throws `new Error('not
+// implemented')`, so specs against them fail on that throw — the correct RED reason.
+// parseReviewHash/formatReviewHash/reviewHash are widened IN PLACE (their only consumer
+// is App.tsx's boot/mirror, updated in the same commit; HASH-1/HASH-3 above were
+// updated to the new array signature for exactly this reason). reviewQuery/
+// reviewPageQuery/channelTiles/reviewHeader/reviewShellState/unreadableRows/
+// unreadableCsv/UNREADABLE_CSV_HEADER stay UNTOUCHED and exported — five component call
+// sites (ReviewBatch.tsx x4 counting channelTiles/reviewHeader, ReviewInvoicesTab.tsx
+// x1) plus ReviewUnreadableTab.tsx's unreadableCsv call would not compile if widened in
+// place; BULK-01-07 owns switching those over before the singular exports can be
+// deleted (task-307's own recorded obligation).
+//
+// BULK-06-9 (the wire repeats the param) is DELIBERATELY NOT authored here: BULK-01-02
+// already fully widened ListInvoicesOptions.importBatchIds/listInvoices/
+// violationSummary, and invoices.test.ts:439-450 ("LIST-6 (BULK-02-14, AC-1)") already
+// pins the repeated `import_batch_id` `append` (never `set`) behaviour, green today.
+// invoices.ts/invoices.test.ts are not touched by this subtask.
+//
+// BULK-06-12b (NEW, not in the frozen 23-row table): AC-12 ("reviewPageQuery takes an
+// id array and still routes through reviewQuery — no second composer") names a real
+// acceptance criterion with no numbered spec of its own; without it, reviewPageQueryAll
+// would be the one widened export in this subtask with zero RED coverage. Named "12b"
+// to sit next to the header spec it neighbours in the AC list, not because it derives
+// from BULK-06-12's own assertion.
+
+// 00000000-0000-4000-8000-00000000000<n> — a valid REVIEW_UUID shape, parameterised so
+// hash specs needing several distinct ids never hand-roll one and risk a regex-invalid
+// typo (a stray non-hex char would make the "poisons the whole hash" specs pass for the
+// wrong reason: rejected because malformed, not because of the multi-id policy).
+function mkUuid(n: number): string {
+  return `00000000-0000-4000-8000-00000000000${n}`
+}
+
+// Local fixture — mirrors mkRow's convention above (own copy, lib/invoices.test.ts's
+// draftInvoice is not reused). Defaults to a clean, fully-recorded batch; every BULK-06
+// spec overrides only the fields it cares about.
+function mkBatch(id: string, filename: string | null, overrides: Partial<ImportBatch> = {}): ImportBatch {
+  return {
+    id,
+    entity_id: 'e1',
+    filename,
+    status: 'completed',
+    rows_total: 10,
+    rows_valid: 10,
+    rows_invalid: 0,
+    errors: [],
+    rule_set_version: 5,
+    created_at: '2026-07-30T00:00:00Z',
+    ...overrides,
+  }
+}
+
+describe('parseReviewHash: widened to a run (BULK-01-06, AC-1)', () => {
+  it('BULK-06-1: a shipped single-uuid deep link still parses — parseReviewHash(\'#review/<uuid>\') is a one-element array', () => {
+    const id = mkUuid(1)
+
+    expect(parseReviewHash(`#review/${id}`)).toEqual([id])
+  })
+
+  it('BULK-06-2: several ids parse IN ORDER — #review/a,b,c -> [a,b,c]', () => {
+    const a = mkUuid(1)
+    const b = mkUuid(2)
+    const c = mkUuid(3)
+
+    expect(parseReviewHash(`#review/${a},${b},${c}`)).toEqual([a, b, c])
+  })
+
+  it('BULK-06-3: one bad segment poisons the WHOLE hash — #review/<uuid>,notauuid is null, never a partial [uuid]', () => {
+    const id = mkUuid(1)
+
+    expect(parseReviewHash(`#review/${id},notauuid`)).toBeNull()
+  })
+
+  it('BULK-06-4: traversal and suffixes stay refused', () => {
+    const id = mkUuid(1)
+
+    expect(parseReviewHash('#review/../../etc')).toBeNull()
+    expect(parseReviewHash(`#review/${id}/extra`)).toBeNull()
+    expect(parseReviewHash('#review/')).toBeNull()
+  })
+
+  it('BULK-06-5: the hash is bounded at REVIEW_HASH_MAX_IDS — six ids is null, never a truncated five', () => {
+    const ids = Array.from({ length: 6 }, (_, i) => mkUuid(i))
+
+    expect(parseReviewHash(`#review/${ids.join(',')}`)).toBeNull()
+  })
+
+  it("BULK-06-6: parseReviewHash(formatReviewHash([a,b])) round-trips; a single-id format stays byte-identical to today's #review/x", () => {
+    const a = mkUuid(1)
+    const b = mkUuid(2)
+
+    expect(formatReviewHash([a])).toBe(`#review/${a}`)
+    expect(parseReviewHash(formatReviewHash([a, b]))).toEqual([a, b])
+  })
+})
+
+describe('REVIEW_HASH_MAX_IDS: mirrors importRun.ts\'s MAX_RUN_FILES (drift guard, BULK-01-06 — NOT a runtime clamp, same idiom as BATCH_SUBMIT_MAX_IDS)', () => {
+  it('BULK-06-DRIFT: REVIEW_HASH_MAX_IDS equals MAX_RUN_FILES — a documented mirror, not an import, avoids the reviewBatch.ts <-> importRun.ts cycle importRun.ts:74 would otherwise create', () => {
+    expect(REVIEW_HASH_MAX_IDS).toBe(MAX_RUN_FILES)
+  })
+})
+
+describe('reviewQueryAll: the tenant-wide-leak argument survives widened to an array (BULK-01-06, AC-4)', () => {
+  // GREEN-BEFORE, structurally, not by coincidence of the fixture (unlike PILL-3b/
+  // BULK-14's own green-before specs above, which are green because the thing they pin
+  // already exists): a `.toThrow()`-only assertion cannot discriminate "throws because
+  // the real empty/blank-id validation caught it" from "throws because the STUB always
+  // throws `not implemented`, unconditionally, for every input" -- every call below
+  // throws today, including the one this subtask's own AC-4 does NOT want to throw once
+  // implemented (a real `['a','b']`). This is an unavoidable property of writing a
+  // negative-only `.toThrow()` spec against a not-implemented stub (adding a
+  // conditional throw now would be implementation, which Mode A forbids) — QA Mode B
+  // must re-verify this throws for the RIGHT reason (and that a valid array does NOT
+  // throw) once BULK-01-06's own implementation lands.
+  it("BULK-06-7: an empty query cannot leak the tenant — reviewQueryAll([]), (['']) and ([id,'']) all throw", () => {
+    expect(() => reviewQueryAll([], 'all')).toThrow()
+    expect(() => reviewQueryAll([''], 'all')).toThrow()
+    expect(() => reviewQueryAll(['batch-1', ''], 'all')).toThrow()
+  })
+
+  it('BULK-06-8: reviewQueryAll carries EVERY id, and the pill filter still applies', () => {
+    const result = reviewQueryAll(['a', 'b'], 'ready')
+
+    expect(result).toEqual({ importBatchIds: ['a', 'b'], status: 'validated' })
+  })
+
+  it('BULK-06-12b (AC-12, not in the frozen 23-row table): reviewPageQueryAll composes through reviewQueryAll, never a second composer', () => {
+    const state: ReviewFilterState = { pill: 'needs-fix', ruleKey: 'vat-standard-rate', q: 'ACME', offset: 100 }
+
+    const query = reviewPageQueryAll(['a', 'b'], state)
+
+    expect(query).toEqual({
+      importBatchIds: ['a', 'b'],
+      needsFix: true,
+      ruleKey: 'vat-standard-rate',
+      q: 'ACME',
+      limit: REVIEW_PAGE_SIZE,
+      offset: 100,
+    })
+  })
+})
+
+describe('reviewShellStateAll (BULK-01-06, AC-4)', () => {
+  it("BULK-06-10: reviewShellStateAll is 'batch' iff ANY batch is 'completed'; over one batch it equals the shipped reviewShellState", () => {
+    const completed: Pick<ImportBatch, 'status'> = { status: 'completed' }
+    const failed: Pick<ImportBatch, 'status'> = { status: 'failed' }
+
+    expect(reviewShellStateAll([completed, failed])).toBe('batch')
+    expect(reviewShellStateAll([failed, failed])).toBe('rejected')
+    expect(reviewShellStateAll([completed])).toBe(reviewShellState(completed))
+  })
+})
+
+describe('channelTilesAll: sums the frozen channel and labels the min non-null rule-set version (BULK-01-06, AC-5)', () => {
+  it('BULK-06-11: two batches with 2 and 1 unreadable rows sum to 3; versions [null,3] label NG-MBS v3; [null,null] labels "not evaluated", never v0', () => {
+    const twoUnreadable: Pick<ImportBatch, 'errors' | 'rule_set_version'> = {
+      errors: [
+        { row: 1, message: 'm1' },
+        { row: 2, message: 'm2' },
+      ],
+      rule_set_version: null,
+    }
+    const oneUnreadable: Pick<ImportBatch, 'errors' | 'rule_set_version'> = {
+      errors: [{ row: 3, message: 'm3' }],
+      rule_set_version: 3,
+    }
+
+    const result = channelTilesAll([twoUnreadable, oneUnreadable], { cleanTotal: 0, failingTotal: 0 })
+    expect(result.frozen.unreadable).toBe(3)
+    expect(result.frozen.ruleSetLabel).toBe('NG-MBS v3')
+
+    const bothNull: Pick<ImportBatch, 'errors' | 'rule_set_version'> = { errors: [], rule_set_version: null }
+    expect(channelTilesAll([bothNull, bothNull], { cleanTotal: 0, failingTotal: 0 }).frozen.ruleSetLabel).toBe(
+      'not evaluated',
+    )
+  })
+})
+
+describe('reviewHeaderAll: states the files, sums the rows, never prints a null (BULK-01-06, AC-6)', () => {
+  it('BULK-06-12: one batch -> filesLine "from a.csv"; three -> "from 3 files"; rows read is the sum', () => {
+    const one = reviewHeaderAll([mkBatch('b1', 'a.csv', { rows_total: 1500 })], { allTotal: 500 })
+    expect(one.filesLine).toBe('from a.csv')
+    expect(one.subline).toContain('1500 ROWS READ')
+
+    const three = reviewHeaderAll(
+      [
+        mkBatch('b1', 'a.csv', { rows_total: 100 }),
+        mkBatch('b2', 'b.csv', { rows_total: 200 }),
+        mkBatch('b3', 'c.csv', { rows_total: 300 }),
+      ],
+      { allTotal: 500 },
+    )
+    expect(three.filesLine).toBe('from 3 files')
+    expect(three.subline).toContain('600 ROWS READ')
+  })
+
+  it('BULK-06-22: a single batch with filename:null renders filesLine "source not recorded" — never "from null", never a bare "from "', () => {
+    const header = reviewHeaderAll([mkBatch('b1', null, { rows_total: 10 })], { allTotal: 5 })
+
+    expect(header.filesLine).toBe('source not recorded')
+    expect(header.filesLine).not.toContain('null')
+    expect(header.filesLine).not.toBe('from ')
+  })
+})
+
+describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7)', () => {
+  it('BULK-06-13: a rows:[5,6] error in b1 and a row:2 in b2 yield THREE entries, each carrying its own filename', () => {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b1',
+      filename: 'a.csv',
+      errors: [{ rows: [5, 6], message: 'quarantined: duplicate invoice_number' }],
+    }
+    const b2: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b2',
+      filename: 'b.csv',
+      errors: [{ row: 2, message: 'bad row' }],
+    }
+
+    const result = unreadableRowsAll([b1, b2])
+
+    expect(result).toHaveLength(3)
+    expect(result.filter((r) => r.file === 'a.csv')).toHaveLength(2)
+    expect(result.filter((r) => r.file === 'b.csv')).toHaveLength(1)
+  })
+
+  it('BULK-06-14: an error with neither row nor rows still yields ONE row:null entry, carrying its filename — the no-swallow rule survives widening', () => {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b1',
+      filename: 'a.csv',
+      errors: [{ message: 'unreadable file structure' }],
+    }
+
+    const result = unreadableRowsAll([b1])
+
+    expect(result).toEqual([{ row: null, column: '—', message: 'unreadable file structure', file: 'a.csv' }])
+  })
+
+  it('BULK-06-23: an unreadable row belonging to a filename:null batch renders "source not recorded" in the File column and the CSV cell, never the literal null', () => {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b1',
+      filename: null,
+      errors: [{ row: 1, message: 'm1' }],
+    }
+
+    const rows = unreadableRowsAll([b1])
+    expect(rows[0].file).toBe('source not recorded')
+
+    const csv = unreadableCsvAll(rows)
+    expect(csv.split('\n')[1]).toBe('source not recorded,1,—,m1')
+    expect(csv).not.toContain('null')
+  })
+})
+
+describe('unreadableCsvAll (BULK-01-06, AC-7): the CSV gains a File column', () => {
+  it('BULK-06-15: header is File,Row,Field,Why it could not be read; a null row renders an empty cell; a comma-bearing filename is RFC-4180 quoted', () => {
+    const rows: UnreadableRowAll[] = [
+      { row: 5, column: '—', message: 'bad row', file: 'a,b.csv' },
+      { row: null, column: '—', message: 'unreadable file structure', file: 'source not recorded' },
+    ]
+
+    const csv = unreadableCsvAll(rows)
+    const lines = csv.split('\n')
+
+    expect(lines[0]).toBe('File,Row,Field,Why it could not be read')
+    expect(lines[1]).toBe('"a,b.csv",5,—,bad row')
+    expect(lines[2]).toBe('source not recorded,,—,unreadable file structure')
+  })
+})
+
+describe('filesStrip: the whole per-file report, batch GETs merged with the in-session run (BULK-01-06, AC-8/9/10/11)', () => {
+  it('BULK-06-16: filesStrip reports a run-only failure — a file that never produced a batch — carrying its filename and the server message', () => {
+    const run: ImportRun = {
+      files: [{ id: 'f1', name: 'broken.csv', groupId: 'g1', outcome: { kind: 'failed', message: '422: unreadable file structure' } }],
+      cursor: 1,
+      status: 'finished',
+    }
+
+    const rows = filesStrip([], run)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].filename).toBe('broken.csv')
+    expect(rows[0].reason).toBe('422: unreadable file structure')
+  })
+
+  it('BULK-06-17: filesStrip(batches, null) survives a deep link — one row per batch, and no run-only failure rows', () => {
+    const batches: ImportBatch[] = [mkBatch('b1', 'a.csv'), mkBatch('b2', 'b.csv')]
+
+    const rows = filesStrip(batches, null)
+
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.id).sort()).toEqual(['b1', 'b2'])
+  })
+
+  it('BULK-06-18: a batch with filename:null renders "source not recorded" in filesStrip — never \'\' and never the literal null', () => {
+    const rows = filesStrip([mkBatch('b1', null)], null)
+
+    expect(rows[0].filename).toBe('source not recorded')
+  })
+
+  // BULK-06-21 (the QA-debate addition, and the reason this subtask exists in this
+  // shape): a rejected-by-verdict file states its reason, read from `batch.errors`,
+  // NEVER `batch.status` ([reason-comes-from-errors-not-status]). Verified in Go:
+  // service.go:787 finalizes 'failed' only when rowsTotal === 0; a fully-quarantined
+  // file with rows falls through to service.go:923 and finalizes 'completed' with
+  // rows_valid:0, its reason entering errorsList at service.go:838-849 and reaching the
+  // wire at handlers.go:371. Asserted TWICE — a status-keyed implementation fails BOTH
+  // halves, not just one: once with a live run whose outcome for this file is
+  // kind:'imported' with ready_invoices:0 (the report itself, matching the batch), and
+  // once with run:null (a reload), where `errors` is the only surviving source.
+  it('BULK-06-21: a rejected-by-verdict file (status:completed, rows_total:1, rows_valid:0, a duplicate RowError in errors) states its reason from errors, not status — both with a live run and with run:null', () => {
+    const message = 'duplicate invoice_number: INV-1'
+    const batch = mkBatch('b1', 'dupes.csv', {
+      rows_total: 1,
+      rows_valid: 0,
+      rows_invalid: 1,
+      errors: [{ row: 1, rule_key: 'duplicate_invoice_number', severity: 'error', message }],
+    })
+    const report: ImportReport = {
+      id: 'b1',
+      status: 'completed',
+      format: 'csv',
+      delimiter: ',',
+      encoding: 'utf-8',
+      rows_total: 1,
+      rows_valid: 0,
+      rows_invalid: 1,
+      ready_invoices: 0,
+      quarantined_invoices: 1,
+      errors: batch.errors,
+      rule_set_version: 5,
+      invoices_clean: 0,
+      invoices_with_violations: 0,
+      invoice_violations: [],
+    }
+    const liveRun: ImportRun = {
+      files: [{ id: 'f1', name: 'dupes.csv', groupId: 'g1', outcome: { kind: 'imported', batchId: 'b1', report } }],
+      cursor: 1,
+      status: 'finished',
+    }
+
+    const liveRows = filesStrip([batch], liveRun)
+    expect(liveRows.find((r) => r.id === 'b1')?.reason).toBe(message)
+
+    const deepLinkRows = filesStrip([batch], null)
+    expect(deepLinkRows.find((r) => r.id === 'b1')?.reason).toBe(message)
+  })
+})
+
+describe('sourceFileLabel / showsSourceFile: per-row source attribution (BULK-01-06, AC-11)', () => {
+  it("BULK-06-19: sourceFileLabel resolves a row's import_batch_id to its batch's filename; an unknown id and a null filename both return null", () => {
+    const batches: Pick<ImportBatch, 'id' | 'filename'>[] = [
+      { id: 'b1', filename: 'a.csv' },
+      { id: 'b2', filename: null },
+    ]
+
+    expect(sourceFileLabel('b1', batches)).toBe('a.csv')
+    expect(sourceFileLabel('b2', batches)).toBeNull()
+    expect(sourceFileLabel('unknown-id', batches)).toBeNull()
+  })
+
+  it('BULK-06-20: showsSourceFile is the sole owner of the "only when >1 batch" rule — false at one batch, true at two', () => {
+    expect(showsSourceFile([mkBatch('b1', 'a.csv')])).toBe(false)
+    expect(showsSourceFile([mkBatch('b1', 'a.csv'), mkBatch('b2', 'b.csv')])).toBe(true)
   })
 })

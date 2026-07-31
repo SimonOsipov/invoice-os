@@ -3,14 +3,23 @@
 // "Book a demo" modal). Shell (overlay/card/header) is cloned VERBATIM from
 // SignInModal.tsx — including its "ASComply" brand, which is already correct
 // per task-99 (the prototype still shows the old "InvoiceOS" codename; normalized
-// here). Submit is client-side theater only (no backend, no persistence), matching
-// the existing landing pattern (auth.ts). Mount = open: the parent renders
+// here). Submit is gate-aware since LAND-02: it POSTs the lead to HubSpot only on
+// the production host with the ids configured, and stays client-side theater
+// everywhere else. Mount = open: the parent renders
 // `{demoOpen && <DemoModal onClose={...} />}`, same as SignInModal.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { BrandMark } from '../icons'
-import { validateDemoForm, firstNameOf, type DemoFormErrors } from './demoForm'
+import {
+  validateDemoForm,
+  firstNameOf,
+  CONSENT_TEXT,
+  DEFAULT_TAXPAYER_SIZE,
+  TAXPAYER_SIZE_OPTIONS,
+  type DemoFormErrors,
+} from './demoForm'
+import { resolveSubmitTarget, submitDemoLead, type DemoLead } from '../hubspot'
 
 function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -31,7 +40,6 @@ const WARN_PATHS = [
 ]
 
 const ROLE_OPTIONS = ['Owner / Partner', 'Finance or Accounting lead', 'Tax / Compliance', 'Developer / IT', 'Other']
-const SIZE_OPTIONS = ['Micro', 'Small', 'Medium', 'Large']
 const VOLUME_OPTIONS = ['under 1k', '1k–10k', '10k–100k', '100k+']
 
 const DEFAULT_FORM = {
@@ -39,36 +47,44 @@ const DEFAULT_FORM = {
   email: '',
   company: '',
   role: 'Finance or Accounting lead',
-  size: 'Medium',
+  size: DEFAULT_TAXPAYER_SIZE,
   volume: '1k–10k',
+  consent: false,
 }
 
 type DemoFormState = typeof DEFAULT_FORM
+// Every key except the one boolean — setField carries strings, setConsent the box.
+type DemoFieldKey = Exclude<keyof DemoFormState, 'consent'>
 type DemoStep = 'form' | 'submitting' | 'success' | 'error'
 
-// A focusable element is eligible for the Tab-trap if it isn't disabled and is
-// actually rendered (offsetParent is null for display:none / detached nodes).
+// A focusable element is eligible for the Tab-trap if it isn't disabled, is
+// actually rendered (offsetParent is null for display:none / detached nodes), and
+// is reachable by Tab at all. The tabIndex clause is load-bearing, not tidying:
+// the honeypot below is an absolutely-positioned off-screen <input>, which the
+// trap's `input,select,…` selector matches unconditionally and which keeps a
+// NON-null offsetParent — so without this it would enter the trap list, possibly
+// as its first/last node, and the Tab-wrap would try to focus an element the
+// browser refuses, letting focus escape the modal.
 export function isFocusable(el: HTMLElement): boolean {
-  return !(el as HTMLButtonElement).disabled && el.offsetParent !== null
+  return !(el as HTMLButtonElement).disabled && el.offsetParent !== null && el.tabIndex >= 0
 }
 
-export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: () => Promise<void> }) {
+export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (lead: DemoLead) => Promise<void> }) {
   const [form, setForm] = useState<DemoFormState>(DEFAULT_FORM)
   const [errors, setErrors] = useState<DemoFormErrors>({})
   const [demoStep, setDemoStep] = useState<DemoStep>('form')
   const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mounted = useRef(true)
 
-  // Default submit stub: client-side theater, always resolves to success after
-  // ~1300ms (matching the prototype's submitDemo). Its timer is stored on the
-  // shared submitTimer ref so unmount cleanup still clears it. A real `submit`
-  // (or an injected failing one from QA/tests) is used instead when provided.
-  const runSubmit =
-    submit ??
-    (() =>
-      new Promise<void>((resolve) => {
-        submitTimer.current = setTimeout(resolve, 1300)
-      }))
+  // Demo-mode stub: client-side theater, always resolves to success after ~1300ms
+  // (matching the prototype's submitDemo). Its timer is stored on the shared
+  // submitTimer ref so unmount cleanup still clears it. Deliberately ONE helper
+  // with the delay written once — a closed HubSpot gate and a tripped honeypot
+  // both route through it, and they must be timing-indistinguishable.
+  const runStub = () =>
+    new Promise<void>((resolve) => {
+      submitTimer.current = setTimeout(resolve, 1300)
+    })
 
   // Close on Escape (never a native dialog); focus the first field on open (added —
   // SignInModal lacks this); clear any pending submit timer on unmount; restore
@@ -98,32 +114,65 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
     else if (demoStep === 'error') document.getElementById('dm-error-retry')?.focus()
   }, [demoStep])
 
-  function setField(key: keyof DemoFormState, value: string) {
+  function setField(key: DemoFieldKey, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }))
     if (key === 'name' || key === 'email' || key === 'company') {
       setErrors((prev) => ({ ...prev, [key]: undefined }))
     }
   }
 
+  // setField's sibling for the one boolean: a computed-key spread carrying
+  // `value: string` cannot also carry a checkbox.
+  function setConsent(next: boolean) {
+    setForm((prev) => ({ ...prev, consent: next }))
+    setErrors((prev) => ({ ...prev, consent: undefined }))
+  }
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (demoStep === 'submitting') return
+    // Read the honeypot off the form SYNCHRONOUSLY, before any await: React clears
+    // e.currentTarget once the handler's synchronous portion returns, so a
+    // post-await read would always see null and the trap would silently never fire.
+    // Reading the DOM (rather than mirroring it into state) is also what catches
+    // the naive bots that assign input.value directly without dispatching an event.
+    const trap = String(new FormData(e.currentTarget).get('website') ?? '').trim()
     const nextErrors = validateDemoForm(form)
     if (Object.keys(nextErrors).length) {
       setErrors(nextErrors)
-      const firstKey = (['name', 'email', 'company'] as const).find((k) => nextErrors[k])
+      const firstKey = (['name', 'email', 'company', 'consent'] as const).find((k) => nextErrors[k])
       if (firstKey) document.getElementById('dm-' + firstKey)?.focus()
       return
     }
     setErrors({})
     setDemoStep('submitting')
-    // The default runSubmit stub always resolves (client-side theater, matching
-    // the prototype's submitDemo), so the happy path never invents a failure
-    // sentinel. The error branch is reachable by construction: any rejection —
-    // from a future real submit, or an injected failing `submit` in QA/tests —
-    // routes here.
+
+    // Built field by field from the seven answers. The honeypot's value is
+    // deliberately absent — it is not part of the form's data model.
+    const lead: DemoLead = {
+      name: form.name,
+      email: form.email,
+      company: form.company,
+      role: form.role,
+      size: form.size,
+      volume: form.volume,
+      consent: form.consent,
+    }
+
+    // All four branches share ONE success/error transition. A tripped honeypot is
+    // dropped by running the very same stub a closed gate runs — no early return,
+    // no distinguishable timing, and nothing written to the console on any path,
+    // so a bot cannot tell a silent drop from a real submit. The error branch is
+    // reachable by construction: any rejection — a HubSpot non-2xx, or an injected
+    // failing `submit` in QA/tests — routes here.
     try {
-      await runSubmit()
+      if (trap) await runStub()
+      else if (submit) await submit(lead)
+      else {
+        const target = resolveSubmitTarget(window.location.hostname)
+        if (target) await submitDemoLead(target, lead, CONSENT_TEXT)
+        else await runStub()
+      }
       if (mounted.current) setDemoStep('success')
     } catch {
       if (mounted.current) setDemoStep('error')
@@ -315,7 +364,7 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                       style={{ width: '100%', height: 42, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '0 32px 0 13px', fontSize: 14, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
                     >
                       <option value="" disabled>Select…</option>
-                      {SIZE_OPTIONS.map((opt) => (
+                      {TAXPAYER_SIZE_OPTIONS.map((opt) => (
                         <option key={opt} value={opt}>{opt}</option>
                       ))}
                     </select>
@@ -348,6 +397,43 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
                   </div>
                 </div>
               </div>
+
+              <div>
+                <label htmlFor="dm-consent" style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-2)', cursor: 'pointer' }}>
+                  <input
+                    id="dm-consent"
+                    type="checkbox"
+                    checked={form.consent}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setConsent(e.target.checked)}
+                    aria-required="true"
+                    aria-invalid={Boolean(errors.consent)}
+                    aria-describedby={errors.consent ? 'dm-consent-error' : undefined}
+                    disabled={submitting}
+                    style={{ flex: 'none', width: 15, height: 15, marginTop: 2, accentColor: 'var(--action)', cursor: 'pointer' }}
+                  />
+                  {/* The imported constant, never a retyped sentence: this is the one
+                      mechanism that keeps the wording the visitor was SHOWN identical to
+                      the wording submitted as legalConsentOptions.consent.text. */}
+                  {CONSENT_TEXT}
+                </label>
+                {errors.consent && (
+                  <div id="dm-consent-error" role="alert" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, color: 'var(--status-red-text)' }}>
+                    <Glyph d={WARN_PATHS} size={15} sw={1.7} /> {errors.consent}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Honeypot. Bots fill every input they find; humans never see this one, so
+                any value here means "not a human" and the submission is dropped
+                silently. Off-screen rather than display:none — bots skip display:none
+                fields, which would defeat the trap entirely. tabIndex={-1} keeps it out
+                of the Tab-trap, and is one half of that fix: an off-screen input still
+                has a non-null offsetParent, so isFocusable's tabIndex clause is the
+                other half. Uncontrolled and read straight off the form in handleSubmit;
+                its value never reaches `lead`. */}
+            <div style={{ position: 'absolute', left: -9999, width: 1, height: 1, overflow: 'hidden' }}>
+              <input type="text" name="website" tabIndex={-1} aria-hidden="true" autoComplete="off" />
             </div>
 
             <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 44, marginTop: 18, cursor: 'pointer', gap: 9 }}>

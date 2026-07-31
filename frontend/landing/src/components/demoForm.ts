@@ -4,15 +4,16 @@
 // validation and the success-copy derivation can be reviewed/tested without
 // rendering React.
 //
-// `consent` is OPTIONAL on DemoFormValues so DemoModal.tsx's existing call (which
-// never sets it) keeps compiling — DemoModal.tsx is untouched in this subtask.
-// LAND-02-02 wires the checkbox and tightens `consent` to required.
+// `consent` is REQUIRED (tightened from optional by LAND-02-02, once DemoModal's
+// DEFAULT_FORM started carrying `consent: false`): an unchecked box is now always a
+// real `false`, never an absent key, so no caller can reach validateDemoForm's
+// fail-closed branch by omission alone.
 
 export type DemoFormValues = {
   name: string
   email: string
   company: string
-  consent?: boolean
+  consent: boolean
 }
 
 export type DemoFormErrors = {

@@ -25,13 +25,15 @@
       "rule_key": "line-items-sum-subtotal",
       "severity": "error",
       "message": "Line item amounts must sum to the invoice subtotal.",
+      "path": "subtotal",
       "expected": "1005",
       "actual": "-5"
     },
     {
       "rule_key": "no-duplicate-line-items",
       "severity": "error",
-      "message": "Invoice contains duplicate line items (a line id appears more than once)."
+      "message": "Invoice contains duplicate line items (a line id appears more than once).",
+      "path": "line_items"
     },
     {
       "rule_key": "subtotal-non-negative",
@@ -58,6 +60,7 @@
       "rule_key": "vat-standard-rate",
       "severity": "error",
       "message": "VAT must equal 7.5% of the subtotal.",
+      "path": "vat",
       "expected": "-0.375",
       "actual": "999"
     }

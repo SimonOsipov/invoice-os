@@ -960,3 +960,67 @@ func TestConditional_RequiredFalseTriviallySatisfied(t *testing.T) {
 		t.Errorf("Eval() violation = %+v, want nil: then's required:false is trivially satisfied even though optional_field is absent", v)
 	}
 }
+
+// TestTaxMathTargetDoesNotChangeEvaluation (task-289 / INVCR-01-13, D8, AC-9): proves
+// this file's own header contract holds under the v3 publish -- setting Rule.Target
+// (e.g. "vat", the value v3's vat-standard-rate row now carries) must not change Eval's
+// pass/fail outcome versus leaving Target unset ("", v2's value), since taxMathEval.Eval
+// never reads r.Target at all (only the shared violation(r) helper in evaluators.go
+// copies it into Violation.Path -- see evaluators_math.go's amended file-header note).
+// Exercised both ways (a wrong-VAT violation and a correct-VAT pass) so this isn't
+// vacuously true for whichever branch happens to run first.
+func TestTaxMathTargetDoesNotChangeEvaluation(t *testing.T) {
+	e := taxMathEval{}
+	params := json.RawMessage(`{"base":"subtotal","rate":0.075,"expected":"vat","tolerance":0.01}`)
+	const newTarget = "vat"
+
+	cases := []struct {
+		name string
+		vat  float64
+	}{
+		{"violates", 50}, // 1000*0.075=75 != 50
+		{"passes", 75},   // 1000*0.075=75 == 75
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := Payload{"invoice": map[string]any{
+				"subtotal": float64(1000),
+				"vat":      tc.vat,
+			}}
+			rWithoutTarget := Rule{
+				Key: "vat-standard-rate", Type: TypeTaxMath, Target: "",
+				Params: params, Severity: "error", Message: "VAT must equal 7.5% of the subtotal.",
+			}
+			rWithTarget := Rule{
+				Key: "vat-standard-rate", Type: TypeTaxMath, Target: newTarget,
+				Params: params, Severity: "error", Message: "VAT must equal 7.5% of the subtotal.",
+			}
+
+			vWithout, errWithout := mustEval(t, e, payload, rWithoutTarget)
+			vWith, errWith := mustEval(t, e, payload, rWithTarget)
+			if errWithout != nil || errWith != nil {
+				t.Fatalf("unexpected error: without-target=%v, with-target=%v", errWithout, errWith)
+			}
+			if (vWithout == nil) != (vWith == nil) {
+				t.Fatalf("pass/fail differs by Target alone: without-target violation=%v, with-target violation=%v",
+					vWithout != nil, vWith != nil)
+			}
+			if vWithout == nil {
+				return // both passed -- nothing further to compare
+			}
+
+			if vWithout.Path != "" {
+				t.Errorf("without-target Violation.Path = %q, want \"\"", vWithout.Path)
+			}
+			if vWith.Path != newTarget {
+				t.Errorf("with-target Violation.Path = %q, want %q", vWith.Path, newTarget)
+			}
+			if !strPtrEqual(vWithout.Expected, vWith.Expected) {
+				t.Errorf("Expected differs by Target alone: without=%s with=%s", stringPtrDebug(vWithout.Expected), stringPtrDebug(vWith.Expected))
+			}
+			if !strPtrEqual(vWithout.Actual, vWith.Actual) {
+				t.Errorf("Actual differs by Target alone: without=%s with=%s", stringPtrDebug(vWithout.Actual), stringPtrDebug(vWith.Actual))
+			}
+		})
+	}
+}

@@ -12,6 +12,7 @@
       "rule_key": "vat-standard-rate",
       "severity": "error",
       "message": "VAT must equal 7.5% of the subtotal.",
+      "path": "vat",
       "expected": "75",
       "actual": "70"
     }

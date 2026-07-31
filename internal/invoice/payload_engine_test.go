@@ -481,17 +481,23 @@ func TestPayloadEngine_LineSum_Violates(t *testing.T) {
 
 // ---------------------------------------------------------------------
 // PAY-18 -- a fully valid invoice evaluates to ZERO violations against the
-// REAL v2 rule set (DB-backed; the discriminating mis-rooting test,
+// REAL active rule set (DB-backed; the discriminating mis-rooting test,
 // [batch-payload-rooting], AC #1).
 // ---------------------------------------------------------------------
 
-// TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2 (PAY-18): RED
-// against the scaffold -- supplier/buyer stay flat (never nested), so
-// supplier-tin-required/supplier-name-required (v2 rules resolving
+// TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2 (PAY-18, name
+// retained for its task-108/Stage-1 traceability even though the active
+// version has since moved on -- see the precondition below): RED against the
+// scaffold -- supplier/buyer stay flat (never nested), so
+// supplier-tin-required/supplier-name-required (v2/v3 rules resolving
 // "supplier.tin"/"supplier.name") both fire on the resulting absence, and
 // every money field is a string (not a number), tripping range/tax_math/
 // line_sum too. Uses the pinned fixture from task-108's Stage-1 addendum
-// D4, checked rule-by-rule against all 19 live v2 rules.
+// D4, checked rule-by-rule against all 19 live rules under the active
+// version -- v3 (INVCR-01-13/task-289) since it superseded v2, but the fixture
+// only ever depended on the 19 KEYS/EVALUATORS being identical (true of both:
+// v3 is v2's content with only 4 keys' `target` filled in, which this
+// zero-violations assertion does not distinguish).
 func TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2(t *testing.T) {
 	pool := rulesAppPool(t)
 	store := validation.NewStore(pool)
@@ -500,8 +506,10 @@ func TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadActiveRuleSet: %v [PAY-18]", err)
 	}
-	if rs.Version != 2 || len(rs.Rules) != 19 {
-		t.Fatalf("active rule set = version %d with %d rules, want version 2 with 19 "+
+	// TRAP FOR THE NEXT PUBLISH: bump this literal (and gate_test.go's identical one)
+	// together on every future rule-set publish -- see that file's matching note.
+	if rs.Version != 3 || len(rs.Rules) != 19 {
+		t.Fatalf("active rule set = version %d with %d rules, want version 3 with 19 "+
 			"rules -- dev DB drifted from the pinned state [PAY-18 precondition]", rs.Version, len(rs.Rules))
 	}
 

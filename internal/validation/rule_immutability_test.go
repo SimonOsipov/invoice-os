@@ -619,11 +619,22 @@ func TestRIL09_UnsealRejected(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // TestRIL10_IsActiveFlipAllowedOnSealed (RIL-10): the legitimate `is_active`
-// activation flip (deactivate v2, activate v1) must remain legal even
-// though both versions are sealed -- Guard C's UPDATE branch only rejects an
-// unseal transition, never touches is_active. Rolled-back super tx.
-// Precondition (requireSealed) makes this 42703 pre-migration, per the
-// spec's Setup ("sealed v1 (inactive) + v2 (active)").
+// activation flip (deactivate whichever version is currently active, activate
+// v1) must remain legal even though both v1/v2 are sealed -- Guard C's UPDATE
+// branch only rejects an unseal transition, never touches is_active.
+// Rolled-back super tx. Precondition (requireSealed) makes this 42703
+// pre-migration, per the spec's Setup ("sealed v1 (inactive) + v2 (active)").
+//
+// Deactivates `WHERE is_active` rather than hardcoding `WHERE version = 2`:
+// this test only needs "the currently active row" cleared before v1 claims
+// the one-active slot, and whichever sealed version that is (v2, historically
+// -- or v3 since INVCR-01-13, or any future publish) is irrelevant to what
+// RIL-10 actually proves. A hardcoded `version = 2` breaks the moment a THIRD
+// sealed version exists and is active: deactivating an already-inactive v2 is
+// a no-op, so the subsequent activate of v1 then collides with the REAL
+// active row on rule_set_versions_one_active (23505) -- the identical
+// [active-version-pinning-is-the-bug] class rule_set_v2_test.go's RS-V2-10/
+// 12/13 fixtures were reworked to avoid.
 func TestRIL10_IsActiveFlipAllowedOnSealed(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
@@ -637,8 +648,8 @@ func TestRIL10_IsActiveFlipAllowedOnSealed(t *testing.T) {
 	requireSealed(t, ctx, tx, 1, true)
 	requireSealed(t, ctx, tx, 2, true)
 
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE version = 2`); err != nil {
-		t.Fatalf("deactivate sealed v2: %v -- is_active flips must remain legal on a sealed version", err)
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
+		t.Fatalf("deactivate the currently active version: %v -- is_active flips must remain legal on a sealed version", err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
 		t.Fatalf("activate sealed v1: %v -- is_active flips must remain legal on a sealed version", err)

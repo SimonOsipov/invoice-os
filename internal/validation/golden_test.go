@@ -246,6 +246,87 @@ func TestGoldenSetUnchangedForOmittingRules(t *testing.T) {
 	}
 }
 
+// TestV3PathIsTheOnlyDelta (task-289 / INVCR-01-13, D8, AC-9): evaluates the golden
+// corpus's three representative payloads under BOTH v2 and v3 (loaded directly by
+// version -- rule_set_v3_test.go's loadRuleSetByVersion -- not via loadActive, since this
+// test needs BOTH sealed versions' content regardless of which one is currently active)
+// and asserts the two Results carry identical RuleKey/Severity/Message/Expected/Actual
+// sequences. The ONE allowed difference is Path, and only on the 4 D8-overridden keys
+// (v2 stays "", v3 carries the new target) -- proving the v3 publish is evaluation-neutral,
+// exactly as evaluators_math.go's amended file header and migrations/
+// 20260731090000_rule_set_v3.sql's Up comment claim.
+func TestV3PathIsTheOnlyDelta(t *testing.T) {
+	_, app := dbTestPools(t)
+	engine := NewDefaultEngine()
+
+	rsV2 := loadRuleSetByVersion(t, app, 2)
+	rsV3 := loadRuleSetByVersion(t, app, 3)
+
+	cases := []struct {
+		name    string
+		payload func() Payload
+	}{
+		{"clean_invoice", validInvoicePayload},
+		{"demo_bad_invoice", badInvoicePayload},
+		{"many_violations", manyViolationsPayload},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resultV2, err := engine.Evaluate(tc.payload(), rsV2)
+			if err != nil {
+				t.Fatalf("Evaluate under v2: %v", err)
+			}
+			resultV3, err := engine.Evaluate(tc.payload(), rsV3)
+			if err != nil {
+				t.Fatalf("Evaluate under v3: %v", err)
+			}
+
+			if len(resultV2.Violations) != len(resultV3.Violations) {
+				t.Fatalf("len(violations) v2=%d v3=%d, want equal -- v3 must fire the exact same violation "+
+					"SET as v2 [AC-9]", len(resultV2.Violations), len(resultV3.Violations))
+			}
+
+			// Both engines sort by RuleKey then Path (Decision N16), and RuleKey is
+			// unique per Evaluate call (rule_set_v3_test.go's
+			// TestV3ViolationOrderStableUnderPathSort proves no rule fires twice), so
+			// index i under v2 and index i under v3 always name the SAME rule.
+			for i := range resultV2.Violations {
+				v2v, v3v := resultV2.Violations[i], resultV3.Violations[i]
+
+				if v2v.RuleKey != v3v.RuleKey {
+					t.Fatalf("[%d] RuleKey v2=%q v3=%q, want equal [AC-9]", i, v2v.RuleKey, v3v.RuleKey)
+				}
+				key := v2v.RuleKey
+				if v2v.Severity != v3v.Severity {
+					t.Errorf("[%s] Severity v2=%q v3=%q, want equal [AC-9]", key, v2v.Severity, v3v.Severity)
+				}
+				if v2v.Message != v3v.Message {
+					t.Errorf("[%s] Message v2=%q v3=%q, want equal [AC-9]", key, v2v.Message, v3v.Message)
+				}
+				if !strPtrEqual(v2v.Expected, v3v.Expected) {
+					t.Errorf("[%s] Expected v2=%s v3=%s, want equal [AC-9]", key, stringPtrDebug(v2v.Expected), stringPtrDebug(v3v.Expected))
+				}
+				if !strPtrEqual(v2v.Actual, v3v.Actual) {
+					t.Errorf("[%s] Actual v2=%s v3=%s, want equal [AC-9]", key, stringPtrDebug(v2v.Actual), stringPtrDebug(v3v.Actual))
+				}
+
+				// The ONE allowed delta: Path, and only on the 4 overridden keys.
+				if wantV3Target, overridden := v3TargetOverrides[key]; overridden {
+					if v2v.Path != "" {
+						t.Errorf("[%s] v2 Path = %q, want \"\" (v2 must be unmutated) [AC-9]", key, v2v.Path)
+					}
+					if v3v.Path != wantV3Target {
+						t.Errorf("[%s] v3 Path = %q, want %q [AC-9]", key, v3v.Path, wantV3Target)
+					}
+				} else if v2v.Path != v3v.Path {
+					t.Errorf("[%s] Path v2=%q v3=%q, want equal (not one of the 4 D8 keys) [AC-9]", key, v2v.Path, v3v.Path)
+				}
+			}
+		})
+	}
+}
+
 // ptr returns a pointer to s -- shorthand for the want-map literals above.
 func ptr(s string) *string { return &s }
 

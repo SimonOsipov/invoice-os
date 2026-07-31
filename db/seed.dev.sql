@@ -120,9 +120,10 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- Entity ids are GENERATED (see the block above) -- these INSERTs resolve entity_id by
 -- joining business_entities on its stable, curated TIN, never a literal uuid.
 -- rule_set_version_id resolves the same way, via `(SELECT id FROM rule_set_versions
--- WHERE is_active)` (currently v2, migrations/20260716185106_rule_set_v2.sql) -- never a
--- literal, so this seed tracks whichever version is active without a hand-maintained
--- number. `validated` (a seed-only column below, not a real one) gates whether a row
+-- WHERE is_active)` (currently v3, migrations/20260731090000_rule_set_v3.sql; previously
+-- v2, migrations/20260716185106_rule_set_v2.sql) -- never a literal, so this seed tracks
+-- whichever version is active without a hand-maintained number. `validated` (a seed-only
+-- column below, not a real one) gates whether a row
 -- stamps rule_set_version_id at all: false for the 3 invoices left genuinely untouched
 -- since creation (rule_set_version_id stays NULL, matching Store.Create's own invariant
 -- that a fresh invoice starts unvalidated); true for every other row, including the ones

@@ -120,29 +120,30 @@ func TestRuleSetV2_V1HasSeventeenRulesAndIsInactive(t *testing.T) {
 // RS-V2-03..04 -- v2 is the sole active version, carrying 19 rules.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV2_OnlyV2ActiveWithNineteenRules (RS-V2-03, RS-V2-04): exactly
-// one rule_set_versions row is active, its version is 2, and it carries the
-// 17 base + 2 line-item keys (19 total).
+// TestRuleSetV2_OnlyV2ActiveWithNineteenRules (RS-V2-04; RS-V2-03's "and it's
+// v2" half retired below): v2, resolved DIRECTLY by version number (no longer
+// via "active" -- see note), carries the 17 base + 2 line-item keys (19
+// total).
+//
+// RS-V2-03's ORIGINAL claim ("exactly one active row, and it's v2") was true
+// only until INVCR-01-13 (task-289) published v3 and superseded it -- that
+// "which version is active now" fact is a moving target every future publish
+// changes, and is asserted going forward by rule_set_v3_test.go's
+// TestRuleSetV3_ActiveAndSealed, not re-litigated here. What NEVER changes,
+// because v2 is sealed, is v2's OWN rule content -- so this test now resolves
+// v2 by its permanent version number (versionIDByVersion, shared with
+// rule_immutability_test.go) instead of by "whichever version happens to be
+// active", which stopped being a valid proxy for "v2" the moment a second
+// version was published after it.
 func TestRuleSetV2_OnlyV2ActiveWithNineteenRules(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
-	var activeCount int
-	if err := app.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE is_active`).Scan(&activeCount); err != nil {
-		t.Fatalf("count active rule_set_versions: %v", err)
-	}
-	if activeCount != 1 {
-		t.Fatalf("count(rule_set_versions WHERE is_active) = %d, want 1 [RS-V2-03]", activeCount)
-	}
+	v2ID := versionIDByVersion(t, ctx, app, 2)
 
-	activeID, activeVersion := activeVersionRow(t, app)
-	if activeVersion != 2 {
-		t.Errorf("the sole active rule_set_versions.version = %d, want 2 [RS-V2-03]", activeVersion)
-	}
-
-	gotKeys := ruleKeysUnder(t, app, activeID)
+	gotKeys := ruleKeysUnder(t, app, v2ID)
 	if len(gotKeys) != 19 {
-		t.Errorf("count(rules under the active version) = %d, want 19 [RS-V2-04] -- got keys %v", len(gotKeys), gotKeys)
+		t.Errorf("count(rules under v2) = %d, want 19 [RS-V2-04] -- got keys %v", len(gotKeys), gotKeys)
 	}
 
 	wantKeys := []string{
@@ -178,7 +179,15 @@ func TestRuleSetV2_OnlyV2ActiveWithNineteenRules(t *testing.T) {
 // TestRuleSetV2_LoadActiveRuleSetReturnsV2 (RS-V2-05): the real Store,
 // called directly (NOT via seed_test.go's loadV1, which hard-pins
 // Version==1 -- exactly the assumption this story exists to remove), must
-// return Version==2 with 19 rules.
+// return the sanctioned active version with 19 rules.
+//
+// Compares against seed_test.go's activeSeedVersion const, NOT a bare literal
+// `2` -- v2 was the active version only until INVCR-01-13 (task-289)
+// published v3 and superseded it. activeSeedVersion is this package's ONE
+// designated place to track "whichever version is sanctioned-active right
+// now" (its own doc comment: "the next version publish is a one-line change
+// here"), so this test tracks every future publish for free instead of
+// re-hardcoding the identical trap this test's own name warns against.
 func TestRuleSetV2_LoadActiveRuleSetReturnsV2(t *testing.T) {
 	_, app := dbTestPools(t)
 	store := NewStore(app)
@@ -187,8 +196,8 @@ func TestRuleSetV2_LoadActiveRuleSetReturnsV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadActiveRuleSet: %v", err)
 	}
-	if rs.Version != 2 {
-		t.Errorf("RuleSet.Version = %d, want 2 [RS-V2-05]", rs.Version)
+	if rs.Version != activeSeedVersion {
+		t.Errorf("RuleSet.Version = %d, want %d [RS-V2-05]", rs.Version, activeSeedVersion)
 	}
 	if len(rs.Rules) != 19 {
 		t.Errorf("len(RuleSet.Rules) = %d, want 19 [RS-V2-05]", len(rs.Rules))
@@ -200,38 +209,42 @@ func TestRuleSetV2_LoadActiveRuleSetReturnsV2(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // TestRuleSetV2_AllActiveRulesEnabledOnPublish (RS-V2-06,
-// [v2-ships-as-authored]): every rule under the active (v2) version has
-// enabled=true. Guards against a vacuous pass two ways: first asserts the
-// active version really is 2 (a loud, real RED today -- the active version
-// is still 1), then asserts there is at least one rule to check before
-// asserting none are disabled.
+// [v2-ships-as-authored]): every rule under the sanctioned active version has
+// enabled=true -- a publish-time guarantee that holds for whichever version
+// is active (v2 originally; v3 since INVCR-01-13, task-289; any future
+// publish alike, since [v2-ships-as-authored] governs every publish, not
+// just v2's), so this is an evergreen regression guard rather than a
+// v2-specific snapshot. Guards against a vacuous pass two ways: first asserts
+// the active version really is activeSeedVersion (a loud, real RED today if
+// the expected version isn't published/active yet), then asserts there is at
+// least one rule to check before asserting none are disabled.
 func TestRuleSetV2_AllActiveRulesEnabledOnPublish(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
 	activeID, activeVersion := activeVersionRow(t, app)
-	if activeVersion != 2 {
-		t.Fatalf("active rule_set_versions.version = %d, want 2 -- expected the v2 migration to be active "+
-			"[RS-V2-06 precondition]", activeVersion)
+	if activeVersion != activeSeedVersion {
+		t.Fatalf("active rule_set_versions.version = %d, want %d -- expected the sanctioned active version "+
+			"[RS-V2-06 precondition]", activeVersion, activeSeedVersion)
 	}
 
 	var n int
 	if err := app.QueryRow(ctx, `SELECT count(*) FROM rules WHERE rule_set_version_id = $1`, activeID).Scan(&n); err != nil {
-		t.Fatalf("count rules under v2: %v", err)
+		t.Fatalf("count rules under the active version: %v", err)
 	}
 	if n == 0 {
-		t.Fatalf("count(rules under v2) = 0, want > 0 -- nothing to check enabled on [RS-V2-06]")
+		t.Fatalf("count(rules under the active version) = 0, want > 0 -- nothing to check enabled on [RS-V2-06]")
 	}
 
 	var disabledCount int
 	if err := app.QueryRow(ctx,
 		`SELECT count(*) FROM rules WHERE rule_set_version_id = $1 AND NOT enabled`, activeID,
 	).Scan(&disabledCount); err != nil {
-		t.Fatalf("count disabled rules under v2: %v", err)
+		t.Fatalf("count disabled rules under the active version: %v", err)
 	}
 	if disabledCount != 0 {
-		t.Errorf("count(disabled rules under v2) = %d, want 0 -- every v2 rule must ship enabled=true, not "+
-			"inherit v1's live enabled column [RS-V2-06, v2-ships-as-authored]", disabledCount)
+		t.Errorf("count(disabled rules under the active version) = %d, want 0 -- every freshly published version "+
+			"must ship enabled=true, not inherit its predecessor's live enabled column [RS-V2-06, v2-ships-as-authored]", disabledCount)
 	}
 }
 
@@ -244,14 +257,21 @@ func TestRuleSetV2_AllActiveRulesEnabledOnPublish(t *testing.T) {
 // line-cost-non-negative / line-items-sum-subtotal rows must carry the
 // EXACT type/params/message the line_rules migration defines (copied, not
 // re-declared -- [v2-copy-not-redeclare]).
+//
+// Resolves v2 DIRECTLY by version number (versionIDByVersion, shared with
+// rule_immutability_test.go), not via "whichever version is active": this
+// claim is about v2's OWN permanent, sealed content, which holds regardless
+// of whether v2 is still the active version -- unlike RS-V2-03's retired
+// "and it's v2" half (see TestRuleSetV2_OnlyV2ActiveWithNineteenRules's doc
+// comment), there was never a real "is v2 active" precondition this spec
+// needed; using activeVersionRow here was itself the latent
+// [active-version-pinning-is-the-bug] instance ("active" standing in for
+// "v2"), now fixed rather than perpetuated.
 func TestRuleSetV2_LineItemRuleParamsMatchLineRulesMigration(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
-	activeID, activeVersion := activeVersionRow(t, app)
-	if activeVersion != 2 {
-		t.Fatalf("active rule_set_versions.version = %d, want 2 [RS-V2-07 precondition]", activeVersion)
-	}
+	v2ID := versionIDByVersion(t, ctx, app, 2)
 
 	cases := []struct {
 		key, wantType, wantParams, wantMessage string
@@ -274,7 +294,7 @@ func TestRuleSetV2_LineItemRuleParamsMatchLineRulesMigration(t *testing.T) {
 			var gotMessage string
 			if err := app.QueryRow(ctx,
 				`SELECT type, params, message FROM rules WHERE rule_set_version_id = $1 AND key = $2`,
-				activeID, tc.key,
+				v2ID, tc.key,
 			).Scan(&gotType, &gotParams, &gotMessage); err != nil {
 				t.Fatalf("read v2's %s row: %v -- expected the line_rules migration's params copied verbatim [RS-V2-07]", tc.key, err)
 			}
@@ -307,11 +327,14 @@ func TestRuleSetV2_LineItemRuleParamsMatchLineRulesMigration(t *testing.T) {
 
 // TestRuleSetV2_DownRestoresV1 (RS-V2-09): mirrors seed_test.go's
 // TestSeed_ReversibilityRollback pattern -- runs the v2 migration's Down
-// (not yet authored) inside a superuser tx that is ALWAYS rolled back, so it
-// never permanently mutates the shared DB other tests in this package
-// depend on. Guards against a vacuous pass exactly like that test does:
-// first asserts an active version=2 row (with 19 rules) actually exists --
-// a loud, real RED today (there is no v2 yet) -- before attempting the Down.
+// inside a superuser tx that is ALWAYS rolled back, so it never permanently
+// mutates the shared DB other tests in this package depend on. Guards
+// against a vacuous pass exactly like that test does: first ESTABLISHES then
+// asserts an active version=2 row (with 19 rules) actually exists -- v2 is
+// no longer the real active version since INVCR-01-13 (task-289) published
+// v3, so this simulation activates v2 itself, inside the same rolled-back
+// tx, before reading it back (mirrors TestRIL10_IsActiveFlipAllowedOnSealed's
+// identical fix, rule_immutability_test.go).
 func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
@@ -339,6 +362,19 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	}
 	if _, err := tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER USER`); err != nil {
 		t.Fatalf("disable USER triggers on rules: %v", err)
+	}
+
+	// This test simulates the v2 migration's OWN Down, whose Setup precondition is "v2
+	// active" -- true only until INVCR-01-13 (task-289) published v3 and superseded it.
+	// Establish that precondition inside this always-rolled-back tx (the same class of
+	// fix TestRIL10_IsActiveFlipAllowedOnSealed needed for the identical reason): clear
+	// whichever version is really active, then activate v2 -- safe, since nothing here
+	// escapes the transaction.
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
+		t.Fatalf("clear the active slot (simulated RS-V2-09 precondition): %v", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 2`); err != nil {
+		t.Fatalf("activate v2 (simulated RS-V2-09 precondition): %v", err)
 	}
 
 	var v2ID string

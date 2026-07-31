@@ -108,9 +108,11 @@ const HONEYPOT_ATTRS: ReadonlyArray<readonly [string, string]> = [
 // Viewports for E6. 1280 is AC #6's mandated measurement. 600 is the exact width at which
 // landing.css's `@media (max-width: 600px)` .ios-demo-card padding rule turns on, so it is
 // the narrow width that actually exercises the rule named in the plan.
-const ASSERTED_WIDTHS = [1280, 600] as const
-// Recorded but NOT asserted — see the long note on E6.
-const RECORDED_WIDTHS = [1100, 960, 500, 430, 390, 375] as const
+// The other eight are the widths at which the UNGUARDED value measurably broke: 1150/1100/
+// 960/921 in the band just above the 920px single-column breakpoint, where the 0.8fr column
+// is at its narrowest, and 500/430/390/375 below it. All ten are asserted — the recorded-only
+// tier this file shipped with is gone, and the note on E6 says why.
+const ASSERTED_WIDTHS = [1280, 1150, 1100, 960, 921, 600, 500, 430, 390, 375] as const
 
 type LandingSinks = {
   /** console.error + pageerror. AC #3: a closed gate must stay silent. */
@@ -261,11 +263,16 @@ function activeKey(page: Page): Promise<string> {
 type SizeValueMeasurement = {
   /** The rendered value text, so a build that regressed to "Medium" cannot pass by fitting. */
   text: string
-  /** Line boxes the value occupies. THE oracle: 1 = no wrap. */
+  /** Line boxes the value occupies, counted by DISTINCT rect top. THE oracle: 1 = no wrap. */
   lines: number
+  /** Raw `getClientRects()` length. Reported, never asserted — see the note on `lines`. */
+  rectCount: number
+  /** Widest single rect. This is the UNCLIPPED run, so it does not shrink under truncation. */
   widestLinePx: number
-  /** Gap between the value's right edge and the ▾ caret's left edge. <= 0 is a collision. */
+  /** Gap between the value's PAINTED right edge and the ▾ caret's left edge. < 0 is overlap. */
   caretGapPx: number
+  /** How far the ▾ caret spills past the box's content-box right edge. > 0 means it was cut off. */
+  caretOverhangPx: number
   /** How far the text's last line falls below the box's border box. > 0 is a visible bleed. */
   bleedBelowBoxPx: number
   boxHeightPx: number
@@ -278,13 +285,25 @@ type SizeValueMeasurement = {
 /**
  * Measures the inline #demo card's taxpayer-size value.
  *
- * The value is a BARE TEXT NODE — DemoCta renders `{DEFAULT_TAXPAYER_SIZE} <span>▾</span>`
- * inside a fixed `height: 42` flex box with no overflow/whiteSpace/minWidth guard anywhere
- * in the element, its flex:1 wrapper or its parent row. There is no element wrapping the
- * text, so a Range over the text node is the only way to measure it, and its per-line client
- * rects are the only oracle that sees a WRAP. scrollHeight is reported below but is NOT the
- * primary oracle: two 14px lines still fit inside a 40px content box, so a wrapped value
- * reads back as scrollHeight === clientHeight while looking visibly broken.
+ * A Range over the text node is still the oracle, but TWO of its readings had to be reinterpreted
+ * when LAND-02-03's overflow guard landed, because the guard changed the DOM the Range sits in.
+ * Both reinterpretations are recorded here rather than in the test, since both are facts about the
+ * measurement rather than about the value.
+ *
+ * 1. `lines` counts DISTINCT RECT TOPS, not `rects.length`. Chromium reports a *truncated* run as
+ *    two rects at the SAME y — the full unclipped run plus the visible portion — so raw rect count
+ *    reads 2 on a value that occupies one line and is behaving exactly as designed. Rect count was
+ *    only ever a proxy for line count, and it stops being one the moment anything clips. A genuine
+ *    wrap puts the second rect ~17px lower, which is what this still catches: on the unguarded
+ *    markup it reads 2 at 1150/1100/960/500/430/390 and 3 at 921/375.
+ * 2. `caretGapPx` measures from the value's PAINTED right edge. The guard puts the text in a span
+ *    with `overflow: hidden`, so nothing paints past that span's border box however long the string
+ *    is — the unclipped run's right edge is no longer where ink stops, and reading it would report
+ *    a collision that is not on screen. When nothing clips the text, the two are the same number.
+ *
+ * scrollHeight is reported below but is NOT a primary oracle: two 14px lines still fit inside a
+ * 40px content box, so a wrapped value reads back as scrollHeight === clientHeight while looking
+ * visibly broken. It only catches the three-line case.
  */
 function measureTaxpayerSizeValue(page: Page): Promise<SizeValueMeasurement> {
   return page.evaluate(() => {
@@ -295,9 +314,16 @@ function measureTaxpayerSizeValue(page: Page): Promise<SizeValueMeasurement> {
     const box = label.nextElementSibling as HTMLElement | null
     if (!box) throw new Error('the "Taxpayer size" label has no value box beside it')
 
-    const textNode = Array.from(box.childNodes).find(
-      (n): n is Text => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim().length > 0,
-    )
+    // Walked, not read off box.childNodes: the guard moved the text one level down into its own
+    // span, and a build that moved it again should still be measured rather than crash.
+    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null = null
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if ((n.textContent ?? '').trim().length > 0) {
+        textNode = n as Text
+        break
+      }
+    }
     if (!textNode) throw new Error('the taxpayer-size value box holds no text node')
 
     const range = document.createRange()
@@ -305,20 +331,44 @@ function measureTaxpayerSizeValue(page: Page): Promise<SizeValueMeasurement> {
     const rects = Array.from(range.getClientRects())
     if (!rects.length) throw new Error('the taxpayer-size value produced no client rects')
 
-    const caret = box.querySelector('span')
+    // The caret is named by its glyph, not by position: the box now holds two spans, and picking
+    // the wrong one would silently measure the value against itself.
+    const caret = Array.from(box.querySelectorAll<HTMLElement>('span')).find(
+      (el) => (el.textContent ?? '').trim() === '▾',
+    )
     if (!caret) throw new Error('the taxpayer-size value box has no ▾ caret span')
 
+    const round = (n: number): number => Math.round(n * 100) / 100
     const boxRect = box.getBoundingClientRect()
     const caretRect = caret.getBoundingClientRect()
-    const right = Math.max(...rects.map((r) => r.right))
     const bottom = Math.max(...rects.map((r) => r.bottom))
-    const round = (n: number): number => Math.round(n * 100) / 100
+
+    // Distinct line boxes: sorted tops, split wherever the gap exceeds 1px. A real second line is
+    // a full 17px lower, so 1px is comfortably below the smallest difference that means "wrapped"
+    // and comfortably above sub-pixel noise between two rects of the same line.
+    const tops = rects.map((r) => r.top).sort((a, b) => a - b)
+    let lines = 1
+    for (let i = 1; i < tops.length; i++) if (tops[i] - tops[i - 1] > 1) lines++
+
+    // Where ink actually stops. `holder` is the element the text lives in; if it clips, its border
+    // box bounds the paint, otherwise the run's own right edge does.
+    const holder = textNode.parentElement!
+    const clips = holder !== box && getComputedStyle(holder).overflow !== 'visible'
+    const paintedRight = clips ? holder.getBoundingClientRect().right : Math.max(...rects.map((r) => r.right))
+
+    // The box's content-box right edge, border and padding resolved rather than assumed, so this
+    // stays honest if either is ever retuned.
+    const boxStyle = getComputedStyle(box)
+    const contentRight =
+      boxRect.right - parseFloat(boxStyle.borderRightWidth) - parseFloat(boxStyle.paddingRight)
 
     return {
       text: (textNode.textContent ?? '').trim(),
-      lines: rects.length,
+      lines,
+      rectCount: rects.length,
       widestLinePx: round(Math.max(...rects.map((r) => r.width))),
-      caretGapPx: round(caretRect.left - right),
+      caretGapPx: round(caretRect.left - paintedRight),
+      caretOverhangPx: round(caretRect.right - contentRight),
       bleedBelowBoxPx: round(bottom - boxRect.bottom),
       boxHeightPx: round(boxRect.height),
       clientWidth: box.clientWidth,
@@ -554,41 +604,39 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
 
 // E6 — AC #6's measurement obligation, carried in from LAND-02-03.
 //
-// DEFAULT_TAXPAYER_SIZE went from 'Medium' (6 chars) to 'Medium ₦1bn–₦5bn' (16), and the
-// inline card renders it in a fixed height:42 flex box with NO overflow, whiteSpace or
-// minWidth guard on the element, its flex:1 wrapper, its parent row, or landing.css:159. So
-// the risk is not only a ▾ collision but wrapping and bleeding out of the box.
+// DEFAULT_TAXPAYER_SIZE went from 'Medium' (6 chars) to 'Medium ₦1bn–₦5bn' (16), rendered in a
+// fixed height:42 flex box. Unguarded, that wrapped to two or three lines and bled out of the
+// box — so the risk this measures is not only a ▾ collision but wrapping and vertical bleed.
 //
-// The full sweep is measured and attached FIRST, before any assertion, so the numbers reach
-// the PR even on a failing run — AC #6 requires the result recorded either way.
+// The full sweep is measured and attached FIRST, before any assertion, so the numbers reach the
+// PR even on a failing run — AC #6 requires the result recorded either way.
 //
-// WHY ONLY TWO WIDTHS ARE ASSERTED. An offline Chromium replica of this exact layout (real
-// Inter, the same inline styles and the same two media queries) measured the value at
-// fourteen widths before this file was written. It occupies ONE line at 1280 (133.5px of
-// text in a 153px content box) and at 600 (133.5 in 188), and it WRAPS to two or three lines
-// between ~921 and ~1150 — just above the 920px single-column breakpoint, where the 0.8fr
-// column is at its narrowest — and again below ~500. At three lines (~921 and ~375) it also
-// bleeds ~4.5px below the 42px box. The same replica with the old 'Medium' fits on one line
-// at every width from 375 to 1440, so this is a LAND-02-03 regression, not pre-existing.
-// Those widths are outside AC #6's mandate and outside this subtask's scope to fix, so they
-// are RECORDED, not asserted: a red deploy gate here would block the story on a defect it
-// was never scoped to fix, and would bury the measurement instead of surfacing it. Once a
-// mitigation lands, move the width into ASSERTED_WIDTHS — the assertions need no change.
+// WHY EVERY WIDTH IS NOW ASSERTED. This file first shipped with eight of these ten widths
+// RECORDED but not asserted, because at the time no mitigation existed and a red deploy gate
+// would have blocked the story on a defect it was not scoped to fix. The guard now exists
+// (DemoCta.tsx: the value text has its own span carrying white-space/overflow/text-overflow/
+// min-width:0, and the flex:1 wrapper carries min-width:0), so the recorded-only tier has no
+// remaining purpose and is gone.
+//
+// The guard is asserted at ten widths rather than the two AC #6 mandates because the failure it
+// prevents is width-dependent and was invisible at both mandated widths. An offline Chromium
+// replica of this layout — the component's own SSR markup, the repo's real design-tokens and
+// landing.css, real Inter — measured all three markups at eighteen widths from 320 to 1440:
+//   * unguarded: FAILS at 11 of 18. Two lines at 1150/1100/1000/960/940/500/430/390, three at
+//     921/375/320, and at three lines it also bleeds 4.5px below the 42px box (scrollHeight 46
+//     against clientHeight 40). One line at 1280 and 600 — both mandated widths pass.
+//   * the old 'Medium' placeholder: passes at every width down to 375, which is what makes this
+//     a LAND-02-03 regression rather than something pre-existing.
+//   * guarded (what ships): passes at all 18.
+// So each assertion below is known to be RED on the markup this branch started from, at the
+// widths named in ASSERTED_WIDTHS. None of them is vacuous.
 test('landing demo: the inline card taxpayer-size value fits its box', async ({ page }, testInfo) => {
   const sinks = await openLanding(page)
 
-  const sweep: Array<SizeValueMeasurement & { viewportWidth: number; asserted: boolean }> = []
-
+  const sweep: Array<SizeValueMeasurement & { viewportWidth: number }> = []
   for (const width of ASSERTED_WIDTHS) {
     await page.setViewportSize({ width, height: 900 })
-    sweep.push({ viewportWidth: width, asserted: true, ...(await measureStable(page, width)) })
-  }
-  for (const width of RECORDED_WIDTHS) {
-    await page.setViewportSize({ width, height: 900 })
-    // Deliberately NOT measureStable: its stability check is an assertion, and a recorded-
-    // only width must be incapable of failing the run for any reason.
-    await settleLayout(page)
-    sweep.push({ viewportWidth: width, asserted: false, ...(await measureTaxpayerSizeValue(page)) })
+    sweep.push({ viewportWidth: width, ...(await measureStable(page, width)) })
   }
 
   await testInfo.attach('taxpayer-size-value-fit.json', {
@@ -600,14 +648,14 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
     description: sweep
       .map(
         (m) =>
-          `${m.viewportWidth}px: ${m.lines} line(s), widest line ${m.widestLinePx}px, ` +
+          `${m.viewportWidth}px: ${m.lines} line(s) (${m.rectCount} rect(s)), widest run ${m.widestLinePx}px, ` +
           `box content width ${m.clientWidth}px, caret gap ${m.caretGapPx}px, ` +
-          `bleed below box ${m.bleedBelowBoxPx}px${m.asserted ? '' : ' [recorded only]'}`,
+          `caret overhang ${m.caretOverhangPx}px, bleed below box ${m.bleedBelowBoxPx}px`,
       )
       .join(' | '),
   })
 
-  for (const m of sweep.filter((s) => s.asserted)) {
+  for (const m of sweep) {
     const at = `at ${m.viewportWidth}px`
     // Non-vacuity: prove we measured the LONG value. A build that regressed to 'Medium'
     // would fit everywhere and pass every assertion below while testing nothing.
@@ -615,12 +663,24 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
     // THE oracle. One line box, or it wrapped.
     expect(m.lines, `"${m.text}" wrapped onto ${m.lines} lines inside its 42px box ${at}`).toBe(1)
     expect(m.bleedBelowBoxPx, `"${m.text}" bleeds ${m.bleedBelowBoxPx}px below its box ${at}`).toBeLessThanOrEqual(0)
-    expect(m.caretGapPx, `"${m.text}" collides with the ▾ caret ${at}`).toBeGreaterThan(0)
+    // Not `> 0`. Once the value truncates, its span shrinks to exactly the space left by the
+    // caret and the two border boxes are flush by construction, so the gap is 0 at every width
+    // where the ellipsis appears — while the painted glyphs stay clearly apart, because the
+    // ellipsis lands before the clip edge. What must never happen is ink CROSSING the caret,
+    // which is what a negative gap means and what this still fails on.
+    expect(m.caretGapPx, `"${m.text}" paints over the ▾ caret ${at}`).toBeGreaterThanOrEqual(0)
+    // The other half of that claim, and the one a guard applied to the WRONG element breaks:
+    // put white-space/overflow on the box instead of on a span inside it and the caret is
+    // shoved out of the box and clipped away entirely (measured: 53px past the content edge,
+    // no ▾ on screen at all). 1px of sub-pixel slack, as with boxHeightPx below.
+    expect(m.caretOverhangPx, `the ▾ caret is cut off by ${m.caretOverhangPx}px ${at}`).toBeLessThanOrEqual(1)
     // The box itself is still the 42px line box it declares (+1px of sub-pixel slack).
     expect(m.boxHeightPx, `the value box grew to ${m.boxHeightPx}px ${at}`).toBeLessThanOrEqual(43)
-    // Reported for the record and asserted for completeness, but weak by construction: two
-    // 14px lines still fit a 40px content box, so these stay equal through a visible wrap.
+    // Weak against a two-line wrap by construction — two 14px lines still fit a 40px content
+    // box — so this only catches the three-line case. Kept because it catches it directly.
     expect(m.scrollHeight, `the value box overflows vertically ${at}`).toBeLessThanOrEqual(m.clientHeight)
+    // NOT weak: this is what fails if the value is made unwrappable without also being made
+    // shrinkable — the box then holds a 166px run in a 111px content box and overflows.
     expect(m.scrollWidth, `the value box overflows horizontally ${at}`).toBeLessThanOrEqual(m.clientWidth)
   }
 

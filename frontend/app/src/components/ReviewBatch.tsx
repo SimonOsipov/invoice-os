@@ -40,14 +40,17 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { getImportBatch, type ImportBatch } from '../lib/importApi'
+import type { ImportRun } from '../lib/importRun'
 import { listInvoices, shouldFetchInvoices } from '../lib/invoices'
 import {
-  channelTiles,
-  reviewHeader,
-  reviewQuery,
-  reviewShellState,
+  channelTilesAll,
+  filesStrip,
+  reviewHeaderAll,
+  reviewQueryAll,
+  reviewShellStateAll,
   reviewTabs,
-  unreadableRows,
+  unreadableRowsAll,
+  type FileStripRow,
   type ReviewTab,
 } from '../lib/reviewBatch'
 import { ReviewInvoicesTab } from './ReviewInvoicesTab'
@@ -55,7 +58,13 @@ import { ReviewUnreadableTab } from './ReviewUnreadableTab'
 import type { PlatformCtx } from '../types'
 
 interface ReviewShellData {
-  batch: ImportBatch
+  // Widened from a single `batch` (BULK-01-07, Core AC 4) -- one entry per id in
+  // ctx.reviewBatchIds, fetched concurrently below. The singular reviewQuery/
+  // channelTiles/reviewHeader/reviewShellState/unreadableRows this shell used before
+  // stay exported in lib/reviewBatch.ts (App.tsx's startRun() N=1 shortcut and
+  // reviewBatch.test.ts's own parity specs are their remaining real callers) -- this
+  // file switches entirely to their `...All` siblings instead of deleting them.
+  batches: ImportBatch[]
   allTotal: number
   cleanTotal: number
   failingTotal: number
@@ -101,18 +110,22 @@ function Tile({
 
 export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
-  // BULK-01-05 widened ctx.reviewBatchIds to carry every batch a run created; THIS
-  // screen is not yet widened to show more than one (BULK-01-06's job) — read only the
-  // first, matching what the URL hash carries for the same reason (App.tsx's mirror
-  // effect).
-  const batchId = ctx.reviewBatchIds[0] ?? null
+  // BULK-01-07: this screen now spans every batch a run created, not just the first —
+  // AC #1/#4. `batchIds` is read straight off ctx; App.applyRoute already sets it to
+  // the full RunRoute.batchIds array (BULK-01-05), so nothing here re-derives it.
+  const batchIds = ctx.reviewBatchIds
+  const batchIdsKey = batchIds.join(',')
   const [tab, setTab] = useState<ReviewTab['id']>('invoices')
 
   const shell = useAsync<ReviewShellData>(
     () =>
-      base != null && batchId != null
+      base != null && batchIds.length > 0
         ? Promise.all([
-            getImportBatch(ctx.authedFetch, base, batchId),
+            // Concurrent, deliberately — [parallel-gets-are-not-parallel-uploads]:
+            // these are idempotent GETs, unlike startRun()'s sequential upload path
+            // ([sequential-not-parallel]), which the ExistingNumbers precheck requires
+            // to stay sequential. Nothing here touches that precheck.
+            Promise.all(batchIds.map((id) => getImportBatch(ctx.authedFetch, base, id))),
             // `limit: 1`, never 0 — ListHandler 400s on `limit < 1`. Only
             // `pagination.total` is read; the one returned row is discarded.
             //
@@ -121,17 +134,19 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             // and neither covers queued/submitted/accepted. Deriving the tab count as a
             // sum would silently under-count the moment subtask 11's bulk submit moves a
             // row past `validated` — which is also exactly what the fourth query counts.
-            listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'all', { limit: 1 })),
-            listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'ready', { limit: 1 })),
-            listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'needs-fix', { limit: 1 })),
-            listInvoices(ctx.authedFetch, base, reviewQuery(batchId, 'queued', { limit: 1 })),
-            // Sixth leg, NOT built through reviewQuery/filterToQuery -- `kept_as_is`
+            // Every one of these is now scoped to EVERY batch id in the run via
+            // reviewQueryAll, not just the first.
+            listInvoices(ctx.authedFetch, base, reviewQueryAll(batchIds, 'all', { limit: 1 })),
+            listInvoices(ctx.authedFetch, base, reviewQueryAll(batchIds, 'ready', { limit: 1 })),
+            listInvoices(ctx.authedFetch, base, reviewQueryAll(batchIds, 'needs-fix', { limit: 1 })),
+            listInvoices(ctx.authedFetch, base, reviewQueryAll(batchIds, 'queued', { limit: 1 })),
+            // Sixth leg, NOT built through reviewQueryAll/filterToQuery -- `kept_as_is`
             // is not one of the four ReviewPill toolbar filters those helpers cover
             // (INVCR-01-15, D6), so this composes ListInvoicesOptions directly, the
             // same way `all` above narrows by importBatchIds alone.
-            listInvoices(ctx.authedFetch, base, { importBatchIds: [batchId], keptAsIs: true, limit: 1 }),
-          ]).then(([batch, all, ready, fix, queued, kept]) => ({
-            batch,
+            listInvoices(ctx.authedFetch, base, { importBatchIds: batchIds, keptAsIs: true, limit: 1 }),
+          ]).then(([batches, all, ready, fix, queued, kept]) => ({
+            batches,
             allTotal: all.pagination.total,
             cleanTotal: ready.pagination.total,
             failingTotal: fix.pagination.total,
@@ -139,7 +154,10 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             keptTotal: kept.pagination.total,
           }))
         : Promise.reject(new Error('no gateway configured')),
-    { immediate: shouldFetchInvoices(base) && batchId != null, deps: [batchId] },
+    // `batchIdsKey` (batchIds.join(',')), never `batchIds` itself: a fresh array has a
+    // new identity every render, and async-state.ts:117 spreads `deps` into a
+    // useEffect dep array — an unjoined array here would refetch forever.
+    { immediate: shouldFetchInvoices(base) && batchIds.length > 0, deps: [batchIdsKey] },
   )
 
   // Keep-previous at the SHELL, mirroring the `lastPage` idiom ReviewInvoicesTab ships
@@ -158,7 +176,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   // An ERROR, not an empty review surface. Reachable by editing the hash to something
   // parseReviewHash rejects, which lands on the review step with no batch to show —
   // CreateReport's `if (!report) return null` rendered a blank body there.
-  if (batchId == null) {
+  if (batchIds.length === 0) {
     return <ErrorState error={new ApiError('network', 'There is no import to review. Start an import, or open one from the invoices list.')} />
   }
   // The no-gateway showcase build: zero network by construction, so there is nothing to
@@ -178,25 +196,64 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   const shellData = shell.data ?? lastShell.current
   if (shellData == null) return <Loading label="Reading the import…" />
 
-  const { batch, allTotal, cleanTotal, failingTotal, queuedTotal, keptTotal } = shellData
+  const { batches, allTotal, cleanTotal, failingTotal, queuedTotal, keptTotal } = shellData
 
-  // The SOLE owner of §7.5-vs-batch, keyed on the batch GET alone — never on
+  // The SOLE owner of §7.5-vs-batch, keyed on the batch GETs alone — never on
   // routeAfterImport's `kind`, which answers a different question ("is there ONE invoice
   // to open") and legitimately says `rejected` for an all-quarantined batch that renders
   // here as the full batch surface with an empty Invoices tab and a populated Unreadable
   // tab. That is more honest than §7.5's "the parser reached the end of the file at row
-  // 2" for an import the server completed.
-  if (reviewShellState(batch) === 'rejected') {
-    return <RejectedFile ctx={ctx} batch={batch} allTotal={allTotal} />
+  // 2" for an import the server completed. reviewShellStateAll is 'batch' iff ANY batch
+  // in the run is 'completed' (BULK-01-06) — byte-identical to the singular
+  // reviewShellState over exactly one batch.
+  if (reviewShellStateAll(batches) === 'rejected') {
+    // Single-batch rendering stays byte-identical (the shipped e2e at
+    // import-wizard.spec.ts:1002-1014 pins it): the ORIGINAL RejectedFile, unchanged,
+    // called with the same two props it always took. Only the genuinely new multi-file
+    // case (Core AC 5's gap: reviewShellStateAll can say 'rejected' with several batches
+    // in play, e.g. a 3-file run where every file is header-only) routes to RejectedRun,
+    // which names every file against filesStrip's own reason instead of silently
+    // dropping every batch but the first.
+    return batches.length === 1 ? (
+      <RejectedFile ctx={ctx} batch={batches[0]} allTotal={allTotal} />
+    ) : (
+      <RejectedRun ctx={ctx} batches={batches} run={ctx.run} />
+    )
   }
 
-  const rows = unreadableRows(batch.errors)
-  const tiles = channelTiles(batch, { cleanTotal, failingTotal })
-  const header = reviewHeader(batch, { allTotal })
+  const rows = unreadableRowsAll(batches)
+  const tiles = channelTilesAll(batches, { cleanTotal, failingTotal })
+  const header = reviewHeaderAll(batches, { allTotal })
   const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable })
   // The Unreadable tab can DISAPPEAR under a selected `tab` (a retry that now reports
   // zero structural errors), which would otherwise render a body with no tab above it.
   const activeTab = tabs.some((t) => t.id === tab) ? tab : 'invoices'
+  // The per-file report (AC #3), rendered under the header below. filesStrip is TOTAL
+  // over ctx.run (`| null`-safe), but in PRACTICE ctx.run.files is always `[]` by the
+  // time this component mounts on the live post-import path: App.applyRoute's 'review'
+  // branch resets `run` to idle in the SAME batched update that sets reviewBatchIds
+  // (App.tsx:585-587), so `files` here today always equals one row per `batches` entry,
+  // never a run-only-failure row -- a request that failed before ever producing a
+  // batch is visible on ImportProgress while the run is live, then silently drops off
+  // this screen. Flagged, not fixed (App.tsx is out of this subtask's scope and its
+  // RunRoute handling is already-shipped, AC #8) -- filesStrip is still wired for the
+  // `run` it is GIVEN, so this self-corrects if that reset is ever revisited.
+  //
+  // `files.length > 1` (this screen's own gate below) and `showsSourceFile(batches)`
+  // (ReviewRow's gate, lib/reviewBatch.ts) are DELIBERATELY two different predicates,
+  // not one accidentally duplicated: `showsSourceFile` asks "can an invoice row's
+  // source be ambiguous" (only possible with >1 batch), while this asks "is there more
+  // than one FILE to report on" (a batch plus a run-only failure both count, even
+  // though only one of them ever produces an invoice to disambiguate). They coincide
+  // today only because run-only-failure rows never survive to this screen (above) --
+  // if that changes, a 2-file run (1 batch + 1 run-only failure) would correctly show
+  // the strip (2 files) while ReviewRow correctly stays silent (only 1 batch's worth of
+  // invoices exist, nothing to disambiguate between).
+  const files = filesStrip(batches, ctx.run)
+  // Summed across every batch (was the single batch's own `rows_valid`) -- the footer
+  // paragraph just below states how many rows the LIVE channel's tiles above it were
+  // built from, and that is a run-wide fact once more than one file is in play.
+  const rowsValidTotal = batches.reduce((sum, b) => sum + b.rows_valid, 0)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -211,7 +268,10 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
         <h2 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em', margin: '0 0 6px' }}>{header.title}</h2>
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{header.subline}</div>
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.05em', marginTop: 3, wordBreak: 'break-all' }}>
-          BATCH {header.batchId}
+          {/* `header.batchIds` is `[batchId]` at one batch -- `.join(', ')` over a
+              single-element array returns that element verbatim, so this line stays
+              byte-identical to the shipped single-batch text. */}
+          BATCH {header.batchIds.join(', ')}
         </div>
 
         <div style={{ display: 'flex', gap: 22, marginTop: 18, flexWrap: 'wrap' }}>
@@ -234,7 +294,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
               />
             </div>
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '9px 0 0', lineHeight: 1.55 }}>
-              Built from {batch.rows_valid} rows. Every one of these exists in the ledger — fixing and submitting is what is left.
+              Built from {rowsValidTotal} rows. Every one of these exists in the ledger — fixing and submitting is what is left.
             </p>
           </div>
 
@@ -264,6 +324,12 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
+      {/* The files strip (AC #3, Core AC 5) -- one row per file from filesStrip, hidden
+          entirely at exactly one file (nothing to disambiguate there, matching
+          showsSourceFile's own ">1" threshold). Reused, never re-derived, by
+          RejectedRun above for the all-rejected multi-file surface. */}
+      {files.length > 1 && <FilesStripView files={files} />}
+
       {/* §7.2 tabs. SettingsView.tsx's precedent: .pf-tab, NOT .pf-btn — the button
           classes force a full pill radius, which bends this 2px underline into an arc.
           The second tab is absent from `tabs` entirely at zero, never hidden with CSS. */}
@@ -292,14 +358,20 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
         <ReviewInvoicesTab
           ctx={ctx}
           base={base}
-          batchId={batchId}
+          batchIds={batchIds}
+          batches={batches}
           totals={{ allTotal, cleanTotal, failingTotal, queuedTotal }}
           onSubmitted={shell.run}
         />
       )}
 
       {activeTab === 'unreadable' && (
-        <ReviewUnreadableTab rows={rows} rowsTotal={batch.rows_total} batchId={batch.id} onImportCorrected={ctx.restartImport} />
+        <ReviewUnreadableTab
+          rows={rows}
+          rowsTotal={batches.reduce((sum, b) => sum + b.rows_total, 0)}
+          batchIds={batchIds}
+          onImportCorrected={ctx.restartImport}
+        />
       )}
 
       {/* Footer. `N kept as-is` (INVCR-01-15, D6, task-291) is now a REAL server total
@@ -369,6 +441,95 @@ function RejectedFile({ ctx, batch, allTotal }: { ctx: PlatformCtx; batch: Impor
           Enter one invoice instead
         </button>
       </div>
+    </div>
+  )
+}
+
+// Multi-file all-rejected surface (BULK-01-07, Core AC 5 gap). reviewShellStateAll
+// answers 'rejected' whenever NO batch in the run is 'completed' -- genuinely reachable
+// with several batches (e.g. a 3-file run where every file is header-only, each still
+// answering 201 per file). RejectedFile above takes ONE batch and cannot represent this;
+// rendering only batches[0] would silently drop every other file's name and reason,
+// which is exactly the Core AC 5 miss this component exists to close. Never reached at
+// exactly one batch -- that case stays on the original RejectedFile, untouched, so the
+// shipped e2e (import-wizard.spec.ts:1002-1014) keeps seeing byte-identical output.
+//
+// filesStrip(batches, run) is the SAME per-file report the successful surface's files
+// strip (FilesStripView, below) renders -- reused, not re-derived, so both branches
+// report a rejected file's reason from one source.
+function RejectedRun({ ctx, batches, run }: { ctx: PlatformCtx; batches: ImportBatch[]; run: ImportRun }) {
+  const files = filesStrip(batches, run)
+  return (
+    <div data-testid="review-rejected-run" style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
+      <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
+      <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
+        The server rejected every file in this run and created no invoices. This usually means a file held no data rows — a spreadsheet with only a header row, for example.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+        {files.map((f) => (
+          <div key={f.id} data-testid="review-rejected-run-file" style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)', padding: '11px 14px', background: 'var(--bg-3)' }}>
+            <div className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg-2)', wordBreak: 'break-all' }}>{f.filename}</div>
+            {/* `reason` is null iff the file produced at least one ready invoice --
+                unreachable in THIS branch for a batch row (every batch here is
+                non-'completed'), but a run-only failure row is always non-null too
+                (runFailures/filesStrip only ever push one with a message). Guarded
+                anyway rather than assumed, matching filesStrip's own total-over-input
+                contract. */}
+            {f.reason != null && (
+              <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.5 }}>{f.reason}</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button onClick={ctx.restartImport} className="v2-btn v2-btn-primary pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13, background: 'var(--action)', color: 'var(--text-on-dark)' }}>
+          Choose another file
+        </button>
+        <button onClick={ctx.skipUpload} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38, padding: '0 16px', fontSize: 13 }}>
+          Enter one invoice instead
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// The files strip (AC #3, Core AC 5) -- one row per file, filename + outcome + (for a
+// rejected file) the reason, read straight off filesStrip's own FileStripRow shape.
+// FileStripRow carries no invoice-count field (`{id, filename, reason}` only, pinned by
+// reviewBatch.test.ts) -- an exact per-file invoice count is not cheaply available
+// without a NEW per-batch query this subtask does not call for (the shell's own counts
+// are aggregated across every batch id via reviewQueryAll), so none is rendered here
+// rather than fabricating one from `rows_valid` (rows are not invoices -- several rows
+// can group into one). Flagged in this subtask's own report, not silently dropped.
+function FilesStripView({ files }: { files: FileStripRow[] }) {
+  return (
+    <div data-testid="review-files-strip" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="label">Files in this run</div>
+      {files.map((f) => {
+        const ok = f.reason == null
+        return (
+          <div key={f.id} data-testid="review-files-strip-row" style={{ padding: '10px 14px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: ok ? 'var(--status-green-text)' : 'var(--status-red-text)', flex: 'none' }} />
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', wordBreak: 'break-all', flex: 1 }}>{f.filename}</span>
+              <span
+                className="mono"
+                style={{ fontSize: 10.5, fontWeight: 600, color: ok ? 'var(--status-green-text)' : 'var(--status-red-text)', letterSpacing: '0.04em', textTransform: 'uppercase', flex: 'none' }}
+              >
+                {ok ? 'Imported' : 'Rejected'}
+              </span>
+            </div>
+            {/* Reason is read from `reason` alone, never from a batch's own `status`
+                ([reason-comes-from-errors-not-status]) -- filesStrip already resolved
+                this off batch.errors, so this component performs no re-derivation. */}
+            {f.reason != null && (
+              <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.5, paddingLeft: 18 }}>{f.reason}</div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

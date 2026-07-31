@@ -36,13 +36,14 @@
 //     written only in an effect, never during render. It is CLEARED on error, so a
 //     pre-error page can never ghost back under a retry of a different query.
 //
-//  3. The rail is a SECOND useAsync with `deps: [batchId]` alone. Its request structurally
-//     cannot carry a pill, a search or an offset, so a filter change never refetches it
-//     and never blinks it. Its counts are batch-wide and stay batch-wide — disclosed in
-//     two words on the eyebrow (`· WHOLE BATCH`) rather than an authored sentence, because
-//     the pager's own `SHOWING x–y OF n` is the single on-screen claim about the visible
-//     rows. A rail error renders an honest one-liner and a Retry, NEVER silence: AC-4
-//     makes rail silence mean "nothing failed", so a false absence is exactly the failure
+//  3. The rail is a SECOND useAsync with `deps: [batchIdsKey]` alone (BULK-01-07 widened
+//     it from `batchId` to every id in the run). Its request structurally cannot carry a
+//     pill, a search or an offset, so a filter change never refetches it and never blinks
+//     it. Its counts are batch-wide and stay batch-wide — disclosed in two words on the
+//     eyebrow (`· WHOLE BATCH`) rather than an authored sentence, because the pager's own
+//     `SHOWING x–y OF n` is the single on-screen claim about the visible rows. A rail
+//     error renders an honest one-liner and a Retry, NEVER silence: AC-4 makes rail
+//     silence mean "nothing failed", so a false absence is exactly the failure
 //     this story's counter discipline exists to prevent.
 //
 //  4. NO `gateByActiveEntity` and no `entity_id`, unlike InvoicesList — same reason
@@ -74,6 +75,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { ErrorState, Loading, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
 import { searchGlyph } from '../glyphs'
+import type { ImportBatch } from '../lib/importApi'
 import {
   listInvoices,
   newIdempotencyKey,
@@ -98,7 +100,7 @@ import {
   pagerNav,
   railPills,
   reviewFilterReducer,
-  reviewPageQuery,
+  reviewPageQueryAll,
   reviewPills,
   type BulkPhase,
   type SubmitResultRow,
@@ -125,7 +127,8 @@ function btnStyle(enabled: boolean) {
 export function ReviewInvoicesTab({
   ctx,
   base,
-  batchId,
+  batchIds,
+  batches,
   totals,
   onSubmitted,
 }: {
@@ -133,7 +136,13 @@ export function ReviewInvoicesTab({
   // Both NON-NULLABLE: the shell has already checked them before mounting this tab, and
   // the types say so rather than re-checking and inventing a second empty state.
   base: string
-  batchId: string
+  // Widened from a single `batchId` (BULK-01-07, Core AC 4) -- every id in the run,
+  // scoping both live queries below.
+  batchIds: string[]
+  // The full batch objects, threaded through UNTOUCHED to Row so sourceFileLabel can
+  // resolve a row's import_batch_id back to its filename (AC #4) -- this tab performs
+  // no lookup of its own, it only passes `batches` one level further down.
+  batches: ImportBatch[]
   // Fired after a successful bulk submit so the SHELL re-runs its four count queries.
   // Without it the row badges correctly read QUEUED while all four pills, the green
   // tile, the `Invoices (N)` tab label and the footer stay at their pre-submit numbers —
@@ -147,6 +156,10 @@ export function ReviewInvoicesTab({
   // the header's green tile 40px above it — same number, not two queries.
   totals: { allTotal: number; cleanTotal: number; failingTotal: number; queuedTotal: number }
 }) {
+  // Never the array reference itself in a `deps` list below (async-state.ts:117's
+  // spread-deps hazard) -- a fresh array has a new identity every render and would
+  // refetch forever.
+  const batchIdsKey = batchIds.join(',')
   const [filter, dispatch] = useReducer(reviewFilterReducer, initialReviewFilter)
   // The RAW draft stays here so the user always sees what they typed; only the trimmed,
   // debounced value reaches the reducer (and therefore the wire).
@@ -173,15 +186,16 @@ export function ReviewInvoicesTab({
   // A superseded in-flight response is already safe (useAsync's own `runId` cleanup
   // discards it before it can dispatch); this is the other half of that guarantee.
   const page = useAsync<InvoiceListResponse>(
-    () => listInvoices(ctx.authedFetch, base, reviewPageQuery(batchId, filter)),
-    { isEmpty: () => false, deps: [batchId, filter.pill, filter.ruleKey, filter.q, filter.offset] },
+    () => listInvoices(ctx.authedFetch, base, reviewPageQueryAll(batchIds, filter)),
+    { isEmpty: () => false, deps: [batchIdsKey, filter.pill, filter.ruleKey, filter.q, filter.offset] },
   )
 
-  // `deps: [batchId]` — one fetch per batch, for the life of the tab. See the file
-  // header, point 3.
-  const rail = useAsync<RuleCount[]>(() => violationSummary(ctx.authedFetch, base, [batchId]), {
+  // `deps: [batchIdsKey]` — one fetch per run, for the life of the tab. See the file
+  // header, point 3. `violationSummary` already takes `importBatchIds: string[]`
+  // (BULK-01-02) -- this is its first caller to actually pass more than one id.
+  const rail = useAsync<RuleCount[]>(() => violationSummary(ctx.authedFetch, base, batchIds), {
     isEmpty: () => false,
-    deps: [batchId],
+    deps: [batchIdsKey],
   })
 
   const lastPage = useRef<InvoiceListResponse | null>(null)
@@ -672,6 +686,7 @@ export function ReviewInvoicesTab({
                 <Row
                   key={r.id}
                   r={r}
+                  batches={batches}
                   checked={selected.includes(r.id)}
                   expanded={expandedId === r.id}
                   // Toggling the SAME row collapses it; expanding a different row moves

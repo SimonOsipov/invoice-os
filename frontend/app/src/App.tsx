@@ -4,7 +4,7 @@ import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { gatewayBase, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, defaultDraft, emptyClient, inhouseClient } from './lib/clients'
+import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
@@ -149,16 +149,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // into a mock array. null until the user (or the fallback below) picks one.
   const [activeEntityId, setActiveEntityId] = useState<string | null>(null)
 
-  // In-house has ZERO business_entities rows (db/seed.dev.sql seeds the firm tenant
-  // only) — its identity comes from the TENANT, never from this fetch ([entity-picker]
-  // trap 1). Firm mode falls back to `clients[0]` (whichever entity the server returns
-  // first) while `activeEntityId` is unset, and to the "nothing here yet" placeholder for
-  // the loading/error/no-gateway/zero-entities window ([entity-picker] trap 2) — every
-  // one of the ~15 places reading ctx.active needs SOMETHING defined, never `undefined`.
-  const active: Client = useMemo(() => {
-    if (mode === 'inhouse') return inhouseClient(session.me?.tenant.name ?? session.persona.org)
-    return clients.find((c) => c.entityId === activeEntityId) ?? clients[0] ?? emptyClient()
-  }, [mode, clients, activeEntityId, session])
+  // task-304 (INVCR-01-19) deleted the old `if (mode === 'inhouse') return
+  // inhouseClient(...)` special case here: it never even consulted `clients` (built from
+  // the LIVE entitiesList), so seeding in-house a real business_entities row (AC-1,
+  // db/seed.dev.sql) alone fixed nothing — this memo still had to stop hardcoding the
+  // answer. resolveActiveClient (lib/clients.ts) is now the ONE resolution path for both
+  // workspace modes ([in-house-degenerate-case], AC-2) — every one of the ~15 places
+  // reading ctx.active needs SOMETHING defined, never `undefined`, which is exactly what
+  // that function is total over: an explicit switcher pick, the server's own first row
+  // with nothing chosen, or the shared emptyClient() placeholder with genuinely nothing
+  // to resolve (AC-3's bootstrap window, either persona).
+  const active: Client = useMemo(
+    () => resolveActiveClient(clients, activeEntityId),
+    [clients, activeEntityId],
+  )
 
   // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
@@ -172,9 +176,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   //    does `tin: e.tin ?? '—'`, so a TIN-less entity is unrepresentable through Client and
   //    would cross the wire as the literal em-dash.
   //
-  // null for in-house (no business_entities row at all), for the emptyClient() placeholder,
-  // and for the whole loading/error/no-gateway window — all three are the same honest
-  // "nothing to file against", so they need no separate copy.
+  // null for a workspace (either persona) with no entity resolved yet, for the
+  // emptyClient() placeholder, and for the whole loading/error/no-gateway window — all
+  // three are the same honest "nothing to file against", so they need no separate copy.
   const activeEntity = useMemo(
     () => entitiesList.find((e) => e.id === active.entityId) ?? null,
     [entitiesList, active.entityId],

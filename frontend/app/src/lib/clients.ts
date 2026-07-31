@@ -33,10 +33,6 @@ function mulberrySeed(name: string) {
 // yet" (see emptyClient below), not "this particular row of a 6-row mock".
 const DEMO_TEMPLATES: ClientCfg[] = CFG.filter((c) => !c.onboarding)
 
-// Reused by inhouseClient() below as the in-house tenant's demo profile — looked up by
-// name, not array position, so it can't silently drift if CFG is reordered/edited.
-const HONEYWELL_TEMPLATE = CFG.find((c) => c.name === 'Honeywell Group')!
-
 // Strips a trailing legal suffix off a real entity's registered name for a shorter
 // display label. The mock CFG shorts were hand-curated (e.g. "Lagos Freight & Logistics
 // Ltd" -> "Lagos Freight" drops more than just the suffix) — a real entity has no such
@@ -102,10 +98,10 @@ export function genInvoices(client: ClientCfg, rnd: () => number): Invoice[] {
   return out
 }
 
-// Shared tail of buildClientForEntity/inhouseClient/emptyClient below: generate the
-// SAMPLE invoices off the (possibly synthetic) cfg + compute the same derived dashboard
-// fields the original CFG-driven buildClients always did — unchanged from before this
-// story except that entityId is now threaded through onto the result.
+// Shared tail of buildClientForEntity/emptyClient below: generate the SAMPLE invoices
+// off the (possibly synthetic) cfg + compute the same derived dashboard fields the
+// original CFG-driven buildClients always did — unchanged from before this story except
+// that entityId is now threaded through onto the result.
 function finishClient(cfg: ClientCfg, entityId: string | null): Client {
   const rnd = mulberrySeed(cfg.name)
   const invoices = genInvoices(cfg, rnd)
@@ -153,20 +149,12 @@ export function buildClients(entities: Entity[]): Client[] {
   return entities.map((e) => buildClientForEntity(e))
 }
 
-// In-house has ZERO business_entities rows (db/seed.dev.sql seeds the firm tenant only)
-// — its identity comes from the TENANT, never from the fetched entity list
-// ([entity-picker] trap 1). entityId stays null: there is no real portfolio entity
-// backing this workspace to file anything under.
-export function inhouseClient(tenantName: string): Client {
-  const cfg: ClientCfg = { ...HONEYWELL_TEMPLATE, name: tenantName, short: shortName(tenantName), initials: initials(tenantName), onboarding: false }
-  return finishClient(cfg, null)
-}
-
 // The window before the live entity list first resolves (loading/error/no-gateway), or a
-// firm tenant with genuinely zero entities ([entity-picker] trap 2) — every one of the
-// ~15 places reading ctx.active needs SOMETHING defined, never `undefined`. onboarding:
-// true reuses the existing "nothing here yet" dashboard rather than inventing a second
-// empty state; entityId stays null since no real entity backs this placeholder either.
+// tenant (either persona, [entity-picker] trap 2) with genuinely zero entities — every
+// one of the ~15 places reading ctx.active needs SOMETHING defined, never `undefined`.
+// onboarding: true reuses the existing "nothing here yet" dashboard rather than
+// inventing a second empty state; entityId stays null since no real entity backs this
+// placeholder either.
 export function emptyClient(): Client {
   const cfg: ClientCfg = {
     name: 'No client yet',
@@ -182,6 +170,28 @@ export function emptyClient(): Client {
     onboarding: true,
   }
   return finishClient(cfg, null)
+}
+
+// [in-house-degenerate-case]: the ONE resolution path for BOTH workspace modes,
+// deleting App.tsx's old `if (mode === 'inhouse') return inhouseClient(...)` special
+// case (task-304 AC-2), which never even looked at the live entity list — so a real
+// business_entities row seeded for in-house (AC-1) still resolved to entityId: null.
+// An explicit id match wins first; with nothing explicitly chosen (first load, or a
+// stale/cleared id), the only defensible default is the server's own row — portfolio
+// store.go's List is `ORDER BY name ASC, id ASC`, so this is never incidental
+// position-in-an-unordered-response. For a workspace with EXACTLY ONE entity (in-house's
+// normal shape once it owns one) that default is simply THAT entity: there is no second
+// row for a "clients[0] ordering" concern to be about. Zero entities anywhere (either
+// persona — a brand-new in-house tenant before its first entity, same as a firm tenant
+// with none) falls to emptyClient(), never a persona-flavoured placeholder: AC-3's
+// "degrades honestly" reads off `activeEntity` (null either way) via the amber panel and
+// filing refusal, never off which Client shape this returns.
+export function resolveActiveClient(clients: Client[], activeEntityId: string | null): Client {
+  if (activeEntityId != null) {
+    const selected = clients.find((c) => c.entityId === activeEntityId)
+    if (selected) return selected
+  }
+  return clients[0] ?? emptyClient()
 }
 
 // The manual create form's starting state. Every field here is now genuinely EDITABLE and

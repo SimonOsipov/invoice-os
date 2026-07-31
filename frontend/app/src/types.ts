@@ -117,8 +117,9 @@ export type DashboardData = {
 // Fully-built client: seed config + generated invoices + precomputed dashboard.
 export type Client = ClientCfg & {
   // The real portfolio entity this Client is sourced from ([entity-picker] keystone) —
-  // null only for the two synthetic fallbacks (lib/clients.ts's inhouseClient/
-  // emptyClient), neither of which is backed by an actual business_entities row.
+  // null only for the synthetic fallback (lib/clients.ts's emptyClient(), returned by
+  // resolveActiveClient when a workspace — either persona — genuinely has zero entities,
+  // task-304 AC-3), never backed by an actual business_entities row.
   entityId: string | null
   invoices: Invoice[]
   failing: number | '—'
@@ -178,7 +179,11 @@ export type CanonField = { key: string; required?: boolean }
 // named VAT" is untransmittable. See task-177.
 export type Mapping = Record<string, string | null>
 
-export type SettingsTab = 'connectors' | 'api' | 'signing'
+// 'company' (task-304, INVCR-01-19) is IN-HOUSE ONLY — SettingsView adds it to the tab
+// strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
+// (data.tsx). A firm workspace already has a dedicated multi-entity portfolio screen
+// (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
+export type SettingsTab = 'connectors' | 'api' | 'signing' | 'company'
 
 export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
 
@@ -221,8 +226,9 @@ export type PlatformCtx = {
   // consumer until [import-upload-unify] removed its entity <select>.
   entities: Entity[]
   // The `entities` member matching `active.entityId`, resolved ONCE in App.tsx beside
-  // `active` — null for in-house (no business_entities row), for the emptyClient()
-  // placeholder, and for the whole loading/error/no-gateway window. Every filing gate
+  // `active` — null for a workspace (either persona) with no entity resolved yet, for
+  // the emptyClient() placeholder, and for the whole loading/error/no-gateway window.
+  // Every filing gate
   // reads THIS, never `active.entityId`: `active` is rebuilt from `entities` by an effect,
   // so the id can be non-null while the entity itself is not yet in the list, and a gate
   // on the id would arm a button that swallows the click ([gate-on-the-resolved-entity]).

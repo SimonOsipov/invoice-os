@@ -13,6 +13,8 @@ import { WIZARD_STEPS } from '../data'
 import { canSubmitMapping } from './mapping'
 import type { CreateStep, Mapping } from '../types'
 import type { ImportPreview } from './importApi'
+import type { AsyncStatus } from '@invoice-os/api-client'
+import type { Entity } from './portfolio'
 
 export type WizardPath = 'document' | 'import'
 
@@ -75,9 +77,10 @@ export function hasImportableExtension(name: string): boolean {
 // reading columns is a pure inspection of the uploaded bytes. The entity requirement lives
 // on the COMMIT step instead (startImport()'s !entityId guard, which is what writes
 // invoices.entity_id / import_batches.entity_id — both NOT NULL). It used to be asserted
-// here too, and because in-house workspaces have a permanently-null entityId (no
-// business_entities row) that belt-and-braces copy locked them out of the wizard's front
-// door: the dropzone never rendered at all. Preview gate = file only; commit gate = entity.
+// here too, and because in-house workspaces had a permanently-null entityId (no
+// business_entities row at all, before task-304 gave in-house a real one) that
+// belt-and-braces copy locked them out of the wizard's front door entirely: the dropzone
+// never rendered at all. Preview gate = file only; commit gate = entity.
 //
 // Still exactly true after INVCR-01-05, and worth restating because that subtask makes it
 // LOOK otherwise: the upload screen now shows an entity-less workspace an amber "No linked
@@ -94,6 +97,40 @@ export function canReadColumns(file: File | null): boolean {
 // gate (lib/mapping.ts) rather than re-deriving !!mapping.invoice_number (FLOW-04).
 export function canStartImport(preview: ImportPreview | null, mapping: Mapping | null): boolean {
   return preview !== null && canSubmitMapping(mapping)
+}
+
+// STUB (task-304, INVCR-01-19, test-first) — importFlow.test.ts's RED specs pin the
+// contract before this body exists; throwing here (rather than a wrong-but-plausible
+// guess) makes every spec fail on an assertion/thrown-error mismatch, never an
+// import/compile error.
+//
+// Whether CreateUpload's "No linked business entity" amber panel should render.
+// Extracted verbatim from CreateUpload.tsx's own three `const`s (unchanged logic, this
+// story only MOVED it) so it is node-testable under the no-jsdom constraint — the
+// component itself stays unrenderable in this suite, but the derivation it reads is not.
+// task-304 AC-6 needs this: the panel is generic over BOTH personas and BOTH reasons a
+// workspace can have no resolved entity — an in-house tenant with none yet (the
+// bootstrap window, AC-3) and a firm tenant whose active entity has been archived out of
+// the roster while others remain are the SAME honest "nothing to file against", so this
+// stays one predicate, never two, and never gains a persona check.
+//
+// Two guards beyond `activeEntity === null` exist for ONE reason: this panel is loud and
+// amber, so a single frame of it on a user who DOES have an entity is a visible lie.
+//  1. entityAnswerSettled — the entities fetch must have definitively answered ('ready'
+//     or 'empty'); 'idle'/'loading'/'error' have not, and 'idle' also covers the
+//     no-gateway build.
+//  2. !rosterCatchingUp — `clients` is derived from `entities` by a useEffect one render
+//     late; on the render where the fetch resolves, entitiesState is already settled
+//     while `clients` is still [], which would otherwise flash the panel for one frame.
+export function computeNoEntity(
+  activeEntity: Entity | null,
+  entitiesState: AsyncStatus,
+  entitiesCount: number,
+  clientsCount: number,
+): boolean {
+  const entityAnswerSettled = entitiesState === 'ready' || entitiesState === 'empty'
+  const rosterCatchingUp = entitiesCount > 0 && clientsCount === 0
+  return activeEntity === null && entityAnswerSettled && !rosterCatchingUp
 }
 
 // = header !== '' — EXACTLY, not header.trim() !== ''. '' is the reserved unplaced

@@ -10,6 +10,14 @@
 // itself (that's ctx.refetchEntities(), invoked via onSuccess — the entity list is
 // lifted to App.tsx and shared with the workspace switcher, [entity-picker]).
 //
+// task-304 (INVCR-01-19): a second caller, SettingsView's in-house Company tab (AC-4),
+// reuses this component verbatim rather than building a second entity form — "verbatim"
+// meaning the same STRUCTURE and submit orchestration, not identical copy: a firm
+// accountant is adding one of many CLIENTS, an in-house accountant is setting up the ONE
+// COMPANY they file for, and "Add client" on that screen would misdescribe what just
+// happened. `noun` below is the only concession to that — everything else about this
+// component is unaware of which caller mounted it.
+//
 // Submit orchestration (Obsidian M3-08 §6):
 // - create: createEntity(ctx.authedFetch, base, toEntityInput(state))
 // - edit:   diff = toEntityUpdateInput(entity, state); an empty diff skips the PATCH
@@ -55,7 +63,13 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  const title = mode === 'create' ? 'Add client' : 'Edit client'
+  // 'client' (ClientsView, firm) vs 'company' (SettingsView's Company tab, in-house,
+  // task-304 AC-4) — off ctx.mode, never a caller-passed prop: this modal's OWN mode
+  // prop already means 'create' | 'edit', so a second 'mode' would either collide or be
+  // confusingly named `noun`/`callerMode`. ctx is already threaded through for
+  // authedFetch, so this reads it rather than growing EntityFormModalProps.
+  const noun = ctx.mode === 'inhouse' ? 'company' : 'client'
+  const title = mode === 'create' ? `Add ${noun}` : `Edit ${noun}`
 
   function updateField<K extends keyof EntityFormState>(field: K, value: string) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -191,7 +205,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
               Cancel
             </button>
             <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>
-              {submitting ? 'Saving…' : mode === 'create' ? 'Add client' : 'Save changes'}
+              {submitting ? 'Saving…' : mode === 'create' ? `Add ${noun}` : 'Save changes'}
             </button>
           </div>
         </form>

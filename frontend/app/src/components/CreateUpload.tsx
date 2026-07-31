@@ -17,13 +17,15 @@
 //
 // That coupling had a side effect this file used to enshrine: a null active.entityId
 // blanked the WHOLE upload surface behind a "No linked entity" empty state. In-house
-// workspaces have a permanently-null entityId (inhouseClient() hardcodes it — there is
-// no business_entities row, and no Clients screen to create one from), so an in-house
-// accountant could not open the wizard's first step at all while the firm could. But
-// nothing about reading a spreadsheet's columns needs an entity: the preview endpoint
-// takes the file alone. The gate therefore now sits where the entity is genuinely
-// required — the commit, on the Map step (CreateMapping's continueBtn + App.tsx's
-// startImport). Both personas get the dropzone and Read columns; only filing differs.
+// workspaces had a permanently-null entityId (no business_entities row at all, and no
+// route to create one), so an in-house accountant could not open the wizard's first step
+// at all while the firm could — task-304 fixed both halves (App.tsx resolves a real
+// entity when one exists; Settings gained a Company panel, [entity-picker], to create the
+// first one). But nothing about reading a spreadsheet's columns ever needed an entity in
+// the first place: the preview endpoint takes the file alone. The gate therefore sits
+// where the entity is genuinely required — the commit, on the Map step (CreateMapping's
+// continueBtn + App.tsx's startImport). Both personas get the dropzone and Read columns;
+// only filing differs, and only for a workspace with no resolved entity yet, either mode.
 //
 // INVCR-01-05 tells the entity-less user that EARLIER, in the amber panel below — and
 // the panel is INFORMATIONAL, never blocking. It is added to the card; it replaces
@@ -39,7 +41,7 @@ import { useState } from 'react'
 import { gatewayBase } from '@invoice-os/api-client'
 
 import { importGlyph } from '../glyphs'
-import { canReadColumns, hasImportableExtension } from '../lib/importFlow'
+import { canReadColumns, computeNoEntity, hasImportableExtension } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
@@ -50,33 +52,18 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   // filing gate reads ([gate-on-the-resolved-entity]), so this panel and the Map step's
   // refusal can never disagree about whether an entity exists.
   //
-  // The two guards below both exist for ONE reason: this panel is loud and amber, so a
-  // single frame of it on a firm user who does have an entity is a visible lie. A
-  // disabled button can afford to be wrong for a frame; this cannot.
-  //
-  // 1. The FETCH must have answered. activeEntity is also null while entities are in
-  //    flight ('idle' | 'loading') and when the fetch failed ('error'); only
-  //    'ready' | 'empty' mean the answer is definitive. 'idle' additionally covers the
-  //    no-gateway build, which has no answer to give at all.
-  //
-  // 2. The ROSTER must have caught up with it. App.tsx derives `clients` from the fetched
-  //    entities through a useEffect, so it lands one render LATE: on the render where the
-  //    fetch resolves, entitiesState is already 'ready' while `clients` is still [],
-  //    which collapses `active` to the emptyClient() placeholder and `activeEntity` to
-  //    null. Guard 1 alone therefore still admits exactly one frame of amber — reading
-  //    "No client has none", the placeholder's own name — and useEffect runs after paint,
-  //    so that frame can genuinely reach the screen. buildClients is a 1:1 map, so a
-  //    non-empty entity list with an empty roster is only ever that in-between render and
-  //    this can never stick.
-  //
-  // Deliberately NOT `entities.length === 0`, which would have been the easy version of
-  // guard 2: it would also hide the panel in a real steady state — a firm workspace whose
-  // own entity has been archived out of the roster while other entities remain — where
-  // there genuinely is nothing to file against. These guards remove a frame; they must
-  // not remove a case.
-  const entityAnswerSettled = entitiesState === 'ready' || entitiesState === 'empty'
-  const rosterCatchingUp = entities.length > 0 && clients.length === 0
-  const noEntity = activeEntity === null && entityAnswerSettled && !rosterCatchingUp
+  // task-304 (INVCR-01-19): the derivation itself moved to lib/importFlow.ts's
+  // computeNoEntity (unchanged logic, this story only extracted it) so it is
+  // node-testable under the no-jsdom constraint — this component stays unrenderable in
+  // the vitest suite, but the predicate it reads is not, which is how AC-6 ("the panel
+  // must not become dead code or in-house-only") stays provable once
+  // [inhouse-can-start]'s browser test — this codebase's only e2e coverage of the panel —
+  // stops being reachable with a genuinely-zero-entity persona (every fixture this suite
+  // can sign in as now has at least one entity, db/seed.dev.sql). See computeNoEntity's
+  // own doc comment for the two guards (fetch settled, roster caught up) and why a
+  // FIRM workspace whose active entity has been archived out of the roster is still a
+  // real, non-dead case this must keep firing for.
+  const noEntity = computeNoEntity(activeEntity, entitiesState, entities.length, clients.length)
 
   // `base` gates the "Read columns" button below (gateway-wide): with no gateway
   // configured there is nothing to POST the preview to.
@@ -204,24 +191,27 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 5 }}>No linked business entity</div>
               <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
                 An import is filed on behalf of a registered entity. {active.short} has none, so there is nothing to file against. Reading a file&rsquo;s columns still works — the refusal lands on the last step, where the invoices would be written.
-                {mode === 'inhouse' && ' There is no way to link one from an in-house workspace yet, so imports cannot be filed here.'}
               </p>
-              {/* Firm only. NAV_CLIENTS is in the firm-only sidebar group and
-                  EntityFormModal mounts from ClientsView alone, so an in-house user
-                  offered this link would be handed a control that goes nowhere they can
-                  act — exactly the dead end this panel exists to replace. Clients, NOT
-                  Settings: SettingsView has no entity form at all.
+              {/* task-304 (INVCR-01-19): unconditional now for both personas — firm's
+                  destination is the Clients page (NAV_CLIENTS, ClientsView's own
+                  EntityFormModal), in-house's is the Settings > Company panel
+                  (SettingsView, AC-4, the SAME EntityFormModal). Neither used to be a
+                  dead end; in-house's own in-house-only refusal sentence that used to sit
+                  in the paragraph above is deleted outright rather than reworded — it is
+                  simply false now that this button has a real destination for that
+                  persona too.
                   Navigating away discards a file the user may have picked; nothing has
                   been uploaded at this point, so there is nothing to lose but the pick. */}
-              {mode === 'firm' && (
-                <button
-                  onClick={() => ctx.nav('clients')}
-                  className="pf-btn"
-                  style={{ marginTop: 9, background: 'none', border: 0, padding: 0, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-amber-text)', textDecoration: 'underline', cursor: 'pointer' }}
-                >
-                  Link a business entity →
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  if (mode === 'inhouse') ctx.setSettingsTab('company')
+                  ctx.nav(mode === 'inhouse' ? 'settings' : 'clients')
+                }}
+                className="pf-btn"
+                style={{ marginTop: 9, background: 'none', border: 0, padding: 0, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-amber-text)', textDecoration: 'underline', cursor: 'pointer' }}
+              >
+                Link a business entity →
+              </button>
             </div>
           )}
 

@@ -136,10 +136,15 @@ export const CFG: ClientCfg[] = [
   },
 ]
 
-// Honeywell Group (index 4 above) — single company with its own finance department
-// (in-house mode). Its CFG row is reused as the in-house tenant's SAMPLE demo profile by
-// lib/clients.ts's inhouseClient(), looked up there by name rather than this array
-// position: in-house has no business_entities rows to index into ([entity-picker]).
+// Honeywell Group (index 4 above) — one of the 5 non-onboarding rows lib/clients.ts's
+// DEMO_TEMPLATES cycles onto every REAL portfolio entity (buildClientForEntity, keyed by
+// a hash of the entity's own id, never array position or name). Before task-304
+// (INVCR-01-19) this row was ALSO reused directly, by name, as the in-house tenant's
+// permanent stand-in profile (lib/clients.ts's now-deleted inhouseClient()) — in-house
+// had no business_entities row of its own to hash. Now that db/seed.dev.sql seeds
+// in-house one real entity, its Client goes through the same cycled-by-hash path as
+// every other entity, firm or in-house; this row lands on it only if the hash says so,
+// same as any other CFG template.
 
 /* ------------------------------------------------------------------ */
 /* Create-flow static content                                          */

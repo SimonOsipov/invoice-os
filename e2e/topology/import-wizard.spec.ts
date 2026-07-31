@@ -607,30 +607,31 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// [inhouse-can-start] — the regression this whole persona gap produced, asserted on the
-// deployed build as the IN-HOUSE accountant.
+// [inhouse-can-file] — task-304 (INVCR-01-19) REPLACES [inhouse-can-start] outright
+// (AC-7), not a patch of its assertions. That test's whole premise was that in-house
+// COULD open the wizard and read columns but every filing path was a legible dead end
+// ("filing is refused in words, not silence") -- true only because in-house's `active`
+// memo was hardcoded to a null-entityId placeholder and the tenant had zero
+// business_entities rows to resolve instead. Both are now false: db/seed.dev.sql seeds
+// the in-house tenant exactly ONE entity (AC-1), and App.tsx's `active` memo resolves it
+// through the SAME entitiesList path as firm, no persona special-case (AC-2,
+// resolveActiveClient in lib/clients.ts). So the premise INVERTS: this test proves
+// in-house FILES successfully, both by import and manually, mirroring the firm paths
+// (E2E-01 above for import; CreateForm's manual round trip, same as
+// [import-upload-unify] proves is reachable in LIVE) rather than asserting a refusal.
 //
-// Both personas must be able to START creating an invoice. The upload surface used to be
-// gated on `active.entityId !== null`, and inhouseClient() hardcodes that to null (an
-// in-house tenant has no business_entities row and no Clients screen to add one from), so
-// step 1 rendered "No linked entity -- import is unavailable here" and the firm alone got
-// a dropzone. Reading columns never needed an entity: POST /imports/preview takes the file
-// and nothing else, and its handler persists nothing. So the gate moved to the COMMIT,
-// which is the step that really does write import_batches.entity_id / invoices.entity_id
-// (both NOT NULL).
-//
-// Deliberately NOT asserted here: that an in-house import can be filed. Persistence for
-// entity-less workspaces is a separate story -- this spec pins that the wizard OPENS and
-// that the point where it stops is honest and legible, not a dead button.
-//
-// INVCR-01-05 moved WHEN that refusal is legible, not whether: the amber panel now states
-// it on step 1, instead of letting the user choose a file and map eleven columns before
-// meeting it at the commit. The panel is INFORMATIONAL and the distinction is the whole
-// point of this test -- "told earlier" and "blocked earlier" look identical in a
-// screenshot and are opposites in behaviour. So the assertions below are deliberately
-// paired: every claim that the panel is PRESENT is followed by a claim that the control it
-// sits next to still WORKS. Restoring the old gate under any new condition fails here.
-test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone and reads columns; filing is refused in words, not silence', async ({
+// What SURVIVES from the old test, restated rather than deleted: the amber "No linked
+// business entity" panel and its 'Filing needs a linked entity' refusal are still real,
+// still INFORMATIONAL-never-blocking code (CreateUpload.tsx's computeNoEntity,
+// lib/importFlow.ts) -- they just no longer fire for THIS persona, because this persona
+// no longer has anything to refuse. AC-6 keeps that contract alive for its other
+// legitimate case (a FIRM workspace whose active entity has been archived out of the
+// roster) -- but every persona this e2e suite's fixtures can sign in as now legitimately
+// has at least one entity, so a genuinely-zero-entity workspace is no longer reachable
+// through ANY browser spec here. lib/importFlow.test.ts's computeNoEntity specs
+// (FLOW-15..17) are the surviving proof that the predicate itself still fires correctly
+// for that case -- see that file for why this is the honest place for it to live now.
+test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity and files an invoice, both by import and manually', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -640,93 +641,93 @@ test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
-
-  // The heart of it: the surface the blocked state used to replace.
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
   })
 
-  // INVCR-01-05's amber panel, asserted POSITIVELY. What stood here was
-  // `getByText('No linked entity').toHaveCount(0)` -- an absence check meant to catch the
-  // old blocking empty state coming back. It was already vacuous (that exact string
-  // survives only in source comments) and it passed on this screen purely by luck: the new
-  // panel says "No linked business entity", which does not contain the substring it looked
-  // for. An absence assertion that cannot fail is worse than none, because it reads like
-  // coverage. The real guarantee was never "no such words appear" -- it is "the surface
-  // still WORKS", and every assertion below this block states that directly.
-  //
-  // Timeout: unlike the dropzone, this panel waits on the entities fetch to SETTLE. It is
-  // gated on `entitiesState` being 'ready'|'empty' as well as a null activeEntity,
-  // precisely so a firm user never sees an amber refusal flash while that fetch is in
-  // flight -- which means an in-house user sees it only once the fetch has answered.
-  await expect(page.getByText('No linked business entity', { exact: true }), 'the refusal is stated up front, on step 1').toBeVisible({
-    timeout: 30_000,
-  })
-  await expect(page.getByText('so there is nothing to file against', { exact: false })).toBeVisible()
-  await expect(
-    page.getByText('no way to link one from an in-house workspace', { exact: false }),
-    'and it says why THIS persona cannot resolve it',
-  ).toBeVisible()
+  // Inverts the old test's positive assertion of this exact panel (AC-7/8:662-669): with
+  // a real entity resolved, the amber refusal — and its in-house-only sentence,
+  // CreateUpload.tsx's now-deleted "There is no way to link one from an in-house
+  // workspace yet" — never renders at all, at any point in the fetch's lifecycle
+  // (computeNoEntity's guard 1 keeps it off during 'idle'/'loading' too, and a resolved
+  // entity keeps it off once 'ready'). No absence check ever proves a flash CAN'T have
+  // happened a moment earlier — the real proof is everything below: Read columns arming,
+  // the Map step's commit control, and the import itself all succeeding on this
+  // workspace's real resolved entity.
+  await expect(page.getByText('No linked business entity', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
 
-  // No dead control. NAV_CLIENTS is in the firm-only sidebar group and EntityFormModal
-  // mounts from ClientsView alone, so the firm's "Link a business entity →" CTA would send
-  // an in-house user to a screen they have no route to -- the exact dead end this panel
-  // exists to replace. In-house gets the sentence and no button.
-  await expect(
-    page.getByRole('button', { name: 'Link a business entity' }),
-    'no CTA to a screen this persona cannot reach',
-  ).toHaveCount(0)
-
-  // And the panel is INFORMATIONAL, not a gate: it is added to the card, it replaces
-  // nothing and disables nothing. This is the regression guard proper -- if the panel ever
-  // becomes blocking, this test fails here and at every assertion after it.
-  await expect(page.getByText('Manual entry has the same requirement', { exact: false }), 'the skip hint tells the truth about manual entry too').toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Skip — enter manually' }),
-    'manual entry stays enabled -- it names its own reason one screen later',
-  ).toBeEnabled()
-
+  const invoiceNumber = `INH-IMP-${Date.now()}`
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
 
-  // Same synthetic-DataTransfer approach as the firm test above (real drag is flaky here).
-  await page.evaluate(() => {
-    const label = document.querySelector('label[for="pf-import-file"]')
-    if (!label) throw new Error('dropzone label[for="pf-import-file"] not found')
-    const dt = new DataTransfer()
-    dt.items.add(new File(['invoice_number,subtotal\nINH-1,100\n'], 'inhouse.csv', { type: 'text/csv' }))
-    label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
-  })
-  await expect(page.getByText('inhouse.csv', { exact: true })).toBeVisible()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'inhouse.csv', mimeType: 'text/csv', buffer: Buffer.from(`Invoice No,Subtotal\n${invoiceNumber},100\n`, 'utf8') })
+  await expect(readColumnsBtn, 'arms on the file alone').toBeEnabled()
 
-  // The gate is gone from the front door: with no entity anywhere in this tenant, Read
-  // columns still arms purely on the file. This is the assertion the old contract made
-  // impossible -- canReadColumns required an entity, so it could never enable here.
-  await expect(readColumnsBtn, 'Read columns arms on the file alone, with no entity').toBeEnabled()
-
-  // And it genuinely works server-side: the preview round-trips without an entity_id.
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
   await readColumnsBtn.click()
-  await expect(page.getByText('Map fields to columns ·', { exact: false }), 'preview succeeded with no entity').toBeVisible({
-    timeout: 60_000,
-  })
+  await previewResp
+  await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 30_000 })
 
-  // Where it must stop, and how. Not a primary that looks armed and swallows the click:
-  // named reason + actually disabled, because an in-house user cannot resolve this in-app.
-  const commitBtn = page.getByRole('button', { name: 'Filing needs a linked entity' })
-  await expect(commitBtn, 'commit names why it cannot file').toBeVisible()
-  await expect(commitBtn, 'and is truly disabled, not a silent no-op').toBeDisabled()
+  // Inverts :715-717: the commit control names the REAL action now, never the refusal
+  // [inhouse-can-start] pinned.
+  await expect(
+    page.getByRole('button', { name: 'Filing needs a linked entity' }),
+    'the refusal is gone from the Map step — in-house has an entity now',
+  ).toHaveCount(0)
 
-  // Manual entry stays reachable for in-house as well — and stops the SAME way the commit
-  // step above does. INVCR-01-03 made the manual primary a real POST /v1/invoices, which
-  // writes invoices.entity_id (NOT NULL), so with no entity anywhere in this tenant it
-  // cannot file either. The refusal reuses the commit step's copy byte-for-byte (one
-  // wording, not two that drift) and is gated on the RESOLVED entity, so it is truly
-  // disabled rather than an armed button that swallows the click.
-  await page.getByRole('button', { name: '← Back to import' }).click()
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'armed once invoice_number is placed — the SAME control that used to be the disabled refusal').toBeEnabled()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  await importResp
+
+  // Core AC 8: exactly one ready invoice routes straight to its own detail screen — the
+  // affirmation IS the server's own row rendering, the same real-filing proof the firm
+  // path gets (E2E-01 above), now available to in-house too.
+  await expect(page.getByTestId('invoice-detail'), 'the import actually filed a real invoice, not a refusal').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  // And manual entry — the OTHER path [inhouse-can-start] proved was also a dead end
+  // (:725-729). Re-opens the wizard fresh via the header CTA rather than navigating back
+  // through the just-filed import's state.
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  const fileBtn = page.getByRole('button', { name: 'Filing needs a linked entity' })
-  await expect(fileBtn, 'manual build step reachable for in-house, and names why it cannot file').toBeVisible()
-  await expect(fileBtn, 'and is truly disabled, not a silent no-op').toBeDisabled()
+
+  const fileBtn = page.getByRole('button', { name: 'File invoice' })
+  await expect(fileBtn, 'manual build step is armed for in-house now, not refused').toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Filing needs a linked entity' }),
+    'the manual refusal is gone too',
+  ).toHaveCount(0)
+
+  // A fresh number: the default draft seeds a FIXED literal (lib/clients.ts's
+  // defaultDraft), and this suite reruns against a persistent, never-reset dev DB — a
+  // second run under the literal would 409 on (tenant_id, entity_id, invoice_number).
+  const manualNumber = `INH-MAN-${Date.now()}`
+  await page.getByPlaceholder('INV-0000-00000').fill(manualNumber)
+  await expect(fileBtn).toBeEnabled()
+
+  const createResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+    { timeout: 30_000 },
+  )
+  await fileBtn.click()
+  await createResp
+
+  await expect(page.getByTestId('invoice-detail'), 'manual filing succeeded too, for in-house').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(manualNumber)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

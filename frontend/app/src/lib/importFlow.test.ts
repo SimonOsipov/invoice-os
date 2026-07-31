@@ -22,6 +22,10 @@
 //   FLOW-12  wizardHeader import set: upload/mapping/review — one path per CreateStep (AC2,6)
 //   FLOW-14  wizardHeader totality: every CreateStep literal, never undefined/NaN     (AC6)
 //
+// FLOW-15..17 (task-304, INVCR-01-19, Test-first): computeNoEntity, CreateUpload's amber-
+// panel predicate, extracted for testability under the no-jsdom constraint. See its own
+// doc comment in importFlow.ts and the block near the end of this file.
+//
 // Every spec below currently fails because wizardHeader/hasImportableExtension/
 // canReadColumns/canStartImport/isMappableColumn/columnLetter/previewColumns's stub
 // bodies throw `new Error('not implemented')` before ever returning anything — that IS
@@ -41,11 +45,13 @@ import {
   canReadColumns,
   canStartImport,
   columnLetter,
+  computeNoEntity,
   hasImportableExtension,
   isMappableColumn,
   previewColumns,
   wizardHeader,
 } from './importFlow'
+import type { Entity } from './portfolio'
 import type { ImportPreview } from './importApi'
 import type { CreateStep, Mapping } from '../types'
 
@@ -708,5 +714,70 @@ describe('hasImportableExtension — adversarial edge cases (QA)', () => {
   it('matches a dotfile whose entire name is the extension — endsWith has no basename requirement', () => {
     expect(hasImportableExtension('.csv')).toBe(true)
     expect(hasImportableExtension('.xlsx')).toBe(true)
+  })
+})
+
+// RED specs (task-304, INVCR-01-19, Test-first) — pin computeNoEntity's contract before
+// the executor implements its body. Every spec below currently fails because the stub
+// throws `new Error('not implemented')` before ever returning anything — that IS the
+// correct RED reason, not an import/compile error.
+//
+// This is the ONLY node-testable proof left, at the deployed-e2e layer, that the amber
+// panel keeps firing for a zero-entity FIRM once [inhouse-can-start] stops being the sole
+// browser test exercising it (AC-6/AC-7/AC-8) — every persona this suite's fixtures can
+// sign in as now legitimately has at least one entity (firm's 27 curated rows, in-house's
+// one seeded row, db/seed.dev.sql), so a genuinely-zero-entity workspace is no longer
+// reachable through any browser spec's fixtures. The predicate itself stays generic and
+// unit-tested here instead.
+const mkEntity = (id: string): Entity => ({
+  id,
+  name: 'Acme Ltd',
+  tin: '10000000-0001',
+  registration: null,
+  sector: null,
+  address: null,
+  status: 'active',
+  created_at: '2026-01-01T00:00:00Z',
+})
+
+describe('computeNoEntity (FLOW-15..17, task-304 AC-6)', () => {
+  // FLOW-15 — the keystone claim AC-6 exists to protect: a FIRM (or any) workspace whose
+  // active entity resolved to null, with the fetch settled and the roster caught up,
+  // shows the panel. Falsification: an impl that gates on anything persona-shaped instead
+  // of `activeEntity` alone.
+  it('FLOW-15: fires whenever activeEntity is null and the fetch has genuinely settled', () => {
+    expect(computeNoEntity(null, 'ready', 3, 3)).toBe(true)
+    expect(computeNoEntity(null, 'empty', 0, 0)).toBe(true)
+  })
+
+  // FLOW-15b — positive companion: a resolved entity never fires the panel, regardless of
+  // fetch status. Falsification: an impl that fires on `entitiesState` alone.
+  it('does not fire once an entity is resolved, whatever the fetch status', () => {
+    expect(computeNoEntity(mkEntity('e-1'), 'ready', 3, 3)).toBe(false)
+    expect(computeNoEntity(mkEntity('e-1'), 'loading', 3, 0)).toBe(false)
+  })
+
+  // FLOW-16 — guard 1 (entityAnswerSettled): 'idle'/'loading'/'error' have not
+  // definitively answered yet, so the panel must not flash for that one frame.
+  // Falsification: an impl checking only `activeEntity === null`.
+  it('FLOW-16: does not fire while the entities fetch has not settled (idle/loading/error)', () => {
+    expect(computeNoEntity(null, 'idle', 0, 0)).toBe(false)
+    expect(computeNoEntity(null, 'loading', 0, 0)).toBe(false)
+    expect(computeNoEntity(null, 'error', 0, 0)).toBe(false)
+  })
+
+  // FLOW-17 — guard 2 (rosterCatchingUp): the one-render-late window where entities has
+  // already landed but the `clients` effect has not yet rebuilt from it. Falsification: an
+  // impl missing this guard would fire the panel for one frame on every load with data.
+  it('FLOW-17: does not fire in the one-render roster-catching-up window (entities landed, clients still [])', () => {
+    expect(computeNoEntity(null, 'ready', 5, 0)).toBe(false)
+  })
+
+  // Positive companion to FLOW-17: once BOTH entities and clients are empty (a genuinely
+  // zero-entity tenant, AC-3's bootstrap window), the roster-catching-up guard must not
+  // also suppress the honest case — entitiesCount === 0 is never "still catching up".
+  it('fires for a genuinely zero-entity tenant — entitiesCount 0 is not mistaken for the catching-up window', () => {
+    expect(computeNoEntity(null, 'empty', 0, 0)).toBe(true)
+    expect(computeNoEntity(null, 'ready', 0, 0)).toBe(true)
   })
 })

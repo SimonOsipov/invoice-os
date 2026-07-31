@@ -346,6 +346,19 @@ func TestSeedBackfillsSectorOntoPreexistingRow(t *testing.T) {
 	}
 }
 
+// foreignTenantID: task-304 (INVCR-01-19) repointed this test off
+// honeywellTenantID onto "Tenant A (dev)". Honeywell stopped being a neutral
+// "other tenant" the moment db/seed.dev.sql started seeding it its OWN one
+// curated business_entities row (task-304 AC-1, so an in-house sign-in has a
+// real entity to file against) — Seed now legitimately writes Honeywell's
+// table too, which is exactly the kind of write this test exists to rule
+// OUT for a tenant Seed has no business touching. Tenant A has no
+// business_entities curation anywhere in seed.dev.sql (only the demo/firm
+// tenant's 27-row block and Honeywell's own 1-row block name a tenant_id),
+// so it is still the neutral bystander the original test wanted — this is a
+// swap of WHICH tenant stands in for "other", not a weakening of the claim.
+const foreignTenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
 // TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) —
 // regression guard for the dropped cross-tenant DELETE ([demo-seed-shape]).
 // Seeds a foreign-tenant probe row, runs Seed, and asserts the probe is
@@ -361,22 +374,22 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	const probeTIN = "77999999-0099"
 	if _, err := pool.Exec(ctx,
 		`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
-		honeywellTenantID, probeTIN,
+		foreignTenantID, probeTIN,
 	); err != nil {
 		t.Fatalf("clear stale probe row (precondition): %v", err)
 	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, 'QA Foreign Tenant Probe', $2, 'active')`,
-		honeywellTenantID, probeTIN,
+		foreignTenantID, probeTIN,
 	); err != nil {
 		t.Fatalf("seed foreign-tenant probe row: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(),
-			`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`, honeywellTenantID, probeTIN)
+			`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`, foreignTenantID, probeTIN)
 	})
 
-	before := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	before := fetchDemoBusinessEntities(t, pool, foreignTenantID)
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("Seed: %v", err)
@@ -388,12 +401,12 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 27", len(demoAfter))
 	}
 
-	after := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	after := fetchDemoBusinessEntities(t, pool, foreignTenantID)
 	if !reflect.DeepEqual(before, after) {
-		t.Errorf("tenant %s's business_entities changed after Seed, want untouched\nbefore: %+v\nafter:  %+v", honeywellTenantID, before, after)
+		t.Errorf("tenant %s's business_entities changed after Seed, want untouched\nbefore: %+v\nafter:  %+v", foreignTenantID, before, after)
 	}
 	if len(after) != 1 {
-		t.Errorf("tenant %s has %d business_entities row(s) after Seed, want exactly 1 (the probe) — no curated demo rows should leak into another tenant", honeywellTenantID, len(after))
+		t.Errorf("tenant %s has %d business_entities row(s) after Seed, want exactly 1 (the probe) — no curated demo rows should leak into another tenant", foreignTenantID, len(after))
 	}
 }
 

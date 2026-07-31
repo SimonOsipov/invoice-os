@@ -6,17 +6,22 @@
 //   `tin: e.tin ?? '—'`, lib/clients.ts:146), so a null entity.tin -- and AC-5's
 //   `supplier_tin: null` rule -- is unrepresentable through Client. `Pick<…>`, not the
 //   whole Entity, mirroring computedLineSum's own convention (invoices.ts:524-525).
-// - `entity.id: string` (not nullable) makes an in-house (entityId===null) invoice
-//   unrepresentable at the TYPE level, so this mapper stays total -- no null-entity
-//   branch, no error return. THE CALLER GATES, precedent App.tsx:403 (`if (base == null
-//   || !importFile || !entityId || …) return` before createImport). §14 puts in-house
-//   filing out of scope; subtask 05 owns the honest refusal panel.
-// - `entity.tin` crosses the wire VERBATIM, never re-hyphenated/repaired -- the C7
-//   residual risk (QA Debate Log finding C7, story description): an entity whose TIN was
-//   canonicalized to 12 bare digits by portfolio.ValidateTIN will false-positive
-//   supplier-tin-format on every manual invoice. The fix is server-side
-//   (task-293/INVCR-01-17), NOT here. DRAFT-3 pins the unrepaired pass-through
-//   deliberately -- if it ever fails, that is a decision about C7, not a bug.
+// - `entity.id: string` (not nullable) makes an entity-less invoice unrepresentable at
+//   the TYPE level, so this mapper stays total -- no null-entity branch, no error
+//   return. THE CALLER GATES, precedent App.tsx:403 (`if (base == null || !importFile
+//   || !entityId || …) return` before createImport). §14 put in-house filing out of
+//   scope at the time subtask 05 was written; task-304 (INVCR-01-19) later brought it
+//   in scope (a workspace resolves a real entity through the same path regardless of
+//   persona now), but this mapper's own contract did not change -- it was always
+//   total over "some Entity, whichever caller resolved one", never persona-aware.
+// - `entity.tin` crosses the wire VERBATIM, never re-hyphenated/repaired here -- CLOSED
+//   as a risk, not open: task-293/INVCR-01-17 (manual create) and task-303/INVCR-01-18
+//   (edit) both made internal/invoice.Store.Create/Update OVERWRITE whatever this mapper
+//   put on the wire with MBSSupplierTIN(entity's own stored tin) at persist time, so a
+//   12-bare-digit-canonicalized entity TIN no longer false-positives supplier-tin-format
+//   regardless of what crosses the wire here. DRAFT-3 still pins the unrepaired
+//   pass-through deliberately (this mapper's own contract, unrelated to the server-side
+//   fix) -- if it ever fails, that is a decision about THIS mapper, not about C7.
 // - `quantity`/`unit_price` cross the wire VERBATIM (typed, user-entered values);
 //   `subtotal`/`vat`/`total`/`line_total` are round2 half-up (DERIVED values) -- see GAP
 //   2 in task-278's plan: PG stores these as numeric(14,2)/numeric(14,3) and rounds
@@ -222,8 +227,9 @@ export async function fileDraftInvoice(
 // Gates on the RESOLVED Entity, never on a Client.entityId: `active` is rebuilt from the
 // live entity list by an effect, so there is a window where the id is non-null but not yet
 // present in the fetched list, and gating on the id there renders an armed button that
-// swallows the click. `null` covers all three honest refusals at once -- in-house (no
-// business_entities row at all), the emptyClient() placeholder, and the no-gateway build.
+// swallows the click. `null` covers every honest refusal at once -- a workspace (either
+// persona) with no entity resolved yet, the emptyClient() placeholder, and the
+// no-gateway build.
 //
 // The blank-number branch is reachable only because this subtask made the field editable;
 // it is the client-side half of the server's own 400 `invoice_number is required`. NO

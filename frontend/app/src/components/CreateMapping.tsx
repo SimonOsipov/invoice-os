@@ -88,11 +88,12 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // Upload and mapping do not (the preview endpoint takes the file alone), but the import
   // writes import_batches.entity_id and invoices.entity_id, both NOT NULL, so with no
   // linked entity there is nothing to file the rows against: startImport() returns early
-  // and the click does nothing whatsoever. An in-house workspace is exactly that case
-  // (null entityId, no business_entities row, no Clients screen to add one from), so
-  // unlike the unmapped-invoice-number case below the user cannot resolve it from here —
-  // hence a real `disabled`, not just not-allowed styling, and copy that names the reason
-  // rather than a button that looks armed and silently swallows the click.
+  // and the click does nothing whatsoever. A workspace with no entity resolved yet —
+  // either persona, task-304 AC-2/AC-3 — is exactly that case, and unlike the
+  // unmapped-invoice-number case below the user cannot resolve it from THIS SCREEN (there
+  // is no entity picker here, whatever route exists elsewhere) — hence a real `disabled`,
+  // not just not-allowed styling, and copy that names the reason rather than a button
+  // that looks armed and silently swallows the click.
   const canFile = entityId !== null
   // The armed branch is the footer half of INVCR-01-05's arm-on-click: clicking the
   // continue control with invoice_number unplaced no longer swallows the click, it arms

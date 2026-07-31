@@ -610,3 +610,131 @@ describe('runFileRows — one row per file, total over the run, and no honesty-c
     })
   })
 })
+
+// ============================================================================
+// QA Mode B (task-308) — adversarial/edge coverage beyond the architect's Test Specs
+// table (BULK-05-1..12). Every one of the four mutations these guard against was
+// hand-verified (revert the targeted line, confirm the corresponding spec goes red for
+// the right reason, restore, confirm `git diff` empty) before this coverage was added;
+// these specs target failure modes the original table left unexercised.
+// ============================================================================
+
+describe('zero progress events is legal (QA Mode B, IMPAPI-08 -- no `phase` action ever required before a settle)', () => {
+  // Falsification: an impl that assumes runFileRows/runBatchIds can only be called
+  // after at least one 'phase' action has been dispatched for a file (e.g. reading a
+  // field off `outcome` that only 'uploading' populates, or crashing on an outcome that
+  // jumps straight from 'pending' to 'imported'/'failed'). A ~100 KB file on a fast link
+  // may fire zero `sending` events (importApi.ts's own IMPAPI-08 comment) -- this pins
+  // that the run-reducer half never depends on that never-guaranteed intermediate step.
+  it('a file that settles IMPORTED with no phase event at all still produces a correct row, batch id, and finished status', () => {
+    const report: ImportReport = { ...BASE_RUN_REPORT, id: 'b-noprogress', ready_invoices: 2 }
+    const run = runReducer(startRun([pendingFile('f1', 'silent.csv')]), {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b-noprogress', report },
+    })
+    expect(run.status).toBe('finished')
+    expect(runFileRows(run)).toEqual([{ name: 'silent.csv', kind: 'imported', count: 2 }])
+    expect(runBatchIds(run)).toEqual(['b-noprogress'])
+  })
+
+  // Same falsification, the FAILED half: a request can reject before its first
+  // progress event too (e.g. a synchronous network-layer refusal) -- 'failed' must not
+  // assume an 'uploading' outcome ever existed either.
+  it('a file that settles FAILED with no phase event at all still produces a correct row and failure entry', () => {
+    const run = runReducer(startRun([pendingFile('f1', 'silent-fail.csv')]), {
+      type: 'settled',
+      outcome: { kind: 'failed', message: 'network error' },
+    })
+    expect(run.status).toBe('finished')
+    expect(runFileRows(run)).toEqual([{ name: 'silent-fail.csv', kind: 'failed', reason: 'network error' }])
+    expect(runFailures(run)).toEqual([{ name: 'silent-fail.csv', message: 'network error' }])
+  })
+})
+
+describe('malformed dispatch sequences must not throw (QA Mode B)', () => {
+  // Falsification: an impl that indexes `run.files[run.cursor]` directly (e.g.
+  // `run.files[run.cursor].outcome = ...`) instead of going through `.map`, which would
+  // throw on an out-of-bounds cursor against an empty files array. App.startRun() never
+  // dispatches 'phase' before 'start' in practice, but the reducer itself should not
+  // rely on caller discipline to avoid a crash.
+  it('a phase action dispatched before any start action does not throw, and is a no-op over the empty file list', () => {
+    const idle: ImportRun = { files: [], cursor: 0, status: 'idle' }
+    let after: ImportRun | undefined
+    expect(() => {
+      after = runReducer(idle, { type: 'phase', phase: { kind: 'sending', loaded: 1, total: 2 } })
+    }).not.toThrow()
+    expect(after).toEqual({ files: [], cursor: 0, status: 'idle' })
+  })
+
+  // Falsification: same indexing hazard on the 'settled' arm. `start([])` itself
+  // resolves straight to 'finished' (runStatus's own zero-file rule, module comment
+  // above) -- dispatching 'settled' on top of THAT degenerate state must still not
+  // crash, even though App.startRun()'s `for` loop would never produce it (an empty
+  // `runFiles` array iterates zero times, so no 'settled' is ever dispatched for it).
+  it('a settled action dispatched against a zero-file run does not throw', () => {
+    const run = startRun([])
+    expect(run.status).toBe('finished')
+    expect(() => runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'x' } })).not.toThrow()
+  })
+})
+
+describe('a 5-file mixed run preserves order and totality across all three derivations (QA Mode B)', () => {
+  // Falsification: an impl whose `runBatchIds`/`runFailures` order comes from
+  // SETTLE-COMPLETION order rather than the run's own FILE order (the two coincide in
+  // every BULK-05 fixture above, which only ever settles files in file order) -- this
+  // is still settled in file order here too (the reducer offers no other way to settle
+  // out of order), so what this specifically falsifies is an impl that sorts, groups by
+  // outcome kind, or otherwise reorders the two derived arrays independently of file
+  // order once there are enough of each kind to notice a reorder.
+  it('failed/imported/failed/imported/imported yields correctly ordered ids and failures, and a total row set', () => {
+    const files = [
+      pendingFile('f1', 'a.csv'),
+      pendingFile('f2', 'b.csv'),
+      pendingFile('f3', 'c.csv'),
+      pendingFile('f4', 'd.csv'),
+      pendingFile('f5', 'e.csv'),
+    ]
+    let run = startRun(files)
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'fail-a' } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2' } } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'fail-c' } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'imported', batchId: 'b4', report: { ...BASE_RUN_REPORT, id: 'b4' } } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'imported', batchId: 'b5', report: { ...BASE_RUN_REPORT, id: 'b5' } } })
+
+    expect(run.status).toBe('finished')
+    expect(runBatchIds(run)).toEqual(['b2', 'b4', 'b5'])
+    expect(runFailures(run)).toEqual([
+      { name: 'a.csv', message: 'fail-a' },
+      { name: 'c.csv', message: 'fail-c' },
+    ])
+    // runFileRows is TOTAL over the run regardless of outcome mix -- one row per file,
+    // always, in file order (BULK-05-12's own claim, exercised here at a length beyond
+    // that spec's fixture).
+    const rows = runFileRows(run)
+    expect(rows).toHaveLength(5)
+    expect(rows.map((r) => r.kind)).toEqual(['failed', 'imported', 'failed', 'imported', 'imported'])
+  })
+})
+
+describe('routeAfterRun — a single file that imports ZERO invoices is review, never none (QA Mode B)', () => {
+  // Pins the boundary between routeAfterRun's OWN 'none' (no batch was ever created --
+  // every file request-level FAILED) and routeAfterImport's 'rejected' (a batch WAS
+  // created, it just has zero ready invoices -- reviewBatch.ts:327). A single-file run
+  // landing on 'rejected' must still fall through to 'review' with that one batch id,
+  // exactly as the multi-file BULK-05-10 case does -- 'none' is reserved for
+  // batchIds.length === 0 alone, never for "the one batch that exists says rejected".
+  // Falsification: an impl that treats routeAfterImport's 'rejected' kind as
+  // equivalent to no-batch-at-all and returns `{kind:'none'}` here instead.
+  it('one file, completed with ready_invoices:0, routes to review carrying that one batch id -- a batch WAS created', () => {
+    const run = runReducer(startRun([pendingFile('f1', 'empty.csv')]), {
+      type: 'settled',
+      outcome: {
+        kind: 'imported',
+        batchId: 'b-zero',
+        report: { ...BASE_RUN_REPORT, id: 'b-zero', ready_invoices: 0, quarantined_invoices: 10 },
+      },
+    })
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'review', batchIds: ['b-zero'] })
+    expect(routeAfterRun(run, null).kind).not.toBe('none')
+  })
+})

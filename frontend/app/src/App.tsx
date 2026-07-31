@@ -13,6 +13,7 @@ import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
   canReadColumnsAll,
+  markRunFailed,
   removeFile,
   routeAfterRun,
   runReducer,
@@ -537,6 +538,18 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
         setGroups(groupByLayout(previewed))
         setGroupIndex(0)
         setCreateStep('mapping')
+        // A fresh mapping cycle must not carry a PREVIOUS run's leftovers onto it.
+        // Reachable now in a way it never was before task-308's QA correction: a
+        // `none`-routed run lands on `run.status: 'failed'` rather than resetting (AC
+        // #9), which is what makes ctx.backToImport's "← Back to import" button
+        // usable again from that landing — and from there the operator can change the
+        // file selection entirely and re-preview. Without this, CreateMapping's
+        // failures footer (runFailures(run)) would keep naming files from the run
+        // that already finished, superimposed on a completely different group/mapping
+        // this preview just built. `startRun` itself never needs this: it always
+        // dispatches its own 'start' action against a fresh `{status:'idle'}` seed
+        // (below), overwriting whatever `run` currently holds regardless.
+        setRun({ files: [], cursor: 0, status: 'idle' })
       } finally {
         reqInFlight.current = false
       }
@@ -546,13 +559,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Where a finished RUN lands (INVCR-01-09, BULK-01-05, Core AC 8). `review` and
   // `rejected` batches are handled IDENTICALLY on purpose: both are the review step,
   // and which SURFACE it renders there is decided by reviewShellState(batch) off the
-  // batch GET alone — never by this route's `kind`. `none` (every file in the run
-  // failed) deliberately does NOT reset `run`: leaving it at its finished, all-failed
-  // state is what keeps ImportProgress rendering the per-file failure list on the
-  // 'mapping' step (AC #9) until the user backs out via restartImport/resetImport.
-  // `single`/`review` DO reset it — their data is already drained into
-  // importedInvoiceId/reviewBatchIds, and CreateFlow's body-swap (run.status !==
-  // 'idle') must go false so the newly-set createStep/view actually render.
+  // batch GET alone — never by this route's `kind`. `single`/`review` reset `run` to
+  // idle — their data is already drained into importedInvoiceId/reviewBatchIds, and
+  // both CreateFlow's body-swap and CreateMapping's upload-disable gate (both
+  // runIsActive(run)) must go false so the newly-set createStep/view actually render.
+  //
+  // `none` (every file in the run failed at the request level) does NOT reset `run`
+  // the same way — lib/importRun.ts's markRunFailed (BULK-01-05 QA correction,
+  // task-308) flips ONLY `status`, to 'failed'. `files`/`cursor` survive untouched, so
+  // runFailures(run) still returns every failure. runIsActive(run) reads 'failed' the
+  // same as 'idle' (false), so CreateFlow renders CreateMapping again instead of the
+  // dead-end ImportProgress card (no buttons at all) — the operator lands back on an
+  // INTERACTIVE mapping step, per-file failures visible there (AC #9), free to fix
+  // whatever the error named and start another run from the still-intact selection and
+  // mappings, or back out entirely via restartImport/resetImport.
   function applyRoute(route: RunRoute) {
     if (route.kind === 'single') {
       openImportedInvoice(route.invoiceId)
@@ -563,7 +583,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       setReviewBatchIds(route.batchIds)
       setCreateStep('review')
       setRun({ files: [], cursor: 0, status: 'idle' })
+      return
     }
+    setRun(markRunFailed)
   }
 
   // The sequential run (BULK-01-05, task-308): one createImport in flight at a time,

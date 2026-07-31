@@ -34,11 +34,13 @@ import {
   addFiles,
   canReadColumnsAll,
   capRefusal,
+  markRunFailed,
   removeFile,
   routeAfterRun,
   runBatchIds,
   runFailures,
   runFileRows,
+  runIsActive,
   runReducer,
 } from './importRun'
 import type { FileOutcome, ImportRun, PickedFile, RunFile } from './importRun'
@@ -736,5 +738,64 @@ describe('routeAfterRun — a single file that imports ZERO invoices is review, 
     })
     expect(routeAfterRun(run, null)).toEqual({ kind: 'review', batchIds: ['b-zero'] })
     expect(routeAfterRun(run, null).kind).not.toBe('none')
+  })
+})
+
+// ============================================================================
+// Executor correction (task-308, BULK-01-05) — the all-failed run used to be a dead
+// end: applyRoute (App.tsx) had no branch for RunRoute's `none` kind, so `run.status`
+// stayed 'finished' forever, CreateFlow's `run.status !== 'idle'` gate stayed true, and
+// the operator was stuck on ImportProgress (a card with zero buttons) with no way back
+// to the mapping step short of the wizard-wide Cancel. These pin the fix's new
+// contract: a distinct 'failed' status, and the one predicate (runIsActive) both
+// CreateFlow's and CreateMapping's body-swap/upload-disable gates now share.
+// ============================================================================
+
+describe("runIsActive — 'running'/'finished' are active, 'idle'/'failed' are not (task-308 correction)", () => {
+  // Falsification: an impl that keys off `status !== 'idle'` (the ORIGINAL bug's own
+  // gate) would wrongly call 'failed' active too, reproducing the exact dead end this
+  // fix retires — CreateFlow would keep rendering ImportProgress over a 'failed' run.
+  it('is true for running and finished, false for idle and failed', () => {
+    const files = [pendingFile('f1', 'a.csv')]
+    expect(runIsActive({ files, cursor: 0, status: 'idle' })).toBe(false)
+    expect(runIsActive({ files, cursor: 0, status: 'running' })).toBe(true)
+    expect(runIsActive({ files, cursor: 1, status: 'finished' })).toBe(true)
+    expect(runIsActive({ files, cursor: 1, status: 'failed' })).toBe(false)
+  })
+})
+
+describe('markRunFailed — flips status only, files/cursor survive intact (task-308 correction, AC #9)', () => {
+  // Falsification: an impl that resets `files`/`cursor` alongside `status` (mirroring
+  // the 'single'/'review' routes' `{files:[],cursor:0,status:'idle'}` reset) would wipe
+  // the exact failure history CreateMapping needs to render — runFailures would come
+  // back empty and the operator would see no reason for the run they just watched fail.
+  it('a two-file run where both files failed keeps every failure readable after markRunFailed', () => {
+    let run = startRun([pendingFile('f1', 'a.csv'), pendingFile('f2', 'b.csv')])
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'network error' } })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'duplicate invoice number 7' } })
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'none' })
+
+    const landed = markRunFailed(run)
+
+    expect(landed.status).toBe('failed')
+    expect(landed.cursor).toBe(run.cursor)
+    expect(landed.files).toEqual(run.files)
+    expect(runFailures(landed)).toEqual([
+      { name: 'a.csv', message: 'network error' },
+      { name: 'b.csv', message: 'duplicate invoice number 7' },
+    ])
+    expect(runBatchIds(landed)).toEqual([])
+    expect(runIsActive(landed)).toBe(false)
+  })
+
+  // Falsification: an impl that mutates the run object in place instead of returning a
+  // new one — App.tsx's `setRun(markRunFailed)` relies on a fresh reference so React
+  // actually re-renders CreateFlow off the status change.
+  it('returns a new object rather than mutating the run passed in', () => {
+    const run = startRun([pendingFile('f1', 'a.csv')])
+    const failedRun = { ...run, status: 'finished' as const }
+    const landed = markRunFailed(failedRun)
+    expect(landed).not.toBe(failedRun)
+    expect(failedRun.status).toBe('finished')
   })
 })

@@ -17,6 +17,7 @@ import { CANON } from '../data'
 import { recognize } from '../lib/mapping'
 import { previewColumns } from '../lib/importFlow'
 import { coverageSentence } from '../lib/mappingGroups'
+import { runFailures, runIsActive } from '../lib/importRun'
 import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
@@ -77,11 +78,21 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     return dot > 0 ? primaryFileName.slice(dot + 1).toUpperCase() : 'FILE'
   })()
 
-  // BULK-01-05: mirrors CreateFlow's own `run.status !== 'idle'` body-swap gate — this
-  // screen is never actually mounted while a run is live (CreateFlow renders
+  // BULK-01-05: mirrors CreateFlow's own runIsActive(run) body-swap gate — this screen
+  // is never mounted while a run is actively running/finishing (CreateFlow renders
   // ImportProgress instead), so this stays the same always-false-in-practice guard it
-  // was before, now read off `run` rather than the retired `uploadPhase`.
-  const uploading = run.status !== 'idle'
+  // was before. It is ALSO false on the 'failed' landing (AC #9, task-308 QA
+  // correction) — that is the whole point of that status existing: Continue/Back must
+  // be usable again once the operator is back here reading the per-file failures below.
+  const uploading = runIsActive(run)
+
+  // AC #9 (BULK-01-05 QA correction, task-308): every file in the run failed at the
+  // request level and applyRoute (App.tsx) landed back on this screen instead of
+  // resetting `run` — lib/importRun.ts's runFailures still returns them because only
+  // `run.status` changed (to 'failed'), never `files`. Empty on every other path this
+  // screen renders on (a fresh mapping, or mid-run — which `uploading` above shows
+  // never actually happens here either).
+  const failures = runFailures(run)
 
   const paletteChips = CANON.filter((c) => !mapping[c.key]).map((c) => {
     const armed = armedField === c.key
@@ -346,7 +357,22 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             <span style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Rows to import</span>
             <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--action)' }}>{preview.rows_total}</span>
           </span>
-          {importError ? (
+          {/* AC #9: a run that just landed here with every file failed takes priority
+              over importError/mapNote — those are both about THIS screen's live
+              mapping state, not a run that already ran and failed. filename + the
+              server's own message verbatim, one line per failed file (runFailures).
+              <span className="mono">, never <div className="mono"> — e2e/topology/
+              import-wizard.spec.ts's E2E-02 asserts `main div.mono` resolves to
+              exactly the one column-header cell further down this file. */}
+          {failures.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {failures.map((f, i) => (
+                <span key={i} style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>
+                  <span className="mono" style={{ fontSize: 11 }}>{f.name}</span>: {f.message}
+                </span>
+              ))}
+            </div>
+          ) : importError ? (
             <span style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>{importError.message}</span>
           ) : (
             <span style={{ fontSize: 12, color: mapNote.color, lineHeight: 1.4 }}>{mapNote.text}</span>

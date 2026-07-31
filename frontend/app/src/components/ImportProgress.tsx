@@ -4,12 +4,19 @@
 // beside it rather than the state of the whole screen.
 //
 // BULK-01-05 (task-308) turned this from a single-file card into a PER-FILE LIST: one
-// row per file in the run, in run order (lib/importRun.ts's runFileRows), live while the
-// run is executing and left on screen (CreateFlow's body-swap gate, `run.status !==
-// 'idle'`) even once the run has finished if EVERY file failed (AC #9) — so the operator
-// can read which files failed and why without the card disappearing back into
-// CreateMapping. The rewrite is additive to the card's own honesty rules, not a
-// relaxation of them.
+// row per file in the run, in run order (lib/importRun.ts's runFileRows), live while a
+// createImport call is actually in flight or just settled (CreateFlow's body-swap gate,
+// runIsActive(run) — true for 'running' and the brief 'finished' tick before a route is
+// chosen). The rewrite is additive to the card's own honesty rules, not a relaxation of
+// them.
+//
+// It does NOT stay on screen once EVERY file has failed (AC #9, corrected by QA under
+// this same task-308 after the first cut of this rewrite shipped it as a dead end):
+// applyRoute (App.tsx) lands a `none` route on `run.status: 'failed'`
+// (lib/importRun.ts's markRunFailed) rather than 'finished', and runIsActive treats
+// 'failed' like 'idle' — so CreateFlow swaps back to the step router and CreateMapping
+// renders again, showing the same per-file failures (runFailures) in its own footer
+// instead of here.
 //
 // WHAT THIS CARD DELIBERATELY DOES NOT SHOW, ON ANY ROW, and why each one is a lie
 // rather than a missing feature:

@@ -98,7 +98,14 @@ export interface RunFile {
 export interface ImportRun {
   files: RunFile[]
   cursor: number
-  status: 'idle' | 'running' | 'finished'
+  // 'failed' (BULK-01-05 QA correction, task-308, AC #9) is a landing state distinct
+  // from BOTH 'idle' and 'finished' -- markRunFailed is its sole producer, called by
+  // App.tsx's applyRoute on a `none` route INSTEAD OF resetting to idle, so `files`/
+  // `cursor` survive intact for runFailures/runBatchIds/runFileRows to keep reading.
+  // runReducer itself never produces or receives 'failed' -- every run starts fresh
+  // from 'idle' (App.tsx's startRun), so the reducer's own 'finished' guard (below)
+  // never needs to widen to cover it.
+  status: 'idle' | 'running' | 'finished' | 'failed'
 }
 
 export type RunAction =
@@ -112,6 +119,18 @@ export type RunAction =
 // than a 'running' state nothing will ever advance out of.
 function runStatus(fileCount: number, cursor: number): ImportRun['status'] {
   return cursor >= fileCount ? 'finished' : 'running'
+}
+
+// Whether the run pipeline is actively mid-flight or has JUST wrapped up and is
+// choosing a route: 'running' (a createImport call in flight) or the brief 'finished'
+// tick between the last settle and applyRoute's routing decision (App.tsx). FALSE for
+// 'idle' AND for 'failed' — CreateFlow.tsx's body-swap gate and CreateMapping.tsx's own
+// upload-disable gate both read this one predicate rather than keeping two independent
+// `!== 'idle'` checks that could silently drift the day a third terminal status
+// appears, which is exactly what happened here: 'failed' (BULK-01-05 QA correction,
+// task-308, AC #9) had to be excluded from both gates at once.
+export function runIsActive(run: ImportRun): boolean {
+  return run.status === 'running' || run.status === 'finished'
 }
 
 // [partial-success-kept]: `settled` ALWAYS advances the cursor, regardless of
@@ -223,4 +242,17 @@ export function routeAfterRun(run: ImportRun, resolvedInvoiceId: string | null):
     }
   }
   return { kind: 'review', batchIds }
+}
+
+// AC #9's landing (BULK-01-05 QA correction, task-308): App.tsx's applyRoute calls this
+// on a `none` route INSTEAD OF resetting `run` to idle. Only `status` changes, to a
+// terminal value distinct from both 'idle' and 'finished' — `files`/`cursor` are left
+// exactly as the run ended, so runFailures/runBatchIds/runFileRows keep reading the same
+// true history. runIsActive(run) is false for 'failed', same as 'idle', so CreateFlow's
+// body-swap gate lets CreateMapping render again and CreateMapping's own upload-disable
+// gate leaves Continue/Back usable — the operator lands back on an INTERACTIVE mapping
+// step, per-file failure list still visible, instead of the dead-end ImportProgress card
+// (no buttons, nothing to click) that this status split exists to retire.
+export function markRunFailed(run: ImportRun): ImportRun {
+  return { ...run, status: 'failed' }
 }

@@ -9,6 +9,7 @@
 // router may affirm a filing — there is no branch left that could.
 
 import { wizardHeader } from '../lib/importFlow'
+import { runIsActive } from '../lib/importRun'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
@@ -36,14 +37,15 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
   // spinner is an offer the request cannot honour. The header strip stays — the user is
   // still on the Map step, and this IS what that step is doing.
   //
-  // Gated on `run.status !== 'idle'` (BULK-01-05), not just 'running' (importApi.ts:
-  // UploadPhase's live 'sending'/'processing'), so this card SURVIVES a finished run
-  // whose route was `none` (every file failed, AC #9): applyRoute (App.tsx) resets `run`
-  // back to 'idle' on the `single`/`review` routes, once their data is drained into
-  // importedInvoiceId/reviewBatchIds, but deliberately leaves a `none` run at its
-  // finished, all-failed state — that is what keeps this card (rendering the per-file
-  // failure list, ImportProgress) on screen instead of falling back to CreateMapping.
-  const importing = run.status !== 'idle'
+  // Gated on runIsActive(run) (BULK-01-05, lib/importRun.ts) — true for 'running' and
+  // the brief 'finished' tick before applyRoute picks a route, false for 'idle' AND for
+  // 'failed'. A `none` route (every file failed at the request level, AC #9) lands
+  // `run.status` on 'failed' (App.tsx's applyRoute, via markRunFailed) rather than
+  // resetting to idle, so runFailures keeps returning every failure — but this gate
+  // treats 'failed' exactly like 'idle', so the body-swap falls back to the step router
+  // below and CreateMapping renders again (its own footer shows the failure list),
+  // instead of leaving this dead-end card (no buttons) on screen forever.
+  const importing = runIsActive(run)
 
   return (
     <div style={{ padding: '24px 36px 56px' }}>

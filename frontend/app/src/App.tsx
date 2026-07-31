@@ -20,6 +20,14 @@ import {
   type UploadPhase,
 } from './lib/importApi'
 import {
+  addMembers,
+  removeMember,
+  replaceMember,
+  seedMembers,
+  type Member,
+  type MemberStore,
+} from './lib/members'
+import {
   addSuggested,
   customRulesFor,
   customRulesKey,
@@ -180,7 +188,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [filter, setFilter] = useState('all')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [sandbox, setSandbox] = useState(false)
-  const [settingsTab, setSettingsTab_] = useState<SettingsTab>('connectors')
+  // Settings opens on Members. This literal is the ONLY thing that decides which tab
+  // opens — SETTINGS_TABS' array order decides only which renders first — so the two
+  // have to be changed together.
+  const [settingsTab, setSettingsTab_] = useState<SettingsTab>('members')
   const [xmlOpen, setXmlOpen] = useState(false)
   const [connectors, setConnectors] = useState<ConnectorsState>(INITIAL_CONNECTORS)
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
@@ -206,6 +217,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [policyStore, setPolicyStore] = useState<PolicyStore>(seedPolicies)
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null)
   const policies = policyStore[mode]
+  // The workspace's people, PER WORKSPACE MODE (lib/members.ts) — the policyStore shape
+  // above, for the same reason: a firm's staff and an in-house finance team are two
+  // different rosters, and `mode` is fixed by the signed-in persona for the session.
+  // Held here rather than in MembersView because in-house Workflows resolves approval
+  // positions to these people, so it is not one tab's private state.
+  const [memberStore, setMemberStore] = useState<MemberStore>(seedMembers)
+  const members = memberStore[mode]
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -638,6 +656,31 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     updatePolicies((list) => replacePolicy(list, next))
   }
 
+  // Same one-funnel shape again: resolve THIS workspace's member list, run the pure
+  // reducer from lib/members.ts, store it back under the mode key. Every member write
+  // goes through here, so no caller has to know the store is keyed.
+  //
+  // Deliberately a pure pass-through: the last-admin invariant (§9) is NOT enforced
+  // here. It is enforced at the call sites, where a refusal can be explained — a funnel
+  // that silently declined the write would leave the UI no way to say why.
+  function updateMembers(fn: (list: Member[]) => Member[]) {
+    setMemberStore((store) => ({ ...store, [mode]: fn(store[mode]) }))
+  }
+
+  // The ONE write funnel's three verbs. The tab composes the next Member with the pure
+  // reducers and hands the whole object back, so nothing here knows a member's shape.
+  function saveMember(next: Member) {
+    updateMembers((list) => replaceMember(list, next))
+  }
+
+  function inviteMembers(next: Member[]) {
+    updateMembers((list) => addMembers(list, next))
+  }
+
+  function dropMember(id: string) {
+    updateMembers((list) => removeMember(list, id))
+  }
+
   const user: SignedInUser = {
     name: session.persona.name,
     initials: session.persona.initials,
@@ -677,6 +720,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     openRuleKey,
     policies,
     editingPolicyId,
+    members,
     entityId,
     importFile,
     preview,
@@ -727,6 +771,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     createPolicy,
     deletePolicy,
     savePolicy,
+    saveMember,
+    inviteMembers,
+    dropMember,
     signOut: onSignOut,
   }
 

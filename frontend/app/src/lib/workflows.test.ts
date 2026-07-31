@@ -12,6 +12,7 @@ import {
   getLane,
   insertNode,
   moveNode,
+  newNode,
   newPolicy,
   opLabel,
   parseLoc,
@@ -776,5 +777,95 @@ describe('simulate (§6.2)', () => {
     const snapshot = JSON.stringify(p)
     simulate(p, { ...SIM_DEFAULT, amount: 5 })
     expect(JSON.stringify(p)).toBe(snapshot)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// delegateTo — MEMB-01-08's single schema addition
+// ---------------------------------------------------------------------------
+//
+// `ApprovalNode.delegateTo` is optional and the seed never writes it. That is not an
+// accident of style: it is what keeps the whole-node `toEqual` above (`updateNode > patches
+// one field…`) passing, because vitest's `toEqual` ignores an `undefined` property but NOT a
+// present one. Writing `delegateTo: ''` into the seed constructor makes that spec fail; these
+// pin the invariant so a later seed edit cannot quietly reintroduce it.
+
+describe('delegateTo', () => {
+  const firstApproval = (p: Policy) => p.nodes.find((n) => n.type === 'approval') as ApprovalNode
+
+  it('is ABSENT — not undefined — on every seeded approval node, in both modes', () => {
+    let visited = 0
+    const walk = (ns: readonly WfNode[]) => {
+      for (const n of ns) {
+        if (n.type === 'approval') {
+          visited += 1
+          expect(Object.hasOwn(n, 'delegateTo')).toBe(false)
+        }
+        if (n.type === 'condition') {
+          walk(n.then)
+          walk(n.else)
+        }
+      }
+    }
+    const seeds = seedPolicies()
+    ;[...seeds.firm, ...seeds.inhouse].forEach((p) => walk(p.nodes))
+    // Guards against a vacuous pass: the walk must actually have reached every approval,
+    // condition lanes included (10 firm + 7 in-house).
+    expect(visited).toBe(ALL_APPROVALS.length)
+    expect(visited).toBe(17)
+  })
+
+  it('is absent on a freshly created approval node', () => {
+    const n = newNode('approval') as ApprovalNode
+    expect(Object.hasOwn(n, 'delegateTo')).toBe(false)
+    expect(n.delegate).toBe(false)
+  })
+
+  it('rides the ordinary NodePatch path onto a root-lane node', () => {
+    const before = polH1()
+    const after = updateNode(before, firstApproval(before).id, { delegateTo: 'Tunde Adeyemi' })
+    expect(firstApproval(after).delegateTo).toBe('Tunde Adeyemi')
+    expect(firstApproval(after)).toMatchObject({ role: firstApproval(before).role, sla: firstApproval(before).sla })
+  })
+
+  it('rides the same path onto a node inside a condition lane', () => {
+    const after = updateNode(polH1(), 'h1n5', { delegateTo: 'Ibrahim Bello' })
+    expect((asCond(after, 2).then[0] as ApprovalNode).delegateTo).toBe('Ibrahim Bello')
+  })
+
+  it("stores the '' sentinel as a real value — '' and absent both mean the default", () => {
+    const p = updateNode(polH1(), 'h1n1', { delegateTo: 'Tunde Adeyemi' })
+    const cleared = updateNode(p, 'h1n1', { delegateTo: '' })
+    expect((cleared.nodes[0] as ApprovalNode).delegateTo).toBe('')
+    expect(Object.hasOwn(cleared.nodes[0], 'delegateTo')).toBe(true)
+  })
+
+  it('goes through touch() like every other node edit', () => {
+    const before = polH1()
+    expect(before.status).toBe('published')
+    const after = updateNode(before, 'h1n1', { delegateTo: 'Tunde Adeyemi' })
+    expect(after.updated).toBe('just now')
+    expect(after.status).toBe('draft')
+  })
+
+  it('never mutates the policy it was given', () => {
+    const before = polH1()
+    const snapshot = JSON.stringify(before)
+    updateNode(before, 'h1n1', { delegateTo: 'Tunde Adeyemi' })
+    expect(JSON.stringify(before)).toBe(snapshot)
+  })
+
+  it('survives an unrelated later patch to the same node', () => {
+    const withDelegate = updateNode(polH1(), 'h1n1', { delegateTo: 'Tunde Adeyemi' })
+    const thenSla = updateNode(withDelegate, 'h1n1', { sla: '24' })
+    expect(thenSla.nodes[0]).toMatchObject({ sla: '24', delegateTo: 'Tunde Adeyemi' })
+  })
+
+  it('is untouched by toggling the `delegate` boolean off', () => {
+    const on = updateNode(polH1(), 'h1n1', { delegate: true, delegateTo: 'Tunde Adeyemi' })
+    const off = updateNode(on, 'h1n1', { delegate: false })
+    // The inspector hides the picker but does not clear the choice — turning delegation
+    // back on restores the same delegate rather than silently resetting to "anyone".
+    expect((off.nodes[0] as ApprovalNode).delegateTo).toBe('Tunde Adeyemi')
   })
 })

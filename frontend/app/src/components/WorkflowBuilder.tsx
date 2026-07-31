@@ -17,7 +17,15 @@ import { useEffect, useState, type DragEvent } from 'react'
 import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
-import { NodeGlyph, NODE_TONE, PolicyStatusPill, WfSelect, wfBackGlyph, type WfPending, pendingNodeType } from './WorkflowParts'
+import { NodeGlyph, NODE_TONE, PolicyStatusPill, TARGET_OPTIONS, toOptions, WfSelect, wfBackGlyph, type ResolvedLine, type WfPending, pendingNodeType } from './WorkflowParts'
+import {
+  canvasApprovalLine,
+  delegateCandidates,
+  inhouseNotifyTargets,
+  inspectorApprovalLine,
+  resolvePosition,
+  type PositionResolution,
+} from '../lib/members'
 import {
   appendNode,
   canDrop,
@@ -38,6 +46,7 @@ import {
   type NodePatch,
   type NodeType,
   type Policy,
+  type RoleKey,
   type SimContext,
 } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -173,6 +182,32 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const selected = selId ? (findNode(policy, selId)?.node ?? null) : null
   const pending = drag ?? armed
 
+  // --- The in-house resolution seam (MEMB-01 §15.2) -------------------------
+  //
+  // This is the ONLY component in the Workflows surface that imports lib/members.ts. The
+  // canvas and the inspector receive already-rendered values, so they never learn a member
+  // list exists and never learn which mode they are in.
+  //
+  // Firm mode is unchanged BY CONSTRUCTION, not by inspection: `resolve` and `delegates` are
+  // `undefined`, so every branch those two props gate is unreachable, and `notifyOptions` is
+  // the TARGET_OPTIONS object itself — the same reference the inspector used to import, not a
+  // copy of it. Do not "symmetrise" that into `toOptions(TARGET_OPTIONS.map(...))`.
+  const inhouse = ctx.mode === 'inhouse'
+
+  // Two closures over one resolution: the tone is shared (`kind !== 'ok'`) but the copy is
+  // not — the canvas says "Ngozi Balogun +1", the inspector "Currently: Ngozi Balogun".
+  const line = (fmt: (r: PositionResolution) => string) => (position: RoleKey): ResolvedLine => {
+    const res = resolvePosition(ctx.members, position)
+    return { line: fmt(res), amber: res.kind !== 'ok' }
+  }
+
+  // Per-node by design: a value stored on the SELECTED node stays selectable, so moving the
+  // node off it drops it from the list. `''` covers "nothing selected" and "not a notify
+  // node" alike — inhouseNotifyTargets' append guard is falsy-safe.
+  const notifyOptions = inhouse
+    ? toOptions(inhouseNotifyTargets(ctx.members, selected?.type === 'notify' ? selected.target : ''))
+    : TARGET_OPTIONS
+
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -267,10 +302,18 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
           onSlotLeave={onSlotLeave}
           onSlotDrop={onSlotDrop}
           onSlotClick={onSlotClick}
+          resolve={inhouse ? line(canvasApprovalLine) : undefined}
         />
 
         <div style={{ position: 'sticky', top: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <WorkflowInspector node={selected} onPatch={patchNode} onRemove={removeNode} />
+          <WorkflowInspector
+            node={selected}
+            onPatch={patchNode}
+            onRemove={removeNode}
+            resolve={inhouse ? line(inspectorApprovalLine) : undefined}
+            delegates={inhouse ? delegateCandidates(ctx.members) : undefined}
+            notifyOptions={notifyOptions}
+          />
           <WorkflowSimulator policy={policy} sim={sim} onSim={setSim} />
         </div>
       </div>

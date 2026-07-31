@@ -24,9 +24,10 @@ import {
   wfSendGlyph,
   wfTargetGlyph,
   wfTriggerGlyph,
+  type ResolvedLine,
   type WfPending,
 } from './WorkflowParts'
-import { canDrop, parseLoc, type BranchNode, type ConditionNode, type Loc, type Policy, type WfNode } from '../lib/workflows'
+import { canDrop, parseLoc, type BranchNode, type ConditionNode, type Loc, type Policy, type RoleKey, type WfNode } from '../lib/workflows'
 
 export type CanvasProps = {
   policy: Policy
@@ -46,6 +47,23 @@ export type CanvasProps = {
   onSlotLeave: (loc: Loc) => void
   onSlotDrop: (loc: Loc, e: DragEvent) => void
   onSlotClick: (loc: Loc) => void
+  /**
+   * IN-HOUSE only. `undefined` in firm mode — which is the whole firm-identity guarantee:
+   * with no resolver there is no `res`, so both approval cards below take their pre-existing
+   * branch and this file renders exactly what it rendered before (MEMB-01 §15.2). This
+   * component never imports `lib/members.ts`; `WorkflowBuilder` closes over the roster.
+   */
+  resolve?: (position: RoleKey) => ResolvedLine
+}
+
+/** The resolved sub-line's colour. Non-amber is the tone the sub-line already had. */
+function subColor(res: ResolvedLine | null): string {
+  return res?.amber ? 'var(--status-amber-text)' : 'var(--fg-3)'
+}
+
+/** Non-null ONLY for an approval node in in-house mode. */
+function resolved(api: CanvasProps, node: BranchNode): ResolvedLine | null {
+  return node.type === 'approval' && api.resolve ? api.resolve(node.role) : null
 }
 
 export function WorkflowCanvas(api: CanvasProps) {
@@ -178,6 +196,7 @@ function cardShell(selected: boolean): { border: string; boxShadow: string } {
 
 function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
   const tone = NODE_TONE[node.type]
+  const res = resolved(api, node)
   return (
     <div
       draggable
@@ -191,7 +210,7 @@ function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 600 }}>{nodeTitle(node)}</div>
-        <div style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>{nodeSub(node)}</div>
+        <div style={{ fontSize: 11.5, color: subColor(res) }}>{nodeSub(node, res?.line)}</div>
       </div>
       <Badge tone={tone.badgeColor} bg={tone.badgeBg} border={tone.badgeBorder}>
         {tone.badge}
@@ -273,6 +292,9 @@ function Lane({ api, node, branch }: { api: CanvasProps; node: ConditionNode; br
 
 function MiniCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
   const tone = NODE_TONE[node.type]
+  // Condition-lane cards carry the resolved line too, not just SimpleCard: EVERY in-house
+  // `cfo` approval node sits in a `then` lane, so both amber cases exist only here.
+  const res = resolved(api, node)
   return (
     <div
       draggable
@@ -284,7 +306,20 @@ function MiniCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
       <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 7, background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
         <NodeGlyph type={node.type} size={15} />
       </span>
-      <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node)}</div>
+      {/* The `res === null` branch is this file's original line, moved but not edited — read
+          the two together and firm mode is unchanged by inspection. It cannot simply gain a
+          sibling: the title's typography sits ON the flex child, so a sub-line nested inside
+          it would inherit 12/600. In-house therefore lifts `flex`/`minWidth` onto a wrapper
+          and re-states the title's own type. 10.5/1.3 is the palette tile's sub-line
+          (WorkflowBuilder.tsx:245) — the app's other 10.5px sub-line under a compact title. */}
+      {res ? (
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node)}</div>
+          <div style={{ fontSize: 10.5, lineHeight: 1.3, marginTop: 1, color: subColor(res) }}>{nodeSub(node, res.line)}</div>
+        </div>
+      ) : (
+        <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node)}</div>
+      )}
       <StepActions api={api} node={node} size={20} />
     </div>
   )

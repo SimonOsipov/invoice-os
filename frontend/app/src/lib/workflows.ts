@@ -52,7 +52,24 @@ export type CondField = 'amount' | 'docType' | 'newCustomer'
 export type CondOp = '>' | '>=' | '<' | '<='
 export const WF_OPS: readonly CondOp[] = ['>', '>=', '<', '<=']
 
-export type ApprovalNode = { id: string; type: 'approval'; role: RoleKey; sla: Sla; delegate: boolean }
+export type ApprovalNode = {
+  id: string
+  type: 'approval'
+  role: RoleKey
+  sla: Sla
+  delegate: boolean
+  /**
+   * IN-HOUSE only — the named delegate, when `delegate` is on (MEMB-01 §11.3). OPTIONAL, and
+   * the seed never writes it: that is what keeps every existing fixture and the whole-node
+   * `toEqual` in workflows.test.ts compiling and passing untouched.
+   *
+   * `''` and ABSENT both mean "Anyone with the Reviewer role" — `WfSelect` is `value: string`
+   * and cannot emit absence, so the default is the empty-string sentinel (the same idiom
+   * MemberParts' `NO_POSITION` uses). Round-tripping the toggle off and on therefore leaves
+   * the key present as `''`, which is the default, not a stored choice.
+   */
+  delegateTo?: string
+}
 export type NotifyNode = { id: string; type: 'notify'; target: string; channel: string }
 export type AutoApproveNode = { id: string; type: 'autoapprove' }
 

@@ -17,10 +17,12 @@ import {
   ROLE_OPTIONS,
   ruleText,
   SLA_OPTIONS,
-  TARGET_OPTIONS,
+  toOptions,
   WfAmountInput,
   WfSelect,
   WfToggle,
+  type ResolvedLine,
+  type WfOption,
 } from './WorkflowParts'
 import type { CondField, CondOp, NodePatch, RoleKey, Sla, WfDocType, WfNode } from '../lib/workflows'
 
@@ -38,10 +40,39 @@ const FIELD_DEFAULT: Record<CondField, number | WfDocType | boolean> = {
   newCustomer: true,
 }
 
-export function WorkflowInspector({ node, onPatch, onRemove }: {
+// `delegateTo` has no "unset" value a <select> can emit — `WfSelect` is `value: string` — so
+// the default is a SENTINEL option valued `''`, the idiom MemberParts' `NO_POSITION` uses for
+// the same reason. `''` and absent both mean "anyone", which is why nothing maps it back out:
+// toggling delegation off and on leaves the key present as `''`, still the default.
+const ANY_REVIEWER = ''
+
+// Deliberately NOT the same wording as the option above it: the option names the fallback,
+// the note states the eligibility rule. §11.3 writes them differently — do not harmonise.
+const DELEGATE_NOTE = 'Only members with the Reviewer access role can be a delegate.'
+
+/** The read-only hint under a select — the typography MemberParts' Reviewer hint already uses. */
+function hintStyle(amber = false) {
+  return { marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: amber ? 'var(--status-amber-text)' : 'var(--fg-3)' } as const
+}
+
+export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates, notifyOptions }: {
   node: WfNode | null
   onPatch: (id: string, patch: NodePatch) => void
   onRemove: (id: string) => void
+  /**
+   * IN-HOUSE only, `undefined` in firm mode — with no resolver there is no resolved line and
+   * no delegate picker, so firm renders exactly what it rendered before (MEMB-01 §15.2).
+   * This component never imports `lib/members.ts`, and never learns which mode it is in.
+   */
+  resolve?: (position: RoleKey) => ResolvedLine
+  /** IN-HOUSE only — active members holding the Reviewer access role. */
+  delegates?: string[]
+  /**
+   * ALWAYS passed, because the notify fork has to happen somewhere and it cannot happen here.
+   * Firm mode is handed the untouched `TARGET_OPTIONS` object itself, so its five values are
+   * identical by identity rather than merely by value.
+   */
+  notifyOptions: WfOption[]
 }) {
   const card = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 16, overflow: 'hidden' } as const
 
@@ -57,6 +88,9 @@ export function WorkflowInspector({ node, onPatch, onRemove }: {
   }
 
   const patch = (p: NodePatch) => onPatch(node.id, p)
+  // Null in firm mode for every node kind, so the two approval-panel additions below are
+  // unreachable there and the panel renders its pre-existing three controls unchanged.
+  const res = node.type === 'approval' && resolve ? resolve(node.role) : null
 
   return (
     <div style={card}>
@@ -75,12 +109,24 @@ export function WorkflowInspector({ node, onPatch, onRemove }: {
       <div style={{ padding: 15 }}>
         {node.type === 'approval' && (
           <>
-            <WfSelect label="Who must approve" value={node.role} options={ROLE_OPTIONS} onChange={(v) => patch({ role: v as RoleKey })} marginBottom={14} />
+            <WfSelect label="Who must approve" value={node.role} options={ROLE_OPTIONS} onChange={(v) => patch({ role: v as RoleKey })} marginBottom={res ? 0 : 14} />
+            {res && <div style={{ ...hintStyle(res.amber), marginBottom: 14 }}>{res.line}</div>}
             <WfSelect label="Deadline" value={node.sla} options={SLA_OPTIONS} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
               <WfToggle on={node.delegate} onToggle={() => patch({ delegate: !node.delegate })} label="Allow delegation" />
             </div>
+            {node.delegate && delegates && (
+              <div style={{ marginTop: 12 }}>
+                <WfSelect
+                  label="Delegate to"
+                  value={node.delegateTo ?? ANY_REVIEWER}
+                  options={[{ value: ANY_REVIEWER, label: 'Anyone with the Reviewer role' }, ...toOptions(delegates)]}
+                  onChange={(v) => patch({ delegateTo: v })}
+                />
+                <div style={hintStyle()}>{DELEGATE_NOTE}</div>
+              </div>
+            )}
           </>
         )}
 
@@ -136,7 +182,7 @@ export function WorkflowInspector({ node, onPatch, onRemove }: {
 
         {node.type === 'notify' && (
           <>
-            <WfSelect label="Notify" value={node.target} options={TARGET_OPTIONS} onChange={(v) => patch({ target: v })} marginBottom={14} />
+            <WfSelect label="Notify" value={node.target} options={notifyOptions} onChange={(v) => patch({ target: v })} marginBottom={14} />
             <WfSelect label="Channel" value={node.channel} options={CHANNEL_OPTIONS} onChange={(v) => patch({ channel: v })} />
           </>
         )}

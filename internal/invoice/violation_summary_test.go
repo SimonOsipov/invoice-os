@@ -57,7 +57,7 @@ func TestViolationSummary_CountsDistinctInvoicesPerRule(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	got, err := store.ViolationSummary(c, batchID)
+	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
 		t.Fatalf("ViolationSummary: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestViolationSummary_OneInvoiceTwiceOnOneRuleCountsOnce(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	got, err := store.ViolationSummary(c, batchID)
+	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
 		t.Fatalf("ViolationSummary: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestViolationSummary_MatchesRuleKeyFilterTotalIncludingWarnings(t *testing.
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	_, listTotal, err := store.List(c, ListFilter{ImportBatchID: batchID, RuleKey: "W", Limit: 50})
+	_, listTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, RuleKey: "W", Limit: 50})
 	if err != nil {
 		t.Fatalf("List (RuleKey: W): %v", err)
 	}
@@ -138,7 +138,7 @@ func TestViolationSummary_MatchesRuleKeyFilterTotalIncludingWarnings(t *testing.
 		t.Fatalf("List (RuleKey: W).total = %d, want 2 -- fixture assumption broken", listTotal)
 	}
 
-	got, err := store.ViolationSummary(c, batchID)
+	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
 		t.Fatalf("ViolationSummary: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestViolationSummary_NonArrayViolationsDoNotError(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	got, err := store.ViolationSummary(c, batchID)
+	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
 		t.Fatalf("ViolationSummary: %v, want nil -- a non-array violations row must not 500 the whole aggregate (missing jsonb_typeof guard)", err)
 	}
@@ -214,7 +214,7 @@ func TestViolationSummary_EmptyOrMissingRuleKeyExcludedByNullifGuard(t *testing.
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	got, err := store.ViolationSummary(c, batchID)
+	got, err := store.ViolationSummary(c, []string{batchID})
 	if err != nil {
 		t.Fatalf("ViolationSummary: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRLS_ViolationSummaryTenantScopedAndNonVacuous(t *testing.T) {
 
 	// Cross-tenant: tenant 1 summarising tenant 2's batch must come back
 	// EMPTY -- never an error, never tenant 2's rows.
-	crossGot, err := store.ViolationSummary(c1, batchB)
+	crossGot, err := store.ViolationSummary(c1, []string{batchB})
 	if err != nil {
 		t.Fatalf("ViolationSummary (tenant 1, tenant 2's batch): %v, want nil", err)
 	}
@@ -262,11 +262,102 @@ func TestRLS_ViolationSummaryTenantScopedAndNonVacuous(t *testing.T) {
 	}
 
 	// Same-tenant leg, in the SAME test -- the discriminating half.
-	sameGot, err := store.ViolationSummary(c1, batchA)
+	sameGot, err := store.ViolationSummary(c1, []string{batchA})
 	if err != nil {
 		t.Fatalf("ViolationSummary (tenant 1, own batch): %v", err)
 	}
 	if len(sameGot) != 1 || sameGot[0] != (RuleCount{RuleKey: "r-own", Invoices: 1}) {
 		t.Errorf("ViolationSummary (tenant 1, own batch) = %+v, want exactly [{r-own 1}]", sameGot)
+	}
+}
+
+// --- BULK-01-02 (task-306): ViolationSummary spans several import batches ---
+
+// TestViolationSummary_SpansSeveralBatches (BULK-02-11, AC-4): the same
+// rule_key fails once in batch1 and once in batch2 -- ViolationSummary
+// called with BOTH ids must report Invoices=2 for that rule (the distinct
+// count across both batches), not 1 (either batch alone).
+func TestViolationSummary_SpansSeveralBatches(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "VIOSUM-MULTI tenant")
+	entityID := seedEntity(t, super, tenantID, "VIOSUM-MULTI entity")
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-MULTI-B1", batch1, string(StatusDraft),
+		`[{"rule_key":"r1","severity":"error","message":"a"}]`)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-MULTI-B2", batch2, string(StatusDraft),
+		`[{"rule_key":"r1","severity":"error","message":"b"}]`)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.ViolationSummary(c, []string{batch1, batch2})
+	if err != nil {
+		t.Fatalf("ViolationSummary: %v", err)
+	}
+	if len(got) != 1 || got[0] != (RuleCount{RuleKey: "r1", Invoices: 2}) {
+		t.Errorf("ViolationSummary([]string{batch1, batch2}) = %+v, want exactly [{r1 2}] (the distinct count spanning BOTH batches)", got)
+	}
+}
+
+// TestViolationSummary_SpansBatchesMatchesRuleKeyFilterWithWarnings
+// (BULK-02-13, AC-4): extends TestViolationSummary_
+// MatchesRuleKeyFilterTotalIncludingWarnings across TWO batches -- a
+// warning-only rule "W" fails once in batch1 and twice in batch2 (3 total).
+// ViolationSummary([batch1,batch2]) must report Invoices=3 for "W", and
+// List{ImportBatchIDs:[batch1,batch2], RuleKey:"W"}.total must ALSO be 3 --
+// the rail must match the filter it triggers even across several batches.
+// Both are asserted against the HARDCODED 3, not merely against each other:
+// two independently-broken implementations (e.g. both degrading to "only
+// the first batch") could otherwise agree with each other by coincidence
+// and pass a same-value-only comparison.
+func TestViolationSummary_SpansBatchesMatchesRuleKeyFilterWithWarnings(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "VIOSUM-MULTI-WARN tenant")
+	entityID := seedEntity(t, super, tenantID, "VIOSUM-MULTI-WARN entity")
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-MULTI-WARN-B1", batch1, string(StatusDraft),
+		`[{"rule_key":"W","severity":"warning","message":"advisory only"}]`)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-MULTI-WARN-B2-a", batch2, string(StatusDraft),
+		`[{"rule_key":"W","severity":"warning","message":"advisory only"}]`)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "VIOSUM-MULTI-WARN-B2-b", batch2, string(StatusDraft),
+		`[{"rule_key":"W","severity":"warning","message":"advisory only"}]`)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	_, listTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch2}, RuleKey: "W", Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], RuleKey: W): %v", err)
+	}
+	if listTotal != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], RuleKey: W).total = %d, want 3 (1 from batch1 + 2 from batch2)", listTotal)
+	}
+
+	got, err := store.ViolationSummary(c, []string{batch1, batch2})
+	if err != nil {
+		t.Fatalf("ViolationSummary: %v", err)
+	}
+	var w *RuleCount
+	for i := range got {
+		if got[i].RuleKey == "W" {
+			w = &got[i]
+		}
+	}
+	if w == nil {
+		t.Fatalf(`ViolationSummary([batch1, batch2]) has no entry for rule_key "W": %+v`, got)
+	}
+	if w.Invoices != 3 {
+		t.Errorf(`ViolationSummary([batch1, batch2])["W"].Invoices = %d, want 3 (spanning both batches)`, w.Invoices)
+	}
+	if w.Invoices != listTotal {
+		t.Errorf("ViolationSummary[\"W\"].Invoices = %d, want %d (List's own filtered total -- the rail must match the filter it triggers)", w.Invoices, listTotal)
 	}
 }

@@ -105,12 +105,12 @@ func TestStoreList_AllFiveFiltersCombinedANDCorrectRows(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{
-		ImportBatchID: batchA,
-		Status:        StatusDraft,
-		NeedsFix:      true,
-		RuleKey:       "vat-standard-rate",
-		Query:         "acme",
-		Limit:         50,
+		ImportBatchIDs: []string{batchA},
+		Status:         StatusDraft,
+		NeedsFix:       true,
+		RuleKey:        "vat-standard-rate",
+		Query:          "acme",
+		Limit:          50,
 	})
 	if err != nil {
 		t.Fatalf("List (all five filters): %v", err)
@@ -215,10 +215,10 @@ func TestStoreList_NeedsFixBetweenTwoBoundFiltersKeepsPlaceholderNumbering(t *te
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	items, total, err := store.List(c, ListFilter{
-		ImportBatchID: batchA,
-		NeedsFix:      true,
-		RuleKey:       "vat-standard-rate",
-		Limit:         50,
+		ImportBatchIDs: []string{batchA},
+		NeedsFix:       true,
+		RuleKey:        "vat-standard-rate",
+		Limit:          50,
 	})
 	if err != nil {
 		t.Fatalf("List (ImportBatchID, NeedsFix, RuleKey -- NeedsFix between two bound conditions): %v", err)
@@ -228,5 +228,55 @@ func TestStoreList_NeedsFixBetweenTwoBoundFiltersKeepsPlaceholderNumbering(t *te
 	}
 	if len(items) != 1 || items[0].ID != target {
 		t.Fatalf("List (ImportBatchID, NeedsFix, RuleKey) items = %+v, want exactly [%s]", items, target)
+	}
+}
+
+// TestStoreList_SeveralImportBatchIDsANDNeedsFix (BULK-02-5, task-306, AC-1):
+// the several-ids union inside ImportBatchIDs must still AND against the
+// OTHER filters, never OR across the whole condition list. Batches 1 and 2
+// each get one needs-fix row and one validated (non-needs-fix) row; batch 3
+// (out of the id list) gets a needs-fix row too. {ImportBatchIDs: [batch1,
+// batch2], NeedsFix: true} must return EXACTLY the two needs-fix rows from
+// batch1/batch2 -- batch3's needs-fix row (wrong batch) and batch1/2's
+// validated rows (wrong status) must both be excluded.
+func TestStoreList_SeveralImportBatchIDsANDNeedsFix(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-MULTI-AND tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-MULTI-AND entity")
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+	batch3 := seedImportBatch(t, super, tenantID, entityID)
+
+	const errorViolation = `[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`
+
+	fix1 := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "MULTI-AND-B1-FIX", batch1, string(StatusDraft), errorViolation)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "MULTI-AND-B1-OK", batch1, string(StatusValidated), `[]`)
+	fix2 := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "MULTI-AND-B2-FIX", batch2, string(StatusDraft), errorViolation)
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "MULTI-AND-B2-OK", batch2, string(StatusValidated), `[]`)
+	// Out-of-list batch, same NeedsFix-satisfying shape -- discriminates an
+	// OR-composed implementation (which would leak this row in) from an
+	// AND-composed one.
+	seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "MULTI-AND-B3-FIX", batch3, string(StatusDraft), errorViolation)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch2}, NeedsFix: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], NeedsFix: true): %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], NeedsFix: true).total = %d, want 2 -- batch3's needs-fix row or batch1/2's validated rows leaked through", total)
+	}
+	want := map[string]bool{fix1: true, fix2: true}
+	if len(items) != 2 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], NeedsFix: true) len = %d, want 2", len(items))
+	}
+	for _, inv := range items {
+		if !want[inv.ID] {
+			t.Errorf("List (ImportBatchIDs: [batch1, batch2], NeedsFix: true) returned an unexpected invoice: %s", inv.ID)
+		}
 	}
 }

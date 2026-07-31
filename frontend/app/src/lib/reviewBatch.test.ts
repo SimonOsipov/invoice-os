@@ -262,7 +262,7 @@ describe('reviewQuery (AC-4, cashing the un-cashed #review/<uuid> safety argumen
 
     const result = reviewQuery(id, 'needs-fix', { q: '', ruleKey: 'k' })
 
-    expect(result).toEqual({ importBatchId: id, needsFix: true, ruleKey: 'k' })
+    expect(result).toEqual({ importBatchIds: [id], needsFix: true, ruleKey: 'k' })
     expect('q' in result).toBe(false)
   })
 })
@@ -680,7 +680,7 @@ describe('reviewFilterReducer (AC-2/3/4/10, task-286 §3) — offset:0 is struct
     const next = reviewFilterReducer(state, { type: 'pill', pill: 'needs-fix' })
 
     expect(reviewPageQuery('batch-1', next)).toEqual({
-      importBatchId: 'batch-1',
+      importBatchIds: ['batch-1'],
       needsFix: true,
       limit: REVIEW_PAGE_SIZE,
       offset: 0,
@@ -739,7 +739,7 @@ describe('reviewPageQuery: all four filters compose into ONE ANDed options objec
     const query = reviewPageQuery('batch-1', state)
 
     expect(query).toEqual({
-      importBatchId: 'batch-1',
+      importBatchIds: ['batch-1'],
       needsFix: true,
       ruleKey: 'vat-standard-rate',
       q: 'ACME',

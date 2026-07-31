@@ -553,7 +553,7 @@ func escapeLike(s string) string {
 // `where` is empty and both queries are byte-identical to before any filter
 // existed.
 //
-// f.ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4]) are the
+// f.ImportBatchIDs/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4]) are the
 // review screen's five filters. Four notes on them:
 //
 //   - NeedsFix is a NEW predicate, not a slice of NeedsAttention
@@ -576,11 +576,24 @@ func escapeLike(s string) string {
 //     finds a literal percent sign, not every row. See escapeLike for why this
 //     reverses portfolio's recorded ruling.
 //
-// A malformed (non-uuid) f.ImportBatchID raises 22P02 on the COUNT query and
-// maps to ErrValidation, exactly as f.EntityID does. A cross-tenant (or
-// nonexistent) batch id is NOT an error and NOT a 404: RLS has already scoped
-// the row set, so it narrows to an empty page with total 0 -- a 404 would be
-// an existence oracle for another tenant's data.
+// A malformed (non-uuid) member of f.ImportBatchIDs raises 22P02 on the COUNT
+// query and maps to ErrValidation, exactly as f.EntityID does -- verified
+// live (BULK-01-02) against pgx v5.10.0/PG18: `= ANY($n)` binds a Go
+// []string in TEXT format with each member written verbatim, so a malformed
+// member reaches Postgres's own uuid parser (string_to_uuid) rather than
+// failing client-side in pgx, and pgCode(err) == "22P02" below already
+// catches it -- no ::uuid[] cast needed. A cross-tenant (or nonexistent)
+// batch id is NOT an error and NOT a 404: RLS has already scoped the row
+// set, so it narrows to an empty page with total 0 -- a 404 would be an
+// existence oracle for another tenant's data.
+//
+// STUB (BULK-01-02, test-first): List itself still narrows on only
+// f.ImportBatchIDs[0] via plain "=" (below) -- the several-ids union
+// (`= ANY($n)`) is deliberately NOT implemented yet, so every BULK-02-1/4/5/6
+// multi-id spec fails on membership/total or on a nil error where
+// ErrValidation is wanted, never on a compile or setup error. A one-element
+// slice (every migrated batch_filter_test.go/batch_filter_adversarial_test.go
+// site, i.e. today's shipped single-id behaviour) is UNAFFECTED.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
@@ -595,8 +608,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		if f.NeedsAttention {
 			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
 		}
-		if f.ImportBatchID != "" {
-			args = append(args, f.ImportBatchID)
+		if len(f.ImportBatchIDs) > 0 {
+			args = append(args, f.ImportBatchIDs[0])
 			conditions = append(conditions, fmt.Sprintf("import_batch_id = $%d", len(args)))
 		}
 		if f.Status != "" {
@@ -696,11 +709,15 @@ type RuleCount struct {
 }
 
 // ViolationSummary returns one row per distinct rule_key among the
-// violations of the invoices linked to importBatchID, counted as
+// violations of the invoices linked to importBatchIDs, counted as
 // count(DISTINCT invoice.id) -- an invoice naming the same rule twice counts
-// ONCE -- ordered invoices DESC then rule_key ASC. importBatchID is
-// REQUIRED by the caller: an unbounded tenant-wide aggregation is not a
-// supported query (ViolationSummaryHandler rejects an absent one).
+// ONCE -- ordered invoices DESC then rule_key ASC. importBatchIDs is
+// REQUIRED to carry at least one usable id (ViolationSummaryHandler rejects
+// zero usable ids): an unbounded tenant-wide aggregation is not a supported
+// query. Widened from a single importBatchID string to []string (BULK-01-02,
+// [one-review-screen]) so the rail can span every batch a multi-file run
+// produced, via `= ANY($1)` -- the same bare-array idiom List uses above, no
+// cast (verified live, see List's own doc comment).
 //
 // Reuses internal/dashboard/store.go's Rollup aggregate shape, including
 // BOTH of its guards:
@@ -726,10 +743,21 @@ type RuleCount struct {
 //
 // RLS-scoped like every other read here -- no manual tenant predicate. A
 // cross-tenant batch id is therefore an empty result, not an error.
-func (s *Store) ViolationSummary(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+func (s *Store) ViolationSummary(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 	// Never nil: the handler renders "rules":[] and a nil slice would
 	// marshal to null.
 	rules := []RuleCount{}
+
+	// STUB (BULK-01-02, test-first): only importBatchIDs[0] is honoured, bound
+	// with plain "=" below -- the several-batches union (`= ANY($1)`, AC-4)
+	// is deliberately NOT implemented yet, so BULK-02-11's cross-batch spec
+	// fails on Invoices count, never on a compile or setup error. A
+	// one-element slice (every migrated violation_summary_test.go site, i.e.
+	// today's shipped single-batch behaviour) is UNAFFECTED.
+	var importBatchID string
+	if len(importBatchIDs) > 0 {
+		importBatchID = importBatchIDs[0]
+	}
 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,

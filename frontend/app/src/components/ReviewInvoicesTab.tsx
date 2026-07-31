@@ -179,7 +179,7 @@ export function ReviewInvoicesTab({
 
   // `deps: [batchId]` — one fetch per batch, for the life of the tab. See the file
   // header, point 3.
-  const rail = useAsync<RuleCount[]>(() => violationSummary(ctx.authedFetch, base, batchId), {
+  const rail = useAsync<RuleCount[]>(() => violationSummary(ctx.authedFetch, base, [batchId]), {
     isEmpty: () => false,
     deps: [batchId],
   })

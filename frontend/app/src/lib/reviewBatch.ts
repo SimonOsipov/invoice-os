@@ -276,10 +276,17 @@ export function formatReviewHash(id: string): string {
 //
 // The throw is the runtime half of the same argument, and it is the only enforcement a
 // pure function has left: the TYPE stops `undefined`, but `''` is still a `string`, and
-// listInvoices treats an empty importBatchId as ABSENT (matching the server's own
-// empty-is-absent rule) -- which returns a tenant-wide page carrying a plausible total,
-// i.e. exactly the wrong-page-instead-of-an-honest-error failure mode ListHandler's own
-// doc comment refuses. Loud beats a review table full of another batch's invoices.
+// listInvoices treats an empty id as ABSENT (matching the server's own empty-is-absent
+// rule, applied per value) -- which returns a tenant-wide page carrying a plausible
+// total, i.e. exactly the wrong-page-instead-of-an-honest-error failure mode
+// ListHandler's own doc comment refuses. Loud beats a review table full of another
+// batch's invoices.
+//
+// `batchId` stays a single `string` here (BULK-01-02 widens ListInvoicesOptions'
+// importBatchIds to string[], but reviewQuery/reviewPageQuery's OWN signatures are
+// unchanged -- deriving several ids from a run is BULK-01-06's job): the one-element
+// array below is this subtask's plumbing only, not a widening of what this function
+// accepts.
 //
 // The extras follow listInvoices' emission rules rather than being spread in blind: a
 // blank search box must not become `q=''` on the wire, and `offset: 0` must survive.
@@ -289,7 +296,7 @@ export function reviewQuery(
   extra: { ruleKey?: string; q?: string; limit?: number; offset?: number } = {},
 ): ListInvoicesOptions {
   if (batchId === '') throw new Error('reviewQuery: batchId is required — an empty one lists the whole tenant')
-  const opts: ListInvoicesOptions = { importBatchId: batchId, ...filterToQuery(pill) }
+  const opts: ListInvoicesOptions = { importBatchIds: [batchId], ...filterToQuery(pill) }
   if (extra.ruleKey) opts.ruleKey = extra.ruleKey
   if (extra.q) opts.q = extra.q
   if (extra.limit != null) opts.limit = extra.limit

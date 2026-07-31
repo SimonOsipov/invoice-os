@@ -124,8 +124,8 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             // Sixth leg, NOT built through reviewQuery/filterToQuery -- `kept_as_is`
             // is not one of the four ReviewPill toolbar filters those helpers cover
             // (INVCR-01-15, D6), so this composes ListInvoicesOptions directly, the
-            // same way `all` above narrows by importBatchId alone.
-            listInvoices(ctx.authedFetch, base, { importBatchId: batchId, keptAsIs: true, limit: 1 }),
+            // same way `all` above narrows by importBatchIds alone.
+            listInvoices(ctx.authedFetch, base, { importBatchIds: [batchId], keptAsIs: true, limit: 1 }),
           ]).then(([batch, all, ready, fix, queued, kept]) => ({
             batch,
             allTotal: all.pagination.total,

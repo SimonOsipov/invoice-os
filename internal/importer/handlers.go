@@ -148,12 +148,6 @@ func detectFormat(filename, contentType string) string {
 // detection (unrecognized -> 400) -> Decode (undecodable -> 400) -> imp
 // (Service.Import) -> statusForErr -> the shared {"error":"..."} envelope on
 // failure, or a 200 (dry run) / 201 (real) importResponse on success.
-// STUB (BULK-01-01, test-first): imp's type gains filename (after entityID)
-// but the call site below threads a hardcoded "" rather than
-// sanitizeFilename(fh.Filename) -- so BULK-01-9's spy never observes the real
-// part filename, failing on a value mismatch, not a compile error. Real
-// implementation must call imp(r.Context(), entityID,
-// sanitizeFilename(fh.Filename), mapping, header, rows, dryRun).
 func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -227,7 +221,7 @@ func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapp
 			return
 		}
 
-		res, err := imp(r.Context(), entityID, "", mapping, header, rows, dryRun)
+		res, err := imp(r.Context(), entityID, sanitizeFilename(fh.Filename), mapping, header, rows, dryRun)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -369,6 +363,7 @@ func PreviewHandler() http.HandlerFunc {
 type batchResponse struct {
 	ID          string     `json:"id"`
 	EntityID    string     `json:"entity_id"`
+	Filename    *string    `json:"filename"` // NEW (BULK-01-01). NO omitempty -- an unrecorded filename must serialise as an explicit null, never an absent key.
 	Status      string     `json:"status"`
 	RowsTotal   int        `json:"rows_total"`
 	RowsValid   int        `json:"rows_valid"`
@@ -427,6 +422,7 @@ func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *sl
 		writeJSON(w, http.StatusOK, batchResponse{
 			ID:          batch.ID,
 			EntityID:    batch.EntityID,
+			Filename:    batch.Filename,
 			Status:      batch.Status,
 			RowsTotal:   batch.RowsTotal,
 			RowsValid:   batch.RowsValid,

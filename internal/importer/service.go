@@ -581,11 +581,10 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //     error propagates (the handler 500s) rather than being laundered into a
 //     fake RowError. Finalize records the terminal counts/status/errors.
 //
-// STUB (BULK-01-01, test-first): filename is accepted but NOT threaded on to
-// either CreateBatch call site below (both still pass "") -- so every
-// filename-persistence spec (BULK-01-1/5/8/11) fails on a value mismatch, not
-// a compile error. Real implementation passes filename straight through to
-// BOTH the early-finalize CreateBatch (below) and the main-path CreateBatch.
+// filename (already sanitized by the caller) is passed straight through to
+// BOTH the early-finalize CreateBatch below and the main-path CreateBatch --
+// a zero-row file's 'failed' batch must be attributable too (BULK-01-11). It
+// is unused on the dry-run path: a dry run never creates a batch.
 func (s *Service) Import(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
@@ -781,7 +780,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename string, mapping
 	// straight to 'failed' — never CreateBatch/Create for a real group,
 	// never a partial-split status for this case.
 	if rowsTotal == 0 {
-		batchID, err := s.batch.CreateBatch(ctx, entityID, "")
+		batchID, err := s.batch.CreateBatch(ctx, entityID, filename)
 		if err != nil {
 			return BatchResult{}, err
 		}
@@ -791,7 +790,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename string, mapping
 		return BatchResult{ID: batchID, Status: "failed"}, nil
 	}
 
-	batchID, err := s.batch.CreateBatch(ctx, entityID, "")
+	batchID, err := s.batch.CreateBatch(ctx, entityID, filename)
 	if err != nil {
 		return BatchResult{}, err
 	}

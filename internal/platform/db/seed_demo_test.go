@@ -346,6 +346,133 @@ func TestSeedBackfillsSectorOntoPreexistingRow(t *testing.T) {
 	}
 }
 
+// curatedHoneywellEntity is Honeywell's own single curated business_entities
+// row (task-304, INVCR-01-19, AC-1) — db/seed.dev.sql's second INSERT block,
+// seeded so the in-house persona has a real entity to resolve and file
+// against (App.tsx's resolveActiveClient, frontend/app/src/lib/clients.ts).
+// The TIN is deliberately the hyphenated NNNNNNNN-NNNN wire spelling
+// (supplier-tin-format's own shape, internal/invoice/supplier_tin.go), not a
+// 10-digit JTB TIN and not a 12-bare-digit canonical FIRS TIN —
+// MBSSupplierTIN only rewrites the latter, so this literal must stay exactly
+// as seeded or a manual/imported invoice against Honeywell would fail
+// supplier-tin-format.
+var curatedHoneywellEntity = entityRow{name: "Honeywell Group", tin: "20665510-0001", sector: "Manufacturing", status: "active"}
+
+// resetHoneywellBusinessEntities mirrors resetDemoBusinessEntities above,
+// scoped to honeywellTenantID — clears any invoices then business_entities
+// rows so each test below starts from a genuinely empty Honeywell portfolio.
+func resetHoneywellBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM invoices WHERE tenant_id = $1`, honeywellTenantID,
+	); err != nil {
+		t.Fatalf("clear Honeywell's invoices (precondition): %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM business_entities WHERE tenant_id = $1`, honeywellTenantID,
+	); err != nil {
+		t.Fatalf("clear Honeywell's business_entities (precondition): %v", err)
+	}
+}
+
+// TestSeedCreatesCuratedHoneywellEntity: task-304 (INVCR-01-19) AC-1 — after
+// Seed runs against an empty Honeywell portfolio, the in-house tenant has
+// EXACTLY the one curated row db/seed.dev.sql now seeds for it, with the
+// literal TIN spelling AC-1 requires. QA gap-fill: no existing test pinned
+// this. The demo-tenant suite above (TestSeedCreatesCuratedDemoEntities etc.)
+// is scoped to demoTenantID only, and TestSeedDoesNotTouchOtherTenants below
+// was repointed OFF Honeywell onto Tenant A the moment this row started
+// existing (see foreignTenantID's own doc comment) — so nothing else in this
+// file actually proves the new row's shape, count, or literal TIN spelling.
+func TestSeedCreatesCuratedHoneywellEntity(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetHoneywellBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	want := []entityRow{curatedHoneywellEntity}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("business_entities for Honeywell after Seed = %+v, want exactly one curated row %+v", got, want)
+	}
+}
+
+// TestSeedHoneywellEntityIsIdempotent: companion to
+// TestSeedDemoEntitiesIsIdempotent, scoped to Honeywell's one-row block —
+// running Seed twice must leave exactly one row, byte-identical, never a
+// duplicate under the (tenant_id, tin) partial unique index.
+func TestSeedHoneywellEntityIsIdempotent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetHoneywellBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	first := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	if len(first) != 1 {
+		t.Fatalf("count(business_entities) for Honeywell after the FIRST Seed = %d, want 1", len(first))
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (idempotency): %v", err)
+	}
+	second := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	if len(second) != 1 {
+		t.Fatalf("count(business_entities) for Honeywell after the SECOND Seed = %d, want 1 (no duplication)", len(second))
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("Honeywell's curated row differs between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", first, second)
+	}
+}
+
+// TestSeedRepairsMutatedHoneywellEntity: companion to
+// TestSeedRepairsMutatedDemoEntity — mutates Honeywell's curated row's
+// name/sector/status in place, then re-runs Seed: the row must be restored,
+// proving the Honeywell block's upsert is DO UPDATE, not DO NOTHING, same as
+// the demo tenant's block.
+func TestSeedRepairsMutatedHoneywellEntity(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetHoneywellBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated baseline): %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE business_entities SET name = 'MUTATED JUNK NAME', sector = 'MUTATED JUNK SECTOR', status = 'archived' WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, curatedHoneywellEntity.tin,
+	); err != nil {
+		t.Fatalf("mutate curated row (precondition): %v", err)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (repair): %v", err)
+	}
+
+	var name, sector, status string
+	if err := pool.QueryRow(ctx,
+		`SELECT name, sector, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, curatedHoneywellEntity.tin,
+	).Scan(&name, &sector, &status); err != nil {
+		t.Fatalf("read back repaired row: %v", err)
+	}
+	if name != curatedHoneywellEntity.name || sector != curatedHoneywellEntity.sector || status != curatedHoneywellEntity.status {
+		t.Errorf("Honeywell's row after repair Seed = (%q, %q, %q), want curated (%q, %q, %q) — an ON CONFLICT DO NOTHING upsert would leave the mutated values in place",
+			name, sector, status, curatedHoneywellEntity.name, curatedHoneywellEntity.sector, curatedHoneywellEntity.status)
+	}
+}
+
 // foreignTenantID: task-304 (INVCR-01-19) repointed this test off
 // honeywellTenantID onto "Tenant A (dev)". Honeywell stopped being a neutral
 // "other tenant" the moment db/seed.dev.sql started seeding it its OWN one

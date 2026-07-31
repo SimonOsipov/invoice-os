@@ -334,6 +334,16 @@ test('detail surface: violations render against the rule-set version, the fix lo
   //    (fixtures.ts) -- a blocking violation, so the invoice stays draft (no
   //    promotion, no new history row) while the violations table now renders
   //    the real verdict against the live rule-set version.
+  //
+  //    KNOWN PRE-EXISTING GAP (INVCR-01-17/task-293's own QA finding,
+  //    tracked on task-292, NOT touched by INVCR-01-18/task-303): Store.
+  //    Create now derives supplier_tin from the entity ([supplier-from-
+  //    entity]) rather than trusting badInvoiceFields()'s 'BADTIN', so
+  //    supplier-tin-format no longer actually fires here -- this loop's
+  //    'supplier-tin-format' iteration is expected to fail until task-292
+  //    updates the fixture/assertion. Left as-is rather than fixed here: it
+  //    is a CREATE-path consequence of a different subtask, outside this
+  //    one's scope.
   const violationsTable = page.getByTestId('violations-table')
   await page.getByTestId('revalidate').click()
   await expect(violationsTable).toBeVisible()
@@ -345,28 +355,36 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expect(page.getByTestId('status-history-row')).toHaveCount(1)
 
-  // 3. The fix: edit the two broken fields (supplier TIN, VAT) AND -- the
-  //    priority regression QA flagged -- edit issue_date with a plain
-  //    YYYY-MM-DD value, the form's own placeholder shape. Before the QA fix
-  //    (commit 0bfc4a1), sending a bare date 400'd at the backend
-  //    (editReq.IssueDate decodes into a *time.Time, which only accepts a
-  //    full RFC3339 string); diffEditInput now normalizes a bare date to
-  //    midnight UTC first. onSaved firing (staleSinceEdit becoming true,
-  //    asserted below) is the one behaviour a 400 could never produce -- a
-  //    failed submit takes the catch branch and renders a red inline error
-  //    instead, never calling onSaved.
+  // 3. The fix: edit VAT AND -- the priority regression QA flagged -- edit
+  //    issue_date with a plain YYYY-MM-DD value, the form's own placeholder
+  //    shape. Before the QA fix (commit 0bfc4a1), sending a bare date 400'd
+  //    at the backend (editReq.IssueDate decodes into a *time.Time, which
+  //    only accepts a full RFC3339 string); diffEditInput now normalizes a
+  //    bare date to midnight UTC first. onSaved firing (staleSinceEdit
+  //    becoming true, asserted below) is the one behaviour a 400 could never
+  //    produce -- a failed submit takes the catch branch and renders a red
+  //    inline error instead, never calling onSaved.
   //
-  //    The 3 inputs are matched by their own label text via XPath sibling
-  //    lookup: the form carries no per-field test ids, and the two TIN inputs
-  //    share the same placeholder ("########-####"), so a placeholder-based
-  //    locator would be ambiguous.
+  //    Supplier TIN is deliberately NOT edited here anymore (INVCR-01-18,
+  //    C7 fix, edit path): the field is no longer an editable form control
+  //    at all (InvoiceDetail.tsx renders it display-only, entity-derived) --
+  //    Store.Update/Edit now ALWAYS re-derive supplier_tin from the invoice's
+  //    entity regardless of what a PATCH sends, mirroring Store.Create's own
+  //    [supplier-from-entity] override. A `.fill()` against that input would
+  //    now throw ("element is not editable"), not merely assert something
+  //    false. Correcting VAT alone is sufficient to reach a clean re-validate
+  //    below: the ONLY genuinely-firing violation on this deployed build is
+  //    vat-standard-rate (see the KNOWN PRE-EXISTING GAP note above --
+  //    supplier-tin-format was never actually blocking post-INVCR-01-17).
+  //
+  //    The 2 inputs are matched by their own label text via XPath sibling
+  //    lookup: the form carries no per-field test ids.
   // [edit-mode-in-body] (INVED-01-07/08): the form now mounts only while `editing`, so the
   // Edit toggle must be clicked before it exists at all -- without this every
   // form.locator(...) below is a locator TIMEOUT, not an assertion.
   await page.getByTestId('edit-toggle').click()
   const form = page.getByTestId('edit-invoice')
   await form.locator('xpath=.//div[normalize-space(text())="Issue date"]/following-sibling::input').fill('2026-02-01')
-  await form.locator('xpath=.//div[normalize-space(text())="Supplier TIN"]/following-sibling::input').fill(freshTin())
   await form.locator('xpath=.//div[normalize-space(text())="VAT"]/following-sibling::input').fill('75')
   await page.getByRole('button', { name: 'Save changes' }).click()
 

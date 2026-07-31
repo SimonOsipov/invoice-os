@@ -446,16 +446,25 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const before = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
       const beforeLines = (before.body as Record<string, unknown>).line_items
 
+      // buyer_name, NOT supplier_name (INVCR-01-18, C7 fix, edit path): Store.Update/Edit
+      // now ALWAYS re-derive supplier_tin/supplier_name from the invoice's entity,
+      // discarding whatever the PATCH body sends for those two fields (mirroring
+      // Store.Create's own [supplier-from-entity] override, INVCR-01-17) -- a PATCHed
+      // supplier_name would silently NOT take effect, which is exactly the fix working as
+      // intended, not a bug this "header-only change" vehicle should trip over. buyer_name
+      // is untouched by the derivation (scope fence) and remains ordinary caller-controlled
+      // content, so it still proves the thing this test actually cares about: a header-only
+      // PATCH leaves the stored line ids/content byte-identical.
       const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${token}` },
-        body: { supplier_name: 'Renamed Supplier Ltd' },
+        body: { buyer_name: 'Renamed Buyer Ltd' },
       })
       expect(res.status, 'a header-only PATCH should return 200').toBe(200)
 
       const after = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
       const afterBody = after.body as Record<string, unknown>
-      expect(afterBody.supplier_name, 'the header field should be updated').toBe('Renamed Supplier Ltd')
+      expect(afterBody.buyer_name, 'the header field should be updated').toBe('Renamed Buyer Ltd')
       expect(afterBody.line_items, 'a header-only edit must not touch the stored lines (ids incl.)').toEqual(beforeLines)
     })
 

@@ -778,6 +778,16 @@ func (s *Store) ViolationSummary(ctx context.Context, importBatchID string) ([]R
 // mirrors Get/Create). Numeric inputs are bound as $N::text::numeric, same
 // rationale as Create.
 //
+// supplier_tin/supplier_name are ALWAYS overwritten with the invoice's
+// entity-derived values, discarding whatever the caller sent in
+// in.SupplierTIN/in.SupplierName (INVCR-01-18, C7 fix, mirroring Store.
+// Create's own [supplier-from-entity] override) -- see updateContentTx's
+// doc comment for the full mechanism. This guard's own all-nil check above
+// is UNCHANGED and still runs against the caller's raw in (a caller who
+// sends nothing at all is still rejected; one who sends ONLY a
+// since-discarded supplier_tin still legitimately passes it and triggers a
+// real write).
+//
 // A thin wrapper over updateContentTx (M4-05-02 extraction, [content-write-
 // extraction]): the guard/tx/audit shell stays HERE, byte-identical to before
 // the extraction; the SET-clause build/query/scan/error-map moved verbatim
@@ -830,6 +840,19 @@ func headerFieldsPresent(in UpdateInput) bool {
 		in.Subtotal != nil || in.VAT != nil || in.Total != nil
 }
 
+// strPtrEqual reports whether two possibly-nil *string values represent the
+// same content: both nil, or both non-nil with an identical dereferenced
+// value. Used by updateContentTx (INVCR-01-18) to decide whether the
+// entity-derived supplier_tin genuinely differs from what is already
+// stored, so the audit trail names a real correction without falsely
+// claiming one on every ordinary edit.
+func strPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
 // Store.Edit (M4-05-02 extraction from Store.Update): it builds the dynamic
 // SET clause over in's non-nil fields, runs the UPDATE ... RETURNING, and
@@ -839,7 +862,127 @@ func headerFieldsPresent(in UpdateInput) bool {
 // writes its own audit row under its own conditions (Update always; Edit
 // only when the DB-authoritative fingerprint says something really changed).
 // Assumes at least one field in in is non-nil.
+//
+// [supplier-from-entity-on-edit], INVCR-01-18 (C7 fix, edit path): BEFORE
+// building the SET clause, this function ALWAYS re-resolves the invoice's
+// entity -- a single JOIN read, RLS-scoped on BOTH sides exactly like every
+// other read in this package, no manual tenant_id predicate -- and
+// OVERWRITES in.SupplierTIN/in.SupplierName with
+// MBSSupplierTIN(entity.tin)/entity.name, mirroring Store.Create's own
+// [supplier-from-entity] override (INVCR-01-17). Because Store.Update and
+// Store.Edit BOTH funnel their content write through this one function, this
+// single change closes C7 on both -- "one owner", AC #1/#5 of task-303's
+// story, not a second copy of the derivation. It runs UNCONDITIONALLY
+// whenever updateContentTx runs at all (i.e. the caller sent >= 1 header
+// field), NOT gated on whether the caller's UpdateInput happened to include
+// SupplierTIN/SupplierName -- so a PATCH that never mentions supplier
+// identity still re-derives it from the entity's CURRENT name/tin. This is
+// exactly why AC #8's no-op trap is real and has two legitimate outcomes:
+// an invoice whose STORED supplier_tin already agrees with its entity
+// re-derives to the SAME value and Edit's existing DB-authoritative
+// fingerprint check (step 6, below in Store.Edit) correctly treats an
+// otherwise-identical resend as a true no-op
+// (TestStoreEdit_ValidatedNoOpStaysValidated, EDIT-04, left byte-unchanged
+// by this subtask); an invoice whose stored value DISAGREES -- e.g. one
+// created before this fix shipped -- genuinely changes fingerprint on its
+// first PATCH afterwards, and the SAME no-op check correctly demotes it
+// (TestStoreEdit_PreExistingWrongSupplierTINGenuinelyChangesAndDemotesOnFirstPatch,
+// supplier_tin_update_test.go). Both are correct: idempotence protects a
+// truly-unchanged edit, not a stale stored value the entity has since
+// disagreed with.
+//
+// buyer_tin/buyer_name are NOT touched by this override (scope fence, AC
+// #3/#7 of task-303, mirroring AC #4/#7 of task-293): the `if in.BuyerTIN
+// != nil` / `if in.BuyerName != nil` branches below are unchanged, so a
+// malformed buyer TIN still writes -- and still violates buyer-tin-format
+// -- exactly as before.
+//
+// The resolved supplier_tin/supplier_name are appended to setClauses/args
+// DIRECTLY, deliberately bypassing the set() helper below -- so a PATCH that
+// merely re-submits its own already-correct supplier fields is not, by
+// itself, enough to earn a "supplier_tin"/"supplier_name" audit-fields
+// entry. But this is NOT "never audited" (product-advisor review, 2026-07-31):
+// audit.Record's "invoice.updated" payload is fields-ONLY, no from/to
+// snapshot (map[string]any{"id":..., "fields": changedFields}, below in
+// Store.Update/Store.Edit) -- if the override were unconditionally excluded
+// from changedFields, a REAL silent correction of a compliance-relevant
+// field (a fiscal invoice's own supplier identity) would leave literally NO
+// trace in the audit trail naming what changed, which is a materially worse
+// gap than the alternative. So the widened query below ALSO reads the
+// invoice's CURRENTLY STORED supplier_tin/supplier_name (i.strPtrEqual
+// comparison against the freshly-derived value, immediately below) and adds
+// "supplier_tin"/"supplier_name" to changedFields precisely when the
+// derived value actually DIFFERS from what is already stored -- i.e.
+// exactly the cases that matter: a stale/wrong stored value (AC #8's
+// "genuine content change" half) is now named in the audit trail, not just
+// silently corrected, while the overwhelmingly common case (an
+// already-correct stored value, re-derived to the SAME value on every
+// ordinary PATCH) still resolves to "no entry", preserving the pre-existing
+// "fields lists what genuinely changed" contract several edit_test.go specs
+// pin byte-for-byte (e.g.
+// TestStoreEdit_LinesRemovedOutOfBandThenHeaderOnlyEditSucceeds's fields ==
+// ["vat"], TestStoreEdit_EmptyLineItemsRemovesAllLinesGuardWidened's fields
+// == ["line_items"]) -- those fixtures' entities never drift from what was
+// already stored, so the comparison is a no-op for them.
+// TestStoreUpdate_AuditFieldsOmitSupplierWhenUnchangedButNameItWhenCorrected
+// (supplier_tin_update_test.go) pins BOTH halves of this directly.
+//
+// A malformed (non-uuid) id or a since-deleted/cross-tenant-invisible
+// invoice both surface HERE first, before the UPDATE statement itself ever
+// runs: pgx.ErrNoRows (the JOIN matches no row) maps to ErrNotFound, 22P02
+// to ErrValidation -- the identical two outcomes Update/Edit already
+// produced via the UPDATE's own RETURNING clause (below), just detected one
+// query earlier. entity_id is NOT NULL and FK-enforced on invoices
+// (migrations/20260714103137_invoices.sql), and immutable after Create
+// (UpdateInput carries no EntityID field, [store-update-untouched]), so this
+// read cannot itself introduce a NEW cross-tenant vector (AC #7): a
+// legitimately-owned invoice's entity was already proven same-tenant at
+// Create time by the composite (tenant_id, entity_id) FK
+// (M4-06-03/INVCR-01-17's own pre-check), and a cross-tenant OR nonexistent
+// invoice id simply 0-rows here exactly as it always 0-rowed at the UPDATE
+// -- TestStoreCrossTenant_UpdateGetListRefused (store_test.go, INV-STORE-12,
+// left unmodified by this subtask) already covers that outcome. This same
+// JOIN also runs on Store's ONE pool (s.pool, the invoice_app role) every
+// other method here shares -- there is no second, more-restricted role that
+// can reach Store.Update/Store.Edit, so unlike a multi-role deployment,
+// there is no RLS-grant-parity gap where invoices are writable but
+// business_entities is not: Store.Create's own pre-existing, structurally
+// identical business_entities SELECT (INVCR-01-17) already proves this role
+// can read it, and this subtask's own specs (which observe a real non-nil
+// derived value, not a 0-row fallback) additionally prove it empirically.
+//
+// Store.Update itself carries NO status/editability guard (pre-existing,
+// [D9] -- "never touches status" -- unchanged by this subtask) and has NO
+// production caller today (grep-confirmed: only Store.Edit's own step 5 and
+// this package's tests call updateContentTx at all; cmd/invoice/main.go
+// wires PATCH /v1/invoices/{id} to Store.Edit, never Store.Update
+// directly). Store.Edit DOES guard -- canEdit(before.Status), step 3, run
+// BEFORE this function is ever reached -- so the wired PATCH path can never
+// hit this derivation on a queued/submitted/accepted/failed invoice, and
+// this override can never silently diverge from what an APP has already
+// received. A hypothetical FUTURE direct Store.Update caller with no such
+// guard would not inherit that protection; documented here as a residual,
+// not fixed, since there is no live code path to fix (product-advisor
+// review, 2026-07-31).
 func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) (Invoice, []string, error) {
+	var entityName string
+	var entityTIN *string
+	var storedSupplierTIN, storedSupplierName *string
+	if err := tx.QueryRow(ctx,
+		`SELECT be.name, be.tin, i.supplier_tin, i.supplier_name
+		 FROM invoices i JOIN business_entities be ON be.id = i.entity_id
+		 WHERE i.id = $1`, id,
+	).Scan(&entityName, &entityTIN, &storedSupplierTIN, &storedSupplierName); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, nil, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return Invoice{}, nil, ErrValidation
+		}
+		return Invoice{}, nil, err
+	}
+	derivedSupplierTIN := MBSSupplierTIN(entityTIN)
+
 	var setClauses []string
 	var args []any
 	var changedFields []string
@@ -855,12 +998,22 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 	if in.IssueDate != nil {
 		set("issue_date", text, *in.IssueDate)
 	}
-	if in.SupplierTIN != nil {
-		set("supplier_tin", text, *in.SupplierTIN)
+
+	// supplier_tin/supplier_name: ALWAYS written, derived from the entity
+	// resolved above -- see this function's own doc comment for the full
+	// rationale, incl. why they bypass set() yet are conditionally still
+	// named in changedFields when they actually changed.
+	args = append(args, derivedSupplierTIN)
+	setClauses = append(setClauses, fmt.Sprintf(text, "supplier_tin", len(args)))
+	args = append(args, entityName)
+	setClauses = append(setClauses, fmt.Sprintf(text, "supplier_name", len(args)))
+	if !strPtrEqual(storedSupplierTIN, derivedSupplierTIN) {
+		changedFields = append(changedFields, "supplier_tin")
 	}
-	if in.SupplierName != nil {
-		set("supplier_name", text, *in.SupplierName)
+	if storedSupplierName == nil || *storedSupplierName != entityName {
+		changedFields = append(changedFields, "supplier_name")
 	}
+
 	if in.BuyerTIN != nil {
 		set("buyer_tin", text, *in.BuyerTIN)
 	}

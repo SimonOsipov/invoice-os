@@ -310,7 +310,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // mirrored here purely for rendering — same discipline readAllColumns' local
   // `previewed` array already uses. `'idle'` both before a run starts and once
   // applyRoute has drained a finished run into `reviewBatchIds`/an opened invoice;
-  // `'finished'` survives ONLY across a `none` route (AC #9).
+  // `'failed'` (not `'finished'` — markRunFailed flips it) survives ONLY across a
+  // `none` route (AC #9).
   const [run, setRun] = useState<ImportRun>({ files: [], cursor: 0, status: 'idle' })
   const [importError, setImportError] = useState<ApiError | null>(null)
 

@@ -36,6 +36,7 @@
 // module stays DOM-free so it is node-testable with no jsdom.
 import {
   invoiceStatusStyle,
+  mbsPathToEditField,
   pruneSelection,
   selectableIds,
   skipReasonLabel,
@@ -805,12 +806,24 @@ export interface FixCard {
   hint: string | null
 }
 
+function fixHint(v: Pick<Violation, 'expected' | 'actual'>): string | null {
+  if (v.expected == null) return null
+  return v.actual != null ? `Expected ${v.expected} · got ${v.actual}` : `Expected ${v.expected}`
+}
+
 // `blocking` is `severity === 'error'` alone -- the SAME predicate verdictPill uses
 // (§10.12's trap), never `true` unconditionally: a warning-only violation still gets a
 // card (so the operator can review and, where mappable, fix it), just styled
 // non-blocking/advisory rather than suppressed.
-export function fixCard(_v: Violation): FixCard {
-  throw new Error('not implemented') // STUB -- task-290 Stage 4 implements
+export function fixCard(v: Violation): FixCard {
+  return {
+    ruleKey: v.rule_key,
+    severity: v.severity,
+    message: v.message,
+    blocking: v.severity === 'error',
+    field: mbsPathToEditField(v.path),
+    hint: fixHint(v),
+  }
 }
 
 // Field labels for the inline editor's own input, VERBATIM from InvoiceDetail.tsx's edit
@@ -818,7 +831,17 @@ export function fixCard(_v: Violation): FixCard {
 // whichever of the 19 rules happens to flag that field and is not the client rule-key map
 // D8 forbids. Kept here rather than duplicated per-card inline, per this file's own
 // [bulk-copy-lives-in-the-lib] convention (see the INVCR-01-11 section header above).
-export const EDIT_FIELD_LABELS = {} as Record<EditFieldKey, string> // STUB -- task-290 Stage 4 implements
+export const EDIT_FIELD_LABELS: Record<EditFieldKey, string> = {
+  issue_date: 'Issue date',
+  supplier_tin: 'Supplier TIN',
+  supplier_name: 'Supplier name',
+  buyer_tin: 'Buyer TIN',
+  buyer_name: 'Buyer name',
+  currency: 'Currency',
+  subtotal: 'Subtotal',
+  vat: 'VAT',
+  total: 'Total',
+}
 
 // §7.3's exact provenance/scope copy (AC-7), verbatim.
 export const ROW_EXPANSION_NOTE = 'Re-validating touches this invoice only — the rest of the import stays as it is.'
@@ -869,10 +892,24 @@ export interface RowExpansionView {
 // of its own; that discipline lives at the wire boundary (getInvoice, lib/invoices.ts)
 // and is not repeated here.
 export function rowExpansionView(
-  _invoice: { violations: Violation[]; rule_set_version: number | null | undefined },
-  _gate: { can_revalidate: boolean; revalidate_blocked_reason: string | null },
+  invoice: { violations: Violation[]; rule_set_version: number | null | undefined },
+  gate: { can_revalidate: boolean; revalidate_blocked_reason: string | null },
 ): RowExpansionView {
-  throw new Error('not implemented') // STUB -- task-290 Stage 4 implements
+  const passing = invoice.violations.length === 0
+  const blocking = invoice.violations.some((v) => v.severity === 'error')
+  return {
+    passing,
+    blocking,
+    // D1: the app supplies the name, the server supplies the number -- ruleSetLabel
+    // (defined above, INVCR-01-08) is the SAME function channelTiles/reviewHeader use,
+    // never a second copy or a hardcoded fallback.
+    summary: passing ? `Every rule in ${ruleSetLabel(invoice.rule_set_version)} passed.` : null,
+    sectionLabel: passing ? null : blocking ? ROW_EXPANSION_COPY.sectionLabel : ROW_EXPANSION_COPY.advisorySectionLabel,
+    cards: invoice.violations.map(fixCard),
+    revalidateDisabled: !gate.can_revalidate,
+    revalidateReason: gate.revalidate_blocked_reason,
+    note: ROW_EXPANSION_NOTE,
+  }
 }
 
 // The row editor's own patch builder -- mirrors InvoiceDetail.tsx's private
@@ -891,8 +928,21 @@ export function rowExpansionView(
 // "leave unchanged" ([D9]), so an explicit clear cannot be represented over this PATCH at
 // all, and sending "" would only surface a confusing decode failure.
 export function fixEditPatch(
-  _original: Pick<InvoiceRecord, EditFieldKey>,
-  _draft: Partial<Record<EditFieldKey, string>>,
+  original: Pick<InvoiceRecord, EditFieldKey>,
+  draft: Partial<Record<EditFieldKey, string>>,
 ): InvoiceEditInput {
-  throw new Error('not implemented') // STUB -- task-290 Stage 4 implements
+  const patch: InvoiceEditInput = {}
+  for (const key of Object.keys(draft) as EditFieldKey[]) {
+    const value = draft[key]
+    if (value === undefined) continue
+    if (value === (original[key] ?? '')) continue
+    if (key === 'issue_date') {
+      const trimmed = value.trim()
+      if (!trimmed) continue
+      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T00:00:00Z` : trimmed
+      continue
+    }
+    patch[key] = value
+  }
+  return patch
 }

@@ -73,10 +73,8 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 
 import { ErrorState, Loading, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 
-import { chevDownGlyph, searchGlyph } from '../glyphs'
-import { fmt, fmtDate } from '../lib/format'
+import { searchGlyph } from '../glyphs'
 import {
-  isRowSelectable,
   listInvoices,
   newIdempotencyKey,
   pruneSelection,
@@ -86,7 +84,6 @@ import {
   toggleSelection,
   violationSummary,
   type InvoiceListResponse,
-  type InvoiceRecord,
   // From lib/invoices, NOT lib/dashboard — that module exports an identically-shaped
   // `RuleCount` of its own, so the wrong import compiles and is silently wrong.
   type RuleCount,
@@ -103,19 +100,15 @@ import {
   reviewFilterReducer,
   reviewPageQuery,
   reviewPills,
-  verdictPill,
   type BulkPhase,
   type SubmitResultRow,
 } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
-
-// Decision 19's grid, minus the 40px `Ln` track (see the file header):
-// select-all · Invoice # (mono) · Buyer · Issue date · Total · Verdict · chevron.
-// At 1280×720 the fixed tracks sum to 500px and the six 9px gaps to 54px, leaving the
-// `1fr` buyer column ~349px inside this screen's 903px track box — far above its 120px
-// floor, with no max-width wrapper anywhere in the chain.
-const REVIEW_GRID_COLUMNS = '26px 122px minmax(120px,1fr) 92px 114px 124px 22px'
-const REVIEW_GRID_GAP = 9
+// The row + its row-expansion fix editor (INVCR-01-14). REVIEW_GRID_COLUMNS/GAP are
+// owned there now (not duplicated here): the row and this table's own head row must
+// never disagree about the grid, and a single export is what makes that structural
+// rather than remembered.
+import { REVIEW_GRID_COLUMNS, REVIEW_GRID_GAP, Row } from './ReviewRow'
 
 // The repo's first debounce. 300ms is short enough that the committed value lands
 // before the user looks up, long enough that a 12-character buyer name is one request
@@ -206,6 +199,12 @@ export function ReviewInvoicesTab({
   const rows = useMemo(() => shown?.invoices ?? [], [shown])
 
   const [selected, setSelected] = useState<string[]>([])
+  // Row expansion (INVCR-01-14) — AT MOST ONE row expanded at a time, so the panel's own
+  // getInvoice fetch is never more than one in flight. Local state, like `selected`: the
+  // tab-switch unmount already resets it along with everything else in this component
+  // (task-287 QA Stage 4's cross-referenced finding, this subtask's own Implementation
+  // Notes), so there is no persistence to build.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   // The bulk-submit machine. `useState`, not `useReducer`: the contract is
   // `const next = bulkPhaseReducer(phase, a); if (next === phase) return` — identity has
   // to be able to stop the REQUEST, and useReducer's identity return only suppresses a
@@ -674,10 +673,24 @@ export function ReviewInvoicesTab({
                   key={r.id}
                   r={r}
                   checked={selected.includes(r.id)}
-                  onOpen={() => ctx.openImportedInvoice(r.id)}
+                  expanded={expandedId === r.id}
+                  // Toggling the SAME row collapses it; expanding a different row moves
+                  // the single expansion slot rather than stacking a second one open.
+                  onToggleExpand={() => setExpandedId((id) => (id === r.id ? null : r.id))}
                   onToggle={() => {
                     setSelected((sel) => toggleSelection(sel, r.id))
                     disarm()
+                  }}
+                  ctx={ctx}
+                  base={base}
+                  // A successful Save or Re-validate moved this invoice's server-side
+                  // state — refetch THIS page (moves the row's own verdict pill) and the
+                  // shell's four count queries (moves the pills/tiles/tab label/footer),
+                  // the identical pair the bulk-submit path already fires for the same
+                  // reason.
+                  onChanged={() => {
+                    page.run()
+                    onSubmitted()
                   }}
                 />
               ))
@@ -713,91 +726,6 @@ export function ReviewInvoicesTab({
           </div>
         </>
       )}
-    </div>
-  )
-}
-
-// One invoice row. A LOCAL sub-component, not a ReviewRow.tsx: it has exactly one call
-// site and lifting it into its own module would buy nothing but an import.
-function Row({
-  r,
-  checked,
-  onOpen,
-  onToggle,
-}: {
-  r: InvoiceRecord
-  checked: boolean
-  onOpen: () => void
-  onToggle: () => void
-}) {
-  // `kept_as_is_at` is deliberately NOT passed: it is not on InvoiceRecord, subtask 15
-  // owns putting it on the wire, and typing it as present now would repeat the shipped
-  // `rule_set_version` trap (typed `number | null`, reads `undefined` on list rows —
-  // which is also why no rule-set version is rendered per row here).
-  const verdict = verdictPill({ status: r.status, violations: r.violations })
-  const badge = verdict.badges[0]
-
-  // Click-only row, matching the shipped InvoicesList.tsx precedent. Keyboard activation
-  // (role/tabIndex/onKeyDown) for BOTH row surfaces is task-302 — no AC here covers it,
-  // and a fake `<a href>` is not an option: this SPA has no router.
-  return (
-    <div
-      onClick={onOpen}
-      data-testid="review-row"
-      className="pf-row pf-list-row"
-      style={{ display: 'grid', gridTemplateColumns: REVIEW_GRID_COLUMNS, gap: REVIEW_GRID_GAP, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
-    >
-      <input
-        type="checkbox"
-        data-testid="review-select"
-        aria-label={`Select invoice ${r.invoice_number}`}
-        checked={checked}
-        disabled={!isRowSelectable(r.status)}
-        // BOTH handlers stop propagation — the row's own onClick is whole-row navigation
-        // and must never fire from a checkbox interaction.
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => {
-          e.stopPropagation()
-          onToggle()
-        }}
-      />
-      <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
-      {/* Buyer name + TIN, InvoicesList.tsx:419-422's treatment verbatim: this is the
-          compliance review surface and `buyer-tin-format` is a live rule, so a missing
-          TIN is the single most useful thing this column can shout about. */}
-      <span style={{ minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name ?? '—'}</span>
-        <span className="mono" style={{ fontSize: 11, color: r.buyer_tin ? 'var(--fg-3)' : 'var(--status-red-text)' }}>{r.buyer_tin ?? 'TIN MISSING'}</span>
-      </span>
-      {/* NO `?? created_at` fallback, unlike InvoicesList.tsx:424 — that column is
-          labelled "Date"; this one says "Issue date", and labelling a creation timestamp
-          as the issue date is a small lie on a compliance screen. */}
-      <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.issue_date != null ? fmtDate(r.issue_date) : '—'}</span>
-      <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
-      {/* The status badge is InvoicesList.tsx:425-433's markup verbatim, driven entirely
-          by verdictPill(...).status — no colour and no label is authored here. The
-          derived badge stacks BENEATH rather than beside it: 124px cannot hold both. */}
-      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
-        <span
-          data-testid="review-verdict"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: verdict.status.bg, border: `1px solid ${verdict.status.border}`, borderRadius: 999, padding: '3px 9px' }}
-        >
-          <span style={{ width: 6, height: 6, borderRadius: 99, background: verdict.status.text }} />
-          <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: verdict.status.text, letterSpacing: '0.04em' }}>{verdict.status.label}</span>
-        </span>
-        {badge != null && (
-          <span
-            className="mono"
-            style={{ display: 'inline-flex', alignItems: 'center', background: badge.tone.bg, border: `1px solid ${badge.tone.border}`, borderRadius: 999, padding: '2px 8px', fontSize: 9.5, fontWeight: 600, color: badge.tone.text, letterSpacing: '0.04em' }}
-          >
-            {badge.label}
-          </span>
-        )}
-      </span>
-      {/* An INDICATOR for the whole-row navigation above, not a control: no pointer
-          events, hidden from assistive tech. Subtask 14 replaces it with the interactive
-          row-disclosure and owns resolving navigate-vs-expand. */}
-      <span aria-hidden style={{ display: 'inline-flex', color: 'var(--fg-4)', pointerEvents: 'none', transform: 'rotate(-90deg)' }}>{chevDownGlyph}</span>
     </div>
   )
 }

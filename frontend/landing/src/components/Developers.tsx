@@ -95,7 +95,7 @@ export function Developers() {
             {',\n  '}
             <span style={{ color: 'var(--teal-300)' }}>"errors"</span>
             {': [],\n  '}
-            <span style={{ color: 'var(--teal-300)' }}>"firs_reference"</span>
+            <span style={{ color: 'var(--teal-300)' }}>"nrs_reference"</span>
             {': '}
             <span style={{ color: 'var(--accent)' }}>"CSID-pending"</span>
             {'\n}'}

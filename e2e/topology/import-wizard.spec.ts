@@ -46,9 +46,10 @@
 // own earlier attempt's fixed invoice numbers -- no-duplicate-invoice-number is scoped
 // per entity
 // (internal/importer/service.go's msgDuplicateInvoiceNumber). The one exception is
-// E2E-05/E2E-09 below, which the Implementation Plan requires share ONE page/session
-// (the F6 hijack this guards against is session-scoped) -- both live in a single
-// test with two labelled assertion blocks rather than two tests.
+// E2E-04/E2E-09 below, which share ONE page/session (the F6 hijack E2E-09 guards
+// against is session-scoped) -- both live in a single test with labelled assertion
+// blocks rather than two tests. E2E-05 was the third block in that test until
+// INVCR-01-09 deleted it with the report row it clicked; see the deletion site.
 //
 // No production code changes at authoring time, and no data-testid -- every selector
 // below was role/exact-text, matching the convention every existing spec in this
@@ -62,13 +63,14 @@ import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
-import { buildMixedCsv, buildPerfCsv, PERF_HEADER, statValue } from '../importFixtures'
+import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
 
 // MixedImportResponse: the subset of POST /v1/imports's success body (internal/
-// importer/handlers.go's importResponse) E2E-05 reads to get a REAL invoice UUID to
-// click through with, independent of the DOM. invoice_id is optional on the wire
-// (absent on dry-run; this is a real import, so it is always populated here --
-// perf.spec.ts's own proven recipe, re-verified against
+// importer/handlers.go's importResponse) E2E-04 reads to assert that a REAL import
+// populates a REAL invoice UUID, independent of the DOM -- the wire-level fact that
+// makes subtask 10's row click-through and 16's N=1 route implementable. invoice_id is
+// optional on the wire (absent on dry-run; this is a real import, so it is always
+// populated here -- perf.spec.ts's own proven recipe, re-verified against
 // internal/importer/service.go:951).
 interface MixedImportResponse {
   invoice_violations: {
@@ -200,6 +202,32 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // 240s timeout at this line was exactly this). The trailing `*` comes from a
   // separate <span> for `required`, so a substring match also sidesteps any
   // accessible-name concatenation question.
+  // INVCR-01-05 arm-on-click oracle (AC-14), hosted here because this is the exact
+  // state it needs -- Map step, invoice_number unplaced -- and this is the only harness
+  // that can reach it at all: the behaviour is a closure inside App.tsx's continueMapping
+  // and this frontend's unit suite is node-only with no jsdom.
+  //
+  // The continue control is NOT disabled in this state (only the no-entity case is), it
+  // just used to do nothing at all when clicked. It now ARMS invoice_number. TWICE is the
+  // whole point: continueMapping must SET the armed field, not toggle it -- routing it
+  // through ctx.armField (which IS a toggle: `a === k ? null : k`) would dis-arm on the
+  // second click and reproduce the identical do-nothing click the fix deletes. Only the
+  // second assertion can catch that; the first passes either way.
+  const continueBtn = page.getByRole('button', { name: 'Map invoice number to continue' })
+  const armedNote = page.getByText('invoice_number is armed', { exact: false })
+  await continueBtn.click()
+  await expect(armedNote, 'first click arms invoice_number instead of swallowing the click').toBeVisible()
+  await continueBtn.click()
+  await expect(armedNote, 'second click must LEAVE it armed -- a toggle here would dis-arm').toBeVisible()
+
+  // Disarm before the click-to-place sequence below, restoring the exact precondition it
+  // has always assumed (nothing armed). The chip click at the next line goes through
+  // ctx.armField, which toggles -- from an already-armed state it would clear the field
+  // and the column click after it would then assign nothing. This click doubles as proof
+  // that armField itself is still a toggle, and is the reason continueMapping cannot be.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await expect(armedNote, 'the chip click toggles the same field back off').toHaveCount(0)
+
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
 
@@ -214,21 +242,54 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   await importBtn.click()
 
   // E2E-06 (redesigned per D5, FLOW-06's non-bar half): an honest in-flight
-  // indicator appears, and no invented PARSE_LABELS stage list renders on the
-  // import path. Deliberately does NOT assert the determinate bar -- §7 point 1:
+  // indicator appears. Deliberately does NOT assert the determinate bar -- §7 point 1:
   // App.tsx seeds uploadPhase total:0, which uploadPercent maps to null (the
   // indeterminate spinner), and IMPAPI-08 makes zero progress events legal, so a
   // real N% bar is not deterministically observable on a live run. Hosted on this
   // 500-invoice test specifically because the window between click and response is
   // seconds here (milliseconds on the small mixed fixture below, which is why that
   // test does not also assert this).
-  await expect(page.getByText('Working…', { exact: true })).toBeVisible({ timeout: 60_000 })
-  await expect(page.getByText('Scanning line rows', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Detecting delimiter & encoding', { exact: true })).toHaveCount(0)
+  //
+  // Repointed by INVCR-01-05: 'Working…' no longer exists anywhere. The footer spinner
+  // it named was deleted along with its determinate-bar sibling, replaced by the
+  // ImportProgress card that body-swaps this whole step.
+  //
+  // An earlier note here promised that INVCR-01-05 would "introduce the honest
+  // server-stage list and own asserting it positively". It deliberately does the
+  // opposite, and there is nothing left to assert positively, because there is no
+  // honest stage list to build:
+  //   - Nothing can drive one. POST /v1/imports is synchronous with no job to poll (no
+  //     GET/status route on the service, no Flusher or text/event-stream in
+  //     internal/importer, no EventSource/ReadableStream in the app). importApi.ts's own
+  //     progress contract already says everything after upload.onload is unobservable,
+  //     "so any stage label there would be invented".
+  //   - A STATIC list would misdescribe the server anyway: internal/importer/service.go
+  //     stores rows BEFORE it validates them, and it has a classify/quarantine step -- the
+  //     one that produces the whole structural-error channel this very test asserts on
+  //     later -- that no plausible four-item list includes.
+  // So the card claims nothing it cannot know. What it DOES render is asserted here.
+  //
+  // The title is the phase-stable anchor (both 'sending' and 'processing' show it); the
+  // phase word is asserted as either side of the single transition the transport really
+  // observes, since which one is on screen at any instant is a race with the network.
+  await expect(page.getByText('Importing ui-perf.csv', { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(/^(SENDING FILE|SERVER PROCESSING)$/)).toBeVisible()
+
+  // The honest denominator, and the proof it is a denominator rather than a counter:
+  // it is the server's OWN preview count of this fixture (500 invoices x 3 line-item
+  // rows, 11 header columns), rendered whole and unchanging. There is no numerator to
+  // pair it with -- UploadPhase carries bytes, never rows -- so a progress-shaped
+  // "N OF 1500" appearing here later would be invented, and this exact-text assertion
+  // is what would fail if someone added one.
+  await expect(page.getByText('1500 ROWS · 11 COLS', { exact: true })).toBeVisible()
 
   await importResp
   const wireMs = Date.now() - importT0
-  await expect(page.getByText('Ready invoices', { exact: true })).toBeVisible({ timeout: 60_000 })
+  // Re-anchored by INVCR-01-09: the `Stat` tile grid this used to wait on
+  // ('Ready invoices') is gone with CreateReport.tsx. The review shell's title is the
+  // equivalent arrival signal -- it renders only once all FIVE of its requests resolve
+  // (four since INVCR-01-10 added the `queued` pill count to the shell's Promise.all).
+  await expect(page.getByRole('heading', { name: '500 invoices imported' })).toBeVisible({ timeout: 60_000 })
   const renderedMs = Date.now() - importT0
 
   // Evidence base for a future xhr.timeout decision (§5) -- assert NOTHING about
@@ -237,16 +298,31 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   console.log(`IMP-UI-PERF (deployed): 500 inv / 1500 rows -- preview ${previewMs}ms, import wire ${wireMs}ms, report rendered ${renderedMs}ms`)
   testInfo.annotations.push({ type: 'imp-ui-perf', description: `preview=${previewMs}ms wire=${wireMs}ms rendered=${renderedMs}ms` })
 
-  // E2E-01 (Core AC7), restated per D2 -- there is no standalone rows_total tile; it
-  // appears only inside "Rows valid" as `${rows_valid} / ${rows_total}`.
-  await expect(statValue(page, 'Rows valid')).toHaveText('1500 / 1500')
-  await expect(statValue(page, 'Ready invoices')).toHaveText('500')
-  await expect(statValue(page, 'Quarantined')).toHaveText('0')
+  // E2E-01 (Core AC7), REWRITTEN for the review shell (INVCR-01-09). All three facts
+  // this asserted survive the deletion of CreateReport's `Stat` grid, in new shapes and
+  // from new sources -- so the assertion moves rather than being dropped:
+  //   - rows_total    -> the header sub-line's `1500 ROWS READ` (off the batch GET).
+  //   - ready count   -> the title's `500 invoices imported`, which is now the LIVE
+  //                      pagination.total of the batch's invoices, not the 201 body's
+  //                      frozen `ready_invoices` -- a stronger fact, since it proves the
+  //                      rows are queryable in the ledger and not merely counted.
+  //   - quarantined   -> the amber "Not imported" channel's own tile.
+  // `statValue()` (e2e/importFixtures.ts) was deleted with these three call sites: it
+  // located a CreateReport `Stat`'s value by an xpath sibling step off a `.label` div,
+  // a two-child shape that no longer exists anywhere, and it had no other consumer.
+  await expect(page.getByText('1500 ROWS READ', { exact: false })).toBeVisible()
+  await expect(page.getByText('0 unreadable rows', { exact: true })).toBeVisible()
+  // Positive companion for the tile above: the channel's zero-state copy, which proves
+  // the tile is rendering the AT-ZERO branch rather than an amber tile that happens to
+  // read 0 -- the channel must stay visible (dashed, greyed) rather than disappear.
+  await expect(page.getByText('Every row in the file became part of an invoice.', { exact: true })).toBeVisible()
+  // The second tab is OMITTED from the DOM at zero unreadable rows, never merely hidden.
+  await expect(page.getByRole('button', { name: /^Unreadable rows \(/ })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-exclusive]/F6): mixed fixture renders two distinct report sections; the violation row opens the real invoice id; a normal invoice afterwards renders the real detail view', async ({
+test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -295,64 +371,100 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   const resp = await importResp
   const body = (await resp.json()) as MixedImportResponse
 
-  // E2E-04 + RPT-09: both channels render as two DISTINCT sections, proven by
-  // TEXT-OFFSET ORDERING (§4) -- section titles are plain <div>s with no heading
-  // role, no testid and no count, so containment cannot be asserted by role. This
-  // genuinely falsifies a merged, reordered, or single-section rendering.
-  await expect(page.getByText('Rule violations', { exact: true })).toBeVisible()
-  const reportText = await page.locator('main').innerText()
-  const iStructTitle = reportText.indexOf('Structural row errors')
-  const iStructMsg = reportText.indexOf('rows disagree on issue_date')
-  const iViolTitle = reportText.indexOf('Rule violations')
-  const iViolKey = reportText.indexOf('vat-standard-rate')
-  expect(iStructTitle, 'Structural row errors section missing').toBeGreaterThanOrEqual(0)
-  expect(iStructMsg, 'structural error message ("rows disagree on issue_date") missing').toBeGreaterThanOrEqual(0)
-  expect(iViolTitle, 'Rule violations section missing').toBeGreaterThanOrEqual(0)
-  expect(iViolKey, 'vat-standard-rate violation missing').toBeGreaterThanOrEqual(0)
-  expect(iStructTitle, 'the structural section must render before its own message').toBeLessThan(iStructMsg)
-  expect(iStructMsg, 'the structural section must render entirely before the violations section').toBeLessThan(iViolTitle)
-  expect(iViolTitle, 'the violations section must render before its own rule key').toBeLessThan(iViolKey)
+  // E2E-04, REWRITTEN for the review shell (INVCR-01-09). The old assertion proved the
+  // two channels were two DISTINCT SECTIONS by text-offset ordering, because
+  // CreateReport stacked them as untitled <div>s on one screen. They are now two TABS,
+  // which affords a strictly stronger claim than ordering: the structural message must
+  // be reachable ONLY through the Unreadable rows tab, i.e. the channels are separated
+  // by NAVIGATION and not merely by vertical position. A merged rendering fails the
+  // first leg; a mislabelled one fails the second.
+  //
+  // The CONTENT half of the old assertion (`vat-standard-rate` under "Rule violations")
+  // still has no home HERE. INVCR-01-10 has since built the Invoices tab -- the table
+  // with its per-row verdicts, the batch-wide failing-rules rail (where a
+  // `vat-standard-rate` pill now genuinely renders) and the pager -- but none of it runs
+  // on this branch until the PR leaves draft, and asserting a rail pill from inside
+  // E2E-04, whose whole subject is the two channels being separated by NAVIGATION, would
+  // blur two claims into one spec. Subtask 16 owns asserting the tab's content on the
+  // deployed run.
+  const structuralMsg = 'rows disagree on issue_date'
+  await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
+  const unreadableTab = page.getByRole('button', { name: /^Unreadable rows \(\d+\)$/ })
+  await expect(unreadableTab, 'the Unreadable rows tab must render for a fixture with a structural failure').toBeVisible()
 
-  // The clean invoice is a provable SUBSET witness: it must appear in NEITHER
-  // section, proving "Rule violations" is not just echoing the whole report.
+  // Leg 1: the structural channel is NOT on the default tab.
+  await expect(page.getByText(structuralMsg)).toHaveCount(0)
+
+  // Leg 2: it is on the other one, verbatim -- the browser never re-authors the
+  // server's own reason string. TWO matches, not one, and that is the fixture's own
+  // doc comment (importFixtures.ts, buildMixedCsv): INV-UI-MIX-STRUCT is two rows that
+  // both disagree on issue_date, so the "Why it could not be read" table renders the
+  // identical reason once per row (row 2 and row 3) -- a bare `getByText` would throw a
+  // strict-mode violation on the legitimate second match rather than proving anything
+  // about the message being re-authored.
+  await unreadableTab.click()
+  await expect(page.getByText(structuralMsg)).toHaveCount(2)
+
+  // §7.1's amber "Not imported" channel renders its own NON-ZERO count off the batch's
+  // structural errors, independent of the tab body -- the tile, the tab and the footer
+  // all read the same expansion count, so a disagreement between them is falsifiable.
+  await expect(page.getByText(/^[1-9]\d* unreadable rows$/)).toBeVisible()
+
+  // The clean invoice is a provable SUBSET witness, RE-HOMED (INVCR-01-09) rather than
+  // rescoped. Asserted HERE, deliberately after the click above and never before it: the
+  // claim is now "a readable invoice never enters the STRUCTURAL channel", i.e. it is
+  // absent while the Unreadable rows tab is the open one -- and only one tab body is
+  // mounted at a time, so this is a claim about that tab, not about the page.
+  //
+  // The old version made the same call before any tab existed, where it passed only
+  // because 09 lists no invoices anywhere. Subtask 10 puts this very invoice on screen
+  // legitimately, under the OTHER tab, at which point the old placement would have gone
+  // red for a correct implementation and the obvious "fix" (deleting it) would have lost
+  // the invariant. This placement survives 10 unchanged.
   await expect(page.getByText('INV-UI-MIX-CLEAN')).toHaveCount(0)
 
-  // E2E-05: click the violation row and land on the LIVE detail (M4-09-05) for the
-  // REAL invoice id -- read from the import response body, independent of the DOM.
-  // [click-through-honest-placeholder]'s inert M4-08 placeholder is GONE
-  // (InvoiceDetail.tsx's `target.kind === 'imported'` branch now mounts
-  // LiveInvoiceDetail instead); the early-branch ordering that decision guarded
-  // still applies to whichever component sits behind it.
+  // E2E-05 is DELETED here, not rescoped. Its subject was the click-through from a
+  // rule-violation row in the import report to the live InvoiceDetail, and the review
+  // shell has no such row: the content channel moved off the frozen 201 payload onto
+  // live per-invoice verdicts (D4), and 09 rendered no table for them. Two owners, both
+  // downstream on this branch:
+  //   - subtask 10 owned the invoices-table row's disclosure, but NOT as a
+  //     click-through: task-290 ([navigate-vs-expand]) built a whole-row click as the
+  //     row-EXPANSION toggle (§7.3's fix loop) instead, never a navigation to
+  //     InvoiceDetail -- ctx.openImportedInvoice stays wired everywhere else
+  //     (InvoicesList.tsx, the N=1 route below) but is no longer what a review-row click
+  //     does. Proven on the deployed run by subtask 16's own INVCR-E2E-1 (the row-switch
+  //     expand/fix/re-validate loop) above.
+  //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice/detailTarget
+  //     seam this exercised (import a one-invoice file -> land on the real InvoiceDetail,
+  //     never the review shell), which is the highest-value uncovered path in 09 --
+  //     INVCR-E2E-2 above.
+  // Deleting rather than leaving a weakened version is deliberate: a spec that asserts
+  // less than its name claims is worse than an absent one.
+  //
+  // What is NOT deleted is the fact the import response carries a real invoice id at
+  // all -- that is a wire-level claim, independent of any DOM affordance, and it is what
+  // makes subtask 10's and 16's click-throughs implementable.
   const violateEntry = body.invoice_violations.find((iv) => iv.invoice_number === 'INV-UI-MIX-VIOLATE')
   expect(
     violateEntry,
     'expected an invoice_violations entry for INV-UI-MIX-VIOLATE -- if this fails, check whether vat-standard-rate was disabled by an out-of-order suite run (api -> topology -> demo)',
   ).toBeTruthy()
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
-  const violateId = violateEntry!.invoice_id
-  expect(violateId, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
+  expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
 
-  // Proves the click targets the REAL invoice id, not a client-side guess -- a
-  // network-level replacement for the retired placeholder's raw-UUID text render:
-  // the live detail's own GET request carries violateId in its path.
-  const detailResp = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${violateId}`),
-  )
-  await page.getByText('INV-UI-MIX-VIOLATE', { exact: true }).click()
-  await detailResp
-
-  await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
-  await expect(page.getByTestId('violations-table')).toContainText('vat-standard-rate')
-
-  // E2E-09 (the F6 regression guard, [detail-target-exclusive]): click back through
-  // to Invoices and open a DIFFERENT invoice -- the live detail must refresh to
-  // THAT invoice's own content, not keep rendering INV-UI-MIX-VIOLATE's. Proves
-  // importedInvoiceId tracks the LATEST clicked row rather than hijacking the
-  // detail view for the rest of the session. "Audit trail" was the retired mock
-  // detail's panel title; M4-09-05's live detail names the equivalent panel
-  // "Status history" instead, so its absence here is also proof this is the live
-  // surface, never the old mock fallback.
+  // E2E-09 (the F6 regression guard, [detail-target-exclusive]): leave the review
+  // screen for Invoices and open one of this batch's invoices -- the live detail must
+  // render THAT invoice's own content. "Audit trail" was the retired mock detail's
+  // panel title; M4-09-05's live detail names the equivalent panel "Status history"
+  // instead, so its absence here is also proof this is the live surface, never the old
+  // mock fallback.
+  //
+  // The exit is "Finish · go to invoices" (INVCR-01-09), not the detail view's
+  // "← All invoices": with E2E-05 deleted this test never leaves the review shell, so
+  // there is no detail view to come back from. Finish is NAVIGATION ONLY -- the
+  // invoices were persisted at import time -- and this click is also the only coverage
+  // that the review screen has a working exit at all.
   //
   // [entity-id-restored] regression fix: Invoices is entity-scoped now (server-side,
   // via listInvoices' own `entity_id` param), and `selectEntity` above made `entity`
@@ -366,7 +478,7 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   // filter-after-paginate regression this fix closes (the scoped list would render
   // EMPTY whenever the default entity's own invoices fell outside the newest-50
   // tenant-wide window, timing out this very click).
-  await page.getByRole('button', { name: '← All invoices' }).click()
+  await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
   await page.getByTestId('invoices-list').getByText('INV-UI-MIX-CLEAN', { exact: true }).click()
 
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
@@ -378,87 +490,90 @@ test('E2E-04/05/09 (RPT-09, [click-through-honest-placeholder], [detail-target-e
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('E2E-10/E2E-08 (FLOW-07, [scanline-stays-on-doc-path]/F4): the wizard header flips between the 3-step import path and the 5-step document path, and the single-document PDF path still runs unchanged', async ({
+// E2E-10 (FLOW-07, [wizard-steps-split], INVCR-01-04/task-280): the header path
+// resolver, re-anchored again. `Build`/`Validate`/`Approve`/`Report` are retired by
+// this subtask -- the typed path is now the 2-item `Enter · Review` strip and the
+// import path is `Import · Map · Review`, sharing the `Review` label between them.
+// The sample-PDF click that used to flip the strip is deleted with the mock, so
+// manual entry ('Skip — enter manually' -> skipUpload -> createStep 'form') is still
+// the only way to reach a DOCUMENT_ONLY_STEP. No SANDBOX toggle: with the document
+// card gone, LIVE and SANDBOX render an identical first step.
+//
+// A label-presence check alone cannot prove STAGE_OF.form === 0: with a 2-item
+// strip, stageIndex 0 and stageIndex 2 (the retired 5-item index) render the SAME
+// two labels -- only the highlight differs. So this also asserts computed `color`,
+// token-agnostic (`--fg-1` vs `--fg-3`, verified genuinely distinct:
+// oklch(16% .03 210) vs oklch(45% .02 210)) rather than a class or token name.
+// Verified no exact-text collision for Import/Map/Review/Enter anywhere else on this
+// screen: CreateUpload's card title is 'Import invoices · X', CreateMapping's are
+// 'Map fields to columns · X' / 'Import N rows' / 'Map invoice number to continue' --
+// none is an exact match for the bare word -- and ConnectorDetail.tsx's own 'Review'
+// is a different, unmounted view.
+//
+// E2E-08 is deliberately NOT replaced -- its subject (the sample-PDF parse -> form ->
+// validate -> results run) is deleted by an earlier subtask, so nothing is left to guard.
+test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-step import path on entry and the 2-step typed path once manual entry is chosen', async ({
   page,
 }) => {
   const errors = collectErrors(page)
 
   await signInFirm(page)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
 
-  // [import-upload-unify] the document-preview card (sample PDF/JPG parse) is now
-  // sandbox-gated -- switch environments once, up front. It stays on for the rest
-  // of this test: ctx.sandbox lives on Workspace state, untouched by openCreate()
-  // (the "New invoice" CTA re-clicked at line ~396 below).
-  await page.getByRole('button', { name: 'SANDBOX' }).click()
+  // Leg 1 -- createStep 'upload' is NOT in DOCUMENT_ONLY_STEPS, so IMPORT_STEPS
+  // (Import/Map/Review) renders; the typed-path-only 'Enter' label is absent.
+  await expect(page.getByText('Import', { exact: true }), '3-step IMPORT_STEPS strip expected on entry').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('Map', { exact: true })).toBeVisible()
+  await expect(page.getByText('Review', { exact: true })).toBeVisible()
+  await expect(page.getByText('Enter', { exact: true })).toHaveCount(0)
 
-  const newInvoiceBtn = page.locator('header').getByRole('button', { name: 'New invoice' })
-  await newInvoiceBtn.click()
+  const colorOf = (t: string) => page.getByText(t, { exact: true }).evaluate((el) => getComputedStyle(el).color)
 
-  // E2E-10 (discharges J1's deferred layout half; confirming oracle for FLOW-07).
-  // Bare 'upload' step with nothing chosen renders the 3-step IMPORT_STEPS strip
-  // (Import/Map/Report) -- the header's path resolver (wizardHeader) is unaffected
-  // by sandbox; only the sample file's clickability needed the toggle above.
-  await expect(page.getByText('Report', { exact: true }), '3-step IMPORT_STEPS strip expected with nothing chosen').toBeVisible()
-  await expect(page.getByText('Build', { exact: true })).toHaveCount(0)
+  // Positive companion: exactly one of the three is lit, at index 0 -- proves the
+  // color-comparison technique itself discriminates before leg 2's assertion relies
+  // on it. Map (idx 1) and Review (idx 2) are both un-lit, so their colors match;
+  // Import (idx 0, current) differs from both.
+  expect(await colorOf('Import')).not.toBe(await colorOf('Map'))
+  expect(await colorOf('Map')).toBe(await colorOf('Review'))
 
-  // Selecting the PDF sample flips to the 5-step WIZARD_STEPS strip
-  // (Import/Map/Build/Validate/Approve).
-  await page.getByText('lagos-freight-INV-0482.pdf', { exact: true }).click()
-  await expect(page.getByText('Build', { exact: true }), '5-step WIZARD_STEPS strip expected once a sample file is picked').toBeVisible()
-  await expect(page.getByText('Report', { exact: true })).toHaveCount(0)
+  // Leg 2 -- 'form' IS in DOCUMENT_ONLY_STEPS, so wizardHeader must return
+  // WIZARD_STEPS (Enter/Review) at STAGE_OF.form === 0, and the import-only
+  // 'Import'/'Map' labels must disappear.
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByText('Enter', { exact: true }), '2-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
+  await expect(page.getByText('Review', { exact: true })).toBeVisible()
+  await expect(page.getByText('Import', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Map', { exact: true })).toHaveCount(0)
 
-  // Also choosing a spreadsheet file flips back to the 3-step strip -- a chosen
-  // import file always wins over a stale sample selection (wizardHeader's FLOW-13
-  // tie-break, lib/importFlow.ts).
-  await page
-    .locator('input[type="file"][accept=".csv,.xlsx"]')
-    .setInputFiles({ name: 'e2e10.csv', mimeType: 'text/csv', buffer: Buffer.from('Invoice No,Issue Date\nX,2026-01-01', 'utf8') })
-  await expect(page.getByText('Report', { exact: true }), 'a chosen import file must win the strip back to 3 steps').toBeVisible()
-  await expect(page.getByText('Build', { exact: true })).toHaveCount(0)
+  // The label pair alone is indistinguishable from a regressed stageIndex 2: with
+  // only two entries (indices 0/1), index 2 matches neither, so BOTH labels would
+  // fall to the same muted --fg-3 and this comparison would be equal -- only the
+  // correct stageIndex 0 lights Enter and leaves Review muted, producing a genuine
+  // color inequality.
+  expect(await colorOf('Enter'), 'STAGE_OF.form must be 0').not.toBe(await colorOf('Review'))
 
-  // Reset to a clean wizard before driving E2E-08 -- the header's "New invoice" CTA
-  // (openCreate) unconditionally clears uploadFile/importFile/mapping/etc, so the
-  // probe above's stray spreadsheet selection cannot leak into the document path
-  // below (D7: no file upload is involved in the document path at all).
-  await newInvoiceBtn.click()
-
-  // E2E-08 ([scanline-stays-on-doc-path] / F4 regression guard): the fenced
-  // single-document path (now a sandbox-only preview, [import-upload-unify]) must
-  // still run byte-for-byte the same upload -> parsing -> form -> validate ->
-  // results flow M4-08-06 could only prove unchanged by git-diff and code review.
-  // This is the only REAL oracle for that claim.
-  await page.getByText('lagos-freight-INV-0482.pdf', { exact: true }).click()
-  await page.getByRole('button', { name: 'Upload & parse' }).click()
-
-  await expect(page.getByText('Parsing lagos-freight-INV-0482.pdf…', { exact: true })).toBeVisible()
-  await expect(page.getByText(/\d+% PARSED/)).toBeVisible()
-
-  // Auto-advances to 'form' (~1.3s) -- wait for the destination state (the
-  // pre-fill banner), never an intermediate scanline frame.
-  await expect(
-    page.getByText('Pre-filled from lagos-freight-INV-0482.pdf — review and edit below.', { exact: true }),
-  ).toBeVisible({ timeout: 15_000 })
-
-  await page.getByRole('button', { name: 'Run validation' }).click()
-  await expect(page.getByText('Validating against MBS rules…', { exact: true })).toBeVisible()
-  await expect(page.getByText(/\d+% COMPLETE/)).toBeVisible()
-
-  // Auto-advances to 'results' (~1.8s) -- one of the three verdict literals plus a
-  // /16 score, whichever this deterministic mock draft resolves to (which one is
-  // not the point; that a verdict renders at all, unchanged, is).
-  await expect(page.getByText(/Not compliant yet|Review warnings|Compliant — ready to approve/)).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText(/\d+\/16/)).toBeVisible()
+  // Not just the strip: the Enter step's BODY rendered underneath it. A resolver
+  // that returned the right labels over a blank step router would otherwise pass.
+  // Same smallest-match text idiom as :465/:529's 'Import invoices ·'; the header
+  // CTA's name is exactly 'New invoice' with no '·', so there is no collision.
+  await expect(page.getByText('New invoice ·', { exact: false }), 'the Enter step body rendered').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// [import-upload-unify] LIVE-mode guards for the unified upload surface. Three things
-// this change made true that nothing else asserts: the mock document card is
-// sandbox-ONLY (it used to render unconditionally), manual entry survives OUTSIDE that
-// gate (it used to live in the document card's sibling rail -- gating it along with the
-// card would have deleted the only from-scratch creation path in production), and the
-// dropzone accepts a real drop (setInputFiles everywhere else bypasses onDrop entirely).
-test('[import-upload-unify] LIVE: document preview gated, manual entry survives, dropzone accepts a drop', async ({ page }) => {
+// [import-upload-unify] LIVE-mode guards for the unified upload surface. Two things
+// this change made true that nothing else asserts: manual entry survives OUTSIDE the
+// import card (it used to live in the mock document card's sibling rail -- gating it
+// along with that card would have deleted the only from-scratch creation path in
+// production), and the dropzone accepts a real drop (setInputFiles everywhere else
+// bypasses onDrop entirely).
+//
+// This test used to carry a third claim -- that the mock document card was sandbox-ONLY
+// rather than unconditional. INVCR-01-01 deleted that card outright, so its three
+// absence assertions became permanently vacuous (the strings exist in no code path) and
+// were removed rather than repointed, per plan D-01b. What remains is the positive fact
+// that survives: there is exactly ONE import surface here, and it is real.
+test('[import-upload-unify] LIVE: one real import surface, manual entry survives, dropzone accepts a drop', async ({ page }) => {
   const errors = collectErrors(page)
 
   await signInFirm(page)
@@ -467,11 +582,6 @@ test('[import-upload-unify] LIVE: document preview gated, manual entry survives,
   // The unified card is the only import surface in LIVE. Entity is now static header
   // text, not a <select> -- this doubles as the assertion that it still renders.
   await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
-
-  // Sandbox-gated: neither the divider, the card, nor its samples may appear in LIVE.
-  await expect(page.getByText('Or import a single document', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Import a document ·', { exact: false })).toHaveCount(0)
-  await expect(page.getByText('lagos-freight-INV-0482.pdf', { exact: true })).toHaveCount(0)
 
   // Wait for the zone itself, not just the card. The dropzone no longer depends on the
   // entities fetch at all -- reading columns needs only the file ([inhouse-can-start]) --
@@ -499,29 +609,41 @@ test('[import-upload-unify] LIVE: document preview gated, manual entry survives,
   await expect(readColumnsBtn, 'enabled once a dropped file lands').toBeEnabled()
 
   // Manual entry must be reachable in LIVE. skipUpload -> createStep 'form'; the build
-  // step's own primary is 'Run validation' (CreateForm), which no earlier step renders.
+  // step's own primary is 'File invoice' (CreateForm), which no earlier step renders. That
+  // label replaced 'Run validation' in INVCR-01-03, when the mock 16-check scanline and its
+  // approve screen were deleted in favour of one real POST /v1/invoices — the firm persona
+  // has a resolved entity, so the gate passes and the primary reads its armed label.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable in LIVE').toBeVisible()
+  await expect(page.getByRole('button', { name: 'File invoice' }), 'manual build step reachable in LIVE').toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// [inhouse-can-start] — the regression this whole persona gap produced, asserted on the
-// deployed build as the IN-HOUSE accountant.
+// [inhouse-can-file] — task-304 (INVCR-01-19) REPLACES [inhouse-can-start] outright
+// (AC-7), not a patch of its assertions. That test's whole premise was that in-house
+// COULD open the wizard and read columns but every filing path was a legible dead end
+// ("filing is refused in words, not silence") -- true only because in-house's `active`
+// memo was hardcoded to a null-entityId placeholder and the tenant had zero
+// business_entities rows to resolve instead. Both are now false: db/seed.dev.sql seeds
+// the in-house tenant exactly ONE entity (AC-1), and App.tsx's `active` memo resolves it
+// through the SAME entitiesList path as firm, no persona special-case (AC-2,
+// resolveActiveClient in lib/clients.ts). So the premise INVERTS: this test proves
+// in-house FILES successfully, both by import and manually, mirroring the firm paths
+// (E2E-01 above for import; CreateForm's manual round trip, same as
+// [import-upload-unify] proves is reachable in LIVE) rather than asserting a refusal.
 //
-// Both personas must be able to START creating an invoice. The upload surface used to be
-// gated on `active.entityId !== null`, and inhouseClient() hardcodes that to null (an
-// in-house tenant has no business_entities row and no Clients screen to add one from), so
-// step 1 rendered "No linked entity -- import is unavailable here" and the firm alone got
-// a dropzone. Reading columns never needed an entity: POST /imports/preview takes the file
-// and nothing else, and its handler persists nothing. So the gate moved to the COMMIT,
-// which is the step that really does write import_batches.entity_id / invoices.entity_id
-// (both NOT NULL).
-//
-// Deliberately NOT asserted here: that an in-house import can be filed. Persistence for
-// entity-less workspaces is a separate story -- this spec pins that the wizard OPENS and
-// that the point where it stops is honest and legible, not a dead button.
-test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone and reads columns; filing is refused in words, not silence', async ({
+// What SURVIVES from the old test, restated rather than deleted: the amber "No linked
+// business entity" panel and its 'Filing needs a linked entity' refusal are still real,
+// still INFORMATIONAL-never-blocking code (CreateUpload.tsx's computeNoEntity,
+// lib/importFlow.ts) -- they just no longer fire for THIS persona, because this persona
+// no longer has anything to refuse. AC-6 keeps that contract alive for its other
+// legitimate case (a FIRM workspace whose active entity has been archived out of the
+// roster) -- but every persona this e2e suite's fixtures can sign in as now legitimately
+// has at least one entity, so a genuinely-zero-entity workspace is no longer reachable
+// through ANY browser spec here. lib/importFlow.test.ts's computeNoEntity specs
+// (FLOW-15..17) are the surviving proof that the predicate itself still fires correctly
+// for that case -- see that file for why this is the honest place for it to live now.
+test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity and files an invoice, both by import and manually', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -531,49 +653,493 @@ test('[inhouse-can-start] LIVE: the in-house persona reaches the import dropzone
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await expect(page.getByText('Import invoices ·', { exact: false })).toBeVisible({ timeout: 30_000 })
-
-  // The heart of it: the surface the blocked state used to replace. Paired with an explicit
-  // absence check on the old copy, so re-introducing the gate under a different condition
-  // still fails here rather than passing on a visible-but-wrong screen.
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
   })
-  await expect(page.getByText('No linked entity', { exact: false })).toHaveCount(0)
 
+  // Inverts the old test's positive assertion of this exact panel (AC-7/8:662-669): with
+  // a real entity resolved, the amber refusal — and its in-house-only sentence,
+  // CreateUpload.tsx's now-deleted "There is no way to link one from an in-house
+  // workspace yet" — never renders at all, at any point in the fetch's lifecycle
+  // (computeNoEntity's guard 1 keeps it off during 'idle'/'loading' too, and a resolved
+  // entity keeps it off once 'ready'). No absence check ever proves a flash CAN'T have
+  // happened a moment earlier — the real proof is everything below: Read columns arming,
+  // the Map step's commit control, and the import itself all succeeding on this
+  // workspace's real resolved entity.
+  await expect(page.getByText('No linked business entity', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
+
+  const invoiceNumber = `INH-IMP-${Date.now()}`
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
 
-  // Same synthetic-DataTransfer approach as the firm test above (real drag is flaky here).
-  await page.evaluate(() => {
-    const label = document.querySelector('label[for="pf-import-file"]')
-    if (!label) throw new Error('dropzone label[for="pf-import-file"] not found')
-    const dt = new DataTransfer()
-    dt.items.add(new File(['invoice_number,subtotal\nINH-1,100\n'], 'inhouse.csv', { type: 'text/csv' }))
-    label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
-  })
-  await expect(page.getByText('inhouse.csv', { exact: true })).toBeVisible()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'inhouse.csv', mimeType: 'text/csv', buffer: Buffer.from(`Invoice No,Subtotal\n${invoiceNumber},100\n`, 'utf8') })
+  await expect(readColumnsBtn, 'arms on the file alone').toBeEnabled()
 
-  // The gate is gone from the front door: with no entity anywhere in this tenant, Read
-  // columns still arms purely on the file. This is the assertion the old contract made
-  // impossible -- canReadColumns required an entity, so it could never enable here.
-  await expect(readColumnsBtn, 'Read columns arms on the file alone, with no entity').toBeEnabled()
-
-  // And it genuinely works server-side: the preview round-trips without an entity_id.
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
   await readColumnsBtn.click()
-  await expect(page.getByText('Map fields to columns ·', { exact: false }), 'preview succeeded with no entity').toBeVisible({
-    timeout: 60_000,
-  })
+  await previewResp
+  await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 30_000 })
 
-  // Where it must stop, and how. Not a primary that looks armed and swallows the click:
-  // named reason + actually disabled, because an in-house user cannot resolve this in-app.
-  const commitBtn = page.getByRole('button', { name: 'Filing needs a linked entity' })
-  await expect(commitBtn, 'commit names why it cannot file').toBeVisible()
-  await expect(commitBtn, 'and is truly disabled, not a silent no-op').toBeDisabled()
+  // Inverts :715-717: the commit control names the REAL action now, never the refusal
+  // [inhouse-can-start] pinned.
+  await expect(
+    page.getByRole('button', { name: 'Filing needs a linked entity' }),
+    'the refusal is gone from the Map step — in-house has an entity now',
+  ).toHaveCount(0)
 
-  // Manual entry stays reachable for in-house as well.
-  await page.getByRole('button', { name: '← Back to import' }).click()
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'armed once invoice_number is placed — the SAME control that used to be the disabled refusal').toBeEnabled()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  await importResp
+
+  // Core AC 8: exactly one ready invoice routes straight to its own detail screen — the
+  // affirmation IS the server's own row rendering, the same real-filing proof the firm
+  // path gets (E2E-01 above), now available to in-house too.
+  await expect(page.getByTestId('invoice-detail'), 'the import actually filed a real invoice, not a refusal').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  // And manual entry — the OTHER path [inhouse-can-start] proved was also a dead end
+  // (:725-729). Re-opens the wizard fresh via the header CTA rather than navigating back
+  // through the just-filed import's state.
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByRole('button', { name: 'Run validation' }), 'manual build step reachable for in-house').toBeVisible()
+
+  const fileBtn = page.getByRole('button', { name: 'File invoice' })
+  await expect(fileBtn, 'manual build step is armed for in-house now, not refused').toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Filing needs a linked entity' }),
+    'the manual refusal is gone too',
+  ).toHaveCount(0)
+
+  // A fresh number: the default draft seeds a FIXED literal (lib/clients.ts's
+  // defaultDraft), and this suite reruns against a persistent, never-reset dev DB — a
+  // second run under the literal would 409 on (tenant_id, entity_id, invoice_number).
+  const manualNumber = `INH-MAN-${Date.now()}`
+  await page.getByPlaceholder('INV-0000-00000').fill(manualNumber)
+  await expect(fileBtn).toBeEnabled()
+
+  const createResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+    { timeout: 30_000 },
+  )
+  await fileBtn.click()
+  await createResp
+
+  await expect(page.getByTestId('invoice-detail'), 'manual filing succeeded too, for in-house').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(manualNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// INVCR-01-16 (task-292) -- Core AC 11's closing subtask. The five tests below discharge
+// the story's rewritten ACs 1/2/4/6/7 against a deployed build (AC-3/AC-5/AC-9/AC-10 live
+// in invoice-surfaces.spec.ts; AC-5's own in-house happy path is [inhouse-can-file] above
+// -- task-304 -- NOT duplicated here, this subtask only verifies it runs green).
+//
+// ReviewRow.tsx's row (`data-testid="review-row"`) and its row-expansion panel
+// (`data-testid="review-row-expansion"`, and everything inside it) are SIBLINGS in the
+// DOM, not parent/child (ReviewRow.tsx returns `<>{row}{expanded && <ExpandedFixPanel/>}
+// </>`) -- so every panel-internal testid below (`review-fix-card`/`review-fix-input`/
+// `review-fix-save`/`review-revalidate`/`review-row-passing`/`review-keep-reason`/
+// `review-keep`/`review-kept-banner`) is queried PAGE-SCOPED, never scoped off a row
+// locator. This is safe because ReviewInvoicesTab.tsx's `expandedId` is singular -- at
+// most one row's panel exists in the DOM at any moment -- unlike `review-verdict`/
+// `review-select`, which genuinely are children of the row's own grid div and so ARE
+// scoped off the row locator throughout.
+
+// AC-1: the full firm N>1 loop, driven for real for the first time -- import a mixed
+// batch, filter the review table by a failing RULE (the rail, not a pill), expand a row,
+// fix the field the server flagged, re-validate, watch the verdict pill move, select the
+// now-eligible set, confirm, and prove the row badges only move once a REAL re-fetch
+// lands (never derived off the submit response -- bulkOutcome's own documented
+// discipline, lib/reviewBatch.ts: batch_submit.go's duplicate-request branch hard-codes a
+// known-wrong status on a skipped item, M5-11).
+//
+// Also closes the coverage gap task-290's own Implementation Notes flagged and this
+// subtask's own notes repeat: switching the row-expansion slot between two rows must not
+// leak one row's fetched detail/draft into the other. Verified by CODE READING only until
+// now -- vitest here is environment:'node' (no jsdom/RTL), so there is no unit oracle for
+// this, and this is the first time it runs against a live DOM at all.
+test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-validate -> select -> submit, badges from a re-fetch', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 loop ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'e2e-loop.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  const resp = await importResp
+  const body = (await resp.json()) as { id: string }
+  const batchId = body.id
+
+  // Lands on the review shell -- 2 ready invoices (CLEAN and VIOLATE; STRUCT never
+  // becomes an invoice at all), both §7.1 channels rendered.
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('1 valid', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 failed a rule', { exact: true })).toBeVisible()
+  await expect(page.getByText(/^[1-9]\d* unreadable rows$/)).toBeVisible()
+
+  const violateRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
+  const cleanRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })
+  await expect(violateRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  // Row-switch non-leak (coverage gap): expand VIOLATE, note its (wrong) VAT value,
+  // switch to CLEAN, and back -- neither panel may show the other's data.
+  const fixCard = page.getByTestId('review-fix-card')
+  const fixInput = page.getByTestId('review-fix-input')
+  const rowPassing = page.getByTestId('review-row-passing')
+
+  await violateRow.click()
+  await expect(fixCard).toContainText('vat-standard-rate')
+  await expect(fixInput).toHaveValue('0.00')
+
+  await cleanRow.click()
+  await expect(rowPassing, "CLEAN never inherits VIOLATE's fix card").toBeVisible()
+  await expect(fixCard).toHaveCount(0)
+
+  await violateRow.click()
+  await expect(rowPassing).toHaveCount(0)
+  await expect(fixInput, 'switching back re-fetches VIOLATE fresh, not a ghost of CLEAN').toHaveValue('0.00')
+
+  // Filter by the failing RULE (the rail, not the "Needs a fix" pill) -- narrows the
+  // server-paged table to VIOLATE alone.
+  const railPill = page.getByTestId('review-rail-pill').filter({ hasText: 'vat-standard-rate' })
+  await expect(railPill).toBeVisible()
+  await railPill.click()
+  await expect(cleanRow).toHaveCount(0)
+  await expect(violateRow).toBeVisible()
+
+  // Fix the field the server flagged, save.
+  await expect(fixInput).toHaveValue('0.00')
+  await fixInput.fill('75.00')
+  await page.getByTestId('review-fix-save').click()
+  await expect(fixInput, 'the panel re-fetches the saved value').toHaveValue('75.00')
+
+  // Re-validate -- the verdict pill moves. ReviewInvoicesTab is entirely server-filtered
+  // ([filters-are-server-side], its own file header) -- the fixed invoice no longer
+  // matches vat-standard-rate, so the refetch this triggers (onChanged -> page.run())
+  // drops it out of THIS filtered view the instant it lands, taking its expanded panel
+  // with it. Proven explicitly, not assumed, before un-filtering: asserting
+  // `rowPassing` visible here (while still filtered) would be asserting a fact about a
+  // row that just left the DOM.
+  await page.getByTestId('review-revalidate').click()
+  await expect(violateRow, 'the fixed row drops out of the still-active rule filter').toHaveCount(0)
+
+  // Toggle the SAME rule filter back off -- the invoice no longer matches it, so this is
+  // also what makes the moved verdict (and the still-expanded row's passing panel)
+  // observable again. `expandedId` (ReviewInvoicesTab.tsx) is untouched by the filter
+  // round-trip, so the SAME row re-expands rather than starting collapsed.
+  await railPill.click()
+  await expect(cleanRow).toBeVisible()
+  await expect(violateRow).toBeVisible()
+  await expect(rowPassing, 'clean after the fix').toBeVisible()
+  await expect(violateRow.getByTestId('review-verdict'), 'the verdict pill moved to VALIDATED').toContainText('VALIDATED')
+  await expect(violateRow.getByTestId('review-verdict')).not.toContainText('RULES FAILED')
+
+  // Select the (now fully) eligible subset and submit.
+  await page.getByTestId('review-select-all').click()
+  await expect(page.getByTestId('review-bulk-submit')).toContainText('Submit 2 for transmission')
+  await page.getByTestId('review-bulk-submit').click()
+  await expect(page.getByTestId('review-bulk-confirm')).toContainText('Yes, send 2 now')
+
+  const submitResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions'),
+  )
+  // The re-fetch this whole AC pins as the badge source -- registered BEFORE the click so
+  // it cannot be satisfied by a request that already landed.
+  const refetchResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('import_batch_id') === batchId,
+  )
+  await page.getByTestId('review-bulk-confirm').click()
+  await submitResp
+  await refetchResp
+
+  await expect(
+    violateRow.getByTestId('review-verdict'),
+    'the badge only moves once the re-fetch lands, never off the submit response',
+  ).toContainText('QUEUED')
+  await expect(cleanRow.getByTestId('review-verdict')).toContainText('QUEUED')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-2: Core AC 8's N=1 route, proven on the deployed build for the first time -- a
+// single-invoice CSV lands directly on the real InvoiceDetail, asserted by PRESENCE of
+// its own data-testid and status-history, never by the review table's absence alone
+// ([E2E-must-not] #4).
+test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, never a one-row review grid', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 single ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const invoiceNumber = `INV-E2E-SINGLE-${Date.now()}`
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'single.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(invoiceNumber), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await expect(page.getByTestId('invoice-detail'), 'N=1 routes to the real detail').toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+  await expect(page.getByTestId('status-history'), 'the real detail carries a status-history panel').toBeVisible()
+  await expect(page.getByTestId('review-table')).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-4: a header-only file (a real spreadsheet, real bytes, zero data rows) is refused
+// honestly -- §7.5's "Nothing was imported" with three zeroed tiles, and no Map-step
+// retry offered from the rejected screen (only re-upload or manual entry).
+test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step retry offered', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 rejected ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'header-only.csv', mimeType: 'text/csv', buffer: Buffer.from(buildHeaderOnlyCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // A header-only file still echoes real columns (PRV-07) -- invoice_number is placed by
+  // hand exactly as every other fixture in this file, at 0 rows.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  const importBtn = page.getByRole('button', { name: 'Import 0 rows' })
+  await expect(importBtn).toBeEnabled()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  await importResp
+
+  await expect(page.getByText('Nothing was imported', { exact: true }), "§7.5's rejected-file state").toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('Invoices created', { exact: true })).toBeVisible()
+  await expect(page.getByText('Rows stored', { exact: true })).toBeVisible()
+  await expect(page.getByText('Rows quarantined', { exact: true })).toBeVisible()
+  // Three ZEROED tiles -- a header-only file creates nothing, stores nothing, quarantines
+  // nothing (it fails before any per-row classification runs at all).
+  await expect(page.getByText('0', { exact: true })).toHaveCount(3)
+
+  // No Map-step retry from here: the only two recovery actions are re-upload and manual
+  // entry (ctx.restartImport / ctx.skipUpload) -- never a "go back and remap" affordance.
+  await expect(page.getByRole('button', { name: 'Choose another file' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Enter one invoice instead' })).toBeVisible()
+  await expect(page.getByText('Map fields to columns', { exact: false })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-6: the review screen is addressable and REVISITABLE (D4) -- a reload on
+// `#review/<batchId>` restores it with BOTH channels re-derived from a fresh GET, never
+// from memory the tab already held.
+test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derives both channels', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 deep-link ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'e2e-deep-link.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page).toHaveURL(/#review\//)
+
+  // Registered BEFORE reload: D4's whole point is that a revisit re-derives from the
+  // server rather than reading a frozen import-time payload, so a genuine GET must fire
+  // for the batch AND the invoices list, not merely a client-side re-render of memory
+  // this page already held.
+  const batchRefetch = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/api\/invoice\/v1\/imports\/[0-9a-fA-F-]+$/.test(new URL(r.url()).pathname),
+  )
+  const invoicesRefetch = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+  )
+  await page.reload()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await batchRefetch
+  await invoicesRefetch
+
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('1 valid', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 failed a rule', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('review-table')).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })).toBeVisible()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-7: keeping a failing invoice as-is drops it out of "Needs a fix" but the row -- and
+// its checkbox -- stay on screen, DISABLED, never absent (task-291's own QA finding; the
+// plan's older "checkbox is absent" wording is wrong and the rewritten AC corrects it).
+test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disabled, never absent', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVCR-01-16 keep ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'e2e-keep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+
+  const violateRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
+  const cleanRow = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })
+  await expect(violateRow).toBeVisible()
+
+  await violateRow.click()
+  const keepReason = page.getByTestId('review-keep-reason')
+  await expect(keepReason).toBeVisible()
+  await keepReason.fill('Buyer confirmed the VAT discrepancy is intentional; will not recur.')
+  await page.getByTestId('review-keep').click()
+
+  // The pill flips, and the reason surfaces verbatim (KEEP-3's own live proof).
+  await expect(violateRow.getByTestId('review-verdict')).toContainText('KEPT')
+  await expect(page.getByTestId('review-kept-banner')).toContainText('Buyer confirmed the VAT discrepancy is intentional')
+
+  // It drops out of "Needs a fix" ...
+  await page.getByTestId('review-filter-pill').filter({ hasText: 'Needs a fix' }).click()
+  await expect(page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })).toHaveCount(0)
+
+  // ... but stays PRESENT and DISABLED on "All", never absent.
+  await page.getByTestId('review-filter-pill').filter({ hasText: 'All' }).click()
+  await expect(violateRow).toBeVisible()
+  await expect(violateRow.getByTestId('review-select'), 'the checkbox renders -- it is not absent').toBeVisible()
+  await expect(
+    violateRow.getByTestId('review-select'),
+    'but it is disabled -- a kept row stays non-selectable (isRowSelectable)',
+  ).toBeDisabled()
+
+  // select-all excludes it (status stays non-validated even though kept) and still picks
+  // up the still-eligible CLEAN row.
+  await page.getByTestId('review-select-all').click()
+  await expect(cleanRow.getByTestId('review-select')).toBeChecked()
+  await expect(violateRow.getByTestId('review-select')).not.toBeChecked()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

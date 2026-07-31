@@ -44,6 +44,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
@@ -476,5 +477,113 @@ func TestCreateHandler_XLSX201(t *testing.T) {
 	}
 	if resp.Status != "completed" {
 		t.Errorf("status = %q, want %q", resp.Status, "completed")
+	}
+}
+
+// --- GET /v1/imports/{id} (task-283 specs 4/5/6) ----------------------------
+
+// batchResponseBody mirrors the (future) GET /v1/imports/{id} response wire
+// shape (batchResponse, handlers.go), plus an Error field for the shared
+// {"error":"..."} envelope -- same convention as importBatchBody.
+type batchResponseBody struct {
+	ID             string     `json:"id"`
+	EntityID       string     `json:"entity_id"`
+	Status         string     `json:"status"`
+	RowsTotal      int        `json:"rows_total"`
+	RowsValid      int        `json:"rows_valid"`
+	RowsInvalid    int        `json:"rows_invalid"`
+	Errors         []RowError `json:"errors"`
+	RuleSetVersion *int       `json:"rule_set_version"`
+	CreatedAt      time.Time  `json:"created_at"`
+	Error          string     `json:"error"`
+}
+
+// doImportGetBatch builds the GET /v1/imports/{id} request, injects id into
+// the context when non-nil (mirrors doImportCreate), runs it through
+// GetHandler(get, nil), and decodes the JSON response body -- tolerating a
+// completely empty body (the 501 stub writes a body, but this mirrors
+// doImportCreate's own tolerance for consistency).
+func doImportGetBatch(t *testing.T, get func(ctx context.Context, id string) (Batch, error), id *auth.Identity, batchID string) (*httptest.ResponseRecorder, batchResponseBody) {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/imports/"+batchID, nil)
+	r.SetPathValue("id", batchID)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	GetHandler(get, nil).ServeHTTP(rec, r)
+	var resp batchResponseBody
+	if len(rec.Body.Bytes()) > 0 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+	}
+	return rec, resp
+}
+
+// TestGetBatchHandler_ErrorsIsEmptyArrayNotNull (spec 4): a store returning
+// Batch{Errors: nil} must still render "errors":[], never null -- marshalling
+// a nil slice without omitempty would emit null. RED against the 501 stub:
+// the status assertion fails (got 501, want 200).
+func TestGetBatchHandler_ErrorsIsEmptyArrayNotNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	batchID := uuid.NewString()
+	get := func(ctx context.Context, gotID string) (Batch, error) {
+		return Batch{ID: batchID, Errors: nil}, nil
+	}
+	rec, _ := doImportGetBatch(t, get, &id, batchID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.Bytes()
+	if !bytes.Contains(raw, []byte(`"errors":[]`)) {
+		t.Errorf("body = %s, want raw JSON to contain \"errors\":[] (never null, even when the store returns a nil []RowError)", raw)
+	}
+}
+
+// TestGetBatchHandler_MalformedID400StoreNeverCalled (spec 6, task-283 R5):
+// a malformed (non-uuid) path id must 400 BEFORE store.GetBatch is ever
+// called. The status alone is VACUOUS here: a malformed id that DID reach
+// Store.GetBatch would ALSO surface as 400, via its own 22P02->ErrValidation
+// mapping (store.go) -- so 400 cannot by itself prove a handler-level
+// uuid.Parse pre-check exists. The spy (store.GetBatch must never run) is
+// the ONLY half of this test that actually discriminates the two
+// implementations.
+func TestGetBatchHandler_MalformedID400StoreNeverCalled(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	get := func(ctx context.Context, gotID string) (Batch, error) {
+		t.Fatal("store.GetBatch must not run when the path id is not a well-formed uuid")
+		return Batch{}, nil
+	}
+	rec, resp := doImportGetBatch(t, get, &id, "not-a-uuid")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestGetBatchHandler_NoIdentity401 (QA Stage 4, task-283 F2 / AC #3
+// "identity-first 401"): no identity in the request context must 401
+// BEFORE the handler-level uuid.Parse guard, and BEFORE store.GetBatch,
+// ever run -- proven here with a MALFORMED path id ("not-a-uuid"), so a
+// wrong ordering (uuid.Parse before the identity check) would surface as
+// 400, not 401, discriminating the two orderings. The spy additionally
+// proves the store itself never runs either way.
+func TestGetBatchHandler_NoIdentity401(t *testing.T) {
+	get := func(ctx context.Context, gotID string) (Batch, error) {
+		t.Fatal("store.GetBatch must not run without an identity")
+		return Batch{}, nil
+	}
+	rec, resp := doImportGetBatch(t, get, nil, "not-a-uuid")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error == "" {
+		t.Error("expected a non-empty error message in the body")
 	}
 }

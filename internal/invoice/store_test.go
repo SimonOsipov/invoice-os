@@ -41,6 +41,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -121,6 +122,35 @@ func seedEntity(t *testing.T, super *pgxpool.Pool, tenantID, name string) string
 		tenantID, name,
 	).Scan(&id); err != nil {
 		t.Fatalf("seed business_entities: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, id)
+	})
+	return id
+}
+
+// seedEntityWithTIN is seedEntity plus a raw-SQL tin column value (INVCR-01-17,
+// C7 fix): Store.Create now derives supplier_tin/supplier_name FROM the
+// entity ([supplier-from-entity]), so a handful of pre-existing specs that
+// used arbitrary placeholder supplier fields purely as CreateInput fixture
+// data (unrelated to what they actually test) need the entity itself to
+// carry the placeholder instead. The tin is written EXACTLY as given, NOT
+// through portfolio.ValidateTIN -- fine for these callers because their
+// fixture strings ("SUP-TIN-1") are not a 12-bare-digit shape, so
+// MBSSupplierTIN leaves them untouched and the derived value equals the old
+// placeholder byte-for-byte. A spec that needs the REAL canonicalize ->
+// restore round trip (the actual C7 regression) must go through
+// portfolio.Store.Create instead -- see createEntityViaRealPortfolioStore
+// (supplier_tin_test.go).
+func seedEntityWithTIN(t *testing.T, super *pgxpool.Pool, tenantID, name, tin string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3) RETURNING id`,
+		tenantID, name, tin,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed business_entities (with tin): %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, id)
@@ -538,7 +568,14 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 		InvoiceNumber: "INV-STORE-05",
 		Subtotal:      strPtr("-5.00"),
 		Currency:      nil,
-		SupplierName:  strPtr(""),
+		// BuyerName, NOT SupplierName (INVCR-01-17, C7 fix): supplier_name is
+		// now DERIVED from the entity ([supplier-from-entity]), so it can no
+		// longer demonstrate "blank content stored, not rejected" -- a
+		// business_entities row always carries a non-blank NOT NULL name.
+		// buyer_name is still caller-controlled (the story's scope fence is
+		// supplier fields ONLY), so it keeps exercising the same store-invalid-
+		// faithfully contract this spec is actually about.
+		BuyerName: strPtr(""),
 	})
 	if err != nil {
 		t.Fatalf("Create (store-invalid content): want success (AC-6, no content CHECK), got: %v", err)
@@ -549,15 +586,15 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 	if inv.Currency != nil {
 		t.Errorf("Create returned currency = %q, want nil", *inv.Currency)
 	}
-	if inv.SupplierName == nil || *inv.SupplierName != "" {
-		t.Errorf("Create returned supplier_name = %v, want empty string (blank content stored, not rejected)", inv.SupplierName)
+	if inv.BuyerName == nil || *inv.BuyerName != "" {
+		t.Errorf("Create returned buyer_name = %v, want empty string (blank content stored, not rejected)", inv.BuyerName)
 	}
 
-	var subtotal, supplierName string
+	var subtotal, buyerName string
 	var currency *string
 	if err := super.QueryRow(ctx,
-		`SELECT subtotal::text, currency, supplier_name FROM invoices WHERE id = $1`, inv.ID,
-	).Scan(&subtotal, &currency, &supplierName); err != nil {
+		`SELECT subtotal::text, currency, buyer_name FROM invoices WHERE id = $1`, inv.ID,
+	).Scan(&subtotal, &currency, &buyerName); err != nil {
 		t.Fatalf("read back invoice: %v", err)
 	}
 	if subtotal != "-5.00" {
@@ -566,8 +603,8 @@ func TestStoreCreate_StoreInvalidContentPersistsUnrejected(t *testing.T) {
 	if currency != nil {
 		t.Errorf("currency read back = %q, want NULL", *currency)
 	}
-	if supplierName != "" {
-		t.Errorf("supplier_name read back = %q, want empty string", supplierName)
+	if buyerName != "" {
+		t.Errorf("buyer_name read back = %q, want empty string", buyerName)
 	}
 }
 
@@ -943,6 +980,53 @@ func TestStoreList_TenantScopedAndPaginated(t *testing.T) {
 	}
 	if len(emptyItems) != 0 {
 		t.Errorf("List (empty tenant) len = %d, want 0", len(emptyItems))
+	}
+}
+
+// TestStoreList_ZeroFilterQueryUnchanged (INVCR-01-06 spec 10, AC-1,
+// task-282): GREEN BEFORE -- a regression guard, not red-first. AC-1
+// requires "the zero ListFilter still produces a byte-identical
+// where-less query"; the SQL string itself is unobservable from outside the
+// package, so the observable invariant substituted here is what a
+// byte-identical where-less query would return: a zero ListFilter must
+// return EVERY invoice regardless of import batch -- two different batches,
+// plus one with import_batch_id NULL -- not just the rows in one batch or
+// the other. This already holds today (Store.List applies none of the 5 new
+// filters yet) and must keep holding once they're wired -- it discriminates
+// a wrong implementation where an EMPTY ImportBatchID leaks into the SQL as
+// `import_batch_id = ''` or `import_batch_id IS NULL` (which would silently
+// narrow the zero-filter case instead of leaving it unfiltered).
+func TestStoreList_ZeroFilterQueryUnchanged(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "ZERO-FILTER tenant")
+	entityID := seedEntity(t, super, tenantID, "ZERO-FILTER entity")
+	batchA := seedImportBatch(t, super, tenantID, entityID)
+	batchB := seedImportBatch(t, super, tenantID, entityID)
+
+	aID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-A", &batchA, time.Now().UTC())
+	bID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-B", &batchB, time.Now().UTC())
+	nullID := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "ZERO-FILTER-NULL", nil, time.Now().UTC())
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (zero ListFilter): %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("List (zero ListFilter).total = %d, want 3 (all invoices regardless of import_batch_id)", total)
+	}
+	seen := map[string]bool{}
+	for _, inv := range items {
+		seen[inv.ID] = true
+	}
+	for _, id := range []string{aID, bID, nullID} {
+		if !seen[id] {
+			t.Errorf("List (zero ListFilter) is missing invoice %s", id)
+		}
 	}
 }
 

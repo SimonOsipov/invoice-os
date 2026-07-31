@@ -18,6 +18,19 @@
 // Rule.Target explicitly -- the executor's Eval bodies must not derive Path
 // from Params on their own initiative.
 //
+// NOTE (INVCR-01-13/D8): the constraint above governs the EVALUATOR, not the
+// RULE ROW -- an Eval body here must never compute/derive a Path from Params
+// on its own initiative (e.g. echoing tax_math's `expected` param string back
+// as a Path). It does NOT forbid a rule's author from setting Rule.Target on
+// one of these three types via the DATA (a migration's rules row), which is
+// exactly what rule-set v3 does for vat-standard-rate (target: "vat") and
+// no-duplicate-line-items (target: "line_items") -- neither taxMathEval.Eval
+// nor celEvaluator.Eval reads r.Target at all, so setting it is inert to
+// evaluation and only changes what violation(r) copies into Violation.Path
+// (see migrations/20260731090000_rule_set_v3.sql,
+// TestTaxMathTargetDoesNotChangeEvaluation below, and golden_test.go's
+// TestV3PathIsTheOnlyDelta).
+//
 // Param shapes (pinned here so the executor's implementation and this RED
 // suite agree byte-for-byte; QA Mode A decision, not yet in the story's Test
 // Specs table beyond the six baseline rows):
@@ -117,9 +130,13 @@ func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
 
 	rate := decimal.NewFromFloat(*params.Rate)
 	tolerance := decimal.NewFromFloat(params.Tolerance)
-	mismatch := expected.Sub(base.Mul(rate)).Abs()
+	computed := base.Mul(rate)
+	mismatch := expected.Sub(computed).Abs()
 	if mismatch.GreaterThan(tolerance) {
-		return violation(r), nil
+		// Expected = base*rate (what the tax SHOULD be); Actual = the
+		// resolved "expected"(param) operand (what the invoice states) --
+		// both exact decimal strings ([D13]), never floats.
+		return violation(r, withExpected(computed.String()), withActual(expected.String())), nil
 	}
 	return nil, nil
 }
@@ -243,14 +260,21 @@ func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
 
 	expectedVal, present := resolvePath(p, params.Expected)
 	if !present {
+		// No natural Expected/Actual: nothing to compare sum against.
 		return violation(r), nil
 	}
 	expectedF, ok := toFloat(expectedVal)
 	if !ok {
 		return violation(r), nil
 	}
-	if sum.Sub(decimal.NewFromFloat(expectedF)).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
-		return violation(r), nil
+	// Hoisted ONCE and reused in both the comparison below and the
+	// violation's Actual, so the reported Actual can never disagree with
+	// the number the rule actually judged (Stage 2 correction C3).
+	declared := decimal.NewFromFloat(expectedF)
+	if sum.Sub(declared).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
+		// Expected = the folded line total (sum); Actual = the declared
+		// "expected"(param) field -- both exact decimal strings ([D13]).
+		return violation(r, withExpected(sum.String()), withActual(declared.String())), nil
 	}
 	return nil, nil
 }

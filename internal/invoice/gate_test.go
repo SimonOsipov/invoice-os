@@ -303,7 +303,13 @@ func TestGate_ValidateAfterUpdateFixToGreenRevalidatesToValidated(t *testing.T) 
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "GAPI-13 tenant")
-	entityID := seedEntity(t, super, tenantID, "GAPI-13 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): see
+	// TestApplyValidation_LinedDraftValidatesWithoutStaleFingerprint's
+	// identical note (apply_validation_test.go) -- gapiValidInvoiceInput's
+	// zero-violations premise needs the entity to carry its "12345678-0001"/
+	// "Acme Ltd" fixture values, since Store.Create now derives supplier_tin/
+	// supplier_name from the entity rather than trusting CreateInput.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Acme Ltd", "12345678-0001")
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	in := gapiValidInvoiceInput(entityID, "GAPI-13")
@@ -408,16 +414,19 @@ func TestGate_ValidateZeroLineItemsStaysDraftWithLineItemsRequired(t *testing.T)
 // --- Rule-set version threaded out of Gate.Validate (task-161/M4-22-02) ----
 
 // TestGateValidate_PropagatesEvaluatedVersion (task-161's Test Specs #6): a
-// real validate against the real seeded active v2 rule set must hand the
+// real validate against the real seeded active rule set must hand the
 // evaluated version back to the CALLER as Gate.Validate's own return value
 // -- not merely stamp it into RuleSetVersionID via ApplyValidation and
 // discard it, which is exactly what gate.go's Validate does today (see its
 // QA MODE-A SCAFFOLD comment). This is what lets ValidateHandler
-// (task-161) put the version on the wire. Asserts it equals both 2 (the
-// seeded active version, migrations/20260716185106_rule_set_v2.sql) AND
-// the version the stamped rule_set_version_id itself resolves to, so a
-// future rule-set republish that moved the active version could not leave
-// this test's hardcoded 2 silently wrong on only one side.
+// (task-161) put the version on the wire. Asserts it equals both 3 (the
+// seeded active version since INVCR-01-13/task-289 published rule-set v3,
+// migrations/20260731090000_rule_set_v3.sql -- previously 2, v2's own
+// migrations/20260716185106_rule_set_v2.sql) AND the version the stamped
+// rule_set_version_id itself resolves to, so a future rule-set republish
+// that moved the active version could not leave this test's hardcoded
+// literal silently wrong on only one side -- bump BOTH together, as this
+// v2->v3 publish just did.
 func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -441,8 +450,12 @@ func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if version != 2 {
-		t.Errorf("version = %d, want 2 -- the real seeded active version, threaded out of Gate.Validate's own "+
+	// TRAP FOR THE NEXT PUBLISH: this package has no shared "sanctioned active version"
+	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
+	// literal (and payload_engine_test.go's identical one) together on every future
+	// rule-set publish, or this test goes red for the wrong reason.
+	if version != 3 {
+		t.Errorf("version = %d, want 3 -- the real seeded active version, threaded out of Gate.Validate's own "+
 			"return value, not merely stamped into rule_set_version_id and discarded", version)
 	}
 	if got.RuleSetVersionID == nil {

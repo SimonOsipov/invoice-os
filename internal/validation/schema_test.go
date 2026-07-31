@@ -113,10 +113,21 @@ func sweepOrphanFixtures(superURL string) {
 	_, err = tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER USER`)
 	record("enable rule_set_versions triggers", err)
 	// The DELETE above may have cleared an active orphan (freeing the one-active slot);
-	// ensure v2 is active. Ordered delete-then-activate so the non-deferrable partial
-	// unique index never sees two active rows at once.
-	_, err = tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 2 AND NOT is_active`)
-	record("reactivate v2", err)
+	// self-heal by reactivating the newest SEALED (i.e. real, permanently-published, never
+	// an orphan fixture -- those are never sealed+left behind uncleaned by design) version --
+	// NOT a hardcoded `version = 2` literal, which would silently reactivate a SUPERSEDED
+	// version once a newer one (v3, INVCR-01-13; v4 and beyond) is published
+	// ([active-version-pinning-is-the-bug], the identical bug class rule_set_v2_test.go's
+	// RS-V2-10/12/13 fixtures were reworked to avoid). The `NOT EXISTS` guard is
+	// deliberately the sweep's ONLY trigger condition: this must self-heal an EMPTY active
+	// slot only, never override whatever real state genuinely is active (even a state this
+	// sweep wouldn't itself have chosen) -- ordered delete-then-activate so the
+	// non-deferrable partial unique index never sees two active rows at once.
+	_, err = tx.Exec(ctx,
+		`UPDATE rule_set_versions SET is_active = true
+		  WHERE sealed AND version = (SELECT max(version) FROM rule_set_versions WHERE sealed)
+		    AND NOT EXISTS (SELECT 1 FROM rule_set_versions WHERE is_active)`)
+	record("reactivate the newest sealed version", err)
 	if err := tx.Commit(ctx); err != nil {
 		record("commit", err)
 	}

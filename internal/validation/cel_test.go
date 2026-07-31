@@ -110,6 +110,37 @@ func TestCEL_TrueExprPasses(t *testing.T) {
 	}
 }
 
+// TestCel_OmitsExpected (INVCR-01-12 AC-5, D9): cel is a free-form escape
+// hatch with no single natural expectation to report -- an arbitrary
+// boolean expression has no "expected value" shape -- so a cel violation
+// omits both keys entirely on the wire, mirroring the seeded
+// no-duplicate-line-items rule's shape.
+func TestCel_OmitsExpected(t *testing.T) {
+	e := celEvaluator{}
+	payload := Payload{"invoice": map[string]any{
+		"line_items": []any{
+			map[string]any{"id": "1"},
+			map[string]any{"id": "1"},
+		},
+	}}
+	r := Rule{
+		Key:      "no-duplicate-line-items",
+		Type:     TypeCEL,
+		Params:   json.RawMessage(`{"expr":"!has(invoice.line_items) || invoice.line_items.all(x, !has(x.id) || invoice.line_items.filter(y, has(y.id) && y.id == x.id).size() <= 1)"}`),
+		Severity: "error",
+		Message:  "Invoice contains duplicate line items (a line id appears more than once).",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: line id \"1\" appears twice")
+	}
+	assertOmitsExpectedAndActual(t, v)
+}
+
 // TestCEL_BadExprErrors: an expr that does not compile as CEL is a config
 // fault (Decision N15) -- a non-nil error, NOT a violation and NOT a silent
 // pass.

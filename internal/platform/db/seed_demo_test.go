@@ -346,6 +346,146 @@ func TestSeedBackfillsSectorOntoPreexistingRow(t *testing.T) {
 	}
 }
 
+// curatedHoneywellEntity is Honeywell's own single curated business_entities
+// row (task-304, INVCR-01-19, AC-1) — db/seed.dev.sql's second INSERT block,
+// seeded so the in-house persona has a real entity to resolve and file
+// against (App.tsx's resolveActiveClient, frontend/app/src/lib/clients.ts).
+// The TIN is deliberately the hyphenated NNNNNNNN-NNNN wire spelling
+// (supplier-tin-format's own shape, internal/invoice/supplier_tin.go), not a
+// 10-digit JTB TIN and not a 12-bare-digit canonical FIRS TIN —
+// MBSSupplierTIN only rewrites the latter, so this literal must stay exactly
+// as seeded or a manual/imported invoice against Honeywell would fail
+// supplier-tin-format.
+var curatedHoneywellEntity = entityRow{name: "Honeywell Group", tin: "20665510-0001", sector: "Manufacturing", status: "active"}
+
+// resetHoneywellBusinessEntities mirrors resetDemoBusinessEntities above,
+// scoped to honeywellTenantID — clears any invoices then business_entities
+// rows so each test below starts from a genuinely empty Honeywell portfolio.
+func resetHoneywellBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM invoices WHERE tenant_id = $1`, honeywellTenantID,
+	); err != nil {
+		t.Fatalf("clear Honeywell's invoices (precondition): %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM business_entities WHERE tenant_id = $1`, honeywellTenantID,
+	); err != nil {
+		t.Fatalf("clear Honeywell's business_entities (precondition): %v", err)
+	}
+}
+
+// TestSeedCreatesCuratedHoneywellEntity: task-304 (INVCR-01-19) AC-1 — after
+// Seed runs against an empty Honeywell portfolio, the in-house tenant has
+// EXACTLY the one curated row db/seed.dev.sql now seeds for it, with the
+// literal TIN spelling AC-1 requires. QA gap-fill: no existing test pinned
+// this. The demo-tenant suite above (TestSeedCreatesCuratedDemoEntities etc.)
+// is scoped to demoTenantID only, and TestSeedDoesNotTouchOtherTenants below
+// was repointed OFF Honeywell onto Tenant A the moment this row started
+// existing (see foreignTenantID's own doc comment) — so nothing else in this
+// file actually proves the new row's shape, count, or literal TIN spelling.
+func TestSeedCreatesCuratedHoneywellEntity(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetHoneywellBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	want := []entityRow{curatedHoneywellEntity}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("business_entities for Honeywell after Seed = %+v, want exactly one curated row %+v", got, want)
+	}
+}
+
+// TestSeedHoneywellEntityIsIdempotent: companion to
+// TestSeedDemoEntitiesIsIdempotent, scoped to Honeywell's one-row block —
+// running Seed twice must leave exactly one row, byte-identical, never a
+// duplicate under the (tenant_id, tin) partial unique index.
+func TestSeedHoneywellEntityIsIdempotent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetHoneywellBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	first := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	if len(first) != 1 {
+		t.Fatalf("count(business_entities) for Honeywell after the FIRST Seed = %d, want 1", len(first))
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (idempotency): %v", err)
+	}
+	second := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	if len(second) != 1 {
+		t.Fatalf("count(business_entities) for Honeywell after the SECOND Seed = %d, want 1 (no duplication)", len(second))
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("Honeywell's curated row differs between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", first, second)
+	}
+}
+
+// TestSeedRepairsMutatedHoneywellEntity: companion to
+// TestSeedRepairsMutatedDemoEntity — mutates Honeywell's curated row's
+// name/sector/status in place, then re-runs Seed: the row must be restored,
+// proving the Honeywell block's upsert is DO UPDATE, not DO NOTHING, same as
+// the demo tenant's block.
+func TestSeedRepairsMutatedHoneywellEntity(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetHoneywellBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated baseline): %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE business_entities SET name = 'MUTATED JUNK NAME', sector = 'MUTATED JUNK SECTOR', status = 'archived' WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, curatedHoneywellEntity.tin,
+	); err != nil {
+		t.Fatalf("mutate curated row (precondition): %v", err)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (repair): %v", err)
+	}
+
+	var name, sector, status string
+	if err := pool.QueryRow(ctx,
+		`SELECT name, sector, status FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, curatedHoneywellEntity.tin,
+	).Scan(&name, &sector, &status); err != nil {
+		t.Fatalf("read back repaired row: %v", err)
+	}
+	if name != curatedHoneywellEntity.name || sector != curatedHoneywellEntity.sector || status != curatedHoneywellEntity.status {
+		t.Errorf("Honeywell's row after repair Seed = (%q, %q, %q), want curated (%q, %q, %q) — an ON CONFLICT DO NOTHING upsert would leave the mutated values in place",
+			name, sector, status, curatedHoneywellEntity.name, curatedHoneywellEntity.sector, curatedHoneywellEntity.status)
+	}
+}
+
+// foreignTenantID: task-304 (INVCR-01-19) repointed this test off
+// honeywellTenantID onto "Tenant A (dev)". Honeywell stopped being a neutral
+// "other tenant" the moment db/seed.dev.sql started seeding it its OWN one
+// curated business_entities row (task-304 AC-1, so an in-house sign-in has a
+// real entity to file against) — Seed now legitimately writes Honeywell's
+// table too, which is exactly the kind of write this test exists to rule
+// OUT for a tenant Seed has no business touching. Tenant A has no
+// business_entities curation anywhere in seed.dev.sql (only the demo/firm
+// tenant's 27-row block and Honeywell's own 1-row block name a tenant_id),
+// so it is still the neutral bystander the original test wanted — this is a
+// swap of WHICH tenant stands in for "other", not a weakening of the claim.
+const foreignTenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
 // TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) —
 // regression guard for the dropped cross-tenant DELETE ([demo-seed-shape]).
 // Seeds a foreign-tenant probe row, runs Seed, and asserts the probe is
@@ -361,22 +501,35 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	const probeTIN = "77999999-0099"
 	if _, err := pool.Exec(ctx,
 		`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
-		honeywellTenantID, probeTIN,
+		foreignTenantID, probeTIN,
 	); err != nil {
 		t.Fatalf("clear stale probe row (precondition): %v", err)
 	}
+
+	// Precondition, made explicit rather than left implicit in the post-Seed
+	// count below: foreignTenantID must have ZERO business_entities rows of
+	// its own BEFORE this test plants its probe. If db/seed.dev.sql is ever
+	// edited to seed Tenant A something of its own, this fails LOUDLY and
+	// immediately, naming the actual cause -- rather than surfacing later as
+	// a confusing "want 1, got N+1" from the post-Seed assertion, which would
+	// look like a Seed bug rather than what it actually is (this test's
+	// "foreign tenant" stand-in silently stopped being neutral).
+	if pre := fetchDemoBusinessEntities(t, pool, foreignTenantID); len(pre) != 0 {
+		t.Fatalf("precondition: tenant %s already has %d business_entities row(s) before this test ran — it is no longer a neutral \"foreign tenant\" stand-in (has db/seed.dev.sql started seeding it something?); pick a different tenant for this test", foreignTenantID, len(pre))
+	}
+
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO business_entities (tenant_id, name, tin, status) VALUES ($1, 'QA Foreign Tenant Probe', $2, 'active')`,
-		honeywellTenantID, probeTIN,
+		foreignTenantID, probeTIN,
 	); err != nil {
 		t.Fatalf("seed foreign-tenant probe row: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(),
-			`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`, honeywellTenantID, probeTIN)
+			`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`, foreignTenantID, probeTIN)
 	})
 
-	before := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	before := fetchDemoBusinessEntities(t, pool, foreignTenantID)
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("Seed: %v", err)
@@ -388,12 +541,12 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 27", len(demoAfter))
 	}
 
-	after := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	after := fetchDemoBusinessEntities(t, pool, foreignTenantID)
 	if !reflect.DeepEqual(before, after) {
-		t.Errorf("tenant %s's business_entities changed after Seed, want untouched\nbefore: %+v\nafter:  %+v", honeywellTenantID, before, after)
+		t.Errorf("tenant %s's business_entities changed after Seed, want untouched\nbefore: %+v\nafter:  %+v", foreignTenantID, before, after)
 	}
 	if len(after) != 1 {
-		t.Errorf("tenant %s has %d business_entities row(s) after Seed, want exactly 1 (the probe) — no curated demo rows should leak into another tenant", honeywellTenantID, len(after))
+		t.Errorf("tenant %s has %d business_entities row(s) after Seed, want exactly 1 (the probe) — no curated demo rows should leak into another tenant", foreignTenantID, len(after))
 	}
 }
 

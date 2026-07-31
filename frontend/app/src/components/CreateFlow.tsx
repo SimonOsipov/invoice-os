@@ -1,34 +1,60 @@
-// Create / validate flow orchestrator — the wizard header + a step router keyed on
-// `ctx.createStep`, serving two paths: a single document (upload → parsing → form →
-// validating → results) and a server-backed spreadsheet import (upload → mapping →
-// report). Ported from Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
+// Create flow orchestrator — the wizard header + a step router keyed on `ctx.createStep`,
+// serving two paths: manual entry (a single 'form' step that files straight to the server)
+// and a server-backed spreadsheet import (upload → mapping → review). Ported from
+// Platform.dc.html ~L389-596 + renderVals() (~L1521-1524).
+//
+// The manual path has no step after 'form': INVCR-01-03 replaced the mock
+// validate-then-approve tail with one real POST, and a successful filing navigates away to
+// the real invoice detail view rather than rendering any success step here. Nothing in this
+// router may affirm a filing — there is no branch left that could.
 
-import { VAL_LABELS, PARSE_LABELS, SAMPLE_FILES } from '../data'
 import { wizardHeader } from '../lib/importFlow'
 import { CreateUpload } from './CreateUpload'
 import { CreateMapping } from './CreateMapping'
 import { CreateForm } from './CreateForm'
-import { CreateResults } from './CreateResults'
-import { CreateReport } from './CreateReport'
-import { ScanlineSteps } from './ScanlineSteps'
+import { ReviewBatch } from './ReviewBatch'
+import { ImportProgress } from './ImportProgress'
 import type { PlatformCtx } from '../types'
 
-// The wizard now serves TWO paths with different step lists — the 5-step single-document
-// wizard and the 3-step Import/Map/Report import — so the header is resolved by
-// wizardHeader (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which
-// has no concept of which path the user is on. STAGE_OF moved there with it: one table,
-// one owner, no second copy to drift.
+// The wizard serves TWO paths with different step lists — the 2-step Enter/Review typed
+// path and the 3-step Import/Map/Review import — so the header is resolved by wizardHeader
+// (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which has no concept
+// of which path the user is on. STAGE_OF moved there with it: one table, one owner, no
+// second copy to drift. wizardHeader takes the step ALONE: the file arguments existed
+// only to disambiguate 'upload' between the two paths, and with the document mock deleted
+// (INVCR-01-01) 'upload' belongs unambiguously to the import path.
 export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
-  const { createStep, draft, uploadFile, importFile, valIdx, parseIdx } = ctx
-  const { steps, stageIndex } = wizardHeader(createStep, uploadFile, importFile)
-  const selFileName = uploadFile ? SAMPLE_FILES.find((f) => f.id === uploadFile)?.name || '' : ''
-  const valCount = Math.min(valIdx, VAL_LABELS.length)
+  const { createStep, uploadPhase } = ctx
+  const { steps, stageIndex } = wizardHeader(createStep)
+
+  // The in-flight import owns the whole body, not a corner of the mapping footer. The
+  // footer's two buttons already disabled themselves while uploading, but the GRID never
+  // did — and it could not usefully: startImport serializes the mapping into the request
+  // at the moment of the click, so dragging a field onto a different column mid-flight
+  // rearranges a screen whose contents have already been sent, with no effect whatsoever
+  // on what the server is doing. Leaving that live behind a small spinner is an offer the
+  // request cannot honour. The header strip stays — the user is still on the Map step,
+  // and this IS what that step is doing.
+  //
+  // The card cannot stick: createImport emits its terminal phase BEFORE the promise
+  // settles (importApi's stated ordering), and resetImport returns the phase to 'idle',
+  // so every exit from these two kinds is an exit from this branch. On FAILURE the phase
+  // is 'error', which falls through to CreateMapping below — preserving the shipped
+  // behaviour that a failed import stays on mapping and renders importError there rather
+  // than advancing to a review step with no report.
+  const importing = uploadPhase.kind === 'sending' || uploadPhase.kind === 'processing'
 
   return (
     <div style={{ padding: '24px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
+        {/* "Cancel" implies undo, and on the review step there is nothing to undo: the
+            invoices were persisted at import time (§10.10), the batch exists, and this
+            button does the identical setView('invoices') that "Finish · go to invoices"
+            does 400px below it. Naming it after where it goes is the only honest label
+            on a surface where everything is already saved. The other three steps keep
+            "Cancel", where abandoning genuinely discards work in progress. */}
         <button onClick={ctx.closeCreate} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 34, padding: '0 12px', fontSize: 13 }}>
-          ← Cancel
+          {createStep === 'review' ? '← Invoices' : '← Cancel'}
         </button>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0 }}>
           {steps.map(([n, label], idx) => {
@@ -47,39 +73,19 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
         </div>
       </div>
 
-      {createStep === 'upload' && <CreateUpload ctx={ctx} />}
+      {importing ? (
+        <ImportProgress ctx={ctx} />
+      ) : (
+        <>
+          {createStep === 'upload' && <CreateUpload ctx={ctx} />}
 
-      {createStep === 'parsing' && (
-        <ScanlineSteps
-          title={`Parsing ${selFileName}…`}
-          subtitle="READING FILE · DETECTING COLUMNS"
-          labels={PARSE_LABELS}
-          idx={parseIdx}
-          unitLabel="PARSED"
-          transformMs={180}
-          widthMs={170}
-        />
+          {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
+
+          {createStep === 'form' && <CreateForm ctx={ctx} />}
+
+          {createStep === 'review' && <ReviewBatch ctx={ctx} />}
+        </>
       )}
-
-      {createStep === 'mapping' && <CreateMapping ctx={ctx} />}
-
-      {createStep === 'form' && <CreateForm ctx={ctx} />}
-
-      {createStep === 'validating' && (
-        <ScanlineSteps
-          title="Validating against MBS rules…"
-          subtitle={`${draft.number} · ${valCount} / 16 CHECKS`}
-          labels={VAL_LABELS}
-          idx={valIdx}
-          unitLabel="COMPLETE"
-          transformMs={170}
-          widthMs={150}
-        />
-      )}
-
-      {createStep === 'results' && <CreateResults ctx={ctx} />}
-
-      {createStep === 'report' && <CreateReport ctx={ctx} />}
     </div>
   )
 }

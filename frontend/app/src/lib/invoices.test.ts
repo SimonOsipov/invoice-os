@@ -30,6 +30,7 @@ import { ApiError, type AsyncState } from '@invoice-os/api-client'
 import { createAuthedFetch } from './authedFetch'
 import {
   computedLineSum,
+  createInvoice,
   diffLineItems,
   editInvoice,
   gateByActiveEntity,
@@ -39,6 +40,7 @@ import {
   invoicesViewState,
   isInFlight,
   isRowSelectable,
+  keepInvoiceAsIs,
   LIVE_POLL_MS,
   listInvoices,
   mbsPathToEditField,
@@ -59,13 +61,16 @@ import {
   submitInvoices,
   toggleSelection,
   verdictStatus,
+  violationSummary,
   type BatchSubmitResultItem,
   type EditFieldKey,
+  type InvoiceCreateInput,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceLineItem,
   type InvoiceRecord,
   type InvoiceStatus,
+  type ListInvoicesOptions,
   type RejectionReason,
   type StatusChange,
 } from './invoices'
@@ -127,6 +132,9 @@ const draftInvoice: InvoiceRecord = {
   csid: null,
   qr_payload: null,
   rejection_reasons: [],
+  kept_as_is_at: null,
+  kept_as_is_by: null,
+  kept_as_is_reason: null,
   rule_set_version: null,
 }
 
@@ -216,7 +224,7 @@ describe('listInvoices', () => {
 
     const result = await listInvoices(af, base, { needsAttention: true })
 
-    expect(result).toEqual([draftInvoice])
+    expect(result.invoices).toEqual([draftInvoice])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices?needs_attention=true')
@@ -233,7 +241,7 @@ describe('listInvoices', () => {
 
     const result = await listInvoices(af, base, {})
 
-    expect(result).toEqual([])
+    expect(result.invoices).toEqual([])
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices')
     expect(url).not.toContain('?')
@@ -254,7 +262,7 @@ describe('listInvoices', () => {
 
     const result = await listInvoices(af, base, { entityId: 'entity-1' })
 
-    expect(result).toEqual([draftInvoice])
+    expect(result.invoices).toEqual([draftInvoice])
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/invoices?entity_id=entity-1')
   })
@@ -287,6 +295,185 @@ describe('listInvoices', () => {
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).not.toContain('entity_id')
+  })
+})
+
+// --- Stage 2.5 (Mode A, task-284) RED specs for the envelope + widened
+// ListInvoicesOptions (AC-1). I6/I7/the entityId spec above got a one-token value-half
+// edit (result -> result.invoices) forced by the envelope change; their URL-half
+// assertions are untouched. `as ListInvoicesOptions` casts below are necessary and
+// deliberate -- the type is not widened with the 7 new fields until Stage 3, so passing
+// them through the real (unwidened) signature needs an explicit cast, not a silent `any`.
+describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () => {
+  it('LIST-1a (green-before -- already covered by I7, restated for the option table): absent options ({}) emit no query params', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {})
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('?')
+  })
+
+  it('LIST-1b (the discriminating leg): explicitly-empty/false options (needsAttention:false, needsFix:false, importBatchId:"", ruleKey:"", q:"") still emit no query params', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, {
+      needsAttention: false,
+      needsFix: false,
+      importBatchId: '',
+      ruleKey: '',
+      q: '',
+    } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).not.toContain('?')
+  })
+
+  it('LIST-2: the envelope is returned whole -- pagination.total is reachable, not discarded', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [draftInvoice], pagination: { limit: 50, offset: 0, total: 500 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listInvoices(af, base, {})
+
+    expect(result.pagination).toEqual({ limit: 50, offset: 0, total: 500 })
+  })
+
+  it('LIST-3: needsFix is emitted iff strictly true, mirroring the shipped needsAttention (I17) precedent', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { needsFix: false } as ListInvoicesOptions)
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).not.toContain('needs_fix')
+
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { needsFix: true } as ListInvoicesOptions)
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('needs_fix=true')
+  })
+
+  it('LIST-KEEP-1 (INVCR-01-15, D6, task-291): keptAsIs is emitted iff strictly true, mirroring LIST-3\'s needsFix precedent', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { keptAsIs: false } as ListInvoicesOptions)
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).not.toContain('kept_as_is')
+
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { keptAsIs: true } as ListInvoicesOptions)
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('kept_as_is=true')
+  })
+
+  it('LIST-4: offset:0 is emitted, not dropped -- the classic falsy-zero bug (`!= null`, never truthiness)', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { limit: 50, offset: 0 } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url)
+    expect(parsed.searchParams.get('limit')).toBe('50')
+    expect(parsed.searchParams.get('offset')).toBe('0')
+  })
+
+  it('LIST-5: no client-side default -- an explicit limit/offset passes through untouched, but {} never synthesizes ?limit=50 (I7\'s guard against `opts.limit ?? 50`)', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const explicitMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 25, offset: 10, total: 0 } }),
+    })
+    await listInvoices(af, base, { limit: 25, offset: 10 } as ListInvoicesOptions)
+    const [explicitUrl] = explicitMock.mock.calls[0] as [string, RequestInit]
+    expect(explicitUrl).toContain('limit=25')
+    expect(explicitUrl).toContain('offset=10')
+
+    const absentMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, {})
+    const [absentUrl] = absentMock.mock.calls[0] as [string, RequestInit]
+    expect(absentUrl).not.toContain('limit')
+    expect(absentUrl).not.toContain('offset')
+  })
+})
+
+describe('violationSummary (AC-2, Stage 2.5)', () => {
+  it('SUMMARY-1: unwraps .rules and preserves the server order verbatim, never re-sorted', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          rules: [
+            { rule_key: 'zzz-rule', invoices: 5 },
+            { rule_key: 'aaa-rule', invoices: 5 },
+          ],
+        }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await violationSummary(af, base, 'batch-1')
+
+    expect(result).toEqual([
+      { rule_key: 'zzz-rule', invoices: 5 },
+      { rule_key: 'aaa-rule', invoices: 5 },
+    ])
+  })
+
+  it('ERR-1b: a 500 from violationSummary rejects ApiError{status:500} unchanged, not wrapped or swallowed', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.reject(new Error('no body')),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => violationSummary(af, base, 'batch-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(500)
   })
 })
 
@@ -400,6 +587,119 @@ describe('editInvoice', () => {
     expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1')
     expect(init.method).toBe('PATCH')
     expect(init.body).toBe(JSON.stringify({ supplier_tin: 'x' }))
+  })
+})
+
+describe('keepInvoiceAsIs (INVCR-01-15, D6, task-291)', () => {
+  it('KEEP-INV-1: POST .../invoices/{id}/keep-as-is with {reason} as the whole body', async () => {
+    const kept: InvoiceRecord = {
+      ...draftInvoice,
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(kept) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await keepInvoiceAsIs(af, base, 'inv-1', 'Buyer confirmed the discrepancy is intentional.')
+
+    expect(result).toEqual(kept)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1/keep-as-is')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ reason: 'Buyer confirmed the discrepancy is intentional.' }))
+  })
+
+  it('KEEP-INV-2: a 409 (clean invoice / not draft) rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: () => Promise.resolve({ error: 'invoice must be a draft with a blocking violation to be kept as-is' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => keepInvoiceAsIs(af, base, 'inv-1', 'some reason'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(409)
+  })
+})
+
+describe('createInvoice', () => {
+  it('CREATE-1 posts to the invoice create route with the body verbatim', async () => {
+    const body: InvoiceCreateInput = {
+      entity_id: 'e1',
+      invoice_number: 'INV-2026-00482',
+      issue_date: '2026-06-16T00:00:00Z',
+      supplier_tin: '12345678-0001',
+      supplier_name: 'Lagos Freight Ltd',
+      buyer_tin: '00000000002',
+      buyer_name: 'Beta Ltd',
+      currency: 'NGN',
+      subtotal: '3300.47',
+      vat: '247.54',
+      total: '3548.01',
+      line_items: [
+        { description: 'Logistics consulting', quantity: '2', unit_price: '1500.25', line_total: '3000.50', line_tax: null },
+        { description: 'Warehousing', quantity: '3', unit_price: '99.99', line_total: '299.97', line_tax: null },
+      ],
+    }
+    const created: InvoiceRecord = {
+      ...draftInvoice,
+      id: 'inv-new',
+      entity_id: 'e1',
+      invoice_number: body.invoice_number,
+      supplier_tin: body.supplier_tin,
+      supplier_name: body.supplier_name,
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 201, json: () => Promise.resolve(created) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await createInvoice(af, base, body)
+
+    expect(result).toEqual(created)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify(body))
+    // I18-style fidelity: exactly the passed keys, no undefined/extra keys injected.
+    const sentBody: unknown = JSON.parse(init.body as string)
+    expect(Object.keys(sentBody as object).sort()).toEqual(Object.keys(body).sort())
+  })
+
+  it('CREATE-2 a 400 rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({ error: 'entity_id is required' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const body: InvoiceCreateInput = {
+      entity_id: '',
+      invoice_number: 'INV-2026-00482',
+      issue_date: null,
+      supplier_tin: null,
+      supplier_name: null,
+      buyer_tin: null,
+      buyer_name: null,
+      currency: 'NGN',
+      subtotal: null,
+      vat: null,
+      total: null,
+      line_items: [],
+    }
+
+    const err = await captureRejection(() => createInvoice(af, base, body))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(400)
+    expect((err as ApiError).message).toBe('entity_id is required')
   })
 })
 
@@ -1021,7 +1321,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 22 keys mirrored from invoice.go:83-105, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 25 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -1050,6 +1350,12 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       'csid',
       'qr_payload',
       'rejection_reasons',
+      // INVCR-01-15 (D6, task-291): +3 -- kept_as_is_at/by/reason join Invoice as
+      // direct top-level siblings, no omitempty, same flattened shape as every
+      // field above.
+      'kept_as_is_at',
+      'kept_as_is_by',
+      'kept_as_is_reason',
       'rule_set_version',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
@@ -1617,6 +1923,71 @@ describe('diffLineItems (adversarial, QA)', () => {
       const copy: LineFields[] = shape.map((l) => ({ ...l }))
       expect(diffLineItems(shape, copy), JSON.stringify(shape)).toBeUndefined()
     }
+  })
+})
+
+// --- INVCR-01-14 (task-290, Stage 2.5/Mode A) — RED specs for the row-expansion fix
+// editor's two data-access integration points: a per-invoice re-validate that never
+// touches the import, and the editInvoice+diffLineItems composition the row editor
+// uses. FIX-7 closes a genuine gap: INV-06-T10 (above) already proves an OMITTED
+// can_revalidate normalizes to false, but `?? false` and `=== true` behave IDENTICALLY
+// on `undefined` -- omission alone cannot discriminate the two implementations. Only a
+// non-boolean TRUTHY value (T10c's own technique, there applied to can_edit only) does.
+
+describe('revalidateInvoice: a per-invoice re-validate never touches the import (FIX-5, INVCR-01-14)', () => {
+  it("FIX-5: re-validating 'u-9' fires exactly one POST .../invoices/u-9/validate and no import-endpoint call — fixing a row never restarts the import", async () => {
+    const validated: InvoiceRecord = { ...draftInvoice, id: 'u-9', status: 'validated', rule_set_version: 3 }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(validated) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await revalidateInvoice(af, base, 'u-9')
+
+    expect(result).toEqual(validated)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/u-9/validate')
+    expect(url).not.toContain('/imports')
+    expect(init.method).toBe('POST')
+  })
+})
+
+describe('getInvoice: can_revalidate specifically fails closed on a non-boolean truthy value (FIX-7, INVCR-01-14)', () => {
+  it('FIX-7: a stringly-typed "false" can_revalidate normalizes to false — the mutation oracle for === true over ?? false on THIS flag (INV-06-T10c only covers can_edit)', async () => {
+    const wire = { ...draftInvoice, can_edit: true, can_revalidate: 'false', revalidate_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_revalidate).toBe(false)
+    // Positive companion, mirroring T10c's own shape: can_edit's genuine `true` on the
+    // SAME payload still passes through, proving the denial is about can_revalidate's
+    // own value, not a side effect that zeroes every flag.
+    expect(result.can_edit).toBe(true)
+  })
+})
+
+describe('editInvoice + diffLineItems together: the row-expansion editor\'s own composition (FIX-8, INVCR-01-14)', () => {
+  it('FIX-8: changing only vat, with line items run through diffLineItems unchanged, produces a wire body carrying vat and NO line_items key', async () => {
+    const lines: LineFields[] = [lineFields()]
+    const updated: InvoiceRecord = { ...draftInvoice, vat: '999.00' }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(updated) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    // The row-expansion editor never touches line items — it always diffs the SAME
+    // content it loaded against itself, which diffLineItems (INV-06-T7) already pins as
+    // undefined. Asserted again HERE as the exact composition the fix editor performs:
+    // build the header patch, conditionally attach diffLineItems' result, then call
+    // editInvoice once.
+    const patch: InvoiceEditInput = { vat: '999.00' }
+    const diffed = diffLineItems(lines, lines)
+    if (diffed !== undefined) patch.line_items = diffed
+
+    await editInvoice(af, base, 'inv-1', patch)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBe(JSON.stringify({ vat: '999.00' }))
+    expect(init.body).not.toContain('line_items')
   })
 })
 

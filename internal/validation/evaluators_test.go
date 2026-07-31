@@ -29,6 +29,7 @@ package validation
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -413,6 +414,315 @@ func TestDate_WithinPasses(t *testing.T) {
 	if v != nil {
 		t.Errorf("Eval() violation = %+v, want nil: yesterday is not after not_after=today", v)
 	}
+}
+
+// --- D9 (INVCR-01-12): Expected/Actual on Violation, per evaluator --------
+//
+// AC-1..6 (task-288): format/regex, enum, and range populate Violation's
+// new Expected/Actual (*string, omitempty -- see rule.go's Violation doc
+// comment); required/date/cross_field/conditional/cel omit both (an absent
+// expectation is omitempty-absent, never a fabricated ""). Omission is
+// asserted by MARSHALING and checking the json body has no "expected"/
+// "actual" key -- checking v.Expected==nil would pass even if a future
+// change fabricated a non-nil-but-never-marshaled value; the wire is the
+// contract (this file's own violation() doc comment; rule.go's header).
+
+// TestRequired_OmitsExpectedAndActual (AC-5): required has no natural
+// expectation to report -- an absent target's violation must omit both
+// keys entirely on the wire.
+func TestRequired_OmitsExpectedAndActual(t *testing.T) {
+	e := requiredEval{}
+	payload := Payload{"invoice": map[string]any{}}
+	r := Rule{
+		Key:      "supplier-tin-required",
+		Type:     TypeRequired,
+		Target:   "supplier.tin",
+		Params:   json.RawMessage(`{}`),
+		Severity: "error",
+		Message:  "Supplier TIN is required.",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil for an absent required target")
+	}
+	assertOmitsExpectedAndActual(t, v)
+}
+
+// TestDate_OmitsExpectedAndActual (AC-5): date has no natural expectation to
+// report -- date/cross_field/conditional don't exist in the seeded corpus
+// (Stage 2 correction C1), so this is exercised by direct construction.
+func TestDate_OmitsExpectedAndActual(t *testing.T) {
+	e := dateEval{}
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	payload := Payload{"invoice": map[string]any{"issue_date": tomorrow}}
+	r := Rule{
+		Key:      "DATE-ISSUE",
+		Type:     TypeDate,
+		Target:   "issue_date",
+		Params:   json.RawMessage(`{"not_after":"today"}`),
+		Severity: "error",
+		Message:  "issue date cannot be in the future",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: tomorrow is after not_after=today")
+	}
+	assertOmitsExpectedAndActual(t, v)
+}
+
+// TestFormatRegex_ExpectedIsThePattern (AC-3): format/regex reports the
+// rule's pattern as Expected; no natural Actual (the population table has
+// no entry for it -- the failing string itself is already in Path/the
+// invoice payload, not restated here).
+func TestFormatRegex_ExpectedIsThePattern(t *testing.T) {
+	e := formatEval{}
+	payload := Payload{"invoice": map[string]any{
+		"buyer": map[string]any{"tin": "abc"},
+	}}
+	r := Rule{
+		Key:      "buyer-tin-format",
+		Type:     TypeFormat,
+		Target:   "buyer.tin",
+		Params:   json.RawMessage(`{"pattern":"^[0-9]{8}-[0-9]{4}$"}`),
+		Severity: "error",
+		Message:  "Buyer TIN, when present, must be in the format NNNNNNNN-NNNN.",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal(`Eval() violation = nil, want non-nil: "abc" does not match the pattern`)
+	}
+	if v.Expected == nil || *v.Expected != "^[0-9]{8}-[0-9]{4}$" {
+		t.Errorf("Expected = %v, want \"^[0-9]{8}-[0-9]{4}$\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual != nil {
+		t.Errorf("Actual = %v, want nil -- format/regex has no Actual entry in the population table", stringPtrDebug(v.Actual))
+	}
+}
+
+// TestEnum_ExpectedIsTheAllowedValues (AC-3): enum reports the allowed
+// values (joined " · ") as Expected and the resolved (non-matching) value as
+// Actual.
+func TestEnum_ExpectedIsTheAllowedValues(t *testing.T) {
+	e := enumEval{}
+	payload := Payload{"invoice": map[string]any{"currency": "USD"}}
+	r := Rule{
+		Key:      "currency-allowed",
+		Type:     TypeEnum,
+		Target:   "currency",
+		Params:   json.RawMessage(`{"values":["NGN"]}`),
+		Severity: "error",
+		Message:  "Currency must be NGN.",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal(`Eval() violation = nil, want non-nil: "USD" is not in [NGN]`)
+	}
+	if v.Expected == nil || *v.Expected != "NGN" {
+		t.Errorf("Expected = %v, want \"NGN\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "USD" {
+		t.Errorf("Actual = %v, want \"USD\"", stringPtrDebug(v.Actual))
+	}
+}
+
+// TestRange_ExpectedIsTheBound (AC-3/AC-4, min-only arm): {"min":0}, value
+// -5 => Expected ">= 0", Actual "-5" (an exact decimal string, not a raw
+// float -- [D13]). Mirrors the seeded subtotal-non-negative shape.
+func TestRange_ExpectedIsTheBound(t *testing.T) {
+	e := rangeEval{}
+	payload := Payload{"invoice": map[string]any{"subtotal": float64(-5)}}
+	r := Rule{
+		Key:      "subtotal-non-negative",
+		Type:     TypeRange,
+		Target:   "subtotal",
+		Params:   json.RawMessage(`{"min":0}`),
+		Severity: "error",
+		Message:  "Subtotal must be zero or positive.",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: -5 is below min 0")
+	}
+	if v.Expected == nil || *v.Expected != ">= 0" {
+		t.Errorf("Expected = %v, want \">= 0\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "-5" {
+		t.Errorf("Actual = %v, want \"-5\"", stringPtrDebug(v.Actual))
+	}
+}
+
+// TestRange_ExpectedIsTheBound_MaxOnly (AC-4, max-only arm): no seeded rule
+// has a max (Stage 2 correction C1/AC-4), so this is direct construction.
+// {"max":5}, value 10 => Expected "<= 5".
+func TestRange_ExpectedIsTheBound_MaxOnly(t *testing.T) {
+	e := rangeEval{}
+	payload := Payload{"invoice": map[string]any{"quantity": float64(10)}}
+	r := Rule{
+		Key:      "RANGE-QTY-MAX",
+		Type:     TypeRange,
+		Target:   "quantity",
+		Params:   json.RawMessage(`{"max":5}`),
+		Severity: "error",
+		Message:  "quantity out of range",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: 10 is above max 5")
+	}
+	if v.Expected == nil || *v.Expected != "<= 5" {
+		t.Errorf("Expected = %v, want \"<= 5\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "10" {
+		t.Errorf("Actual = %v, want \"10\"", stringPtrDebug(v.Actual))
+	}
+}
+
+// TestRange_ExpectedIsTheBound_Both (AC-4, both-bounds arm): {"min":1,
+// "max":5}, value 0 (below min) => Expected still names BOTH configured
+// bounds (">= 1 · <= 5"), not just the one that fired -- Expected describes
+// the rule's whole valid range, per AC-4's "whichever bounds exist".
+func TestRange_ExpectedIsTheBound_Both(t *testing.T) {
+	e := rangeEval{}
+	payload := Payload{"invoice": map[string]any{"quantity": float64(0)}}
+	r := Rule{
+		Key:      "RANGE-QTY-BOTH",
+		Type:     TypeRange,
+		Target:   "quantity",
+		Params:   json.RawMessage(`{"min":1,"max":5}`),
+		Severity: "error",
+		Message:  "quantity out of range",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: 0 is below min 1")
+	}
+	if v.Expected == nil || *v.Expected != ">= 1 · <= 5" {
+		t.Errorf("Expected = %v, want \">= 1 · <= 5\" -- both configured bounds, not just the min arm that fired", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "0" {
+		t.Errorf("Actual = %v, want \"0\"", stringPtrDebug(v.Actual))
+	}
+}
+
+// TestRange_ExpectedIsTheBound_ExclusiveMin: rangeEval also supports
+// exclusive_min/exclusive_max, which no AC or seeded rule exercises but
+// which the evaluator already evaluates -- generalizing the SAME
+// whichever-bounds-exist rendering to these avoids an inconsistency where
+// two branches of one evaluator type treat Expected differently depending
+// on which bound param fired (product-advisor consult, this subtask).
+// {"exclusive_min":0}, value 0 (not > 0) => Expected "> 0".
+func TestRange_ExpectedIsTheBound_ExclusiveMin(t *testing.T) {
+	e := rangeEval{}
+	payload := Payload{"invoice": map[string]any{"quantity": float64(0)}}
+	r := Rule{
+		Key:      "RANGE-QTY-EXMIN",
+		Type:     TypeRange,
+		Target:   "quantity",
+		Params:   json.RawMessage(`{"exclusive_min":0}`),
+		Severity: "error",
+		Message:  "quantity out of range",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: 0 is not strictly greater than exclusive_min 0")
+	}
+	if v.Expected == nil || *v.Expected != "> 0" {
+		t.Errorf("Expected = %v, want \"> 0\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "0" {
+		t.Errorf("Actual = %v, want \"0\"", stringPtrDebug(v.Actual))
+	}
+}
+
+// TestRange_ExpectedIsTheBound_ExclusiveMax: {"exclusive_max":100}, value
+// 100 (not < 100) => Expected "< 100".
+func TestRange_ExpectedIsTheBound_ExclusiveMax(t *testing.T) {
+	e := rangeEval{}
+	payload := Payload{"invoice": map[string]any{"quantity": float64(100)}}
+	r := Rule{
+		Key:      "RANGE-QTY-EXMAX",
+		Type:     TypeRange,
+		Target:   "quantity",
+		Params:   json.RawMessage(`{"exclusive_max":100}`),
+		Severity: "error",
+		Message:  "quantity out of range",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: 100 is not strictly less than exclusive_max 100")
+	}
+	if v.Expected == nil || *v.Expected != "< 100" {
+		t.Errorf("Expected = %v, want \"< 100\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "100" {
+		t.Errorf("Actual = %v, want \"100\"", stringPtrDebug(v.Actual))
+	}
+}
+
+// assertOmitsExpectedAndActual marshals v and fails if the body has an
+// "expected" or "actual" key -- omitempty-absent, not a nil check, is the
+// property that actually matters on the wire (see this section's header).
+func assertOmitsExpectedAndActual(t *testing.T, v *Violation) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal(violation): %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("json.Unmarshal(marshaled violation): %v", err)
+	}
+	if _, ok := raw["expected"]; ok {
+		t.Errorf("marshaled violation has an \"expected\" key, want omitted entirely: %s", b)
+	}
+	if _, ok := raw["actual"]; ok {
+		t.Errorf("marshaled violation has an \"actual\" key, want omitted entirely: %s", b)
+	}
+}
+
+// stringPtrDebug renders a *string for a t.Errorf %v-style message: "<nil>"
+// for nil, else the quoted pointed-to value.
+func stringPtrDebug(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%q", *s)
 }
 
 // --- cross-cutting: bad params / absent target -----------------------------

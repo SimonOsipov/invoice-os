@@ -1,26 +1,36 @@
-// Import report step — pure view-model for the report step (M4-08-05, task-174).
-// Every derivation the UI reads lives here so CreateReport.tsx is presentation only
-// (plan §C). Pinned by importReport.test.ts (RPT-01..08, 10..13). Plan §C/§D are
-// authoritative.
+// Import report step — pure view-model over the POST /v1/imports 201 body (M4-08-05,
+// task-174). Pure and node-testable by construction: no React, no DOM, no fetch.
 //
-// Pure and node-testable by construction: no React, no DOM, no fetch. CreateReport.tsx
-// renders what these return and derives nothing of its own.
+// INVCR-01-09 (task-285) DELETED `structuralErrorRows`/`violationRows` and their row
+// types along with CreateReport.tsx, their only consumer. Neither is forked, both are
+// SUPERSEDED by the two live channels the review shell reads instead:
+//   - structural  -> reviewBatch.ts's `unreadableRows`, over the same `errors[]` through
+//                    the same `rowErrorRows`, with a strictly better contract (a
+//                    `row: null` entry instead of a silently dropped error, an em-dash
+//                    column instead of an invented one). The channel invariant — a
+//                    rule_key-bearing RowError is STRUCTURAL — moved with it and is
+//                    pinned there as UNREAD-3. See importReport.test.ts's header for
+//                    the per-claim audit of what migrated and what was retired.
+//   - content     -> per-row verdicts off the LIVE `InvoiceRecord.violations` (D4: the
+//                    review screen re-fetches rather than reading a frozen import-time
+//                    payload), never this report.
+// TRAP A below is retained because it still explains why `invoices_clean` and
+// `invoice_violations` disagree in the report reportSummary echoes.
 //
-// Three counting traps (plan §B; full evidence in task-174's Implementation Notes):
+// Two counting traps (plan §B; full evidence in task-174's Implementation Notes):
 //
 // TRAP A — blocking vs any-severity. `invoices_clean`/`invoices_with_violations` count
 // by the server's blocking predicate (internal/invoice/store.go:669-676, exactly
 // `severity === 'error'`); `invoice_violations` lists ANY severity that produced at
 // least one violation. A warning-only invoice is counted clean AND listed — documented,
-// not a bug (importer/service.go:36-42). violationRows must render `severity` VERBATIM
-// and derive NO blocked/clean label: re-deriving `severity === 'error'` in the browser
-// is a second copy of the server's predicate, free to drift — exactly the browser
-// verdict Core AC3 forbids.
+// not a bug (importer/service.go:36-42). Nothing here may derive a blocked/clean label
+// from `severity`: re-deriving `severity === 'error'` in the browser is a second copy of
+// the server's predicate, free to drift — exactly the browser verdict Core AC3 forbids.
 //
 // TRAP B — status:"failed" is a REACHABLE user path, not a defensive branch: a
 // header-only spreadsheet -> rowsTotal===0 (importer/service.go:817-826) -> the
 // handler still returns 201 Created (handlers.go:231-234) -> createImport resolves ->
-// the app advances to the report step. reportSummary keys `kind:'failed'` on
+// routeAfterImport (reviewBatch.ts) classifies it. reportSummary keys `kind:'failed'` on
 // `status !== 'completed'`, NOT `=== 'failed'`: normalizeReport deliberately does not
 // validate `status` (importApi.ts:296-301), so an unrecognised/undefined status must
 // also fail safe rather than render as a flawless import of nothing. KEEP — do not
@@ -37,7 +47,7 @@
 // illegal both-set state (unconstructible via the constructors, reachable only by an
 // inline literal bypassing them) resolves 'imported', never a mock invoice rendered
 // under a real UUID.
-import { rowErrorRows, type ImportReport } from './importApi'
+import type { ImportReport } from './importApi'
 
 export type ReportSummary =
   | { kind: 'failed'; id: string }
@@ -52,26 +62,6 @@ export type ReportSummary =
       invoices_with_violations: number
       rule_set_version: number | null
     }
-
-export interface StructuralRow {
-  // from errors[] — "couldn't read this row"
-  rowLabel: string // '' when neither row nor rows is present; delegates to rowErrorRows
-  field: string | null
-  rule_key: string | null // may be set (store-duplicate) and is STILL structural
-  severity: string | null
-  message: string
-}
-
-export interface ViolationRow {
-  // from invoice_violations[] — "read fine, rule failed"; one row per violation
-  invoice_number: string
-  invoice_id: string | null // null => NOT clickable — never a fallback to invoice_number
-  rows: number[]
-  rule_key: string
-  severity: string // rendered VERBATIM — no derived blocked/clean label (Trap A)
-  message: string
-  path: string | null
-}
 
 // kind:'failed' iff r.status !== 'completed' (Trap B; KEEP — see module doc comment).
 // On 'completed', echoes the six counters plus rule_set_version field-for-field — no
@@ -101,48 +91,6 @@ export function reportSummary(r: ImportReport): ReportSummary {
     // rule set numbered 0, a false zero (RPT-06).
     rule_set_version: r.rule_set_version,
   }
-}
-
-// One row per errors[] entry. rowLabel delegates to rowErrorRows (importApi.ts:284)
-// rather than re-reading the row/rows union locally — a local re-read could silently
-// drift from the shipped union reader, e.g. dropping row 0 (RPT-12).
-export function structuralErrorRows(r: ImportReport): StructuralRow[] {
-  return r.errors.map((e) => {
-    const nums = rowErrorRows(e)
-    return {
-      // Joined with ', ', never a `min–max` range: [5, 9] is two reported rows, and
-      // "rows 5–9" would assert five the server never reported (RPT-02).
-      rowLabel: nums.length === 0 ? '' : nums.length === 1 ? `row ${nums[0]}` : `rows ${nums.join(', ')}`,
-      field: e.field ?? null,
-      // Carried, and STILL structural — a rule_key-bearing RowError (the store-duplicate
-      // case) never crosses into the violations channel (RPT-03).
-      rule_key: e.rule_key ?? null,
-      severity: e.severity ?? null,
-      message: e.message,
-    }
-  })
-}
-
-// Flattens invoice_violations[] to one ViolationRow per violation, repeating the
-// parent's invoice_number/rows/invoice_id on each (RPT-04). invoice_id undefined ->
-// null, never a fallback to invoice_number (RPT-08).
-export function violationRows(r: ImportReport): ViolationRow[] {
-  return r.invoice_violations.flatMap((iv) =>
-    iv.violations.map((v) => ({
-      invoice_number: iv.invoice_number,
-      // Absent -> null, NEVER a fallback to invoice_number: the id is what the
-      // click-through carries, and a non-UUID cited as one is worse than not clickable
-      // at all (RPT-08).
-      invoice_id: iv.invoice_id ?? null,
-      rows: iv.rows,
-      rule_key: v.rule_key,
-      // Verbatim. No derived `blocked` flag — that would be a second copy of the
-      // server's blocking predicate (Trap A) living in the browser (RPT-05).
-      severity: v.severity,
-      message: v.message,
-      path: v.path ?? null,
-    })),
-  )
 }
 
 // --- detail-target selection ([detail-target-exclusive], debate F6, plan §C4) ---

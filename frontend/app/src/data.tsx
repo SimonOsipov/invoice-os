@@ -136,21 +136,23 @@ export const CFG: ClientCfg[] = [
   },
 ]
 
-// Honeywell Group (index 4 above) — single company with its own finance department
-// (in-house mode). Its CFG row is reused as the in-house tenant's SAMPLE demo profile by
-// lib/clients.ts's inhouseClient(), looked up there by name rather than this array
-// position: in-house has no business_entities rows to index into ([entity-picker]).
+// Honeywell Group (index 4 above) — one of the 5 non-onboarding rows lib/clients.ts's
+// DEMO_TEMPLATES cycles onto every REAL portfolio entity (buildClientForEntity, keyed by
+// a hash of the entity's own id, never array position or name). Before task-304
+// (INVCR-01-19) this row was ALSO reused directly, by name, as the in-house tenant's
+// permanent stand-in profile (lib/clients.ts's now-deleted inhouseClient()) — in-house
+// had no business_entities row of its own to hash. Now that db/seed.dev.sql seeds
+// in-house one real entity, its Client goes through the same cycled-by-hash path as
+// every other entity, firm or in-house; this row lands on it only if the hash says so,
+// same as any other CFG template.
 
 /* ------------------------------------------------------------------ */
 /* Create-flow static content                                          */
 /* ------------------------------------------------------------------ */
 
 export const WIZARD_STEPS: [string, string][] = [
-  ['1', 'Import'],
-  ['2', 'Map'],
-  ['3', 'Build'],
-  ['4', 'Validate'],
-  ['5', 'Approve'],
+  ['1', 'Enter'],
+  ['2', 'Review'],
 ]
 
 // Canonical invoice fields the Map step targets (Platform.dc.html ~L1115).
@@ -168,49 +170,9 @@ export const CANON: CanonField[] = [
   { key: 'line_unit_price' },
 ]
 
-export type SampleFileDef = {
-  id: string
-  ext: string
-  name: string
-  meta: string
-  iconBg: string
-  iconColor: string
-}
-
-export const SAMPLE_FILES: SampleFileDef[] = [
-  { id: 'pdf', ext: 'PDF', name: 'lagos-freight-INV-0482.pdf', meta: '1 PAGE · 142 KB', iconBg: 'var(--status-red-bg)', iconColor: 'var(--status-red-text)' },
-  { id: 'img', ext: 'JPG', name: 'scan-invoice-0482.jpg', meta: 'IMAGE · 2.1 MB', iconBg: 'var(--action-tint)', iconColor: 'var(--action)' },
-]
-
-export const VAL_LABELS: string[] = [
-  'Buyer TIN format',
-  'Buyer billing address',
-  'Mandatory seller fields',
-  'VAT computed at 7.5%',
-  'Line totals reconcile to header',
-  'Currency declared · NGN',
-  'Invoice number unique in ledger',
-  'Invoice date within open period',
-  'Withholding-tax logic',
-  'Tax-point date valid',
-  'Supplier VAT registration active',
-  'Line HS / SKU codes present',
-  'Rounding within ±0.01 tolerance',
-  'Digital-signature slot reserved',
-  'QR payload generated',
-  'Document schema · UBL 2.1',
-]
-
-// The scanline now reads the file and detects columns, then hands off to Map —
-// "Mapping to invoice fields" stopped being an animation and became a real step.
-export const PARSE_LABELS: string[] = [
-  'Reading file',
-  'Detecting delimiter & encoding',
-  'Reading header row',
-  'Scanning line rows',
-  'Detecting columns',
-]
-
+// Still read by the Workflows builder's doc-type condition (WorkflowParts.tsx's
+// DOC_OPTIONS) — it outlived the create form's own doc-type picker, which INVCR-01-03
+// removed because `invoices` has no doc-type column to file the choice into.
 export const DOC_TYPE_DEFS: [string, string, string][] = [
   ['B2B', 'Business', 'Standard tax invoice'],
   ['B2G', 'Government', 'Routed to MDA portal'],

@@ -88,6 +88,42 @@ func TestLineSum_QuantityAbsentIsWeightOne(t *testing.T) {
 	}
 }
 
+// TestLineSum_ExpectedIsTheFoldedLineTotal (INVCR-01-12 AC-2/AC-3, D9;
+// Stage 2 correction C3): Expected is the folded line total (sum);
+// Actual is the declared "expected" param's resolved value -- hoisted ONCE
+// (evaluators_math.go's `declared`) and reused in both the tolerance
+// comparison and this violation, so the reported Actual can never disagree
+// with the number the rule actually judged.
+//
+// Filed here (line_sum_test.go), NOT evaluators_math_test.go as the older
+// plan body named -- line_sum's own suite already lives in this dedicated
+// file (mirroring the codebase's established per-type file convention), and
+// evaluators_math_test.go covers only tax_math/cross_field/conditional.
+func TestLineSum_ExpectedIsTheFoldedLineTotal(t *testing.T) {
+	e := lineSumEval{}
+	// lines summing 1120000 (1000*1000 + 20*6000 = 1000000+120000=1120000)
+	// with subtotal=1000000 declared.
+	p := lineSumPayload(1000000,
+		map[string]any{"unit_price": 1000.0, "quantity": 1000.0},
+		map[string]any{"unit_price": 6000.0, "quantity": 20.0},
+	)
+	r := lineSumRule()
+
+	v, err := mustEval(t, e, p, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: Σ 1120000 != declared subtotal 1000000")
+	}
+	if v.Expected == nil || *v.Expected != "1120000" {
+		t.Errorf("Expected = %v, want \"1120000\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "1000000" {
+		t.Errorf("Actual = %v, want \"1000000\"", stringPtrDebug(v.Actual))
+	}
+}
+
 func TestLineSum_NoLineItemsNotApplicable(t *testing.T) {
 	e := lineSumEval{}
 	// line_items absent entirely -> pass (line-items-required owns that case).

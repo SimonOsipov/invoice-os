@@ -18,6 +18,9 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -341,6 +344,91 @@ func PreviewHandler() http.HandlerFunc {
 			SampleRows: sample,
 			// Every data row, not just the previewed ones.
 			RowsTotal: len(rows),
+		})
+	}
+}
+
+// batchResponse is the GET /v1/imports/{id} success body (task-283):
+// id/entity_id/status/rows_total/rows_valid/rows_invalid/errors/created_at
+// are FROZEN at Finalize; rule_set_version is DERIVED (min() over the
+// batch's invoices, task-283 R4). Errors is []RowError (never nil from
+// Store.GetBatch), so a clean batch serializes "errors":[] -- NOT the same
+// as POST /v1/imports's own contract, which renders "errors":null for a
+// clean import (a flagged, deliberately-unfixed divergence between the two
+// endpoints, task-283 trap 4).
+//
+// RuleSetVersion is a *int with NO omitempty: it must render an explicit
+// JSON null when nothing under this batch was ever validated -- never
+// omitted, never a false 0 ([Stage-1 F2]).
+type batchResponse struct {
+	ID          string     `json:"id"`
+	EntityID    string     `json:"entity_id"`
+	Status      string     `json:"status"`
+	RowsTotal   int        `json:"rows_total"`
+	RowsValid   int        `json:"rows_valid"`
+	RowsInvalid int        `json:"rows_invalid"`
+	Errors      []RowError `json:"errors"`
+
+	RuleSetVersion *int      `json:"rule_set_version"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// GetHandler is GET /v1/imports/{id} (task-283): identity-first-401 -> a
+// handler-level uuid.Parse guard (400 BEFORE the store is ever called -- a
+// malformed id must never reach Store.GetBatch's own 22P02 mapping, which
+// would put the package-internal "importer: validation" string on the wire;
+// the wording here mirrors internal/invoice's ListHandler instead) -> get ->
+// statusForErr -> 200 + batchResponse on success.
+//
+// A cross-tenant id and an id that exists nowhere BOTH resolve to
+// ErrNotFound in the store, so both render the SAME 404 body -- that
+// byte-equality, not the 404 status itself, is what proves there is no
+// existence oracle (task-283 R5).
+func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		id := r.PathValue("id")
+		if _, err := uuid.Parse(id); err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+
+		batch, err := get(r.Context(), id)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: get batch", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		// Second nil guard, after Store.GetBatch's own: this handler is a
+		// factory over an arbitrary get func, and a nil []RowError marshals
+		// to JSON null, not [] (spec 4).
+		rowErrors := batch.Errors
+		if rowErrors == nil {
+			rowErrors = []RowError{}
+		}
+
+		writeJSON(w, http.StatusOK, batchResponse{
+			ID:          batch.ID,
+			EntityID:    batch.EntityID,
+			Status:      batch.Status,
+			RowsTotal:   batch.RowsTotal,
+			RowsValid:   batch.RowsValid,
+			RowsInvalid: batch.RowsInvalid,
+			Errors:      rowErrors,
+
+			RuleSetVersion: batch.RuleSetVersion,
+			CreatedAt:      batch.CreatedAt,
 		})
 	}
 }

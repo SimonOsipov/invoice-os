@@ -139,8 +139,8 @@ export function MemberRoleMatrix() {
                     const allowed = row[r.id]
                     return (
                       <td key={r.id} style={{ ...BODY_CELL, textAlign: 'center' }}>
-                        {/* Teal tick / muted cross, NOT the green/red pair CreateResults
-                            uses. app-layer.css:71-73 assigns the palette meaning "teal =
+                        {/* Teal tick / muted cross, NOT a green/red pass/fail pair.
+                            app-layer.css:71-73 assigns the palette meaning "teal =
                             pass, destructive = failure", and a Preparer who cannot approve
                             is not a failure — it is the role working as designed. */}
                         <span style={{ display: 'inline-flex', color: allowed ? 'var(--action)' : 'var(--fg-4)' }}>

@@ -30,6 +30,9 @@ function invoiceRecord(overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
     csid: null,
     qr_payload: null,
     rejection_reasons: [],
+    kept_as_is_at: null,
+    kept_as_is_by: null,
+    kept_as_is_reason: null,
     rule_set_version: null,
     ...overrides,
   }

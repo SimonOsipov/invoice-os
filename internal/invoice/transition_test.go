@@ -1083,3 +1083,41 @@ func TestStoreTransition_AcceptedClearFailureStillRollsBack(t *testing.T) {
 		t.Errorf("audit_log invoice.transitioned rows = %d, want unchanged %d", n, beforeAudit)
 	}
 }
+
+// TestLegalTransitionsUnchanged (INVCR-01-15, D6/D10, task-291, AC #12): D6 does NOT
+// touch the state machine, and D10 (the loosening D6 made unnecessary) is dropped --
+// this is the tripwire. No DB needed: enumerates legalTransitions directly (store.go)
+// and asserts it holds EXACTLY the 11 shipped edges named by wantLegalEdge
+// (transition_adversarial_test.go's own hard-coded, independent restatement of the
+// story's edge table) -- no additions, no removals. A regression here means an
+// implementation misread D6 and widened the machine to make a kept-invalid invoice
+// transmittable instead of keeping it strictly off-machine, as the story requires --
+// "If an implementation appears to need a transition change, STOP" (task-291's own
+// text). Deliberately independent of TestTransition_ExhaustiveMatrixLocksLegalEdgeTable
+// (which drives all 49 pairs through the real, DB-backed Store.Transition): that test
+// proves BEHAVIOUR agrees with wantLegalEdge; this one is the cheap, DB-free guard
+// that the TABLE ITSELF is still exactly 11 entries, runnable on every `go test` with
+// no service container at all.
+func TestLegalTransitionsUnchanged(t *testing.T) {
+	got := map[[2]Status]bool{}
+	total := 0
+	for from, targets := range legalTransitions {
+		for _, target := range targets {
+			got[[2]Status{from, target}] = true
+			total++
+		}
+	}
+	if total != 11 {
+		t.Fatalf("legalTransitions has %d edges, want exactly 11 (D6/D10: this story adds none)", total)
+	}
+	for edge, want := range wantLegalEdge {
+		if want && !got[edge] {
+			t.Errorf("legalTransitions is missing edge %s->%s, want it present (D6/D10: no edges may be removed either)", edge[0], edge[1])
+		}
+	}
+	for edge := range got {
+		if !wantLegalEdge[edge] {
+			t.Errorf("legalTransitions has an unexpected new edge %s->%s (D6/D10 forbid adding transition edges for kept-as-is)", edge[0], edge[1])
+		}
+	}
+}

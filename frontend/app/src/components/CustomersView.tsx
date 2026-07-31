@@ -32,7 +32,9 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const list = useAsync<InvoiceRecord[]>(
     () =>
       base
-        ? listInvoices(ctx.authedFetch, base, { entityId: activeEntityId })
+        ? // listInvoices resolves the {invoices, pagination} envelope (INVCR-01-08); this
+          // screen sends no limit/offset and stays un-paged, so it keeps the rows only.
+          listInvoices(ctx.authedFetch, base, { entityId: activeEntityId }).then((r) => r.invoices)
         : Promise.reject(new Error('no gateway configured')),
     { immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
   )

@@ -98,6 +98,33 @@ INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
     DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
 
+-- task-304 (INVCR-01-19): ONE business_entities row for the in-house tenant
+-- (Honeywell Group, 2222...) -- previously zero, which was the second half of why
+-- an in-house sign-in could not file anything at all (the first half was
+-- frontend/app/src/App.tsx's `active` memo, which special-cased mode==='inhouse' to
+-- a synthetic Client with entityId:null and never consulted the fetched entity list
+-- even once a row existed here -- both are fixed by this story, together).
+--
+-- In-house is a DEGENERATE case of the firm model (story description's Design
+-- section): a firm manages many client entities, a company that files for itself
+-- owns exactly one. This block therefore mirrors the firm block above in STYLE
+-- (raw SQL, ON CONFLICT DO UPDATE idempotency, same partial unique index target)
+-- but seeds exactly ONE row, never a portfolio.
+--
+-- TIN '20665510-0001' is the same literal src/data.tsx's mock CFG entry for
+-- "Honeywell Group" already uses as its demo profile's tin (looked up there by
+-- name, lib/clients.ts's buildClientForEntity) -- reusing it keeps the mock overlay
+-- and the real seeded row telling the same story rather than two different TINs
+-- for "the same" company. It is a hyphenated NNNNNNNN-NNNN literal: raw SQL
+-- bypasses portfolio.ValidateTIN, so no Luhn check digit is needed here, and this
+-- is deliberately NOT the 10-digit JTB shape MBSSupplierTIN leaves alone
+-- (internal/invoice/supplier_tin.go) -- it is the same MBS wire spelling the firm
+-- block's 27 rows above already use, so supplier-tin-format never fires against it.
+INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
+  ('22222222-2222-2222-2222-222222222222', 'Honeywell Group', '20665510-0001', 'Manufacturing', 'active')
+ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
+    DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
+
 -- persona-handoff-fix step 4 ([demo-invoice-seed]): a curated invoice history for 6 of
 -- the 27 business_entities above, so the entity-scoped surfaces persona-handoff-fix
 -- steps 1-3 shipped (workspace switcher, Overview, Invoices, Customers, Reports --
@@ -120,9 +147,10 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- Entity ids are GENERATED (see the block above) -- these INSERTs resolve entity_id by
 -- joining business_entities on its stable, curated TIN, never a literal uuid.
 -- rule_set_version_id resolves the same way, via `(SELECT id FROM rule_set_versions
--- WHERE is_active)` (currently v2, migrations/20260716185106_rule_set_v2.sql) -- never a
--- literal, so this seed tracks whichever version is active without a hand-maintained
--- number. `validated` (a seed-only column below, not a real one) gates whether a row
+-- WHERE is_active)` (currently v3, migrations/20260731090000_rule_set_v3.sql; previously
+-- v2, migrations/20260716185106_rule_set_v2.sql) -- never a literal, so this seed tracks
+-- whichever version is active without a hand-maintained number. `validated` (a seed-only
+-- column below, not a real one) gates whether a row
 -- stamps rule_set_version_id at all: false for the 3 invoices left genuinely untouched
 -- since creation (rule_set_version_id stays NULL, matching Store.Create's own invariant
 -- that a fresh invoice starts unvalidated); true for every other row, including the ones

@@ -58,6 +58,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -843,6 +844,369 @@ func TestListHandler_EntityIDParam(t *testing.T) {
 	})
 }
 
+// TestListHandler_MalformedImportBatchID400 (INVCR-01-06 spec 7, AC-6/AC-1
+// fork 1, task-282): ListHandler parses ?import_batch_id with uuid.Parse --
+// absent OR EMPTY leaves the captured ListFilter.ImportBatchID at "" (the
+// zero value, unfiltered -- [Fork 1: empty param = absent, not 400]); a
+// well-formed uuid passes through verbatim; a malformed value 400s BEFORE
+// the store is ever called. Mirrors TestListHandler_EntityIDParam's exact
+// shape.
+//
+// RED today: ListHandler does not parse import_batch_id at all, so the
+// malformed sub-test fails (200 + store called, not 400) and the
+// well-formed-uuid sub-test fails (captured.ImportBatchID stays "", not the
+// uuid) -- both value mismatches, not compile errors.
+func TestListHandler_MalformedImportBatchID400(t *testing.T) {
+	t.Run("absent applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.ImportBatchID != "" {
+			t.Errorf("captured ListFilter.ImportBatchID = %q, want \"\" when ?import_batch_id is absent", captured.ImportBatchID)
+		}
+	})
+
+	t.Run("empty string applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?import_batch_id=")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.ImportBatchID != "" {
+			t.Errorf("captured ListFilter.ImportBatchID = %q, want \"\" for ?import_batch_id= (empty is absent, not a 400 -- [Fork 1])", captured.ImportBatchID)
+		}
+	})
+
+	t.Run("well-formed uuid sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		batchID := uuid.NewString()
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?import_batch_id="+batchID)
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.ImportBatchID != batchID {
+			t.Errorf("captured ListFilter.ImportBatchID = %q, want %q", captured.ImportBatchID, batchID)
+		}
+	})
+
+	t.Run("malformed value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when import_batch_id is not a well-formed uuid")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?import_batch_id=nope")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_UnknownStatus400 (INVCR-01-06 spec 8, AC-6, task-282):
+// ListHandler parses ?status via the existing Status.valid() (the same
+// "unknown status" 400 TransitionHandler already uses, handlers.go:434) --
+// absent leaves the captured ListFilter.Status at "" (zero value,
+// unfiltered); one of the 7 canonical values passes through; anything else
+// 400s BEFORE the store is ever called. "approved" is D2's forbidden
+// vocabulary (not one of the 7 canonical Status values), so this doubles as
+// a D2 guard.
+//
+// RED today: ListHandler does not parse status at all, so "approved" 200s
+// with the store called (not 400), and "validated" leaves captured.Status
+// == "" (not StatusValidated) -- both value mismatches.
+func TestListHandler_UnknownStatus400(t *testing.T) {
+	t.Run("absent applies no filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.Status != "" {
+			t.Errorf("captured ListFilter.Status = %q, want \"\" when ?status is absent", captured.Status)
+		}
+	})
+
+	t.Run("validated sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?status=validated")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.Status != StatusValidated {
+			t.Errorf("captured ListFilter.Status = %q, want %q", captured.Status, StatusValidated)
+		}
+	})
+
+	t.Run("approved is unknown, 400s store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when status is not a canonical value")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?status=approved")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_NonBoolNeedsFix400 (INVCR-01-06 spec 9, AC-6, task-282):
+// ListHandler parses ?needs_fix via strconv.ParseBool, mirroring
+// TestListHandler_NeedsAttentionParse's exact shape -- absent defaults the
+// captured ListFilter.NeedsFix to false; "1" sets it true; an unparseable
+// value 400s BEFORE the store is ever called.
+//
+// RED today: ListHandler does not parse needs_fix at all, so the "1"
+// sub-test fails (captured.NeedsFix stays false) and the "malformed"
+// sub-test fails (no 400, store runs anyway) -- both value mismatches.
+func TestListHandler_NonBoolNeedsFix400(t *testing.T) {
+	t.Run("absent defaults to false", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.NeedsFix {
+			t.Errorf("captured ListFilter.NeedsFix = true, want false when ?needs_fix is absent")
+		}
+	})
+
+	t.Run("1 sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?needs_fix=1")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if !captured.NeedsFix {
+			t.Errorf("captured ListFilter.NeedsFix = false, want true for ?needs_fix=1")
+		}
+	})
+
+	t.Run("unparseable value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when needs_fix is not a bool")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?needs_fix=maybe")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestListHandler_RuleKeyAndQLengthCap (QA Mode B, AC-6, task-282): the
+// implementation plan's own §1 param-contract table requires rule_key/q to
+// 400 with "rule_key is too long" / "q is too long" above a 200-char cap --
+// Stage 2.5 (RED) flagged that no test in the 11-row spec table pinned it,
+// and Stage 3 (execution) implemented the cap without adding one. Closes
+// that gap. Covers: the boundary (exactly 200 bytes accepted, 201 bytes
+// 400s), that the cap is a BYTE length and not a rune count (200 multi-byte
+// CJK runes is 600 bytes and must still 400 even though it is "200
+// characters" by a rune count), and that malformed input is REJECTED rather
+// than silently truncated -- every 400 sub-case here uses a store closure
+// that calls t.Fatal if invoked, so there is no code path where a truncated
+// value could reach Store.List.
+func TestListHandler_RuleKeyAndQLengthCap(t *testing.T) {
+	t.Run("rule_key exactly 200 bytes is accepted", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("a", 200)
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		v := url.Values{}
+		v.Set("rule_key", key)
+		rec, _ := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for a 200-byte rule_key (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatal("store.List was not called for a 200-byte rule_key")
+		}
+		if captured.RuleKey != key {
+			t.Errorf("captured ListFilter.RuleKey len = %d, want 200 (value must pass through unmutated, not truncated)", len(captured.RuleKey))
+		}
+	})
+
+	t.Run("rule_key 201 bytes 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("a", 201)
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when rule_key exceeds the 200-byte cap")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("rule_key", key)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 201-byte rule_key (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "rule_key is too long" {
+			t.Errorf("error = %q, want \"rule_key is too long\"", resp.Error)
+		}
+	})
+
+	t.Run("q exactly 200 bytes is accepted", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		q := strings.Repeat("b", 200)
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		v := url.Values{}
+		v.Set("q", q)
+		rec, _ := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for a 200-byte q (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatal("store.List was not called for a 200-byte q")
+		}
+		if captured.Query != q {
+			t.Errorf("captured ListFilter.Query len = %d, want 200 (value must pass through unmutated, not truncated)", len(captured.Query))
+		}
+	})
+
+	t.Run("q 201 bytes 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		q := strings.Repeat("b", 201)
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when q exceeds the 200-byte cap")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("q", q)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 201-byte q (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "q is too long" {
+			t.Errorf("error = %q, want \"q is too long\"", resp.Error)
+		}
+	})
+
+	// The cap is a BYTE length, not a rune count: 200 CJK runes is 200
+	// characters by any human count but 600 UTF-8 bytes (3 bytes/rune for
+	// U+6D4B), so it must still 400 -- a rune-counting implementation would
+	// wrongly accept this.
+	t.Run("rule_key 200 multi-byte runes (600 bytes) 400s -- byte cap, not rune cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		key := strings.Repeat("测", 200)
+		if n := len([]rune(key)); n != 200 {
+			t.Fatalf("test fixture bug: fixture has %d runes, want 200", n)
+		}
+		if n := len(key); n != 600 {
+			t.Fatalf("test fixture bug: fixture has %d bytes, want 600 (3 bytes/rune for U+6D4B)", n)
+		}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when rule_key exceeds the 200-BYTE cap, even at exactly 200 runes")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("rule_key", key)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 200-rune/600-byte rule_key (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "rule_key is too long" {
+			t.Errorf("error = %q, want \"rule_key is too long\"", resp.Error)
+		}
+	})
+
+	// Same byte-vs-rune proof for q, confirming the cap applies uniformly to
+	// both free-text params rather than only rule_key.
+	t.Run("q 200 multi-byte runes (600 bytes) 400s -- byte cap, not rune cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		q := strings.Repeat("测", 200)
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when q exceeds the 200-BYTE cap, even at exactly 200 runes")
+			return nil, 0, nil
+		}
+		v := url.Values{}
+		v.Set("q", q)
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a 200-rune/600-byte q (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "q is too long" {
+			t.Errorf("error = %q, want \"q is too long\"", resp.Error)
+		}
+	})
+}
+
 // TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues (QA Mode B
 // adversarial): the RAW response body's top-level envelope must have EXACTLY
 // two keys, "invoices" and "pagination" (no extra keys, no drift from the
@@ -1591,6 +1955,10 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		// every other Invoice field here. FAILS today (19 raw keys vs. this
 		// slice's 23) since none of the four exist on Invoice yet.
 		"irn", "csid", "qr_payload", "rejection_reasons",
+		// INVCR-01-15 (D6, task-291): +3 -- kept_as_is_at/by/reason join
+		// Invoice as direct top-level siblings too, same no-omitempty
+		// flattened-embed shape as every field above.
+		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -3108,6 +3476,11 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
 		"vat", "total", "violations", "rule_set_version_id", "created_at", "line_items",
 		"irn", "csid", "qr_payload", "rejection_reasons",
+		// INVCR-01-15 (D6, task-291): joins Invoice as direct top-level
+		// siblings, same no-omitempty flattened-embed shape as every field
+		// above -- "pre-existing" here means "already on Invoice", which this
+		// story makes true.
+		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"rule_set_version", "qr_png_base64",
 	}
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason"}
@@ -3243,7 +3616,12 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"id", "entity_id", "import_batch_id", "invoice_number", "status", "issue_date",
 		"supplier_tin", "supplier_name", "buyer_tin", "buyer_name", "currency", "subtotal",
 		"vat", "total", "violations", "rule_set_version_id", "created_at",
-		"irn", "csid", "qr_payload", "rejection_reasons", "line_items",
+		"irn", "csid", "qr_payload", "rejection_reasons",
+		// INVCR-01-15 (D6, task-291): kept_as_is_at/by/reason are declared
+		// between RejectionReasons and LineItems on Invoice, so they land
+		// here in wire order too.
+		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
+		"line_items",
 		// getResponse's own fields, in declaration order -- the three
 		// action-flag keys MUST be last (AC #5's additive/position clause).
 		"rule_set_version", "qr_png_base64",
@@ -3786,5 +4164,205 @@ func TestEditHandler_LineItemsNullEntryDecodesToZeroValueNotError(t *testing.T) 
 	}
 	if lines[1].Description == nil || *lines[1].Description != "a" {
 		t.Errorf("line[1].Description = %v, want %q", lines[1].Description, "a")
+	}
+}
+
+// --- GET /v1/invoices/violation-summary (task-283 specs 12-14) -------------
+
+// violationSummaryBody mirrors the (future) GET
+// /v1/invoices/violation-summary response wire shape (violationSummaryResponse,
+// handlers.go), plus an Error field for the shared {"error":"..."} envelope
+// -- same convention as invoiceBody/listInvoicesResponse.
+type violationSummaryBody struct {
+	Rules []RuleCount `json:"rules"`
+	Error string      `json:"error"`
+}
+
+// doViolationSummary builds the GET /v1/invoices/violation-summary request
+// (query appended verbatim, e.g. "?import_batch_id=..."), injects id into
+// the context when non-nil, runs it through ViolationSummaryHandler(summary,
+// nil), and decodes the JSON response body.
+func doViolationSummary(t *testing.T, summary func(ctx context.Context, importBatchID string) ([]RuleCount, error), id *auth.Identity, query string) (*httptest.ResponseRecorder, violationSummaryBody) {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/invoices/violation-summary"+query, nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	ViolationSummaryHandler(summary, nil).ServeHTTP(rec, r)
+	var resp violationSummaryBody
+	if len(rec.Body.Bytes()) > 0 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+	}
+	return rec, resp
+}
+
+// TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled
+// (spec 12, task-283 AC-6): import_batch_id is REQUIRED on this route --
+// absent OR malformed must 400 BEFORE store.ViolationSummary is ever
+// called (an unbounded tenant-wide aggregation is not a supported query).
+// The status alone is VACUOUS: a malformed uuid reaching the store would
+// ALSO plausibly 400 -- the spy (store must not run) is the only half of
+// this test that actually discriminates a handler-level uuid.Parse
+// pre-check from a store-level rejection.
+func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t *testing.T) {
+	t.Run("missing import_batch_id", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run when import_batch_id is absent")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, &id, "")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+
+	t.Run("malformed import_batch_id", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run when import_batch_id is not a well-formed uuid")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, &id, "?import_batch_id=not-a-uuid")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestViolationSummaryHandler_NoIdentity401 (QA Stage 4, task-283 F2 / AC
+// #3 "identity-first 401"): no identity in the request context must 401
+// BEFORE the handler-level import_batch_id checks (absent/malformed-uuid
+// guard), and BEFORE store.ViolationSummary, ever run -- proven here with
+// BOTH an absent AND a malformed import_batch_id, so a wrong ordering
+// (the import_batch_id guard before the identity check) would surface as
+// 400, not 401, in either sub-case. The spy additionally proves the store
+// itself never runs.
+func TestViolationSummaryHandler_NoIdentity401(t *testing.T) {
+	t.Run("missing import_batch_id", func(t *testing.T) {
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run without an identity")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, nil, "")
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+
+	t.Run("malformed import_batch_id", func(t *testing.T) {
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			t.Fatal("store.ViolationSummary must not run without an identity")
+			return nil, nil
+		}
+		rec, resp := doViolationSummary(t, summary, nil, "?import_batch_id=not-a-uuid")
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error == "" {
+			t.Error("expected a non-empty error message in the body")
+		}
+	})
+}
+
+// TestViolationSummaryHandler_RulesIsEmptyArrayNotNull (spec 13): a store
+// returning a nil []RuleCount must still render "rules":[], never null.
+func TestViolationSummaryHandler_RulesIsEmptyArrayNotNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		return nil, nil
+	}
+	rec, _ := doViolationSummary(t, summary, &id, "?import_batch_id="+uuid.NewString())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.Bytes()
+	if !bytes.Contains(raw, []byte(`"rules":[]`)) {
+		t.Errorf("body = %s, want raw JSON to contain \"rules\":[] (never null, even when the store returns a nil slice)", raw)
+	}
+}
+
+// TestRoutes_BothResolveInBothDirections (spec 14, task-283 R6): Go 1.22+
+// net/http.ServeMux resolves by PATTERN SPECIFICITY, not registration order
+// -- a literal segment ("violation-summary") always beats a wildcard
+// ({id}), in EITHER registration order (go.mod is go 1.26.4; empirically
+// verified live both ways -- the older "register the literal BEFORE {id}"
+// wording is obsolete). This test drives a real *http.ServeMux, built in
+// BOTH registration orders, for BOTH request directions each time, and
+// asserts the CORRECT closure fires (and the wrong one does not) every
+// time.
+func TestRoutes_BothResolveInBothDirections(t *testing.T) {
+	build := func(literalFirst bool) (mux *http.ServeMux, getCalled, summaryCalled *bool) {
+		getCalled = new(bool)
+		summaryCalled = new(bool)
+		get := func(ctx context.Context, id string) (Invoice, error) {
+			*getCalled = true
+			return Invoice{}, nil
+		}
+		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+			*summaryCalled = true
+			return nil, nil
+		}
+		mux = http.NewServeMux()
+		if literalFirst {
+			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, nil))
+		} else {
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, nil))
+			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
+		}
+		return mux, getCalled, summaryCalled
+	}
+
+	callerID := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	doReq := func(mux *http.ServeMux, target string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", target, nil)
+		r = r.WithContext(auth.WithIdentity(r.Context(), callerID))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}
+
+	for _, literalFirst := range []bool{true, false} {
+		name := "wildcard registered first"
+		if literalFirst {
+			name = "literal registered first"
+		}
+		t.Run(name, func(t *testing.T) {
+			mux, getCalled, summaryCalled := build(literalFirst)
+			doReq(mux, "/v1/invoices/violation-summary?import_batch_id="+uuid.NewString())
+			if !*summaryCalled {
+				t.Error("GET /v1/invoices/violation-summary did not resolve to ViolationSummaryHandler's closure")
+			}
+			if *getCalled {
+				t.Error(`GET /v1/invoices/violation-summary incorrectly resolved to GetHandler's closure ("violation-summary" read as a path {id})`)
+			}
+
+			mux, getCalled, summaryCalled = build(literalFirst)
+			doReq(mux, "/v1/invoices/"+uuid.NewString())
+			if !*getCalled {
+				t.Error("GET /v1/invoices/<uuid> did not resolve to GetHandler's closure")
+			}
+			if *summaryCalled {
+				t.Error("GET /v1/invoices/<uuid> incorrectly resolved to ViolationSummaryHandler's closure")
+			}
+		})
 	}
 }

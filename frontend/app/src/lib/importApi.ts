@@ -66,6 +66,7 @@
 // import under this app's `verbatimModuleSyntax`.
 import { ApiError } from '@invoice-os/api-client'
 import type { Session } from '../auth'
+import type { AuthedFetch } from './portfolio'
 
 export interface ImportPreview {
   format: string
@@ -86,11 +87,16 @@ export interface RowError {
   message: string // always
 }
 
+// `expected`/`actual` (INVCR-01-08 AC-3) mirror validationApi.ts's Violation field for
+// field -- same optionality, same decimal-string type, same reason (see that type's own
+// comment): absent means absent, never `''`.
 export interface RuleViolation {
   rule_key: string
   severity: string
   message: string
   path?: string
+  expected?: string
+  actual?: string
 }
 
 export interface InvoiceViolations {
@@ -117,6 +123,33 @@ export interface ImportReport {
   invoices_clean: number
   invoices_with_violations: number
   invoice_violations: InvoiceViolations[] // NORMALIZED: wire null -> []
+}
+
+// GET /v1/imports/{id} response (the import_batches row; 08/task-284 AC-2, per 07's own
+// R1/R2). Exactly 9 fields -- no `filename` (07 R1), no `ready_invoices`/
+// `invoices_clean`/`invoices_with_violations` (07 R2 -- those are live off the list
+// endpoint's own totals, never stored on the batch).
+//
+// `errors` is always an ARRAY on GET, never JSON null (07 spec 4). That is NOT the same
+// claim as "always EMPTY", and reading it that way would make the review screen's
+// unreadable-rows tile a permanent zero. It carries the batch's real structural errors:
+// Store.Finalize persists them into import_batches.errors on the success path
+// (service.go:958), Store.GetBatch reads the column back (store.go:235-280), and the
+// nil-guards in both GetBatch and GetHandler exist solely so a jsonb null cannot marshal
+// back out as JSON `null`. That never-null guarantee is exactly why getImportBatch does
+// NOT run the body through normalizeReport -- the POST's wire null->[] coercion is a
+// documented quirk of THAT endpoint alone, and re-coercing here would imply the GET might
+// lie too.
+export interface ImportBatch {
+  id: string
+  entity_id: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  rows_total: number
+  rows_valid: number
+  rows_invalid: number
+  errors: RowError[]
+  rule_set_version: number | null
+  created_at: string
 }
 
 export type XhrCtor = new () => XMLHttpRequest
@@ -262,6 +295,21 @@ export async function createImport(
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)
+}
+
+// A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through
+// the typed authedFetch wrapper, not xhrJson (08/task-284 AC-2). `authedFetch` seam
+// first, `base` second -- repo convention. Non-2xx rejects with the underlying ApiError
+// unchanged; `rule_set_version` is never coerced to 0 (a null there means "nothing was
+// evaluated" and must stay null), which is also why the body is resolved verbatim with no
+// normalizeReport pass -- see ImportBatch's own comment.
+export async function getImportBatch(authedFetch: AuthedFetch, base: string, id: string): Promise<ImportBatch> {
+  // `id` is encoded even though it is a uuid by the time it gets here (the route is
+  // `#review/<uuid>` and parseReviewHash rejects anything else): it is still a path segment
+  // built from a caller-supplied string, and the encode costs nothing. NOTE this differs
+  // from getInvoice/getInvoiceHistory/editInvoice, which interpolate their `id` raw --
+  // flagged rather than silently "fixed" across all four, which is not this subtask's call.
+  return authedFetch<ImportBatch>(`${base}/api/invoice/v1/imports/${encodeURIComponent(id)}`)
 }
 
 export function uploadPercent(p: UploadPhase): number | null {

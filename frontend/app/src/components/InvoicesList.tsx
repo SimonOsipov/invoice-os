@@ -77,7 +77,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const list = useAsync<InvoiceRecord[]>(
     () =>
       base
-        ? listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId })
+        ? // listInvoices resolves the {invoices, pagination} envelope (INVCR-01-08); this
+          // screen is deliberately un-paged and sends no limit/offset, so it reads the
+          // rows and drops the pagination -- the review screen is what needs `total`.
+          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId }).then((r) => r.invoices)
         : Promise.reject(new Error('no gateway configured')),
     { immediate: shouldFetchInvoices(base), deps: [needsAttention, ctx.mode, ctx.active.entityId] },
   )
@@ -185,8 +188,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       tickInFlight.current = true
       const g = gen.current
       listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId })
-        .then((freshRows) => {
-          if (g === gen.current) setLive(freshRows)
+        .then((r) => {
+          if (g === gen.current) setLive(r.invoices)
         })
         .catch(() => {}) // a transient blip is silent -- the next tick retries (AC-6)
         .finally(() => { tickInFlight.current = false })
@@ -211,11 +214,17 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // the invoice silently strands at `validated` while the results panel reads
   // "Already submitted with this request" as if it succeeded.
   //
-  // No client-side 200-id cap check: `listInvoices` sends no `limit` param, so every
-  // page is bounded by `ListHandler`'s server-side default of 50 rows — well under the
-  // batch-submit endpoint's 200-id cap, so a full-page selection can never exceed it. If
-  // the list client ever starts sending its own `limit`, this argument (and the missing
-  // clamp) needs revisiting.
+  // No client-side 200-id cap check, and the reason is now STRUCTURAL rather than a
+  // property of this call site: `ListHandler` silently clamps `limit` down to 200
+  // (handlers.go:370-372), so ANY page of GET /v1/invoices holds ≤200 rows for ANY `limit`
+  // ANY caller passes — `listInvoices` gaining a `limit` param (INVCR-01-08) cannot
+  // breach it. `rows` here is exactly one such page, and `selected` is pruned to
+  // `selectableIds(rows)`, so `selected.length ≤ 200` while the endpoint rejects only
+  // `> 200`. THE HONEST COST: the margin used to be 150 (a 50-row page against a 200-id
+  // cap) and is now ZERO — a full-page select-all at `limit=200` saturates the cap
+  // exactly. Two facts hold it up, and either one breaking needs a real clamp here: the
+  // two 200s staying equal (the server's limit ceiling and batch-submit's id cap are
+  // independent constants that nothing ties together), and selection never spanning pages.
   async function submitSelection() {
     if (base == null) return
     if (submitInFlight.current) return

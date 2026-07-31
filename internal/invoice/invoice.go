@@ -102,7 +102,18 @@ type Invoice struct {
 	CSID             *string         `json:"csid"`
 	QRPayload        *string         `json:"qr_payload"`
 	RejectionReasons json.RawMessage `json:"rejection_reasons"`
-	LineItems        []LineItem      `json:"line_items,omitempty"`
+
+	// KeptAsIsAt/By/Reason (INVCR-01-15, D6, [keep-as-is-three-columns]) are the
+	// auditable-triage triple: who/when/why an operator chose to keep a failing
+	// draft rather than fix it. All three or none -- enforced by
+	// invoices_kept_as_is_complete (migrations/20260731100000_invoices_kept_as_is.sql),
+	// never asserted in Go alone. No omitempty, matching every other Invoice field
+	// above: an un-kept invoice renders explicit nulls, never a dropped key.
+	KeptAsIsAt     *time.Time `json:"kept_as_is_at"`
+	KeptAsIsBy     *string    `json:"kept_as_is_by"`
+	KeptAsIsReason *string    `json:"kept_as_is_reason"`
+
+	LineItems []LineItem `json:"line_items,omitempty"`
 
 	// RuleSetVersion is the human-facing integer resolved from
 	// RuleSetVersionID (rule_set_versions.version) -- populated by
@@ -211,26 +222,56 @@ type EditInput struct {
 }
 
 // ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
-// two predicate filters, EntityID and NeedsAttention (M4-09-02), ANDed
-// together when both are set. EntityID "" (the zero value) applies no
-// filter -- tenant-wide, byte-identical to every caller before this field
-// existed. It was added by a regression fix ([entity-id-restored], reversing
-// the earlier [entity-id-cut] decision): the SPA had been narrowing to one
-// entity by filtering listInvoices' response IN THE BROWSER, but that
-// response was (and still is, absent EntityID) a tenant-wide LIMIT-50 page --
-// filter-AFTER-paginate, so an entity's own invoices silently vanished
-// whenever they weren't inside the newest 50 tenant-wide (CI caught this on a
-// shared, never-reset dev DB; see ListHandler's doc comment, handlers.go).
-// EntityID fixes it by narrowing BEFORE the limit applies, in SQL.
-// NeedsAttention is a plain bool: true applies the verbatim dashboard
-// predicate (Store.List's doc comment); false/omitted applies no predicate
-// ([needs-attention-bool-true-only] — no "not-needs-attention" branch).
+// predicate filters, ALL ANDed together when more than one is set. EntityID
+// and NeedsAttention (M4-09-02) were the first two; EntityID "" (the zero
+// value) applies no filter -- tenant-wide, byte-identical to every caller
+// before this field existed. It was added by a regression fix
+// ([entity-id-restored], reversing the earlier [entity-id-cut] decision): the
+// SPA had been narrowing to one entity by filtering listInvoices' response IN
+// THE BROWSER, but that response was (and still is, absent EntityID) a
+// tenant-wide LIMIT-50 page -- filter-AFTER-paginate, so an entity's own
+// invoices silently vanished whenever they weren't inside the newest 50
+// tenant-wide (CI caught this on a shared, never-reset dev DB; see
+// ListHandler's doc comment, handlers.go). EntityID fixes it by narrowing
+// BEFORE the limit applies, in SQL. NeedsAttention is a plain bool: true
+// applies the verbatim dashboard predicate (Store.List's doc comment);
+// false/omitted applies no predicate ([needs-attention-bool-true-only] — no
+// "not-needs-attention" branch).
+//
+// ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4], Core AC 7)
+// are the review-screen's five filters, ANDed with each other and with
+// EntityID/NeedsAttention. Each zero value ("" / false) applies no predicate,
+// same convention as EntityID -- so the zero ListFilter is still the
+// where-less, tenant-wide query it was before any of them existed.
+// NeedsFix is a NEW, separate predicate from NeedsAttention
+// ([needs-fix-is-a-new-predicate]) -- it must never be folded into the
+// needs_attention SQL fragment, which is byte-pinned to the dashboard rollup
+// (TestStoreList_NeedsAttentionMatchesDashboardRollup,
+// [needs-attention-drift-guard]). RuleKey is deliberately a single string,
+// not []string -- ListFilter must stay a comparable struct
+// (needs_attention_adversarial_test.go's whole-struct == check).
 type ListFilter struct {
 	Limit  int
 	Offset int
 
 	EntityID       string
 	NeedsAttention bool
+
+	ImportBatchID string
+	Status        Status
+	NeedsFix      bool
+	RuleKey       string
+	Query         string
+
+	// KeptAsIs (INVCR-01-15, D6) narrows to invoices carrying a kept-as-is mark
+	// (kept_as_is_at IS NOT NULL) -- the review shell's footer counter query
+	// ("N kept as-is"), same zero-value-applies-no-filter convention as every
+	// other bool above. Deliberately NOT one of the four toolbar pills
+	// (System Design §7's "Toolbar filters are server-side" table names only
+	// All/Needs a fix/Ready to submit/Queued) -- this exists solely so the
+	// footer count is a real server total, never a client-side arithmetic
+	// derivation of the other four ([filters-are-server-side]).
+	KeptAsIs bool
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/
@@ -303,6 +344,16 @@ var (
 	// (Edit's guard also accepts validated, so "not draft" would be simply
 	// wrong for that case).
 	ErrNotFixable = errors.New("invoice: not fixable")
+
+	// ErrNotKeepable is Store.KeepAsIs's own precondition sentinel (INVCR-01-15,
+	// D6): keeping is refused unless the invoice is draft AND carries a blocking
+	// violation -- keeping a clean invoice is meaningless (there is nothing to
+	// suppress), and keeping a non-draft one is unreachable anyway (every other
+	// status either already passed the gate or has left the fix loop entirely).
+	// A 409 in statusForErr, alongside ErrNotDraft/ErrNotFixable -- the caller
+	// asked for something that is not currently true, not something malformed
+	// (400) or missing (404).
+	ErrNotKeepable = errors.New("invoice: not keepable")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

@@ -57,8 +57,19 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, app.Logger))
+	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
+	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the
+	// rail is derived from the whole batch instead of the 50 rows on the
+	// current page. Registration order relative to GET /v1/invoices/{id} above
+	// is IRRELEVANT: Go 1.22+ ServeMux resolves by pattern specificity, and a
+	// literal segment always beats a {wildcard}.
+	app.Mux.HandleFunc("GET /v1/invoices/violation-summary", invoice.ViolationSummaryHandler(store.ViolationSummary, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/transitions", invoice.TransitionHandler(store.Transition, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/invoices/{id}", invoice.EditHandler(store.Edit, app.Logger))
+	// POST/DELETE /v1/invoices/{id}/keep-as-is -- D6's auditable-triage write
+	// (INVCR-01-15, task-291): never touches status or legalTransitions.
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/keep-as-is", invoice.KeepAsIsHandler(store.KeepAsIs, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/invoices/{id}/keep-as-is", invoice.UnkeepAsIsHandler(store.UnkeepAsIs, app.Logger))
 
 	// POST /v1/invoices/{id}/validate -- THE validate gate ([gate-endpoint],
 	// M4-04): the ONLY route by which an invoice reaches validated, and the
@@ -99,6 +110,15 @@ func main() {
 	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler())
+	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
+	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
+	// import_batches and, until now, reached the browser only inside the POST
+	// response; without this route the review screen's "Not imported" channel
+	// silently vanishes on reload. Every field is FROZEN at Finalize -- the
+	// live ledger counters come from GET /v1/invoices?import_batch_id=...
+	// instead. Its literal /preview sibling above is unaffected by
+	// registration order (ServeMux resolves by specificity).
+	app.Mux.HandleFunc("GET /v1/imports/{id}", importer.GetHandler(impStore.GetBatch, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this

@@ -166,6 +166,67 @@ func TestBatchSubmit_PartialBatchEnqueuesValidatedSkipsRest(t *testing.T) {
 	}
 }
 
+// TestKeptAsIs_NotSubmittable (INVCR-01-15, D6, task-291, AC #11): a kept draft id
+// submitted through the batch endpoint must be skipped with reason "not_validated" --
+// the SAME third leg TestBatchSubmit_PartialBatchEnqueuesValidatedSkipsRest above
+// already proves for a plain draft, pinned separately here because D6's whole promise
+// ("never transmittable, three ways over") rests on this being true for the KEPT case
+// specifically, not merely inherited by coincidence: a kept invoice is ALWAYS draft
+// (invoices_kept_as_is_draft_only), so `statuses[id] != StatusValidated` at
+// batch_submit.go:44 catches it via the SAME status check, with no kept-aware branch
+// anywhere in this file -- exactly the "three ways over" story text describes. No
+// transition, no queue row, no invoices.status change.
+func TestKeptAsIs_NotSubmittable(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	q := newInsertOnlyQueueClient(t, app)
+
+	tenantID := seedTenant(t, super, "KEEP-SUBMIT tenant")
+	entityID := seedEntity(t, super, tenantID, "KEEP-SUBMIT entity")
+	keptID := seedInvoiceAtStatus(t, super, tenantID, entityID, "KEEP-SUBMIT", StatusDraft)
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET violations = $1::jsonb, kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'triaged' WHERE id = $2`,
+		`[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`, keptID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	submitter := NewSubmitter(NewStore(app), q)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	resp, err := submitter.BatchSubmit(c, BatchSubmitInput{
+		InvoiceIDs:     []string{keptID},
+		IdempotencyKey: "KEEP-SUBMIT-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("BatchSubmit: %v, want nil (HTTP 200 contract)", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(resp.Results))
+	}
+	got := resp.Results[0]
+	if got.Enqueued {
+		t.Errorf("kept invoice result = %+v, want enqueued:false", got)
+	}
+	if got.Reason != batchSubmitReasonNotValidated {
+		t.Errorf("kept invoice result.Reason = %q, want %q", got.Reason, batchSubmitReasonNotValidated)
+	}
+	if got.Status != string(StatusDraft) {
+		t.Errorf("kept invoice result.Status = %q, want %q (unchanged)", got.Status, StatusDraft)
+	}
+
+	if n := countBatchSubmitJobs(t, app, keptID); n != 0 {
+		t.Errorf("river_job rows for the kept (skipped) invoice = %d, want 0", n)
+	}
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1`, keptID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("invoices.status after the skipped submit attempt = %q, want unchanged %q (D6: never transmittable)", status, StatusDraft)
+	}
+}
+
 // TestBatchSubmit_AtomicityRollsBackOnInjectedFailureAfterLastEnqueue (T07-2, AC-4's
 // "neither happens" half): with in.failAfterLastEnqueue set, BatchSubmit must inject a
 // failure after the (single, here) invoice's EnqueueTx call succeeds but before commit --

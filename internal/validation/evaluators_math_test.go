@@ -145,6 +145,41 @@ func TestTaxMath_OutsideToleranceViolates(t *testing.T) {
 	}
 }
 
+// TestTaxMath_ExpectedIsExactDecimal (INVCR-01-12 AC-2/AC-3, D9): Expected
+// is base.Mul(rate) as an exact decimal string; Actual is the resolved
+// "expected" param operand (the invoice's OWN reported VAT, i.e. what the
+// rule judged against, NOT what the rule computed -- see this file's own
+// Test Specs table naming). subtotal=1125000, rate=0.075, vat=0 => 1125000 *
+// 0.075 = 84375 exactly (shopspring/decimal, no binary-float error).
+func TestTaxMath_ExpectedIsExactDecimal(t *testing.T) {
+	e := taxMathEval{}
+	payload := Payload{"invoice": map[string]any{
+		"subtotal": float64(1125000),
+		"vat":      float64(0),
+	}}
+	r := Rule{
+		Key:      "vat-standard-rate",
+		Type:     TypeTaxMath,
+		Params:   json.RawMessage(`{"base":"subtotal","rate":0.075,"expected":"vat","tolerance":0.005}`),
+		Severity: "error",
+		Message:  "VAT must equal 7.5% of the subtotal.",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: 1125000*0.075=84375, expected(param) vat=0")
+	}
+	if v.Expected == nil || *v.Expected != "84375" {
+		t.Errorf("Expected = %v, want \"84375\"", stringPtrDebug(v.Expected))
+	}
+	if v.Actual == nil || *v.Actual != "0" {
+		t.Errorf("Actual = %v, want \"0\"", stringPtrDebug(v.Actual))
+	}
+}
+
 // --- cross_field --------------------------------------------------------
 
 // TestCrossField_SumMismatchViolates (Test Spec): left="total"(100),
@@ -249,6 +284,35 @@ func TestCrossField_LessThanViolates(t *testing.T) {
 	}
 }
 
+// TestCrossField_OmitsExpectedAndActual (INVCR-01-12 AC-5, D9): cross_field
+// has no single natural expectation to report (it compares two payload
+// paths, neither of which is "the" expected value) -- omitted entirely on
+// the wire. cross_field doesn't exist in the seeded corpus (Stage 2
+// correction C1), so this is exercised by direct construction.
+func TestCrossField_OmitsExpectedAndActual(t *testing.T) {
+	e := crossFieldEval{}
+	payload := Payload{"invoice": map[string]any{
+		"total":     float64(100),
+		"lines_sum": float64(90),
+	}}
+	r := Rule{
+		Key:      "CROSSFIELD-TOTAL",
+		Type:     TypeCrossField,
+		Params:   json.RawMessage(`{"left":"total","op":"eq","right":"lines_sum"}`),
+		Severity: "error",
+		Message:  "total must equal the sum of line items",
+	}
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: total 100 != lines_sum 90")
+	}
+	assertOmitsExpectedAndActual(t, v)
+}
+
 // --- conditional ----------------------------------------------------------
 
 // conditionalTINRule is the shared `if country==NG then supplier.tin
@@ -347,6 +411,26 @@ func TestConditional_IfTrueThenComparisonFails(t *testing.T) {
 	if v.RuleKey != r.Key || v.Severity != r.Severity || v.Message != r.Message {
 		t.Errorf("Eval() violation = %+v, want RuleKey=%q Severity=%q Message=%q", v, r.Key, r.Severity, r.Message)
 	}
+}
+
+// TestConditional_OmitsExpectedAndActual (INVCR-01-12 AC-5, D9): conditional
+// has no single natural expectation to report -- omitted entirely on the
+// wire. conditional doesn't exist in the seeded corpus (Stage 2 correction
+// C1), so this is exercised by direct construction (reusing
+// conditionalTINRule's if-true/then-required-fails shape).
+func TestConditional_OmitsExpectedAndActual(t *testing.T) {
+	e := conditionalEval{}
+	payload := Payload{"invoice": map[string]any{"country": "NG"}} // supplier.tin absent
+	r := conditionalTINRule()
+
+	v, err := mustEval(t, e, payload, r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal("Eval() violation = nil, want non-nil: country=NG (if true) and supplier.tin is absent (then fails)")
+	}
+	assertOmitsExpectedAndActual(t, v)
 }
 
 // --- cross-cutting: bad params -------------------------------------------
@@ -874,5 +958,69 @@ func TestConditional_RequiredFalseTriviallySatisfied(t *testing.T) {
 	}
 	if v != nil {
 		t.Errorf("Eval() violation = %+v, want nil: then's required:false is trivially satisfied even though optional_field is absent", v)
+	}
+}
+
+// TestTaxMathTargetDoesNotChangeEvaluation (task-289 / INVCR-01-13, D8, AC-9): proves
+// this file's own header contract holds under the v3 publish -- setting Rule.Target
+// (e.g. "vat", the value v3's vat-standard-rate row now carries) must not change Eval's
+// pass/fail outcome versus leaving Target unset ("", v2's value), since taxMathEval.Eval
+// never reads r.Target at all (only the shared violation(r) helper in evaluators.go
+// copies it into Violation.Path -- see evaluators_math.go's amended file-header note).
+// Exercised both ways (a wrong-VAT violation and a correct-VAT pass) so this isn't
+// vacuously true for whichever branch happens to run first.
+func TestTaxMathTargetDoesNotChangeEvaluation(t *testing.T) {
+	e := taxMathEval{}
+	params := json.RawMessage(`{"base":"subtotal","rate":0.075,"expected":"vat","tolerance":0.01}`)
+	const newTarget = "vat"
+
+	cases := []struct {
+		name string
+		vat  float64
+	}{
+		{"violates", 50}, // 1000*0.075=75 != 50
+		{"passes", 75},   // 1000*0.075=75 == 75
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := Payload{"invoice": map[string]any{
+				"subtotal": float64(1000),
+				"vat":      tc.vat,
+			}}
+			rWithoutTarget := Rule{
+				Key: "vat-standard-rate", Type: TypeTaxMath, Target: "",
+				Params: params, Severity: "error", Message: "VAT must equal 7.5% of the subtotal.",
+			}
+			rWithTarget := Rule{
+				Key: "vat-standard-rate", Type: TypeTaxMath, Target: newTarget,
+				Params: params, Severity: "error", Message: "VAT must equal 7.5% of the subtotal.",
+			}
+
+			vWithout, errWithout := mustEval(t, e, payload, rWithoutTarget)
+			vWith, errWith := mustEval(t, e, payload, rWithTarget)
+			if errWithout != nil || errWith != nil {
+				t.Fatalf("unexpected error: without-target=%v, with-target=%v", errWithout, errWith)
+			}
+			if (vWithout == nil) != (vWith == nil) {
+				t.Fatalf("pass/fail differs by Target alone: without-target violation=%v, with-target violation=%v",
+					vWithout != nil, vWith != nil)
+			}
+			if vWithout == nil {
+				return // both passed -- nothing further to compare
+			}
+
+			if vWithout.Path != "" {
+				t.Errorf("without-target Violation.Path = %q, want \"\"", vWithout.Path)
+			}
+			if vWith.Path != newTarget {
+				t.Errorf("with-target Violation.Path = %q, want %q", vWith.Path, newTarget)
+			}
+			if !strPtrEqual(vWithout.Expected, vWith.Expected) {
+				t.Errorf("Expected differs by Target alone: without=%s with=%s", stringPtrDebug(vWithout.Expected), stringPtrDebug(vWith.Expected))
+			}
+			if !strPtrEqual(vWithout.Actual, vWith.Actual) {
+				t.Errorf("Actual differs by Target alone: without=%s with=%s", stringPtrDebug(vWithout.Actual), stringPtrDebug(vWith.Actual))
+			}
+		})
 	}
 }

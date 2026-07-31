@@ -1,11 +1,13 @@
-// Create flow · step 1 — ONE live import surface (spreadsheet upload, server-backed,
-// M4-08-04: previewImport -> mapping -> createImport) plus a sandbox-only preview of
-// the mock document-parse path. Previously two stacked cards implied two real import
-// methods; only the spreadsheet path ever touched a server — the document card is a
-// local setInterval fixture over SAMPLE_FILES with zero network and no OCR/parse
-// endpoint behind it, so it now renders only behind ctx.sandbox, explicitly labelled
-// as a preview, and its dashed panel no longer claims to accept a dragged file (it
-// never had a drop handler).
+// Create flow · step 1 — THE import surface: one spreadsheet upload, server-backed
+// (M4-08-04: previewImport -> mapping -> createImport). It is the only card here, and
+// every pixel of it talks to a real endpoint.
+//
+// It used to be joined by a second, sandbox-gated "import a document" card: a local
+// setInterval fixture over two hardcoded sample filenames, with zero network and no
+// OCR/parse endpoint behind it. INVCR-01-01 deleted it outright rather than leave a fake
+// parse anchoring a five-step strip that will never ship in that shape ([one-flow],
+// [prereq-delete-mock]). Real document ingestion is explicitly out of scope (§14) — do
+// not reintroduce a client-side stand-in for it.
 //
 // The entity picker is gone too: entityId now mirrors ctx.active.entityId (the
 // company already chosen via the workspace switcher) instead of a second, separate
@@ -15,29 +17,53 @@
 //
 // That coupling had a side effect this file used to enshrine: a null active.entityId
 // blanked the WHOLE upload surface behind a "No linked entity" empty state. In-house
-// workspaces have a permanently-null entityId (inhouseClient() hardcodes it — there is
-// no business_entities row, and no Clients screen to create one from), so an in-house
-// accountant could not open the wizard's first step at all while the firm could. But
-// nothing about reading a spreadsheet's columns needs an entity: the preview endpoint
-// takes the file alone. The gate therefore now sits where the entity is genuinely
-// required — the commit, on the Map step (CreateMapping's continueBtn + App.tsx's
-// startImport). Both personas get the dropzone and Read columns; only filing differs.
+// workspaces had a permanently-null entityId (no business_entities row at all, and no
+// route to create one), so an in-house accountant could not open the wizard's first step
+// at all while the firm could — task-304 fixed both halves (App.tsx resolves a real
+// entity when one exists; Settings gained a Company panel, [entity-picker], to create the
+// first one). But nothing about reading a spreadsheet's columns ever needed an entity in
+// the first place: the preview endpoint takes the file alone. The gate therefore sits
+// where the entity is genuinely required — the commit, on the Map step (CreateMapping's
+// continueBtn + App.tsx's startImport). Both personas get the dropzone and Read columns;
+// only filing differs, and only for a workspace with no resolved entity yet, either mode.
+//
+// INVCR-01-05 tells the entity-less user that EARLIER, in the amber panel below — and
+// the panel is INFORMATIONAL, never blocking. It is added to the card; it replaces
+// nothing and disables nothing. Making it a gate would re-create the very regression
+// the paragraph above records ([inhouse-can-start]) and would falsify importFlow.ts's
+// stated contract ("Preview gate = file only; commit gate = entity"). Nothing upstream
+// of `Read columns` may ever acquire an entity check — the dropzone, the file input and
+// the button stay live for both personas, whatever this panel says.
 // Ported shell from Platform.dc.html ~L407-448.
 
 import { useState } from 'react'
 
 import { gatewayBase } from '@invoice-os/api-client'
 
-import { SAMPLE_FILES } from '../data'
-import { importGlyph, tickGlyph13 } from '../glyphs'
-import { canReadColumns, hasImportableExtension } from '../lib/importFlow'
+import { importGlyph } from '../glyphs'
+import { canReadColumns, computeNoEntity, hasImportableExtension } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
-  const { active, sandbox, uploadFile, importFile, importError } = ctx
-  const selFile = SAMPLE_FILES.find((f) => f.id === uploadFile) || null
-  const hasFile = !!selFile
+  const { active, importFile, importError, activeEntity, entitiesState, entities, clients, mode } = ctx
   const [dragOver, setDragOver] = useState(false)
+
+  // `activeEntity`, not `active.entityId` — the same resolved-object predicate every
+  // filing gate reads ([gate-on-the-resolved-entity]), so this panel and the Map step's
+  // refusal can never disagree about whether an entity exists.
+  //
+  // task-304 (INVCR-01-19): the derivation itself moved to lib/importFlow.ts's
+  // computeNoEntity (unchanged logic, this story only extracted it) so it is
+  // node-testable under the no-jsdom constraint — this component stays unrenderable in
+  // the vitest suite, but the predicate it reads is not, which is how AC-6 ("the panel
+  // must not become dead code or in-house-only") stays provable once
+  // [inhouse-can-start]'s browser test — this codebase's only e2e coverage of the panel —
+  // stops being reachable with a genuinely-zero-entity persona (every fixture this suite
+  // can sign in as now has at least one entity, db/seed.dev.sql). See computeNoEntity's
+  // own doc comment for the two guards (fetch settled, roster caught up) and why a
+  // FIRM workspace whose active entity has been archived out of the roster is still a
+  // real, non-dead case this must keep firing for.
+  const noEntity = computeNoEntity(activeEntity, entitiesState, entities.length, clients.length)
 
   // `base` gates the "Read columns" button below (gateway-wide): with no gateway
   // configured there is nothing to POST the preview to.
@@ -125,12 +151,69 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             ) : (
               <>
                 <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag a spreadsheet here, or click to choose'}</div>
-                <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                  .csv or .xlsx, one row per invoice — the server reads your columns on the next step.
+                {/* The string here used to read "one row per invoice", which is simply
+                    FALSE: one row is one LINE ITEM, and rows group into invoices by the
+                    column mapped to invoice_number — exactly what the next step says
+                    (CreateMapping.tsx's own prose) and what the server does. A file of
+                    five rows can be one invoice or five. Stating the grain here is the
+                    whole point of this copy: it is the fact that decides whether the
+                    user's spreadsheet is shaped right at all, and learning it a step
+                    later is learning it too late. */}
+                <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 420, lineHeight: 1.55 }}>
+                  The parser extracts buyer details, line items and totals. One row is one line item; rows group into invoices by the column you map to{' '}
+                  <span className="mono" style={{ fontSize: 11.5 }}>invoice_number</span> — one invoice or five hundred, the same way.
                 </p>
               </>
             )}
           </label>
+
+          {/* A <span>, and it lives OUTSIDE the label on purpose — see the placement
+              note on the panel below. The file input's own accept="" is the real gate;
+              this is the human-readable statement of it, not a second source of truth. */}
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.06em' }}>
+            ACCEPTED · CSV · XLSX
+          </span>
+
+          {/* ⚠️ PLACEMENT IS LOAD-BEARING: everything here renders AFTER </label>, never
+              between the <input class="pf-file"> and it. app-layer.css's dropzone focus
+              ring is `.asc-app .pf-file:focus-visible + label` — an ADJACENT-sibling
+              selector — so a single element inserted between the two silently kills the
+              keyboard focus ring on the only control this step has. No test covers that;
+              the failure is invisible except to a keyboard user.
+
+              The panel itself is informational (see the header note): it states the fact
+              early instead of letting the user map every column first and meet the
+              refusal at the commit. It disables nothing — `Read columns` below is
+              deliberately still live, because reading columns genuinely does not need an
+              entity. */}
+          {noEntity && (
+            <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 5 }}>No linked business entity</div>
+              <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
+                An import is filed on behalf of a registered entity. {active.short} has none, so there is nothing to file against. Reading a file&rsquo;s columns still works — the refusal lands on the last step, where the invoices would be written.
+              </p>
+              {/* task-304 (INVCR-01-19): unconditional now for both personas — firm's
+                  destination is the Clients page (NAV_CLIENTS, ClientsView's own
+                  EntityFormModal), in-house's is the Settings > Company panel
+                  (SettingsView, AC-4, the SAME EntityFormModal). Neither used to be a
+                  dead end; in-house's own in-house-only refusal sentence that used to sit
+                  in the paragraph above is deleted outright rather than reworded — it is
+                  simply false now that this button has a real destination for that
+                  persona too.
+                  Navigating away discards a file the user may have picked; nothing has
+                  been uploaded at this point, so there is nothing to lose but the pick. */}
+              <button
+                onClick={() => {
+                  if (mode === 'inhouse') ctx.setSettingsTab('company')
+                  ctx.nav(mode === 'inhouse' ? 'settings' : 'clients')
+                }}
+                className="pf-btn"
+                style={{ marginTop: 9, background: 'none', border: 0, padding: 0, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-amber-text)', textDecoration: 'underline', cursor: 'pointer' }}
+              >
+                Link a business entity →
+              </button>
+            </div>
+          )}
 
           {importError && (
             <p style={{ fontSize: 12.5, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>{importError.message}</p>
@@ -151,66 +234,21 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               Skip — enter manually
             </button>
           </div>
+
+          {/* Only alongside the panel, and only to close the obvious escape hatch: a
+              reader who has just been told imports cannot be filed will reach for the
+              button directly above. Manual entry carries the SAME requirement —
+              fileDraftGate refuses on a null resolved entity and CreateForm's primary
+              renders disabled — so implying otherwise would send them one screen further
+              to meet an identical wall. The button stays enabled: the form is worth
+              reaching, and it names its own reason when it gets there. */}
+          {noEntity && (
+            <p style={{ fontSize: 12, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>
+              Manual entry has the same requirement — an invoice is filed against a registered entity too.
+            </p>
+          )}
         </div>
       </div>
-
-      {sandbox && (
-        <>
-          <div className="label">Or import a single document</div>
-
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span className="card-title">Import a document · {active.short}</span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                PREVIEW · SANDBOX
-              </span>
-            </div>
-            <div style={{ padding: 20 }}>
-              <div style={{ border: '1.5px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: 'var(--bg-1)', marginBottom: 22 }}>
-                <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{importGlyph}</span>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>Preview: parse a sample document</div>
-                <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                  The parser extracts buyer details, line items and totals, then pre-fills the invoice for validation. Sample files only — this preview can't read a real upload.
-                </p>
-              </div>
-              <div className="label" style={{ marginBottom: 12 }}>
-                Sample files
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {SAMPLE_FILES.map((f) => {
-                  const sel = uploadFile === f.id
-                  return (
-                    <button
-                      key={f.id}
-                      onClick={() => ctx.selectFile(f.id)}
-                      className="pf-upcard"
-                      style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', border: `1px solid ${sel ? 'var(--action)' : 'var(--line-2)'}`, background: sel ? 'var(--action-tint)' : 'var(--bg-2)', borderRadius: 'var(--radius-md)', width: '100%' }}
-                    >
-                      <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: f.iconBg, color: f.iconColor, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: '0.02em' }}>{f.ext}</span>
-                      <div style={{ flex: 1, textAlign: 'left' }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--fg-1)' }}>{f.name}</div>
-                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                          {f.meta}
-                        </div>
-                      </div>
-                      <span style={{ flex: 'none', color: 'var(--action)', display: 'inline-flex' }}>{sel ? tickGlyph13 : ''}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              <button
-                onClick={ctx.parseFile}
-                disabled={!hasFile}
-                className="v2-btn v2-btn-primary pf-btn"
-                style={{ width: '100%', justifyContent: 'center', height: 42, marginTop: 18, background: hasFile ? 'var(--action)' : 'var(--bg-3)', color: hasFile ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: hasFile ? 'pointer' : 'not-allowed' }}
-              >
-                <span style={{ display: 'inline-flex' }}>{importGlyph}</span> Upload &amp; parse
-              </button>
-              <p style={{ fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'center', margin: '12px 0 0', lineHeight: 1.5 }}>Parsed fields are editable before validation.</p>
-            </div>
-          </div>
-        </>
-      )}
     </div>
   )
 }

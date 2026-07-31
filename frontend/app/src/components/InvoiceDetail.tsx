@@ -835,15 +835,38 @@ function InvoiceEditBody({
             {fieldFlag('currency')}
             <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
           </div>
+          {/* Supplier name/TIN are DISPLAY-ONLY (INVCR-01-18, C7 fix, edit path -- a narrowly
+              authorized §14 exception, no other field or layout on this screen touched): the
+              backend now ALWAYS re-derives both from the invoice's entity on every PATCH,
+              discarding whatever these inputs used to send ([supplier-from-entity], mirroring
+              Store.Create's own override) -- a live editable supplier_tin here let an operator
+              retype a bare-digit TIN and reintroduce the exact false supplier-tin-format defect
+              C7 fixed on create. readOnly (not disabled): still focusable/selectable so the
+              value can be copied, just not typed into -- no onChange, so diffEditInput can never
+              see these two fields differ from formFromInvoice(inv) and they are never sent.
+              aria-readonly is redundant with the native `readonly` attribute for assistive tech
+              (already implicit) but stated explicitly anyway. color: var(--fg-3) (an EXISTING
+              token this file already uses for de-emphasized text, e.g. the computed-line-sum
+              hint below) is the one concession to ".pf-input has no :disabled/:read-only style
+              at all today" (product-advisor review, 2026-07-31) -- without it this field is
+              visually IDENTICAL to every editable one beside it, which is worse than "unstyled"
+              for a control that no longer does what it looks like it does; not a new visual
+              language, just this file's own existing muted-text color applied to two inputs. */}
           <div>
             <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier name</div>
             {fieldFlag('supplier_name')}
-            <input className="pf-input" type="text" value={form.supplier_name} onChange={(e) => updateField('supplier_name', e.target.value)} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.supplier_name} readOnly aria-readonly="true" disabled={submitting} style={{ color: 'var(--fg-3)' }} />
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Supplier TIN</div>
             {fieldFlag('supplier_tin')}
-            <input className="pf-input" type="text" value={form.supplier_tin} onChange={(e) => updateField('supplier_tin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.supplier_tin} readOnly aria-readonly="true" placeholder="########-####" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} disabled={submitting} />
+            {/* CreateMapping.tsx's existing vocabulary ("Supplier details come from <entity>,
+                not the file"), reused rather than inventing new copy -- adapted to this screen
+                (no file here to contrast against). */}
+            <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.4 }}>
+              Supplier details come from {form.supplier_name || 'the linked entity'}, not editable here.
+            </div>
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>

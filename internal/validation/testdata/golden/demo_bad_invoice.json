@@ -5,12 +5,16 @@
       "rule_key": "supplier-tin-format",
       "severity": "error",
       "message": "Supplier TIN must be in the format NNNNNNNN-NNNN (8 digits, hyphen, 4 digits).",
-      "path": "supplier.tin"
+      "path": "supplier.tin",
+      "expected": "^[0-9]{8}-[0-9]{4}$"
     },
     {
       "rule_key": "vat-standard-rate",
       "severity": "error",
-      "message": "VAT must equal 7.5% of the subtotal."
+      "message": "VAT must equal 7.5% of the subtotal.",
+      "path": "vat",
+      "expected": "75",
+      "actual": "70"
     }
   ]
 }

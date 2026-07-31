@@ -266,20 +266,26 @@ func TestStoreEdit_ValidatedNoOpStaysValidated(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "EDIT-04 tenant")
-	entityID := seedEntity(t, super, tenantID, "EDIT-04 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): Store.Create now
+	// derives supplier_tin/supplier_name from the entity, so the entity itself
+	// must carry the "SUP-TIN-1"/"Supplier Co" fixture values this test's Edit
+	// call re-sends below as a no-op. "SUP-TIN-1" is not a 12-bare-digit shape,
+	// so MBSSupplierTIN leaves it untouched -- the derived value equals this
+	// placeholder byte-for-byte.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Supplier Co", "SUP-TIN-1")
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
 		InvoiceNumber: "EDIT-04",
-		SupplierTIN:   strPtr("SUP-TIN-1"),
-		SupplierName:  strPtr("Supplier Co"),
-		BuyerTIN:      strPtr("BUY-TIN-1"),
-		BuyerName:     strPtr("Buyer Co"),
-		Currency:      strPtr("NGN"),
-		Subtotal:      strPtr("100.00"),
-		VAT:           strPtr("7.00"),
-		Total:         strPtr("107.00"),
+		// SupplierTIN/SupplierName intentionally OMITTED: Store.Create derives
+		// them from the entity above regardless of what's sent (C7 fix).
+		BuyerTIN:  strPtr("BUY-TIN-1"),
+		BuyerName: strPtr("Buyer Co"),
+		Currency:  strPtr("NGN"),
+		Subtotal:  strPtr("100.00"),
+		VAT:       strPtr("7.00"),
+		Total:     strPtr("107.00"),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -432,6 +438,90 @@ func TestStoreEdit_DraftNoOpWritesNothing(t *testing.T) {
 
 	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated {
 		t.Errorf("audit_log invoice.updated rows = %d, want unchanged %d (no-op writes nothing)", n, beforeUpdated)
+	}
+}
+
+// TestStoreEdit_ClearsKeepMarks (INVCR-01-15, D6, task-291, AC #8 -- named
+// TestEdit_ClearsKeepMarks in the Test Specs table; renamed to this file's own
+// TestStoreEdit_ prefix for consistency with every other test here): a kept draft,
+// PATCHed on a header field, must come back with all three kept_as_is_* columns NULL
+// -- a content change invalidates the recorded reason, since the reason no longer
+// describes the invoice as it now stands.
+func TestStoreEdit_ClearsKeepMarks(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-KEEP-CLEAR tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-KEEP-CLEAR entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-KEEP-CLEAR", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET violations = $1::jsonb, kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'kept before this edit' WHERE id = $2`,
+		`[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`, inv.ID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.50")}})
+	if err != nil {
+		t.Fatalf("Edit (content change on a kept draft): want success, got: %v", err)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Edit returned status = %q, want unchanged %q (draft has nothing to demote from)", got.Status, StatusDraft)
+	}
+	if got.KeptAsIsAt != nil || got.KeptAsIsBy != nil || got.KeptAsIsReason != nil {
+		t.Errorf("Edit return kept_as_is triple = (at=%v by=%v reason=%v), want all nil (a content change invalidates the recorded reason)",
+			got.KeptAsIsAt, got.KeptAsIsBy, got.KeptAsIsReason)
+	}
+
+	var at, by, reason *string
+	if err := super.QueryRow(ctx,
+		`SELECT kept_as_is_at::text, kept_as_is_by, kept_as_is_reason FROM invoices WHERE id = $1`, inv.ID,
+	).Scan(&at, &by, &reason); err != nil {
+		t.Fatalf("read back kept_as_is triple: %v", err)
+	}
+	if at != nil || by != nil || reason != nil {
+		t.Errorf("stored kept_as_is triple after the edit = (at=%v by=%v reason=%v), want all NULL", at, by, reason)
+	}
+}
+
+// TestStoreEdit_NoOpEditDoesNotClearKeepMarks (extra, task-291): the DB-authoritative
+// no-op check (step 6) must win BEFORE the kept-marks clear -- a resent-unchanged PATCH
+// is not a "content change" and must leave a kept invoice's reason exactly as it was,
+// mirroring [A6]'s general "idempotence applies to draft" rule this file already pins
+// for TestStoreEdit_DraftNoOpWritesNothing above.
+func TestStoreEdit_NoOpEditDoesNotClearKeepMarks(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EDIT-KEEP-NOOP tenant")
+	entityID := seedEntity(t, super, tenantID, "EDIT-KEEP-NOOP entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EDIT-KEEP-NOOP", VAT: strPtr("7.00")})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET violations = $1::jsonb, kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'still valid' WHERE id = $2`,
+		`[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`, inv.ID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{VAT: strPtr("7.00")}}) // resent unchanged
+	if err != nil {
+		t.Fatalf("Edit (no-op resend on a kept draft): want success, got: %v", err)
+	}
+	if got.KeptAsIsAt == nil || got.KeptAsIsBy == nil || got.KeptAsIsReason == nil {
+		t.Errorf("Edit (no-op) return kept_as_is triple = (at=%v by=%v reason=%v), want all still set (a no-op is not a content change)",
+			got.KeptAsIsAt, got.KeptAsIsBy, got.KeptAsIsReason)
 	}
 }
 
@@ -629,21 +719,24 @@ func TestStoreEdit_PartialNonMoneyFieldChangeDemotes(t *testing.T) {
 	store := NewStore(app)
 
 	tenantID := seedTenant(t, super, "EDIT-12 tenant")
-	entityID := seedEntity(t, super, tenantID, "EDIT-12 entity")
+	// seedEntityWithTIN, not seedEntity (INVCR-01-17, C7 fix): see EDIT-04's
+	// identical note above -- the entity now supplies the "SUP-TIN-1"/
+	// "Supplier Co" values the sibling-field assertions below expect.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Supplier Co", "SUP-TIN-1")
 	subject := uuid.NewString()
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
 
 	inv, err := store.Create(c, CreateInput{
 		EntityID:      entityID,
 		InvoiceNumber: "EDIT-12",
-		SupplierTIN:   strPtr("SUP-TIN-1"),
-		SupplierName:  strPtr("Supplier Co"),
-		BuyerTIN:      strPtr("BUY-TIN-1"),
-		BuyerName:     strPtr("Buyer Co"),
-		Currency:      strPtr("NGN"),
-		Subtotal:      strPtr("100.00"),
-		VAT:           strPtr("7.00"),
-		Total:         strPtr("107.00"),
+		// SupplierTIN/SupplierName intentionally OMITTED: Store.Create derives
+		// them from the entity above regardless of what's sent (C7 fix).
+		BuyerTIN:  strPtr("BUY-TIN-1"),
+		BuyerName: strPtr("Buyer Co"),
+		Currency:  strPtr("NGN"),
+		Subtotal:  strPtr("100.00"),
+		VAT:       strPtr("7.00"),
+		Total:     strPtr("107.00"),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

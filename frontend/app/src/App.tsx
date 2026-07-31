@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PARSE_LABELS } from './data'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { gatewayBase, toApiError, useAsync, type ApiError } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, defaultDraft, emptyClient, inhouseClient } from './lib/clients'
+import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
-import { validate } from './lib/validation'
+import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
+import { createInvoice, listInvoices } from './lib/invoices'
+import { parseReviewHash, reviewHash, reviewQuery, routeAfterImport, type PostImportRoute } from './lib/reviewBatch'
 import { initMappingFromHeaders, toImportMapping } from './lib/mapping'
 import { canReadColumns, canStartImport } from './lib/importFlow'
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
@@ -16,7 +17,6 @@ import {
   makeImportAuth,
   previewImport,
   type ImportPreview,
-  type ImportReport,
   type UploadPhase,
 } from './lib/importApi'
 import {
@@ -75,7 +75,6 @@ import type {
   PlatformCtx,
   SettingsTab,
   SignedInUser,
-  ValidationResult,
   View,
 } from './types'
 
@@ -142,12 +141,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const entitiesList = useMemo(() => entitiesAsync.data ?? [], [entitiesAsync.data])
 
   // The switcher roster. Rebuilt whenever the live entity list changes (first load, or a
-  // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge: a
-  // SAMPLE invoice approve() appended to a client's mock list (the single-document path,
-  // untouched by this story) does not survive a refetch triggered elsewhere. That mock
-  // invoice never renders anywhere live anyway — InvoiceDetail's mock branch is fully
-  // retired (M5-09-04); it only ever fed CustomersView/ReportsView/XmlModal, themselves
-  // still-mock surfaces this plan's next step migrates off active.invoices.
+  // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge, and
+  // since INVCR-01-03 this effect is its ONLY writer: the mock approve() that used to
+  // prepend a locally-built invoice to a client's list is gone, so no creation path writes
+  // active.invoices any more. Those generated SAMPLE rows never rendered anywhere live
+  // anyway — InvoiceDetail's mock branch is fully retired (M5-09-04); they only ever fed
+  // CustomersView/ReportsView/XmlModal, themselves still-mock surfaces this plan's next
+  // step migrates off active.invoices.
   const [clients, setClients] = useState<Client[]>([])
   useEffect(() => {
     setClients(buildClients(entitiesList))
@@ -157,22 +157,64 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // into a mock array. null until the user (or the fallback below) picks one.
   const [activeEntityId, setActiveEntityId] = useState<string | null>(null)
 
-  // In-house has ZERO business_entities rows (db/seed.dev.sql seeds the firm tenant
-  // only) — its identity comes from the TENANT, never from this fetch ([entity-picker]
-  // trap 1). Firm mode falls back to `clients[0]` (whichever entity the server returns
-  // first) while `activeEntityId` is unset, and to the "nothing here yet" placeholder for
-  // the loading/error/no-gateway/zero-entities window ([entity-picker] trap 2) — every
-  // one of the ~15 places reading ctx.active needs SOMETHING defined, never `undefined`.
-  const active: Client = useMemo(() => {
-    if (mode === 'inhouse') return inhouseClient(session.me?.tenant.name ?? session.persona.org)
-    return clients.find((c) => c.entityId === activeEntityId) ?? clients[0] ?? emptyClient()
-  }, [mode, clients, activeEntityId, session])
+  // task-304 (INVCR-01-19) deleted the old `if (mode === 'inhouse') return
+  // inhouseClient(...)` special case here: it never even consulted `clients` (built from
+  // the LIVE entitiesList), so seeding in-house a real business_entities row (AC-1,
+  // db/seed.dev.sql) alone fixed nothing — this memo still had to stop hardcoding the
+  // answer. resolveActiveClient (lib/clients.ts) is now the ONE resolution path for both
+  // workspace modes ([in-house-degenerate-case], AC-2) — every one of the ~15 places
+  // reading ctx.active needs SOMETHING defined, never `undefined`, which is exactly what
+  // that function is total over: an explicit switcher pick, the server's own first row
+  // with nothing chosen, or the shared emptyClient() placeholder with genuinely nothing
+  // to resolve (AC-3's bootstrap window, either persona).
+  const active: Client = useMemo(
+    () => resolveActiveClient(clients, activeEntityId),
+    [clients, activeEntityId],
+  )
 
-  const [view, setView] = useState<View>('dashboard')
+  // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
+  // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
+  // resolved object and not `active.entityId`:
+  //
+  //  - the filing gate. `active` is rebuilt from `entitiesList` by an effect, so between a
+  //    refetch landing and that rebuild the id can name an entity not (yet) in the list.
+  //    Gating on the id there arms the button and the click does nothing — the exact
+  //    silent-no-op shape [inhouse-can-start] exists to forbid.
+  //  - draftToCreateRequest, which takes `Entity` and never `Client`: buildClientForEntity
+  //    does `tin: e.tin ?? '—'`, so a TIN-less entity is unrepresentable through Client and
+  //    would cross the wire as the literal em-dash.
+  //
+  // null for a workspace (either persona) with no entity resolved yet, for the
+  // emptyClient() placeholder, and for the whole loading/error/no-gateway window — all
+  // three are the same honest "nothing to file against", so they need no separate copy.
+  const activeEntity = useMemo(
+    () => entitiesList.find((e) => e.id === active.entityId) ?? null,
+    [entitiesList, active.entityId],
+  )
+
+  // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the READ half ---------
+  //
+  // ONE lazy parse of `window.location.hash`, here in Workspace rather than App: App
+  // renders <Workspace> only once `session != null`, so a read up there would run before
+  // the session exists on the deep-link hand-off path. The three initializers below are
+  // DERIVED from this single value — there is deliberately no boot effect that navigates,
+  // because StrictMode double-invokes effects and a navigating one would fire twice.
+  //
+  // The hash survives the landing hand-off: App's `?persona=` strip (below) rebuilds the
+  // URL as `pathname + window.location.hash`, preserving it.
+  //
+  // There is NO `hashchange` listener, by decision. D4 asks that the screen survive a
+  // RELOAD, which it does. In-SPA history navigation does not exist for any surface in
+  // this app (replaceState everywhere, no router), and a listener for this one screen
+  // would make the app half-routed with a divergence the mirror effect below cannot
+  // reconcile (hash hand-deleted while the review screen is still mounted). Recorded
+  // limitation: pasting a review hash into an already-open tab's address bar does not
+  // navigate until reload.
+  const [bootBatchId] = useState<string | null>(() => parseReviewHash(window.location.hash))
+  const [view, setView] = useState<View>(bootBatchId ? 'create' : 'dashboard')
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
-  const [createStep, setCreateStep] = useState<CreateStep>('form')
-  const [validation, setValidation] = useState<ValidationResult | null>(null)
-  const [uploadFile, setUploadFile] = useState<string | null>(null)
+  const [createStep, setCreateStep] = useState<CreateStep>(bootBatchId ? 'review' : 'form')
+  const [reviewBatchId, setReviewBatchId] = useState<string | null>(bootBatchId)
   const [mapping, setMapping] = useState<Mapping | null>(null)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
@@ -197,8 +239,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
-  const [valIdx, setValIdx] = useState(0)
-  const [parseIdx, setParseIdx] = useState(0)
   // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
   // RulesView so a client's set survives navigating away and back, and so switching
   // company genuinely swaps the set instead of carrying one client's rules over to
@@ -238,30 +278,23 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>({ kind: 'idle' })
   const [importError, setImportError] = useState<ApiError | null>(null)
-  const [report, setReport] = useState<ImportReport | null>(null)
 
-  // Re-entrancy guard for the two import round trips. A ref, not state: React batches
-  // state updates, so a fast double-click can fire the handler twice before a `disabled`
-  // prop re-renders — and for startImport that would create the SAME import twice, i.e.
-  // duplicate invoices. readColumns and startImport live on different steps and can
-  // never overlap, so one flag covers both. A ref also cannot get stuck the way a
-  // component-local flag would: CreateUpload never observes the rejection that would
-  // clear it, since errors come back through ctx.importError.
+  // The manual form's one round trip (INVCR-01-03). `filing` renders the disabled/spinner
+  // frame; correctness against a double-click belongs to reqInFlight below, not to this.
+  const [filing, setFiling] = useState(false)
+  const [filingError, setFilingError] = useState<ApiError | null>(null)
+
+  // Re-entrancy guard for the THREE server round trips this workspace fires. A ref, not
+  // state: React batches state updates, so a fast double-click can fire the handler twice
+  // before a `disabled` prop re-renders — and for startImport that would create the SAME
+  // import twice, i.e. duplicate invoices, while for fileDraft it would persist TWO
+  // separately-submittable invoices (createRequest carries no idempotency key; that field
+  // is batch-submit-only). readColumns (upload step), startImport (mapping step) and
+  // fileDraft (form step) live on different steps and can never overlap, so one flag covers
+  // all three. A ref also cannot get stuck the way a component-local flag would: the
+  // wizard components never observe the rejection that would clear it, since errors come
+  // back through ctx.importError / ctx.filingError.
   const reqInFlight = useRef(false)
-
-  const valTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const valDone = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const parseTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const parseDone = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const clearVal = () => {
-    if (valTimer.current) { clearInterval(valTimer.current); valTimer.current = null }
-    if (valDone.current) { clearTimeout(valDone.current); valDone.current = null }
-    if (parseTimer.current) { clearInterval(parseTimer.current); parseTimer.current = null }
-    if (parseDone.current) { clearTimeout(parseDone.current); parseDone.current = null }
-  }
-
-  useEffect(() => clearVal, [])
 
   // resetImport() snapshots active.entityId at openCreate so a company switch cannot
   // silently retarget an import already in flight. But that snapshot can be taken
@@ -275,10 +308,27 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // upload step: past it the columns are already read against the snapshot, and moving
   // the target then is the retarget resetImport exists to prevent. In-house stays null
   // through this — active.entityId is null there too, so the guard's third clause holds.
+  // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the WRITE half ---------
+  //
+  // ONE writer, mirroring state to the URL, rather than a `location.hash = …` at every
+  // exit from review. Every one of Finish, `← Invoices`, `Choose another file`, `Enter
+  // one invoice instead`, sidebar nav, switchClient and openCreate would otherwise each
+  // have to remember to clear the hash — and `closeCreate` in particular does not, so a
+  // reload after Finish would bounce straight back into the review screen. Mirroring the
+  // state makes "clear it" structural instead of remembered; it is the same idiom as
+  // App's session mirror below.
+  //
+  // `replaceState`, never `location.hash = …`: assigning adds a history entry the back
+  // button bounces off, and assigning `''` leaves a bare `#` in the URL. The rebuilt URL
+  // keeps `search` — App's `?persona=` strip is the one writer that removes it, and it
+  // preserves the hash in turn, so the two effects compose in either order.
+  //
+  // At boot this rewrites the identical URL (the three initializers above already agree
+  // with the hash it parses), so the first pass is a no-op rather than a navigation.
   useEffect(() => {
-    if (createStep !== 'upload' || entityId !== null || active.entityId === null) return
-    setEntityId(active.entityId)
-  }, [createStep, entityId, active.entityId])
+    const h = reviewHash(view, createStep, reviewBatchId)
+    window.history.replaceState(null, '', window.location.pathname + window.location.search + (h ?? ''))
+  }, [view, createStep, reviewBatchId])
 
   function nav(id: NavId) {
     if (id === 'approvals') { setView('invoices'); setFilter('Pending'); setSwitcherOpen(false); return }
@@ -299,7 +349,15 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setCreateStep('form')
-    setValidation(null)
+    // A batch belongs to ONE entity. Leaving this set would keep the review screen's
+    // deep-link id pointing at the company just left — and the mirror effect above would
+    // keep writing its hash into the URL from the incoming company's dashboard.
+    setReviewBatchId(null)
+    // A failed filing's message named the company just left. `filing` is deliberately NOT
+    // cleared: a request already in flight is still in flight, and it will land on the
+    // invoice it was fired for — under the PREVIOUS company. Leaving the button disabled
+    // until it settles is the honest frame; cancelling it is not something this flow does.
+    setFilingError(null)
     // Custom rules are per client, so the incoming client has a different set — a
     // drawer left open would keep describing a rule from the company just left.
     setOpenRuleKey(null)
@@ -310,12 +368,10 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   }
 
   function openCreate() {
-    clearVal()
     setView('create')
     setCreateStep('upload')
     setDraft(defaultDraft(active))
-    setValidation(null)
-    setUploadFile(null)
+    setFilingError(null)
     setMapping(null)
     setSwitcherOpen(false)
     resetImport()
@@ -334,11 +390,14 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setPreview(null)
     setUploadPhase({ kind: 'idle' })
     setImportError(null)
-    setReport(null)
+    // Per-run, sitting exactly where `setReport(null)` sat: a second import must not
+    // inherit the first one's batch, and `Import a corrected file` routes back through
+    // here specifically so a deep-link arrival — which carries no importFile, preview or
+    // mapping at all — cannot open the upload step on another run's state.
+    setReviewBatchId(null)
   }
 
   function closeCreate() {
-    clearVal()
     setView('invoices')
   }
 
@@ -353,45 +412,26 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     }))
   }
 
-  function runValidation() {
-    clearVal()
-    const TOTAL = 16
-    const draftAtRun = draft
-    setCreateStep('validating')
-    setValIdx(0)
-    valTimer.current = setInterval(() => {
-      setValIdx((prev) => {
-        const next = prev + 1
-        if (next >= TOTAL) {
-          if (valTimer.current) clearInterval(valTimer.current)
-          valTimer.current = null
-          valDone.current = setTimeout(() => {
-            setCreateStep('results')
-            setValidation(validate(draftAtRun))
-          }, 300)
-          return TOTAL
-        }
-        return next
-      })
-    }, 95)
+  // Separate from updateItem: a description is a string kept verbatim, while qty/price are
+  // numbers coerced off the input's text. One writer switching on the field would have to
+  // branch on the value's type, which is how a description ends up as 0.
+  function updateItemDesc(i: number, desc: string) {
+    setDraft((d) => ({
+      ...d,
+      items: d.items.map((it, idx) => (idx === i ? { ...it, desc } : it)),
+    }))
   }
 
-  function applyFix(patch: Partial<Draft>) {
-    const nd = { ...draft, ...patch }
-    setDraft(nd)
-    setValidation(validate(nd))
+  // A blank line, not a copy of the last one: qty 1 is the only value that cannot silently
+  // multiply a price the operator has not entered yet.
+  function addItem() {
+    setDraft((d) => ({ ...d, items: [...d.items, { desc: '', qty: 1, price: 0 }] }))
   }
 
-  // The results screen is reachable only from the single-document path now (the
-  // multi-invoice path ends at the server's report, not at a locally-built draft), so
-  // leaving it always lands back on the form.
-  function backToEdit() {
-    clearVal()
-    setCreateStep('form')
-  }
-
-  function selectFile(id: string) {
-    setUploadFile(id)
+  // The form disables its remove control at one remaining line, so this never empties the
+  // list in practice; the filter is still written to be total rather than assuming that.
+  function removeItem(i: number) {
+    setDraft((d) => (d.items.length <= 1 ? d : { ...d, items: d.items.filter((_it, idx) => idx !== i) }))
   }
 
   // Stores whatever the input yielded — the extension rule lives in canReadColumns
@@ -428,13 +468,26 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
       })
   }
 
+  // Where a classified import LANDS (INVCR-01-09, Core AC 8). `review` and `rejected`
+  // are handled IDENTICALLY on purpose: both are the review step, and which SURFACE it
+  // renders there is decided by reviewShellState(batch) off the batch GET alone — never
+  // by this route's `kind`. That single ownership is what makes the POST-arrival path and
+  // a deep-link revisit (which never calls routeAfterImport at all) run one derivation.
+  function applyRoute(route: PostImportRoute) {
+    if (route.kind === 'single') {
+      openImportedInvoice(route.invoiceId)
+      return
+    }
+    setReviewBatchId(route.batchId)
+    setCreateStep('review')
+  }
+
   function startImport() {
     const base = gatewayBase()
     if (base == null || !importFile || !entityId || !mapping || !canStartImport(preview, mapping)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
     setImportError(null)
-    setReport(null)
     // Seed 'sending' with an unknown total: uploadPercent maps total 0 to null, so the
     // UI opens on the indeterminate spinner and only flips to a determinate bar if the
     // transport actually reports a computable length. Zero progress events is legal
@@ -443,39 +496,40 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     createImport(importAuth, base, { file: importFile, entityId, mapping: toImportMapping(mapping) }, setUploadPhase)
       .then(
         (res) => {
-          setReport(res)
-          setCreateStep('report')
+          // Core AC 8: exactly ONE ready invoice goes straight to that invoice, so the
+          // single-invoice path never makes the user read a batch report about a batch of
+          // one. The id is NOT in the 201 body on this path — Go appends InvoiceViolations
+          // only when a violation exists, so a CLEAN single invoice is counted and never
+          // listed — which is why it takes a follow-up list page to resolve.
+          //
+          // Fired ONLY at ready_invoices === 1. At any other count its answer is
+          // discarded, so asking is pure cost.
+          if (res.status === 'completed' && res.ready_invoices === 1) {
+            // RETURNED, not floating: `.finally` below releases reqInFlight, and an
+            // un-returned promise would release it mid-flight and re-arm the button
+            // while this chain is still resolving.
+            return listInvoices(authedFetch, base, reviewQuery(res.id, 'all', { limit: 1 }))
+              .then(
+                (r) => r.invoices[0]?.id ?? null,
+                // DEGRADES to null, never setImportError. The import SUCCEEDED and the
+                // rows are in the ledger; an error banner here would say "failed" about
+                // data that landed. routeAfterImport turns a null id into the review
+                // surface, which is the honest fallback — the batch is real either way.
+                () => null,
+              )
+              .then((id) => applyRoute(routeAfterImport(res, id)))
+          }
+          applyRoute(routeAfterImport(res, null))
         },
         // Stays on 'mapping' on purpose (AC5): a failed import must not advance to a
-        // report step that has no report to show.
+        // review step with no batch to show. Note this is the REQUEST's error arm — the
+        // server's own "the file was rejected" verdict arrives as a resolved 201 and is
+        // classified by routeAfterImport above, not here.
         (err: unknown) => setImportError(toApiError(err)),
       )
       .finally(() => {
         reqInFlight.current = false
       })
-  }
-
-  function parseFile() {
-    if (!uploadFile) return
-    clearVal()
-    const TOTAL = PARSE_LABELS.length
-    setCreateStep('parsing')
-    setParseIdx(0)
-    parseTimer.current = setInterval(() => {
-      setParseIdx((prev) => {
-        const next = prev + 1
-        if (next >= TOTAL) {
-          if (parseTimer.current) clearInterval(parseTimer.current)
-          parseTimer.current = null
-          // Sample documents have no columns to map, so they go straight to the
-          // single-invoice form. Spreadsheets take the server-backed import path
-          // (Import -> Map -> Report), which never routes through here.
-          parseDone.current = setTimeout(() => setCreateStep('form'), 320)
-          return TOTAL
-        }
-        return next
-      })
-    }, 200)
   }
 
   function armField(k: string) {
@@ -526,35 +580,75 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     })
   }
 
+  // The continue control used to swallow the click outright when invoice_number was
+  // unplaced: the button rendered `cursor: not-allowed` but was NOT disabled (only the
+  // no-entity case is), so a firm user clicked an armed-looking primary and nothing at
+  // all happened. It now ANSWERS the click by arming the one field it is waiting for —
+  // every unplaced column lights up as a drop target (CreateMapping's `dropHot` is
+  // driven by armedField alone, so no styling change was needed) and the footer note
+  // switches to the armed instruction.
+  //
+  // `setArmedField`, deliberately NOT `armField` — armField is a TOGGLE
+  // (`a === k ? null : k`, just above), so routing this through it would DIS-ARM on the
+  // second click and reproduce the exact do-nothing click this branch exists to delete.
+  // A set is idempotent; clicking continue five times leaves the chip armed five times.
   function continueMapping() {
-    if (!mapping || !mapping.invoice_number) return
+    if (!mapping || !mapping.invoice_number) {
+      setArmedField('invoice_number')
+      return
+    }
     startImport()
   }
 
   function backToImport() {
-    clearVal()
+    setCreateStep('upload')
+  }
+
+  // The review surface's TWO ways back to the upload step ("Choose another file" on the
+  // rejected-file card, "Import a corrected file" on the unreadable-rows tab). ONE action
+  // rather than asking the component to call resetImport-then-backToImport in the right
+  // order at two call sites — and deliberately NOT folded into backToImport itself, whose
+  // other caller is the Map step's back button, where wiping the chosen file and its
+  // preview would be a regression.
+  //
+  // The reset is what makes this safe from a DEEP LINK: an arrival by URL carries no
+  // importFile, no preview and no mapping at all, so the upload step must not open on
+  // whatever a previous run in this session happened to leave behind.
+  function restartImport() {
+    resetImport()
     setCreateStep('upload')
   }
 
   function skipUpload() {
-    clearVal()
     setCreateStep('form')
-    setUploadFile(null)
     setMapping(null)
   }
 
-  function approve() {
-    if (!validation || validation.errors.length > 0 || validation.warnings.length > 0) return
-    const d = draft
-    const inv = { number: d.number, buyer: d.buyer, buyerTin: d.buyerTin, buyerAddress: d.buyerAddress, date: d.date, items: d.items, status: 'Approved' as const, wht: d.wht, docType: d.docType || 'B2B' }
-    // Matched by entityId, not array index ([entity-picker] keystone). A no-op for
-    // in-house/the empty fallback (entityId:null, never a member of `clients`) — this
-    // single-document mock path is untouched by this story, and its only observable
-    // effect (active.invoices) feeds CustomersView/ReportsView/XmlModal, themselves
-    // still-mock surfaces the next step of this plan migrates off it.
-    setClients((cs) => cs.map((c) => (c.entityId === active.entityId ? { ...c, invoices: [inv, ...c.invoices] } : c)))
-    setView('detail')
-    setDetailSel(selectMock(inv.number))
+  // The manual path's one round trip. Replaces the mock approve(), which wrote the draft
+  // into local `clients` state, showed a success screen and persisted NOTHING — reachable
+  // in LIVE via "Skip — enter manually", so a production user could complete it and lose
+  // the invoice silently.
+  //
+  // Everything ordering-sensitive lives in fileDraftInvoice (lib/invoiceDraft.ts), which is
+  // node-testable under the no-jsdom constraint; this is the wiring only. `onCreated` is
+  // passed as a BARE function reference so there is no local closure here that could do
+  // anything other than navigate, and no branch in which it fires early.
+  //
+  // The guard is the second of two — CreateForm renders the same fileDraftGate result as a
+  // disabled button with a named reason, so a blocked click never reaches here. `base ==
+  // null` is the no-gateway build (zero network), and the `activeEntity == null` clause is
+  // redundant with the gate but required for the narrowing draftToCreateRequest's
+  // `Pick<Entity, …>` parameter needs — the same reason readColumns keeps `!importFile`.
+  function fileDraft() {
+    const base = gatewayBase()
+    if (base == null || activeEntity == null || !fileDraftGate(draft, activeEntity).canFile) return
+    void fileDraftInvoice(draft, activeEntity, {
+      create: (input) => createInvoice(authedFetch, base, input),
+      inFlight: reqInFlight,
+      onPending: setFiling,
+      onError: setFilingError,
+      onCreated: openImportedInvoice,
+    })
   }
 
   function selectInvoice(number: string) {
@@ -562,9 +656,13 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setDetailSel(selectMock(number))
   }
 
-  // Click-through from a rule-violation row in the import report (Core AC4). `id` is a
-  // real invoice UUID (invoice_violations[].invoice_id), NOT a mock invoice number — so
-  // InvoiceDetail renders its placeholder rather than resolving it against active.invoices.
+  // Click-through from a rule-violation row in the import report (Core AC4), from a row in
+  // the invoices list, and — since INVCR-01-03 — the landing point of a successful manual
+  // filing. `id` is always a real invoice UUID, never a mock invoice number, so InvoiceDetail
+  // resolves it against the server instead of against active.invoices. Reused verbatim by
+  // the create flow rather than given a variant: "the real detail screen showing the
+  // server's own row" IS the whole affirmation that a filing succeeded, and a second route
+  // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
     setView('detail')
     setDetailSel(selectImported(id))
@@ -694,6 +792,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     clients,
     active,
     entities: entitiesList,
+    activeEntity,
     entitiesState,
     entitiesError: entitiesAsync.error,
     refetchEntities: entitiesAsync.run,
@@ -701,8 +800,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     view,
     draft,
     createStep,
-    validation,
-    uploadFile,
     mapping,
     armedField,
     dragField,
@@ -714,8 +811,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     xmlOpen,
     connectors,
     connectorMappings,
-    valIdx,
-    parseIdx,
+    filing,
+    filingError,
     customRules,
     openRuleKey,
     policies,
@@ -726,7 +823,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     preview,
     uploadPhase,
     importError,
-    report,
+    reviewBatchId,
     importedInvoiceId: detailSel.importedInvoiceId,
     nav,
     setFilter,
@@ -736,11 +833,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     closeCreate,
     updateDraft,
     updateItem,
-    runValidation,
-    applyFix,
-    backToEdit,
-    selectFile,
-    parseFile,
+    updateItemDesc,
+    addItem,
+    removeItem,
     armField,
     setDrag,
     endDrag,
@@ -751,8 +846,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     selectImportFile,
     readColumns,
     backToImport,
+    restartImport,
     skipUpload,
-    approve,
+    fileDraft,
     selectInvoice,
     openImportedInvoice,
     setSandbox,

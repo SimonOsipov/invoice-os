@@ -36,17 +36,45 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
+// violationOption customizes a violation() call to attach an Expected and/or
+// Actual value (D9, INVCR-01-12). Only format/regex, enum, range, tax_math,
+// and line_sum pass one; required/date/cross_field/conditional/cel call
+// violation(r) bare, so their Violation's Expected/Actual stay nil ->
+// omitempty-absent on the wire (rule.go's Violation doc comment) -- never a
+// fabricated "".
+type violationOption func(*Violation)
+
+// withExpected sets Violation.Expected to the given value: an exact decimal
+// string (decimal.Decimal.String(), never a float -- [D13]) for the
+// arithmetic/numeric types, or the rule's own natural-language expectation
+// (a regex pattern, an allowed-values list) for format/enum.
+func withExpected(expected string) violationOption {
+	return func(v *Violation) { v.Expected = &expected }
+}
+
+// withActual sets Violation.Actual to the given value. Mirrors withExpected.
+func withActual(actual string) violationOption {
+	return func(v *Violation) { v.Actual = &actual }
+}
+
 // violation builds the *Violation a failed rule returns: the rule's key +
-// severity + message, plus the resolved target path (for the M3-09 UI).
-func violation(r Rule) *Violation {
-	return &Violation{
+// severity + message, plus the resolved target path (for the M3-09 UI) and,
+// via opts, this evaluation's Expected/Actual (D9).
+func violation(r Rule, opts ...violationOption) *Violation {
+	v := &Violation{
 		RuleKey:  r.Key,
 		Severity: r.Severity,
 		Message:  r.Message,
 		Path:     r.Target,
 	}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
 }
 
 // decodeParams unmarshals a rule's type-specific Params into dst. An empty
@@ -157,7 +185,9 @@ func (formatEval) Eval(p Payload, r Rule) (*Violation, error) {
 	if re.MatchString(stringify(val)) {
 		return nil, nil
 	}
-	return violation(r), nil
+	// Expected = the pattern; no natural Actual (population table, AC-3) --
+	// the failing value is already on the invoice payload at Path.
+	return violation(r, withExpected(*params.Pattern)), nil
 }
 
 // enumEval implements the `enum` rule type: params `{values:[...]}`.
@@ -186,7 +216,14 @@ func (enumEval) Eval(p Payload, r Rule) (*Violation, error) {
 			return nil, nil
 		}
 	}
-	return violation(r), nil
+	// Expected = the allowed values, joined " · " (enumLabel); Actual = the
+	// resolved (non-matching) value, stringified the same way formatEval's
+	// match target is (AC-3).
+	labels := make([]string, len(*params.Values))
+	for i, w := range *params.Values {
+		labels[i] = stringify(w)
+	}
+	return violation(r, withExpected(strings.Join(labels, " · ")), withActual(stringify(val))), nil
 }
 
 // rangeEval implements the `range` rule type: params
@@ -215,19 +252,56 @@ func (rangeEval) Eval(p Payload, r Rule) (*Violation, error) {
 	f, ok := toFloat(val)
 	if !ok {
 		// Present but non-numeric DATA -> violation, not a config error.
+		// No natural Expected/Actual: f never resolved to a comparable number.
 		return violation(r), nil
 	}
+	// Expected names ALL of this rule's configured bounds (not just whichever
+	// one fires below) -- AC-4's "whichever bounds exist" describes the
+	// rule's whole valid range, e.g. a min+max rule reports both even when
+	// only the min arm is violated. Actual is the resolved value, as an
+	// exact decimal string ([D13]), never the raw float.
+	expected := rangeBoundLabel(params.Min, params.ExclusiveMin, params.Max, params.ExclusiveMax)
+	actual := decimal.NewFromFloat(f).String()
 	switch {
 	case params.Min != nil && f < *params.Min:
-		return violation(r), nil
+		return violation(r, withExpected(expected), withActual(actual)), nil
 	case params.Max != nil && f > *params.Max:
-		return violation(r), nil
+		return violation(r, withExpected(expected), withActual(actual)), nil
 	case params.ExclusiveMin != nil && f <= *params.ExclusiveMin:
-		return violation(r), nil
+		return violation(r, withExpected(expected), withActual(actual)), nil
 	case params.ExclusiveMax != nil && f >= *params.ExclusiveMax:
-		return violation(r), nil
+		return violation(r, withExpected(expected), withActual(actual)), nil
 	}
 	return nil, nil
+}
+
+// rangeBoundLabel renders rangeEval's configured bounds as a single
+// Expected string: whichever of min/exclusive_min/max/exclusive_max are
+// set, in that order (lower bounds then upper bounds), each as "<op>
+// <bound>" (an exact decimal string, never a raw float), joined by " · " --
+// the same joiner enumEval uses for its allowed-values list (one separator
+// convention, AC-4). min/max use inclusive operators (>=, <=);
+// exclusive_min/exclusive_max use strict operators (>, <) -- no AC or
+// seeded rule exercises the exclusive params (Stage 2 correction C1's
+// seeded-params note), but rangeEval already evaluates them, so this
+// generalizes the same "whichever bounds exist" rendering to all four
+// rather than leaving two of rangeEval's four branches with no natural
+// Expected at all (product-advisor consult, this subtask).
+func rangeBoundLabel(min, exclusiveMin, max, exclusiveMax *float64) string {
+	var parts []string
+	if min != nil {
+		parts = append(parts, ">= "+decimal.NewFromFloat(*min).String())
+	}
+	if exclusiveMin != nil {
+		parts = append(parts, "> "+decimal.NewFromFloat(*exclusiveMin).String())
+	}
+	if max != nil {
+		parts = append(parts, "<= "+decimal.NewFromFloat(*max).String())
+	}
+	if exclusiveMax != nil {
+		parts = append(parts, "< "+decimal.NewFromFloat(*exclusiveMax).String())
+	}
+	return strings.Join(parts, " · ")
 }
 
 // dateEval implements the `date` rule type: params

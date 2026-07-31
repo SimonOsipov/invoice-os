@@ -219,9 +219,27 @@ export const SUGGESTION_MESSAGE = 'Added from a suggestion — review before ena
 export type CustomRuleStore = Record<string, CustomRule[]>
 
 /**
- * The store key for a client. In-house has no business_entities row of its own
- * (entityId is null there by construction — lib/clients.ts inhouseClient), and it has
- * exactly one workspace, so every in-house read lands on the same bucket.
+ * The store key for a client. `entityId` is null whenever a workspace has no entity
+ * resolved yet — an in-house tenant before its first entity (AC-3's bootstrap window)
+ * or the emptyClient()/no-gateway placeholder — and every such read lands on the shared
+ * 'workspace' bucket regardless of persona or of WHICH entity-less workspace it is.
+ *
+ * task-304 (INVCR-01-19) AC-9: before that story, in-house had no route to ever create
+ * an entity, so `entityId` was null there PERMANENTLY and 'workspace' was its only key
+ * for the life of the app. Now an in-house tenant can create its one entity mid-session
+ * (Settings > Company, [entity-picker]) — `active.entityId` (and therefore this key)
+ * CAN change from 'workspace' to a real id within a session. A rule added under
+ * 'workspace' before that point becomes invisible once `rulesKey` moves to the real id
+ * (App.tsx keeps both entries in `customRuleStore`; only the READ side stops finding the
+ * old one). No fallback/migration is added for this: `customRuleStore` is plain React
+ * state (App.tsx's `useState<CustomRuleStore>({})`), never persisted to localStorage or
+ * anywhere else — it is wiped on every reload regardless, so the ONLY window in which
+ * this can be observed at all is a single session, between adding a custom rule with no
+ * entity yet and creating that entity, with no reload in between. Judged an acceptable
+ * edge case: it is new-tenant-onboarding-only (unreachable again once an entity exists),
+ * self-healing on the next reload, and building a merge-on-create migration for
+ * in-memory state that never outlives the tab would be solving a persistence problem
+ * that does not exist here.
  */
 export function customRulesKey(entityId: string | null): string {
   return entityId ?? 'workspace'

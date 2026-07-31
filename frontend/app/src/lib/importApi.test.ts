@@ -49,8 +49,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
+import { createAuthedFetch } from './authedFetch'
 import {
   createImport,
+  getImportBatch,
   makeImportAuth,
   normalizeReport,
   previewImport,
@@ -748,5 +750,73 @@ describe('concurrency (QA)', () => {
 describe('rowErrorRows: boundary case (QA)', () => {
   it('QA-14: row 0 is read via a strict `!== undefined` check, not truthiness — {row:0} resolves [0], not [] (guards against a future truthy-check regression; row 0 cannot occur today since sheet rows are 1-based, but the reader must not silently rely on that)', () => {
     expect(rowErrorRows({ row: 0, message: 'x' })).toEqual([0])
+  })
+})
+
+// --- Stage 2.5 (Mode A, task-284) RED specs for getImportBatch (AC-2). Unlike
+// previewImport/createImport, this is a plain-JSON GET through the typed authedFetch
+// wrapper, not xhrJson — mirrors invoices.test.ts's fetch-stub pattern rather than this
+// file's own FakeXhr harness. Reuses this file's own captureRejection (:146) — no
+// second declaration.
+interface MockResponse {
+  ok: boolean
+  status: number
+  statusText?: string
+  json: () => Promise<unknown>
+}
+
+function mockFetchOnce(response: MockResponse) {
+  const fetchMock = vi.fn().mockResolvedValue(response)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('getImportBatch (AC-2, Stage 2.5)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('BATCH-1: resolves exactly the 9 declared fields; rule_set_version:null stays null, never coerced to 0; URL is .../imports/<id>', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          id: 'batch-1',
+          entity_id: 'entity-1',
+          status: 'completed',
+          rows_total: 10,
+          rows_valid: 9,
+          rows_invalid: 1,
+          errors: [],
+          rule_set_version: null,
+          created_at: '2026-07-30T00:00:00Z',
+        }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getImportBatch(af, base, 'batch-1')
+
+    expect(result.rule_set_version).toBeNull()
+    expect(result.id).toBe('batch-1')
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/imports/batch-1')
+    expect(init.method).toBe('GET')
+  })
+
+  it('ERR-1a: a 500 from getImportBatch rejects ApiError{status:500} unchanged, not wrapped or swallowed', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.reject(new Error('no body')),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => getImportBatch(af, base, 'batch-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(500)
   })
 })

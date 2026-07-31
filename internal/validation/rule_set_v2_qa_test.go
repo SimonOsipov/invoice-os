@@ -115,15 +115,20 @@ func TestRuleSetV2_JSONQuotedVersionPinNotPresent(t *testing.T) {
 //    mutation to ANY existing rule, not just a key added/removed.
 // ---------------------------------------------------------------------
 
-// activeRuleContentFingerprint reads every rule under the active version,
-// ordered by key for determinism, and hashes their CONTENT columns --
-// key/type/target/params/severity/when/message/scope. `enabled` is
-// deliberately EXCLUDED: it is a runtime toggle (the kill-switch,
-// [v2-ships-as-authored]'s own framing draws this exact line), not content,
-// and TestSeed_KillSwitch legitimately flips it mid-suite (restored via its
-// own cleanup before any later test runs). Hashing it in would make this
-// test flicker on kill-switch ordering rather than guard content.
-func activeRuleContentFingerprint(t *testing.T) string {
+// v2RuleContentFingerprint reads every rule under v2 -- resolved DIRECTLY by
+// version number, NOT "whichever version is active" (see this file's
+// TestRuleSetV2_ActiveContentFingerprintUnmutated doc comment for why: using
+// "active" here was itself a latent [active-version-pinning-is-the-bug]
+// instance, fixed rather than perpetuated once INVCR-01-13/task-289 published
+// v3 and superseded v2 as active) -- ordered by key for determinism, and
+// hashes their CONTENT columns -- key/type/target/params/severity/when/
+// message/scope. `enabled` is deliberately EXCLUDED: it is a runtime toggle
+// (the kill-switch, [v2-ships-as-authored]'s own framing draws this exact
+// line), not content, and TestSeed_KillSwitch legitimately flips it mid-suite
+// (restored via its own cleanup before any later test runs). Hashing it in
+// would make this test flicker on kill-switch ordering rather than guard
+// content.
+func v2RuleContentFingerprint(t *testing.T) string {
 	t.Helper()
 	_, app := dbTestPools(t)
 	ctx := context.Background()
@@ -131,10 +136,10 @@ func activeRuleContentFingerprint(t *testing.T) string {
 	rows, err := app.Query(ctx,
 		`SELECT r.key, r.type, r.target, r.params, r.severity, COALESCE(r."when", ''), r.message, r.scope
 		   FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		  WHERE v.is_active
+		  WHERE v.version = 2
 		  ORDER BY r.key`)
 	if err != nil {
-		t.Fatalf("query active version's rule content: %v", err)
+		t.Fatalf("query v2's rule content: %v", err)
 	}
 	defer rows.Close()
 
@@ -144,7 +149,7 @@ func activeRuleContentFingerprint(t *testing.T) string {
 		var key, typ, target, severity, when, message, scope string
 		var params json.RawMessage
 		if err := rows.Scan(&key, &typ, &target, &params, &severity, &when, &message, &scope); err != nil {
-			t.Fatalf("scan active rule row: %v", err)
+			t.Fatalf("scan v2 rule row: %v", err)
 		}
 		h.Write([]byte(key))
 		h.Write([]byte{0})
@@ -165,37 +170,47 @@ func activeRuleContentFingerprint(t *testing.T) string {
 		n++
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate active rule rows: %v", err)
+		t.Fatalf("iterate v2 rule rows: %v", err)
 	}
 	if n == 0 {
-		t.Fatal("0 rules under the active version -- nothing to fingerprint")
+		t.Fatal("0 rules under v2 -- nothing to fingerprint")
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 // TestRuleSetV2_ActiveContentFingerprintUnmutated (QA-added adversarial):
-// pins a SHA-256 digest of every active-version rule's full content
+// pins a SHA-256 digest of v2's full rule content
 // (key/type/target/params/severity/when/message/scope, sorted by key).
-// RS-V2-03/04 only pin the active version's KEY SET (19 names); RS-V2-07
-// only pins the 2 line-item rules' params byte-for-byte. Neither would
-// notice a future migration that "republished" v3 by editing an EXISTING
-// v2 rule's params/severity/message directly, in place -- exactly the M3-04
+// RS-V2-03/04 only pin v2's KEY SET (19 names); RS-V2-07 only pins the 2
+// line-item rules' params byte-for-byte. Neither would notice a future
+// migration that "republished" a version by editing an EXISTING v2 rule's
+// params/severity/message directly, in place -- exactly the M3-04
 // immutability violation task-111 exists to revert (the line_rules.sql
 // mutation of v1). A full-content hash closes that gap: any single-byte
-// change to any rule's content changes the digest.
+// change to v2's content changes the digest.
 //
-// If this test ever legitimately reds because content intentionally changed
-// (a deliberate v3 publish that revises v2... no -- v2 must stay immutable
-// too, by the same M3-04 guarantee this story restores. A red here should be
-// read as "something mutated a rule that must never change" first, and a
-// digest update only after confirming the change is NOT a content mutation
-// of an already-published version).
+// RESOLVED BY VERSION NUMBER, NOT "active" (INVCR-01-13, task-289): this
+// test's own doc comment already anticipated the answer below, verbatim,
+// before v3 existed -- "a deliberate v3 publish that revises v2... no -- v2
+// must stay immutable too". v3's publish does NOT touch v2's content at all
+// (only adds a new, separate version), so wantFingerprint stays UNCHANGED
+// here; v2RuleContentFingerprint now resolves v2 by its permanent version
+// number rather than "whichever version is active" (which stopped meaning
+// "v2" the moment v3 superseded it as active) -- this test now proves what
+// its name has always claimed, rather than silently tracking whatever
+// happens to be active. v3's OWN content fingerprint is a separate, disjoint
+// concern -- covered by rule_set_v3_test.go's TestRuleSetV3_IsV2PlusFourTargets
+// field-by-field comparison, not duplicated here as a second hash.
+//
+// A red here should be read as "something mutated v2's content, which must
+// never change" -- and a digest update only after confirming the change is
+// NOT a content mutation of an already-published, sealed version.
 func TestRuleSetV2_ActiveContentFingerprintUnmutated(t *testing.T) {
 	const wantFingerprint = "321883213ed3a56cc0b9cf6c89a3279af086165e9fdfbdb4cff2ff82fad73790"
 
-	got := activeRuleContentFingerprint(t)
+	got := v2RuleContentFingerprint(t)
 	if got != wantFingerprint {
-		t.Errorf("active rule-set content fingerprint = %s, want %s -- an active rule's content "+
+		t.Errorf("v2 rule-set content fingerprint = %s, want %s -- a v2 rule's content "+
 			"(key/type/target/params/severity/when/message/scope) changed. If this is NOT an "+
 			"in-place mutation of an already-published version's content (the exact defect "+
 			"task-111 reverts), update wantFingerprint deliberately, with the diff reviewed -- "+

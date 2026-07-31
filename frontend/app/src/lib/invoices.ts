@@ -18,10 +18,18 @@
 // seam from M3-07-02, src/lib/authedFetch.ts), mirroring listEntities/updateEntity in
 // portfolio.ts. Gateway path prefix confirmed `${base}/api/invoice/v1/…`
 // (importApi.ts:248,263):
-// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?needs_attention=true]
-//                       [&entity_id=...]`, unwraps `.invoices` (ListHandler,
-//                       handlers.go:223-292, [needs-attention-param-strictness],
-//                       [entity-id-restored]).
+// - listInvoices:      GET   `${base}/api/invoice/v1/invoices[?<any of the nine
+//                       filters>]`, resolving the ENVELOPE whole -- `{invoices,
+//                       pagination}`, not the bare array it used to unwrap (INVCR-01-08,
+//                       task-284 AC-1: `pagination.total` is what every review filter-pill
+//                       count and the pager read, and it was unreachable while this
+//                       discarded it). Absent options emit no param and the client adds no
+//                       defaults of its own (ListHandler, handlers.go:349-451,
+//                       [needs-attention-param-strictness], [entity-id-restored]).
+// - violationSummary:   GET   `${base}/api/invoice/v1/invoices/violation-summary
+//                       ?import_batch_id=...`, unwraps `.rules` -- the review rail's
+//                       rule-key aggregate (ViolationSummaryHandler, handlers.go:821;
+//                       import_batch_id is REQUIRED there, absent/malformed is a 400).
 // - getInvoice:         GET   `${base}/api/invoice/v1/invoices/{id}`, resolves an
 //                       InvoiceDetailRecord and normalizes a missing/undefined
 //                       `rule_set_version` to `null` (defensive; the backend now sends
@@ -33,6 +41,11 @@
 //                       getInvoice itself.
 // - getInvoiceHistory:  GET   `${base}/api/invoice/v1/invoices/{id}/history`, resolves
 //                       the bare StatusChange[] verbatim (HistoryHandler).
+// - createInvoice:      POST  `${base}/api/invoice/v1/invoices`, follows editInvoice's
+//                       shape verbatim (CreateHandler, handlers.go:117-165, INVCR-01-02,
+//                       task-278) -- the missing caller for a handler that has existed
+//                       since M4-02 (cmd/invoice/main.go:56). draftToCreateRequest
+//                       (lib/invoiceDraft.ts) is the pure Draft -> body mapper.
 // - editInvoice:        PATCH `${base}/api/invoice/v1/invoices/{id}`, only the changed
 //                       fields in the body (EditHandler, handlers.go:427-475, [D9]).
 // - revalidateInvoice:  POST  `${base}/api/invoice/v1/invoices/{id}/validate`, no body
@@ -170,6 +183,14 @@ export interface InvoiceRecord {
   csid: string | null
   qr_payload: string | null
   rejection_reasons: RejectionReason[]
+  // kept_as_is_at/by/reason (INVCR-01-15, D6) -- Invoice's own three new columns
+  // (invoice.go), no omitempty, so all three are present as explicit null on an
+  // un-kept row, same convention as irn/csid/qr_payload above. `kept_as_is_at` is
+  // what verdictPill's kept-invalid badge reads (lib/reviewBatch.ts); `_by`/`_reason`
+  // are surfaced so the row-expansion panel can render the persisted reason verbatim.
+  kept_as_is_at: string | null
+  kept_as_is_by: string | null
+  kept_as_is_reason: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
 }
@@ -207,7 +228,10 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   revalidate_blocked_reason: string | null
 }
 
-// GET /v1/invoices response envelope (listResponse, handlers.go:91-98).
+// GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
+// keys -- applied filters are deliberately NOT echoed back
+// (TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues pins len == 2), so
+// `pagination` reports the EFFECTIVE limit/offset the server used, clamped.
 export interface InvoiceListResponse {
   invoices: InvoiceRecord[]
   pagination: { limit: number; offset: number; total: number }
@@ -222,13 +246,42 @@ export interface StatusChange {
   changed_at: string
 }
 
-// listInvoices's two filters (ListFilter, invoice.go:200-217): needsAttention
-// ([needs-attention-bool-true-only] — absent/false applies no predicate) and entityId
-// ([entity-id-restored] — absent/undefined applies no filter, tenant-wide). Both AND
-// together server-side when set together.
+// listInvoices's nine filters (ListFilter, invoice.go:200-217; ListHandler,
+// handlers.go:349-451). All nine AND together server-side, and EVERY one is optional:
+// an absent option emits NO query param, so `listInvoices(af, base, {})` is byte-identical
+// to the pre-INVCR-01 tenant-wide call.
+//
+// The four that shipped first: needsAttention ([needs-attention-bool-true-only] —
+// absent/false applies no predicate), entityId ([entity-id-restored] — absent/undefined
+// applies no filter, tenant-wide), plus limit/offset, which the client never sent until
+// now. INVCR-01-06 ([D4]) adds the review screen's five: importBatchId, status, needsFix,
+// ruleKey, q.
+//
+// `status` is typed InvoiceStatus, NOT string, on purpose: D2 retires 'approved' from
+// this flow's vocabulary, and a typed enum makes writing it a compile error at every call
+// site — cheaper and earlier than a runtime guard.
+//
+// NO CLIENT-SIDE DEFAULTS (task-284 §1, pinned by LIST-5 + I7's `not.toContain('?')`).
+// The server already defaults limit=50/offset=0 and clamps limit down to 200
+// (handlers.go:361-375); an `opts.limit ?? 50` here would emit `?limit=50` on every call
+// in the app and silently change the wire for the three shipped screens that send no
+// options at all. The server's defaults stay the only defaults.
 export interface ListInvoicesOptions {
   needsAttention?: boolean
   entityId?: string
+  limit?: number
+  offset?: number
+  importBatchId?: string
+  status?: InvoiceStatus
+  needsFix?: boolean
+  ruleKey?: string
+  q?: string
+  // keptAsIs (INVCR-01-15, D6) -- the review shell's "N kept as-is" footer counter
+  // query (ListFilter.KeptAsIs, store.go), same [needs-attention-bool-true-only]
+  // shape as needsFix/needsAttention. Deliberately NOT one of the four toolbar
+  // pills (System Design §7's own table) -- see reviewBatch.ts's ReviewPill union,
+  // which is unchanged by this field.
+  keptAsIs?: boolean
 }
 
 // One entry of editInvoice's optional `line_items` array (lineItemReq,
@@ -271,6 +324,40 @@ export type InvoiceEditInput = Partial<
   line_items?: LineItemEditInput[]
 }
 
+// One entry of createInvoice's `line_items` array (lineItemReq echo, createRequest.
+// LineItems, handlers.go:51-64, INVCR-01-02/task-278). Same five nullable-string fields
+// as LineItemEditInput -- deliberately a SEPARATE type, not reused: create and edit are
+// different endpoints (createRequest vs editReq) that could diverge independently. NO
+// `id`/`line_no`: line_no is system-assigned 1..N by array position (handlers.go:38-41)
+// and a client-supplied one is silently ignored.
+export interface LineItemCreateInput {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
+// createInvoice's POST body (createRequest, handlers.go:51-64). `entity_id`/
+// `invoice_number` are the two REQUIRED fields -- blank rejects 400 before create ever
+// runs (handlers.go:138-145); every other header field is nullable. The mapper
+// (draftToCreateRequest, lib/invoiceDraft.ts) never emits `buyer_address`/`wht`/
+// `doc_type` -- they have no column and no wire field.
+export interface InvoiceCreateInput {
+  entity_id: string
+  invoice_number: string
+  issue_date: string | null
+  supplier_tin: string | null
+  supplier_name: string | null
+  buyer_tin: string | null
+  buyer_name: string | null
+  currency: string | null
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  line_items: LineItemCreateInput[]
+}
+
 // The 9 editable header fields (editReq, handlers.go:70-80, [D9]) -- moved here from
 // InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
 // component share one definition; EditFieldKey travels with the const it's derived
@@ -300,17 +387,60 @@ export interface BatchSubmitResultItem {
   reason?: string
 }
 
+// Returns the envelope WHOLE (INVCR-01-08/task-284 AC-1), not the bare `.invoices` array
+// it used to unwrap: `pagination.total` is the source of every review-screen filter-pill
+// count and of the "SHOWING 1–50 OF 500" pager, and discarding it here made that number
+// unreachable no matter what the server sent.
+//
+// Three emission rules, one per kind of option — a wrong one here is the only way this
+// function can break I7/LIST-1b/LIST-4:
+//   - booleans emit iff STRICTLY `=== true` ([needs-attention-bool-true-only]); `false`
+//     is absent, and `??`/truthiness would let the string "false" through permissive.
+//   - strings emit iff truthy, so `''` is ABSENT — matching the server's own
+//     empty-is-absent rule (handlers.go:409-445, `if raw != ""`).
+//   - limit/offset emit iff `!= null`, NEVER truthiness: `offset: 0` is falsy, so an
+//     `if (opts.offset)` would silently drop the first page's own offset (LIST-4).
 export async function listInvoices(
   authedFetch: AuthedFetch,
   base: string,
   opts: ListInvoicesOptions = {},
-): Promise<InvoiceRecord[]> {
+): Promise<InvoiceListResponse> {
   const params = new URLSearchParams()
   if (opts.needsAttention === true) params.set('needs_attention', 'true')
   if (opts.entityId) params.set('entity_id', opts.entityId)
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  if (opts.offset != null) params.set('offset', String(opts.offset))
+  if (opts.importBatchId) params.set('import_batch_id', opts.importBatchId)
+  if (opts.status) params.set('status', opts.status)
+  if (opts.needsFix === true) params.set('needs_fix', 'true')
+  if (opts.ruleKey) params.set('rule_key', opts.ruleKey)
+  if (opts.q) params.set('q', opts.q)
+  if (opts.keptAsIs === true) params.set('kept_as_is', 'true')
   const query = params.toString() ? `?${params.toString()}` : ''
-  const res = await authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
-  return res.invoices
+  return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
+}
+
+// One row of the violation-summary aggregate (RuleCount, store.go:639-642): a distinct
+// rule_key and the number of DISTINCT invoices failing it in this batch -- an invoice
+// naming the same rule twice counts ONCE, so these never sum to the invoice total.
+export interface RuleCount {
+  rule_key: string
+  invoices: number
+}
+
+// The rows arrive SERVER-ordered (count DESC, then rule_key ASC) and severity-agnostic,
+// and are passed through untouched: this rail is a set of filter triggers, so re-sorting
+// or re-filtering it here would make the rail disagree with the `rule_key` query each of
+// its rows fires ([filters-are-server-side]).
+export async function violationSummary(
+  authedFetch: AuthedFetch,
+  base: string,
+  importBatchId: string,
+): Promise<RuleCount[]> {
+  const res = await authedFetch<{ rules: RuleCount[] }>(
+    `${base}/api/invoice/v1/invoices/violation-summary?import_batch_id=${encodeURIComponent(importBatchId)}`,
+  )
+  return res.rules
 }
 
 // The two action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
@@ -342,6 +472,27 @@ export async function getInvoiceHistory(
   return authedFetch<StatusChange[]>(`${base}/api/invoice/v1/invoices/${id}/history`)
 }
 
+// POST /v1/invoices -- the missing caller for CreateHandler (cmd/invoice/main.go:56,
+// INVCR-01-02, task-278: the handler has existed since M4-02 with no caller). Follows
+// editInvoice's shape verbatim below -- forwards `input` to apiFetch untouched, no
+// wrapping. Non-2xx rejects with the underlying ApiError unchanged.
+//
+// The 201 body is the bare domain Invoice with its line_items (CreateHandler,
+// handlers.go:117-165), NOT the getResponse wrapper -- so like listInvoices/editInvoice/
+// revalidateInvoice's responses it carries no `rule_set_version` key, and the resolved
+// record reads `undefined` there at runtime despite InvoiceRecord typing it `number |
+// null` (see that type's own comment). Deliberately NOT normalized with `?? null` here:
+// getInvoice is the one helper that does that, and a fourth variant of the same wire shape
+// is worse than the documented gap. If that gap is ever closed it should be closed once,
+// for all four helpers, not per-callsite.
+export async function createInvoice(
+  authedFetch: AuthedFetch,
+  base: string,
+  input: InvoiceCreateInput,
+): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices`, { method: 'POST', body: input })
+}
+
 export async function editInvoice(
   authedFetch: AuthedFetch,
   base: string,
@@ -357,6 +508,27 @@ export async function revalidateInvoice(
   id: string,
 ): Promise<InvoiceRecord> {
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST' })
+}
+
+// POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6, KeepAsIsHandler handlers.go) --
+// D6's auditable-triage write, never a lifecycle transition. `reason` is sent as
+// received; the caller (ReviewRow.tsx) is expected to have already gated the click on
+// canKeepAsIs (lib/reviewBatch.ts) so an empty reason never reaches this call at all
+// ([must-not-allow-empty-reason], KEEP-2) -- this wrapper does no trimming/validation
+// of its own, matching editInvoice/revalidateInvoice's own thin-wrapper shape.
+//
+// DELETE .../keep-as-is (UnkeepAsIsHandler) has NO caller here: AC #10's named UI
+// surface is the keep action only, and the backend endpoint exists with no frontend
+// caller yet -- the same precedent createInvoice/POST /v1/invoices itself sat on for
+// two stories before INVCR-01-02 wired it up. Flagged in this subtask's notes, not
+// silently dropped.
+export async function keepInvoiceAsIs(
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  reason: string,
+): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/keep-as-is`, { method: 'POST', body: { reason } })
 }
 
 // POST /v1/invoices/submissions -- the batch-submit trigger ([trigger-surface] /
@@ -540,7 +712,12 @@ export function diffLineItems(
 // (an exponent that would drive it below zero is folded into `u` instead), so nothing
 // downstream has to reason about a negative scale. bigint throughout -- no float ever
 // touches a money value here, which is the whole point of the type.
-interface Scaled {
+//
+// Exported (INVCR-01-02, task-278, [money-primitives-exported]): draftToCreateRequest
+// (lib/invoiceDraft.ts) is the second consumer of this exact-decimal kit, alongside
+// computedLineSum below. Zero behaviour change -- these five names were module-private
+// until now.
+export interface Scaled {
   u: bigint
   s: number
 }
@@ -561,7 +738,7 @@ interface Scaled {
 // transcription does not quietly widen at the anchor.
 const DECIMAL_RE = /^(-?)(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
 
-function parseScaled(raw: string): Scaled | null {
+export function parseScaled(raw: string): Scaled | null {
   // Optional groups are absent at runtime; RegExpExecArray types them all `string`.
   const m: Array<string | undefined> | null = DECIMAL_RE.exec(raw)
   if (m === null) return null
@@ -576,11 +753,11 @@ function parseScaled(raw: string): Scaled | null {
   return { u: m[1] === '-' ? -u : u, s }
 }
 
-function mulScaled(a: Scaled, b: Scaled): Scaled {
+export function mulScaled(a: Scaled, b: Scaled): Scaled {
   return { u: a.u * b.u, s: a.s + b.s }
 }
 
-function addScaled(a: Scaled, b: Scaled): Scaled {
+export function addScaled(a: Scaled, b: Scaled): Scaled {
   const s = Math.max(a.s, b.s)
   return { u: a.u * 10n ** BigInt(s - a.s) + b.u * 10n ** BigInt(s - b.s), s }
 }
@@ -588,7 +765,7 @@ function addScaled(a: Scaled, b: Scaled): Scaled {
 // Exact digits, no thousands grouping -- that keeps this ICU-independent (format.test.ts:9
 // records that toLocaleString('en-NG') varies by node ICU build). Trailing zeros are
 // stripped down to, but never below, 2dp: 250.0000 -> '250.00', 0.015 stays '0.015'.
-function renderScaled({ u, s }: Scaled): string {
+export function renderScaled({ u, s }: Scaled): string {
   let mantissa = u
   let scale = s
   if (scale < 2) {

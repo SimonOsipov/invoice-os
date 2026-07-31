@@ -99,13 +99,16 @@ func newTestIdentity() context.Context {
 }
 
 // activeSeedVersion is the ONE place this package names the migration-seeded
-// ACTIVE rule-set version. M4-04-01 published v2 (v1's 17 base rules + the 2
-// line-item rules) and deactivated v1, restoring v1's immutability -- see
-// migrations/20260716185106_rule_set_v2.sql. Every fixture below that needs
-// "the sanctioned active version" resolves it through here or by discovering
-// it from the DB, so the next version publish is a one-line change here rather
-// than a scavenger hunt through scattered literals ([active-version-pinning-is-the-bug]).
-const activeSeedVersion = 2
+// ACTIVE rule-set version. INVCR-01-13 (D8, task-289) published v3 (v2's same
+// 19 rules, target filled on 4 keys) and deactivated v2 -- see
+// migrations/20260731090000_rule_set_v3.sql. Previously M4-04-01 published v2
+// (v1's 17 base rules + the 2 line-item rules) and deactivated v1, restoring
+// v1's immutability -- see migrations/20260716185106_rule_set_v2.sql. Every
+// fixture below that needs "the sanctioned active version" resolves it
+// through here or by discovering it from the DB, so the next version publish
+// is a one-line change here rather than a scavenger hunt through scattered
+// literals ([active-version-pinning-is-the-bug]).
+const activeSeedVersion = 3
 
 // loadActive loads the ACTIVE RuleSet via the real Store -- the shared "DB
 // load" half of this file's DB-load -> engine-evaluate chain (combining

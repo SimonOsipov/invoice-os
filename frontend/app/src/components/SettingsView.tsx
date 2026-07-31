@@ -8,13 +8,29 @@
 // tab, so they live here rather than in ctx (the EntityFormModal/ClientsView precedent).
 // Saved mappings are the exception — those are workspace state (ctx.connectorMappings),
 // so they outlive navigating away from Settings.
+//
+// Company tab (task-304, INVCR-01-19, AC-4) — IN-HOUSE ONLY, prepended ahead of the
+// shared SETTINGS_TABS list. Placement call: a firm workspace already has a dedicated
+// multi-entity portfolio screen for this (ClientsView, reached via the firm-only
+// NAV_CLIENTS sidebar item) — building a second one for in-house's single-entity case
+// would be the "second entity form" AC-4 explicitly forbids. In-house's own workspace
+// has no such screen and Settings is already its one config destination (NAV_SETTINGS is
+// in in-house's sidebar group already, unlike NAV_CLIENTS), so a tab here is the natural
+// home rather than a new nav item / new view. It reuses the EXISTING EntityFormModal
+// verbatim, the same component + create/edit contract ClientsView already drives — this
+// file only supplies the "when to open which mode" wiring ClientsView's own local
+// `useState<{mode,entity}|null>` precedent already established.
 
 import { useState } from 'react'
+
+import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
 import { API_BASE, API_KEYS, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
 import { ConnectorDetail } from './ConnectorDetail'
+import { EntityFormModal } from './EntityFormModal'
 import { FieldMappingModal } from './FieldMappingModal'
+import type { Entity } from '../lib/portfolio'
 import { MembersView } from './MembersView'
 import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
 
@@ -25,13 +41,21 @@ function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
 }
 
 export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
-  const { settingsTab, sandbox, connectors } = ctx
+  const { settingsTab, sandbox, connectors, mode, activeEntity, entitiesState, refetchEntities } = ctx
   const connCount = CONNECTOR_DEFS.filter((c) => connectors[c.id]).length
   const [openId, setOpenId] = useState<ConnectorId | null>(null)
   const [mappingOpen, setMappingOpen] = useState(false)
   const [envs, setEnvs] = useState<Partial<Record<ConnectorId, 'SANDBOX'>>>({})
   // A connector disconnected from another surface must not leave its detail view mounted.
   const openDef = CONNECTOR_DEFS.find((c) => c.id === openId && connectors[c.id]) ?? null
+
+  // Company tab's add/edit modal state — local, not ctx, same precedent as ClientsView's
+  // own `modal` state: it derives from this view's own resolved entity + refetch handle,
+  // neither of which live on Workspace ctx as view state.
+  const [companyModal, setCompanyModal] = useState<{ mode: 'create' | 'edit'; entity?: Entity } | null>(null)
+  const base = gatewayBase()
+
+  const tabs: { id: SettingsTab; label: string }[] = mode === 'inhouse' ? [{ id: 'company', label: 'Company' }, ...SETTINGS_TABS] : SETTINGS_TABS
 
   function goList() {
     setOpenId(null)
@@ -53,7 +77,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
         <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>People, integrations, developer access, and signing certificates.</p>
       </div>
       <div style={{ display: 'flex', gap: 26, borderBottom: '1px solid var(--line-1)', marginBottom: 24 }}>
-        {SETTINGS_TABS.map((t) => {
+        {tabs.map((t) => {
           const a = settingsTab === t.id
           return (
             <button
@@ -69,6 +93,81 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           )
         })}
       </div>
+
+      {/* Company (in-house only, task-304 AC-4). Guarded on `mode` too, defensively —
+          there is no button that can ever set settingsTab:'company' for a firm workspace
+          (the tab itself only exists in `tabs` for in-house), but this keeps the block
+          honest on its own rather than trusting the tab strip alone. */}
+      {settingsTab === 'company' && mode === 'inhouse' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {entitiesState === 'loading' && <Loading label="Loading your company…" />}
+          {entitiesState === 'error' && ctx.entitiesError && <ErrorState error={ctx.entitiesError} onRetry={refetchEntities} />}
+          {entitiesState !== 'loading' && entitiesState !== 'error' && (
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span className="card-title">Your company</span>
+                {/* Same button, two labels/modes: Add when there's nothing yet (AC-3's
+                    bootstrap window), Edit once the one entity this workspace can ever
+                    have (AC-1/AC-2) exists. */}
+                <button
+                  onClick={() => setCompanyModal(activeEntity ? { mode: 'edit', entity: activeEntity } : { mode: 'create' })}
+                  disabled={base == null}
+                  className="v2-btn v2-btn-primary pf-btn"
+                >
+                  {activeEntity ? (
+                    'Edit company'
+                  ) : (
+                    <>
+                      <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add company
+                    </>
+                  )}
+                </button>
+              </div>
+              <div style={{ padding: 20 }}>
+                {activeEntity ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <div className="label" style={{ marginBottom: 4 }}>Name</div>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{activeEntity.name}</div>
+                    </div>
+                    <div>
+                      <div className="label" style={{ marginBottom: 4 }}>TIN</div>
+                      <div className="mono" style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.tin ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="label" style={{ marginBottom: 4 }}>Sector</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.sector ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="label" style={{ marginBottom: 4 }}>Registration</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.registration ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="label" style={{ marginBottom: 4 }}>Address</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--fg-1)' }}>{activeEntity.address ?? '—'}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <EmptyState title="No company set up yet" message="Add your business entity so invoices have somewhere real to file against." />
+                )}
+              </div>
+            </div>
+          )}
+          {companyModal && base != null && (
+            <EntityFormModal
+              mode={companyModal.mode}
+              entity={companyModal.entity}
+              ctx={ctx}
+              base={base}
+              onClose={() => setCompanyModal(null)}
+              onSuccess={() => {
+                refetchEntities()
+                setCompanyModal(null)
+              }}
+            />
+          )}
+        </div>
+      )}
 
       {/* Members */}
       {settingsTab === 'members' && <MembersView ctx={ctx} />}

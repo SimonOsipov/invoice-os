@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,7 +48,8 @@ const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, 
 	`issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name, ` +
 	`currency, subtotal::text, vat::text, total::text, ` +
 	`violations, rule_set_version_id, created_at, ` +
-	`irn, csid, qr_payload, rejection_reasons`
+	`irn, csid, qr_payload, rejection_reasons, ` +
+	`kept_as_is_at, kept_as_is_by, kept_as_is_reason`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -56,6 +58,7 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.Currency, &inv.Subtotal, &inv.VAT, &inv.Total,
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
 		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
+		&inv.KeptAsIsAt, &inv.KeptAsIsBy, &inv.KeptAsIsReason,
 	)
 }
 
@@ -84,15 +87,22 @@ func scanStatusChange(row scanner, sc *StatusChange) error {
 // (M4-06-03 -- mirrors the importer's EntitySupplier idiom,
 // internal/importer/store.go, and closes the direct-path gap the "22P02 does
 // not disambiguate" note below used to accept: a cross-tenant OR nonexistent
-// entity_id now returns ErrValidation HERE, before any row is written); (1)
-// the invoices row (tenant_id from the caller's identity, status left to the
-// column DEFAULT 'draft', MBS-content passed through un-rejected incl.
-// NULL/negative — store-invalid-faithfully, AC-6); (2) one line_items row per
-// CreateInput.LineItems entry with a system-assigned line_no = 1..N by array
-// position ([D10]); (3) the genesis invoice_status_history row (from_status
-// NULL -> to_status 'draft', actor = the caller's Subject, [D5]); (4) an
-// "invoice.created" audit.Record. Because all these writes share one
-// transaction, a later failure rolls the earlier ones back too (INV-STORE-07).
+// entity_id now returns ErrValidation HERE, before any row is written), WIDENED
+// by INVCR-01-17 (C7 fix) to also resolve the entity's name/tin and OVERWRITE
+// in.SupplierTIN/in.SupplierName with them (MBSSupplierTIN-restored for a
+// 12-bare-digit FIRS tin, unchanged for a 10-digit JTB tin or no tin at all) --
+// whatever the caller sent in those two fields is discarded, never trusted
+// ([supplier-from-entity]; CreateHandler's own doc comment records the
+// override-not-400 ruling); (1) the invoices row (tenant_id from the caller's
+// identity, status left to the column DEFAULT 'draft', MBS-content passed
+// through un-rejected incl. NULL/negative — store-invalid-faithfully, AC-6 --
+// EXCEPT supplier_tin/supplier_name, which step 0 already overwrote); (2) one
+// line_items row per CreateInput.LineItems entry with a system-assigned
+// line_no = 1..N by array position ([D10]); (3) the genesis
+// invoice_status_history row (from_status NULL -> to_status 'draft', actor =
+// the caller's Subject, [D5]); (4) an "invoice.created" audit.Record. Because
+// all these writes share one transaction, a later failure rolls the earlier
+// ones back too (INV-STORE-07).
 //
 // The pre-check is a friendly early exit, not the enforcement mechanism: the
 // composite (tenant_id, entity_id) FK (invoices_tenant_entity_fk, added
@@ -104,10 +114,10 @@ func scanStatusChange(row scanner, sc *StatusChange) error {
 // unique_violation (23505) on invoices_tenant_entity_number_uq -> ErrDuplicateNumber
 // (INSERT only), a foreign_key_violation (23503, a non-existent entity_id or
 // import_batch_id -- the pre-check turns the entity_id case into ErrValidation
-// earlier via the exists=false branch above, so this INSERT-time 23503 in practice
-// now only fires for import_batch_id) or an invalid_text_representation (22P02, a
-// malformed entity_id/import_batch_id uuid, OR a malformed numeric MBS-content
-// value; the pre-check maps its own 22P02 the same way for entity_id) ->
+// earlier via its own zero-rows (pgx.ErrNoRows) branch, so this INSERT-time 23503
+// in practice now only fires for import_batch_id) or an invalid_text_representation
+// (22P02, a malformed entity_id/import_batch_id uuid, OR a malformed numeric
+// MBS-content value; the pre-check maps its own 22P02 the same way for entity_id) ->
 // ErrValidation. 22P02 at the INSERT does not disambiguate which input was bad; the
 // importer avoids this ambiguity by pre-validating entity_id itself and
 // quarantining the row on ANY Create error. The line_items/history/audit errors
@@ -134,26 +144,58 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// db.ErrNoTenant otherwise.
 		id, _ := auth.IdentityFromContext(ctx)
 
-		// Tenant-scoped ownership pre-check: RLS scopes this SELECT to the
-		// caller's tenant (same mechanism EntitySupplier relies on,
+		// Tenant-scoped ownership pre-check, WIDENED by INVCR-01-17 (C7 fix)
+		// to also resolve the entity's name/tin: RLS scopes this SELECT to
+		// the caller's tenant (same mechanism EntitySupplier relies on,
 		// internal/importer/store.go), so a foreign OR nonexistent entity_id
-		// both come back exists=false. This rejects the cross-tenant case
-		// EARLY, as a friendly ErrValidation with NO row written and NO audit
-		// row -- the composite (tenant_id, entity_id) FK below is the
-		// DB-authoritative backstop (see this func's doc comment; M4-06-03
-		// closes the direct-path gap noted there).
-		var exists bool
+		// both come back zero rows -- pgx.ErrNoRows, mapped to ErrValidation
+		// exactly as the old bare EXISTS check's !exists branch was. This
+		// rejects the cross-tenant case EARLY, as a friendly ErrValidation
+		// with NO row written and NO audit row -- the composite (tenant_id,
+		// entity_id) FK below is the DB-authoritative backstop (see this
+		// func's doc comment; M4-06-03 closes the direct-path gap noted
+		// there). Widening this query's SELECT list (rather than adding a
+		// SECOND lookup) means AC #9's cross-tenant refusal is still the
+		// pre-existing coverage (TestStoreCreate_CrossTenantEntityIDRejected
+		// and its no-partial-write sibling) -- no new lookup was introduced.
+		var entityName string
+		var entityTIN *string
 		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM business_entities WHERE id = $1)`, in.EntityID,
-		).Scan(&exists); err != nil {
+			`SELECT name, tin FROM business_entities WHERE id = $1`, in.EntityID,
+		).Scan(&entityName, &entityTIN); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrValidation
+			}
 			if pgCode(err) == "22P02" {
 				return ErrValidation
 			}
 			return err
 		}
-		if !exists {
-			return ErrValidation
-		}
+
+		// [supplier-from-entity], INVCR-01-17 (C7 fix): supplier_tin/
+		// supplier_name are ALWAYS derived from the entity this pre-check
+		// just resolved, OVERRIDING whatever the caller sent in
+		// in.SupplierTIN/in.SupplierName -- the architect ruling CreateHandler's
+		// own doc comment records (AC #8: override, not a 400, so the
+		// existing e2e harness that already sends these fields keeps
+		// working). Supplier identity is the FIRM's own data, never the
+		// caller's -- true for every Store.Create caller, not just the HTTP
+		// handler, which is why this lives here rather than in CreateHandler
+		// alone: internal/importer's buildCreateInput already computes the
+		// identical value via EntitySupplier + MBSSupplierTIN before calling
+		// Create (needed for its own dry-run preview, which never reaches
+		// this method), so this re-derivation is a no-op recompute for that
+		// caller, not a behavior change. MBSSupplierTIN restores the MBS
+		// wire spelling (NNNNNNNN-NNNN) of a 12-bare-digit canonical FIRS
+		// TIN; a 10-digit JTB TIN or a nil TIN passes through unchanged --
+		// nil overrides a caller-supplied value too (there is no fallback to
+		// the caller when the entity has none of its own).
+		//
+		// buyer_tin/buyer_name are NOT touched here (scope fence, AC #4/#7):
+		// they stay exactly what the caller sent, so a malformed buyer TIN
+		// still violates buyer-tin-format faithfully.
+		in.SupplierTIN = MBSSupplierTIN(entityTIN)
+		in.SupplierName = &entityName
 
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices
@@ -455,16 +497,40 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 	return result, nil
 }
 
+// escapeLike neutralises the LIKE/ILIKE metacharacters in a user-supplied
+// search string so it matches LITERALLY, for use with an explicit
+// ESCAPE '\' clause. Order matters: backslash FIRST, or the backslashes this
+// function itself introduces get escaped a second time.
+//
+// This deliberately diverges from internal/portfolio's List, whose q is bound
+// but NOT escaped -- a ruling pinned there by
+// TestStoreList_SearchQWildcardIsNotEscaped, whose own comment anticipated a
+// future story wanting literal-search semantics. This is that story
+// (INVCR-01-06): across a 500-row import review, a stray "%" silently
+// matching all 500 is a worse lie than 0 results. portfolio/* is NOT changed,
+// so the same typed "%" matches everything on Entities and nothing here --
+// an accepted, flagged divergence.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
 // List returns the caller's tenant's invoice HEADERS (LineItems left nil, [D7]),
 // ordered created_at DESC, id DESC (deterministic), paginated by f.Limit/f.Offset,
-// plus the total FILTERED count (matching f.EntityID/f.NeedsAttention, ignoring
-// limit/offset) for the pagination envelope. RLS (not a manual WHERE tenant_id)
+// plus the total FILTERED count (matching every predicate filter set on f,
+// ignoring limit/offset) for the pagination envelope. Every condition is
+// interpolated into BOTH the COUNT and the page query before LIMIT/OFFSET are
+// appended last, so total is the filtered total across all pages, never the
+// count of one page. RLS (not a manual WHERE tenant_id)
 // additionally scopes both the COUNT and the page to the caller's tenant. An
 // empty result is []Invoice{}, never a nil slice.
 //
 // f.EntityID ([entity-id-restored], regression fix) and f.NeedsAttention
-// (M4-09-02) are Store.List's two predicate filters ([D8]), ANDed together
-// when both are set. EntityID follows portfolio/store.go List's own
+// (M4-09-02) were Store.List's first two predicate filters ([D8]); INVCR-01-06
+// added five more (below). ALL of them AND together when more than one is set.
+// EntityID follows portfolio/store.go List's own
 // conditions/args idiom (fmt.Sprintf("entity_id = $%d", len(args)), never
 // string-interpolated) so it narrows the row set BEFORE LIMIT/OFFSET are ever
 // applied -- the fix for the CI-caught regression where the SPA instead
@@ -483,9 +549,38 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 // store.go Rollup, alias dropped -- List has no join) so the two surfaces can
 // never drift apart ([needs-attention-drift-guard],
 // TestStoreList_NeedsAttentionMatchesDashboardRollup). It carries no bind
-// params of its own. When both filters are false/absent (the zero
-// ListFilter), `where` is empty and both queries are byte-identical to before
-// either filter existed.
+// params of its own. When every filter is false/absent (the zero ListFilter),
+// `where` is empty and both queries are byte-identical to before any filter
+// existed.
+//
+// f.ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4]) are the
+// review screen's five filters. Four notes on them:
+//
+//   - NeedsFix is a NEW predicate, not a slice of NeedsAttention
+//     ([needs-fix-is-a-new-predicate]): draft AND a blocking violation, so a
+//     rejected/failed invoice is EXCLUDED where NeedsAttention includes it.
+//     It is written out separately rather than sharing a Go constant with the
+//     NeedsAttention fragment, precisely so a later change to one cannot
+//     silently move the dashboard's meaning too. ([D6]'s kept_as_is_at IS NULL
+//     clause lands in INVCR-01-15, not here.)
+//   - RuleKey is bound as a jsonb ARGUMENT (violations @> $n::jsonb), never
+//     interpolated. This is the one place NeedsAttention's idiom does NOT
+//     generalise: that fragment is a hardcoded literal with no bind param, and
+//     concatenating a caller-supplied key into its shape would be a direct
+//     injection path.
+//   - Query's fragment is wrapped in OUTER PARENTHESES. conditions are joined
+//     with " AND ", so a bare `a ILIKE $n OR b ILIKE $n` would bind as
+//     `(batch AND ...) OR (b ILIKE ...)` -- the other filters silently
+//     evaporate and the query goes tenant-wide with a plausible-looking total.
+//   - Query's wildcards are escaped (escapeLike + ESCAPE '\'), so a typed "%"
+//     finds a literal percent sign, not every row. See escapeLike for why this
+//     reverses portfolio's recorded ruling.
+//
+// A malformed (non-uuid) f.ImportBatchID raises 22P02 on the COUNT query and
+// maps to ErrValidation, exactly as f.EntityID does. A cross-tenant (or
+// nonexistent) batch id is NOT an error and NOT a 404: RLS has already scoped
+// the row set, so it narrows to an empty page with total 0 -- a 404 would be
+// an existence oracle for another tenant's data.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
@@ -499,6 +594,47 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		}
 		if f.NeedsAttention {
 			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
+		}
+		if f.ImportBatchID != "" {
+			args = append(args, f.ImportBatchID)
+			conditions = append(conditions, fmt.Sprintf("import_batch_id = $%d", len(args)))
+		}
+		if f.Status != "" {
+			args = append(args, string(f.Status))
+			conditions = append(conditions, fmt.Sprintf("status = $%d", len(args)))
+		}
+		if f.NeedsFix {
+			// AND kept_as_is_at IS NULL (INVCR-01-15, D6, [needs-fix-is-a-new-predicate]):
+			// a kept row still matches the base needs_fix shape (draft + a blocking
+			// violation) but has left the "needs a fix" working set by operator decision --
+			// this clause lands ONLY here, never on needs_attention's verbatim-pinned
+			// fragment above (which stays byte-identical to the dashboard rollup,
+			// TestStoreList_NeedsAttentionMatchesDashboardRollup).
+			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb AND kept_as_is_at IS NULL)`)
+		}
+		if f.KeptAsIs {
+			// The review shell's footer counter query ("N kept as-is") -- a real server
+			// total, never derived by arithmetic over the other totals
+			// ([filters-are-server-side]).
+			conditions = append(conditions, `kept_as_is_at IS NOT NULL`)
+		}
+		if f.RuleKey != "" {
+			// json.Marshal, never fmt.Sprintf: a quote-bearing rule_key built by
+			// string formatting emits malformed JSON, which Postgres rejects as
+			// 22P02 (a 500) instead of returning the honest zero rows.
+			b, err := json.Marshal([]map[string]string{{"rule_key": f.RuleKey}})
+			if err != nil {
+				return err
+			}
+			args = append(args, string(b))
+			conditions = append(conditions, fmt.Sprintf("violations @> $%d::jsonb", len(args)))
+		}
+		if f.Query != "" {
+			args = append(args, escapeLike(f.Query))
+			conditions = append(conditions, fmt.Sprintf(
+				`(invoice_number ILIKE '%%'||$%d||'%%' ESCAPE '\' OR buyer_name ILIKE '%%'||$%d||'%%' ESCAPE '\')`,
+				len(args), len(args),
+			))
 		}
 
 		where := ""
@@ -544,6 +680,94 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 	return items, total, nil
 }
 
+// RuleCount is one row of the violation-summary aggregate: a distinct
+// rule_key plus the count of distinct invoices carrying at least one
+// violation entry for that key. Copied from internal/dashboard's own
+// RuleCount (dashboard.go) rather than imported cross-package -- the
+// established per-package-copy convention (pgCode, writeJSON/writeError,
+// the two seedImportBatch test shapes) -- because the two aggregates
+// deliberately diverge: this one is SEVERITY-AGNOSTIC (see
+// Store.ViolationSummary's own doc), the dashboard's TopViolations counts
+// severity:"error" only (internal/dashboard/store.go:95) -- a different
+// question with its own predicate, task-283 R3.
+type RuleCount struct {
+	RuleKey  string `json:"rule_key"`
+	Invoices int    `json:"invoices"`
+}
+
+// ViolationSummary returns one row per distinct rule_key among the
+// violations of the invoices linked to importBatchID, counted as
+// count(DISTINCT invoice.id) -- an invoice naming the same rule twice counts
+// ONCE -- ordered invoices DESC then rule_key ASC. importBatchID is
+// REQUIRED by the caller: an unbounded tenant-wide aggregation is not a
+// supported query (ViolationSummaryHandler rejects an absent one).
+//
+// Reuses internal/dashboard/store.go's Rollup aggregate shape, including
+// BOTH of its guards:
+//   - jsonb_typeof(violations) = 'array' is REQUIRED, not decorative:
+//     jsonb_array_elements RAISES 22023 on non-array input (unlike the `@>`
+//     predicate elsewhere in this file, which just returns false), and
+//     invoices carries no array CHECK on violations -- so one malformed row
+//     would 500 the whole rail without it.
+//   - the nullif guard on rule_key stops an empty key becoming a group.
+//
+// DIVERGENCE, deliberate: the dashboard's v->>'severity' = 'error' clause is
+// OMITTED. This aggregate is a PREVIEW OF A FILTER -- clicking a rail pill
+// issues ?import_batch_id=X&rule_key=K, and List's RuleKey filter above is
+// severity-agnostic. The rail must therefore use the same predicate as the
+// filter it triggers, or a warning-only rule shows 0 in the rail while the
+// table below shows its rows. All shipped rules are today severity "error",
+// so the two clauses coincide and a severity-filtered implementation would
+// pass every test written against today's data -- which is exactly why
+// TestViolationSummary_MatchesRuleKeyFilterTotalIncludingWarnings seeds a
+// warning-only rule. Do NOT "fix" this divergence by copying the
+// dashboard's clause back in; the dashboard asks a different question
+// (task-283 R3).
+//
+// RLS-scoped like every other read here -- no manual tenant predicate. A
+// cross-tenant batch id is therefore an empty result, not an error.
+func (s *Store) ViolationSummary(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+	// Never nil: the handler renders "rules":[] and a nil slice would
+	// marshal to null.
+	rules := []RuleCount{}
+
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
+			 FROM invoices i
+			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
+			 WHERE i.import_batch_id = $1
+			   AND jsonb_typeof(i.violations) = 'array'
+			   AND nullif(v->>'rule_key', '') IS NOT NULL
+			 GROUP BY 1
+			 ORDER BY 2 DESC, 1 ASC`,
+			importBatchID,
+		)
+		if err != nil {
+			// Defence in depth behind the handler's own uuid.Parse guard,
+			// mirroring List above: a malformed batch id must be a 400, not
+			// a 500.
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rc RuleCount
+			if err := rows.Scan(&rc.RuleKey, &rc.Invoices); err != nil {
+				return err
+			}
+			rules = append(rules, rc)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
 // Update applies only in's non-nil MBS-content fields to an invoices row and
 // writes an "invoice.updated" audit row in the same transaction. An all-nil in
 // is rejected as ErrValidation BEFORE any tx opens (a no-op UPDATE is forbidden,
@@ -553,6 +777,16 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 // (non-uuid) id raises 22P02, mapped to ErrValidation (CodeRabbit finding,
 // mirrors Get/Create). Numeric inputs are bound as $N::text::numeric, same
 // rationale as Create.
+//
+// supplier_tin/supplier_name are ALWAYS overwritten with the invoice's
+// entity-derived values, discarding whatever the caller sent in
+// in.SupplierTIN/in.SupplierName (INVCR-01-18, C7 fix, mirroring Store.
+// Create's own [supplier-from-entity] override) -- see updateContentTx's
+// doc comment for the full mechanism. This guard's own all-nil check above
+// is UNCHANGED and still runs against the caller's raw in (a caller who
+// sends nothing at all is still rejected; one who sends ONLY a
+// since-discarded supplier_tin still legitimately passes it and triggers a
+// real write).
 //
 // A thin wrapper over updateContentTx (M4-05-02 extraction, [content-write-
 // extraction]): the guard/tx/audit shell stays HERE, byte-identical to before
@@ -606,6 +840,19 @@ func headerFieldsPresent(in UpdateInput) bool {
 		in.Subtotal != nil || in.VAT != nil || in.Total != nil
 }
 
+// strPtrEqual reports whether two possibly-nil *string values represent the
+// same content: both nil, or both non-nil with an identical dereferenced
+// value. Used by updateContentTx (INVCR-01-18) to decide whether the
+// entity-derived supplier_tin genuinely differs from what is already
+// stored, so the audit trail names a real correction without falsely
+// claiming one on every ordinary edit.
+func strPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
 // Store.Edit (M4-05-02 extraction from Store.Update): it builds the dynamic
 // SET clause over in's non-nil fields, runs the UPDATE ... RETURNING, and
@@ -615,7 +862,127 @@ func headerFieldsPresent(in UpdateInput) bool {
 // writes its own audit row under its own conditions (Update always; Edit
 // only when the DB-authoritative fingerprint says something really changed).
 // Assumes at least one field in in is non-nil.
+//
+// [supplier-from-entity-on-edit], INVCR-01-18 (C7 fix, edit path): BEFORE
+// building the SET clause, this function ALWAYS re-resolves the invoice's
+// entity -- a single JOIN read, RLS-scoped on BOTH sides exactly like every
+// other read in this package, no manual tenant_id predicate -- and
+// OVERWRITES in.SupplierTIN/in.SupplierName with
+// MBSSupplierTIN(entity.tin)/entity.name, mirroring Store.Create's own
+// [supplier-from-entity] override (INVCR-01-17). Because Store.Update and
+// Store.Edit BOTH funnel their content write through this one function, this
+// single change closes C7 on both -- "one owner", AC #1/#5 of task-303's
+// story, not a second copy of the derivation. It runs UNCONDITIONALLY
+// whenever updateContentTx runs at all (i.e. the caller sent >= 1 header
+// field), NOT gated on whether the caller's UpdateInput happened to include
+// SupplierTIN/SupplierName -- so a PATCH that never mentions supplier
+// identity still re-derives it from the entity's CURRENT name/tin. This is
+// exactly why AC #8's no-op trap is real and has two legitimate outcomes:
+// an invoice whose STORED supplier_tin already agrees with its entity
+// re-derives to the SAME value and Edit's existing DB-authoritative
+// fingerprint check (step 6, below in Store.Edit) correctly treats an
+// otherwise-identical resend as a true no-op
+// (TestStoreEdit_ValidatedNoOpStaysValidated, EDIT-04, left byte-unchanged
+// by this subtask); an invoice whose stored value DISAGREES -- e.g. one
+// created before this fix shipped -- genuinely changes fingerprint on its
+// first PATCH afterwards, and the SAME no-op check correctly demotes it
+// (TestStoreEdit_PreExistingWrongSupplierTINGenuinelyChangesAndDemotesOnFirstPatch,
+// supplier_tin_update_test.go). Both are correct: idempotence protects a
+// truly-unchanged edit, not a stale stored value the entity has since
+// disagreed with.
+//
+// buyer_tin/buyer_name are NOT touched by this override (scope fence, AC
+// #3/#7 of task-303, mirroring AC #4/#7 of task-293): the `if in.BuyerTIN
+// != nil` / `if in.BuyerName != nil` branches below are unchanged, so a
+// malformed buyer TIN still writes -- and still violates buyer-tin-format
+// -- exactly as before.
+//
+// The resolved supplier_tin/supplier_name are appended to setClauses/args
+// DIRECTLY, deliberately bypassing the set() helper below -- so a PATCH that
+// merely re-submits its own already-correct supplier fields is not, by
+// itself, enough to earn a "supplier_tin"/"supplier_name" audit-fields
+// entry. But this is NOT "never audited" (product-advisor review, 2026-07-31):
+// audit.Record's "invoice.updated" payload is fields-ONLY, no from/to
+// snapshot (map[string]any{"id":..., "fields": changedFields}, below in
+// Store.Update/Store.Edit) -- if the override were unconditionally excluded
+// from changedFields, a REAL silent correction of a compliance-relevant
+// field (a fiscal invoice's own supplier identity) would leave literally NO
+// trace in the audit trail naming what changed, which is a materially worse
+// gap than the alternative. So the widened query below ALSO reads the
+// invoice's CURRENTLY STORED supplier_tin/supplier_name (i.strPtrEqual
+// comparison against the freshly-derived value, immediately below) and adds
+// "supplier_tin"/"supplier_name" to changedFields precisely when the
+// derived value actually DIFFERS from what is already stored -- i.e.
+// exactly the cases that matter: a stale/wrong stored value (AC #8's
+// "genuine content change" half) is now named in the audit trail, not just
+// silently corrected, while the overwhelmingly common case (an
+// already-correct stored value, re-derived to the SAME value on every
+// ordinary PATCH) still resolves to "no entry", preserving the pre-existing
+// "fields lists what genuinely changed" contract several edit_test.go specs
+// pin byte-for-byte (e.g.
+// TestStoreEdit_LinesRemovedOutOfBandThenHeaderOnlyEditSucceeds's fields ==
+// ["vat"], TestStoreEdit_EmptyLineItemsRemovesAllLinesGuardWidened's fields
+// == ["line_items"]) -- those fixtures' entities never drift from what was
+// already stored, so the comparison is a no-op for them.
+// TestStoreUpdate_AuditFieldsOmitSupplierWhenUnchangedButNameItWhenCorrected
+// (supplier_tin_update_test.go) pins BOTH halves of this directly.
+//
+// A malformed (non-uuid) id or a since-deleted/cross-tenant-invisible
+// invoice both surface HERE first, before the UPDATE statement itself ever
+// runs: pgx.ErrNoRows (the JOIN matches no row) maps to ErrNotFound, 22P02
+// to ErrValidation -- the identical two outcomes Update/Edit already
+// produced via the UPDATE's own RETURNING clause (below), just detected one
+// query earlier. entity_id is NOT NULL and FK-enforced on invoices
+// (migrations/20260714103137_invoices.sql), and immutable after Create
+// (UpdateInput carries no EntityID field, [store-update-untouched]), so this
+// read cannot itself introduce a NEW cross-tenant vector (AC #7): a
+// legitimately-owned invoice's entity was already proven same-tenant at
+// Create time by the composite (tenant_id, entity_id) FK
+// (M4-06-03/INVCR-01-17's own pre-check), and a cross-tenant OR nonexistent
+// invoice id simply 0-rows here exactly as it always 0-rowed at the UPDATE
+// -- TestStoreCrossTenant_UpdateGetListRefused (store_test.go, INV-STORE-12,
+// left unmodified by this subtask) already covers that outcome. This same
+// JOIN also runs on Store's ONE pool (s.pool, the invoice_app role) every
+// other method here shares -- there is no second, more-restricted role that
+// can reach Store.Update/Store.Edit, so unlike a multi-role deployment,
+// there is no RLS-grant-parity gap where invoices are writable but
+// business_entities is not: Store.Create's own pre-existing, structurally
+// identical business_entities SELECT (INVCR-01-17) already proves this role
+// can read it, and this subtask's own specs (which observe a real non-nil
+// derived value, not a 0-row fallback) additionally prove it empirically.
+//
+// Store.Update itself carries NO status/editability guard (pre-existing,
+// [D9] -- "never touches status" -- unchanged by this subtask) and has NO
+// production caller today (grep-confirmed: only Store.Edit's own step 5 and
+// this package's tests call updateContentTx at all; cmd/invoice/main.go
+// wires PATCH /v1/invoices/{id} to Store.Edit, never Store.Update
+// directly). Store.Edit DOES guard -- canEdit(before.Status), step 3, run
+// BEFORE this function is ever reached -- so the wired PATCH path can never
+// hit this derivation on a queued/submitted/accepted/failed invoice, and
+// this override can never silently diverge from what an APP has already
+// received. A hypothetical FUTURE direct Store.Update caller with no such
+// guard would not inherit that protection; documented here as a residual,
+// not fixed, since there is no live code path to fix (product-advisor
+// review, 2026-07-31).
 func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) (Invoice, []string, error) {
+	var entityName string
+	var entityTIN *string
+	var storedSupplierTIN, storedSupplierName *string
+	if err := tx.QueryRow(ctx,
+		`SELECT be.name, be.tin, i.supplier_tin, i.supplier_name
+		 FROM invoices i JOIN business_entities be ON be.id = i.entity_id
+		 WHERE i.id = $1`, id,
+	).Scan(&entityName, &entityTIN, &storedSupplierTIN, &storedSupplierName); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, nil, ErrNotFound
+		}
+		if pgCode(err) == "22P02" {
+			return Invoice{}, nil, ErrValidation
+		}
+		return Invoice{}, nil, err
+	}
+	derivedSupplierTIN := MBSSupplierTIN(entityTIN)
+
 	var setClauses []string
 	var args []any
 	var changedFields []string
@@ -631,12 +998,22 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 	if in.IssueDate != nil {
 		set("issue_date", text, *in.IssueDate)
 	}
-	if in.SupplierTIN != nil {
-		set("supplier_tin", text, *in.SupplierTIN)
+
+	// supplier_tin/supplier_name: ALWAYS written, derived from the entity
+	// resolved above -- see this function's own doc comment for the full
+	// rationale, incl. why they bypass set() yet are conditionally still
+	// named in changedFields when they actually changed.
+	args = append(args, derivedSupplierTIN)
+	setClauses = append(setClauses, fmt.Sprintf(text, "supplier_tin", len(args)))
+	args = append(args, entityName)
+	setClauses = append(setClauses, fmt.Sprintf(text, "supplier_name", len(args)))
+	if !strPtrEqual(storedSupplierTIN, derivedSupplierTIN) {
+		changedFields = append(changedFields, "supplier_tin")
 	}
-	if in.SupplierName != nil {
-		set("supplier_name", text, *in.SupplierName)
+	if storedSupplierName == nil || *storedSupplierName != entityName {
+		changedFields = append(changedFields, "supplier_name")
 	}
+
 	if in.BuyerTIN != nil {
 		set("buyer_tin", text, *in.BuyerTIN)
 	}
@@ -830,6 +1207,27 @@ func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, err
 			after.LineItems = afterLines
 			inv = after
 			return nil
+		}
+
+		// 6b. [kept-marks-clear-on-edit] (INVCR-01-15, D6, AC #8): a genuine content
+		// change invalidates any recorded keep-as-is reason. Gated on `before` --
+		// the pre-edit, locked row -- actually carrying a mark: the marks can only
+		// ever be set on a draft (invoices_kept_as_is_draft_only), so this never
+		// fires for a validated/rejected `before`, and skipping it for the
+		// overwhelmingly common un-kept case avoids a pointless UPDATE on every
+		// ordinary edit. A standalone statement (not folded into updateContentTx,
+		// which Store.Update also shares and which this story does not touch) so
+		// it applies uniformly whether this edit changed header fields, lines
+		// only, or both -- a lines-only edit never runs updateContentTx at all.
+		// `after` is safe to overwrite here: step 9 re-attaches afterLines LAST
+		// regardless of what happened in between.
+		if before.KeptAsIsAt != nil {
+			if err := scanInvoice(tx.QueryRow(ctx,
+				`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+				 WHERE id = $1 RETURNING `+invoiceColumns, id,
+			), &after); err != nil {
+				return err
+			}
 		}
 
 		// 7. the content change is real -- audit it. `fields` lists what was
@@ -1088,9 +1486,24 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	// the outcome callback BEFORE transitionTx (actor.go) -- so clearing on
 	// rejected here would wipe the reasons MarkRejectedTx had just written
 	// moments earlier in the SAME tx, destroying every APP rejection reason.
+	// [kept-marks-clear-on-promote] (INVCR-01-15, D6, task-291): draft has exactly
+	// ONE outgoing edge (draft->validated, legalTransitions), so target ==
+	// StatusValidated unambiguously means "promoting a draft" -- no other status
+	// transitions into validated. The invoices_kept_as_is_draft_only CHECK
+	// FORCES this clear to happen: a kept invoice promoted without it would
+	// 23514 on this very UPDATE (status becomes non-draft while the marks are
+	// still set) -- the intended failure mode, a loud CI red rather than a
+	// stale KEPT badge on a validated row. Nulling all three unconditionally
+	// (never gated on "was it actually kept") is deliberate: it is a no-op
+	// on the overwhelmingly common un-kept case and keeps this single UPDATE
+	// the SAME UPDATE that promotes, per the story's own requirement, rather
+	// than a second statement that could be forgotten or fail independently.
 	setClause := "status = $1"
-	if target == StatusAccepted {
+	switch target {
+	case StatusAccepted:
 		setClause = "status = $1, rejection_reasons = '[]'"
+	case StatusValidated:
+		setClause = "status = $1, kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL"
 	}
 
 	var inv Invoice
@@ -1286,6 +1699,124 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			"outcome":             outcome,
 			"violation_count":     len(vs),
 		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
+}
+
+// KeepAsIs is D6's auditable-triage write (INVCR-01-15, task-291): records who/when/why
+// an operator chose to keep a failing draft rather than fix it, WITHOUT touching status
+// or legalTransitions at all -- this method never calls transitionTx. Inside ONE
+// db.WithinRequestTenantTx:
+//
+//  1. SELECT <invoiceColumns> ... FOR UPDATE -- RLS-scoped, so a cross-tenant VALID uuid
+//     0-rows exactly like a genuinely nonexistent one (pgx.ErrNoRows -> ErrNotFound); a
+//     malformed non-uuid id raises 22P02 -> ErrValidation, mirroring every other
+//     lock-and-read method in this file.
+//  2. the keepable guard -- draft AND at least one severity:"error" violation, else
+//     ErrNotKeepable, NOTHING written. Keeping a clean invoice is meaningless (there is
+//     nothing being suppressed); a non-draft invoice cannot reach here in practice
+//     either (invoices_kept_as_is_draft_only would refuse the write anyway, but this
+//     guard is what turns that DB-level refusal into an honest 409 instead of a raw
+//     23514 surfacing as a 500).
+//  3. UPDATE ... SET the triple, RETURNING <invoiceColumns> -- re-keeping an
+//     already-kept invoice is legal (a changed mind about the reason), overwriting the
+//     prior at/by/reason.
+//  4. audit.Record(ctx, tx, subject, "invoice.kept_as_is", {id, reason}) in the SAME
+//     transaction as the column write (this package's standing convention,
+//     invoice.go:1-9 / the audit_log CHECKs' own actor-length failure mode) -- a failed
+//     audit write rolls the column write back too.
+//
+// reason arrives already trimmed and non-empty/within-bound (KeepAsIsHandler's own
+// pre-tx guard, mirroring BatchSubmitHandler's idempotency_key validation) -- this
+// method does not re-validate it, matching Store.Edit/Store.Update's own division of
+// labour between handler-level shape checks and store-level domain guards.
+func (s *Store) KeepAsIs(ctx context.Context, id, reason string) (Invoice, error) {
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		var vs []Violation
+		if err := json.Unmarshal(locked.Violations, &vs); err != nil {
+			return err
+		}
+		if locked.Status != StatusDraft || !hasBlockingViolation(vs) {
+			return ErrNotKeepable
+		}
+
+		now := time.Now().UTC()
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = $1, kept_as_is_by = $2, kept_as_is_reason = $3
+			 WHERE id = $4 RETURNING `+invoiceColumns,
+			now, callerID.Subject, reason, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.kept_as_is", map[string]any{
+			"id":     id,
+			"reason": reason,
+		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
+}
+
+// UnkeepAsIs is KeepAsIs's un-do (INVCR-01-15, task-291): clears the triple and audits
+// "invoice.unkept_as_is". Inside ONE db.WithinRequestTenantTx: the same RLS-scoped
+// lock+read as KeepAsIs (cross-tenant/unknown -> ErrNotFound, malformed id ->
+// ErrValidation), then an IDEMPOTENT no-op when the invoice is not currently kept
+// (locked.KeptAsIsAt == nil) -- nothing written, nothing audited, mirroring
+// markTerminalTx's own already-at-target short-circuit (actor.go) -- else the clearing
+// UPDATE plus the audit row, same transaction.
+func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if locked.KeptAsIsAt == nil {
+			inv = locked
+			return nil
+		}
+
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+			 WHERE id = $1 RETURNING `+invoiceColumns, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{"id": id})
 	})
 	if err != nil {
 		return Invoice{}, err

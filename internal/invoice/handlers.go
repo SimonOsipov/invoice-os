@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,6 +121,16 @@ type listResponse struct {
 // pre-tx guard is the defense-in-depth backstop for the importer-reuse path,
 // [D3]), calls create, maps errors via statusForErr, 201 + Invoice (with
 // line_items) on success.
+//
+// req.SupplierTIN/req.SupplierName (INVCR-01-17, C7 fix): passed through to
+// CreateInput unchanged here, but Store.Create OVERRIDES them with the
+// resolved entity's own tin (MBS-hyphen-restored)/name before the INSERT --
+// this handler does not reject a caller-supplied value with a 400, it is
+// silently superseded. Architect ruling (task-293 AC #8): supplier identity
+// is the firm's own data, never the caller's wire body, and a 400 here would
+// break e2e/api/client.ts's CreateInvoiceInput, which has sent these two
+// fields since M4-07-05 -- override keeps that harness green while closing
+// the false supplier-tin-format violation for API-created entities.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -291,6 +302,19 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 	}
 }
 
+// maxFilterTextLen bounds ListHandler's two free-text filter params, rule_key
+// and q (INVCR-01-06 AC-6). 200 is an invented abuse bound with a wide margin:
+// the longest shipped rule key is ~24 chars, and no honest review-screen search
+// is longer. Over the cap is a 400, deliberately NOT a silent truncation --
+// truncating turns "find X" into "find some prefix of X" and returns rows the
+// caller never asked for. (Contrast limit>200, which DOES silently clamp: a
+// clamp there still answers the question asked, just less of it, and
+// pagination.limit reports the truncation on the wire.)
+//
+// This is a byte length, not a rune count: the cap exists to bound the input,
+// and bytes are what an abusive caller actually spends.
+const maxFilterTextLen = 200
+
 // ListHandler returns GET /v1/invoices. Same identity-first-401 order as
 // Create/GetHandler. Query params (portfolio's exact defaulting/clamping
 // rules, [D8]): limit (default 50, non-integer -> 400, <1 -> 400, >200
@@ -309,9 +333,30 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 // tenant-wide LIMIT-50 page in the browser instead (lib/invoices.ts) -- wrong:
 // that's filter-AFTER-paginate, so an entity's own invoices silently vanished
 // from Invoices/Reports/Customers whenever they weren't inside the newest 50
-// tenant-wide (the CI-caught regression this param fixes). No status filter
-// beyond that -- unlike portfolio's ListHandler, there is no q/status parsing
-// here.
+// tenant-wide (the CI-caught regression this param fixes).
+//
+// INVCR-01-06 ([D4], Core AC 7) adds the review screen's five, taking this to
+// nine params, ALL ANDed: import_batch_id (uuid.Parse, same shape as
+// entity_id), status (validated by the existing Status.valid(), reusing
+// TransitionHandler's byte-identical "unknown status" 400 rather than writing
+// a second copy of the 7-value list), needs_fix (strconv.ParseBool, same shape
+// as needs_attention), and the two free-text params rule_key and q, capped at
+// maxFilterTextLen.
+//
+// Two contract rules hold across all five. First, EMPTY IS ABSENT, not a 400
+// (`if raw != ""`), matching all four params that shipped before them -- so
+// `?import_batch_id=` applies no filter and returns the tenant-wide list. That
+// is safe only because the review route is `#review/<uuid>` and parseReviewHash
+// returns null for a non-uuid, so no request is ever issued without a batch id;
+// a caller must never render a review table from a response fetched without
+// one. Second, a MALFORMED value is always a 400 raised BEFORE the store is
+// called, never a silent ignore -- silently dropping a narrowing filter renders
+// a wrong page (too many rows, plausible total) instead of an honest error,
+// which is exactly the [entity-id-cut] failure mode.
+//
+// The response envelope is unchanged: exactly two top-level keys, "invoices"
+// and "pagination". Applied filters are deliberately NOT echoed back
+// (TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues pins len == 2).
 func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -372,7 +417,63 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 			}
 		}
 
-		filter := ListFilter{Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention}
+		importBatchID := query.Get("import_batch_id")
+		if importBatchID != "" {
+			if _, err := uuid.Parse(importBatchID); err != nil {
+				writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
+				return
+			}
+		}
+
+		// statusFilter, not `status`: the error path below binds its own
+		// `status` from statusForErr, and shadowing it here reads as a bug.
+		statusFilter := Status(query.Get("status"))
+		if statusFilter != "" && !statusFilter.valid() {
+			writeError(w, http.StatusBadRequest, "unknown status")
+			return
+		}
+
+		needsFix := false
+		if raw := query.Get("needs_fix"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "needs_fix must be a boolean")
+				return
+			}
+			needsFix = b
+		}
+
+		ruleKey := query.Get("rule_key")
+		if len(ruleKey) > maxFilterTextLen {
+			writeError(w, http.StatusBadRequest, "rule_key is too long")
+			return
+		}
+
+		q := query.Get("q")
+		if len(q) > maxFilterTextLen {
+			writeError(w, http.StatusBadRequest, "q is too long")
+			return
+		}
+
+		// kept_as_is (INVCR-01-15, D6): the review shell's "N kept as-is" footer
+		// counter query -- same empty-is-absent/strconv.ParseBool shape as
+		// needs_fix/needs_attention above, deliberately NOT one of the four
+		// toolbar pills (System Design §7).
+		keptAsIs := false
+		if raw := query.Get("kept_as_is"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "kept_as_is must be a boolean")
+				return
+			}
+			keptAsIs = b
+		}
+
+		filter := ListFilter{
+			Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention,
+			ImportBatchID: importBatchID, Status: statusFilter, NeedsFix: needsFix,
+			RuleKey: ruleKey, Query: q, KeptAsIs: keptAsIs,
+		}
 
 		items, total, err := list(r.Context(), filter)
 		if err != nil {
@@ -600,6 +701,99 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 	}
 }
 
+// keepAsIsRequest is the POST /v1/invoices/{id}/keep-as-is wire body (INVCR-01-15, D6):
+// a single free-text reason. Deliberately has NO `by`/`actor` field -- the actor is
+// ALWAYS auth.Identity.Subject (KeepAsIsHandler never reads one off the body), so a
+// client-supplied "by" is silently ignored by json.Decode rather than accepted
+// (TestKeepAsIsHandler_ActorIsIdentityNotBody).
+type keepAsIsRequest struct {
+	Reason string `json:"reason"`
+}
+
+// maxKeepAsIsReasonLen bounds the free-text reason (task-291 AC #3's "400 on an
+// empty/oversized reason"). An invented abuse bound, mirroring maxFilterTextLen's own
+// "wide margin" reasoning above: a genuine compliance note explaining why a failing
+// invoice was kept can run to a couple of sentences, so 1000 bytes leaves ample room
+// without opening the door to an unbounded audit-log payload.
+const maxKeepAsIsReasonLen = 1000
+
+// KeepAsIsHandler returns POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6,
+// task-291). Same identity-first-401 order as every handler above, then decodes the
+// body (400 on decode error), trims the reason and 400s on empty/oversized BEFORE
+// keep is ever called ([must-not-allow-empty-reason], mirrors BatchSubmitHandler's own
+// pre-tx idempotency_key guard) -- keep itself never sees an empty or over-length
+// reason. Errors map via statusForErr, including the new ErrNotKeepable->409 case
+// (AC #3's "409 unless draft AND carries a blocking violation") -- 200 + the updated
+// Invoice (kept_as_is_at/by/reason now stamped) on success.
+func KeepAsIsHandler(keep func(ctx context.Context, id, reason string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var req keepAsIsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		reason := strings.TrimSpace(req.Reason)
+		if reason == "" {
+			writeError(w, http.StatusBadRequest, "reason is required")
+			return
+		}
+		if len(reason) > maxKeepAsIsReasonLen {
+			writeError(w, http.StatusBadRequest, "reason exceeds the 1000-char bound")
+			return
+		}
+
+		inv, err := keep(r.Context(), r.PathValue("id"), reason)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: keep as-is", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// UnkeepAsIsHandler returns DELETE /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6,
+// task-291) -- KeepAsIsHandler's un-do. Same identity-first-401 order; no body to
+// decode, matching HistoryHandler/ValidateHandler's own no-body GET/POST shape. 200 +
+// the updated Invoice (kept_as_is_at/by/reason now NULL) on success, idempotent when
+// the invoice was not kept to begin with (Store.UnkeepAsIs's own no-op branch).
+func UnkeepAsIsHandler(unkeep func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		inv, err := unkeep(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: unkeep as-is", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
 // HistoryHandler returns GET /v1/invoices/{id}/history (task-160/M4-22-01).
 // ErrNotFound covers both an unknown id and a cross-tenant one (RLS-scoped
 // zero rows) -- 404, same as GetHandler. Malformed id maps ErrValidation ->
@@ -720,6 +914,69 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 	}
 }
 
+// violationSummaryResponse is the GET /v1/invoices/violation-summary success
+// body: {"rules":[...]}. Rules is []RuleCount (never a nil slice from
+// Store.ViolationSummary), so a batch with no violations serializes
+// "rules":[] rather than "rules":null.
+type violationSummaryResponse struct {
+	Rules []RuleCount `json:"rules"`
+}
+
+// ViolationSummaryHandler is GET
+// /v1/invoices/violation-summary?import_batch_id=X (task-283 R6) -- a
+// SEPARATE route, not a listResponse key:
+// TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues pins
+// listResponse at exactly 2 keys. It coexists with GET /v1/invoices/{id}
+// without any registration-order requirement: Go 1.22+ net/http.ServeMux
+// resolves by pattern specificity, and the literal "violation-summary"
+// segment always beats the {id} wildcard.
+//
+// import_batch_id is REQUIRED -- absent OR malformed is a 400 raised by a
+// uuid.Parse guard BEFORE the store is ever called, because an unbounded
+// tenant-wide aggregation is not a supported query. Same identity-first-401
+// order as every handler above, then summary -> statusForErr -> 200 +
+// violationSummaryResponse.
+func ViolationSummaryHandler(summary func(ctx context.Context, importBatchID string) ([]RuleCount, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		importBatchID := r.URL.Query().Get("import_batch_id")
+		if importBatchID == "" {
+			writeError(w, http.StatusBadRequest, "import_batch_id is required")
+			return
+		}
+		if _, err := uuid.Parse(importBatchID); err != nil {
+			writeError(w, http.StatusBadRequest, "import_batch_id must be a well-formed uuid")
+			return
+		}
+
+		rules, err := summary(r.Context(), importBatchID)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: violation summary", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		// Second nil guard, after Store.ViolationSummary's own: this handler
+		// is a factory over an arbitrary summary func, and a nil []RuleCount
+		// marshals to JSON null, not [].
+		if rules == nil {
+			rules = []RuleCount{}
+		}
+
+		writeJSON(w, http.StatusOK, violationSummaryResponse{Rules: rules})
+	}
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in
@@ -761,6 +1018,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice changed during validation"
 	case errors.Is(err, ErrNotFixable):
 		return http.StatusConflict, "invoice is not in a fixable state"
+	case errors.Is(err, ErrNotKeepable):
+		return http.StatusConflict, "invoice must be a draft with a blocking violation to be kept as-is"
 	case errors.Is(err, ErrUpstream):
 		return http.StatusBadGateway, "validation service unavailable"
 	case errors.Is(err, ErrNoActiveRuleSet):

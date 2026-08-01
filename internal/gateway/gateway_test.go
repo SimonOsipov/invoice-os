@@ -483,6 +483,126 @@ func TestMockLoginLocalEmptyBody(t *testing.T) {
 	}
 }
 
+// TestMockLoginPreflightBypassesHostedRefusal pins the exact composition main.go
+// uses for /auth/login: a browser preflight (OPTIONS + Origin) must get CORS's 204
+// even though the same body would 403 if it reached the handler under Hosted.
+func TestMockLoginPreflightBypassesHostedRefusal(t *testing.T) {
+	tg := setupGateway(t)
+	login := CORS([]string{allowedOrigin})(MockLoginHandler(tg.issuer, platform.PostureHosted))
+
+	r := httptest.NewRequest("OPTIONS", "/auth/login",
+		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, unlistedTenant, personaRole)))
+	r.Header.Set("Origin", allowedOrigin)
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	login.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204 (body %s) -- a real browser preflight must never see the Hosted refusal", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMockLoginOptionsNoOriginFallsThroughUnderHosted pins the documented residual:
+// an OPTIONS with no Origin is not a browser preflight, so CORS lets it fall through
+// to MockLoginHandler. Nothing in the tree or any browser sends this, but under
+// Hosted it now 403s where the pre-allowlist handler minted unconditionally.
+func TestMockLoginOptionsNoOriginFallsThroughUnderHosted(t *testing.T) {
+	tg := setupGateway(t)
+	login := CORS([]string{allowedOrigin})(MockLoginHandler(tg.issuer, platform.PostureHosted))
+
+	r := httptest.NewRequest("OPTIONS", "/auth/login", strings.NewReader(``))
+	rec := httptest.NewRecorder()
+	login.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %s) -- an Origin-less OPTIONS reaches the handler and the empty body is not an allowlisted triple", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMockLoginHostedMalformedBodies exercises decode edge cases the allowlist must
+// survive without ever minting: whichever way the body fails to decode into a clean
+// seeded triple, the zero/partial struct must not match, and the response must not
+// carry an access_token key at all (not merely an empty one).
+func TestMockLoginHostedMalformedBodies(t *testing.T) {
+	tg := setupGateway(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
+
+	firmTriple := fmt.Sprintf(`"subject":%q,"tenant_id":%q,"role":%q`, firmSubject, firmTenant, personaRole)
+
+	cases := []struct {
+		name        string
+		body        string
+		contentType string
+		wantStatus  int
+	}{
+		{"top-level JSON array", `["not","an","object"]`, "", http.StatusForbidden},
+		{"top-level JSON null", `null`, "", http.StatusForbidden},
+		{"unknown extra field alongside a valid triple", fmt.Sprintf(`{%s,"admin_override":true}`, firmTriple), "", http.StatusOK},
+		{
+			"duplicate subject key, last value wins and is unlisted",
+			fmt.Sprintf(`{"subject":%q,"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedSubject, firmTenant, personaRole),
+			"", http.StatusForbidden,
+		},
+		{
+			"duplicate subject key, last value wins and is the seeded one",
+			fmt.Sprintf(`{"subject":%q,"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmSubject, firmTenant, personaRole),
+			"", http.StatusOK,
+		},
+		{"non-JSON Content-Type header, unlisted triple, JSON body", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, unlistedTenant, personaRole), "text/plain", http.StatusForbidden},
+		{"non-JSON Content-Type header, valid persona triple, JSON body", fmt.Sprintf(`{%s}`, firmTriple), "text/plain", http.StatusOK},
+		{"oversized body, unlisted triple padded past 1MB", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q,"pad":%q}`, unlistedSubject, unlistedTenant, personaRole, strings.Repeat("x", 1<<20)), "", http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/auth/login", strings.NewReader(tc.body))
+			if tc.contentType != "" {
+				r.Header.Set("Content-Type", tc.contentType)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, r)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			var resp map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if tc.wantStatus == http.StatusForbidden {
+				if _, minted := resp["access_token"]; minted {
+					t.Errorf("refusal minted a token: %+v", resp)
+				}
+			}
+		})
+	}
+}
+
+// TestMockLoginHostedRefusalHasNoAccessTokenKey isolates AC-3's strongest form: the
+// key itself must be absent, not merely empty -- a caller checking `"access_token" in
+// resp` must see the same false a caller checking truthiness would.
+func TestMockLoginHostedRefusalHasNoAccessTokenKey(t *testing.T) {
+	tg := setupGateway(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth/login", MockLoginHandler(tg.issuer, platform.PostureHosted))
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, unlistedTenant, personaRole))))
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, present := resp["access_token"]; present {
+		t.Fatalf("refusal body has an access_token key at all: %+v", resp)
+	}
+	if len(resp) != 1 || resp["error"] != "forbidden" {
+		t.Fatalf("refusal body = %+v, want exactly {\"error\":\"forbidden\"}", resp)
+	}
+}
+
 func TestMockIssuerEnabled(t *testing.T) {
 	cases := []struct {
 		env, flag string

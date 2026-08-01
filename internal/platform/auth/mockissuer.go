@@ -14,11 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// MockIssuer mints GoTrue-shaped, ES256-signed JWTs for local development and
-// CI and serves its own JWKS, so a Verifier can validate them end to end with
-// the exact code path it will use against Supabase GoTrue after M8. It is the
-// dev/CI stand-in for GoTrue and must never be wired into a production build;
-// production refusal of mock-issued tokens is enforced separately in M8-07.
+// MockIssuer mints GoTrue-shaped, ES256-signed JWTs and serves its own JWKS, so a
+// Verifier validates them with the exact code path it will use against Supabase
+// GoTrue after M8. It stands in for GoTrue outside production, the public demo
+// included; production refusal of mock-issued tokens is enforced separately in M8-07.
 type MockIssuer struct {
 	issuer string
 	kid    string

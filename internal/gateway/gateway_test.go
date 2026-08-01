@@ -286,7 +286,7 @@ func TestHealthCoexistsUnauthenticated(t *testing.T) {
 	}
 }
 
-// TestMockLoginRoundTrip proves the dev/CI login path end to end: mint via
+// TestMockLoginRoundTrip proves the mock login path end to end: mint via
 // /auth/login, then use the token through a proxied route.
 func TestMockLoginRoundTrip(t *testing.T) {
 	tg := setupGateway(t)

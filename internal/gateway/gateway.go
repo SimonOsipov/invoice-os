@@ -147,12 +147,11 @@ func injectIdentity(pr *httputil.ProxyRequest) {
 	}
 }
 
-// MockIssuerEnabled reports whether the dev/CI mock issuer should be wired in. It
-// is refused in production regardless of the flag, so a misconfigured prod env
-// can never expose the token-mint / JWKS endpoints — defense in depth ahead of
-// the M8-07 production refusal. environment is trimmed and lowercased first (the
-// same normalization submission.IsProduction applies), so a value like
-// "Production" or " production" cannot defeat the refusal.
+// MockIssuerEnabled reports whether the mock issuer should be wired in: every
+// non-production environment, the public demo included. It is refused in production
+// regardless of the flag, and environment is trimmed and lowercased first (the same
+// normalization submission.IsProduction applies), so "Production" or " production"
+// cannot defeat it. M8-07 still owes the verifier refusing mock-issued tokens.
 func MockIssuerEnabled(environment, flag string) bool {
 	return flag == "true" && strings.ToLower(strings.TrimSpace(environment)) != "production"
 }
@@ -171,7 +170,7 @@ var loginPersonas = []loginPersona{
 }
 
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is
-// the dev/CI stand-in for GoTrue's login; main wires it only when the mock issuer
+// the mock stand-in for GoTrue's login; main wires it only when the mock issuer
 // is enabled (see MockIssuerEnabled). Under PostureHosted — the one public
 // deployment — it mints only for an exact seeded persona.
 func MockLoginHandler(issuer *auth.MockIssuer, posture platform.PostureKind) http.HandlerFunc {

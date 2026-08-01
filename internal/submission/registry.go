@@ -94,9 +94,9 @@ func Select(reg Registry, environment, name string) (Adapter, error) {
 // (whether to log.Fatalf when no adapter is selectable) uses this exact normalization
 // instead of duplicating it with a second, unnormalized comparison.
 //
-// internal/gateway.MockIssuerEnabled now applies this same trim+lowercase normalization
-// inline, so the issuer and adapter gates read "production" identically. Folding them
-// onto one shared symbol remains M8-07's.
+// internal/gateway.MockIssuerEnabled applies this same trim+lowercase normalization
+// inline, so the issuer and adapter gates read "production" identically. M8-07 still
+// owes the verifier refusing mock-issued tokens.
 func IsProduction(environment string) bool {
 	return strings.ToLower(strings.TrimSpace(environment)) == "production"
 }

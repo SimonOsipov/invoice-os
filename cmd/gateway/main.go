@@ -1,8 +1,8 @@
 // Command gateway is the ASComply API edge (M2-11). It verifies caller JWTs,
 // injects the verified tenant/user/role context that downstream services and RLS
-// depend on, and reverse-proxies each request to the owning context service. In
-// dev/CI it also embeds a mock issuer (mint + JWKS) so a token can be minted and
-// verified end to end with the exact code path used against Supabase GoTrue after
+// depend on, and reverse-proxies each request to the owning context service.
+// Outside production it also embeds a mock issuer (mint + JWKS) so a token can be
+// minted and verified with the exact code path used against Supabase GoTrue after
 // M8 — the cutover is then a change to AUTH_ISSUER/AUTH_JWKS_URL, not to code.
 package main
 
@@ -124,11 +124,9 @@ func main() {
 	// backend surface. Outside /api/ and outside the verifier — operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", gateway.FleetHealthHandler(upstreams, app.Logger))
 
-	// Dev/CI only: embed the mock issuer so a token can be minted (/auth/login)
-	// and its JWKS served for the Verifier to fetch (AUTH_JWKS_URL points back at
-	// this gateway). Refused in production regardless of the flag. ENVIRONMENT is
-	// read raw, as gate 1 above does: app.Config.Environment substitutes the literal
-	// "development" when it is unset, which a gate must never see.
+	// Embed the mock issuer wherever ENVIRONMENT is not production and the flag is
+	// set — the public demo included; under Hosted posture the mint serves only
+	// seeded personas. ENVIRONMENT is read raw, for the reason gate 1 above gives.
 	if gateway.MockIssuerEnabled(os.Getenv("ENVIRONMENT"), os.Getenv("GATEWAY_MOCK_ISSUER")) {
 		issuer, err := auth.NewMockIssuer(mustEnv("AUTH_ISSUER"))
 		if err != nil {
@@ -146,7 +144,7 @@ func main() {
 		login := withCORS(gateway.MockLoginHandler(issuer, posture))
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
-		app.Logger.Warn("mock issuer enabled — dev/CI only, never production")
+		app.Logger.Warn("mock issuer enabled — token mint is public on this deployment")
 	}
 
 	if err := app.Run(context.Background()); err != nil {

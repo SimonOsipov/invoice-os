@@ -1,7 +1,8 @@
 // [M4-22-03] Suite for the demo-curation + rule-re-enable half of db.Seed
 // (task-162): the boot-time UPSERT of 27 curated business_entities rows into
 // the demo tenant, plus the global rule re-enable, per binding decision
-// [demo-seed-shape].
+// [demo-seed-shape]. Also covers task-322: irn/csid/qr_payload on the demo
+// tenant's seeded invoices (bottom of file).
 //
 // Design notes:
 //   - Env-gated on DATABASE_SUPERUSER_URL only (db.Seed runs as the
@@ -11,22 +12,26 @@
 //     that harness requires all four DB DSNs; this suite only needs the
 //     superuser one.
 //   - No t.Parallel(): every test shares the demo tenant's business_entities
-//     rows and the global rules table.
+//     and invoices rows, plus the global rules table.
 package db_test
 
 import (
 	"context"
+	"encoding/base64"
 	"io/fs"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
 )
 
 // demoTenantID is the demo-tenant fixture id (db/seed.dev.sql) — Okafor &
@@ -773,3 +778,426 @@ func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
 // Test Spec row 7 (task-162 AC-6, "the guard still gates seeding") is
 // covered by TestProvisionSkippedWhenGuardOff in provision_test.go — not
 // duplicated here.
+
+// task-322: irn/csid/qr_payload on the demo tenant's seeded `accepted` invoices
+// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 27
+// DEMO-2026-* invoices, 8 of them accepted.
+const (
+	demoInvoiceTotalCount    = 27
+	demoAcceptedInvoiceCount = 8
+
+	// demoIRNServiceID / demoIRNDateLayout mirror mock_script.go's mockServiceID /
+	// mockIRNDateLayout — the IRN shape is <docRef>-FBMOCK01-<YYYYMMDD>.
+	demoIRNServiceID  = "FBMOCK01"
+	demoIRNDateLayout = "20060102"
+)
+
+// rawURLBase64Pattern is base64.RawURLEncoding's own alphabet, unpadded: no '+', '/',
+// '=', and no '\n'. Postgres encode(bytea,'base64') wraps output with a newline every 76
+// characters — a corruption the char_length CHECK and qrcode.RenderBase64 both let
+// through silently (Stage 1 architecture validation, ADD 1).
+var rawURLBase64Pattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// qrPayloadShapePattern pins the decoded qr_payload's exact key order (irn,csid,tin,amt,
+// cur) and zero whitespace. jsonb_build_object reorders keys by length and
+// json_build_object inserts spaces around ':' — decoding into a map or struct would pass
+// against either wrong shape, so this matches the literal string instead (Stage 1
+// architecture validation, ADD 2).
+var qrPayloadShapePattern = regexp.MustCompile(`^\{"irn":"([^"]*)","csid":"([^"]*)","tin":"([^"]*)","amt":"([^"]*)","cur":"([^"]*)"\}$`)
+
+// fiscalInvoiceRow is a seeded DEMO-2026-* invoice's identity plus the three
+// fiscal-outcome columns. irn/csid/qrPayload are *string (not coalesced) since NULL vs
+// "" is exactly what AC-1/AC-2 turn on.
+type fiscalInvoiceRow struct {
+	invoiceNumber string
+	status        string
+	issueDate     time.Time
+	supplierTIN   string
+	currency      string
+	total         string // numeric(14,2) rendered via ::text
+	irn           *string
+	csid          *string
+	qrPayload     *string
+}
+
+// fetchDemoFiscalInvoices returns tenantID's DEMO-2026-* seeded invoices (the
+// invoice_seed CTE's own rows, never a junk/probe row a test planted), ordered by
+// invoice_number for deterministic assertions.
+func fetchDemoFiscalInvoices(t *testing.T, pool *pgxpool.Pool, tenantID string) []fiscalInvoiceRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT invoice_number, status, issue_date, coalesce(supplier_tin, ''), coalesce(currency, ''),
+		        total::text, irn, csid, qr_payload
+		 FROM invoices
+		 WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'
+		 ORDER BY invoice_number`,
+		tenantID,
+	)
+	if err != nil {
+		t.Fatalf("query DEMO-2026-* invoices for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	var got []fiscalInvoiceRow
+	for rows.Next() {
+		var r fiscalInvoiceRow
+		if err := rows.Scan(&r.invoiceNumber, &r.status, &r.issueDate, &r.supplierTIN, &r.currency,
+			&r.total, &r.irn, &r.csid, &r.qrPayload); err != nil {
+			t.Fatalf("scan invoices row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate invoices rows for tenant %s: %v", tenantID, err)
+	}
+	return got
+}
+
+// decodeQRPayload base64url-decodes payload and asserts its decoded JSON matches
+// mock_script.go's mockQR compact shape exactly, returning the five embedded fields.
+// Fatal rather than Error: a caller can't meaningfully compare embedded values once the
+// shape itself is wrong.
+func decodeQRPayload(t *testing.T, payload string) (irn, csid, tin, amt, cur string) {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("qr_payload %q is not valid base64url: %v", payload, err)
+	}
+	m := qrPayloadShapePattern.FindStringSubmatch(string(raw))
+	if m == nil {
+		t.Fatalf(`decoded qr_payload = %q, want compact JSON {"irn":..,"csid":..,"tin":..,"amt":..,"cur":..} in exactly that key order with no whitespace`, string(raw))
+	}
+	return m[1], m[2], m[3], m[4], m[5]
+}
+
+// TestSeedPopulatesFiscalIdentifiersOnAcceptedInvoices: Test Spec row 1 (task-322 AC-1).
+// Every seeded `accepted` invoice gets a non-null, non-empty irn/csid/qr_payload, each
+// pinned to the mock adapter's exact shape (mock_script.go:221-250) — not just
+// "present", since a newline-corrupted or key-reordered payload would satisfy a weaker
+// check while still failing to decode for a real consumer.
+func TestSeedPopulatesFiscalIdentifiersOnAcceptedInvoices(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	all := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+	var accepted []fiscalInvoiceRow
+	for _, r := range all {
+		if r.status == "accepted" {
+			accepted = append(accepted, r)
+		}
+	}
+	if len(accepted) != demoAcceptedInvoiceCount {
+		t.Fatalf("count(accepted DEMO-2026-* invoices) = %d, want %d", len(accepted), demoAcceptedInvoiceCount)
+	}
+
+	for _, r := range accepted {
+		if r.irn == nil || *r.irn == "" {
+			t.Errorf("%s: irn = %v, want non-null non-empty", r.invoiceNumber, r.irn)
+			continue
+		}
+		if r.csid == nil || *r.csid == "" {
+			t.Errorf("%s: csid = %v, want non-null non-empty", r.invoiceNumber, r.csid)
+			continue
+		}
+		if r.qrPayload == nil || *r.qrPayload == "" {
+			t.Errorf("%s: qr_payload = %v, want non-null non-empty", r.invoiceNumber, r.qrPayload)
+			continue
+		}
+
+		wantIRN := r.invoiceNumber + "-" + demoIRNServiceID + "-" + r.issueDate.Format(demoIRNDateLayout)
+		if *r.irn != wantIRN {
+			t.Errorf("%s: irn = %q, want %q (<docRef>-FBMOCK01-<YYYYMMDD>)", r.invoiceNumber, *r.irn, wantIRN)
+		}
+
+		if len(*r.csid) != 43 {
+			t.Errorf("%s: len(csid) = %d, want 43 (unpadded base64url of a 32-byte sha256 digest)", r.invoiceNumber, len(*r.csid))
+		}
+		if !rawURLBase64Pattern.MatchString(*r.csid) {
+			t.Errorf("%s: csid = %q, contains characters outside base64.RawURLEncoding's alphabet", r.invoiceNumber, *r.csid)
+		}
+
+		// The newline trap: Postgres encode(bytea,'base64') wraps at 76 chars with '\n'; a
+		// direct check on the raw column is the only thing that catches it (ADD 1).
+		if strings.ContainsAny(*r.qrPayload, " \t\r\n") {
+			t.Errorf("%s: qr_payload contains whitespace — encode(...,'base64') wraps every 76 chars; wanted translate(...,'+/=\\n','-_')", r.invoiceNumber)
+		}
+		if !rawURLBase64Pattern.MatchString(*r.qrPayload) {
+			t.Errorf("%s: qr_payload = %q, contains characters outside base64.RawURLEncoding's alphabet", r.invoiceNumber, *r.qrPayload)
+		}
+
+		irn, csid, tin, amt, cur := decodeQRPayload(t, *r.qrPayload)
+		if irn != *r.irn {
+			t.Errorf("%s: qr_payload embeds irn=%q, want the row's own irn %q", r.invoiceNumber, irn, *r.irn)
+		}
+		if csid != *r.csid {
+			t.Errorf("%s: qr_payload embeds csid=%q, want the row's own csid %q", r.invoiceNumber, csid, *r.csid)
+		}
+		if tin != r.supplierTIN {
+			t.Errorf("%s: qr_payload embeds tin=%q, want the row's own SUPPLIER tin %q (not the buyer TIN — mock_script.go:239-240)", r.invoiceNumber, tin, r.supplierTIN)
+		}
+		amtF, errAmt := strconv.ParseFloat(amt, 64)
+		totalF, errTotal := strconv.ParseFloat(r.total, 64)
+		if errAmt != nil {
+			t.Errorf("%s: qr_payload embeds amt=%q, not a number: %v", r.invoiceNumber, amt, errAmt)
+		} else if errTotal != nil {
+			t.Fatalf("%s: row's own total = %q, not a number: %v", r.invoiceNumber, r.total, errTotal)
+		} else if amtF != totalF {
+			t.Errorf("%s: qr_payload embeds amt=%q, want the row's own TOTAL %q (not the subtotal)", r.invoiceNumber, amt, r.total)
+		}
+		if cur != r.currency {
+			t.Errorf("%s: qr_payload embeds cur=%q, want the row's own currency %q", r.invoiceNumber, cur, r.currency)
+		}
+	}
+}
+
+// TestSeedLeavesFiscalIdentifiersNullOnNonAcceptedInvoices: Test Spec row 2 (task-322
+// AC-2). A stray irn is invoices' "already cleared" sentinel
+// (internal/invoice/submission_port.go:36) and the reconciliation.go
+// irn_without_accepted drift signature, so leaking one onto a non-accepted row makes it
+// permanently unsubmittable, not just untidy.
+func TestSeedLeavesFiscalIdentifiersNullOnNonAcceptedInvoices(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	all := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+	var nonAccepted []fiscalInvoiceRow
+	for _, r := range all {
+		if r.status != "accepted" {
+			nonAccepted = append(nonAccepted, r)
+		}
+	}
+	if want := demoInvoiceTotalCount - demoAcceptedInvoiceCount; len(nonAccepted) != want {
+		t.Fatalf("count(non-accepted DEMO-2026-* invoices) = %d, want %d", len(nonAccepted), want)
+	}
+
+	for _, r := range nonAccepted {
+		if r.irn != nil {
+			t.Errorf("%s (status=%s): irn = %q, want NULL", r.invoiceNumber, r.status, *r.irn)
+		}
+		if r.csid != nil {
+			t.Errorf("%s (status=%s): csid = %q, want NULL", r.invoiceNumber, r.status, *r.csid)
+		}
+		if r.qrPayload != nil {
+			t.Errorf("%s (status=%s): qr_payload = %q, want NULL", r.invoiceNumber, r.status, *r.qrPayload)
+		}
+	}
+}
+
+// TestSeedBackfillsFiscalIdentifiersOntoPreexistingAcceptedRows: Test Spec row 3
+// (task-322 AC-3/AC-4) — the load-bearing case, proving the ON CONFLICT ... DO UPDATE
+// SET list backfills these columns, not just the INSERT (db/seed.dev.sql:66-69's sector
+// precedent). Mirrors TestSeedBackfillsSectorOntoPreexistingRow's seed -> null out ->
+// assert precondition -> re-seed -> assert repopulated shape, including the precondition
+// assertion — without it a passing test proves nothing.
+func TestSeedBackfillsFiscalIdentifiersOntoPreexistingAcceptedRows(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish baseline): %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE invoices SET irn = NULL, csid = NULL, qr_payload = NULL
+		 WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%' AND status = 'accepted'`,
+		demoTenantID,
+	); err != nil {
+		t.Fatalf("null out fiscal columns on the accepted demo rows (precondition): %v", err)
+	}
+
+	precond := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+	for _, r := range precond {
+		if r.status != "accepted" {
+			continue
+		}
+		if r.irn != nil || r.csid != nil || r.qrPayload != nil {
+			t.Fatalf("precondition: %s still has a non-null fiscal column (irn=%v csid=%v qr_payload=%v), want all three NULL — this row must start exactly as a pre-this-story deploy would leave it", r.invoiceNumber, r.irn, r.csid, r.qrPayload)
+		}
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (backfill): %v", err)
+	}
+
+	after := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+	var checked int
+	for _, r := range after {
+		if r.status != "accepted" {
+			continue
+		}
+		checked++
+		if r.irn == nil || *r.irn == "" {
+			t.Errorf("%s: irn after backfill Seed = %v, want non-null non-empty — a DO UPDATE missing irn from its SET clause would leave this NULL forever", r.invoiceNumber, r.irn)
+		}
+		if r.csid == nil || *r.csid == "" {
+			t.Errorf("%s: csid after backfill Seed = %v, want non-null non-empty — a DO UPDATE missing csid from its SET clause would leave this NULL forever", r.invoiceNumber, r.csid)
+		}
+		if r.qrPayload == nil || *r.qrPayload == "" {
+			t.Errorf("%s: qr_payload after backfill Seed = %v, want non-null non-empty — a DO UPDATE missing qr_payload from its SET clause would leave this NULL forever", r.invoiceNumber, r.qrPayload)
+		}
+	}
+	if checked != demoAcceptedInvoiceCount {
+		t.Fatalf("checked %d accepted rows after backfill Seed, want %d", checked, demoAcceptedInvoiceCount)
+	}
+}
+
+// TestSeedFiscalIdentifiersAreIdempotent: Test Spec row 4 (task-322 AC-5). The values
+// are DERIVED (sha256 of the invoice's own content, mock_script.go's
+// mockIdentifiersFor), not randomised, so a second Seed must reproduce them
+// byte-identical, not merely leave them non-null.
+func TestSeedFiscalIdentifiersAreIdempotent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	first := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (idempotency): %v", err)
+	}
+	second := fetchDemoFiscalInvoices(t, pool, demoTenantID)
+
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("DEMO-2026-* invoices' fiscal columns differ between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", first, second)
+	}
+}
+
+// TestSeedLeavesJunkInvoiceFiscalColumnsUntouched: Test Spec row 5 (task-322, residue
+// preserved) — companion to TestSeedLeavesJunkRowsInPlace. A non-curated invoice_number
+// never matches Seed's ON CONFLICT target (invoices_tenant_entity_number_uq), so its
+// fiscal columns must survive untouched.
+func TestSeedLeavesJunkInvoiceFiscalColumnsUntouched(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated entities): %v", err)
+	}
+
+	const curatedTIN = "10012345-0001" // Adeyemi & Sons Trading Ltd
+	var entityID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, curatedTIN,
+	).Scan(&entityID); err != nil {
+		t.Fatalf("read back curated entity id (precondition): %v", err)
+	}
+
+	const junkNumber = "QA-JUNK-FISCAL-0001"
+	const junkIRN, junkCSID, junkQR = "JUNK-IRN-VALUE", "JUNK-CSID-VALUE", "JUNK-QR-PAYLOAD-VALUE"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status, irn, csid, qr_payload)
+		 VALUES ($1, $2, $3, 'accepted', $4, $5, $6)`,
+		demoTenantID, entityID, junkNumber, junkIRN, junkCSID, junkQR,
+	); err != nil {
+		t.Fatalf("seed junk invoice (precondition): %v", err)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed: %v", err)
+	}
+
+	var irn, csid, qrPayload string
+	if err := pool.QueryRow(ctx,
+		`SELECT irn, csid, qr_payload FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`,
+		demoTenantID, junkNumber,
+	).Scan(&irn, &csid, &qrPayload); err != nil {
+		t.Fatalf("read back junk invoice after Seed: %v", err)
+	}
+	if irn != junkIRN || csid != junkCSID || qrPayload != junkQR {
+		t.Errorf("junk invoice's fiscal columns after Seed = (%q, %q, %q), want unchanged (%q, %q, %q)", irn, csid, qrPayload, junkIRN, junkCSID, junkQR)
+	}
+}
+
+// TestSeedFiscalIdentifierEmptyStringRejected: Test Spec row 6 (task-322). Regression
+// guard for the pre-existing CHECK (irn IS NULL OR char_length(irn) > 0,
+// migrations/20260722083015_invoices_fiscal_outcome.sql:58) — not new behavior this
+// story adds, but load-bearing: a writer meaning "no IRN yet" must get 23514, never a
+// second silent encoding of NULL.
+func TestSeedFiscalIdentifierEmptyStringRejected(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed (establish baseline): %v", err)
+	}
+
+	_, err := pool.Exec(ctx,
+		`UPDATE invoices SET irn = '' WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-1001'`,
+		demoTenantID,
+	)
+	if err == nil {
+		t.Fatal("UPDATE invoices SET irn = '' succeeded, want SQLSTATE 23514 (invoices_irn_check)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Errorf("UPDATE invoices SET irn = '' failed with SQLSTATE %q, want 23514", code)
+	}
+}
+
+// TestSeedAcceptedInvoiceQRPayloadRendersAsQRImage: Test Spec row 7 (task-322). The
+// fiscal card's own read path (internal/invoice/handlers.go:270-278) derives
+// qr_png_base64 by calling qrcode.RenderBase64(*inv.QRPayload) — exercised directly
+// since this package has no HTTP server harness.
+//
+// This alone does NOT catch the newline-corruption trap: a newline is legal QR
+// byte-mode content, so a corrupted payload still renders an image. It only proves
+// AC-6's "renders a QR image" clause; the whitespace/alphabet checks above catch
+// corruption.
+func TestSeedAcceptedInvoiceQRPayloadRendersAsQRImage(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var qrPayload *string
+	if err := pool.QueryRow(ctx,
+		`SELECT qr_payload FROM invoices WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-1001'`,
+		demoTenantID,
+	).Scan(&qrPayload); err != nil {
+		t.Fatalf("read back DEMO-2026-1001's qr_payload: %v", err)
+	}
+	if qrPayload == nil {
+		t.Fatal("DEMO-2026-1001's qr_payload = NULL, want a derivable payload (it is an accepted invoice)")
+	}
+
+	png, err := qrcode.RenderBase64(*qrPayload)
+	if err != nil {
+		t.Fatalf("qrcode.RenderBase64(qr_payload): %v", err)
+	}
+	if png == "" {
+		t.Error("qrcode.RenderBase64(qr_payload) returned an empty string, want a non-empty base64 PNG")
+	}
+}

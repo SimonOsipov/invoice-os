@@ -36,6 +36,17 @@ describe('environment posture copy', () => {
     }
   })
 
+  // Layer 3 of the disabled-LIVE pattern: the only reason a keyboard/screen-reader
+  // user can reach, since LIVE is out of tab order and its title never fires. Pins
+  // the claim (simulated today, accreditation unlocks live), not the exact prose,
+  // so a legitimate reword doesn't fail this alongside the forbidden-string checks.
+  it('the sandbox banner states filing is simulated and names accreditation as what unlocks live filing', () => {
+    const msg = ENV_BANNER.sandbox.msg.toLowerCase()
+
+    expect(msg, 'no claim that filing today is simulated / not real').toMatch(/simulat|not filed with nrs/)
+    expect(msg, 'no mention of accreditation as the unlock condition').toContain('accreditation')
+  })
+
   it('no forbidden string anywhere in frontend/app/src', () => {
     const files = sourceFiles(SRC)
     expect(files.length, 'the source walk found nothing to scan').toBeGreaterThanOrEqual(20)

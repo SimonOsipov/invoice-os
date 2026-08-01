@@ -144,7 +144,7 @@ func main() {
 		login := withCORS(gateway.MockLoginHandler(issuer, posture))
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
-		app.Logger.Warn("mock issuer enabled — token mint is public on this deployment")
+		app.Logger.Warn("mock issuer enabled — unauthenticated login is live on this deployment")
 	}
 
 	if err := app.Run(context.Background()); err != nil {

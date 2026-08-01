@@ -1067,3 +1067,98 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// task-329 (BUG-01-03): the register's own pagination + page-scoped selection. Like every
+// other test() in this file, each builds its OWN fixture (no test.describe.serial / shared
+// module state -- see the M5-09-08 comment above for why).
+//
+// db/seed.dev.sql caps every curated entity under 51 rows (its own documented ceiling), so a
+// >50-row page can only come from a fixture built here, on a fresh entity -- paging through a
+// curated one would rot the page-1 specs earlier in this file. 51 sequential createInvoice
+// round trips against Railway is real wall-clock cost nothing else here pays, so each fixture
+// below is 1 sequential "anchor" invoice, awaited alone, then N invoices via Promise.all.
+// The anchor is always the OLDEST row (`ORDER BY created_at DESC, id DESC`, store.go), so it
+// always sorts onto page 2 regardless of how the concurrent batch ties against itself --
+// which row lands on page 2 is then known ahead of time without 51 sequential awaits.
+async function buildAnchoredPage(token: string, entityId: string, bulkCount: number): Promise<{ anchorNumber: string; bulk: Awaited<ReturnType<typeof createInvoice>>[] }> {
+  const anchorNumber = `INV-BUG0103-ANCHOR-${Date.now()}`
+  await createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(anchorNumber) })
+  const bulk = await Promise.all(
+    Array.from({ length: bulkCount }, (_, i) =>
+      createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(`INV-BUG0103-BULK-${i}-${Date.now()}`) }),
+    ),
+  )
+  return { anchorNumber, bulk }
+}
+
+test('register-pagination: the list discloses its true total and the last page is reachable', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-03 page ${Date.now()}`, tin: freshTin() })
+  const { anchorNumber } = await buildAnchoredPage(token, entity.id, 50)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const pager = page.getByTestId('invoices-pager')
+  await expect(pager).toBeVisible()
+  await expect(pager).toContainText('SHOWING 1–50 OF 51')
+  await expect(pager).toContainText('PAGE 1 / 2')
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'the anchor row is the oldest, so it must not be on page 1').toHaveCount(0)
+
+  const page2Resp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('offset') === '50',
+  )
+  await pager.getByRole('button', { name: 'Next →' }).click()
+  await page2Resp
+
+  await expect(pager).toContainText('SHOWING 51–51 OF 51')
+  await expect(pager).toContainText('PAGE 2 / 2')
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'page 2 must render the row that was not reachable on page 1').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('register-selection: select-all is page-scoped and paging clears it', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-03 select ${Date.now()}`, tin: freshTin() })
+  // The anchor is never validated -- it always lands on page 2 (buildAnchoredPage), so
+  // page 2's own selectable-row count is not this test's concern.
+  const { bulk } = await buildAnchoredPage(token, entity.id, 50)
+
+  // All 50 `bulk` rows are strictly newer than the anchor, so ALL of them land on page 1
+  // regardless of how they tie-break against each other -- validating exactly this many
+  // makes page 1's select-all count known ahead of time without depending on row order.
+  const SELECTABLE_COUNT = 12
+  await Promise.all(bulk.slice(0, SELECTABLE_COUNT).map((inv) => validateInvoice(token, inv.id)))
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  await expect(page.getByTestId('invoices-pager')).toBeVisible()
+  await page.getByTestId('invoice-select-all').click()
+  await expect(page.getByTestId('batch-submit-summary'), 'select-all must select only this page\'s selectable rows').toContainText(`${SELECTABLE_COUNT} selected on this page`)
+
+  const page2Resp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('offset') === '50',
+  )
+  await page.getByTestId('invoices-pager').getByRole('button', { name: 'Next →' }).click()
+  await page2Resp
+
+  await expect(page.getByTestId('batch-submit-summary'), 'paging must clear the selection').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

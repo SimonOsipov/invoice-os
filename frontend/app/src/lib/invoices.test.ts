@@ -78,6 +78,10 @@ import {
 // over this whole object with the `in` operator, so it never imports the [isfixable-deleted]
 // export by name and can't fail to compile either before or after that export is removed.
 import * as invoicesModule from './invoices'
+// This test file is a leaf (nothing imports it back), so importing reviewBatch.ts here
+// alongside invoices.ts is cycle-safe even though reviewBatch.ts itself imports FROM
+// invoices.ts (task-329, BUG-01-03).
+import { BATCH_SUBMIT_MAX_IDS } from './reviewBatch'
 
 interface MockResponse {
   ok: boolean
@@ -2020,6 +2024,97 @@ describe('editInvoice + diffLineItems together: the row-expansion editor\'s own 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(init.body).toBe(JSON.stringify({ vat: '999.00' }))
     expect(init.body).not.toContain('line_items')
+  })
+})
+
+// RED specs (task-329, BUG-01-03, Mode A) -- the register's own pagination, envelope
+// emptiness, and page-scoped selection, ahead of the InvoicesList.tsx fix. REGISTER_PAGE_SIZE
+// and invoiceListIsEmpty don't exist yet -- read off the module namespace through an index
+// signature (mirrors glyphs.test.ts's own idiom) so a missing export fails as an `undefined`
+// ASSERTION, never an import/compile error.
+const invoicesNS = invoicesModule as unknown as Record<string, unknown>
+
+describe('listInvoices sends limit and offset for the register page', () => {
+  it('a register-sized page ({limit:50, offset:100}) puts both on the wire', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 100, total: 259 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { limit: 50, offset: 100 } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url)
+    expect(parsed.searchParams.get('limit')).toBe('50')
+    expect(parsed.searchParams.get('offset')).toBe('100')
+  })
+
+  // Regression guard, not a red bug: listInvoices already emits offset via `!= null`
+  // (lib/invoices.ts:425-426, LIST-4 above already pins this) -- restated here against the
+  // register's own page-1 request shape so a future truthiness regression on THIS call
+  // shape fails here too, not only on LIST-4's generic one.
+  it('offset:0 (page 1) is still emitted, not dropped by a falsy-zero guard', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 259 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { limit: 50, offset: 0 } as ListInvoicesOptions)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url)
+    expect(parsed.searchParams.get('limit')).toBe('50')
+    expect(parsed.searchParams.get('offset')).toBe('0')
+  })
+})
+
+describe('REGISTER_PAGE_SIZE is 50 and stays under BATCH_SUBMIT_MAX_IDS', () => {
+  it('REGISTER_PAGE_SIZE === 50, and a full page can never breach the batch-submit id cap', () => {
+    const registerPageSize = invoicesNS.REGISTER_PAGE_SIZE
+    expect(registerPageSize, 'REGISTER_PAGE_SIZE is not exported by invoices.ts yet').toBeDefined()
+    expect(registerPageSize).toBe(50)
+    expect(registerPageSize as number).toBeLessThan(BATCH_SUBMIT_MAX_IDS)
+  })
+})
+
+describe('invoiceListIsEmpty resolves empty from the set, not the page', () => {
+  it('mid-set empty page is false, genuine zero-total is true, a populated page is false', () => {
+    const invoiceListIsEmpty = invoicesNS.invoiceListIsEmpty as ((r: unknown) => boolean) | undefined
+    // Guard first, and the ONLY unguarded call below reads through this same checked
+    // reference -- a missing export fails right here (an assertion), never as a
+    // "not a function" crash further down.
+    expect(invoiceListIsEmpty, 'invoiceListIsEmpty is not exported by invoices.ts yet').toBeDefined()
+
+    // [empty-is-total-zero]'s own trap: total>0 but this page's own slice is [].
+    const midSetEmptyPage = { invoices: [], pagination: { limit: 50, offset: 100, total: 259 } }
+    expect(invoiceListIsEmpty!(midSetEmptyPage)).toBe(false)
+
+    const genuineEmpty = { invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }
+    expect(invoiceListIsEmpty!(genuineEmpty)).toBe(true)
+
+    const populatedPage = { invoices: [draftInvoice], pagination: { limit: 50, offset: 0, total: 1 } }
+    expect(invoiceListIsEmpty!(populatedPage)).toBe(false)
+  })
+})
+
+describe('selectAllState and selectableIds never span beyond the given rows', () => {
+  it('a 50-row page with 12 selectable rows selects exactly those 12', () => {
+    const rows: InvoiceRecord[] = Array.from({ length: 50 }, (_, i) => ({
+      ...draftInvoice,
+      id: `inv-${i}`,
+      status: i < 12 ? 'validated' : 'draft',
+    }))
+
+    const ids = selectableIds(rows)
+    expect(ids).toHaveLength(12)
+    const rowIds = new Set(rows.map((r) => r.id))
+    for (const id of ids) expect(rowIds.has(id), `${id} must be one of the given rows`).toBe(true)
+
+    expect(selectAllState(ids, rows)).toBe('all')
   })
 })
 

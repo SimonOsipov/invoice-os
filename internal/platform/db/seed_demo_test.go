@@ -1934,3 +1934,104 @@ func TestSeedWritesNoSubmissionEvidenceForOtherTenants(t *testing.T) {
 		t.Errorf("count(app_exchange) for foreign tenant %s after Seed = %d, want 0", foreignTenantID, n)
 	}
 }
+
+// TestSeedFailedHistoryOutranksPreexistingSubmittedResidue: QA gap-fill, regression for the
+// chains CTE's ord=5 (not 4) on the failed chain's queued->failed row.
+//
+// On a never-reset production DB, an invoice this subtask newly terminalizes to 'failed' may
+// already carry a queued->submitted row from an OLDER deploy of this file (back when the
+// invoice's status was still 'submitted' and the 'submitted' chain's own ord=4 row wrote it).
+// Residue deletion is out of scope, so that row survives forever. If the failed chain's own
+// queued->failed row used the SAME ord (4 -> anchor+60min), it would land at the identical
+// changed_at as the residue, and History's own ORDER BY changed_at ASC, id ASC would then
+// tie-break on a random uuid -- sometimes rendering 'submitted' as the LAST step of an invoice
+// whose real status is 'failed'. ord=5 (anchor+75min) keeps it strictly after the residue.
+func TestSeedFailedHistoryOutranksPreexistingSubmittedResidue(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish baseline): %v", err)
+	}
+
+	const probeInvoice = "DEMO-2026-2003" // one of C6's four named in-flight rows
+	var invoiceID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`,
+		demoTenantID, probeInvoice,
+	).Scan(&invoiceID); err != nil {
+		t.Fatalf("look up %s id (precondition): %v", probeInvoice, err)
+	}
+
+	// Plant the pre-existing residue an older deploy would have left: the 'submitted' chain's
+	// own ord=4 row, at the exact anchor+4*15min offset every other ord=4 row in this file uses.
+	const residueChangedAt = "2026-06-01 09:00:00+00"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, changed_at)
+		 VALUES ($1, $2, 'queued', 'submitted', 'system', $3)`,
+		demoTenantID, invoiceID, residueChangedAt,
+	); err != nil {
+		t.Fatalf("plant pre-existing queued->submitted residue (precondition): %v", err)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (deploy onto the residue): %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT to_status, changed_at FROM invoice_status_history
+		  WHERE tenant_id = $1 AND invoice_id = $2 ORDER BY changed_at ASC, id ASC`,
+		demoTenantID, invoiceID,
+	)
+	if err != nil {
+		t.Fatalf("query history: %v", err)
+	}
+	defer rows.Close()
+
+	type histStep struct {
+		to string
+		at time.Time
+	}
+	var got []histStep
+	for rows.Next() {
+		var r histStep
+		if err := rows.Scan(&r.to, &r.at); err != nil {
+			t.Fatalf("scan history row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate history rows: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("no history rows for the probe invoice after re-seed")
+	}
+
+	// The determinism check: no two rows may share changed_at. A shared timestamp is what
+	// makes the "last" row's identity depend on a random uuid instead of on what actually
+	// happened last -- this is the direct, order-independent detector for the tie itself.
+	seen := make(map[time.Time]int, len(got))
+	for _, r := range got {
+		seen[r.at]++
+	}
+	for at, n := range seen {
+		if n > 1 {
+			t.Errorf("changed_at %v is shared by %d history rows, want every row distinct — a tie makes the LAST row's identity depend on a random uuid rather than on which change actually happened last", at, n)
+		}
+	}
+
+	if last := got[len(got)-1]; last.to != "failed" {
+		t.Errorf("last history row (changed_at ASC, id ASC) has to_status %q, want %q — the residue's queued->submitted row must not outrank the failed chain's own queued->failed row", last.to, "failed")
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1`, invoiceID).Scan(&status); err != nil {
+		t.Fatalf("read back invoice status: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("invoice status after re-seed = %q, want failed", status)
+	}
+}

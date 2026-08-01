@@ -2035,3 +2035,490 @@ func TestSeedFailedHistoryOutranksPreexistingSubmittedResidue(t *testing.T) {
 		t.Fatalf("invoice status after re-seed = %q, want failed", status)
 	}
 }
+
+// task-324 (DEMO-01-07): re-anchor the curated invoice set ahead of E2E residue on every
+// boot. RED against the Stage-1-corrected Core AC-1..7 (C0-C13) -- neither invoice upsert's
+// SET list carries created_at yet.
+
+// invoiceOrderRow is a seeded invoice's number and created_at. Mirrors
+// fetchDemoStatusHistory's shape (:1414).
+type invoiceOrderRow struct {
+	invoiceNumber string
+	createdAt     time.Time
+}
+
+// fetchDemoInvoiceOrder returns tenantID's seeded DEMO-2026-* invoices ordered exactly
+// like the register (store.go:666): created_at DESC, id DESC.
+func fetchDemoInvoiceOrder(t *testing.T, pool *pgxpool.Pool, tenantID string) []invoiceOrderRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT invoice_number, created_at FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY created_at DESC, id DESC`,
+		tenantID,
+	)
+	if err != nil {
+		t.Fatalf("query seeded invoice order for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	var got []invoiceOrderRow
+	for rows.Next() {
+		var r invoiceOrderRow
+		if err := rows.Scan(&r.invoiceNumber, &r.createdAt); err != nil {
+			t.Fatalf("scan invoice order row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate invoice order rows for tenant %s: %v", tenantID, err)
+	}
+	return got
+}
+
+// wantFirmInvoiceOrder / wantInHouseInvoiceOrder: each tenant's own DEMO-2026-* invoice
+// numbers ordered by issue_date DESC, invoice_number DESC (C3/C4) -- hand-derived from
+// db/seed.dev.sql's invoice_seed / inhouse_invoice_seed CTEs, the "declared expected
+// order" C2's detector checks the observed created_at DESC, id DESC sequence against.
+var wantFirmInvoiceOrder = []string{
+	"DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
+	"DEMO-2026-2004", "DEMO-2026-1006", "DEMO-2026-5003", "DEMO-2026-3004", "DEMO-2026-1005",
+	"DEMO-2026-4003", "DEMO-2026-2003", "DEMO-2026-6002", "DEMO-2026-1004", "DEMO-2026-3003",
+	"DEMO-2026-5002", "DEMO-2026-4002", "DEMO-2026-1003", "DEMO-2026-2002", "DEMO-2026-6001",
+	"DEMO-2026-3002", "DEMO-2026-5001", "DEMO-2026-4001", "DEMO-2026-1002", "DEMO-2026-3001",
+	"DEMO-2026-2001", "DEMO-2026-1001",
+}
+
+var wantInHouseInvoiceOrder = []string{
+	"DEMO-2026-8005", "DEMO-2026-8004", "DEMO-2026-8003", "DEMO-2026-7006", "DEMO-2026-7004",
+	"DEMO-2026-8002", "DEMO-2026-7003", "DEMO-2026-7002", "DEMO-2026-8001", "DEMO-2026-7001",
+}
+
+// reanchorOffsetUnit: the declared per-row spacing (C3/C5). clock_timestamp() would also
+// make every row distinct, but its deltas are microseconds, not this.
+const reanchorOffsetUnit = time.Second
+
+// TestSeedInvoiceCreatedAtDistinctWithinTenant: C12 row 1 (AC-1, AC-2). A bare now() is
+// identical for every row this script writes (one implicit transaction) -- distinctness
+// per tenant is the cheapest kill for it.
+func TestSeedInvoiceCreatedAtDistinctWithinTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tc := range []struct {
+		tenantID string
+		want     int
+	}{
+		{demoTenantID, demoInvoiceTotalCount},
+		{honeywellTenantID, len(wantInHouseInvoiceOrder)},
+	} {
+		got := fetchDemoInvoiceOrder(t, pool, tc.tenantID)
+		if len(got) != tc.want {
+			t.Fatalf("tenant %s: count(seeded DEMO-2026-* invoices) = %d, want %d", tc.tenantID, len(got), tc.want)
+		}
+		distinct := make(map[time.Time]bool, len(got))
+		for _, r := range got {
+			distinct[r.createdAt] = true
+		}
+		if len(distinct) != len(got) {
+			t.Errorf("tenant %s: count(DISTINCT created_at) = %d, want %d -- a bare now() collapses every seeded row onto one timestamp", tc.tenantID, len(distinct), len(got))
+		}
+	}
+}
+
+// TestSeedInvoiceCreatedAtSpacingIsExact: C12 row 2 (AC-1, AC-2). Consecutive seeded rows
+// (created_at DESC) must differ by exactly reanchorOffsetUnit -- kills clock_timestamp(),
+// which would also pass the distinctness test above but with microsecond deltas.
+func TestSeedInvoiceCreatedAtSpacingIsExact(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		got := fetchDemoInvoiceOrder(t, pool, tenantID)
+		for i := 1; i < len(got); i++ {
+			delta := got[i-1].createdAt.Sub(got[i].createdAt)
+			if delta != reanchorOffsetUnit {
+				t.Errorf("tenant %s: created_at gap between %s and %s = %v, want exactly %v", tenantID, got[i-1].invoiceNumber, got[i].invoiceNumber, delta, reanchorOffsetUnit)
+			}
+		}
+	}
+}
+
+// TestSeedInvoiceCreatedAtMatchesDeclaredOrder: C12 row 3 (AC-1, AC-2). ON CONFLICT ...
+// DO UPDATE preserves id (5/5 verified), so a bare now() reproduces the SAME uuid
+// tie-break across two runs and a two-run comparison alone would pass it -- comparing
+// against a declared expected order instead kills it regardless of that id-preservation
+// luck, and doubles as C4's issue_date-ordering pin.
+func TestSeedInvoiceCreatedAtMatchesDeclaredOrder(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		tenantID string
+		want     []string
+	}{
+		{"firm", demoTenantID, wantFirmInvoiceOrder},
+		{"in-house", honeywellTenantID, wantInHouseInvoiceOrder},
+	} {
+		rows := fetchDemoInvoiceOrder(t, pool, tc.tenantID)
+		got := make([]string, len(rows))
+		for i, r := range rows {
+			got[i] = r.invoiceNumber
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s tenant: created_at DESC, id DESC invoice_number order =\n%v\nwant (issue_date DESC, invoice_number DESC):\n%v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestSeedInvoiceCreatedAtStrictlyPast: C12 row 4 (AC-1, AC-6). Rows created during an
+// E2E run (which starts after the seed) must still sort ahead of the curated set.
+func TestSeedInvoiceCreatedAtStrictlyPast(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var dbNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		t.Fatalf("read db now(): %v", err)
+	}
+
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		for _, r := range fetchDemoInvoiceOrder(t, pool, tenantID) {
+			if !r.createdAt.Before(dbNow) {
+				t.Errorf("tenant %s: %s created_at = %v, want strictly before %v", tenantID, r.invoiceNumber, r.createdAt, dbNow)
+			}
+		}
+	}
+}
+
+// TestSeedReanchorsFirmInvoicesAheadOfOlderResidue: C12 row 5 (AC-3). Backdating first is
+// what forces the UPDATE path -- a test that only ever inserts fresh rows proves nothing
+// about the ON CONFLICT ... DO UPDATE SET list. The firm register is entity-scoped
+// (InvoicesList.tsx:71/:83 -> store.go:598); Adeyemi & Sons is clients[0] with 6 curated
+// rows, so this asserts positionally against the entity-scoped page (C8), not "dominates
+// the first 50".
+func TestSeedReanchorsFirmInvoicesAheadOfOlderResidue(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish baseline): %v", err)
+	}
+
+	const adeyemiTIN = "10012345-0001"
+	var adeyemiEntityID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, adeyemiTIN,
+	).Scan(&adeyemiEntityID); err != nil {
+		t.Fatalf("look up Adeyemi entity id (precondition): %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE invoices SET created_at = now() - interval '30 days'
+		  WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+		demoTenantID,
+	); err != nil {
+		t.Fatalf("backdate the demo tenant's seeded invoices (precondition): %v", err)
+	}
+
+	const residueNumber = "E2E-FIRM-RESIDUE-0001"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, created_at) VALUES ($1, $2, $3, now() - interval '1 hour')`,
+		demoTenantID, adeyemiEntityID, residueNumber,
+	); err != nil {
+		t.Fatalf("insert residue newer than the backdated seed (precondition): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`, demoTenantID, residueNumber)
+	})
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (re-anchor over the backdated + residue rows): %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number FROM invoices WHERE tenant_id = $1 AND entity_id = $2
+		  ORDER BY created_at DESC, id DESC LIMIT 50`,
+		demoTenantID, adeyemiEntityID,
+	)
+	if err != nil {
+		t.Fatalf("query Adeyemi's entity-scoped page: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatalf("scan invoice_number: %v", err)
+		}
+		got = append(got, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate Adeyemi's entity-scoped page: %v", err)
+	}
+	if len(got) != 7 {
+		t.Fatalf("Adeyemi's entity-scoped page has %d rows, want 7 (6 curated + 1 residue)", len(got))
+	}
+
+	top6 := append([]string{}, got[:6]...)
+	sort.Strings(top6)
+	wantTop6 := []string{"DEMO-2026-1001", "DEMO-2026-1002", "DEMO-2026-1003", "DEMO-2026-1004", "DEMO-2026-1005", "DEMO-2026-1006"}
+	sort.Strings(wantTop6)
+	if !reflect.DeepEqual(top6, wantTop6) {
+		t.Errorf("Adeyemi's top 6 entity-scoped rows = %v, want exactly the 6 curated DEMO-2026-100x rows %v", got[:6], wantTop6)
+	}
+	if got[6] != residueNumber {
+		t.Errorf("Adeyemi's entity-scoped row 7 = %q, want the older residue %q to sort last", got[6], residueNumber)
+	}
+}
+
+// TestSeedReanchorsInHouseInvoicesAheadOfOlderResidue: C12 row 6 (AC-3, AC-5) -- the C1
+// detector. task-323 added a SECOND invoice upsert (in-house, ON CONFLICT at :366-382);
+// created_at must join BOTH SET lists. If only the firm block (:286-302) gained it, the
+// backdated Honeywell rows here stay 30 days old and the 1-hour-old residue outranks them,
+// failing the position assertions below. Also pins AC-5: outcome coverage is in-house
+// only, so every DEMO-01-06 outcome must be visible on this same page.
+func TestSeedReanchorsInHouseInvoicesAheadOfOlderResidue(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish baseline): %v", err)
+	}
+
+	var honeywellEntityID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		honeywellTenantID, curatedHoneywellEntity.tin,
+	).Scan(&honeywellEntityID); err != nil {
+		t.Fatalf("look up Honeywell entity id (precondition): %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE invoices SET created_at = now() - interval '30 days'
+		  WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+		honeywellTenantID,
+	); err != nil {
+		t.Fatalf("backdate Honeywell's seeded invoices (precondition): %v", err)
+	}
+
+	const residueNumber = "E2E-INHOUSE-RESIDUE-0001"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, created_at) VALUES ($1, $2, $3, now() - interval '1 hour')`,
+		honeywellTenantID, honeywellEntityID, residueNumber,
+	); err != nil {
+		t.Fatalf("insert residue newer than the backdated seed (precondition): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`, honeywellTenantID, residueNumber)
+	})
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (re-anchor over the backdated + residue rows): %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, status FROM invoices WHERE tenant_id = $1
+		  ORDER BY created_at DESC, id DESC LIMIT 50`,
+		honeywellTenantID,
+	)
+	if err != nil {
+		t.Fatalf("query Honeywell's tenant-wide page: %v", err)
+	}
+	defer rows.Close()
+	var numbers []string
+	statuses := make(map[string]bool)
+	for rows.Next() {
+		var n, s string
+		if err := rows.Scan(&n, &s); err != nil {
+			t.Fatalf("scan invoice row: %v", err)
+		}
+		numbers = append(numbers, n)
+		statuses[s] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate Honeywell's tenant-wide page: %v", err)
+	}
+	if len(numbers) != 11 {
+		t.Fatalf("Honeywell's tenant-wide page has %d rows, want 11 (10 curated + 1 residue)", len(numbers))
+	}
+
+	top10 := append([]string{}, numbers[:10]...)
+	sort.Strings(top10)
+	wantTop10 := append([]string{}, wantInHouseInvoiceOrder...)
+	sort.Strings(wantTop10)
+	if !reflect.DeepEqual(top10, wantTop10) {
+		t.Errorf("Honeywell's top 10 rows = %v, want exactly the 10 curated DEMO-2026-7xxx/8xxx rows %v -- fails if created_at was added to the FIRM upsert's SET list only (C1)", numbers[:10], wantTop10)
+	}
+	if numbers[10] != residueNumber {
+		t.Errorf("Honeywell's row 11 = %q, want the older residue %q to sort last", numbers[10], residueNumber)
+	}
+
+	for _, want := range []string{"accepted", "rejected", "failed"} {
+		if !statuses[want] {
+			t.Errorf("Honeywell's page is missing invoice status %q -- every DEMO-01-06 outcome must stay visible on the in-house register's first page (AC-5)", want)
+		}
+	}
+
+	jobRows, err := pool.Query(ctx,
+		`SELECT DISTINCT j.state FROM submission_jobs j
+		   JOIN invoices i ON i.tenant_id = j.tenant_id AND i.id = j.invoice_id
+		  WHERE j.tenant_id = $1`,
+		honeywellTenantID,
+	)
+	if err != nil {
+		t.Fatalf("query Honeywell's submission_jobs states: %v", err)
+	}
+	defer jobRows.Close()
+	jobStates := make(map[string]bool)
+	for jobRows.Next() {
+		var s string
+		if err := jobRows.Scan(&s); err != nil {
+			t.Fatalf("scan job state: %v", err)
+		}
+		jobStates[s] = true
+	}
+	if err := jobRows.Err(); err != nil {
+		t.Fatalf("iterate Honeywell's submission_jobs states: %v", err)
+	}
+	for _, want := range []string{"accepted", "rejected", "dead_lettered"} {
+		if !jobStates[want] {
+			t.Errorf("Honeywell's submission_jobs is missing state %q after re-seed", want)
+		}
+	}
+}
+
+// TestSeedNewInvoiceOutranksSeededFirmPortfolio: C12 row 7 (AC-6). A row created strictly
+// after the seed runs (default created_at = now()) must sort ahead of the whole curated
+// set -- the three e2e page-1 assumptions (persona-inhouse.spec.ts:274-279,
+// perf.spec.ts:135, persona-surfaces.spec.ts:438-440) depend on this holding at gateway
+// boot, before any spec runs.
+func TestSeedNewInvoiceOutranksSeededFirmPortfolio(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	const adeyemiTIN = "10012345-0001"
+	var adeyemiEntityID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, adeyemiTIN,
+	).Scan(&adeyemiEntityID); err != nil {
+		t.Fatalf("look up Adeyemi entity id (precondition): %v", err)
+	}
+
+	const newNumber = "E2E-NEW-FIRM-0001"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3)`,
+		demoTenantID, adeyemiEntityID, newNumber,
+	); err != nil {
+		t.Fatalf("insert a fresh post-seed invoice: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`, demoTenantID, newNumber)
+	})
+
+	var first string
+	if err := pool.QueryRow(ctx,
+		`SELECT invoice_number FROM invoices WHERE tenant_id = $1 AND entity_id = $2
+		  ORDER BY created_at DESC, id DESC LIMIT 1`,
+		demoTenantID, adeyemiEntityID,
+	).Scan(&first); err != nil {
+		t.Fatalf("query Adeyemi's entity-scoped page row 1: %v", err)
+	}
+	if first != newNumber {
+		t.Errorf("Adeyemi's entity-scoped page row 1 = %q, want the freshly-created %q", first, newNumber)
+	}
+}
+
+// TestSeedLeavesJunkInvoiceCreatedAtUntouched: C12 row 8 (AC-7). Companion to
+// TestSeedLeavesJunkInvoiceFiscalColumnsUntouched (:1133) -- a non-curated invoice_number
+// never matches Seed's ON CONFLICT target, so the re-anchoring UPDATE must not touch it
+// either. Uses that test's shape (a junk invoice), not TestSeedLeavesJunkRowsInPlace's
+// (:709), which plants a business_entities row.
+func TestSeedLeavesJunkInvoiceCreatedAtUntouched(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated entities): %v", err)
+	}
+
+	const curatedTIN = "10012345-0001" // Adeyemi & Sons Trading Ltd
+	var entityID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, curatedTIN,
+	).Scan(&entityID); err != nil {
+		t.Fatalf("read back curated entity id (precondition): %v", err)
+	}
+
+	const junkNumber = "QA-JUNK-CREATED-AT-0001"
+	const junkCreatedAt = "2020-01-01 00:00:00+00"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, created_at) VALUES ($1, $2, $3, $4::timestamptz)`,
+		demoTenantID, entityID, junkNumber, junkCreatedAt,
+	); err != nil {
+		t.Fatalf("seed junk invoice (precondition): %v", err)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed: %v", err)
+	}
+
+	var gotCreatedAt time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT created_at FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`,
+		demoTenantID, junkNumber,
+	).Scan(&gotCreatedAt); err != nil {
+		t.Fatalf("read back junk invoice after Seed (want it to survive untouched): %v", err)
+	}
+
+	var unchanged bool
+	if err := pool.QueryRow(ctx, `SELECT $1::timestamptz = $2::timestamptz`, gotCreatedAt, junkCreatedAt).Scan(&unchanged); err != nil {
+		t.Fatalf("compare junk invoice's created_at: %v", err)
+	}
+	if !unchanged {
+		t.Errorf("junk invoice's created_at after Seed = %v, want unchanged (%s) -- the upsert must not touch a row it does not curate", gotCreatedAt, junkCreatedAt)
+	}
+}

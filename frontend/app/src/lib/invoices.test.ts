@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, type AsyncState } from '@invoice-os/api-client'
+import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
 import {
@@ -68,6 +68,7 @@ import {
   type InvoiceDetailRecord,
   type InvoiceEditInput,
   type InvoiceLineItem,
+  type InvoiceListResponse,
   type InvoiceRecord,
   type InvoiceStatus,
   type ListInvoicesOptions,
@@ -2098,6 +2099,32 @@ describe('invoiceListIsEmpty resolves empty from the set, not the page', () => {
 
     const populatedPage = { invoices: [draftInvoice], pagination: { limit: 50, offset: 0, total: 1 } }
     expect(invoiceListIsEmpty!(populatedPage)).toBe(false)
+  })
+})
+
+// QA adversarial (task-329 review of InvoicesList.tsx's `state === 'ready' && list.data
+// != null && rows.length === 0` mid-set-empty-page gate): the spec'd condition was
+// `total > 0 && rows.length === 0`. Formally, through the SAME reducer + isEmpty wiring
+// InvoicesList.tsx actually uses (asyncReducer + invoiceListIsEmpty as the `isEmpty`
+// option), status can only ever reach 'ready' when total>0, and 'ready' is the only
+// status that keeps `data` non-null -- so the two conditions coincide for every envelope
+// this app can produce. If a future isEmpty swap breaks that coincidence, this fails here
+// rather than silently reintroducing the mid-set-empty-page bug under a different name.
+describe('claim: state==="ready" implies pagination.total>0, given invoiceListIsEmpty as isEmpty', () => {
+  it('total>0 resolves ready with the envelope intact (data stays the SAME reference)', () => {
+    const envelope: InvoiceListResponse = { invoices: [], pagination: { limit: 50, offset: 100, total: 259 } }
+    const next = asyncReducer(initialState<InvoiceListResponse>(true), { type: 'success', data: envelope, isEmpty: invoicesModule.invoiceListIsEmpty })
+
+    expect(next.status).toBe('ready')
+    expect(next.data).toBe(envelope)
+  })
+
+  it('total===0 can only resolve empty, never ready -- the ready-gated rung is unreachable for it', () => {
+    const envelope: InvoiceListResponse = { invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }
+    const next = asyncReducer(initialState<InvoiceListResponse>(true), { type: 'success', data: envelope, isEmpty: invoicesModule.invoiceListIsEmpty })
+
+    expect(next.status).toBe('empty')
+    expect(next.data).toBeNull()
   })
 })
 

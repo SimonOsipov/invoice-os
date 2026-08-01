@@ -955,6 +955,19 @@ func TestSeedPopulatesFiscalIdentifiersOnAcceptedInvoices(t *testing.T) {
 			t.Errorf("%s: qr_payload embeds cur=%q, want the row's own currency %q", r.invoiceNumber, cur, r.currency)
 		}
 	}
+
+	// A constant CSID would pass every check above (length, alphabet, self-consistency
+	// against qr_payload) — only cross-row comparison catches it.
+	seen := make(map[string]string, len(accepted))
+	for _, r := range accepted {
+		if r.csid == nil {
+			continue
+		}
+		if dupe, ok := seen[*r.csid]; ok {
+			t.Errorf("%s and %s share csid %q, want distinct per row", dupe, r.invoiceNumber, *r.csid)
+		}
+		seen[*r.csid] = r.invoiceNumber
+	}
 }
 
 // TestSeedLeavesFiscalIdentifiersNullOnNonAcceptedInvoices: Test Spec row 2 (task-322

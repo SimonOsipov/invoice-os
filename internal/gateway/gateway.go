@@ -149,9 +149,11 @@ func injectIdentity(pr *httputil.ProxyRequest) {
 // MockIssuerEnabled reports whether the dev/CI mock issuer should be wired in. It
 // is refused in production regardless of the flag, so a misconfigured prod env
 // can never expose the token-mint / JWKS endpoints — defense in depth ahead of
-// the M8-07 production refusal.
+// the M8-07 production refusal. environment is trimmed and lowercased first (the
+// same normalization submission.IsProduction applies), so a value like
+// "Production" or " production" cannot defeat the refusal.
 func MockIssuerEnabled(environment, flag string) bool {
-	return flag == "true" && environment != "production"
+	return flag == "true" && strings.ToLower(strings.TrimSpace(environment)) != "production"
 }
 
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is

@@ -123,6 +123,7 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
       'label="NRS-accepted"',
       'sub="IRN + CSID returned"',
       'operating against the NRS test adapter',
+      'recorded in the immutable audit log against your operator identity',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts')

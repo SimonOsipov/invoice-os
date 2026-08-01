@@ -24,6 +24,7 @@ const FORBIDDEN = [
   'NRS-accepted',
   'IRN + CSID returned',
   'NRS test adapter',
+  'the immutable audit log',
 ]
 
 // Test files are excluded — they carry the forbidden strings as fixtures.

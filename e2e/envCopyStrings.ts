@@ -16,4 +16,7 @@ export const FORBIDDEN_STRINGS = [
   'NRS-accepted',
   'IRN + CSID returned',
   'NRS test adapter',
+  // The leading `the ` is load-bearing: it separates a per-action write claim from
+  // landing's immutable-audit-log product bullets, which are in scope but legitimate.
+  'the immutable audit log',
 ] as const

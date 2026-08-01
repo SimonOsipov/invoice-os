@@ -2145,6 +2145,89 @@ describe('selectAllState and selectableIds never span beyond the given rows', ()
   })
 })
 
+// RED specs (task-331, BUG-01-05, Mode A): clampFilterText doesn't exist yet -- read off
+// the module namespace (mirrors REGISTER_PAGE_SIZE/invoiceListIsEmpty's own idiom above)
+// so a missing export fails as an assertion, never an import/compile error.
+describe('clampFilterText (BUG-01-05)', () => {
+  function clamp(s: string): string {
+    const fn = invoicesNS.clampFilterText as ((s: string) => string) | undefined
+    expect(fn, 'clampFilterText is not exported by invoices.ts yet').toBeDefined()
+    return fn!(s)
+  }
+
+  it('ASCII table cases: 250 chars clamps to 200, 200 chars is unchanged, empty stays empty', () => {
+    expect(clamp('x'.repeat(250))).toHaveLength(200)
+    expect(clamp('x'.repeat(200))).toBe('x'.repeat(200))
+    expect(clamp('')).toBe('')
+  })
+
+  // The server's cap is 200 BYTES, not runes (handlers.go:305-316/488-492, `len(q)` on a
+  // Go string counts UTF-8 bytes). A naive value.slice(0, 200) counts UTF-16 code units
+  // instead, so multi-byte content passes a char-count check and still 400s server-side.
+  it('a 100-char CJK string (3 bytes/char, 300 bytes) clamps to whole characters within 200 bytes', () => {
+    const cjk = '文'.repeat(100)
+
+    const result = clamp(cjk)
+
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(200)
+    expect(result).not.toContain('�')
+    // 66 whole chars = 198 bytes; a 67th would push it to 201, over the cap.
+    expect(result).toBe('文'.repeat(66))
+  })
+
+  it('a 60-emoji string (4 bytes/char, 2 UTF-16 units/char, 240 bytes) clamps to whole characters within 200 bytes', () => {
+    const emoji = '😀'.repeat(60)
+
+    const result = clamp(emoji)
+
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(200)
+    expect(result).not.toContain('�')
+    // 50 whole emoji = 200 bytes exactly; a 51st would push it to 204.
+    expect(result).toBe('😀'.repeat(50))
+  })
+
+  // The byte cutoff (200) falls mid-character here: 199 ASCII bytes leave a 1-byte budget,
+  // not enough for the trailing CJK char's 3-byte sequence. A byte-slice-then-decode
+  // implementation would split that sequence and surface a replacement char (U+FFFD) on
+  // decode; the correct clamp drops the whole character instead of a partial one.
+  it('a byte cutoff that falls mid-character drops the whole character, never a partial one', () => {
+    const mixed = 'a'.repeat(199) + '文'
+
+    const result = clamp(mixed)
+
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(200)
+    expect(result).not.toContain('�')
+    expect(result).toBe('a'.repeat(199))
+  })
+})
+
+describe('listInvoices emits q only when non-empty (BUG-01-05)', () => {
+  // Green-before: listInvoices' own q handling shipped with BUG-01-04 (LIST-1b/I17's
+  // precedent for the other string filters). Restated here as the header-search story's
+  // own AC row, over the exact values it uses.
+  it('{q: "INV-9001"} builds a URL containing q=INV-9001; {q: ""} omits the param entirely', async () => {
+    const withQueryMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await listInvoices(af, base, { q: 'INV-9001' })
+    const [withQueryUrl] = withQueryMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(withQueryUrl).searchParams.get('q')).toBe('INV-9001')
+
+    const emptyQueryMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { q: '' })
+    const [emptyQueryUrl] = emptyQueryMock.mock.calls[0] as [string, RequestInit]
+    expect(emptyQueryUrl).not.toContain('q=')
+  })
+})
+
 // Recursively walks `rootDir`, reading every .ts/.tsx file, and returns the relative paths
 // of every file whose text contains `needle` as a literal substring.
 function scanForIdentifier(rootDir: string, needle: string): string[] {

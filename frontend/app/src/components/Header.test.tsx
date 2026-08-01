@@ -13,17 +13,29 @@ afterEach(cleanup)
 
 // Header reads exactly five ctx fields. Typing them against the real PlatformCtx keeps a
 // rename breaking the typecheck; the cast then stands in for the ~90 fields it never reads.
-type HeaderCtx = Pick<PlatformCtx, 'view' | 'sandbox' | 'setSandbox' | 'openCreate'> & {
+// `nav` is a real PlatformCtx field (App.tsx) so it joins the Pick; `setInvoiceQuery`
+// (task-331, BUG-01-05) doesn't exist on PlatformCtx yet, so it's added as its own
+// intersection member instead -- same idiom `active` below already uses -- which is what
+// lets this widen without touching types.ts.
+type HeaderCtx = Pick<PlatformCtx, 'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav'> & {
   active: Pick<PlatformCtx['active'], 'initials'>
+  setInvoiceQuery: (q: string) => void
 }
 
-function headerCtx(over: { sandbox: boolean; setSandbox?: () => void }) {
+function headerCtx(over: {
+  sandbox: boolean
+  setSandbox?: () => void
+  nav?: PlatformCtx['nav']
+  setInvoiceQuery?: (q: string) => void
+}) {
   const ctx: HeaderCtx = {
     active: { initials: 'OP' },
     view: 'dashboard',
     openCreate: () => {},
     setSandbox: over.setSandbox ?? vi.fn(),
     sandbox: over.sandbox,
+    nav: over.nav ?? vi.fn(),
+    setInvoiceQuery: over.setInvoiceQuery ?? vi.fn(),
   }
   return ctx as unknown as PlatformCtx
 }
@@ -110,5 +122,48 @@ describe('Header environment pill', () => {
     render(<Header ctx={headerCtx({ sandbox: true })} />)
 
     expect(liveSeg().getAttribute('title')).toContain('accreditation')
+  })
+})
+
+// RED specs (task-331, BUG-01-05, Mode A): the search control is a `<span>` today, not an
+// `<input>` -- every spec below fails on a real DOM assertion (an absent element, or a
+// spy never called), never a compile error. Pinned testids the e2e layer also selects on.
+describe('Header search field (BUG-01-05)', () => {
+  it('renders exactly one input[type=text] capped at 200 characters', () => {
+    render(<Header ctx={headerCtx({ sandbox: true })} />)
+
+    const inputs = document.querySelectorAll('input[type="text"]')
+    expect(inputs, 'zero text inputs render today').toHaveLength(1)
+    expect((inputs[0] as HTMLInputElement).maxLength).toBe(200)
+  })
+
+  it('submitting the search sets the query and navigates to invoices', async () => {
+    const setInvoiceQuery = vi.fn()
+    const nav = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, nav, setInvoiceQuery })} />)
+
+    const input = screen.queryByTestId('invoice-search-input')
+    expect(input, 'invoice-search-input does not exist yet').not.toBeNull()
+    await userEvent.type(input!, 'INV-9001{Enter}')
+
+    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
+    expect(setInvoiceQuery).toHaveBeenCalledWith('INV-9001')
+    expect(nav).toHaveBeenCalledTimes(1)
+    expect(nav).toHaveBeenCalledWith('invoices')
+  })
+
+  it('clicking clear emits an empty query', async () => {
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+
+    const input = screen.queryByTestId('invoice-search-input')
+    expect(input, 'invoice-search-input does not exist yet').not.toBeNull()
+    await userEvent.type(input!, 'abc')
+
+    const clearBtn = screen.queryByTestId('invoice-search-clear')
+    expect(clearBtn, 'invoice-search-clear does not exist yet').not.toBeNull()
+    await userEvent.click(clearBtn!)
+
+    expect(setInvoiceQuery).toHaveBeenCalledWith('')
   })
 })

@@ -1080,9 +1080,18 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
 // The anchor is always the OLDEST row (`ORDER BY created_at DESC, id DESC`, store.go), so it
 // always sorts onto page 2 regardless of how the concurrent batch ties against itself --
 // which row lands on page 2 is then known ahead of time without 51 sequential awaits.
-async function buildAnchoredPage(token: string, entityId: string, bulkCount: number): Promise<{ anchorNumber: string; bulk: Awaited<ReturnType<typeof createInvoice>>[] }> {
+// anchorOverrides (task-331, BUG-01-05): mirrors submittableInvoiceFields' own override
+// pattern above -- cleanInvoiceFields' anchor gets a fixed buyer_tin ('87654321-0002'),
+// which the register-search test can't use since it needs a TIN unique to the anchor
+// alone. Optional and additive: both existing callers omit it and are unaffected.
+async function buildAnchoredPage(
+  token: string,
+  entityId: string,
+  bulkCount: number,
+  anchorOverrides?: Partial<ReturnType<typeof cleanInvoiceFields>>,
+): Promise<{ anchorNumber: string; bulk: Awaited<ReturnType<typeof createInvoice>>[] }> {
   const anchorNumber = `INV-BUG0103-ANCHOR-${Date.now()}`
-  await createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(anchorNumber) })
+  await createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(anchorNumber), ...anchorOverrides })
   const bulk = await Promise.all(
     Array.from({ length: bulkCount }, (_, i) =>
       createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(`INV-BUG0103-BULK-${i}-${Date.now()}`) }),
@@ -1159,6 +1168,46 @@ test('register-selection: select-all is page-scoped and paging clears it', async
   await page2Resp
 
   await expect(page.getByTestId('batch-submit-summary'), 'paging must clear the selection').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('register-search: a term matching only a row past page 1 is found, and the count is the server total', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-05 search ${Date.now()}`, tin: freshTin() })
+  // A TIN unique to the anchor alone -- the 50 bulk rows all keep cleanInvoiceFields' fixed
+  // buyer_tin, so a match on this one can only be the anchor, which buildAnchoredPage always
+  // places on page 2.
+  const searchTin = freshTin()
+  const { anchorNumber } = await buildAnchoredPage(token, entity.id, 50, { buyer_tin: searchTin })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  await expect(page.getByTestId('invoices-pager')).toContainText('OF 51')
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'the anchor is the oldest row, so an unfiltered page 1 must not show it').toHaveCount(0)
+
+  const searchResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('q') === searchTin,
+  )
+  await page.getByTestId('invoice-search-input').fill(searchTin)
+  await page.getByTestId('invoice-search-input').press('Enter')
+  const resp = await searchResp
+  const body = (await resp.json()) as { pagination: { total: number } }
+
+  // The unique TIN can only match the anchor -- proves the server actually narrowed the
+  // set, not just that the pager echoes whatever total it was given (register-pagination
+  // above already covers that half).
+  expect(body.pagination.total, 'the unique buyer TIN must match exactly the anchor row').toBe(1)
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'search must surface the row even though it starts past page 1').toBeVisible()
+  await expect(page.getByTestId('invoices-pager')).toContainText(`OF ${body.pagination.total}`)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

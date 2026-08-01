@@ -64,6 +64,9 @@ import { Pager } from './Pager'
 
 const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 130px'
 
+// Tags the envelope with the entity it was fetched for, so staleness is read off the response itself rather than inferred from row count (row count alone can't tell a stale envelope apart from a poll that legitimately emptied the page).
+type FetchedInvoiceList = InvoiceListResponse & { fetchedEntityId: string | undefined }
+
 export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [needsAttention, setNeedsAttention] = useState(false)
@@ -80,12 +83,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // the active company changes ([entity-id-restored]: entity_id is now a server-side
   // param, so switching companies must trigger a real refetch, not just a client-side
   // recompute).
-  const list = useAsync<InvoiceListResponse>(
+  const list = useAsync<FetchedInvoiceList>(
     () =>
       base
         ? // Keeps the {invoices, pagination} envelope whole -- the pager below reads
           // `pagination` off this same response, never a client constant.
-          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset })
+          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset }).then(
+            (r) => ({ ...r, fetchedEntityId: activeEntityId }),
+          )
         : Promise.reject(new Error('no gateway configured')),
     {
       isEmpty: invoiceListIsEmpty,
@@ -98,6 +103,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // sites below: both sit inside a `state === 'ready'` branch, where TS narrows `state`
   // to the literal 'ready' and rejects that comparison as unreachable.
   const loading = state === 'loading'
+  // Both sides are `string | undefined` (in-house has no entity) -- `undefined ===
+  // undefined` correctly reads as fresh there. False whenever `list.data` is still
+  // null so this can be read safely ahead of the `list.data != null` render guards.
+  const fresh = list.data != null && list.data.fetchedEntityId === activeEntityId
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) — a poll tick never calls
   // list.run() (THE LOAD-BEARING TRAP: that dispatches useAsync's 'start' action, nulls
@@ -357,13 +366,21 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {/* A MID-SET empty page: total>0 (else `state` would be 'empty' above) and the
-          server's OWN slice for this offset is []. The switch-transient window (a
-          company switch's pre-refetch frame, where gateByActiveEntity blanks a
-          non-empty response down to [] client-side) is handled by the next branch
-          instead, so the pager mounted here always belongs to this entity's own
-          pagination. */}
-      {state === 'ready' && list.data != null && list.data.invoices.length === 0 && (
+      {/* !fresh: the envelope predates the active entity (a company switch's
+          pre-refetch frame) -- bounded and self-healing, since `activeEntityId` is in
+          `deps` and a refetch is always scheduled. Row count can't stand in for this:
+          a poll tick that legitimately empties every in-flight row on THIS entity's
+          page produces the identical `invoices: []` signature, and routing that case
+          here too (f3b2b54) stranded the user on this same spinner with no refetch
+          ever scheduled, since nothing in `deps` had changed. */}
+      {state === 'ready' && list.data != null && !fresh && <Loading label="Loading invoices…" />}
+
+      {/* Fresh and empty: total>0 (else `state` would be 'empty' above) and this
+          entity's own slice for this offset is [] -- either a genuine mid-set-empty
+          page or a poll tick that just emptied it. Both are trustworthy pagination
+          now that the envelope is known to belong to this entity, so the Pager is
+          mounted either way and the user can page back. */}
+      {state === 'ready' && list.data != null && fresh && rows.length === 0 && (
         <div data-testid="invoices-empty-page">
           <EmptyState title="No invoices on this page" message="Go back to see the rest of the register." />
           <div style={{ marginTop: 16 }}>
@@ -380,15 +397,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {/* Checks the server's own invoices.length, not the gated `rows`, so a switch's
-          pre-refetch frame (non-empty response, blanked to [] by gateByActiveEntity)
-          renders Loading instead of a Pager carrying the previous entity's pagination;
-          self-heals on the next commit when the refetch lands. */}
-      {state === 'ready' && list.data != null && list.data.invoices.length > 0 && rows.length === 0 && (
-        <Loading label="Loading invoices…" />
-      )}
-
-      {state === 'ready' && list.data != null && rows.length > 0 && (
+      {state === 'ready' && list.data != null && fresh && rows.length > 0 && (
         <>
           {selected.length > 0 && (
             <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}>

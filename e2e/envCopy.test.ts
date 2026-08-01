@@ -68,14 +68,23 @@ function partition(paths: string[]): { scanned: string[]; excluded: string[] } {
 function findForbiddenHits(src: string, label: string): Hit[] {
   const hits: Hit[] = []
   const lines = src.split('\n')
-  lines.forEach((line, i) => {
-    const lower = line.toLowerCase()
+  const lower = lines.map((l) => l.toLowerCase())
+  lower.forEach((line, i) => {
     for (const needle of FORBIDDEN_STRINGS) {
-      if (lower.includes(needle.toLowerCase())) {
+      if (line.includes(needle.toLowerCase())) hits.push({ file: label, line: i + 1, needle })
+    }
+  })
+  // A needle split across a line wrap (e.g. reformatted JSX text) evades the per-line pass
+  // above. Also check each adjacent line pair joined by a space, skipping what's already hit.
+  for (let i = 0; i < lower.length - 1; i++) {
+    const pair = `${lower[i]} ${lower[i + 1]}`
+    for (const needle of FORBIDDEN_STRINGS) {
+      const n = needle.toLowerCase()
+      if (pair.includes(n) && !lower[i].includes(n) && !lower[i + 1].includes(n)) {
         hits.push({ file: label, line: i + 1, needle })
       }
     }
-  })
+  }
   return hits
 }
 
@@ -104,6 +113,9 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
     const all = listFrontendSourceFiles()
     const { scanned, excluded } = partition(all)
 
+    // Vacuity guard: on a broken pathspec `all` collapses to [], and both assertions below
+    // pass on empty input (0+0===0, []===[]) without ever exercising the exception rule.
+    expect(all.length, 'total tracked files (vacuity guard)').toBeGreaterThanOrEqual(120)
     expect(scanned.length + excluded.length, 'scanned + excluded must equal all tracked files').toBe(all.length)
 
     const nonTestExcluded = excluded.filter((p) => !TEST_FILE_RE.test(p))
@@ -133,6 +145,13 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
     expect(hits.length, 'hits found in the sample (vacuity guard)').toBeGreaterThanOrEqual(FORBIDDEN_STRINGS.length)
     const undetected = FORBIDDEN_STRINGS.filter((needle) => !detected.has(needle))
     expect(undetected, `forbidden strings not detected in the sample: ${undetected.join(', ')}`).toEqual([])
+  })
+
+  it('catches a needle split across a line wrap', () => {
+    const SAMPLE = ['Submissions are transmitted', 'to NRS and return evidence.'].join('\n')
+    const hits = findForbiddenHits(SAMPLE, 'sample.ts')
+    expect(hits.map((h) => h.needle)).toEqual(['transmitted to NRS'])
+    expect(hits[0].line).toBe(1)
   })
 
   it('no forbidden claim appears in any SPA', () => {

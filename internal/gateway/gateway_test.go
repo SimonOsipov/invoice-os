@@ -328,6 +328,15 @@ func TestMockIssuerEnabled(t *testing.T) {
 		{"development", "1", false},   // only the exact string "true" enables it
 		{"production", "true", false}, // refused in production regardless
 		{"production", "", false},
+
+		// --- normalization added for M8-07's demo-side half: trim + lowercase
+		// before comparing to "production" (mirrors submission.IsProduction) ---
+		{"", "true", true},              // unset env stays permissive, same as "development"
+		{"Production", "true", false},   // AC-3: casing bypass closed
+		{"PRODUCTION", "true", false},   // casing bypass closed
+		{" production", "true", false},  // AC-3: leading-whitespace bypass closed
+		{" production ", "true", false}, // leading+trailing, distinct from AC-3's leading-only case
+		{"production ", "true", false},  // trailing-whitespace bypass closed
 	}
 	for _, c := range cases {
 		if got := MockIssuerEnabled(c.env, c.flag); got != c.want {

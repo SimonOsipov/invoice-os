@@ -90,7 +90,7 @@ const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracl
 // Environment banner under the header, one per state — the environment is always
 // stated, never conveyed by absence. `live` cannot render while the LIVE segment is
 // disabled (Header.tsx); it is kept as the copy that ships when filing switches on.
-const ENV_BANNER = {
+export const ENV_BANNER = {
   sandbox: {
     bg: 'var(--status-amber-bg)',
     border: 'var(--status-amber-border)',
@@ -108,6 +108,10 @@ const ENV_BANNER = {
     tag: 'PENDING ACCREDITATION',
   },
 } as const
+
+// Exported so a test can assert the shipped default without mounting Workspace, which
+// needs a session and a live entities fetch.
+export const SANDBOX_DEFAULT = true
 
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
@@ -247,7 +251,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [switcherOpen, setSwitcherOpen] = useState(false)
   // Every deployment is a sandbox today, so this is a client-side constant, not a
   // posture value fetched from the server.
-  const [sandbox, setSandbox] = useState(true)
+  const [sandbox, setSandbox] = useState(SANDBOX_DEFAULT)
   // Settings opens on Members. This literal is the ONLY thing that decides which tab
   // opens — SETTINGS_TABS' array order decides only which renders first — so the two
   // have to be changed together.

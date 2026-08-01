@@ -260,6 +260,47 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect(urlParams(tickUrl).get('offset'), 'the poll tick must follow the visible page, not silently re-install page 1').toBe('50')
   }, 8000)
 
+  it('QA regression (f3b2b54): a poll tick that empties the live overlay strands the user on a bare Loading spinner, with polling torn down', async () => {
+    // Both rows in-flight -> shouldPollList is active. Between one poll tick and the
+    // next, BOTH resolve (a plausible needs_attention-filtered page: everything on it
+    // was 'queued'/'submitted' and all of it got accepted at once) -- the tick's own
+    // response is genuinely [] for the SAME query, same entity, no company switch.
+    // list.data.invoices.length>0 && rows.length===0 -- same signature the fix uses to
+    // detect a switch-transient -- routes this into the new bare <Loading> branch too.
+    const p1 = [
+      row({ id: 'q0', invoice_number: 'INV-Q0', status: 'queued' }),
+      row({ id: 'q1', invoice_number: 'INV-Q1', status: 'submitted' }),
+    ]
+    const fetchMock = mockFetchSequence([
+      listResponse(p1, { limit: 50, offset: 0, total: 2 }),
+      listResponse([], { limit: 50, offset: 0, total: 2 }), // the poll tick itself
+    ])
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-Q0')
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 3500, interval: 100 })
+
+    // The bare Loading branch has no data-testid; assert by exclusion + the visible
+    // spinner label, which is unambiguous once state==='loading' is ruled out (that
+    // status never coexists with the ready-gated branch this scenario is actually in).
+    await waitFor(() => expect(screen.getByText('Loading invoices…')).toBeTruthy())
+    expect(screen.queryByTestId('invoices-pager'), 'no Pager -- the one escape hatch the pre-fix page-empty branch offered is gone here').toBeNull()
+    expect(screen.queryByTestId('invoices-empty-page')).toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+
+    // shouldPollList([], visible) is false once `rows` empties, so useLiveRefresh's
+    // effect cleanup fires -- polling is torn down, not merely quiet for one tick.
+    await waitFor(() => expect(clearIntervalSpy).toHaveBeenCalled())
+
+    // Nothing in `deps` changed (needsAttention/mode/entityId/offset all the same), so
+    // no refetch is scheduled -- confirm no 3rd call ever arrives, i.e. this is a
+    // standing trap, not a one-tick flicker that the next poll would have self-healed.
+    await new Promise((r) => setTimeout(r, 300))
+    expect(fetchMock, 'no further fetch is ever scheduled -- the spinner is permanent until an unrelated user action remounts/refetches').toHaveBeenCalledTimes(2)
+  }, 8000)
+
   it('(c) two Next clicks batched into the same commit fire exactly one navigation, not two skipped-ahead ones', async () => {
     const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
     const p2 = [row({ id: 'p2', invoice_number: 'INV-P2' })]

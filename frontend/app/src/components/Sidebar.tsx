@@ -27,6 +27,7 @@ import {
   NAV_SETTINGS,
   NAV_VALIDATION,
   NAV_WORKFLOWS,
+  navIconColStyle,
   tickGlyph11,
   type NavDef,
 } from '../glyphs'
@@ -235,7 +236,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                   style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: a ? 600 : 500, background: a ? 'var(--bg-3)' : 'transparent', color: a ? 'var(--fg-1)' : 'var(--fg-2)', position: 'relative' }}
                 >
                   <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 'var(--radius-xs)', background: a ? 'var(--action)' : 'transparent' }} />
-                  <span style={{ color: a ? 'var(--action)' : 'var(--fg-3)', display: 'inline-flex' }}>{n.glyph}</span>
+                  <span style={{ ...navIconColStyle, color: a ? 'var(--action)' : 'var(--fg-3)' }}>{n.glyph}</span>
                   <span style={{ flex: 1 }}>{n.label}</span>
                   {n.badge && (
                     <span className="mono" style={{ fontSize: 10, fontWeight: 600, background: 'var(--status-red-bg)', color: 'var(--status-red-text)', borderRadius: 99, padding: '1px 6px' }}>

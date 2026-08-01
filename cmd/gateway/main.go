@@ -126,8 +126,10 @@ func main() {
 
 	// Dev/CI only: embed the mock issuer so a token can be minted (/auth/login)
 	// and its JWKS served for the Verifier to fetch (AUTH_JWKS_URL points back at
-	// this gateway). Refused in production regardless of the flag.
-	if gateway.MockIssuerEnabled(app.Config.Environment, os.Getenv("GATEWAY_MOCK_ISSUER")) {
+	// this gateway). Refused in production regardless of the flag. ENVIRONMENT is
+	// read raw, as gate 1 above does: app.Config.Environment substitutes the literal
+	// "development" when it is unset, which a gate must never see.
+	if gateway.MockIssuerEnabled(os.Getenv("ENVIRONMENT"), os.Getenv("GATEWAY_MOCK_ISSUER")) {
 		issuer, err := auth.NewMockIssuer(mustEnv("AUTH_ISSUER"))
 		if err != nil {
 			fatal(app.Logger, "gateway: mock issuer: %v", err)

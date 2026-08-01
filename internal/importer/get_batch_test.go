@@ -141,7 +141,7 @@ func TestGetBatch_ReturnsFrozenCountsAndErrors(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	batchID, err := store.CreateBatch(c, entityID)
+	batchID, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestGetBatch_RuleSetVersionIsMinNotArbitrary(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	batchID, err := store.CreateBatch(c, entityID)
+	batchID, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestGetBatch_ZeroInvoicesVersionIsNullAndBodyRendersNull(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	// Leg A -- stamped: the genuine leg.
-	stampedBatch, err := store.CreateBatch(c, entityID)
+	stampedBatch, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch (stamped): %v", err)
 	}
@@ -284,7 +284,7 @@ func TestGetBatch_ZeroInvoicesVersionIsNullAndBodyRendersNull(t *testing.T) {
 	// Leg B -- zero invoices: a real batch with NOTHING linked to it. Kept
 	// in the SAME test as leg A per task-283's own vacuity ruling -- in
 	// isolation this leg passes against ANY nil-returning stub.
-	emptyBatch, err := store.CreateBatch(c, entityID)
+	emptyBatch, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch (empty): %v", err)
 	}
@@ -348,7 +348,7 @@ func TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
 	c2 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant2})
 
-	batch1, err := store.CreateBatch(c1, entity1)
+	batch1, err := store.CreateBatch(c1, entity1, "")
 	if err != nil {
 		t.Fatalf("CreateBatch (tenant 1): %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 		t.Fatalf("Finalize (tenant 1): %v", err)
 	}
 
-	batch2, err := store.CreateBatch(c2, entity2)
+	batch2, err := store.CreateBatch(c2, entity2, "")
 	if err != nil {
 		t.Fatalf("CreateBatch (tenant 2): %v", err)
 	}
@@ -413,7 +413,7 @@ func TestGetBatch_ProcessingStatusUnfinalizedBatchReturns200(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	batchID, err := store.CreateBatch(c, entityID)
+	batchID, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestGetBatch_RowsInvalidAgreesWithErrorRowCount(t *testing.T) {
 		mkRow("", "2026-01-10", "T3", "B3", "NGN", "5.00", "0.00", "5.00", "Blank", "1", "5.00"),                 // sheet 5 -- blank invoice number
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -494,6 +494,100 @@ func TestGetBatch_RowsInvalidAgreesWithErrorRowCount(t *testing.T) {
 	}
 	if gotSum := sumRowErrorRows(got.Errors); gotSum != wantInvalid {
 		t.Errorf("sum of RowError row counts = %d, want %d", gotSum, wantInvalid)
+	}
+}
+
+// --- BULK-01-01 (task-305): filename served by GET -----------------------
+
+// TestGetBatch_ServesFilenameViaStoreAndWire (BULK-01-2): a batch created
+// with a filename must have it readable back both at the store (raw column)
+// level and at the HTTP wire level. Batch.Filename/batchResponse's "filename"
+// json key do NOT exist yet (AC #6 is the executor's job -- see
+// handlers_test.go's batchResponseBody comment), so this reads the column
+// directly via the superuser pool for the store-level pin, and relies on
+// batchResponseBody's own Filename field (added for BULK-01-2/3) for the
+// wire-level pin. RED against the stubs: the store-level read comes back nil
+// (CreateBatch never writes the column) and the wire-level body never
+// contains a "filename" key at all (batchResponse has no such field).
+func TestGetBatch_ServesFilenameViaStoreAndWire(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BULK-01-2 tenant")
+	entityID := seedEntity(t, super, tenantID, "BULK-01-2 entity")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	const wantFilename = "branch-lagos.csv"
+	batchID, err := store.CreateBatch(c, entityID, wantFilename)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if err := store.Finalize(c, batchID, 0, 0, 0, nil, "completed"); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	// Store-level pin.
+	var gotFilename *string
+	if err := super.QueryRow(ctx, `SELECT filename FROM import_batches WHERE id = $1`, batchID).Scan(&gotFilename); err != nil {
+		t.Fatalf("read back filename: %v", err)
+	}
+	if gotFilename == nil || *gotFilename != wantFilename {
+		t.Errorf("persisted filename = %v, want %q", gotFilename, wantFilename)
+	}
+
+	// Wire-level pin: GetHandler must emit the exact stored name.
+	reqID := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID}
+	rec, resp := doImportGetBatch(t, store.GetBatch, &reqID, batchID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Filename == nil || *resp.Filename != wantFilename {
+		t.Errorf("resp.Filename = %v, want %q", resp.Filename, wantFilename)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"filename":"`+wantFilename+`"`)) {
+		t.Errorf("body = %s, want the literal \"filename\":%q", rec.Body.Bytes(), wantFilename)
+	}
+}
+
+// TestGetBatch_PreExistingRowFilenameIsNullBothSides (BULK-01-3): a batch row
+// inserted with no filename (simulating one that predates this migration, or
+// whose upload simply carried no recoverable name) must read back nil at the
+// store level and render an EXPLICIT "filename":null on the wire -- present,
+// never omitted (AC #6's "no omitempty"). RED against the stubs: the wire
+// body never contains a "filename" key AT ALL today (absent, not merely
+// null), so the literal-substring assertion fails.
+func TestGetBatch_PreExistingRowFilenameIsNullBothSides(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BULK-01-3 tenant")
+	entityID := seedEntity(t, super, tenantID, "BULK-01-3 entity")
+
+	// Inserted directly (bypassing Store.CreateBatch) with no filename column
+	// value at all -- exactly what a pre-migration row looks like.
+	var batchID string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO import_batches (tenant_id, entity_id, status, rows_total, rows_valid, rows_invalid, errors)
+		 VALUES ($1, $2, 'completed', 0, 0, 0, '[]'::jsonb) RETURNING id`,
+		tenantID, entityID,
+	).Scan(&batchID); err != nil {
+		t.Fatalf("seed pre-existing import_batches row: %v", err)
+	}
+
+	store := NewStore(app)
+	reqID := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: tenantID}
+	rec, resp := doImportGetBatch(t, store.GetBatch, &reqID, batchID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Filename != nil {
+		t.Errorf("resp.Filename = %q, want nil", *resp.Filename)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"filename":null`)) {
+		t.Errorf("body = %s, want the literal \"filename\":null (key present, not omitted)", rec.Body.Bytes())
 	}
 }
 

@@ -104,7 +104,7 @@ func TestServiceImport_StoreDuplicateReportedAsFirstClassViolation(t *testing.T)
 		mkRow("INV-CLEAN2B", "2026-01-12", "TIN-F", "Clean2 Co", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"),   // sheet 4
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestServiceImport_DryRunAndRealBothReportIdenticalEnrichedDuplicate(t *test
 
 	beforeCount := countInvoicesForEntity(t, super, entityID)
 
-	dryRes, err := svc.Import(c, entityID, stdMapping, stdHeader, dup03Fixture(), true)
+	dryRes, err := svc.Import(c, entityID, "", stdMapping, stdHeader, dup03Fixture(), true)
 	if err != nil {
 		t.Fatalf("Import (dry-run): %v", err)
 	}
@@ -178,7 +178,7 @@ func TestServiceImport_DryRunAndRealBothReportIdenticalEnrichedDuplicate(t *test
 		t.Fatalf("dry-run persisted invoices: before=%d after=%d, want unchanged", beforeCount, got)
 	}
 
-	realRes, err := svc.Import(c, entityID, stdMapping, stdHeader, dup03Fixture(), false)
+	realRes, err := svc.Import(c, entityID, "", stdMapping, stdHeader, dup03Fixture(), false)
 	if err != nil {
 		t.Fatalf("Import (real): %v", err)
 	}
@@ -239,7 +239,7 @@ func TestServiceImport_ConcurrentDuplicateLoserReportedAsFirstClassViolation(t *
 			raceRow := [][]string{
 				mkRow("INV-DUP4-RACE", "2026-01-10", "TIN-RACE", "Racer", "NGN", "100.00", "0.00", "100.00", fmt.Sprintf("RaceItem%d", i), "1", "100.00"),
 			}
-			results[i], errs[i] = svc.Import(c, entityID, stdMapping, stdHeader, raceRow, false)
+			results[i], errs[i] = svc.Import(c, entityID, "", stdMapping, stdHeader, raceRow, false)
 		}(i)
 	}
 	close(start)
@@ -314,7 +314,7 @@ func TestServiceImport_ValidationCreateErrorRowErrorStaysBareNotRuleShaped(t *te
 		mkRow("INV-DUP5-CLEAN", "2026-01-11", "T2", "B2", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"),  // sheet 3
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestServiceImport_MultipleStoreDuplicatesEachEnrichedIndependently(t *testi
 		mkRow("INV-DUP6-C", "2026-01-12", "T3", "B3", "NGN", "30.00", "3.00", "33.00", "ItemC", "1", "30.00"), // sheet 4
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestServiceImport_DuplicateNeverMixesWithContentViolation(t *testing.T) {
 		mkRow("INV-DUP7-CONTENT", "2026-01-11", "T2", "B2", "NGN", "20.00", "2.00", "22.00", "ContentItem", "1", "20.00"), // sheet 3
 	}
 
-	res, err := svc.Import(c, entityID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

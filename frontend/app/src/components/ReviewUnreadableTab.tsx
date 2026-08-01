@@ -1,7 +1,8 @@
 // Review · "Unreadable rows" tab (INVCR-01-09, §7.4, Core AC 6). The STRUCTURAL
 // channel: rows the parser could not turn into an invoice at all. No row here has an
-// invoice id or a lifecycle state, and none can — `UnreadableRow` is `{row, column,
-// message}` by type, so there is no field to put one in.
+// invoice id or a lifecycle state, and none can — `UnreadableRowAll` is `{row, column,
+// message, file}` by type (BULK-01-07 adds `file`, over every batch in the run), so
+// there is no field to put a lifecycle state in.
 //
 // DEGRADED VERSUS §7.4, AND IT SAYS SO. Two things §7.4 draws are not on the wire and
 // are NOT built ([raw-source-line-dropped]):
@@ -24,24 +25,30 @@
 // are no ROWS to download. What the file contains is exactly this rendered table, which
 // is still a genuinely useful fix-list to take back to Excel — but the noun in §7.4's
 // label would be a lie about what lands in the user's downloads folder. The serialization
-// is pure and spec'd (`unreadableCsv`, CSV-1); only the Blob/anchor click lives here.
+// is pure and spec'd (`unreadableCsvAll`, CSV-1 + BULK-06-… File-column siblings); only
+// the Blob/anchor click lives here.
 
-import { unreadableCsv, type UnreadableRow } from '../lib/reviewBatch'
+import { unreadableCsvAll, type UnreadableRowAll } from '../lib/reviewBatch'
 
-const UNREADABLE_GRID = '90px 170px 1fr'
+// Widened by one column, File, at the front (BULK-01-07, AC #5) -- UNREADABLE_GRID had
+// no such column when this tab could only ever show one batch's rows.
+const UNREADABLE_GRID = '150px 90px 170px 1fr'
 
 // The one DOM-only step: turn the pure CSV string into a file the browser saves. Kept as
 // small as possible precisely because it has no unit oracle — everything decidable
-// (quoting, the header row, the null-row cell) is decided inside unreadableCsv.
-function downloadCsv(rows: UnreadableRow[], batchId: string): void {
+// (quoting, the header row, the null-row cell) is decided inside unreadableCsvAll.
+// `batchIds` (was a single `batchId`) names the download: `.join('-')` over a
+// single-element array returns that element verbatim, so a single-batch run's filename
+// stays byte-identical to the shipped one.
+function downloadCsv(rows: UnreadableRowAll[], batchIds: string[]): void {
   // The BOM is what makes Excel read the em dash and any non-ASCII supplier name as
   // UTF-8 rather than the local ANSI codepage — the same mojibake class the importer's
   // own decoder exists to undo, and this file's whole purpose is to be opened in Excel.
-  const blob = new Blob([`﻿${unreadableCsv(rows)}`], { type: 'text/csv;charset=utf-8' })
+  const blob = new Blob([`﻿${unreadableCsvAll(rows)}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `unreadable-rows-${batchId}.csv`
+  a.download = `unreadable-rows-${batchIds.join('-')}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -49,12 +56,16 @@ function downloadCsv(rows: UnreadableRow[], batchId: string): void {
 export function ReviewUnreadableTab({
   rows,
   rowsTotal,
-  batchId,
+  batchIds,
   onImportCorrected,
 }: {
-  rows: UnreadableRow[]
+  rows: UnreadableRowAll[]
+  // Summed across every batch in the run (BULK-01-07) -- was the one batch's own
+  // `rows_total`.
   rowsTotal: number
-  batchId: string
+  // Widened from a single `batchId` (BULK-01-07) -- the download filename can no
+  // longer key off one id.
+  batchIds: string[]
   onImportCorrected: () => void
 }) {
   return (
@@ -70,6 +81,7 @@ export function ReviewUnreadableTab({
 
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div className="label" style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <span>File</span>
           <span>Row</span>
           <span>Field</span>
           <span>Why it could not be read</span>
@@ -79,6 +91,10 @@ export function ReviewUnreadableTab({
             key={i}
             style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, alignItems: 'baseline', padding: '11px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--line-1)' }}
           >
+            {/* `file` resolves through the SAME "source not recorded" fallback as the
+                CSV export (unreadableRowsAll, lib/reviewBatch.ts) — never '', never the
+                literal null. */}
+            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-all' }}>{r.file}</span>
             {/* `row: null` is an em dash, never "ROW null" — the server told us it could
                 not attribute the failure to a line, and that is a fact worth stating. */}
             <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
@@ -94,7 +110,7 @@ export function ReviewUnreadableTab({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
-          onClick={() => downloadCsv(rows, batchId)}
+          onClick={() => downloadCsv(rows, batchIds)}
           className="v2-btn v2-btn-ghost pf-btn"
           style={{ height: 36, padding: '0 14px', fontSize: 13 }}
         >

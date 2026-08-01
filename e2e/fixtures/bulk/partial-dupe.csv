@@ -1,0 +1,2 @@
+Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price
+BULK-DUP-001,2026-01-16,87654321-0002,BULK-01 Partial Buyer,NGN,2000.00,150.00,2150.00,Line item,20,100.00

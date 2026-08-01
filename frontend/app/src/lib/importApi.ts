@@ -126,9 +126,9 @@ export interface ImportReport {
 }
 
 // GET /v1/imports/{id} response (the import_batches row; 08/task-284 AC-2, per 07's own
-// R1/R2). Exactly 9 fields -- no `filename` (07 R1), no `ready_invoices`/
-// `invoices_clean`/`invoices_with_violations` (07 R2 -- those are live off the list
-// endpoint's own totals, never stored on the batch).
+// R1/R2). Exactly 10 fields -- `filename` (BULK-01-01: the uploaded part's name, or null
+// when not recorded), no `ready_invoices`/`invoices_clean`/`invoices_with_violations` (07
+// R2 -- those are live off the list endpoint's own totals, never stored on the batch).
 //
 // `errors` is always an ARRAY on GET, never JSON null (07 spec 4). That is NOT the same
 // claim as "always EMPTY", and reading it that way would make the review screen's
@@ -143,6 +143,7 @@ export interface ImportReport {
 export interface ImportBatch {
   id: string
   entity_id: string
+  filename: string | null
   status: 'pending' | 'processing' | 'completed' | 'failed'
   rows_total: number
   rows_valid: number

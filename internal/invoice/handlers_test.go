@@ -845,17 +845,12 @@ func TestListHandler_EntityIDParam(t *testing.T) {
 }
 
 // TestListHandler_MalformedImportBatchID400 (INVCR-01-06 spec 7, AC-6/AC-1
-// fork 1, task-282): ListHandler parses ?import_batch_id with uuid.Parse --
-// absent OR EMPTY leaves the captured ListFilter.ImportBatchID at "" (the
-// zero value, unfiltered -- [Fork 1: empty param = absent, not 400]); a
-// well-formed uuid passes through verbatim; a malformed value 400s BEFORE
-// the store is ever called. Mirrors TestListHandler_EntityIDParam's exact
-// shape.
-//
-// RED today: ListHandler does not parse import_batch_id at all, so the
-// malformed sub-test fails (200 + store called, not 400) and the
-// well-formed-uuid sub-test fails (captured.ImportBatchID stays "", not the
-// uuid) -- both value mismatches, not compile errors.
+// fork 1, task-282; migrated to []string by BULK-01-02): ListHandler parses
+// ?import_batch_id with uuid.Parse -- absent OR EMPTY leaves the captured
+// ListFilter.ImportBatchIDs empty (the zero value, unfiltered -- [Fork 1:
+// empty param = absent, not 400]); a well-formed uuid passes through as a
+// one-element slice; a malformed value 400s BEFORE the store is ever called.
+// Mirrors TestListHandler_EntityIDParam's exact shape.
 func TestListHandler_MalformedImportBatchID400(t *testing.T) {
 	t.Run("absent applies no filter", func(t *testing.T) {
 		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
@@ -870,8 +865,8 @@ func TestListHandler_MalformedImportBatchID400(t *testing.T) {
 		if !called {
 			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
 		}
-		if captured.ImportBatchID != "" {
-			t.Errorf("captured ListFilter.ImportBatchID = %q, want \"\" when ?import_batch_id is absent", captured.ImportBatchID)
+		if len(captured.ImportBatchIDs) != 0 {
+			t.Errorf("captured ListFilter.ImportBatchIDs = %v, want empty when ?import_batch_id is absent", captured.ImportBatchIDs)
 		}
 	})
 
@@ -891,8 +886,8 @@ func TestListHandler_MalformedImportBatchID400(t *testing.T) {
 		if !called {
 			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
 		}
-		if captured.ImportBatchID != "" {
-			t.Errorf("captured ListFilter.ImportBatchID = %q, want \"\" for ?import_batch_id= (empty is absent, not a 400 -- [Fork 1])", captured.ImportBatchID)
+		if len(captured.ImportBatchIDs) != 0 {
+			t.Errorf("captured ListFilter.ImportBatchIDs = %v, want empty for ?import_batch_id= (empty is absent, not a 400 -- [Fork 1])", captured.ImportBatchIDs)
 		}
 	})
 
@@ -910,8 +905,8 @@ func TestListHandler_MalformedImportBatchID400(t *testing.T) {
 		if !called {
 			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
 		}
-		if captured.ImportBatchID != batchID {
-			t.Errorf("captured ListFilter.ImportBatchID = %q, want %q", captured.ImportBatchID, batchID)
+		if !reflect.DeepEqual(captured.ImportBatchIDs, []string{batchID}) {
+			t.Errorf("captured ListFilter.ImportBatchIDs = %v, want %v", captured.ImportBatchIDs, []string{batchID})
 		}
 	})
 
@@ -930,6 +925,329 @@ func TestListHandler_MalformedImportBatchID400(t *testing.T) {
 			t.Error("expected a non-empty error message in the body")
 		}
 	})
+}
+
+// --- BULK-01-02 (task-306): several import_batch_id values on the wire -----
+//
+// ListHandler reads every import_batch_id value via the multi-value query
+// map (query["import_batch_id"], not query.Get), capped at maxImportBatchIDs
+// USABLE (non-empty) ids, cap checked BEFORE uuid.Parse -- see its doc
+// comment, handlers.go.
+
+// TestListHandler_SecondImportBatchIDValueMalformed400 (BULK-02-6b, AC-3): a
+// SECOND repeated import_batch_id value that is malformed must still 400
+// with the shipped message, store never called -- proven with a spy, since
+// the status alone cannot discriminate "the handler saw and rejected the
+// second value" from "the handler only ever reads the first and got lucky".
+func TestListHandler_SecondImportBatchIDValueMalformed400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	validID := uuid.NewString()
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		t.Fatal("store.List must not run when any import_batch_id value is not a well-formed uuid")
+		return nil, 0, nil
+	}
+	rec, resp := doInvoiceList(t, list, &id, "?import_batch_id="+validID+"&import_batch_id=not-a-uuid")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != "import_batch_id must be a well-formed uuid" {
+		t.Errorf("error = %q, want \"import_batch_id must be a well-formed uuid\"", resp.Error)
+	}
+}
+
+// TestListHandler_DuplicateImportBatchIDValuesPassThrough (BULK-02-8, AC-5):
+// a repeated import_batch_id carrying the SAME value twice must reach the
+// store as-is (the handler never dedupes -- `= ANY(['X','X'])` already
+// matches the same rows as `['X']`, so deduping here would be redundant work
+// protecting nothing). Asserted on the captured filter, since a spy store
+// returning a fixed total cannot itself prove duplicates were harmless.
+func TestListHandler_DuplicateImportBatchIDValuesPassThrough(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	batchID := uuid.NewString()
+	var captured ListFilter
+	called := false
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		called = true
+		captured = f
+		return []Invoice{}, 5, nil
+	}
+	rec, resp := doInvoiceList(t, list, &id, "?import_batch_id="+batchID+"&import_batch_id="+batchID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+	}
+	if !reflect.DeepEqual(captured.ImportBatchIDs, []string{batchID, batchID}) {
+		t.Errorf("captured ListFilter.ImportBatchIDs = %v, want %v (duplicates pass through unchanged, undeduped)", captured.ImportBatchIDs, []string{batchID, batchID})
+	}
+	if resp.Pagination.Total != 5 {
+		t.Errorf("response pagination.total = %d, want 5 (the store's own total, unaffected by the duplicate ids)", resp.Pagination.Total)
+	}
+}
+
+// TestListHandler_ImportBatchIDsCapAt25 (BULK-02-9, AC-6): more than 25
+// well-formed ids must 400 with the named cap message before the store is
+// ever called; exactly 25 must still 200.
+func TestListHandler_ImportBatchIDsCapAt25(t *testing.T) {
+	buildQuery := func(n int) string {
+		v := url.Values{}
+		for i := 0; i < n; i++ {
+			v.Add("import_batch_id", uuid.NewString())
+		}
+		return "?" + v.Encode()
+	}
+
+	t.Run("26 ids exceeds the cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when import_batch_id exceeds the 25 cap")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, buildQuery(26))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for 26 ids (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "import_batch_id exceeds the 25 cap" {
+			t.Errorf("error = %q, want \"import_batch_id exceeds the 25 cap\"", resp.Error)
+		}
+	})
+
+	t.Run("25 ids is within the cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, buildQuery(25))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for 25 ids (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatal("store.List was not called for 25 ids, want it called")
+		}
+	})
+}
+
+// TestListHandler_ImportBatchIDsCapPrecedesMalformedEmptiesNeverCount
+// (BULK-02-9b, AC-6): the cap is checked BEFORE uuid.Parse (so it is never
+// payable in unbounded parse work) and counts only USABLE (non-empty) ids --
+// 26 ids with one malformed member must report the CAP message, not the
+// malformed-uuid message; 30 EMPTY values must never trip the cap at all
+// (empty is not a usable id).
+func TestListHandler_ImportBatchIDsCapPrecedesMalformedEmptiesNeverCount(t *testing.T) {
+	t.Run("26 ids, one malformed -> the cap message wins", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		v := url.Values{}
+		for i := 0; i < 25; i++ {
+			v.Add("import_batch_id", uuid.NewString())
+		}
+		v.Add("import_batch_id", "not-a-uuid")
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when import_batch_id exceeds the 25 cap")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "import_batch_id exceeds the 25 cap" {
+			t.Errorf("error = %q, want the CAP message (not the malformed-uuid message) -- the cap is checked BEFORE uuid.Parse", resp.Error)
+		}
+	})
+
+	t.Run("30 empty values never trip the cap", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		v := url.Values{}
+		for i := 0; i < 30; i++ {
+			v.Add("import_batch_id", "")
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?"+v.Encode())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 -- 30 EMPTY values are not usable ids and must never trip the cap (body=%s)", rec.Code, rec.Body.String())
+		}
+		if !called {
+			t.Fatal("store.List was not called")
+		}
+		if len(captured.ImportBatchIDs) != 0 {
+			t.Errorf("captured ListFilter.ImportBatchIDs = %v, want empty -- 30 empty values are absent, not usable ids", captured.ImportBatchIDs)
+		}
+	})
+}
+
+// TestListHandler_WhitespaceOnlyImportBatchIDIsMalformedNotAbsent (QA Mode B
+// adversarial, task-306): pins the ONE deliberate reading of "empty" this
+// package uses. The skip-per-value guard (handlers.go) tests `raw != ""`
+// (a literal empty string) -- it does NOT strings.TrimSpace first, so
+// `?import_batch_id=%20` (a single space, decoded off the wire by
+// net/url.Values before the handler ever sees it) is NOT "" and is therefore
+// NOT skipped as absent: it is treated as a USABLE id, fails uuid.Parse, and
+// 400s with the same "must be a well-formed uuid" message a garbage value
+// does. This is a deliberate pin, not an assumption -- the alternative
+// (trimming first) would silently swallow a client bug that sends a stray
+// space instead of a real id, turning a caller error into an unfiltered
+// tenant-wide page.
+func TestListHandler_WhitespaceOnlyImportBatchIDIsMalformedNotAbsent(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		t.Fatal("store.List must not run when import_batch_id is whitespace-only (it is not a well-formed uuid, and is not \"\" either)")
+		return nil, 0, nil
+	}
+	rec, resp := doInvoiceList(t, list, &id, "?import_batch_id=%20")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 -- a whitespace-only value is a malformed uuid, not an absent filter (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != "import_batch_id must be a well-formed uuid" {
+		t.Errorf("error = %q, want \"import_batch_id must be a well-formed uuid\"", resp.Error)
+	}
+}
+
+// TestViolationSummaryHandler_WhitespaceOnlyImportBatchIDIsMalformedNotRequired
+// (QA Mode B adversarial, task-306): the SAME whitespace-only pin as
+// TestListHandler_WhitespaceOnlyImportBatchIDIsMalformedNotAbsent above,
+// for ViolationSummaryHandler's own copy of the skip-per-value loop -- a
+// single space is a USABLE (non-empty) value, so it clears the "required"
+// zero-ids guard and fails on uuid.Parse instead, with the malformed
+// message, not the "is required" one.
+func TestViolationSummaryHandler_WhitespaceOnlyImportBatchIDIsMalformedNotRequired(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
+		t.Fatal("store.ViolationSummary must not run when import_batch_id is whitespace-only")
+		return nil, nil
+	}
+	rec, resp := doViolationSummary(t, summary, &id, "?import_batch_id=%20")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != "import_batch_id must be a well-formed uuid" {
+		t.Errorf("error = %q, want \"import_batch_id must be a well-formed uuid\" (NOT \"is required\" -- a whitespace value is usable, not absent)", resp.Error)
+	}
+}
+
+// TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle
+// (QA Mode B adversarial, task-306, AC-9): wires the REAL Store.List into
+// the REAL ListHandler (not a spy) -- tenant 1's identity, querying
+// import_batch_id for BOTH its own batch and tenant 2's real batch. Must be
+// 200 (never 404), pagination.total/invoices must count ONLY tenant 1's own
+// rows, and the response must be BYTE-IDENTICAL to the same request against
+// a made-up, entirely nonexistent batch id in tenant 2's place -- proving
+// the endpoint cannot be used as an existence oracle (a caller cannot tell
+// "that batch id belongs to another tenant" apart from "that batch id does
+// not exist at all").
+func TestRLS_ListHandlerSeveralImportBatchIDsCrossTenantIs200NotExistenceOracle(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenant1 := seedTenant(t, super, "HTTP-RLS-MULTI tenant 1")
+	tenant2 := seedTenant(t, super, "HTTP-RLS-MULTI tenant 2")
+	entity1 := seedEntity(t, super, tenant1, "HTTP-RLS-MULTI entity 1")
+	entity2 := seedEntity(t, super, tenant2, "HTTP-RLS-MULTI entity 2")
+
+	batchOwn := seedImportBatch(t, super, tenant1, entity1)
+	batchOther := seedImportBatch(t, super, tenant2, entity2)
+
+	var wantIDs []string
+	for i := 0; i < 2; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAndStatus(t, super, tenant1, entity1, fmt.Sprintf("HTTP-RLS-MULTI-OWN-%d", i), batchOwn, string(StatusDraft), `[]`))
+	}
+	for i := 0; i < 3; i++ {
+		seedInvoiceWithBatchAndStatus(t, super, tenant2, entity2, fmt.Sprintf("HTTP-RLS-MULTI-OTHER-%d", i), batchOther, string(StatusDraft), `[]`)
+	}
+
+	store := NewStore(app)
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1}
+
+	doReal := func() (*httptest.ResponseRecorder, listInvoicesResponse) {
+		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+batchOther, nil)
+		r = r.WithContext(auth.WithIdentity(ctx, identity))
+		rec := httptest.NewRecorder()
+		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		var resp listInvoicesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+		return rec, resp
+	}
+	doNonexistent := func() (*httptest.ResponseRecorder, listInvoicesResponse) {
+		r := httptest.NewRequest("GET", "/v1/invoices?import_batch_id="+batchOwn+"&import_batch_id="+uuid.NewString(), nil)
+		r = r.WithContext(auth.WithIdentity(ctx, identity))
+		rec := httptest.NewRecorder()
+		ListHandler(store.List, nil).ServeHTTP(rec, r)
+		var resp listInvoicesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+		}
+		return rec, resp
+	}
+
+	rec, resp := doReal()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (never 404 for a cross-tenant batch id) (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Pagination.Total != 2 {
+		t.Fatalf("pagination.total = %d, want 2 (tenant 1's own rows only; tenant 2's 3 rows must not count)", resp.Pagination.Total)
+	}
+	if len(resp.Invoices) != 2 {
+		t.Fatalf("len(invoices) = %d, want 2", len(resp.Invoices))
+	}
+	got := map[string]bool{}
+	for _, inv := range resp.Invoices {
+		got[inv.ID] = true
+	}
+	for _, id := range wantIDs {
+		if !got[id] {
+			t.Errorf("response is missing tenant 1's own invoice %s", id)
+		}
+	}
+
+	recNonexistent, respNonexistent := doNonexistent()
+	if recNonexistent.Code != rec.Code {
+		t.Fatalf("status for a made-up nonexistent batch id (%d) differs from a REAL cross-tenant batch id (%d) -- existence oracle", recNonexistent.Code, rec.Code)
+	}
+	if respNonexistent.Pagination.Total != resp.Pagination.Total {
+		t.Fatalf("pagination.total for a made-up nonexistent batch id (%d) differs from a REAL cross-tenant batch id (%d) -- existence oracle", respNonexistent.Pagination.Total, resp.Pagination.Total)
+	}
+	if len(respNonexistent.Invoices) != len(resp.Invoices) {
+		t.Fatalf("invoices length for a made-up nonexistent batch id (%d) differs from a REAL cross-tenant batch id (%d) -- existence oracle", len(respNonexistent.Invoices), len(resp.Invoices))
+	}
+}
+
+// TestListHandler_MultiImportBatchIDEnvelopeStillTwoKeys (BULK-02-10, AC-8):
+// a request carrying several import_batch_id values must still render the
+// same two-key {invoices,pagination} envelope
+// (TestListHandler_EnvelopeExactKeysAndEffectiveClampedValues's own
+// invariant, restated here specifically for the multi-id case). Not
+// discriminating under today's Mode A stub -- the envelope shape is
+// unaffected by how many import_batch_id values are read -- but real
+// coverage once several ids are genuinely threaded through.
+func TestListHandler_MultiImportBatchIDEnvelopeStillTwoKeys(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{}, 0, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "?import_batch_id="+uuid.NewString()+"&import_batch_id="+uuid.NewString())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw envelope: %v", err)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("envelope has %d top-level keys, want exactly 2 (invoices, pagination): %s", len(raw), rec.Body.String())
+	}
 }
 
 // TestListHandler_UnknownStatus400 (INVCR-01-06 spec 8, AC-6, task-282):
@@ -4182,7 +4500,7 @@ type violationSummaryBody struct {
 // (query appended verbatim, e.g. "?import_batch_id=..."), injects id into
 // the context when non-nil, runs it through ViolationSummaryHandler(summary,
 // nil), and decodes the JSON response body.
-func doViolationSummary(t *testing.T, summary func(ctx context.Context, importBatchID string) ([]RuleCount, error), id *auth.Identity, query string) (*httptest.ResponseRecorder, violationSummaryBody) {
+func doViolationSummary(t *testing.T, summary func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error), id *auth.Identity, query string) (*httptest.ResponseRecorder, violationSummaryBody) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/invoices/violation-summary"+query, nil)
 	if id != nil {
@@ -4210,7 +4528,7 @@ func doViolationSummary(t *testing.T, summary func(ctx context.Context, importBa
 func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t *testing.T) {
 	t.Run("missing import_batch_id", func(t *testing.T) {
 		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 			t.Fatal("store.ViolationSummary must not run when import_batch_id is absent")
 			return nil, nil
 		}
@@ -4226,7 +4544,7 @@ func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t 
 
 	t.Run("malformed import_batch_id", func(t *testing.T) {
 		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 			t.Fatal("store.ViolationSummary must not run when import_batch_id is not a well-formed uuid")
 			return nil, nil
 		}
@@ -4241,6 +4559,28 @@ func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t 
 	})
 }
 
+// TestViolationSummaryHandler_ExplicitEmptyImportBatchIDStillRequired
+// (BULK-02-12, task-306, AC-7): an EXPLICIT ?import_batch_id= (present but
+// empty) must 400 "import_batch_id is required", identically to an absent
+// param -- closes the one sub-case TestViolationSummaryHandler_
+// MissingOrMalformedBatchID400StoreNeverCalled's "missing" leg (query="",
+// i.e. absent) does not itself exercise.
+func TestViolationSummaryHandler_ExplicitEmptyImportBatchIDStillRequired(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
+		t.Fatal("store.ViolationSummary must not run when import_batch_id is explicitly empty")
+		return nil, nil
+	}
+	rec, resp := doViolationSummary(t, summary, &id, "?import_batch_id=")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.Error != "import_batch_id is required" {
+		t.Errorf("error = %q, want \"import_batch_id is required\"", resp.Error)
+	}
+}
+
 // TestViolationSummaryHandler_NoIdentity401 (QA Stage 4, task-283 F2 / AC
 // #3 "identity-first 401"): no identity in the request context must 401
 // BEFORE the handler-level import_batch_id checks (absent/malformed-uuid
@@ -4251,7 +4591,7 @@ func TestViolationSummaryHandler_MissingOrMalformedBatchID400StoreNeverCalled(t 
 // itself never runs.
 func TestViolationSummaryHandler_NoIdentity401(t *testing.T) {
 	t.Run("missing import_batch_id", func(t *testing.T) {
-		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 			t.Fatal("store.ViolationSummary must not run without an identity")
 			return nil, nil
 		}
@@ -4266,7 +4606,7 @@ func TestViolationSummaryHandler_NoIdentity401(t *testing.T) {
 	})
 
 	t.Run("malformed import_batch_id", func(t *testing.T) {
-		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 			t.Fatal("store.ViolationSummary must not run without an identity")
 			return nil, nil
 		}
@@ -4285,7 +4625,7 @@ func TestViolationSummaryHandler_NoIdentity401(t *testing.T) {
 // returning a nil []RuleCount must still render "rules":[], never null.
 func TestViolationSummaryHandler_RulesIsEmptyArrayNotNull(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+	summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 		return nil, nil
 	}
 	rec, _ := doViolationSummary(t, summary, &id, "?import_batch_id="+uuid.NewString())
@@ -4316,7 +4656,7 @@ func TestRoutes_BothResolveInBothDirections(t *testing.T) {
 			*getCalled = true
 			return Invoice{}, nil
 		}
-		summary := func(ctx context.Context, importBatchID string) ([]RuleCount, error) {
+		summary := func(ctx context.Context, importBatchIDs []string) ([]RuleCount, error) {
 			*summaryCalled = true
 			return nil, nil
 		}

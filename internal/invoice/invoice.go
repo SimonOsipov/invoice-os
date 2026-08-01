@@ -238,18 +238,31 @@ type EditInput struct {
 // false/omitted applies no predicate ([needs-attention-bool-true-only] — no
 // "not-needs-attention" branch).
 //
-// ImportBatchID/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4], Core AC 7)
+// ImportBatchIDs/Status/NeedsFix/RuleKey/Query (INVCR-01-06, [D4], Core AC 7)
 // are the review-screen's five filters, ANDed with each other and with
-// EntityID/NeedsAttention. Each zero value ("" / false) applies no predicate,
-// same convention as EntityID -- so the zero ListFilter is still the
-// where-less, tenant-wide query it was before any of them existed.
+// EntityID/NeedsAttention. Each zero value ("" / false / empty slice) applies
+// no predicate, same convention as EntityID -- so the zero ListFilter is
+// still the where-less, tenant-wide query it was before any of them existed.
 // NeedsFix is a NEW, separate predicate from NeedsAttention
 // ([needs-fix-is-a-new-predicate]) -- it must never be folded into the
 // needs_attention SQL fragment, which is byte-pinned to the dashboard rollup
 // (TestStoreList_NeedsAttentionMatchesDashboardRollup,
-// [needs-attention-drift-guard]). RuleKey is deliberately a single string,
-// not []string -- ListFilter must stay a comparable struct
-// (needs_attention_adversarial_test.go's whole-struct == check).
+// [needs-attention-drift-guard]).
+//
+// ListFilter is DELIBERATELY NOT COMPARABLE (BULK-01-02, [one-review-screen]):
+// ImportBatchIDs widened from a single string to []string so the review
+// screen can narrow a multi-file run's invoices across every batch it
+// produced, on one query (`import_batch_id = ANY($n)`, store.go) -- and a
+// slice field makes Go's `==`/`!=` a compile error. The one whole-struct
+// comparison this used to enable
+// (needs_attention_adversarial_test.go's absent-vs-explicit-false check) now
+// uses reflect.DeepEqual, which keeps the SAME strength (any future field
+// that diverges still fails the check) without requiring comparability.
+// RuleKey stays a single string -- NOT because ListFilter must stay
+// comparable (that invariant is retired) but because nothing asks for
+// several rule keys: the rail fires one rule_key at a time
+// ([filters-are-server-side]). Do not read the retired rationale as licence
+// to pluralise it.
 type ListFilter struct {
 	Limit  int
 	Offset int
@@ -257,11 +270,11 @@ type ListFilter struct {
 	EntityID       string
 	NeedsAttention bool
 
-	ImportBatchID string
-	Status        Status
-	NeedsFix      bool
-	RuleKey       string
-	Query         string
+	ImportBatchIDs []string
+	Status         Status
+	NeedsFix       bool
+	RuleKey        string
+	Query          string
 
 	// KeptAsIs (INVCR-01-15, D6) narrows to invoices carrying a kept-as-is mark
 	// (kept_as_is_at IS NOT NULL) -- the review shell's footer counter query

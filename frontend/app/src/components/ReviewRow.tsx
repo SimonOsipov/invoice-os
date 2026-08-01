@@ -36,6 +36,7 @@ import { useState } from 'react'
 import { ErrorState, Loading, useAsync } from '@invoice-os/api-client'
 
 import { chevDownGlyph } from '../glyphs'
+import type { ImportBatch } from '../lib/importApi'
 import { fmt, fmtDate } from '../lib/format'
 import {
   diffLineItems,
@@ -55,6 +56,8 @@ import {
   fixEditPatch,
   rowExpansionView,
   ROW_EXPANSION_COPY,
+  showsSourceFile,
+  sourceFileLabel,
   verdictPill,
   type FixCard,
 } from '../lib/reviewBatch'
@@ -77,6 +80,7 @@ const REVALIDATE_REASON_ID = 'review-row-revalidate-blocked-reason-text'
 
 export function Row({
   r,
+  batches,
   checked,
   expanded,
   onToggleExpand,
@@ -86,6 +90,10 @@ export function Row({
   onChanged,
 }: {
   r: InvoiceRecord
+  // Every batch the review shell fetched (BULK-01-07, AC #4) -- threaded through from
+  // ReviewBatch via ReviewInvoicesTab, untouched, so sourceFileLabel/showsSourceFile
+  // below can resolve THIS row's own import_batch_id without re-deriving anything.
+  batches: ImportBatch[]
   checked: boolean
   expanded: boolean
   onToggleExpand: () => void
@@ -108,6 +116,13 @@ export function Row({
   // KEPT · INVALID instead of the row's raw N RULES FAILED badge.
   const verdict = verdictPill({ status: r.status, violations: r.violations, kept_as_is_at: r.kept_as_is_at })
   const badge = verdict.badges[0]
+  // AC #4: only when the run touched more than one batch (showsSourceFile is the SOLE
+  // owner of that threshold, never re-derived here) -- a single-file review has nothing
+  // to disambiguate. `sourceFileLabel` separately returns `null` for an id absent from
+  // `batches` AND for a batch whose filename was never recorded, and its own contract
+  // is that the caller may render NOTHING rather than a fabricated label -- so this
+  // renders no second line at all rather than an em dash or "source not recorded".
+  const sourceLabel = showsSourceFile(batches) ? sourceFileLabel(r.import_batch_id, batches) : null
 
   // Click-only row, matching the shipped InvoicesList.tsx precedent this table's OLD
   // (task-286) row already followed. Keyboard activation (role/tabIndex/onKeyDown) for
@@ -137,7 +152,20 @@ export function Row({
             onToggle()
           }}
         />
-        <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
+        {/* Invoice # + (AC #4, multi-file runs only) its source file, in the SAME
+            two-lines-in-one-cell idiom the Buyer column already uses below (name +
+            TIN) -- REVIEW_GRID_COLUMNS/REVIEW_GRID_GAP are unchanged, this is an extra
+            line inside the existing cell, never a new grid column. */}
+        <span style={{ minWidth: 0 }}>
+          <span className="mono" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {r.invoice_number}
+          </span>
+          {sourceLabel != null && (
+            <span data-testid="review-row-source-file" className="mono" style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {sourceLabel}
+            </span>
+          )}
+        </span>
         {/* Buyer name + TIN, InvoicesList.tsx:419-422's treatment verbatim: this is the
             compliance review surface and `buyer-tin-format` is a live rule, so a missing
             TIN is the single most useful thing this column can shout about. */}

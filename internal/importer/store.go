@@ -71,17 +71,22 @@ func pgCode(err error) string {
 // an invalid_text_representation (22P02, a malformed entity_id uuid) maps to
 // ErrValidation, mirroring internal/invoice.Store.Create's entity_id
 // handling — a bogus entity_id must never 500.
-func (s *Store) CreateBatch(ctx context.Context, entityID string) (string, error) {
+//
+// filename is wrapped in nullif($3, '') so an unusable/empty name (already
+// coerced to "" by sanitizeFilename before it ever reaches here) persists as
+// SQL NULL, never the empty string (AC #4) -- '' would make an unrecorded
+// source indistinguishable from a file genuinely named nothing.
+func (s *Store) CreateBatch(ctx context.Context, entityID, filename string) (string, error) {
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		identity, _ := auth.IdentityFromContext(ctx)
 
 		if err := tx.QueryRow(ctx,
 			`INSERT INTO import_batches
-			   (tenant_id, entity_id, status, rows_total, rows_valid, rows_invalid, errors)
-			 VALUES ($1, $2, 'processing', 0, 0, 0, '[]'::jsonb)
+			   (tenant_id, entity_id, filename, status, rows_total, rows_valid, rows_invalid, errors)
+			 VALUES ($1, $2, nullif($3, ''), 'processing', 0, 0, 0, '[]'::jsonb)
 			 RETURNING id`,
-			identity.TenantID, entityID,
+			identity.TenantID, entityID, filename,
 		).Scan(&id); err != nil {
 			switch pgCode(err) {
 			case "23503", "22P02":
@@ -197,6 +202,7 @@ func (s *Store) EntitySupplier(ctx context.Context, entityID string) (name strin
 type Batch struct {
 	ID          string
 	EntityID    string
+	Filename    *string // NEW (BULK-01-01). nil = not recorded.
 	Status      string
 	RowsTotal   int
 	RowsValid   int
@@ -238,7 +244,7 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 
 	txErr := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT b.id, b.entity_id, b.status,
+			`SELECT b.id, b.entity_id, b.filename, b.status,
 			        b.rows_total, b.rows_valid, b.rows_invalid,
 			        b.errors, b.created_at,
 			        (SELECT min(rsv.version)
@@ -248,7 +254,7 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 			   FROM import_batches b
 			  WHERE b.id = $1`, id,
 		).Scan(
-			&b.ID, &b.EntityID, &b.Status,
+			&b.ID, &b.EntityID, &b.Filename, &b.Status,
 			&b.RowsTotal, &b.RowsValid, &b.RowsInvalid,
 			&rawErrors, &b.CreatedAt, &b.RuleSetVersion,
 		)

@@ -41,11 +41,12 @@ import { useState } from 'react'
 import { gatewayBase } from '@invoice-os/api-client'
 
 import { importGlyph } from '../glyphs'
-import { canReadColumns, computeNoEntity, hasImportableExtension } from '../lib/importFlow'
+import { computeNoEntity, hasImportableExtension } from '../lib/importFlow'
+import { canReadColumnsAll } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
 
 export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
-  const { active, importFile, importError, activeEntity, entitiesState, entities, clients, mode } = ctx
+  const { active, pickedFiles, filesRefusal, importError, activeEntity, entitiesState, entities, clients, mode } = ctx
   const [dragOver, setDragOver] = useState(false)
 
   // `activeEntity`, not `active.entityId` — the same resolved-object predicate every
@@ -69,8 +70,11 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
   // configured there is nothing to POST the preview to.
   const base = gatewayBase()
 
-  const readReady = canReadColumns(importFile)
-  const badExtension = importFile !== null && !hasImportableExtension(importFile.name)
+  const readReady = canReadColumnsAll(pickedFiles)
+  // Aggregate over the whole selection, for the dropzone's border cue only — the
+  // per-file note (rendered after the label, alongside the chosen-files list) is what
+  // actually names which file is bad.
+  const anyBadExtension = pickedFiles.some((pf) => !hasImportableExtension(pf.file.name))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -97,8 +101,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             className="pf-file"
             type="file"
             accept=".csv,.xlsx"
+            multiple
             aria-label="Choose a spreadsheet to import"
-            onChange={(e) => ctx.selectImportFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => ctx.addPickedFiles(Array.from(e.target.files ?? []))}
           />
           <label
             htmlFor="pf-import-file"
@@ -118,14 +123,14 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             onDrop={(e) => {
               e.preventDefault()
               setDragOver(false)
-              ctx.selectImportFile(e.dataTransfer.files[0] ?? null)
+              ctx.addPickedFiles(Array.from(e.dataTransfer.files))
             }}
             style={{
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               textAlign: 'center',
-              border: `1.5px dashed ${badExtension ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
+              border: `1.5px dashed ${anyBadExtension ? 'var(--status-red-border)' : dragOver ? 'var(--action)' : 'var(--line-3)'}`,
               borderRadius: 'var(--radius-md)',
               padding: '30px 20px',
               background: dragOver ? 'var(--action-tint)' : 'var(--bg-1)',
@@ -135,22 +140,18 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>
               {importGlyph}
             </span>
-            {badExtension ? (
-              <p style={{ fontSize: 12, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>
-                {importFile?.name} is not a spreadsheet — choose a .csv or .xlsx file.
-              </p>
-            ) : importFile ? (
+            {pickedFiles.length > 0 ? (
               <>
                 <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginBottom: 5, color: 'var(--fg-1)' }}>
-                  {importFile.name}
+                  {pickedFiles.length} file{pickedFiles.length === 1 ? '' : 's'} selected
                 </div>
                 <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 380, lineHeight: 1.55 }}>
-                  Selected — click Read columns below, or drop a different file to replace it.
+                  Selected — click Read columns below, drop more files to add them, or remove one from the list below.
                 </p>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag a spreadsheet here, or click to choose'}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 5 }}>{dragOver ? 'Drop to select' : 'Drag spreadsheets here, or click to choose'}</div>
                 {/* The string here used to read "one row per invoice", which is simply
                     FALSE: one row is one LINE ITEM, and rows group into invoices by the
                     column mapped to invoice_number — exactly what the next step says
@@ -161,7 +162,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                     later is learning it too late. */}
                 <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 420, lineHeight: 1.55 }}>
                   The parser extracts buyer details, line items and totals. One row is one line item; rows group into invoices by the column you map to{' '}
-                  <span className="mono" style={{ fontSize: 11.5 }}>invoice_number</span> — one invoice or five hundred, the same way.
+                  <span className="mono" style={{ fontSize: 11.5 }}>invoice_number</span> — one invoice or five hundred, the same way. Pick up to five files per run.
                 </p>
               </>
             )}
@@ -173,6 +174,59 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.06em' }}>
             ACCEPTED · CSV · XLSX
           </span>
+
+          {/* The chosen-files list, per-file remove control and per-file bad-extension
+              note (BULK-01-03, Core AC 1). A bad-extension file is still listed here —
+              addFiles never drops on extension, only on the five-file count cap — so the
+              user can see and remove it rather than wonder why it silently vanished. */}
+          {pickedFiles.length > 0 && (
+            <ul style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: 0, padding: 0, listStyle: 'none' }}>
+              {pickedFiles.map((pf) => {
+                const badExtension = !hasImportableExtension(pf.file.name)
+                return (
+                  <li
+                    key={pf.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      padding: '8px 12px',
+                      borderRadius: 'var(--radius-md)',
+                      border: `1px solid ${badExtension ? 'var(--status-red-border)' : 'var(--line-1)'}`,
+                      background: 'var(--bg-1)',
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div className="mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {pf.file.name}
+                      </div>
+                      {badExtension && (
+                        <p style={{ fontSize: 11.5, color: 'var(--status-red-text)', margin: '2px 0 0', lineHeight: 1.4 }}>
+                          Not a spreadsheet — choose a .csv or .xlsx file.
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => ctx.removePickedFile(pf.id)}
+                      className="pf-btn"
+                      style={{ flex: 'none', background: 'none', border: 0, padding: 0, fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, color: 'var(--fg-3)', textDecoration: 'underline', cursor: 'pointer' }}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          {/* Cap-refusal (BULK-01-03, Core AC 1) — capRefusal's text verbatim, sole copy
+              owner in lib/importRun.ts. Never a silent truncation: whenever addPickedFiles
+              drops any incoming file past MAX_RUN_FILES, this names the cap and the count. */}
+          {filesRefusal && (
+            <p style={{ fontSize: 12.5, color: 'var(--status-amber-text)', margin: 0, lineHeight: 1.5 }}>{filesRefusal}</p>
+          )}
 
           {/* ⚠️ PLACEMENT IS LOAD-BEARING: everything here renders AFTER </label>, never
               between the <input class="pf-file"> and it. app-layer.css's dropzone focus
@@ -221,7 +275,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button
-              onClick={ctx.readColumns}
+              onClick={ctx.readAllColumns}
               disabled={base == null || !readReady}
               className="v2-btn v2-btn-primary pf-btn"
               style={{ height: 42, padding: '0 18px', justifyContent: 'center', background: readReady ? 'var(--action)' : 'var(--bg-3)', color: readReady ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: readReady ? 'pointer' : 'not-allowed' }}

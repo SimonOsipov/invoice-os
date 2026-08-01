@@ -44,7 +44,7 @@ func TestStoreCreateBatch_BogusEntityIDReturnsValidationNoOrphanRow(t *testing.T
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	bogusEntityID := uuid.NewString() // well-formed uuid, no such business_entities row
-	id, err := store.CreateBatch(c, bogusEntityID)
+	id, err := store.CreateBatch(c, bogusEntityID, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("CreateBatch(bogus entity_id) err = %v, want ErrValidation", err)
 	}
@@ -77,7 +77,7 @@ func TestStoreFinalize_InvalidStatusRejectedByCheckConstraint(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID)
+	id, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestStoreFinalize_NegativeCountRejectedByCheckConstraint(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID)
+	id, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestStoreCreateBatch_VisibleViaAppPoolSameTenant(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID)
+	id, err := store.CreateBatch(c, entityID, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}

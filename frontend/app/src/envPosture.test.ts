@@ -12,7 +12,19 @@ import { ENV_BANNER } from './App'
 const SRC = fileURLToPath(new URL('.', import.meta.url))
 const APP_TSX = join(SRC, 'App.tsx')
 
-const FORBIDDEN = ['legally-valid', 'legally valid', 'clearance evidence', 'sent to NRS', 'transmits to NRS', 'PRODUCTION · NRS']
+const FORBIDDEN = [
+  'legally-valid',
+  'legally valid',
+  'clearance evidence',
+  'sent to NRS',
+  'transmits to NRS',
+  'transmitted to NRS',
+  'acknowledged by NRS',
+  'PRODUCTION · NRS',
+  'NRS-accepted',
+  'IRN + CSID returned',
+  'NRS test adapter',
+]
 
 // Test files are excluded — they carry the forbidden strings as fixtures.
 function sourceFiles(dir: string): string[] {
@@ -29,8 +41,9 @@ describe('environment posture copy', () => {
   it('neither ENV_BANNER entry makes a forbidden claim', () => {
     for (const [name, entry] of Object.entries(ENV_BANNER)) {
       for (const field of ['msg', 'tag'] as const) {
+        const value = entry[field].toLowerCase()
         for (const phrase of FORBIDDEN) {
-          expect(entry[field], `ENV_BANNER.${name}.${field} contains "${phrase}"`).not.toContain(phrase)
+          expect(value, `ENV_BANNER.${name}.${field} contains "${phrase}"`).not.toContain(phrase.toLowerCase())
         }
       }
     }

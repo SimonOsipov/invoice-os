@@ -9,23 +9,9 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+import { FORBIDDEN_STRINGS } from './envCopyStrings'
 
-// AC-6's eight strings plus the three AC-7 adds (the copy this subtask retires): NRS-accepted,
-// IRN + CSID returned, NRS test adapter. `·` below is U+00B7, matching the live copy.
-const FORBIDDEN_STRINGS = [
-  'legally-valid',
-  'legally valid',
-  'clearance evidence',
-  'sent to NRS',
-  'transmits to NRS',
-  'transmitted to NRS',
-  'acknowledged by NRS',
-  'PRODUCTION · NRS',
-  'NRS-accepted',
-  'IRN + CSID returned',
-  'NRS test adapter',
-]
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const SPAS = ['app', 'landing', 'ops-console', 'support-console'] as const
 
@@ -160,5 +146,19 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
 
     const hits = scanFiles(scanned)
     expect(hits.map(formatHit), hits.map(formatHit).join('\n')).toEqual([])
+  })
+
+  // frontend/app has no dependency on this package (adding one just to share an array
+  // would invert the graph — app is a product package, e2e is test infra), so its node-tier
+  // guard keeps its own copy of the list. This is the cross-check that stops it drifting
+  // out of sync the way topology/environment-posture.spec.ts's copy did.
+  it("app's node-tier guard list matches the canonical list", () => {
+    const src = readFileSync(join(REPO_ROOT, 'frontend/app/src/envPosture.test.ts'), 'utf8')
+    const match = src.match(/const FORBIDDEN = \[([\s\S]*?)\]/)
+    if (!match) throw new Error('envPosture.test.ts: could not find its FORBIDDEN array')
+
+    const appList = [...match[1].matchAll(/'([^']*)'/g)].map((m) => m[1])
+    expect(appList.length, 'the regex extracted nothing (vacuity guard)').toBeGreaterThan(0)
+    expect(new Set(appList)).toEqual(new Set(FORBIDDEN_STRINGS))
   })
 })

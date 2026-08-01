@@ -533,15 +533,17 @@ WHERE i.tenant_id IN ('11111111-1111-1111-1111-111111111111', '22222222-2222-222
 -- demonstrable by submitting a NEW invoice against a reserved TIN; the worker and the mock
 -- adapter are both running on this deployment.
 --
--- attempts is the real retry budget: 1 for a first-attempt verdict, 2 for the pending row
--- (submit + the poll that resolved it), 8 for the two that exhausted MaxAttempts.
+-- attempts is the real retry budget, and polls continue the submit's own numbering: 1 for a
+-- first-attempt verdict; 3 for the pending row, because its first Ref carries n=2 and Poll
+-- consumes one per call, so it takes submit + TWO polls to converge; 8 for the two that
+-- exhausted the budget, dead-lettered on the 8th execution (job.Attempt >= MaxAttempts).
 -- created_at/updated_at take their now() defaults -- updated_at's trigger is BEFORE UPDATE
 -- only, so setting it on INSERT would be ignored anyway.
 WITH job_seed (invoice_number, state, attempts, last_error) AS (
   VALUES
     ('DEMO-2026-7001', 'accepted',      1, NULL),
     ('DEMO-2026-7002', 'rejected',      1, NULL),
-    ('DEMO-2026-7003', 'accepted',      2, NULL),
+    ('DEMO-2026-7003', 'accepted',      3, NULL),
     ('DEMO-2026-7004', 'dead_lettered', 8, 'submission: mock APP is temporarily unavailable'),
     ('DEMO-2026-7006', 'dead_lettered', 8, 'submission: mock APP timed out in flight')
 )
@@ -573,7 +575,8 @@ WITH exchange_seed (invoice_number, operation, attempt_from, attempt_to, http_st
     ('DEMO-2026-7001', 'submit', 1, 1, 200,  142),
     ('DEMO-2026-7002', 'submit', 1, 1, 422,  158),
     ('DEMO-2026-7003', 'submit', 1, 1, 202,  131),
-    ('DEMO-2026-7003', 'poll',   2, 2, 200,  118),
+    ('DEMO-2026-7003', 'poll',   2, 2, 202,  118),
+    ('DEMO-2026-7003', 'poll',   3, 3, 200,  124),
     ('DEMO-2026-7004', 'submit', 1, 8, 503,   96),
     ('DEMO-2026-7006', 'submit', 1, 8, NULL, 30000)
 )

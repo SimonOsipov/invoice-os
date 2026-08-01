@@ -53,7 +53,7 @@ func importEdgeFixture(t *testing.T, path, tenantLabel, entityName string) (res 
 		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
 	})
 
-	res, err = svc.Import(c, entityID, stdMapping, header, rows, false)
+	res, err = svc.Import(c, entityID, "", stdMapping, header, rows, false)
 	return res, err, entityID, super
 }
 
@@ -292,7 +292,7 @@ func TestFixtures_OversizedRejected413(t *testing.T) {
 	}
 
 	called := false
-	stubImp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	stubImp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		called = true
 		return BatchResult{}, nil
 	}

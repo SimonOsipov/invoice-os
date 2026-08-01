@@ -27,9 +27,10 @@
 //                       defaults of its own (ListHandler, handlers.go:349-451,
 //                       [needs-attention-param-strictness], [entity-id-restored]).
 // - violationSummary:   GET   `${base}/api/invoice/v1/invoices/violation-summary
-//                       ?import_batch_id=...`, unwraps `.rules` -- the review rail's
-//                       rule-key aggregate (ViolationSummaryHandler, handlers.go:821;
-//                       import_batch_id is REQUIRED there, absent/malformed is a 400).
+//                       ?import_batch_id=...` (repeated per id, BULK-01-02), unwraps
+//                       `.rules` -- the review rail's rule-key aggregate
+//                       (ViolationSummaryHandler, handlers.go; at least one usable id is
+//                       REQUIRED there, zero usable ids is a 400).
 // - getInvoice:         GET   `${base}/api/invoice/v1/invoices/{id}`, resolves an
 //                       InvoiceDetailRecord and normalizes a missing/undefined
 //                       `rule_set_version` to `null` (defensive; the backend now sends
@@ -254,8 +255,14 @@ export interface StatusChange {
 // The four that shipped first: needsAttention ([needs-attention-bool-true-only] —
 // absent/false applies no predicate), entityId ([entity-id-restored] — absent/undefined
 // applies no filter, tenant-wide), plus limit/offset, which the client never sent until
-// now. INVCR-01-06 ([D4]) adds the review screen's five: importBatchId, status, needsFix,
+// now. INVCR-01-06 ([D4]) adds the review screen's five: importBatchIds, status, needsFix,
 // ruleKey, q.
+//
+// importBatchIds (BULK-01-02, [one-review-screen]) widened from a single importBatchId
+// to string[] so the review screen can narrow across every batch a multi-file run
+// produced, on one query (ListHandler reads the REPEATED import_batch_id query param).
+// Emitted as one `import_batch_id` param PER non-empty id (see listInvoices below) —
+// `params.append`, never `.set` (which would overwrite all but the last).
 //
 // `status` is typed InvoiceStatus, NOT string, on purpose: D2 retires 'approved' from
 // this flow's vocabulary, and a typed enum makes writing it a compile error at every call
@@ -271,7 +278,7 @@ export interface ListInvoicesOptions {
   entityId?: string
   limit?: number
   offset?: number
-  importBatchId?: string
+  importBatchIds?: string[]
   status?: InvoiceStatus
   needsFix?: boolean
   ruleKey?: string
@@ -400,6 +407,13 @@ export interface BatchSubmitResultItem {
 //     empty-is-absent rule (handlers.go:409-445, `if raw != ""`).
 //   - limit/offset emit iff `!= null`, NEVER truthiness: `offset: 0` is falsy, so an
 //     `if (opts.offset)` would silently drop the first page's own offset (LIST-4).
+//
+// importBatchIds (BULK-01-02) is a FOURTH shape: one `import_batch_id` param per
+// non-empty id, via `params.append` in a loop — `params.set` in a loop would overwrite
+// every earlier value, sending exactly ONE id and silently narrowing a multi-file run's
+// review screen to one file's invoices with a plausible-looking total. Each id is still
+// empty-is-absent PER VALUE ([''] and [] both emit none), matching every other string
+// option above.
 export async function listInvoices(
   authedFetch: AuthedFetch,
   base: string,
@@ -410,7 +424,7 @@ export async function listInvoices(
   if (opts.entityId) params.set('entity_id', opts.entityId)
   if (opts.limit != null) params.set('limit', String(opts.limit))
   if (opts.offset != null) params.set('offset', String(opts.offset))
-  if (opts.importBatchId) params.set('import_batch_id', opts.importBatchId)
+  for (const id of opts.importBatchIds ?? []) if (id) params.append('import_batch_id', id)
   if (opts.status) params.set('status', opts.status)
   if (opts.needsFix === true) params.set('needs_fix', 'true')
   if (opts.ruleKey) params.set('rule_key', opts.ruleKey)
@@ -432,13 +446,20 @@ export interface RuleCount {
 // and are passed through untouched: this rail is a set of filter triggers, so re-sorting
 // or re-filtering it here would make the rail disagree with the `rule_key` query each of
 // its rows fires ([filters-are-server-side]).
+//
+// importBatchIds (BULK-01-02) widened from a single id to string[], emitted the same way
+// listInvoices' own importBatchIds is: one `import_batch_id` param per non-empty id, via
+// URLSearchParams.append (never overwriting), so the rail can span every batch a
+// multi-file run produced.
 export async function violationSummary(
   authedFetch: AuthedFetch,
   base: string,
-  importBatchId: string,
+  importBatchIds: string[],
 ): Promise<RuleCount[]> {
+  const params = new URLSearchParams()
+  for (const id of importBatchIds) if (id) params.append('import_batch_id', id)
   const res = await authedFetch<{ rules: RuleCount[] }>(
-    `${base}/api/invoice/v1/invoices/violation-summary?import_batch_id=${encodeURIComponent(importBatchId)}`,
+    `${base}/api/invoice/v1/invoices/violation-summary?${params.toString()}`,
   )
   return res.rules
 }

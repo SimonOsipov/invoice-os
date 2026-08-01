@@ -776,7 +776,7 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('BATCH-1: resolves exactly the 9 declared fields; rule_set_version:null stays null, never coerced to 0; URL is .../imports/<id>', async () => {
+  it('BATCH-1: resolves exactly the 10 declared fields (BULK-01-01 adds filename); rule_set_version:null stays null, never coerced to 0; URL is .../imports/<id>', async () => {
     const fetchMock = mockFetchOnce({
       ok: true,
       status: 200,
@@ -784,6 +784,7 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
         Promise.resolve({
           id: 'batch-1',
           entity_id: 'entity-1',
+          filename: 'branch-lagos.csv',
           status: 'completed',
           rows_total: 10,
           rows_valid: 9,
@@ -799,6 +800,7 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
 
     expect(result.rule_set_version).toBeNull()
     expect(result.id).toBe('batch-1')
+    expect(result.filename).toBe('branch-lagos.csv')
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/invoice/v1/imports/batch-1')
     expect(init.method).toBe('GET')

@@ -53,7 +53,7 @@ import (
 // upload-cap"). imp fataling if called also proves neither check nor cap
 // enforcement reaches the service layer.
 func TestCreateHandler_NoIdentityOversizedBody401NotTooLarge(t *testing.T) {
-	imp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run without an identity, even for an oversized body")
 		return BatchResult{}, nil
 	}
@@ -104,7 +104,7 @@ func TestCreateHandler_FormatDetection_BadInputNoDBWrite400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-			imp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when the uploaded file can't be recognized/decoded")
 				return BatchResult{}, nil
 			}
@@ -182,7 +182,7 @@ func TestCreateHandler_FormatDetection_ActualMapping201(t *testing.T) {
 // "file" part at all must 400 (r.FormFile's error path), never panic/500.
 func TestCreateHandler_MissingFilePart400(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	imp := func(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run when the file part is missing")
 		return BatchResult{}, nil
 	}

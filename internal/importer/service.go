@@ -580,7 +580,12 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //     whole run aborts, Finalize best-effort records 'failed', and the raw
 //     error propagates (the handler 500s) rather than being laundered into a
 //     fake RowError. Finalize records the terminal counts/status/errors.
-func (s *Service) Import(ctx context.Context, entityID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+//
+// filename (already sanitized by the caller) is passed straight through to
+// BOTH the early-finalize CreateBatch below and the main-path CreateBatch --
+// a zero-row file's 'failed' batch must be attributable too (BULK-01-11). It
+// is unused on the dry-run path: a dry run never creates a batch.
+func (s *Service) Import(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
 		return BatchResult{}, err
@@ -775,7 +780,7 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 	// straight to 'failed' — never CreateBatch/Create for a real group,
 	// never a partial-split status for this case.
 	if rowsTotal == 0 {
-		batchID, err := s.batch.CreateBatch(ctx, entityID)
+		batchID, err := s.batch.CreateBatch(ctx, entityID, filename)
 		if err != nil {
 			return BatchResult{}, err
 		}
@@ -785,7 +790,7 @@ func (s *Service) Import(ctx context.Context, entityID string, mapping map[strin
 		return BatchResult{ID: batchID, Status: "failed"}, nil
 	}
 
-	batchID, err := s.batch.CreateBatch(ctx, entityID)
+	batchID, err := s.batch.CreateBatch(ctx, entityID, filename)
 	if err != nil {
 		return BatchResult{}, err
 	}

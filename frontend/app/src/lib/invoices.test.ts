@@ -319,7 +319,7 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     expect(url).not.toContain('?')
   })
 
-  it('LIST-1b (the discriminating leg): explicitly-empty/false options (needsAttention:false, needsFix:false, importBatchId:"", ruleKey:"", q:"") still emit no query params', async () => {
+  it('LIST-1b (the discriminating leg): explicitly-empty/false options (needsAttention:false, needsFix:false, importBatchIds:[\'\'], ruleKey:"", q:"") still emit no query params', async () => {
     const fetchMock = mockFetchOnce({
       ok: true,
       status: 200,
@@ -330,7 +330,7 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     await listInvoices(af, base, {
       needsAttention: false,
       needsFix: false,
-      importBatchId: '',
+      importBatchIds: [''],
       ruleKey: '',
       q: '',
     } as ListInvoicesOptions)
@@ -435,6 +435,38 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     expect(absentUrl).not.toContain('limit')
     expect(absentUrl).not.toContain('offset')
   })
+
+  it('LIST-6 (BULK-02-14, AC-1): importBatchIds emits one import_batch_id param PER non-empty id, via append -- never a single overwritten value', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const twoIdsMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { importBatchIds: ['a', 'b'] })
+    const [twoIdsUrl] = twoIdsMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(twoIdsUrl)
+    expect(parsed.searchParams.getAll('import_batch_id')).toEqual(['a', 'b'])
+
+    const emptyStringMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { importBatchIds: [''] })
+    const [emptyStringUrl] = emptyStringMock.mock.calls[0] as [string, RequestInit]
+    expect(emptyStringUrl).not.toContain('import_batch_id')
+
+    const emptyArrayMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { importBatchIds: [] })
+    const [emptyArrayUrl] = emptyArrayMock.mock.calls[0] as [string, RequestInit]
+    expect(emptyArrayUrl).not.toContain('import_batch_id')
+  })
 })
 
 describe('violationSummary (AC-2, Stage 2.5)', () => {
@@ -452,7 +484,7 @@ describe('violationSummary (AC-2, Stage 2.5)', () => {
     })
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
-    const result = await violationSummary(af, base, 'batch-1')
+    const result = await violationSummary(af, base, ['batch-1'])
 
     expect(result).toEqual([
       { rule_key: 'zzz-rule', invoices: 5 },
@@ -469,7 +501,7 @@ describe('violationSummary (AC-2, Stage 2.5)', () => {
     })
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
-    const err = await captureRejection(() => violationSummary(af, base, 'batch-1'))
+    const err = await captureRejection(() => violationSummary(af, base, ['batch-1']))
 
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')

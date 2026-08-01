@@ -22,6 +22,7 @@ package invoice
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -257,6 +258,30 @@ func TestStoreList_NeedsAttentionMixedSeverityViolations(t *testing.T) {
 	}
 }
 
+// TestListFilterDeepEqualStillDiscriminates (BULK-02-0, AC #2): the
+// comparability swap below (reflect.DeepEqual replacing the retired
+// whole-struct ==, forced by ListFilter.ImportBatchIDs becoming []string,
+// BULK-01-02) must keep the SAME discriminating power the old == had --
+// two field-identical ListFilter values compare equal, and a single
+// diverging field (Limit) still fails the check. Without this, the swap
+// could silently degrade into a no-op (e.g. a stray `true` or a comparison
+// that only looks at one field) and TestListHandler_
+// NeedsAttentionFalseExplicitMatchesAbsent below would never catch a real
+// divergence again.
+func TestListFilterDeepEqualStillDiscriminates(t *testing.T) {
+	a := ListFilter{Limit: 50, EntityID: "e1", ImportBatchIDs: []string{"b1"}}
+	b := ListFilter{Limit: 50, EntityID: "e1", ImportBatchIDs: []string{"b1"}}
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = false, want true for field-identical ListFilter values", a, b)
+	}
+
+	c := b
+	c.Limit = 51
+	if reflect.DeepEqual(a, c) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = true, want false -- a single diverging field (Limit) must still be caught", a, c)
+	}
+}
+
 // TestListHandler_NeedsAttentionFalseExplicitMatchesAbsent (AC #5): the
 // architect's ListFilter.NeedsAttention is a Go bool, so its OWN zero value
 // already makes "absent" and "explicit false" identical at the Go level --
@@ -264,6 +289,12 @@ func TestStoreList_NeedsAttentionMixedSeverityViolations(t *testing.T) {
 // ?needs_attention=false and no needs_attention param at all are two
 // DIFFERENT query strings that must both parse to the SAME captured
 // ListFilter (false), never one 400ing or diverging from the other.
+//
+// The equality check below is reflect.DeepEqual, not ==, since
+// ListFilter.ImportBatchIDs is a []string (BULK-01-02, [one-review-screen])
+// and Go slices are not comparable with ==. DeepEqual keeps the SAME
+// strength the retired == had -- see TestListFilterDeepEqualStillDiscriminates
+// above.
 func TestListHandler_NeedsAttentionFalseExplicitMatchesAbsent(t *testing.T) {
 	run := func(query string) ListFilter {
 		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
@@ -293,7 +324,37 @@ func TestListHandler_NeedsAttentionFalseExplicitMatchesAbsent(t *testing.T) {
 	if explicitFalse.NeedsAttention {
 		t.Errorf("?needs_attention=false: captured.NeedsAttention = true, want false")
 	}
-	if absent != explicitFalse {
+	if !reflect.DeepEqual(absent, explicitFalse) {
 		t.Errorf("captured ListFilter differs between absent (%+v) and explicit false (%+v), want identical", absent, explicitFalse)
+	}
+}
+
+// TestListFilterDeepEqualStillDiscriminates_ImportBatchIDsDivergence (QA
+// Mode B, BULK-01-02 task-306): TestListFilterDeepEqualStillDiscriminates
+// above proves the swap catches a diverging SCALAR field (Limit). This is
+// the field that actually FORCED the == -> DeepEqual swap -- ImportBatchIDs
+// itself, a []string, which `==` could never even compile-check. Three
+// legs: same content/same order -> equal; a genuinely different member ->
+// unequal; and the SAME members in a DIFFERENT order -> unequal too (a
+// reflect.DeepEqual slice comparison is order-sensitive, unlike a set) --
+// worth pinning explicitly since ImportBatchIDs' own union semantics
+// (Store.List, `= ANY($n)`) are order-INDEPENDENT, so a future reader could
+// wrongly assume the equality check is too.
+func TestListFilterDeepEqualStillDiscriminates_ImportBatchIDsDivergence(t *testing.T) {
+	base := ListFilter{Limit: 50, ImportBatchIDs: []string{"b1", "b2"}}
+
+	same := ListFilter{Limit: 50, ImportBatchIDs: []string{"b1", "b2"}}
+	if !reflect.DeepEqual(base, same) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = false, want true for identical ImportBatchIDs (same content, same order)", base, same)
+	}
+
+	differentMember := ListFilter{Limit: 50, ImportBatchIDs: []string{"b1", "b3"}}
+	if reflect.DeepEqual(base, differentMember) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = true, want false -- a diverging ImportBatchIDs member must still be caught", base, differentMember)
+	}
+
+	reordered := ListFilter{Limit: 50, ImportBatchIDs: []string{"b2", "b1"}}
+	if reflect.DeepEqual(base, reordered) {
+		t.Fatalf("reflect.DeepEqual(%+v, %+v) = true, want false -- DeepEqual is order-sensitive even though ANY($n) is not", base, reordered)
 	}
 }

@@ -1,0 +1,2 @@
+Ref,Date,TIN,Customer,CCY,Net,Tax,Gross,Line,Units,Rate
+BULK-TERM-001,2026-01-15,87654321-0002,BULK-01 Terminal Buyer,NGN,1000.00,75.00,1075.00,Line item,10,100.00

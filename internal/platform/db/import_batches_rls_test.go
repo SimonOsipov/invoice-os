@@ -51,6 +51,7 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -574,5 +575,96 @@ func TestRLS_ImportBatchesUnfilteredSelectSeesOnlyOwnTenant(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}
+
+// IB-RLS-17 (QA-added, BULK-01-01 task-305): the `filename` column added by
+// 20260731151750_import_batches_filename.sql is a COLUMN on this
+// already-FORCE-RLS table, and that migration's own header asserts "a policy
+// is per-ROW, not per-column, so the new column is covered the moment it
+// exists" -- this proves that claim rather than trusting the prose. Tenant
+// A's tx can read its own filename, can NEVER read B's (even by a direct id
+// lookup naming B's row, not merely a tenant_id-scoped query that would
+// coincidentally return the right count on its own), and an UPDATE from A's
+// tx targeting B's row by id is refused with ZERO rows affected -- confirmed
+// by a mutation-verify re-read as superuser afterward, proving the refusal
+// actually wrote nothing rather than merely reporting a misleading rowcount.
+func TestRLS_ImportBatchesFilenameColumnInheritsTenantIsolation(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-17 A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "IB-17 B Corp")
+	defer cleanupEntityB()
+
+	const filenameA = "a-corp-branch-lagos.csv"
+	const filenameB = "b-corp-confidential-payroll.csv"
+
+	var idA string
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO import_batches (tenant_id, entity_id, filename) VALUES ($1, $2, $3) RETURNING id`,
+		h.tenantA, entityA, filenameA,
+	).Scan(&idA); err != nil {
+		t.Fatalf("seed A's batch with filename: %v", err)
+	}
+	defer func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM import_batches WHERE id = $1`, idA) }()
+
+	var idB string
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO import_batches (tenant_id, entity_id, filename) VALUES ($1, $2, $3) RETURNING id`,
+		h.tenantB, entityB, filenameB,
+	).Scan(&idB); err != nil {
+		t.Fatalf("seed B's batch with filename: %v", err)
+	}
+	defer func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM import_batches WHERE id = $1`, idB) }()
+
+	// SELECT leg: A sees its own filename; a direct id lookup for B's row
+	// (not merely a tenant_id-filtered query) resolves to zero rows, proving
+	// RLS itself hides it rather than the query's own WHERE clause.
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var got *string
+		if e := tx.QueryRow(ctx, `SELECT filename FROM import_batches WHERE id = $1`, idA).Scan(&got); e != nil {
+			return e
+		}
+		if got == nil || *got != filenameA {
+			t.Errorf("A's own filename via A's tx = %v, want %q", got, filenameA)
+		}
+
+		e := tx.QueryRow(ctx, `SELECT filename FROM import_batches WHERE id = $1`, idB).Scan(&got)
+		if !errors.Is(e, pgx.ErrNoRows) {
+			t.Errorf("B's batch via A's tx (direct id lookup): err = %v, want pgx.ErrNoRows (B's row must be invisible to A)", e)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithinTenantTx (SELECT leg): %v", err)
+	}
+
+	// UPDATE leg: A's tx attempts to overwrite B's filename by id. RLS's
+	// USING clause filters B's row out of the UPDATE's target set entirely,
+	// so this affects zero rows and raises no error.
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE import_batches SET filename = 'pwned-by-tenant-a.csv' WHERE id = $1`, idB)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 0 {
+			t.Errorf("cross-tenant UPDATE of filename affected %d rows, want 0", ct.RowsAffected())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant filename UPDATE (expected 0 rows): %v", err)
+	}
+
+	// Mutation-verify: B's filename must be UNCHANGED -- the refusal above
+	// must have written NOTHING, not merely returned a misleading rowcount.
+	var gotB *string
+	if err := h.super.QueryRow(ctx, `SELECT filename FROM import_batches WHERE id = $1`, idB).Scan(&gotB); err != nil {
+		t.Fatalf("read back B's filename as superuser: %v", err)
+	}
+	if gotB == nil || *gotB != filenameB {
+		t.Errorf("B's filename after refused cross-tenant UPDATE = %v, want unchanged %q (mutation-verify)", gotB, filenameB)
 	}
 }

@@ -53,6 +53,12 @@ import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from
 import { reportSummary } from './importReport'
 import { fmtDateTime } from './format'
 import type { StatusStyle, View, CreateStep } from '../types'
+// Type-only: importRun.ts:74 already imports routeAfterImport FROM this file, so a
+// runtime import back would be this codebase's first reviewBatch.ts <-> importRun.ts
+// cycle. `import type` is fully erased (verbatimModuleSyntax), so no such cycle exists
+// here -- see REVIEW_HASH_MAX_IDS above for why the one genuinely runtime-valued
+// constant this file needs (MAX_RUN_FILES) is a documented mirror instead.
+import type { ImportRun } from './importRun'
 
 export interface VerdictInput {
   status: InvoiceStatus
@@ -150,6 +156,28 @@ function ruleSetLabel(v: number | null | undefined): string {
   return v != null ? `${RULE_SET_NAME} v${v}` : 'not evaluated'
 }
 
+// The MIN non-null rule-set version across a run's batches (BULK-01-06) -- GetBatch's
+// own min() rationale, matching the version the whole run was imported under. `null`
+// when every batch's version is null, so ruleSetLabel renders 'not evaluated' rather
+// than a fabricated v0. Shared by channelTilesAll and reviewHeaderAll below so the two
+// never derive this differently.
+function minNonNullVersion(versions: (number | null | undefined)[]): number | null {
+  const nums = versions.filter((v): v is number => v != null)
+  return nums.length > 0 ? Math.min(...nums) : null
+}
+
+// "source not recorded" (BULK-01-06): the shared fallback label for a batch whose
+// filename was never recorded (rows written before BULK-01-01's migration) -- used by
+// reviewHeaderAll/unreadableRowsAll/filesStrip below, all three of which always render a
+// fixed cell/line and so fall back to this fixed string rather than to null. A DIFFERENT
+// contract from sourceFileLabel further down, which returns null instead -- a single
+// invoice row can be rendered blank, but a whole header/CSV line cannot.
+const SOURCE_NOT_RECORDED = 'source not recorded'
+
+function filenameLabel(filename: string | null): string {
+  return filename ?? SOURCE_NOT_RECORDED
+}
+
 // The two channels stay apart (§7.1). LIVE is `pagination.total` off two filtered list
 // queries, PASSED IN -- never counted off whatever page the caller happens to hold, and
 // never read from the report's invoices_clean/invoices_with_violations (which the GET
@@ -168,6 +196,22 @@ export function channelTiles(
   return {
     live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
     frozen: { unreadable, ruleSetLabel: ruleSetLabel(batch.rule_set_version) },
+    atZero: unreadable === 0,
+  }
+}
+
+// Additive sibling of channelTiles, summing the frozen channel across every batch in a
+// run and labelling the rule set with the MIN non-null version (GetBatch's own min()
+// rationale -- the version the run was imported under), 'not evaluated' when every
+// batch's version is null. Never `?? 0`.
+export function channelTilesAll(
+  batches: Pick<ImportBatch, 'errors' | 'rule_set_version'>[],
+  live: { cleanTotal: number; failingTotal: number },
+): ChannelTiles {
+  const unreadable = batches.reduce((sum, b) => sum + unreadableRows(b.errors).length, 0)
+  return {
+    live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
+    frozen: { unreadable, ruleSetLabel: ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version))) },
     atZero: unreadable === 0,
   }
 }
@@ -195,6 +239,21 @@ export function unreadableRows(errors: RowError[]): UnreadableRow[] {
     if (rows.length === 0) return [{ row: null, column, message: e.message }]
     return rows.map((row) => ({ row, column, message: e.message }))
   })
+}
+
+// Additive sibling of unreadableRows, attributing each entry to its owning file.
+// UnreadableRow itself is UNTOUCHED -- unreadableRows/channelTiles/ReviewBatch.tsx keep
+// their existing 3-key shape (SHELL-7/UNREAD-3 pin exactly {row, column, message}, no
+// fourth key) -- `file` lives on this separate, additive type instead of widening
+// UnreadableRow in place.
+export interface UnreadableRowAll extends UnreadableRow {
+  // Resolved filename, or "source not recorded" when the owning batch's filename is
+  // null -- NEVER the raw null, NEVER the literal string 'null' (BULK-06-23).
+  file: string
+}
+
+export function unreadableRowsAll(batches: Pick<ImportBatch, 'id' | 'filename' | 'errors'>[]): UnreadableRowAll[] {
+  return batches.flatMap((b) => unreadableRows(b.errors).map((r) => ({ ...r, file: filenameLabel(b.filename) })))
 }
 
 export type ReviewPill = 'all' | 'needs-fix' | 'ready' | 'queued'
@@ -253,19 +312,36 @@ const REVIEW_HASH_PREFIX = '#review/'
 // list. Case is accepted in both directions because uuid.Parse is (server side).
 const REVIEW_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
-// Returns null -- NEVER '' -- for anything that is not `#review/<uuid>`: '' is a string a
-// caller can accidentally treat as a usable id, and passing it to listInvoices omits the
-// param and silently widens the query to the whole tenant. The prefix match is
-// case-SENSITIVE ('#REVIEW/...' is not our route) while the uuid's own case is preserved
+// [five-file-cap] mirror -- importRun.ts:15 owns the real MAX_RUN_FILES, and that module
+// already imports routeAfterImport FROM this file (importRun.ts:74), so importing the
+// constant back would be this codebase's first reviewBatch.ts <-> importRun.ts cycle.
+// Documented mirror + drift guard, NOT a runtime clamp -- the same idiom
+// BATCH_SUBMIT_MAX_IDS uses below for handlers.go's server-side cap. The test file may
+// import both MAX_RUN_FILES and this constant freely; only the two SOURCE modules must
+// stay acyclic.
+export const REVIEW_HASH_MAX_IDS = 5 // importRun.ts:15's MAX_RUN_FILES
+
+// Returns null -- NEVER '' -- for anything that is not one-to-REVIEW_HASH_MAX_IDS comma-
+// separated `#review/<uuid>[,<uuid>...]` segments, EVERY one of which must match
+// REVIEW_UUID: one bad segment poisons the WHOLE hash, never a partial list. '' is a
+// string a caller can accidentally treat as a usable id, and passing it to listInvoices
+// omits the param and silently widens the query to the whole tenant. The prefix match is
+// case-SENSITIVE ('#REVIEW/...' is not our route) while each uuid's own case is preserved
 // VERBATIM -- lower-casing it here would be rewriting the caller's data.
-export function parseReviewHash(hash: string): string | null {
+//
+// Widened in place from `(hash): string | null` -- its only caller, App.tsx's boot
+// initializer, was updated in the same commit (BULK-01-05/06).
+export function parseReviewHash(hash: string): string[] | null {
   if (!hash.startsWith(REVIEW_HASH_PREFIX)) return null
-  const tail = hash.slice(REVIEW_HASH_PREFIX.length)
-  return REVIEW_UUID.test(tail) ? tail : null
+  const segments = hash.slice(REVIEW_HASH_PREFIX.length).split(',')
+  if (segments.length === 0 || segments.length > REVIEW_HASH_MAX_IDS) return null
+  return segments.every((s) => REVIEW_UUID.test(s)) ? segments : null
 }
 
-export function formatReviewHash(id: string): string {
-  return `${REVIEW_HASH_PREFIX}${id}`
+// Widened in place from `(id: string): string` -- a single-id array still formats
+// byte-identically to the shipped `#review/x` (AC-2).
+export function formatReviewHash(ids: string[]): string {
+  return `${REVIEW_HASH_PREFIX}${ids.join(',')}`
 }
 
 // The single composer 09/10 use to build every review request -- flagged as an 8th
@@ -276,10 +352,17 @@ export function formatReviewHash(id: string): string {
 //
 // The throw is the runtime half of the same argument, and it is the only enforcement a
 // pure function has left: the TYPE stops `undefined`, but `''` is still a `string`, and
-// listInvoices treats an empty importBatchId as ABSENT (matching the server's own
-// empty-is-absent rule) -- which returns a tenant-wide page carrying a plausible total,
-// i.e. exactly the wrong-page-instead-of-an-honest-error failure mode ListHandler's own
-// doc comment refuses. Loud beats a review table full of another batch's invoices.
+// listInvoices treats an empty id as ABSENT (matching the server's own empty-is-absent
+// rule, applied per value) -- which returns a tenant-wide page carrying a plausible
+// total, i.e. exactly the wrong-page-instead-of-an-honest-error failure mode
+// ListHandler's own doc comment refuses. Loud beats a review table full of another
+// batch's invoices.
+//
+// `batchId` stays a single `string` here (BULK-01-02 widens ListInvoicesOptions'
+// importBatchIds to string[], but reviewQuery/reviewPageQuery's OWN signatures are
+// unchanged -- deriving several ids from a run is BULK-01-06's job): the one-element
+// array below is this subtask's plumbing only, not a widening of what this function
+// accepts.
 //
 // The extras follow listInvoices' emission rules rather than being spread in blind: a
 // blank search box must not become `q=''` on the wire, and `offset: 0` must survive.
@@ -289,7 +372,32 @@ export function reviewQuery(
   extra: { ruleKey?: string; q?: string; limit?: number; offset?: number } = {},
 ): ListInvoicesOptions {
   if (batchId === '') throw new Error('reviewQuery: batchId is required — an empty one lists the whole tenant')
-  const opts: ListInvoicesOptions = { importBatchId: batchId, ...filterToQuery(pill) }
+  const opts: ListInvoicesOptions = { importBatchIds: [batchId], ...filterToQuery(pill) }
+  if (extra.ruleKey) opts.ruleKey = extra.ruleKey
+  if (extra.q) opts.q = extra.q
+  if (extra.limit != null) opts.limit = extra.limit
+  if (extra.offset != null) opts.offset = extra.offset
+  return opts
+}
+
+// Additive sibling of reviewQuery, over every id in a run. reviewQuery itself is
+// UNTOUCHED and stays exported -- ReviewBatch.tsx's four call sites and App.tsx's
+// startRun() still build a single-batch request through it today (the latter genuinely
+// has one id, so it never needs to switch); BULK-01-07 owns switching ReviewBatch.tsx's
+// four before reviewQuery can be deleted (task-307's own recorded obligation). Throws on
+// an empty array AND on any '' member -- reviewQuery's own argument, applied per
+// element: an absent/empty batch id lists the WHOLE TENANT with a plausible total.
+export function reviewQueryAll(
+  batchIds: string[],
+  pill: ReviewPill,
+  extra: { ruleKey?: string; q?: string; limit?: number; offset?: number } = {},
+): ListInvoicesOptions {
+  if (batchIds.length === 0 || batchIds.some((id) => id === '')) {
+    throw new Error(
+      'reviewQueryAll: batchIds must be non-empty with no empty id — an absent/empty batch id lists the whole tenant',
+    )
+  }
+  const opts: ListInvoicesOptions = { importBatchIds: batchIds, ...filterToQuery(pill) }
   if (extra.ruleKey) opts.ruleKey = extra.ruleKey
   if (extra.q) opts.q = extra.q
   if (extra.limit != null) opts.limit = extra.limit
@@ -351,13 +459,19 @@ export function reviewShellState(batch: Pick<ImportBatch, 'status'>): ReviewShel
   return batch.status !== 'completed' ? 'rejected' : 'batch'
 }
 
+// Additive sibling of reviewShellState, 'batch' iff ANY batch is 'completed' --
+// byte-identical to reviewShellState over exactly one batch, which it will eventually
+// replace once BULK-01-07 switches ReviewBatch.tsx's call site.
+export function reviewShellStateAll(batches: Pick<ImportBatch, 'status'>[]): ReviewShellState {
+  return batches.some((b) => b.status === 'completed') ? 'batch' : 'rejected'
+}
+
 // --- Header copy (AC-2, §7.1) ---
 //
-// Takes NO file/filename parameter at all -- import_batches has no filename column (D4
-// forbids a migration) and the "from {{file}}" clause is unconstructible here, not
-// merely dropped by a conditional. `allTotal` is the LIVE total (the `all` query's
-// pagination.total), never `report.ready_invoices` -- one source feeds both arrival
-// paths.
+// `allTotal` is the LIVE total (the `all` query's pagination.total), never
+// `report.ready_invoices` -- one source feeds both arrival paths. reviewHeader itself
+// takes no file/filename parameter; reviewHeaderAll below is what BULK-01-06 adds for a
+// run's filesLine (AC-6), now that import_batches carries `filename` (BULK-01-01).
 export interface ReviewHeader {
   title: string
   batchId: string
@@ -376,6 +490,39 @@ export function reviewHeader(
     // is CSS's job and a `.toUpperCase()` would also uppercase 'not evaluated' into a
     // shout. fmtDateTime is lib/format.ts's; no date formatting is authored here.
     subline: `${batch.rows_total} ROWS READ · SERVER VERDICT · RULE SET ${ruleSetLabel(batch.rule_set_version)} · ${fmtDateTime(batch.created_at)}`,
+  }
+}
+
+// Additive sibling of reviewHeader, over every batch in a run. `filesLine` is `from
+// ${filename}` at one batch (byte-identical prose to what a human would expect from the
+// shipped single-file case) or `from N files` above one -- and "source not recorded"
+// (never `from null`, never a bare `from `) replaces the whole clause when a single
+// batch's filename is null, matching sourceFileLabel/filesStrip's own fallback
+// (BULK-06-18/22/23). `rows_total` sums across every batch.
+export interface ReviewHeaderAll {
+  title: string
+  batchIds: string[]
+  subline: string
+  filesLine: string
+}
+
+export function reviewHeaderAll(
+  batches: Pick<ImportBatch, 'id' | 'filename' | 'rows_total' | 'rule_set_version' | 'created_at'>[],
+  live: { allTotal: number },
+): ReviewHeaderAll {
+  const rowsTotal = batches.reduce((sum, b) => sum + b.rows_total, 0)
+  const label = ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version)))
+  const filesLine =
+    batches.length === 1
+      ? batches[0].filename != null
+        ? `from ${batches[0].filename}`
+        : SOURCE_NOT_RECORDED
+      : `from ${batches.length} files`
+  return {
+    title: `${live.allTotal} invoices imported`,
+    batchIds: batches.map((b) => b.id),
+    subline: `${rowsTotal} ROWS READ · SERVER VERDICT · RULE SET ${label} · ${fmtDateTime(batches[0]?.created_at)}`,
+    filesLine,
   }
 }
 
@@ -405,11 +552,17 @@ export function reviewTabs(counts: { invoices: number; unreadable: number }): Re
 // review -- App.tsx has ONE effect calling this, not N call sites each responsible for
 // remembering to clear it. `window` itself is never touched here -- only at the two call
 // sites this function's own module comment (top of file) names in App.tsx.
-export function reviewHash(view: View, createStep: CreateStep, reviewBatchId: string | null): string | null {
-  // Truthiness on the id for the same reason routeAfterImport uses it: `''` is a string
-  // and `#review/` with nothing after it is not a route, it is a broken one.
-  if (view !== 'create' || createStep !== 'review' || !reviewBatchId) return null
-  return formatReviewHash(reviewBatchId)
+// Widened in place from `(..., reviewBatchId: string | null)` -- the third param is now
+// every id in the run (App.tsx's `reviewBatchIds` state, BULK-01-05), not just the
+// first. Its only caller, App.tsx's mirror effect, was updated in the same commit; the
+// effect's own dep array joins the array (`reviewBatchIds.join(',')`), never passes the
+// array reference itself -- a fresh array every render would otherwise re-fire the
+// effect forever. This is a plain useEffect, not one of the three genuine useAsync sites
+// packages/api-client/src/async-state.ts:117's spread-deps hazard actually names
+// (ReviewBatch.tsx, ReviewInvoicesTab.tsx x2).
+export function reviewHash(view: View, createStep: CreateStep, reviewBatchIds: string[]): string | null {
+  if (view === 'create' && createStep === 'review' && reviewBatchIds.length > 0) return formatReviewHash(reviewBatchIds)
+  return null
 }
 
 // --- Unreadable-rows CSV (AC-5, §7.4 "Download this list (CSV)") ---
@@ -435,6 +588,97 @@ export function unreadableCsv(rows: UnreadableRow[]): string {
     [r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
   )
   return [UNREADABLE_CSV_HEADER, ...lines].join('\n')
+}
+
+// Additive sibling of UNREADABLE_CSV_HEADER/unreadableCsv, gaining the File column a
+// run's download needs. UNREADABLE_CSV_HEADER and unreadableCsv are UNTOUCHED --
+// ReviewUnreadableTab.tsx's one call site still downloads the single-batch CSV through
+// them today, and BULK-01-07 owns switching it over.
+export const UNREADABLE_CSV_HEADER_ALL = 'File,Row,Field,Why it could not be read'
+
+export function unreadableCsvAll(rows: UnreadableRowAll[]): string {
+  const lines = rows.map((r) =>
+    [r.file, r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
+  )
+  return [UNREADABLE_CSV_HEADER_ALL, ...lines].join('\n')
+}
+
+// --- Files strip (AC-8/9/10/11/12, BULK-01-06) ---
+//
+// filesStrip is the whole per-file report the run screen renders: one row per batch GET
+// (filename resolved through the same "source not recorded" fallback as
+// reviewHeaderAll/sourceFileLabel below, never '' and never the literal null), plus one
+// row per run-only failure -- a file the server refused before a batch ever existed,
+// which vanishes after a reload because there is nothing left to prove it happened.
+// `run` is `| null` on purpose: a deep-link revisit (BULK-06-17) has no run to read
+// run-only failures from, and the strip is TOTAL over that state -- one row per batch,
+// zero run-only rows, never a crash.
+//
+// `[reason-comes-from-errors-not-status]`: a rejected-by-verdict file's reason is read
+// from `batch.errors` alone, NEVER `batch.status` -- a fully-quarantined file has
+// `rows_total > 0` and still finalizes 'completed' server-side
+// (internal/importer/service.go:923), its quarantine reason living only in `errors`
+// (:838-849 -> handlers.go:371). BULK-06-21 asserts this holds identically whether the
+// run is still live (outcome kind:'imported', ready_invoices:0) or `run === null` after
+// a reload, where `errors` is the only surviving source -- a `status`-keyed
+// implementation fails both halves.
+export interface FileStripRow {
+  id: string // ImportBatch.id for a batch row; RunFile.id for a run-only failure row
+  filename: string // resolved label; never '', never the literal null
+  reason: string | null // null iff the file produced at least one ready invoice
+}
+
+// `rows_valid` is the batch-level proxy for "produced at least one ready invoice":
+// service.go's readyGroups either succeed WHOLESALE (their rows stay counted in
+// rowsValid) or fail WHOLESALE (rowsValid -= len(g.rowIdxs), service.go:852) -- there is
+// no partial-invoice state -- so `rows_valid === 0` and `ready_invoices === 0` are the
+// same fact for a given batch. NEVER `batch.status`
+// ([reason-comes-from-errors-not-status]) -- a fully-quarantined file still finalizes
+// 'completed' server-side (service.go:923), and its reason lives only in `errors`.
+function batchReason(batch: Pick<ImportBatch, 'rows_valid' | 'rows_total' | 'errors'>): string | null {
+  if (batch.rows_valid > 0) return null
+  if (batch.errors.length > 0) return batch.errors.map((e) => e.message).join('; ')
+  return `0 of ${batch.rows_total} rows produced an invoice`
+}
+
+export function filesStrip(batches: ImportBatch[], run: ImportRun | null): FileStripRow[] {
+  const batchRows: FileStripRow[] = batches.map((b) => ({
+    id: b.id,
+    filename: filenameLabel(b.filename),
+    reason: batchReason(b),
+  }))
+  // Run-only failures: a file whose outcome never became a batch at all
+  // (FileOutcome's 'failed' kind carries no batchId), so it is never represented among
+  // `batches` above and vanishes the moment `run` is null (a reload). Mirrors
+  // importRun.ts's own runFailures loop.
+  const runOnlyFailures: FileStripRow[] = []
+  for (const f of run?.files ?? []) {
+    if (f.outcome.kind === 'failed') runOnlyFailures.push({ id: f.id, filename: f.name, reason: f.outcome.message })
+  }
+  return [...batchRows, ...runOnlyFailures]
+}
+
+// --- Per-row source file (AC-11) ---
+//
+// sourceFileLabel resolves ONE invoice row's import_batch_id back to its batch's
+// filename -- `null` for an id absent from `batches` AND for a batch whose filename was
+// never recorded (rows written before BULK-01-01's migration), so the caller can choose
+// to render nothing rather than a fabricated label. This is a DIFFERENT contract from
+// filesStrip/reviewHeaderAll/unreadableRowsAll above, which always render a fixed
+// cell/line and so fall back to the literal "source not recorded" instead of null.
+export function sourceFileLabel(
+  importBatchId: string | null,
+  batches: Pick<ImportBatch, 'id' | 'filename'>[],
+): string | null {
+  if (importBatchId == null) return null
+  return batches.find((b) => b.id === importBatchId)?.filename ?? null
+}
+
+// showsSourceFile is the SOLE owner of the "only when the run touched more than one
+// batch" rule (AC-11) -- a single-file review has nothing to disambiguate, so no
+// component re-derives this threshold on its own.
+export function showsSourceFile(batches: unknown[]): boolean {
+  return batches.length > 1
 }
 
 // --- INVCR-01-10 (task-286): the review Invoices tab's whole model ---
@@ -509,6 +753,18 @@ export function reviewPageQuery(batchId: string, s: ReviewFilterState): ListInvo
   return reviewQuery(batchId, s.pill, {
     // `?? undefined` rather than `as string`: reviewQuery's `ruleKey` is optional and a
     // literal `null` would be emitted by neither its truthiness check nor listInvoices'.
+    ruleKey: s.ruleKey ?? undefined,
+    q: s.q,
+    limit: REVIEW_PAGE_SIZE,
+    offset: s.offset,
+  })
+}
+
+// Additive sibling of reviewPageQuery, over every id in a run. Consumes reviewQueryAll
+// (not reviewQuery), matching reviewPageQuery's own discipline of never re-implementing
+// the composer it sits on.
+export function reviewPageQueryAll(batchIds: string[], s: ReviewFilterState): ListInvoicesOptions {
+  return reviewQueryAll(batchIds, s.pill, {
     ruleKey: s.ruleKey ?? undefined,
     q: s.q,
     limit: REVIEW_PAGE_SIZE,

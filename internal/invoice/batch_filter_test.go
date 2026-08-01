@@ -34,10 +34,32 @@
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5434/invoice_os?sslmode=disable" \
 //	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5434/invoice_os?sslmode=disable" \
 //	go test -count=1 -p 1 ./internal/invoice/...
+//
+// BULK-01-02 (task-306) addendum: ListFilter.ImportBatchID widened to
+// ImportBatchIDs []string ([one-review-screen]) so the review screen can
+// narrow across every batch a multi-file run produced, on one query
+// (`= ANY($n)`, no cast -- Decision 2). The 6 ListFilter{ImportBatchID: ...}
+// sites above are MIGRATED IN PLACE to one-element slices (every existing
+// assertion keeps its meaning); new multi-id specs are appended at the
+// bottom of this file:
+//
+//	BULK-02-1 TestStoreList_SeveralImportBatchIDsUnion                       (AC-1)
+//	BULK-02-2 TestStoreList_OneImportBatchIDUnchanged                        (AC-1)
+//	BULK-02-3 TestStoreList_EmptyOrNilImportBatchIDsIsAbsent                 (AC-1)
+//	BULK-02-4 TestStoreList_SeveralImportBatchIDsNarrowBeforePaging          (AC-1)
+//	BULK-02-6 TestStoreList_MalformedImportBatchIDMemberIsValidationError    (AC-3)
+//	BULK-02-7 TestRLS_SeveralImportBatchIDsCrossTenantMemberIsInvisible      (AC-9)
+//
+// Store.List's own Mode A stub (store.go) narrows on ONLY
+// f.ImportBatchIDs[0] via plain "=" -- the several-ids union is deliberately
+// NOT implemented yet, so every spec above except BULK-02-2/3 fails on
+// membership/total or on a nil error where ErrValidation is wanted, never on
+// a compile or setup error.
 package invoice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -166,7 +188,7 @@ func TestStoreList_ImportBatchIDNarrowsBeforePaging(t *testing.T) {
 	// The real assertion: batch A's 3 rows are NOT in that newest-50 window,
 	// yet List(ImportBatchID: batchA, Limit: 50) must still return all 3 --
 	// proving the WHERE narrows before LIMIT runs, not after.
-	items, total, err := store.List(c, ListFilter{ImportBatchID: batchA, Limit: 50, Offset: 0})
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Limit: 50, Offset: 0})
 	if err != nil {
 		t.Fatalf("List (ImportBatchID: batchA): %v", err)
 	}
@@ -216,7 +238,7 @@ func TestRLS_ListImportBatchIDCrossTenantIsEmptyNot404(t *testing.T) {
 
 	// Cross-tenant: tenant 1 filtering by tenant 2's batch id must return an
 	// empty page with total 0 -- never 404, never tenant 2's rows.
-	crossItems, crossTotal, err := store.List(c1, ListFilter{ImportBatchID: batchB, Limit: 50})
+	crossItems, crossTotal, err := store.List(c1, ListFilter{ImportBatchIDs: []string{batchB}, Limit: 50})
 	if err != nil {
 		t.Fatalf("List (tenant 1, ImportBatchID: tenant 2's batch B) err = %v, want nil -- a cross-tenant batch id must be an EMPTY page, never an error/404", err)
 	}
@@ -230,7 +252,7 @@ func TestRLS_ListImportBatchIDCrossTenantIsEmptyNot404(t *testing.T) {
 	// Same-tenant leg, in the SAME test: proves the empty result above is
 	// RLS narrowing an already-nonzero row set, not a vacuous pass from
 	// tenant 1 never owning any rows of its own.
-	sameItems, sameTotal, err := store.List(c1, ListFilter{ImportBatchID: batchA, Limit: 50})
+	sameItems, sameTotal, err := store.List(c1, ListFilter{ImportBatchIDs: []string{batchA}, Limit: 50})
 	if err != nil {
 		t.Fatalf("List (tenant 1, ImportBatchID: batchA): %v", err)
 	}
@@ -267,7 +289,7 @@ func TestStoreList_FiltersAreANDed(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	items, total, err := store.List(c, ListFilter{ImportBatchID: batchA, Status: StatusValidated, Limit: 50})
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Status: StatusValidated, Limit: 50})
 	if err != nil {
 		t.Fatalf("List (ImportBatchID: batchA, Status: validated): %v", err)
 	}
@@ -567,7 +589,7 @@ func TestStoreList_QueryANDsWithImportBatchID(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	items, total, err := store.List(c, ListFilter{ImportBatchID: batchA, Query: "acme", Limit: 50})
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Query: "acme", Limit: 50})
 	if err != nil {
 		t.Fatalf("List (ImportBatchID: batchA, Query: acme): %v", err)
 	}
@@ -601,7 +623,7 @@ func TestStoreList_EmptyBatchReturnsEmptySliceNotNil(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	items, total, err := store.List(c, ListFilter{ImportBatchID: batchID, Limit: 50})
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Limit: 50})
 	if err != nil {
 		t.Fatalf("List (ImportBatchID: an empty batch): %v", err)
 	}
@@ -613,5 +635,272 @@ func TestStoreList_EmptyBatchReturnsEmptySliceNotNil(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("List (ImportBatchID: an empty batch) len = %d, want 0", len(items))
+	}
+}
+
+// --- BULK-01-02 (task-306): several import_batch_ids on one Store.List query ---
+
+// TestStoreList_SeveralImportBatchIDsUnion (BULK-02-1, AC-1): three batches
+// seeded with 2/3/1 invoices respectively -- ImportBatchIDs=[batch1,batch3]
+// must return the UNION of batch1's and batch3's rows (total 3), excluding
+// batch2's 3 entirely. A first-element-only (or last-element-only)
+// implementation would return 2 or 1, never the union's 3.
+func TestStoreList_SeveralImportBatchIDsUnion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-UNION tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-UNION entity")
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+	batch3 := seedImportBatch(t, super, tenantID, entityID)
+
+	var wantIDs []string
+	for i := 0; i < 2; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAt(t, super, tenantID, entityID, fmt.Sprintf("UNION-B1-%d", i), &batch1, time.Now().UTC()))
+	}
+	for i := 0; i < 3; i++ {
+		seedInvoiceWithBatchAt(t, super, tenantID, entityID, fmt.Sprintf("UNION-B2-%d", i), &batch2, time.Now().UTC())
+	}
+	wantIDs = append(wantIDs, seedInvoiceWithBatchAt(t, super, tenantID, entityID, "UNION-B3-0", &batch3, time.Now().UTC()))
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch3}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch3]): %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch3]).total = %d, want 3 (2 from batch1 + 1 from batch3, batch2's 3 excluded)", total)
+	}
+	if len(items) != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch3]) len = %d, want 3", len(items))
+	}
+	want := map[string]bool{}
+	for _, id := range wantIDs {
+		want[id] = true
+	}
+	for _, inv := range items {
+		if !want[inv.ID] {
+			t.Errorf("List (ImportBatchIDs: [batch1, batch3]) returned an invoice not in batch1 or batch3: %s", inv.ID)
+		}
+	}
+}
+
+// TestStoreList_OneImportBatchIDUnchanged (BULK-02-2, AC-1): a one-element
+// ImportBatchIDs slice must return EXACTLY what the shipped single-id filter
+// returned before this subtask -- backward compatibility is total.
+func TestStoreList_OneImportBatchIDUnchanged(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-ONEID tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-ONEID entity")
+	batchA := seedImportBatch(t, super, tenantID, entityID)
+	batchB := seedImportBatch(t, super, tenantID, entityID)
+
+	var wantIDs []string
+	for i := 0; i < 3; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAt(t, super, tenantID, entityID, fmt.Sprintf("ONEID-A-%d", i), &batchA, time.Now().UTC()))
+	}
+	for i := 0; i < 2; i++ {
+		seedInvoiceWithBatchAt(t, super, tenantID, entityID, fmt.Sprintf("ONEID-B-%d", i), &batchB, time.Now().UTC())
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchA}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batchA]): %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batchA]).total = %d, want 3 (batch A's own count, unaffected by batch B's 2)", total)
+	}
+	if len(items) != 3 {
+		t.Fatalf("List (ImportBatchIDs: [batchA]) len = %d, want 3", len(items))
+	}
+	seen := map[string]bool{}
+	for _, inv := range items {
+		seen[inv.ID] = true
+	}
+	for _, id := range wantIDs {
+		if !seen[id] {
+			t.Errorf("List (ImportBatchIDs: [batchA]) is missing batch A's invoice %s", id)
+		}
+	}
+}
+
+// TestStoreList_EmptyOrNilImportBatchIDsIsAbsent (BULK-02-3, AC-1): an empty
+// (non-nil, zero-length) slice AND a nil slice must both apply NO predicate
+// -- the tenant-wide page -- never an empty-result WHERE. `= ANY('{}')`
+// (binding an empty array) matches NOTHING, which is exactly the regression
+// this guards: the fragment must be gated on `len(f.ImportBatchIDs) > 0`,
+// never a bare `f.ImportBatchIDs != nil`.
+func TestStoreList_EmptyOrNilImportBatchIDsIsAbsent(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-EMPTYSLICE tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-EMPTYSLICE entity")
+	batchA := seedImportBatch(t, super, tenantID, entityID)
+
+	for i := 0; i < 3; i++ {
+		seedInvoiceWithBatchAt(t, super, tenantID, entityID, fmt.Sprintf("EMPTYSLICE-%d", i), &batchA, time.Now().UTC())
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	nilItems, nilTotal, err := store.List(c, ListFilter{ImportBatchIDs: nil, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: nil): %v", err)
+	}
+	if nilTotal != 3 {
+		t.Fatalf("List (ImportBatchIDs: nil).total = %d, want 3 (tenant-wide, unfiltered)", nilTotal)
+	}
+	if len(nilItems) != 3 {
+		t.Fatalf("List (ImportBatchIDs: nil) len = %d, want 3", len(nilItems))
+	}
+
+	emptyItems, emptyTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: []): %v", err)
+	}
+	if emptyTotal != 3 {
+		t.Fatalf("List (ImportBatchIDs: []).total = %d, want 3 (tenant-wide, unfiltered -- a `= ANY('{}')` regression would return 0)", emptyTotal)
+	}
+	if len(emptyItems) != 3 {
+		t.Fatalf("List (ImportBatchIDs: []) len = %d, want 3", len(emptyItems))
+	}
+}
+
+// TestStoreList_SeveralImportBatchIDsNarrowBeforePaging (BULK-02-4, AC-1):
+// three batches of 60 invoices each (180 total); filtering by TWO of the
+// three ids with Limit:50 must report pagination.total 120 (2 batches x 60),
+// never 180 (all three, unfiltered) and never 50 (the page size mistaken for
+// the total).
+func TestStoreList_SeveralImportBatchIDsNarrowBeforePaging(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-MULTIPAGE tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-MULTIPAGE entity")
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+	batch3 := seedImportBatch(t, super, tenantID, entityID)
+
+	for _, b := range []string{batch1, batch2, batch3} {
+		for i := 0; i < 60; i++ {
+			seedInvoiceWithBatchAt(t, super, tenantID, entityID, fmt.Sprintf("MULTIPAGE-%s-%d", b, i), &b, time.Now().UTC())
+		}
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	// Sanity: the tenant-wide unfiltered total really is 180.
+	_, unfilteredTotal, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (unfiltered sanity): %v", err)
+	}
+	if unfilteredTotal != 180 {
+		t.Fatalf("List (unfiltered) total = %d, want 180 (3 batches x 60) -- fixture assumption broken", unfilteredTotal)
+	}
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch2}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2]): %v", err)
+	}
+	if total != 120 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2]).total = %d, want 120 (2 batches x 60), not 180 (tenant-wide) and not 50 (page size)", total)
+	}
+	if len(items) != 50 {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], limit=50) len = %d, want 50 (the page window, even though total is 120)", len(items))
+	}
+}
+
+// TestStoreList_MalformedImportBatchIDMemberIsValidationError (BULK-02-6,
+// AC-3): a second, malformed member in ImportBatchIDs must map to
+// ErrValidation, not a raw 500 -- proven against the REAL DB (dbTestPools,
+// DATABASE_URL/DATABASE_SUPERUSER_URL), the only way to tell a genuine
+// Postgres 22P02 (invalid_text_representation, the server's own uuid parser
+// rejecting it) apart from a client-side pgx encode failure. Verified
+// empirically (BULK-01-02, live against this worktree's DB): binding a Go
+// []string containing one malformed member via `= ANY($1)` against a uuid
+// column encodes in TEXT format with each member written verbatim, so the
+// malformed one reaches Postgres's own uuid parser (string_to_uuid) and
+// raises 22P02 there -- SQLSTATE 22P02, Routine "string_to_uuid" -- exactly
+// where today's single-id path already lands, so the existing
+// pgCode(err) == "22P02" check maps it correctly once the store binds the
+// WHOLE slice via ANY(), no ::uuid[] cast needed.
+func TestStoreList_MalformedImportBatchIDMemberIsValidationError(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-MALFORMED tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-MALFORMED entity")
+	valid := seedImportBatch(t, super, tenantID, entityID)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	_, _, err := store.List(c, ListFilter{ImportBatchIDs: []string{valid, "not-a-uuid"}, Limit: 50})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf(`List (ImportBatchIDs: [valid, "not-a-uuid"]) err = %v, want ErrValidation`, err)
+	}
+}
+
+// TestRLS_SeveralImportBatchIDsCrossTenantMemberIsInvisible (BULK-02-7,
+// AC-9): tenant 1 filters by a slice containing tenant 2's batch id
+// ALONGSIDE its own -- RLS must silently drop tenant 2's rows from the union
+// (never an error, never a 404), returning ONLY tenant 1's own rows and
+// total. The cross-tenant id is placed FIRST in the slice so a
+// first-element-only implementation (today's Mode A stub) returns 0 rather
+// than tenant 1's real count -- discriminating it from the eventual
+// `= ANY($n)` union, under which RLS alone (not the WHERE fragment) is what
+// makes tenant 2's id contribute nothing.
+func TestRLS_SeveralImportBatchIDsCrossTenantMemberIsInvisible(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenant1 := seedTenant(t, super, "BATCH-FILTER-RLS-MULTI tenant 1")
+	tenant2 := seedTenant(t, super, "BATCH-FILTER-RLS-MULTI tenant 2")
+	entity1 := seedEntity(t, super, tenant1, "BATCH-FILTER-RLS-MULTI entity 1")
+	entity2 := seedEntity(t, super, tenant2, "BATCH-FILTER-RLS-MULTI entity 2")
+
+	batchA := seedImportBatch(t, super, tenant1, entity1)
+	batchB := seedImportBatch(t, super, tenant2, entity2)
+
+	var wantIDs []string
+	for i := 0; i < 2; i++ {
+		wantIDs = append(wantIDs, seedInvoiceWithBatchAt(t, super, tenant1, entity1, fmt.Sprintf("RLS-MULTI-A-%d", i), &batchA, time.Now().UTC()))
+	}
+	for i := 0; i < 3; i++ {
+		seedInvoiceWithBatchAt(t, super, tenant2, entity2, fmt.Sprintf("RLS-MULTI-B-%d", i), &batchB, time.Now().UTC())
+	}
+
+	store := NewStore(app)
+	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
+
+	items, total, err := store.List(c1, ListFilter{ImportBatchIDs: []string{batchB, batchA}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (tenant 1, ImportBatchIDs: [batchB, batchA]) err = %v, want nil", err)
+	}
+	if total != 2 {
+		t.Fatalf("List (tenant 1, ImportBatchIDs: [batchB, batchA]).total = %d, want 2 (tenant 1's own batch A rows only; tenant 2's batch B contributes nothing under RLS)", total)
+	}
+	if len(items) != 2 {
+		t.Fatalf("List (tenant 1, ImportBatchIDs: [batchB, batchA]) len = %d, want 2", len(items))
+	}
+	seen := map[string]bool{}
+	for _, inv := range items {
+		seen[inv.ID] = true
+	}
+	for _, id := range wantIDs {
+		if !seen[id] {
+			t.Errorf("List (tenant 1, ImportBatchIDs: [batchB, batchA]) is missing tenant 1's own invoice %s", id)
+		}
 	}
 }

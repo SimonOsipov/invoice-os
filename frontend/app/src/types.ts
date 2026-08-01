@@ -5,7 +5,12 @@
 // import here would form a cycle. `AuthedFetch`/`Entity` are only ever used as types below.
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
-import type { ImportPreview, UploadPhase } from './lib/importApi'
+import type { ImportPreview } from './lib/importApi'
+import type { ImportRun, PickedFile } from './lib/importRun'
+// Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
+// `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
+// TS1484), same shape as the pre-existing PickedFile/Member edges.
+import type { MappingGroup } from './lib/mappingGroups'
 // Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
 // `./data`, both of which type-import this file, so `Member` closes the loop
 // members -> auth/data -> types -> members. Benign only because every edge in it is
@@ -170,7 +175,7 @@ export type View = 'dashboard' | 'invoices' | 'validation' | 'rules' | 'workflow
 // 'form' and that. INVCR-01-04 renamed the last member to 'review' ([three-stages]): the
 // stage is the user's REVIEW SURFACE, not an import-report payload rendered on it — and
 // INVCR-01-09 cashed that distinction by deleting CreateReport.tsx outright. 'review' now
-// renders ReviewBatch.tsx off `reviewBatchId` + two live GETs, which is also why the step
+// renders ReviewBatch.tsx off `reviewBatchIds` + two live GETs, which is also why the step
 // is reachable by URL (`#review/<uuid>`) where the payload-backed one never could be.
 export type CreateStep = 'upload' | 'mapping' | 'form' | 'review'
 
@@ -251,6 +256,10 @@ export type PlatformCtx = {
   view: View
   draft: Draft
   createStep: CreateStep
+  // The active group's mapping (BULK-01-04) — a DERIVED read of
+  // `groups[groupIndex]?.mapping ?? null` in App.tsx, not its own state any more.
+  // `assign`/`unmap` write back into `groups[groupIndex].mapping` instead of a
+  // standalone setter. See `groups`/`groupIndex` below.
   mapping: Mapping | null
   armedField: string | null
   dragField: string | null
@@ -318,17 +327,52 @@ export type PlatformCtx = {
   // picker of its own since [import-upload-unify] — it mirrors `active` — but it is
   // read at createImport time, so it must survive that unmount too.)
   entityId: string | null
-  importFile: File | null
+  // The run's ordered file selection (BULK-01-03, Core AC 1) — CreateUpload's
+  // chosen-files list, per-file remove controls and per-file bad-extension notes all
+  // render off this. Lives on ctx, not CreateUpload's local state, for the same reason
+  // `entityId` does ([multi-invoice import path] above): CreateUpload UNMOUNTS when
+  // createStep leaves 'upload'.
+  pickedFiles: PickedFile[]
+  // The refusal text from the most recent addPickedFiles call (lib/importRun's
+  // capRefusal) — null when nothing was dropped. Same idiom as `importError`: state
+  // lives on ctx, the component renders it verbatim.
+  filesRefusal: string | null
+  // Files sharing an identical column layout are mapped ONCE (BULK-01-04, Core AC 3,
+  // decision [shared-mapping-shown]) — App.tsx's readAllColumns previews every picked
+  // file, then lib/mappingGroups.ts's groupByLayout buckets them by columnSignature,
+  // preserving first-appearance order. `mapping`/`preview` above/below are DERIVED reads
+  // of `groups[groupIndex]`, not their own state. `MappingGroup` is pure client state
+  // ([run-is-client-state]) — no table, no endpoint, no group id crosses the wire.
+  groups: MappingGroup[]
+  // Which group the mapping step currently shows. `continueMapping` advances this on a
+  // complete mapping and starts the run only once it is the LAST group.
+  groupIndex: number
   preview: ImportPreview | null
-  uploadPhase: UploadPhase
+  // The sequential run's whole state (BULK-01-05, task-308) — one createImport in
+  // flight at a time, one outcome per file, continuation through failures
+  // ([partial-success-kept]). App.tsx's startRun() is the sole writer, via
+  // lib/importRun.ts's runReducer; every view over it (runBatchIds/runFailures/
+  // runFileRows/routeAfterRun) is a pure derivation of THIS value, never re-computed
+  // ad hoc by a component. `status: 'idle'` both before a run starts and once
+  // applyRoute has drained a finished run into `reviewBatchIds`/an opened invoice.
+  // `'failed'` (BULK-01-05 QA correction, task-308) is a distinct landing applyRoute
+  // sets on a `none` route (AC #9) instead of resetting to idle — `files`/`cursor`
+  // survive so runFailures keeps returning them, and CreateMapping renders again
+  // (runIsActive treats 'failed' like 'idle') until the user backs out via
+  // restartImport/resetImport, or starts another run.
+  run: ImportRun
   importError: ApiError | null
-  // The batch the review step is showing (INVCR-01-09). REPLACES the old
-  // `report: ImportReport | null`, which was the POST's frozen 201 payload held in
-  // memory: D4 made the review screen revisitable by URL (`#review/<uuid>`), so it
-  // re-fetches from GET /v1/imports/{id} + the list endpoint's own totals instead, and
-  // a stale in-memory report is exactly the frozen-counter source that replaced. An id
-  // is all any consumer needs; nothing may resurrect the payload.
-  reviewBatchId: string | null
+  // The batches the review step is showing (INVCR-01-09, widened BULK-01-05).
+  // REPLACES the old singular `reviewBatchId: string | null` — a run's `review` route
+  // (lib/importRun's routeAfterRun) carries every batch id created in the run, in run
+  // order, and none may be dropped just because the review screen itself is not yet
+  // widened to read more than the first (BULK-01-06). REPLACES the old
+  // `report: ImportReport | null` before that, which was the POST's frozen 201 payload
+  // held in memory: D4 made the review screen revisitable by URL (`#review/<uuid>`),
+  // so it re-fetches from GET /v1/imports/{id} + the list endpoint's own totals
+  // instead, and a stale in-memory report is exactly the frozen-counter source that
+  // replaced. An id is all any consumer needs; nothing may resurrect the payload.
+  reviewBatchIds: string[]
   // Set by openImportedInvoice (M4-08-05) when the user clicks through to a real
   // invoice. Mutually exclusive with `selectedId` by construction — both are members
   // of one DetailSelection atom in App.tsx (lib/importReport.ts), so neither can be left
@@ -358,8 +402,24 @@ export type PlatformCtx = {
   clickCol: (header: string) => void
   unmap: (header: string) => void
   continueMapping: () => void
-  selectImportFile: (f: File | null) => void
-  readColumns: () => void
+  // Multi-file selection (BULK-01-03): addPickedFiles appends onto `pickedFiles` via
+  // lib/importRun's addFiles (capped at MAX_RUN_FILES, never silently truncating —
+  // `filesRefusal` carries the refusal text when it drops any). removePickedFile removes
+  // one entry by id, preserving the order of the rest, and also clears `filesRefusal` —
+  // a refusal names files that were NOT added, so removing one already-added file can
+  // never be what that message is still talking about.
+  addPickedFiles: (files: File[]) => void
+  removePickedFile: (id: string) => void
+  // Previews every picked file one at a time (BULK-01-04) and, on success, buckets them
+  // into `groups` via lib/mappingGroups.ts's groupByLayout. A preview failure sets
+  // `importError` naming the failing file and stays on 'upload' — never silently drops
+  // the file, never carries it into the run. Renamed from the single-file `readColumns`.
+  readAllColumns: () => void
+  // Splits `fileId` out of whichever group currently holds it
+  // (lib/mappingGroups.ts's splitOut) — a no-op on a single-file group. The split
+  // group's mapping is a COPY of the shared group's mapping at split time, never a
+  // fresh seed ([split-copies-the-mapping]).
+  splitOutFile: (fileId: string) => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected
   // file", §7.5's "Choose another file"): resetImport THEN backToImport, as one action so

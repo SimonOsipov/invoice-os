@@ -84,6 +84,19 @@ async function goTo(page: Page, label: string): Promise<void> {
   await navButton(page, label).click()
 }
 
+// navLabelSpan()/navIconSpan(): the two unclassed spans a nav button renders around its
+// glyph (Sidebar.tsx:238-240). getByText resolves to the INNERMOST element carrying that
+// exact text, so it lands on the label span even when a badge sibling makes the button's
+// own text longer; :has(svg) isolates the icon wrapper the same way, since that is the
+// only span with an <svg> descendant.
+function navLabelSpan(page: Page, label: string) {
+  return navButton(page, label).getByText(label, { exact: true })
+}
+
+function navIconSpan(page: Page, label: string) {
+  return navButton(page, label).locator('span:has(svg)')
+}
+
 // invoiceRowByNumber(): filter({ has }) with an EXACT text match, not { hasText } -- every
 // fixture number below carries the same Date.now() stamp, so a substring filter could match
 // two rows whose numbers share a prefix.
@@ -460,6 +473,56 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
   await expect(page.getByTestId('invoices-list')).toBeVisible()
   await expect(invoiceRowByNumber(page, firmNumberA)).toBeVisible()
   await expect(invoiceRowByNumber(page, firmNumberB)).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ---------------------------------------------------------------------------------------
+// Test 5 -- nav glyph/icon-column alignment (task-327, BUG-01-01, AC-3/AC-4)
+// ---------------------------------------------------------------------------------------
+// Sidebar.tsx wraps each nav glyph in an UNSIZED span, so a glyph's own width leaks into
+// where its label starts. Scope choice: FIRM_ROSTER, which spans BOTH firm nav groups
+// (CLIENT: Overview/Invoices/Validation/Rules/Customers/Reports, FIRM-WIDE: Workflows/
+// Clients/Settings, Sidebar.tsx:117-118) -- required, not incidental: NAV_CLIENTS (the
+// 14px forked glyph) lives in FIRM-WIDE and NAV_VALIDATION (the 16px shieldGlyph) lives in
+// CLIENT, so scoping to a single group would miss one of the two reported defects.
+//
+// Cannot be run locally -- this package's vitest projects run in `node` with no DOM
+// layer (docs/e2e-convention.md:71-73) -- so this cannot go RED in a local run; its first
+// green run is the post-deploy gate (dev-env.yml). Today's pre-fix values, measured
+// against the deployed build: label x = 45 (Clients), 47 (Validation), 48 (every other
+// item) -- three distinct icon widths leaking into three distinct label offsets.
+test('nav-alignment: every sidebar nav item renders its label and icon column at an identical x', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  await signInAs(page, 'firm')
+  await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+
+  const labelX: number[] = []
+  const iconX: number[] = []
+  const iconWidth: number[] = []
+  for (const label of FIRM_ROSTER) {
+    const labelBox = await navLabelSpan(page, label).boundingBox()
+    const iconBox = await navIconSpan(page, label).boundingBox()
+    expect(labelBox, `${label}: label span not found`).toBeTruthy()
+    expect(iconBox, `${label}: icon column not found`).toBeTruthy()
+    labelX.push(labelBox!.x)
+    iconX.push(iconBox!.x)
+    iconWidth.push(iconBox!.width)
+  }
+
+  const [firstLabelX, ...restLabelX] = labelX
+  for (const x of restLabelX) {
+    expect(x, `label x must match every other nav item's (${JSON.stringify(labelX)})`).toBe(firstLabelX)
+  }
+  const [firstIconX, ...restIconX] = iconX
+  for (const x of restIconX) {
+    expect(x, `icon-column x must match every other nav item's (${JSON.stringify(iconX)})`).toBe(firstIconX)
+  }
+  const [firstIconWidth, ...restIconWidth] = iconWidth
+  for (const width of restIconWidth) {
+    expect(width, `icon-column width must match every other nav item's (${JSON.stringify(iconWidth)})`).toBe(firstIconWidth)
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

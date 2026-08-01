@@ -182,13 +182,13 @@ test('support-console: Re-drive all clears the dead-letter queue everywhere it i
 
   // The toast FIRST: it self-clears after 3400ms (App.tsx:85), so any slower assertion
   // placed ahead of it would race. This console's Toast carries role="status" (Toast.tsx:28)
-  // where the ops console's does not, and asserting the message and the AUDIT LOGGED tag on
+  // where the ops console's does not, and asserting the message and the accreditation tag on
   // the SAME element proves the tag belongs to this toast rather than merely being on the
   // page. The message's number comes from the rows actually transformed (App.tsx:110-112),
   // not from the badge.
   const toast = page.getByRole('status')
-  await expect(toast).toContainText(`Re-drove ${n} dead-letter ${n === 1 ? 'job' : 'jobs'}`)
-  await expect(toast).toContainText('AUDIT LOGGED')
+  await expect(toast).toContainText(`Re-drive queued \u00b7 ${n} dead-letter ${n === 1 ? 'job' : 'jobs'}`)
+  await expect(toast).toContainText('AUDIT ON ACCREDITATION')
 
   // Every reporter of the count now agrees it is empty. The badge is not rendered at all at
   // zero, so that one is an absence assertion, not a "shows 0" assertion.
@@ -308,7 +308,7 @@ test('support-console: tenant search narrows the list, selection fills the detai
   await page.getByRole('button', { name: 'View-as (read-only)' }).click()
   const toast = page.getByRole('status')
   await expect(toast).toContainText(`Opened ${selectedName} in read-only view-as`)
-  await expect(toast).toContainText('AUDIT LOGGED')
+  await expect(toast).toContainText('AUDIT ON ACCREDITATION')
 
   expect(errors, `console errors looking up a support tenant:\n${errors.join('\n')}`).toEqual([])
 })

@@ -150,6 +150,9 @@ func TestGatewayMainPassesRawEnvironmentToProvisioningGuard(t *testing.T) {
 		t.Fatal("cmd/gateway/main.go does not yet call db.Provision(...) or db.BootstrapEnabled(...) — task-128's boot-sequence wiring is not in place yet")
 	}
 
+	// main.go:51 names app.Config.Environment in prose (explaining why NOT to use it) a
+	// few lines above this window's lower edge. Shrinking that comment block by more
+	// than ~4 lines pulls the prose into the window and false-fails this test.
 	start := max(0, idx-300)
 	end := min(len(src), idx+500)
 	window := src[start:end]

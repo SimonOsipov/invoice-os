@@ -87,18 +87,16 @@ import type {
 
 const INITIAL_CONNECTORS: ConnectorsState = { sap: true, quickbooks: true, oracle: false, sage: false, odoo: false, dynamics: false }
 
-// Environment banner under the header, one per state. Adopted from ops-console
-// TopBar.tsx, which states the environment in BOTH states — the app previously
-// showed a banner only in sandbox, so "live" was conveyed by absence. Copy stays in
-// the app's transmission-centric voice rather than the ops console's key-centric one
-// ("sk_live"/"sk_test" are a developer-console concern, not an accountant's).
-const ENV_BANNER = {
+// Environment banner under the header, one per state — the environment is always
+// stated, never conveyed by absence. `live` cannot render while the LIVE segment is
+// disabled (Header.tsx); it is kept as the copy that ships when filing switches on.
+export const ENV_BANNER = {
   sandbox: {
     bg: 'var(--status-amber-bg)',
     border: 'var(--status-amber-border)',
     text: 'var(--status-amber-text)',
     icon: flaskGlyph,
-    msg: 'Sandbox environment — transmissions are simulated against the NRS test adapter. No live data is sent.',
+    msg: 'Sandbox environment — invoices are validated and stamped against simulated clearance, not filed with NRS. Live filing switches on at accreditation.',
     tag: 'TEST DATA · SIMULATED',
   },
   live: {
@@ -106,10 +104,14 @@ const ENV_BANNER = {
     border: 'var(--teal-200)',
     text: 'var(--action-soft)',
     icon: shieldGlyph15,
-    msg: 'Live environment — transmissions are sent to NRS and return legally-valid clearance evidence.',
-    tag: 'PRODUCTION · NRS',
+    msg: 'Live environment — filing to NRS switches on at accreditation.',
+    tag: 'PENDING ACCREDITATION',
   },
 } as const
+
+// Exported so a test can assert the shipped default without mounting Workspace, which
+// needs a session and a live entities fetch.
+export const SANDBOX_DEFAULT = true
 
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
@@ -247,7 +249,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
   const [filter, setFilter] = useState('all')
   const [switcherOpen, setSwitcherOpen] = useState(false)
-  const [sandbox, setSandbox] = useState(false)
+  // Every deployment is a sandbox today, so this is a client-side constant, not a
+  // posture value fetched from the server.
+  const [sandbox, setSandbox] = useState(SANDBOX_DEFAULT)
   // Settings opens on Members. This literal is the ONLY thing that decides which tab
   // opens — SETTINGS_TABS' array order decides only which renders first — so the two
   // have to be changed together.
@@ -1132,7 +1136,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
         {(() => {
           const b = ENV_BANNER[sandbox ? 'sandbox' : 'live']
           return (
-            <div style={{ flex: 'none', background: b.bg, borderBottom: `1px solid ${b.border}`, padding: '7px 24px', display: 'flex', alignItems: 'center', gap: 9 }}>
+            <div data-testid="env-banner" style={{ flex: 'none', background: b.bg, borderBottom: `1px solid ${b.border}`, padding: '7px 24px', display: 'flex', alignItems: 'center', gap: 9 }}>
               <span style={{ color: b.text, flex: 'none', display: 'inline-flex' }}>{b.icon}</span>
               <span style={{ fontSize: 12.5, color: b.text, fontWeight: 500 }}>{b.msg}</span>
               <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, color: b.text, opacity: 0.85, letterSpacing: '0.05em' }}>

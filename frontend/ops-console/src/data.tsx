@@ -124,7 +124,7 @@ export const SEED_SUBMISSIONS: Job[] = [
 export const JOB_FILTER_KEYS: JobState[] = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead-letter']
 
 /* ------------------------------------------------------------------ */
-/* Evidence — signed bundles                                           */
+/* Evidence — simulated bundles                                        */
 /* ------------------------------------------------------------------ */
 
 // proto:1203-1236, via the tested pure builder in charts.ts. Derived once at import:
@@ -259,7 +259,7 @@ export const BILL_ITEMS: BillItem[] = [
   { label: 'Scale platform fee', detail: 'Monthly base', qty: '—', amount: naira(SCALE_PLAN.baseFee), color: 'var(--fg-1)' },
   { label: 'Cleared invoices', detail: '46,820 × ₦40', qty: '46,820', amount: naira(computeBillLine(46820, SCALE_PLAN.clearedRate)), color: 'var(--fg-1)' },
   { label: 'Overage requests', detail: '8,214 over included × ₦42', qty: '8,214', amount: naira(computeBillLine(8214, SCALE_PLAN.overageRate)), color: 'var(--status-amber-text)' },
-  { label: 'Evidence exports', detail: '1,020 signed bundles', qty: '1,020', amount: 'included', color: 'var(--fg-3)' },
+  { label: 'Evidence exports', detail: '1,020 evidence bundles', qty: '1,020', amount: 'included', color: 'var(--fg-3)' },
 ]
 
 // proto:1036-1040. Keyed on `id` at render — never on `amount`, which mixes a computed

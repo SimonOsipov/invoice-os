@@ -256,7 +256,7 @@ export const API_BASE = 'https://api.ascomply.com/v1'
 export type ApiKeyDef = { env: 'LIVE' | 'TEST'; envBg: string; envColor: string; key: string; note: string }
 
 export const API_KEYS: ApiKeyDef[] = [
-  { env: 'LIVE', envBg: 'var(--status-green-bg)', envColor: 'var(--status-green-text)', key: 'sk_live_a3F8b91c••••••••••••Kp2Q', note: 'Production — transmits to NRS' },
+  { env: 'LIVE', envBg: 'var(--status-green-bg)', envColor: 'var(--status-green-text)', key: 'sk_live_a3F8b91c••••••••••••Kp2Q', note: 'Production — inactive until NRS accreditation' },
   { env: 'TEST', envBg: 'var(--status-amber-bg)', envColor: 'var(--status-amber-text)', key: 'sk_test_9bX24fe1••••••••••••Lq7', note: 'Sandbox — simulated transmissions' },
 ]
 

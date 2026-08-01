@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -146,18 +147,33 @@ func injectIdentity(pr *httputil.ProxyRequest) {
 	}
 }
 
-// MockIssuerEnabled reports whether the dev/CI mock issuer should be wired in. It
-// is refused in production regardless of the flag, so a misconfigured prod env
-// can never expose the token-mint / JWKS endpoints — defense in depth ahead of
-// the M8-07 production refusal.
+// MockIssuerEnabled reports whether the mock issuer should be wired in: every
+// non-production environment, the public demo included. It is refused in production
+// regardless of the flag, and environment is trimmed and lowercased first (the same
+// normalization submission.IsProduction applies), so "Production" or " production"
+// cannot defeat it. M8-07 still owes the verifier refusing mock-issued tokens.
 func MockIssuerEnabled(environment, flag string) bool {
-	return flag == "true" && environment != "production"
+	return flag == "true" && strings.ToLower(strings.TrimSpace(environment)) != "production"
+}
+
+// loginPersona is an identity the mock issuer will mint for under PostureHosted.
+type loginPersona struct{ subject, tenantID, role string }
+
+// subject and tenant are seeded (db/seed.dev.sql); role is the GoTrue JWT role every
+// client sends, NOT that seed's memberships.role (admin/preparer/reviewer) — changing
+// it to match the seed locks both personas out of the hosted demo. The seed's other
+// two members (…0003 preparer, …0004 reviewer) are assertion fixtures, never login
+// identities; a spec that signs either of them in must extend this table.
+var loginPersonas = []loginPersona{
+	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},
 }
 
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is
-// the dev/CI stand-in for GoTrue's login; main wires it only when the mock issuer
-// is enabled (see MockIssuerEnabled).
-func MockLoginHandler(issuer *auth.MockIssuer) http.HandlerFunc {
+// the mock stand-in for GoTrue's login; main wires it only when the mock issuer
+// is enabled (see MockIssuerEnabled). Under PostureHosted — the one public
+// deployment — it mints only for an exact seeded persona.
+func MockLoginHandler(issuer *auth.MockIssuer, posture platform.PostureKind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Subject  string `json:"subject"`
@@ -167,6 +183,17 @@ func MockLoginHandler(issuer *auth.MockIssuer) http.HandlerFunc {
 		// The body is optional; on any decode error the zero value yields
 		// GoTrue-shaped defaults (random subject, "authenticated" role).
 		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		// Matched raw, before Mint fills its defaults, so an omitted role cannot
+		// default its way into a persona. Preview stays permissive: the tenancy
+		// contract specs mint deliberately mismatched identities — one against a
+		// per-run random tenant no allowlist could hold — to prove /me fails closed.
+		if posture == platform.PostureHosted &&
+			!slices.Contains(loginPersonas, loginPersona{req.Subject, req.TenantID, req.Role}) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+
 		token, err := issuer.Mint(auth.MintOptions{
 			Subject:  req.Subject,
 			Role:     req.Role,

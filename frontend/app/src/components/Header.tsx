@@ -51,7 +51,6 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
   const { active, view, sandbox } = ctx
   const crumb = CRUMB_MAP[view] || 'Overview'
   const sbx = segStyle(sandbox, 'sandbox')
-  const liv = segStyle(!sandbox, 'live')
 
   return (
     <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'oklch(98.5% .008 85 / .82)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
@@ -69,7 +68,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
         </div>
         {/* Sandbox / Live switch — segment heights (28 + 2px padding + 1px border = 34)
             keep the control flush with the search box and "New invoice" beside it. */}
-        <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>
+        <div data-testid="env-pill" style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>
           <button
             type="button"
             onClick={() => ctx.setSandbox(true)}
@@ -80,14 +79,20 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             <span style={{ width: 6, height: 6, borderRadius: 99, background: sbx.dot }} />
             SANDBOX
           </button>
+          {/* Disabled, not hidden — InvoiceDetail.tsx:406-444's idiom, with the banner
+              sentence below the header as the visible reason. The dot mutes too, or LIVE
+              reads "unselected"; no `--bg-3` fill, since in a segment a fill means selected. */}
           <button
             type="button"
+            data-testid="env-pill-live"
             onClick={() => ctx.setSandbox(false)}
+            disabled
             aria-pressed={!sandbox}
+            title="Live filing switches on at NRS accreditation."
             className="pf-btn"
-            style={{ ...SEG_BASE, background: liv.bg, color: liv.color }}
+            style={{ ...SEG_BASE, background: 'transparent', color: 'var(--fg-4)', cursor: 'not-allowed' }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: 99, background: liv.dot }} />
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--fg-4)' }} />
             LIVE
           </button>
         </div>

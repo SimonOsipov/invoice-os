@@ -94,11 +94,9 @@ func Select(reg Registry, environment, name string) (Adapter, error) {
 // (whether to log.Fatalf when no adapter is selectable) uses this exact normalization
 // instead of duplicating it with a second, unnormalized comparison.
 //
-// internal/gateway.MockIssuerEnabled gates the dev/CI mock issuer with the same
-// `environment != "production"` exact match and is deliberately NOT changed here -- it
-// guards two dev-only routes, not a boot, and is a different story's code. Reconciling the
-// two notions of "production" belongs to M8-07, which MockIssuerEnabled's own comment
-// already defers to.
+// internal/gateway.MockIssuerEnabled applies this same trim+lowercase normalization
+// inline, so the issuer and adapter gates read "production" identically. M8-07 still
+// owes the verifier refusing mock-issued tokens.
 func IsProduction(environment string) bool {
 	return strings.ToLower(strings.TrimSpace(environment)) == "production"
 }

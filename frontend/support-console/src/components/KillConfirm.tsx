@@ -36,7 +36,7 @@ export function KillConfirm({ ruleKey, env, onClose, onConfirm }: Props) {
         <div style={{ background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', borderRadius: 'var(--radius-input)', padding: '10px 12px', display: 'flex', gap: 9 }}>
           <span style={{ color: 'var(--status-amber-text)', flex: 'none' }}>{ALERT_ICON}</span>
           <span style={{ fontSize: 12, color: 'var(--status-amber-text)', lineHeight: 1.5 }}>
-            This action is recorded in the immutable audit log against your operator identity.
+            After NRS accreditation, disabling a rule is attributed to your operator identity in the audit log.
           </span>
         </div>
       </div>

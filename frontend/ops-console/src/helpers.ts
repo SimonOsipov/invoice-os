@@ -127,7 +127,7 @@ export function buildSubmissionDrawer(j: Job, env: Env, amount: string, checkGly
           true,
           true,
           j.state === 'accepted' ? '09:14:22' : '09:20:00',
-          j.state === 'accepted' ? 'IRN issued \u00b7 evidence signed' : 'awaiting clearance',
+          j.state === 'accepted' ? 'IRN issued \u00b7 evidence recorded' : 'awaiting clearance',
         ),
   ]
   const ok = { icon: checkGlyph, color: 'var(--status-green-text)' }

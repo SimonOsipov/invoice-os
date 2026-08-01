@@ -41,6 +41,10 @@ import (
 // superuser DSN) could never have run and left invoices behind in the first
 // place. Tolerates "does not exist" for the same reason the schema-reset itself
 // does — the very first DownTo(0) in a run may target an unmigrated schema.
+//
+// Order is load-bearing: submission_jobs -> invoices and app_exchange ->
+// submission_jobs are both ON DELETE RESTRICT, and db.Seed now writes rows to
+// both (task-323), so clearing invoices first fails 23001.
 func resetInvoicesBeforeFullSchemaReset(t *testing.T, ctx context.Context) {
 	t.Helper()
 	superDSN := os.Getenv("DATABASE_SUPERUSER_URL")
@@ -52,8 +56,14 @@ func resetInvoicesBeforeFullSchemaReset(t *testing.T, ctx context.Context) {
 		t.Fatalf("clear invoices before full schema reset: connect as superuser: %v", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	if _, err := conn.Exec(ctx, `DELETE FROM invoices`); err != nil && !strings.Contains(err.Error(), "does not exist") {
-		t.Fatalf("clear invoices before full schema reset (precondition): %v", err)
+	for _, stmt := range []string{
+		`DELETE FROM app_exchange`,
+		`DELETE FROM submission_jobs`,
+		`DELETE FROM invoices`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil && !strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("clear invoices before full schema reset (precondition): %v", err)
+		}
 	}
 }
 

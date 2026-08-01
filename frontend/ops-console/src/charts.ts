@@ -319,9 +319,8 @@ export function buildEvidenceBundles(): EvidenceBundle[] {
       desc: e.desc,
       csid: 'MBS-CSID:9f2a' + e.invoice.slice(-4) + 'e1b7c4d0' + i + '9f8e2c5a1f0b6d3e7c9a4b',
       hash: 'sha256:9f' + e.invoice.slice(-4) + 'a3e1b7c4d09f' + i + '8e2c5a1f0b6d3e7c9a4d21b8',
-      // Despite the "HASH-CHAINED" copy, this is NOT a chain: prevHash is derived from
-      // the row's own invoice + index, never from bundles[i-1].hash (proto:1231).
-      // Ported verbatim; charts.test.ts locks the non-chained behaviour in place.
+      // NOT a chain: prevHash is derived from the row's own invoice + index, never from
+      // bundles[i-1].hash (proto:1231). charts.test.ts locks the non-chained behaviour.
       prevHash: 'sha256:8e' + e.invoice.slice(-3) + 'c2' + i,
       response:
         '{\n  "status": "CLEARED",\n  "irn": "' +

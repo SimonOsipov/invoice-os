@@ -90,7 +90,7 @@ export function RotateConfirm({ env, onClose, onConfirm }: Props) {
           >
             <span style={{ color: 'var(--status-amber-text)', flex: 'none' }}>{ALERT_ICON}</span>
             <span style={{ fontSize: 12, color: 'var(--status-amber-text)', lineHeight: 1.5 }}>
-              This action is recorded against your account and cannot be undone.
+              Rotating cannot be undone. After NRS accreditation, the action is attributed to your operator identity in the audit log.
             </span>
           </div>
         </div>

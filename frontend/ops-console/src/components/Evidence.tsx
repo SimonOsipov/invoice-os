@@ -44,14 +44,14 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
         >
           {LOCK_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--fg-2)', letterSpacing: '0.04em' }}>
-            SIGNED · HASH-CHAINED
+            SIMULATED · UNSIGNED
           </span>
         </span>
       </div>
 
       <p style={{ fontSize: 13, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 720, lineHeight: 1.5 }}>
-        Every cleared invoice returns a signed evidence bundle — cryptographic proof it was accepted by NRS/MBS. Bundles are immutable and chained; export
-        them for your own records or audits.
+        Every cleared invoice returns an evidence bundle you can export for your own records or audits. Filing to NRS/MBS switches on at
+        accreditation — until then a bundle records a simulated clearance, not a tax-authority acceptance.
       </p>
 
       {/* search + export */}
@@ -133,7 +133,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
               >
                 {SHIELD_ICON}
                 <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: 'var(--status-green-text)', letterSpacing: '0.03em' }}>
-                  SIGNED
+                  SIMULATED
                 </span>
               </span>
             </span>

@@ -13,5 +13,5 @@
     "noUnusedParameters": true,
     "types": ["@playwright/test", "node"]
   },
-  "include": ["smoke", "topology", "api", "rule-set.ts", "targets.ts", "targets.test.ts", "personas.ts", "personaSession.ts", "personas.test.ts", "import-meta-env.d.ts", "playwright.config.ts", "playwright.topology.config.ts", "playwright.api.config.ts"]
+  "include": ["smoke", "topology", "api", "rule-set.ts", "targets.ts", "targets.test.ts", "personas.ts", "personaSession.ts", "personas.test.ts", "envCopy.test.ts", "envCopyStrings.ts", "import-meta-env.d.ts", "playwright.config.ts", "playwright.topology.config.ts", "playwright.api.config.ts"]
 }

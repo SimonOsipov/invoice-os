@@ -29,7 +29,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--status-amber-border)',
         text: 'var(--status-amber-text)',
         icon: SANDBOX_ICON,
-        msg: 'Sandbox — test keys against the simulated NRS adapter. Nothing here is transmitted to the tax authority.',
+        msg: 'Sandbox — test keys against simulated clearance. Nothing here is filed with NRS.',
         tag: 'TEST DATA · sk_test',
       }
     : {
@@ -37,8 +37,8 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--teal-200)',
         text: 'var(--action-soft)',
         icon: SHIELD_ICON,
-        msg: 'Live — production keys. Submissions are transmitted to NRS/MBS and return legally-valid clearance evidence.',
-        tag: 'PRODUCTION · sk_live',
+        msg: 'Live — filing to NRS/MBS switches on at accreditation.',
+        tag: 'PENDING ACCREDITATION · sk_live',
       }
 
   return (

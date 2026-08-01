@@ -185,26 +185,32 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- accumulate alongside it. The other 21 entities (15 active + 6 archived) are LEFT EMPTY
 -- on purpose, so "no invoices yet" stays a reachable, honest state on this fleet, not
 -- just a code path nothing ever exercises.
+--
+-- Nothing is left `queued` or `submitted`: the SPA polls those two statuses every 2s
+-- (lib/invoices.ts's isInFlight) and no job here would ever advance them. The four that
+-- were in flight are `failed` -- they never got a verdict, and inventing an authority
+-- rejection for an invoice that was never sent is the dishonesty this seed is removing.
 WITH invoice_seed (
     tin, invoice_number, status, issue_date, supplier_tin, supplier_name,
     buyer_tin, buyer_name, subtotal, vat, total, validated, violations, rejection_reasons
 ) AS (
   VALUES
     -- Adeyemi & Sons Trading Ltd (10012345-0001) -- [default-entity-needs-data]: mostly
-    -- healthy, one flagged invoice, spanning draft -> accepted.
+    -- healthy, one flagged invoice and one that never got a verdict, spanning draft ->
+    -- accepted.
     ('10012345-0001', 'DEMO-2026-1001', 'accepted',  '2026-06-02', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 500000.00, 37500.00, 537500.00, true,  '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1002', 'accepted',  '2026-06-05', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            220000.00, 16500.00, 236500.00, true,  '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1003', 'validated', '2026-06-10', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 180000.00, 13500.00, 193500.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1004', 'queued',    '2026-06-14', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20033344-0003', 'Kano Agro Distributors',         95000.00,  7125.00,  102125.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1004', 'failed',    '2026-06-14', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20033344-0003', 'Kano Agro Distributors',         95000.00,  7125.00,  102125.00, true,  '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-06-18', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            60000.00,  4500.00,  64500.00,  false, '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 75000.00,  5600.00,  80600.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
 
-    -- Chukwu Global Ventures Ltd (10023456-0002) -- clean majority, one late-lifecycle
-    -- failure and one blocked draft.
+    -- Chukwu Global Ventures Ltd (10023456-0002) -- the late-lifecycle failures, plus one
+    -- blocked draft.
     ('10023456-0002', 'DEMO-2026-2001', 'accepted',  '2026-06-03', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    310000.00, 23250.00, 333250.00, true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2002', 'queued',    '2026-06-09', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 128000.00, 9600.00,  137600.00, true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2003', 'submitted', '2026-06-16', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    84000.00,  6300.00,  90300.00,  true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2002', 'failed',    '2026-06-09', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 128000.00, 9600.00,  137600.00, true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2003', 'failed',    '2026-06-16', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    84000.00,  6300.00,  90300.00,  true, '[]', '[]'),
     ('10023456-0002', 'DEMO-2026-2004', 'failed',    '2026-06-21', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 45000.00,  3375.00,  48375.00,  true, '[]', '[]'),
     ('10023456-0002', 'DEMO-2026-2005', 'draft',     '2026-06-24', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 66000.00,  4800.00,  70800.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
@@ -224,11 +230,12 @@ WITH invoice_seed (
     ('10045678-0004', 'DEMO-2026-4003', 'validated', '2026-06-17', '10045678-0004', 'Balogun Agro-Allied Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 62000.00,  4650.00,  66650.00,  true,  '[]', '[]'),
     ('10045678-0004', 'DEMO-2026-4004', 'draft',     '2026-06-22', '10045678-0004', 'Balogun Agro-Allied Ltd', '20022233-0002', 'Lagos Textiles Mart',       40000.00,  3000.00,  43000.00,  false, '[]', '[]'),
 
-    -- Emeka Pharmaceuticals Ltd (10056789-0005) -- deliberately ALL CLEAR (needs_attention:0).
+    -- Emeka Pharmaceuticals Ltd (10056789-0005) -- clean validation record; its one
+    -- needs_attention row is a transport failure, not a rule violation.
     ('10056789-0005', 'DEMO-2026-5001', 'accepted',  '2026-06-07', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 145000.00, 10875.00, 155875.00, true, '[]', '[]'),
     ('10056789-0005', 'DEMO-2026-5002', 'accepted',  '2026-06-12', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd',      210000.00, 15750.00, 225750.00, true, '[]', '[]'),
     ('10056789-0005', 'DEMO-2026-5003', 'validated', '2026-06-19', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors',         76000.00,  5700.00,  81700.00,  true, '[]', '[]'),
-    ('10056789-0005', 'DEMO-2026-5004', 'queued',    '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 33000.00,  2475.00,  35475.00,  true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5004', 'failed',    '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 33000.00,  2475.00,  35475.00,  true, '[]', '[]'),
 
     -- Aliyu Logistics Services Ltd (10067890-0006) -- the problem client: rejected +
     -- two malformed-TIN blocked drafts (needs_attention:3, the highest of the six).
@@ -244,17 +251,43 @@ WITH invoice_seed (
 )
 INSERT INTO invoices (
     tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
-    buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons
+    buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons,
+    irn, csid, qr_payload, created_at
 )
 SELECT
     '11111111-1111-1111-1111-111111111111', e.id, s.invoice_number, s.status, s.issue_date::date,
     s.supplier_tin, s.supplier_name, s.buyer_tin, s.buyer_name, 'NGN',
     s.subtotal::numeric, s.vat::numeric, s.total::numeric, s.violations::jsonb,
-    CASE WHEN s.validated THEN rsv.id ELSE NULL END, s.rejection_reasons::jsonb
+    CASE WHEN s.validated THEN rsv.id ELSE NULL END, s.rejection_reasons::jsonb,
+    -- Only `accepted` rows carry these: a non-NULL irn is the "already cleared" sentinel
+    -- (internal/invoice/submission_port.go), so a stray one makes a row unsubmittable.
+    CASE WHEN s.status = 'accepted' THEN f.irn END,
+    CASE WHEN s.status = 'accepted' THEN f.csid END,
+    -- format(), not json[b]_build_object: jsonb reorders keys by length and json spaces
+    -- around ':' -- only this reproduces mockQR's compact {irn,csid,tin,amt,cur}. The tin
+    -- is the SUPPLIER's; the buyer TIN is the mock's trigger channel.
+    CASE WHEN s.status = 'accepted' THEN
+      translate(encode(convert_to(
+        format('{"irn":"%s","csid":"%s","tin":"%s","amt":"%s","cur":"%s"}',
+               f.irn, f.csid, s.supplier_tin, s.total::numeric(14,2), 'NGN'),
+        'UTF8'), 'base64'), E'+/=\n', '-_')
+    END,
+    -- Explicit per-row offset, not a bare now(): the whole file runs in one implicit
+    -- transaction, so now() is identical for every row and the register's created_at DESC
+    -- would tie-break on a random uuid. Ceiling: keep each tenant under ~47 curated rows,
+    -- or a mid-run re-seed re-anchors above enough e2e rows to rot the page-1 specs.
+    now() - make_interval(secs => row_number() OVER (ORDER BY s.issue_date::date DESC, s.invoice_number DESC))
 FROM invoice_seed s
 JOIN business_entities e
   ON e.tenant_id = '11111111-1111-1111-1111-111111111111' AND e.tin = s.tin
 CROSS JOIN (SELECT id FROM rule_set_versions WHERE is_active) rsv
+-- Derived here, once, so qr_payload's embedded irn/csid cannot drift from the columns --
+-- nothing in the schema correlates them. translate() strips base64 padding AND the newline
+-- encode() inserts every 76 characters, giving the repo's base64url (RawURLEncoding) shape.
+CROSS JOIN LATERAL (SELECT
+    s.invoice_number || '-FBMOCK01-' || to_char(s.issue_date::date, 'YYYYMMDD') AS irn,
+    translate(encode(sha256(convert_to(s.invoice_number, 'UTF8')), 'base64'), E'+/=\n', '-_') AS csid
+) f
 ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
     status              = EXCLUDED.status,
     issue_date          = EXCLUDED.issue_date,
@@ -268,7 +301,94 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
     total               = EXCLUDED.total,
     violations          = EXCLUDED.violations,
     rule_set_version_id = EXCLUDED.rule_set_version_id,
-    rejection_reasons   = EXCLUDED.rejection_reasons;
+    rejection_reasons   = EXCLUDED.rejection_reasons,
+    irn                 = EXCLUDED.irn,
+    csid                = EXCLUDED.csid,
+    qr_payload          = EXCLUDED.qr_payload,
+    created_at          = EXCLUDED.created_at;
+
+-- The in-house tenant's own portfolio. Honeywell owns exactly ONE entity
+-- ([in-house-single-entity]) and had zero invoices, so Overview, Invoices, Approvals and
+-- Reports all rendered an empty state on a fresh in-house sign-in. A SEPARATE block, not
+-- more rows in invoice_seed above: that CTE carries no tenant column and its INSERT
+-- hardcodes the firm's uuid. The fiscal derivation is copied from it verbatim -- without it
+-- every accepted row here trips reconciliation's accepted_without_irn on cmd/reconciliation's
+-- live 5-minute sweep. supplier_tin/supplier_name come off the entity row itself: a company
+-- filing for itself IS its own supplier.
+--
+-- DEMO-2026-70## carry the mock adapter's RESERVED BUYER tins -- the buyer tin is its trigger
+-- channel (mock_adapter.go's mockTriggerFor, exact match), and the invoice number's last digit
+-- mirrors the tin's so a row and the outcome that produced it read as one. Each status is the
+-- only terminal one its own trigger converges on: -0004 (unavailable) and -0006 (timeout)
+-- return Retryable on EVERY attempt and exhaust to dead_lettered at MaxAttempts=8, so seeding
+-- either as `accepted` would claim an outcome this sandbox cannot produce. -0005 is skipped --
+-- it accepts exactly like -0001 and would add a row but no new outcome. DEMO-2026-80## are
+-- ordinary counterparty invoices, so the portfolio is not made up entirely of triggers.
+WITH inhouse_invoice_seed (
+    invoice_number, status, issue_date, buyer_tin, buyer_name,
+    subtotal, vat, total, validated, violations, rejection_reasons
+) AS (
+  VALUES
+    ('DEMO-2026-7001', 'accepted',  '2026-06-03', '99999999-0001', 'Sandbox APP (accepted)',         400000.00, 30000.00, 430000.00, true, '[]', '[]'),
+    ('DEMO-2026-7002', 'rejected',  '2026-06-05', '99999999-0002', 'Sandbox APP (rejected)',         180000.00, 13500.00, 193500.00, true,
+      '[]', '[{"code":"NGE-4102","message":"Customer tax identifier is not registered with the tax authority.","path":"buyer.tin"}]'),
+    ('DEMO-2026-7003', 'accepted',  '2026-06-09', '99999999-0003', 'Sandbox APP (deferred verdict)', 260000.00, 19500.00, 279500.00, true, '[]', '[]'),
+    ('DEMO-2026-7004', 'failed',    '2026-06-12', '99999999-0004', 'Sandbox APP (unavailable)',      145000.00, 10875.00, 155875.00, true, '[]', '[]'),
+    ('DEMO-2026-7006', 'failed',    '2026-06-16', '99999999-0006', 'Sandbox APP (timeout)',           92000.00,  6900.00,  98900.00, true, '[]', '[]'),
+
+    ('DEMO-2026-8001', 'accepted',  '2026-06-04', '20011122-0001', 'Zenith Freight & Logistics Ltd', 320000.00, 24000.00, 344000.00, true, '[]', '[]'),
+    ('DEMO-2026-8002', 'accepted',  '2026-06-11', '20033344-0003', 'Kano Agro Distributors',         215000.00, 16125.00, 231125.00, true, '[]', '[]'),
+    ('DEMO-2026-8003', 'validated', '2026-06-18', '20044455-0004', 'Ibadan Consumer Goods Ltd',       88000.00,  6600.00,  94600.00, true, '[]', '[]'),
+    ('DEMO-2026-8004', 'draft',     '2026-06-22', '20022233-0002', 'Lagos Textiles Mart',             64000.00,  4800.00,  68800.00, false, '[]', '[]'),
+    ('DEMO-2026-8005', 'draft',     '2026-06-25', '20011122-0001', 'Zenith Freight & Logistics Ltd',  56000.00,  4100.00,  60100.00, true,
+      '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]')
+)
+INSERT INTO invoices (
+    tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
+    buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons,
+    irn, csid, qr_payload, created_at
+)
+SELECT
+    '22222222-2222-2222-2222-222222222222', e.id, s.invoice_number, s.status, s.issue_date::date,
+    e.tin, e.name, s.buyer_tin, s.buyer_name, 'NGN',
+    s.subtotal::numeric, s.vat::numeric, s.total::numeric, s.violations::jsonb,
+    CASE WHEN s.validated THEN rsv.id ELSE NULL END, s.rejection_reasons::jsonb,
+    CASE WHEN s.status = 'accepted' THEN f.irn END,
+    CASE WHEN s.status = 'accepted' THEN f.csid END,
+    CASE WHEN s.status = 'accepted' THEN
+      translate(encode(convert_to(
+        format('{"irn":"%s","csid":"%s","tin":"%s","amt":"%s","cur":"%s"}',
+               f.irn, f.csid, e.tin, s.total::numeric(14,2), 'NGN'),
+        'UTF8'), 'base64'), E'+/=\n', '-_')
+    END,
+    -- Explicit per-row offset, same reason and same ceiling as the firm block above.
+    now() - make_interval(secs => row_number() OVER (ORDER BY s.issue_date::date DESC, s.invoice_number DESC))
+FROM inhouse_invoice_seed s
+JOIN business_entities e
+  ON e.tenant_id = '22222222-2222-2222-2222-222222222222' AND e.tin = '20665510-0001'
+CROSS JOIN (SELECT id FROM rule_set_versions WHERE is_active) rsv
+CROSS JOIN LATERAL (SELECT
+    s.invoice_number || '-FBMOCK01-' || to_char(s.issue_date::date, 'YYYYMMDD') AS irn,
+    translate(encode(sha256(convert_to(s.invoice_number, 'UTF8')), 'base64'), E'+/=\n', '-_') AS csid
+) f
+ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
+    status              = EXCLUDED.status,
+    issue_date          = EXCLUDED.issue_date,
+    supplier_tin        = EXCLUDED.supplier_tin,
+    supplier_name       = EXCLUDED.supplier_name,
+    buyer_tin           = EXCLUDED.buyer_tin,
+    buyer_name          = EXCLUDED.buyer_name,
+    currency            = EXCLUDED.currency,
+    subtotal            = EXCLUDED.subtotal,
+    vat                 = EXCLUDED.vat,
+    total               = EXCLUDED.total,
+    violations          = EXCLUDED.violations,
+    rule_set_version_id = EXCLUDED.rule_set_version_id,
+    rejection_reasons   = EXCLUDED.rejection_reasons,
+    irn                 = EXCLUDED.irn,
+    csid                = EXCLUDED.csid,
+    qr_payload          = EXCLUDED.qr_payload,
+    created_at          = EXCLUDED.created_at;
 
 -- Line items for the invoices above. Conflict target is line_items_invoice_line_no_uq
 -- (invoice_id, line_no); invoice_id is resolved by joining back on invoice_number, which
@@ -315,14 +435,32 @@ WITH line_item_seed (invoice_number, line_no, description, quantity, unit_price,
 
     ('DEMO-2026-6001', 1, 'Freight consignment - Lagos-Abuja',         1,  72000.00,  72000.00),
     ('DEMO-2026-6002', 1, 'Container handling fee',                    1,  54000.00,  54000.00),
-    ('DEMO-2026-6003', 1, 'Warehousing - monthly',                     1,  47000.00,  47000.00)
+    ('DEMO-2026-6003', 1, 'Warehousing - monthly',                     1,  47000.00,  47000.00),
+
+    -- Honeywell (in-house). The 1xxx-6xxx and 7xxx/8xxx number ranges are disjoint by
+    -- construction, which is what keeps the invoice_number join below unambiguous once it
+    -- spans two tenants.
+    ('DEMO-2026-7001', 1, 'Industrial gas cylinder supply',            2,  200000.00, 400000.00),
+    ('DEMO-2026-7002', 1, 'Packaging film order',                      1,  180000.00, 180000.00),
+    ('DEMO-2026-7003', 1, 'Compressor unit',                           1,  180000.00, 180000.00),
+    ('DEMO-2026-7003', 2, 'Installation & commissioning',              1,  80000.00,  80000.00),
+    ('DEMO-2026-7004', 1, 'Boiler spares consignment',                 1,  145000.00, 145000.00),
+    ('DEMO-2026-7006', 1, 'Preventive maintenance retainer',           1,  92000.00,  92000.00),
+
+    ('DEMO-2026-8001', 1, 'Steel coil supply',                         4,  60000.00,  240000.00),
+    ('DEMO-2026-8001', 2, 'Haulage surcharge',                         1,  80000.00,  80000.00),
+    ('DEMO-2026-8002', 1, 'Grain dryer components',                    5,  43000.00,  215000.00),
+    ('DEMO-2026-8003', 1, 'Conveyor belt replacement',                 1,  88000.00,  88000.00),
+    ('DEMO-2026-8004', 1, 'Textile machinery parts',                   4,  16000.00,  64000.00),
+    ('DEMO-2026-8005', 1, 'Quarterly service contract',                1,  56000.00,  56000.00)
 )
 INSERT INTO line_items (tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
-SELECT '11111111-1111-1111-1111-111111111111', i.id, li.line_no, li.description,
+SELECT i.tenant_id, i.id, li.line_no, li.description,
        li.quantity::numeric, li.unit_price::numeric, li.line_total::numeric
 FROM line_item_seed li
 JOIN invoices i
-  ON i.tenant_id = '11111111-1111-1111-1111-111111111111' AND i.invoice_number = li.invoice_number
+  ON i.tenant_id IN ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222')
+ AND i.invoice_number = li.invoice_number
 ON CONFLICT (invoice_id, line_no) DO UPDATE SET
     description = EXCLUDED.description,
     quantity    = EXCLUDED.quantity,
@@ -374,20 +512,104 @@ WITH chains (status, ord, from_status, to_status) AS (
     ('failed',    1, NULL,        'draft'),
     ('failed',    2, 'draft',     'validated'),
     ('failed',    3, 'validated', 'queued'),
-    ('failed',    4, 'queued',    'failed')
+    -- ord 5, not 4: on an environment seeded before this row was terminal, the guard below
+    -- leaves the old `queued -> submitted` row (ord 4) in place, and a tie on changed_at
+    -- would let the panel render `submitted` as the LAST step of a failed invoice.
+    ('failed',    5, 'queued',    'failed')
 )
 INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, changed_at)
 SELECT
-    '11111111-1111-1111-1111-111111111111', i.id, c.from_status, c.to_status, 'system',
+    i.tenant_id, i.id, c.from_status, c.to_status, 'system',
     '2026-06-01 08:00:00+00'::timestamptz + make_interval(mins => c.ord * 15)
 FROM invoices i
 JOIN chains c ON c.status = i.status
-WHERE i.tenant_id = '11111111-1111-1111-1111-111111111111'
+WHERE i.tenant_id IN ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222')
   AND i.invoice_number LIKE 'DEMO-2026-%'
   AND NOT EXISTS (
     SELECT 1 FROM invoice_status_history h
      WHERE h.invoice_id = i.id
        AND h.to_status = c.to_status
        AND h.from_status IS NOT DISTINCT FROM c.from_status
+  );
+
+-- The submission record behind each outcome-coverage invoice above. The column is `state`,
+-- never `status`: it shares four names with invoices.status and joins to none of them.
+--
+-- TERMINAL states ONLY (accepted / rejected / failed / dead_lettered). A seeded `pending`
+-- job trips reconciliation's pending_too_long 24h after this environment last booted and a
+-- `submitting` one trips submitting_orphan after 15 minutes -- on a real 5-minute sweep, so
+-- it would file a drift audit every cycle forever. Live in-flight behaviour stays
+-- demonstrable by submitting a NEW invoice against a reserved TIN; the worker and the mock
+-- adapter are both running on this deployment.
+--
+-- attempts is the real retry budget, and polls continue the submit's own numbering: 1 for a
+-- first-attempt verdict; 3 for the pending row, because its first Ref carries n=2 and Poll
+-- consumes one per call, so it takes submit + TWO polls to converge; 8 for the two that
+-- exhausted the budget, dead-lettered on the 8th execution (job.Attempt >= MaxAttempts).
+-- created_at/updated_at take their now() defaults -- updated_at's trigger is BEFORE UPDATE
+-- only, so setting it on INSERT would be ignored anyway.
+WITH job_seed (invoice_number, state, attempts, last_error) AS (
+  VALUES
+    ('DEMO-2026-7001', 'accepted',      1, NULL),
+    ('DEMO-2026-7002', 'rejected',      1, NULL),
+    ('DEMO-2026-7003', 'accepted',      3, NULL),
+    ('DEMO-2026-7004', 'dead_lettered', 8, 'submission: mock APP is temporarily unavailable'),
+    ('DEMO-2026-7006', 'dead_lettered', 8, 'submission: mock APP timed out in flight')
+)
+INSERT INTO submission_jobs (
+    tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state, attempts, last_error
+)
+SELECT i.tenant_id, i.id, 'demo-seed:' || i.invoice_number, 'mock', 'v1',
+       j.state, j.attempts, j.last_error
+FROM job_seed j
+JOIN invoices i
+  ON i.tenant_id = '22222222-2222-2222-2222-222222222222' AND i.invoice_number = j.invoice_number
+ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET
+    state      = EXCLUDED.state,
+    attempts   = EXCLUDED.attempts,
+    last_error = EXCLUDED.last_error;
+
+-- One app_exchange row per ATTEMPT against the APP, which is what makes the five outcomes
+-- distinguishable: invoices.status collapses -0004 and -0006 onto `failed`, and only the
+-- http_status here tells a 503 exhaustion from a timeout that never got a response at all.
+-- `outcome` is a TRANSPORT outcome, not a verdict -- every one of these reached the wire,
+-- so all of them are 'sent'.
+--
+-- Bodies stay NULL: these rows are seeded evidence, and a synthesized request/response body
+-- would be a fabricated wire capture rather than a recorded one. Idempotency is a NOT EXISTS
+-- guard on (submission_job_id, operation, attempt) -- the table has no unique constraint to
+-- key an ON CONFLICT off, and is append-only by grant.
+--
+-- The join is pinned to the seed's OWN job by idempotency_key: a real submit adds a second job
+-- for the same invoice (ensureSubmissionJob runs before every gate in worker.go), and an
+-- invoice_id-only join would re-attribute this synthetic evidence to it on the next re-seed.
+WITH exchange_seed (invoice_number, operation, attempt_from, attempt_to, http_status, latency_ms) AS (
+  VALUES
+    ('DEMO-2026-7001', 'submit', 1, 1, 200,  142),
+    ('DEMO-2026-7002', 'submit', 1, 1, 422,  158),
+    ('DEMO-2026-7003', 'submit', 1, 1, 202,  131),
+    ('DEMO-2026-7003', 'poll',   2, 2, 202,  118),
+    ('DEMO-2026-7003', 'poll',   3, 3, 200,  124),
+    ('DEMO-2026-7004', 'submit', 1, 8, 503,   96),
+    ('DEMO-2026-7006', 'submit', 1, 8, NULL, 30000)
+)
+INSERT INTO app_exchange (
+    tenant_id, submission_job_id, invoice_id, operation, outcome, attempt,
+    http_status, latency_ms, adapter, adapter_version
+)
+SELECT j.tenant_id, j.id, j.invoice_id, x.operation, 'sent', a.attempt,
+       x.http_status, x.latency_ms, 'mock', 'v1'
+FROM exchange_seed x
+JOIN invoices i
+  ON i.tenant_id = '22222222-2222-2222-2222-222222222222' AND i.invoice_number = x.invoice_number
+JOIN submission_jobs j
+  ON j.tenant_id = i.tenant_id AND j.invoice_id = i.id
+ AND j.idempotency_key = 'demo-seed:' || i.invoice_number
+CROSS JOIN LATERAL generate_series(x.attempt_from, x.attempt_to) AS a(attempt)
+WHERE NOT EXISTS (
+    SELECT 1 FROM app_exchange e
+     WHERE e.submission_job_id = j.id
+       AND e.operation = x.operation
+       AND e.attempt = a.attempt
   );
 

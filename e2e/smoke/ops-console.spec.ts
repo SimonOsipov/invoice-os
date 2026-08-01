@@ -161,7 +161,7 @@ test('ops-console: Re-drive all clears the dead-letter queue everywhere it is re
   // placed ahead of it would race. This console's Toast carries no role (Toast.tsx) —
   // unlike the support console's — so it is matched by its text, which is derived from the
   // number of rows actually transformed (App.tsx:111-113), not from the badge.
-  await expect(page.getByText(`Re-drove ${n} dead-letter submissions`, { exact: true })).toBeVisible()
+  await expect(page.getByText(`Re-drive queued \u00b7 ${n} dead-letter submissions`, { exact: true })).toBeVisible()
 
   // Every reporter of the count now agrees it is empty. The badge and the button are not
   // rendered at all at zero, so these are absence assertions, not "shows 0" assertions.

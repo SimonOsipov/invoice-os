@@ -32,6 +32,7 @@ import (
 	dbsql "github.com/SimonOsipov/invoice-os/db"
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
+	"github.com/SimonOsipov/invoice-os/internal/reconciliation"
 )
 
 // demoTenantID is the demo-tenant fixture id (db/seed.dev.sql) — Okafor &
@@ -101,8 +102,23 @@ var curatedDemoEntities = []entityRow{
 // are cleared FIRST -- line_items and invoice_status_history cascade off
 // invoice_id (ON DELETE CASCADE on both) -- so the entities delete below
 // always succeeds regardless of what Seed most recently wrote.
+//
+// app_exchange and submission_jobs are cleared BEFORE invoices (task-323,
+// DEMO-01-06): submission_jobs -> invoices is ON DELETE RESTRICT too, and
+// app_exchange -> submission_jobs the same, so once Seed writes job/evidence
+// rows the old invoices-first order fails 23001.
 func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM app_exchange WHERE tenant_id = $1`, demoTenantID,
+	); err != nil {
+		t.Fatalf("clear demo tenant's app_exchange (precondition): %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM submission_jobs WHERE tenant_id = $1`, demoTenantID,
+	); err != nil {
+		t.Fatalf("clear demo tenant's submission_jobs (precondition): %v", err)
+	}
 	if _, err := pool.Exec(context.Background(),
 		`DELETE FROM invoices WHERE tenant_id = $1`, demoTenantID,
 	); err != nil {
@@ -366,8 +382,21 @@ var curatedHoneywellEntity = entityRow{name: "Honeywell Group", tin: "20665510-0
 // resetHoneywellBusinessEntities mirrors resetDemoBusinessEntities above,
 // scoped to honeywellTenantID — clears any invoices then business_entities
 // rows so each test below starts from a genuinely empty Honeywell portfolio.
+//
+// app_exchange and submission_jobs cleared first (task-323, DEMO-01-06):
+// same RESTRICT-FK order fix as resetDemoBusinessEntities above.
 func resetHoneywellBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM app_exchange WHERE tenant_id = $1`, honeywellTenantID,
+	); err != nil {
+		t.Fatalf("clear Honeywell's app_exchange (precondition): %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM submission_jobs WHERE tenant_id = $1`, honeywellTenantID,
+	); err != nil {
+		t.Fatalf("clear Honeywell's submission_jobs (precondition): %v", err)
+	}
 	if _, err := pool.Exec(context.Background(),
 		`DELETE FROM invoices WHERE tenant_id = $1`, honeywellTenantID,
 	); err != nil {
@@ -1212,5 +1241,696 @@ func TestSeedAcceptedInvoiceQRPayloadRendersAsQRImage(t *testing.T) {
 	}
 	if png == "" {
 		t.Error("qrcode.RenderBase64(qr_payload) returned an empty string, want a non-empty base64 PNG")
+	}
+}
+
+// task-323 (DEMO-01-06): in-house portfolio, full outcome coverage, nothing left in
+// flight. RED authored against the plan's Core AC-4/5/6 plus the Stage-1 architecture
+// corrections appended to the task -- db/seed.dev.sql does not implement any of this yet.
+
+// resetBothDemoTenants resets both seeded tenants, for the assertions below that span
+// the firm and in-house portfolios together (nothing-in-flight, outcome coverage,
+// reconciliation, idempotency).
+func resetBothDemoTenants(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	resetDemoBusinessEntities(t, pool)
+	resetHoneywellBusinessEntities(t, pool)
+}
+
+// reservedTINReachableStatus pins each reserved buyer TIN this subtask uses to the ONE
+// invoice status the mock adapter can actually converge on (Stage-1 correction C3).
+// -0004 and -0006 return Retryable on every attempt and never accept; seeding either as
+// "accepted" fabricates an outcome the sandbox cannot produce.
+var reservedTINReachableStatus = map[string]string{
+	"99999999-0001": "accepted",
+	"99999999-0002": "rejected",
+	"99999999-0003": "accepted", // converges via a poll cycle ([ref-carries-the-verdict])
+	"99999999-0004": "failed",   // Retryable forever -> dead_lettered -> failed
+	"99999999-0006": "failed",   // Retryable forever (timeout) -> dead_lettered -> failed
+}
+
+// terminalJobStates is submission_jobs' 4-value terminal subset of its 7-value state
+// CHECK (jobstore.go's isTerminalJobState) -- dead_lettered is terminal and must not be
+// rejected by a check that only knows accepted/rejected/failed.
+var terminalJobStates = map[string]bool{
+	"accepted": true, "rejected": true, "failed": true, "dead_lettered": true,
+}
+
+// invoiceOutcomeRow is a seeded invoice's buyer TIN and current status. tenantID is
+// carried explicitly -- the two tenants' DEMO-2026-#### number spaces are not proven
+// disjoint, so a caller keying a map by invoiceNumber alone would silently merge two
+// different tenants' rows if they ever collide.
+type invoiceOutcomeRow struct {
+	tenantID      string
+	invoiceNumber string
+	buyerTIN      string
+	status        string
+}
+
+// fetchDemoInvoiceOutcomes returns every seeded DEMO-2026-* invoice across BOTH tenants
+// (buyer_tin, status), for the reachability and history-consistency checks below.
+func fetchDemoInvoiceOutcomes(t *testing.T, pool *pgxpool.Pool) []invoiceOutcomeRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT tenant_id, invoice_number, coalesce(buyer_tin, ''), status
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY tenant_id, invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query DEMO-2026-* invoice outcomes: %v", err)
+	}
+	defer rows.Close()
+
+	var got []invoiceOutcomeRow
+	for rows.Next() {
+		var r invoiceOutcomeRow
+		if err := rows.Scan(&r.tenantID, &r.invoiceNumber, &r.buyerTIN, &r.status); err != nil {
+			t.Fatalf("scan invoice outcome row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate invoice outcome rows: %v", err)
+	}
+	return got
+}
+
+// submissionJobRow is a seeded submission_jobs row, joined back onto its invoice_number.
+type submissionJobRow struct {
+	invoiceNumber string
+	state         string
+	attempts      int
+	adapter       string
+}
+
+// fetchDemoSubmissionJobs returns every seeded submission_jobs row across both tenants,
+// joined through invoices on the same composite (tenant_id, invoice_id) the FK enforces
+// -- the join itself is part of what proves AC-5's "resolves through its composite FK".
+func fetchDemoSubmissionJobs(t *testing.T, pool *pgxpool.Pool) []submissionJobRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT i.invoice_number, j.state, j.attempts, j.adapter
+		   FROM submission_jobs j
+		   JOIN invoices i ON i.tenant_id = j.tenant_id AND i.id = j.invoice_id
+		  WHERE j.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY i.invoice_number, j.created_at`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query seeded submission_jobs: %v", err)
+	}
+	defer rows.Close()
+
+	var got []submissionJobRow
+	for rows.Next() {
+		var r submissionJobRow
+		if err := rows.Scan(&r.invoiceNumber, &r.state, &r.attempts, &r.adapter); err != nil {
+			t.Fatalf("scan submission_jobs row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate submission_jobs rows: %v", err)
+	}
+	return got
+}
+
+// appExchangeRow is a seeded app_exchange row, joined back onto its invoice_number.
+type appExchangeRow struct {
+	invoiceNumber string
+	operation     string
+	outcome       string
+	attempt       int
+	httpStatus    *int
+}
+
+// fetchDemoAppExchange returns every seeded app_exchange row across both tenants,
+// joined through invoices the same way fetchDemoSubmissionJobs does.
+func fetchDemoAppExchange(t *testing.T, pool *pgxpool.Pool) []appExchangeRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT i.invoice_number, e.operation, e.outcome, e.attempt, e.http_status
+		   FROM app_exchange e
+		   JOIN invoices i ON i.tenant_id = e.tenant_id AND i.id = e.invoice_id
+		  WHERE e.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY i.invoice_number, e.attempt`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query seeded app_exchange: %v", err)
+	}
+	defer rows.Close()
+
+	var got []appExchangeRow
+	for rows.Next() {
+		var r appExchangeRow
+		if err := rows.Scan(&r.invoiceNumber, &r.operation, &r.outcome, &r.attempt, &r.httpStatus); err != nil {
+			t.Fatalf("scan app_exchange row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate app_exchange rows: %v", err)
+	}
+	return got
+}
+
+// statusHistoryRow is a seeded invoice_status_history row, joined back onto its
+// invoice_number. tenantID carried explicitly for the same reason as
+// invoiceOutcomeRow above.
+type statusHistoryRow struct {
+	tenantID      string
+	invoiceNumber string
+	fromStatus    *string
+	toStatus      string
+	changedAt     time.Time
+}
+
+// fetchDemoStatusHistory returns every seeded invoice_status_history row across both
+// tenants, ordered the same way History's own read path orders them
+// (changed_at ASC, id ASC).
+func fetchDemoStatusHistory(t *testing.T, pool *pgxpool.Pool) []statusHistoryRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT i.tenant_id, i.invoice_number, h.from_status, h.to_status, h.changed_at
+		   FROM invoice_status_history h
+		   JOIN invoices i ON i.tenant_id = h.tenant_id AND i.id = h.invoice_id
+		  WHERE h.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY i.tenant_id, i.invoice_number, h.changed_at, h.id`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query seeded invoice_status_history: %v", err)
+	}
+	defer rows.Close()
+
+	var got []statusHistoryRow
+	for rows.Next() {
+		var r statusHistoryRow
+		if err := rows.Scan(&r.tenantID, &r.invoiceNumber, &r.fromStatus, &r.toStatus, &r.changedAt); err != nil {
+			t.Fatalf("scan invoice_status_history row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate invoice_status_history rows: %v", err)
+	}
+	return got
+}
+
+// TestSeedPopulatesInHouseInvoicePortfolio: Test Spec rows "in-house populated" /
+// "in-house single entity" (Core AC-4). Honeywell (2222...) has zero invoices and
+// exactly one curated entity today -- Overview/Invoices/Approvals/Reports all render
+// empty on a fresh in-house sign-in. In-house stays a DEGENERATE single-entity case
+// ([in-house-single-entity]): the portfolio must land on invoices, never on a second
+// entity.
+func TestSeedPopulatesInHouseInvoicePortfolio(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	invoiceCount := mustCount(t, pool, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, honeywellTenantID)
+	if invoiceCount == 0 {
+		t.Error("count(invoices) for Honeywell (in-house tenant) after Seed = 0, want > 0 -- Overview/Invoices/Approvals/Reports all render an empty state on a fresh in-house sign-in otherwise")
+	}
+
+	entities := fetchDemoBusinessEntities(t, pool, honeywellTenantID)
+	if len(entities) != 1 {
+		t.Errorf("count(business_entities) for Honeywell after Seed = %d, want exactly 1 -- in-house is a degenerate single-entity case ([in-house-single-entity]), never a portfolio of entities", len(entities))
+	}
+}
+
+// TestSeedLeavesNoInvoiceInFlight: Test Spec row "nothing in flight" (Core AC-6). The
+// SPA polls isInFlight(status) = status IN ('queued','submitted') every 2s while the tab
+// is visible; the seed today leaves 3 queued + 1 submitted (C6: DEMO-2026-1004/2002/5004
+// queued, DEMO-2026-2003 submitted) with zero submission_jobs rows behind them, which
+// poll forever with nothing to advance them.
+func TestSeedLeavesNoInvoiceInFlight(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	n := mustCount(t, pool,
+		`SELECT count(*) FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%' AND status IN ('queued', 'submitted')`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if n != 0 {
+		t.Errorf("count(seeded invoices with status IN queued/submitted) = %d, want 0", n)
+	}
+}
+
+// TestSeedNeverClaimsUnreachableOutcomeForReservedTIN: the sharpest test in this
+// subtask. Fails if any seeded invoice claims a terminal status its OWN buyer TIN
+// cannot produce -- e.g. -0004 seeded as "accepted" (unreachable: Retryable on every
+// attempt, MaxAttempts=8 exhausts to dead_lettered/failed). Seeding a fabricated
+// outcome is the exact dishonesty Core AC-5 exists to remove.
+func TestSeedNeverClaimsUnreachableOutcomeForReservedTIN(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var checked int
+	for _, r := range fetchDemoInvoiceOutcomes(t, pool) {
+		want, reserved := reservedTINReachableStatus[r.buyerTIN]
+		if !reserved {
+			continue
+		}
+		checked++
+		if r.status != want {
+			t.Errorf("%s: buyer_tin=%s status=%q, want %q -- the mock adapter can never converge this TIN on any other terminal status (Stage-1 correction C3)", r.invoiceNumber, r.buyerTIN, r.status, want)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no seeded invoice uses a reserved outcome-coverage buyer TIN -- Core AC-5's outcome coverage is not exercised at all")
+	}
+}
+
+// TestSeedSubmissionJobsAreTerminalAndLinkToSeededInvoices: Test Spec rows "jobs are
+// terminal" / "job <-> invoice integrity" (Core AC-6). The state CHECK has SEVEN
+// values; the terminal set is FOUR (jobstore.go's isTerminalJobState) --
+// accepted/rejected/failed/dead_lettered. A job asserting only {accepted,rejected,
+// failed} would reject a legitimately dead-lettered row (Stage-1 correction C4.1).
+func TestSeedSubmissionJobsAreTerminalAndLinkToSeededInvoices(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	jobs := fetchDemoSubmissionJobs(t, pool)
+	if len(jobs) == 0 {
+		t.Fatal("count(seeded submission_jobs rows) = 0, want > 0 -- Core AC-5's outcome-coverage invoices need job+evidence rows behind them")
+	}
+	for _, j := range jobs {
+		if !terminalJobStates[j.state] {
+			t.Errorf("%s: submission_jobs.state = %q, want one of accepted/rejected/failed/dead_lettered (terminal) -- a live queued/submitting/pending job polls forever", j.invoiceNumber, j.state)
+		}
+		if j.attempts < 1 {
+			t.Errorf("%s: submission_jobs.attempts = %d, want >= 1 -- a terminal job made at least one real attempt", j.invoiceNumber, j.attempts)
+		}
+		if j.adapter != "mock" {
+			t.Errorf("%s: submission_jobs.adapter = %q, want %q -- the sandbox adapter is the only one wired for the demo environment", j.invoiceNumber, j.adapter, "mock")
+		}
+	}
+}
+
+// TestSeedOutcomeCoverageAtTheEvidenceLayer: Test Spec row "outcome coverage" (Core
+// AC-5). invoices.status only reaches 3 values across the 5 reserved TINs this subtask
+// uses (accepted/rejected/failed, both -0004 and -0006 landing on failed) -- AC-5's five
+// distinct outcomes are visible only at the job+evidence layer (Stage-1 correction C3):
+// submission_jobs.state + app_exchange.operation/http_status, never invoices.status
+// alone.
+func TestSeedOutcomeCoverageAtTheEvidenceLayer(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	exchanges := fetchDemoAppExchange(t, pool)
+	if len(exchanges) == 0 {
+		t.Fatal("count(seeded app_exchange rows) = 0, want > 0")
+	}
+
+	type outcomeMarker struct {
+		name string
+		seen bool
+	}
+	markers := []outcomeMarker{
+		{name: "accepted (submit, http 200)"},
+		{name: "rejected (submit, http 422)"},
+		{name: "pending-initial (submit, http 202)"},
+		{name: "pending-converge (poll)"},
+		{name: "retry/unavailable (submit, http 503)"},
+		{name: "timeout (submit, http_status NULL)"},
+	}
+
+	for _, e := range exchanges {
+		// All five reserved TINs this subtask uses reach the wire; only -0007
+		// (connection, unused here) would produce connection_failed.
+		if e.outcome != "sent" {
+			t.Errorf("%s: app_exchange.outcome = %q, want %q", e.invoiceNumber, e.outcome, "sent")
+		}
+		if e.attempt < 1 {
+			t.Errorf("%s: app_exchange.attempt = %d, want >= 1 (CHECK attempt >= 1, never 0)", e.invoiceNumber, e.attempt)
+		}
+
+		switch {
+		case e.operation == "submit" && e.httpStatus != nil && *e.httpStatus == 200:
+			markers[0].seen = true
+		case e.operation == "submit" && e.httpStatus != nil && *e.httpStatus == 422:
+			markers[1].seen = true
+		case e.operation == "submit" && e.httpStatus != nil && *e.httpStatus == 202:
+			markers[2].seen = true
+		case e.operation == "poll":
+			markers[3].seen = true
+		case e.operation == "submit" && e.httpStatus != nil && *e.httpStatus == 503:
+			markers[4].seen = true
+		case e.operation == "submit" && e.httpStatus == nil:
+			markers[5].seen = true
+		}
+	}
+
+	for _, m := range markers {
+		if !m.seen {
+			t.Errorf("no seeded app_exchange evidence for outcome %q -- Core AC-5 requires at least one invoice per sandbox-adapter outcome", m.name)
+		}
+	}
+}
+
+// TestSeedPopulatesFiscalIdentifiersOnAcceptedInHouseInvoices: the in-house block is
+// STRUCTURALLY NEW (Stage-1 correction C2) -- it cannot extend the firm INSERT, whose
+// CTE carries no tenant column and whose fiscal derivation is hardcoded to 1111....  A
+// copied block that drops the derivation makes every accepted in-house row trip
+// accepted_without_irn on cmd/reconciliation's live 5-minute sweep. Mirrors
+// TestSeedPopulatesFiscalIdentifiersOnAcceptedInvoices, scoped to Honeywell.
+func TestSeedPopulatesFiscalIdentifiersOnAcceptedInHouseInvoices(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var accepted []fiscalInvoiceRow
+	for _, r := range fetchDemoFiscalInvoices(t, pool, honeywellTenantID) {
+		if r.status == "accepted" {
+			accepted = append(accepted, r)
+		}
+	}
+	if len(accepted) == 0 {
+		t.Fatal("count(accepted DEMO-2026-* invoices) for Honeywell (in-house) = 0, want > 0 -- outcome coverage requires at least one accepted in-house row")
+	}
+
+	for _, r := range accepted {
+		if r.irn == nil || *r.irn == "" {
+			t.Errorf("%s: irn = %v, want non-null non-empty", r.invoiceNumber, r.irn)
+			continue
+		}
+		if r.csid == nil || *r.csid == "" {
+			t.Errorf("%s: csid = %v, want non-null non-empty", r.invoiceNumber, r.csid)
+			continue
+		}
+		if r.qrPayload == nil || *r.qrPayload == "" {
+			t.Errorf("%s: qr_payload = %v, want non-null non-empty", r.invoiceNumber, r.qrPayload)
+			continue
+		}
+
+		wantIRN := r.invoiceNumber + "-" + demoIRNServiceID + "-" + r.issueDate.Format(demoIRNDateLayout)
+		if *r.irn != wantIRN {
+			t.Errorf("%s: irn = %q, want %q (<docRef>-FBMOCK01-<YYYYMMDD>)", r.invoiceNumber, *r.irn, wantIRN)
+		}
+		if len(*r.csid) != 43 || !rawURLBase64Pattern.MatchString(*r.csid) {
+			t.Errorf("%s: csid = %q, want 43-char base64.RawURLEncoding of a 32-byte sha256 digest", r.invoiceNumber, *r.csid)
+		}
+		if strings.ContainsAny(*r.qrPayload, " \t\r\n") || !rawURLBase64Pattern.MatchString(*r.qrPayload) {
+			t.Errorf("%s: qr_payload = %q, want clean base64.RawURLEncoding with no whitespace", r.invoiceNumber, *r.qrPayload)
+		}
+
+		irn, csid, tin, amt, cur := decodeQRPayload(t, *r.qrPayload)
+		if irn != *r.irn {
+			t.Errorf("%s: qr_payload embeds irn=%q, want the row's own irn %q", r.invoiceNumber, irn, *r.irn)
+		}
+		if csid != *r.csid {
+			t.Errorf("%s: qr_payload embeds csid=%q, want the row's own csid %q", r.invoiceNumber, csid, *r.csid)
+		}
+		if tin != r.supplierTIN {
+			t.Errorf("%s: qr_payload embeds tin=%q, want the row's own SUPPLIER tin %q", r.invoiceNumber, tin, r.supplierTIN)
+		}
+		if r.supplierTIN != "20665510-0001" {
+			t.Errorf("%s: supplier_tin = %q, want Honeywell's curated TIN %q, or supplier-tin-format fires", r.invoiceNumber, r.supplierTIN, "20665510-0001")
+		}
+		amtF, errAmt := strconv.ParseFloat(amt, 64)
+		totalF, errTotal := strconv.ParseFloat(r.total, 64)
+		if errAmt != nil {
+			t.Errorf("%s: qr_payload embeds amt=%q, not a number: %v", r.invoiceNumber, amt, errAmt)
+		} else if errTotal != nil {
+			t.Fatalf("%s: row's own total = %q, not a number: %v", r.invoiceNumber, r.total, errTotal)
+		} else if amtF != totalF {
+			t.Errorf("%s: qr_payload embeds amt=%q, want the row's own TOTAL %q", r.invoiceNumber, amt, r.total)
+		}
+		if cur != r.currency {
+			t.Errorf("%s: qr_payload embeds cur=%q, want the row's own currency %q", r.invoiceNumber, cur, r.currency)
+		}
+	}
+}
+
+// TestSeedStatusHistoryConsistentWithFinalStatus: Test Spec row "history consistent"
+// (Core AC-6). Each invoice's LAST history row (changed_at ASC, id ASC, matching
+// History's own read order) must land on its current status. changed_at is an explicit
+// anchor+ord*15min offset (:363-369), never now() -- but only safe if ord stays distinct
+// WITHIN each invoice's own chain, or History's own ORDER BY tie-breaks on a random
+// uuid and scrambles the visible timeline.
+func TestSeedStatusHistoryConsistentWithFinalStatus(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	// Keyed by (tenantID, invoiceNumber): the two tenants' DEMO-2026-#### number spaces
+	// are not proven disjoint, so a bare invoiceNumber key could silently merge two
+	// different tenants' chains.
+	type invoiceKey struct{ tenantID, invoiceNumber string }
+
+	outcomes := fetchDemoInvoiceOutcomes(t, pool)
+	finalStatus := make(map[invoiceKey]string, len(outcomes))
+	for _, r := range outcomes {
+		finalStatus[invoiceKey{r.tenantID, r.invoiceNumber}] = r.status
+	}
+
+	history := fetchDemoStatusHistory(t, pool)
+	if len(history) == 0 {
+		t.Fatal("count(seeded invoice_status_history rows) = 0, want > 0")
+	}
+
+	byInvoice := make(map[invoiceKey][]statusHistoryRow)
+	for _, h := range history {
+		key := invoiceKey{h.tenantID, h.invoiceNumber}
+		byInvoice[key] = append(byInvoice[key], h)
+	}
+
+	for key, rows := range byInvoice {
+		last := rows[len(rows)-1]
+		if last.toStatus != finalStatus[key] {
+			t.Errorf("%s: last history row's to_status = %q, want the invoice's own final status %q", key.invoiceNumber, last.toStatus, finalStatus[key])
+		}
+
+		seen := make(map[time.Time]bool, len(rows))
+		for _, r := range rows {
+			if seen[r.changedAt] {
+				t.Errorf("%s: two history rows share changed_at %v, want distinct offsets within the chain (or ORDER BY changed_at ASC, id ASC ties-break on a random uuid)", key.invoiceNumber, r.changedAt)
+			}
+			seen[r.changedAt] = true
+		}
+	}
+}
+
+// TestSeedTripsNoReconciliationDrift: "no reconciliation predicate matches any seeded
+// row". Reads all eight drift signatures directly off internal/reconciliation.Scan (the
+// same query cmd/reconciliation runs on its live 5-minute sweep) and asserts none of
+// them flags a seeded invoice. Today queued_never_sent = 3 on the un-fixed seed; this
+// subtask must take it to 0 without introducing a new one (accepted_without_irn is the
+// one real hazard the in-house block risks -- Stage-1 correction C2).
+func TestSeedTripsNoReconciliationDrift(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	seededInvoiceIDs := make(map[string]bool)
+	idRows, err := pool.Query(ctx, `SELECT id FROM invoices WHERE tenant_id = ANY($1)`,
+		[]string{demoTenantID, honeywellTenantID})
+	if err != nil {
+		t.Fatalf("query seeded invoice ids: %v", err)
+	}
+	for idRows.Next() {
+		var id string
+		if err := idRows.Scan(&id); err != nil {
+			t.Fatalf("scan invoice id: %v", err)
+		}
+		seededInvoiceIDs[id] = true
+	}
+	if err := idRows.Err(); err != nil {
+		t.Fatalf("iterate invoice ids: %v", err)
+	}
+	idRows.Close()
+	if len(seededInvoiceIDs) == 0 {
+		t.Fatal("precondition: zero invoices for the seeded tenants after Seed")
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx for reconciliation.Scan: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Matches cmd/reconciliation's own documented defaults (sweep.go) -- irrelevant to a
+	// fully-terminal seed, but keeps this test honest about what production runs.
+	th := reconciliation.Thresholds{Grace: 15 * time.Minute, MaxPendingAge: 24 * time.Hour, HopCeiling: 20}
+	findings, err := reconciliation.Scan(ctx, tx, th)
+	if err != nil {
+		t.Fatalf("reconciliation.Scan: %v", err)
+	}
+
+	for _, f := range findings {
+		if seededInvoiceIDs[f.InvoiceID] {
+			t.Errorf("reconciliation.Scan flagged seeded invoice %s: kind=%s -- cmd/reconciliation sweeps every 5 minutes and would write a real reconciliation.drift_detected audit row for this", f.InvoiceID, f.Kind)
+		}
+	}
+}
+
+// TestSeedConvergesPreexistingInFlightInvoiceOnReseed: proves the UPSERT/CONFLICT path,
+// not just the INSERT. The demo environment is never reset -- forces a seeded invoice
+// back to 'queued' (simulating what ascomply.com looks like today), re-seeds, and
+// asserts it converges to a terminal status through ON CONFLICT ... DO UPDATE SET, not
+// just on a fresh INSERT.
+func TestSeedConvergesPreexistingInFlightInvoiceOnReseed(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish baseline): %v", err)
+	}
+
+	const probeInvoice = "DEMO-2026-1004" // one of C6's four named in-flight rows
+	if _, err := pool.Exec(ctx,
+		`UPDATE invoices SET status = 'queued' WHERE tenant_id = $1 AND invoice_number = $2`,
+		demoTenantID, probeInvoice,
+	); err != nil {
+		t.Fatalf("force %s back to queued (precondition): %v", probeInvoice, err)
+	}
+
+	var precond string
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`,
+		demoTenantID, probeInvoice,
+	).Scan(&precond); err != nil {
+		t.Fatalf("read back precondition: %v", err)
+	}
+	if precond != "queued" {
+		t.Fatalf("precondition: %s status = %q, want queued", probeInvoice, precond)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (convergence): %v", err)
+	}
+
+	var after string
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`,
+		demoTenantID, probeInvoice,
+	).Scan(&after); err != nil {
+		t.Fatalf("read back after second Seed: %v", err)
+	}
+	if after == "queued" || after == "submitted" {
+		t.Errorf("%s: status after re-seed = %q, want terminal -- a status change must converge through ON CONFLICT ... DO UPDATE SET, not just the INSERT", probeInvoice, after)
+	}
+}
+
+// TestSeedOutcomeCoverageIsIdempotent: Test Spec row "idempotent". A second Seed must
+// leave submission_jobs, app_exchange and invoice_status_history byte-identical to the
+// first -- invoice_status_history has no unique constraint to key an ON CONFLICT off
+// (idempotency is a NOT EXISTS guard on (invoice_id, from_status, to_status)), so this
+// is the one table where a re-run duplicating a row is structurally possible.
+func TestSeedOutcomeCoverageIsIdempotent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	firstJobs := fetchDemoSubmissionJobs(t, pool)
+	firstExchanges := fetchDemoAppExchange(t, pool)
+	firstHistory := fetchDemoStatusHistory(t, pool)
+	if len(firstJobs) == 0 {
+		t.Fatal("precondition: zero seeded submission_jobs rows after the FIRST Seed")
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (idempotency): %v", err)
+	}
+	secondJobs := fetchDemoSubmissionJobs(t, pool)
+	secondExchanges := fetchDemoAppExchange(t, pool)
+	secondHistory := fetchDemoStatusHistory(t, pool)
+
+	if !reflect.DeepEqual(firstJobs, secondJobs) {
+		t.Errorf("submission_jobs differ between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", firstJobs, secondJobs)
+	}
+	if !reflect.DeepEqual(firstExchanges, secondExchanges) {
+		t.Errorf("app_exchange differs between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", firstExchanges, secondExchanges)
+	}
+	if !reflect.DeepEqual(firstHistory, secondHistory) {
+		t.Errorf("invoice_status_history differs between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", firstHistory, secondHistory)
+	}
+}
+
+// TestSeedWritesNoSubmissionEvidenceForOtherTenants: "other tenants untouched" —
+// companion to TestSeedDoesNotTouchOtherTenants, scoped to the two new tables this
+// subtask writes. Guards against a copy-paste bug in the in-house block landing a
+// job/exchange row under the wrong tenant_id.
+func TestSeedWritesNoSubmissionEvidenceForOtherTenants(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	if n := mustCount(t, pool, `SELECT count(*) FROM submission_jobs WHERE tenant_id = $1`, foreignTenantID); n != 0 {
+		t.Errorf("count(submission_jobs) for foreign tenant %s after Seed = %d, want 0", foreignTenantID, n)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM app_exchange WHERE tenant_id = $1`, foreignTenantID); n != 0 {
+		t.Errorf("count(app_exchange) for foreign tenant %s after Seed = %d, want 0", foreignTenantID, n)
 	}
 }

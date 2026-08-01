@@ -357,12 +357,13 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {/* A MID-SET empty page: total>0 (else `state` would be 'empty' above) but this
-          page's own slice is []. Also the one window the server can't cover -- entityId
-          not yet resolved / a company switch's pre-refetch frame -- where
-          gateByActiveEntity blanks a non-empty response down to []. The pager stays
-          mounted either way so the user (or the next refetch) can get back. */}
-      {state === 'ready' && list.data != null && rows.length === 0 && (
+      {/* A MID-SET empty page: total>0 (else `state` would be 'empty' above) and the
+          server's OWN slice for this offset is []. The switch-transient window (a
+          company switch's pre-refetch frame, where gateByActiveEntity blanks a
+          non-empty response down to [] client-side) is handled by the next branch
+          instead, so the pager mounted here always belongs to this entity's own
+          pagination. */}
+      {state === 'ready' && list.data != null && list.data.invoices.length === 0 && (
         <div data-testid="invoices-empty-page">
           <EmptyState title="No invoices on this page" message="Go back to see the rest of the register." />
           <div style={{ marginTop: 16 }}>
@@ -377,6 +378,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             />
           </div>
         </div>
+      )}
+
+      {/* Checks the server's own invoices.length, not the gated `rows`, so a switch's
+          pre-refetch frame (non-empty response, blanked to [] by gateByActiveEntity)
+          renders Loading instead of a Pager carrying the previous entity's pagination;
+          self-heals on the next commit when the refetch lands. */}
+      {state === 'ready' && list.data != null && list.data.invoices.length > 0 && rows.length === 0 && (
+        <Loading label="Loading invoices…" />
       )}
 
       {state === 'ready' && list.data != null && rows.length > 0 && (

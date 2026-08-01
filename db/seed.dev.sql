@@ -244,17 +244,38 @@ WITH invoice_seed (
 )
 INSERT INTO invoices (
     tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
-    buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons
+    buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons,
+    irn, csid, qr_payload
 )
 SELECT
     '11111111-1111-1111-1111-111111111111', e.id, s.invoice_number, s.status, s.issue_date::date,
     s.supplier_tin, s.supplier_name, s.buyer_tin, s.buyer_name, 'NGN',
     s.subtotal::numeric, s.vat::numeric, s.total::numeric, s.violations::jsonb,
-    CASE WHEN s.validated THEN rsv.id ELSE NULL END, s.rejection_reasons::jsonb
+    CASE WHEN s.validated THEN rsv.id ELSE NULL END, s.rejection_reasons::jsonb,
+    -- Only `accepted` rows carry these: a non-NULL irn is the "already cleared" sentinel
+    -- (internal/invoice/submission_port.go), so a stray one makes a row unsubmittable.
+    CASE WHEN s.status = 'accepted' THEN f.irn END,
+    CASE WHEN s.status = 'accepted' THEN f.csid END,
+    -- format(), not json[b]_build_object: jsonb reorders keys by length and json spaces
+    -- around ':' -- only this reproduces mockQR's compact {irn,csid,tin,amt,cur}. The tin
+    -- is the SUPPLIER's; the buyer TIN is the mock's trigger channel.
+    CASE WHEN s.status = 'accepted' THEN
+      translate(encode(convert_to(
+        format('{"irn":"%s","csid":"%s","tin":"%s","amt":"%s","cur":"%s"}',
+               f.irn, f.csid, s.supplier_tin, s.total::numeric(14,2), 'NGN'),
+        'UTF8'), 'base64'), E'+/=\n', '-_')
+    END
 FROM invoice_seed s
 JOIN business_entities e
   ON e.tenant_id = '11111111-1111-1111-1111-111111111111' AND e.tin = s.tin
 CROSS JOIN (SELECT id FROM rule_set_versions WHERE is_active) rsv
+-- Derived here, once, so qr_payload's embedded irn/csid cannot drift from the columns --
+-- nothing in the schema correlates them. translate() strips base64 padding AND the newline
+-- encode() inserts every 76 characters, giving the repo's base64url (RawURLEncoding) shape.
+CROSS JOIN LATERAL (SELECT
+    s.invoice_number || '-FBMOCK01-' || to_char(s.issue_date::date, 'YYYYMMDD') AS irn,
+    translate(encode(sha256(convert_to(s.invoice_number, 'UTF8')), 'base64'), E'+/=\n', '-_') AS csid
+) f
 ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
     status              = EXCLUDED.status,
     issue_date          = EXCLUDED.issue_date,
@@ -268,7 +289,10 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
     total               = EXCLUDED.total,
     violations          = EXCLUDED.violations,
     rule_set_version_id = EXCLUDED.rule_set_version_id,
-    rejection_reasons   = EXCLUDED.rejection_reasons;
+    rejection_reasons   = EXCLUDED.rejection_reasons,
+    irn                 = EXCLUDED.irn,
+    csid                = EXCLUDED.csid,
+    qr_payload          = EXCLUDED.qr_payload;
 
 -- Line items for the invoices above. Conflict target is line_items_invoice_line_no_uq
 -- (invoice_id, line_no); invoice_id is resolved by joining back on invoice_number, which

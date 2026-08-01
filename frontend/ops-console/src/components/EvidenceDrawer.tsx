@@ -1,4 +1,4 @@
-// Signed evidence bundle drawer (prototype lines 657-704). Overlay geometry is the
+// Evidence bundle drawer (prototype lines 657-704). Overlay geometry is the
 // same shell as JobDrawer — same 580px width, same scrim/panel z-order and animations.
 
 import { CLOSE_ICON, COPY_ICON, EVIDENCE_QR, EXPORT_ICON, SHIELD_ICON } from '../data'
@@ -75,7 +75,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
         >
           {SHIELD_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--status-green-text)', letterSpacing: '0.03em' }}>
-            SIMULATED CLEARANCE · SIGNED · PENDING ACCREDITATION
+            SIMULATED CLEARANCE · UNSIGNED · PENDING ACCREDITATION
           </span>
         </div>
 
@@ -132,7 +132,7 @@ export function EvidenceDrawer({ evidence, env, onClose, onCopy, onDownload }: P
             <div style={{ width: 92, height: 92, background: 'var(--surface)', borderRadius: 'var(--radius-input)', display: 'grid', placeItems: 'center' }}>{EVIDENCE_QR}</div>
             <div>
               <div className="label" style={{ marginBottom: 6 }}>
-                CSID signature
+                CSID signature · simulated
               </div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-2)', wordBreak: 'break-all', lineHeight: 1.5 }}>
                 {evidence.csid}

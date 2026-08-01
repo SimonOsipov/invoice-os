@@ -112,6 +112,40 @@ func sehDeriveTrail(t *testing.T, buyerTIN string) []sehStep {
 	return steps
 }
 
+// sehDemoTenantID is db/seed.dev.sql's in-house demo tenant, the only one the seed writes
+// these five invoices under. A reserved buyer TIN carries no tenancy of its own, so every
+// lookup here has to supply it.
+const sehDemoTenantID = "22222222-2222-2222-2222-222222222222"
+
+type sehInvoice struct {
+	id     string
+	number string
+}
+
+// sehSeededInvoices returns every DEMO-2026-* invoice in the demo tenant carrying buyerTIN,
+// ordered so the caller's "exactly one" check reports the same set on every run.
+func sehSeededInvoices(ctx context.Context, pool *pgxpool.Pool, buyerTIN string) ([]sehInvoice, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT id, invoice_number FROM invoices
+		  WHERE tenant_id = $1 AND buyer_tin = $2 AND invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY invoice_number ASC`,
+		sehDemoTenantID, buyerTIN)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []sehInvoice
+	for rows.Next() {
+		var inv sehInvoice
+		if err := rows.Scan(&inv.id, &inv.number); err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
 // reservedTINsUsedBySeed is db/seed.dev.sql's own outcome-coverage subset (Core AC-5) -- the
 // five reserved TINs it actually seeds an invoice against. -0005/-0007 are allocated in
 // mockAllocations but unused by the seed, so they are not asserted here.
@@ -145,27 +179,38 @@ func TestSeedEvidenceTrailMatchesDerivedAdapterBehavior(t *testing.T) {
 		t.Run(tin, func(t *testing.T) {
 			want := sehDeriveTrail(t, tin)
 
-			var invoiceID string
-			if err := pool.QueryRow(ctx,
-				`SELECT id FROM invoices WHERE buyer_tin = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
-				tin,
-			).Scan(&invoiceID); err != nil {
-				t.Fatalf("no seeded DEMO-2026-* invoice carries buyer_tin=%q: %v", tin, err)
+			// Every lookup below is pinned to the seed's own rows: an unscoped QueryRow returns
+			// an arbitrary first row and no error when more exist, and on a shared database a
+			// real submit adds a second job for these invoices plus its own evidence.
+			invoices, err := sehSeededInvoices(ctx, pool, tin)
+			if err != nil {
+				t.Fatalf("look up seeded DEMO-2026-* invoice for buyer_tin=%q: %v", tin, err)
 			}
+			if len(invoices) != 1 {
+				t.Fatalf("buyer_tin=%q: %d seeded DEMO-2026-* invoices in tenant %s, want exactly 1: %v", tin, len(invoices), sehDemoTenantID, invoices)
+			}
+			invoiceID, invoiceNumber := invoices[0].id, invoices[0].number
 
+			// (tenant_id, idempotency_key) is submission_jobs' unique constraint, so this
+			// resolves the seed's job and nothing else.
+			var jobID string
 			var jobAttempts int
 			if err := pool.QueryRow(ctx,
-				`SELECT attempts FROM submission_jobs WHERE invoice_id = $1`, invoiceID,
-			).Scan(&jobAttempts); err != nil {
-				t.Fatalf("read submission_jobs.attempts for buyer_tin=%q: %v", tin, err)
+				`SELECT id, attempts FROM submission_jobs
+				  WHERE tenant_id = $1 AND idempotency_key = $2 AND invoice_id = $3`,
+				sehDemoTenantID, "demo-seed:"+invoiceNumber, invoiceID,
+			).Scan(&jobID, &jobAttempts); err != nil {
+				t.Fatalf("read the seeded submission_jobs row for %s (buyer_tin=%q): %v", invoiceNumber, tin, err)
 			}
 			if jobAttempts != len(want) {
 				t.Errorf("buyer_tin=%q: submission_jobs.attempts = %d, want %d -- derived by driving the real adapter, not read off the seed", tin, jobAttempts, len(want))
 			}
 
 			rows, err := pool.Query(ctx,
-				`SELECT operation, http_status FROM app_exchange WHERE invoice_id = $1 ORDER BY attempt ASC`,
-				invoiceID,
+				`SELECT operation, http_status FROM app_exchange
+				  WHERE tenant_id = $1 AND submission_job_id = $2
+				  ORDER BY attempt ASC, operation ASC`,
+				sehDemoTenantID, jobID,
 			)
 			if err != nil {
 				t.Fatalf("query app_exchange for buyer_tin=%q: %v", tin, err)

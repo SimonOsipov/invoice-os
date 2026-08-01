@@ -47,6 +47,16 @@ function partition(paths: string[]): { scanned: string[]; excluded: string[] } {
   return { scanned, excluded }
 }
 
+// `'transmitted ' + 'to NRS'` renders the forbidden claim, but the source carries a
+// quote/plus/quote run between the halves that a substring match trips over. Deleting that
+// run is a cheap normalization, not a parse — see the concatenation test below for what it
+// still does not reach.
+const CONCAT_BOUNDARY = /['"`]\s*\+\s*['"`]/g
+
+function collapseConcat(src: string): string {
+  return src.replace(CONCAT_BOUNDARY, '')
+}
+
 // The matcher itself, parameterized on source text + a label (not inlined into the scan loop)
 // so row "the matcher is not vacuous" below can exercise the SAME function on an inline
 // fixture, not a copy of its logic. Case-insensitive by construction — the live defect is
@@ -55,18 +65,21 @@ function findForbiddenHits(src: string, label: string): Hit[] {
   const hits: Hit[] = []
   const lines = src.split('\n')
   const lower = lines.map((l) => l.toLowerCase())
-  lower.forEach((line, i) => {
+  const norm = lower.map(collapseConcat)
+  norm.forEach((line, i) => {
     for (const needle of FORBIDDEN_STRINGS) {
       if (line.includes(needle.toLowerCase())) hits.push({ file: label, line: i + 1, needle })
     }
   })
-  // A needle split across a line wrap (e.g. reformatted JSX text) evades the per-line pass
-  // above. Also check each adjacent line pair joined by a space, skipping what's already hit.
+  // A needle split across a line wrap (reformatted JSX text) or across a concatenation whose
+  // `+` ends the line evades the per-line pass above. Also check each adjacent line pair
+  // joined by a space — collapsed AFTER joining, so a boundary spanning the wrap closes too —
+  // skipping what's already hit.
   for (let i = 0; i < lower.length - 1; i++) {
-    const pair = `${lower[i]} ${lower[i + 1]}`
+    const pair = collapseConcat(`${lower[i]} ${lower[i + 1]}`)
     for (const needle of FORBIDDEN_STRINGS) {
       const n = needle.toLowerCase()
-      if (pair.includes(n) && !lower[i].includes(n) && !lower[i + 1].includes(n)) {
+      if (pair.includes(n) && !norm[i].includes(n) && !norm[i + 1].includes(n)) {
         hits.push({ file: label, line: i + 1, needle })
       }
     }
@@ -129,8 +142,12 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
       "showToast('Cancelled', 'AUDIT LOGGED')",
       'This action is recorded against your account',
       'SIGNED · HASH-CHAINED',
+      'bundle tag: SIGNED · SIMULATED',
       'cryptographic proof it cleared',
       'The tax authority rejected this invoice',
+      'returns a signed evidence bundle',
+      'billed as 1,020 signed bundles',
+      'IRN issued · evidence signed',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts')
@@ -146,6 +163,42 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
     const hits = findForbiddenHits(SAMPLE, 'sample.ts')
     expect(hits.map((h) => h.needle)).toEqual(['transmitted to NRS'])
     expect(hits[0].line).toBe(1)
+  })
+
+  // Concatenation, both on one line and split at the `+`. What this does NOT reach: template
+  // interpolation (`` `transmitted ${x} to NRS` ``), a needle assembled through a variable or
+  // .join(), and adjacent JSX expressions (`{'transmitted '}{'to NRS'}`). Closing those needs
+  // a JSX/AST parse; the normalization is deliberately cheaper than that.
+  it('catches a needle split across a string concatenation', () => {
+    const oneLine = findForbiddenHits(`const claim = 'transmitted ' + 'to NRS'`, 'sample.ts')
+    expect(oneLine.map((h) => h.needle)).toEqual(['transmitted to NRS'])
+
+    const doubleQuoted = findForbiddenHits(`const claim = "transmitted " + "to NRS"`, 'sample.ts')
+    expect(doubleQuoted.map((h) => h.needle)).toEqual(['transmitted to NRS'])
+
+    const wrapped = findForbiddenHits(["const claim = 'transmitted ' +", "  'to NRS · IRN assigned'"].join('\n'), 'sample.ts')
+    expect(wrapped.map((h) => h.needle)).toEqual(['transmitted to NRS'])
+    expect(wrapped[0].line).toBe(1)
+  })
+
+  // The bare pill form (`<span>SIGNED</span>`) carries no neighbouring token for a needle to
+  // anchor on, and FORBIDDEN_STRINGS is matched case-insensitively — `signed` alone would hit
+  // `signed in`, `assigned`, `unassigned`, `designed` and landing's real `signed webhooks`.
+  // This is the case-SENSITIVE complement: `\b` clears UNSIGNED/DESIGNED, and keeping it out
+  // of the shared list leaves the Playwright and app-tier consumers on plain strings.
+  it('no SPA renders a bare SIGNED tag', () => {
+    const { scanned } = partition(listFrontendSourceFiles())
+    expect(scanned.length, 'files to scan (vacuity guard)').toBeGreaterThanOrEqual(120)
+
+    expect(/\bSIGNED\b/.test('SIGNED · SIMULATED'), 'the matcher is vacuous').toBe(true)
+    expect(/\bSIGNED\b/.test('SIMULATED · UNSIGNED'), 'the matcher hits the honest retraction').toBe(false)
+
+    const hits = scanned.flatMap((relPath) =>
+      readFileSync(join(REPO_ROOT, relPath), 'utf8')
+        .split('\n')
+        .flatMap((line, i) => (/\bSIGNED\b/.test(line) ? [`${relPath}:${i + 1}`] : [])),
+    )
+    expect(hits, `a bare SIGNED tag claims a signing operation nothing performs:\n${hits.join('\n')}`).toEqual([])
   })
 
   it('no forbidden claim appears in any SPA', () => {

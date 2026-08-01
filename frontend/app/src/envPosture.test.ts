@@ -32,6 +32,11 @@ const FORBIDDEN = [
   'hash-chained',
   'cryptographic proof',
   'the tax authority rejected',
+  'signed evidence',
+  'signed bundle',
+  'evidence signed',
+  ' signed ·',
+  '· signed',
 ]
 
 // Test files are excluded — they carry the forbidden strings as fixtures.

@@ -11,8 +11,8 @@ type Props = {
   onExport: () => void
 }
 
-// proto:1196. Both digests are fabricated and do not chain; audit_log (internal/audit) has
-// no digest column either, so the drawer's banner claims only what the grants enforce.
+// proto:1196. Both digests are fabricated and do not chain; audit_log (internal/audit) has no
+// digest column, so nothing shown here is read back from it — which is what the banner says.
 function entryHash(id: string): string {
   return `sha256:9f${id.slice(-4)}a3e1b7c4d09f${id.slice(-2)}8e2c5a1f0b6d3e7c9a4`
 }
@@ -54,7 +54,7 @@ export function AuditDrawer({ entry, env, onClose, onCopy, onExport }: Props) {
         <div style={{ flex: 'none', background: 'var(--status-muted-bg)', borderBottom: '1px solid var(--line-1)', padding: '9px 22px', display: 'flex', alignItems: 'center', gap: 9 }}>
           {LOCK_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--fg-2)', letterSpacing: '0.03em' }}>
-            READ-ONLY EVIDENCE · CANNOT BE EDITED OR DELETED
+            SIMULATED ENTRY · DIGESTS NOT STORED IN AUDIT LOG
           </span>
         </div>
       }
@@ -80,7 +80,7 @@ export function AuditDrawer({ entry, env, onClose, onCopy, onExport }: Props) {
 
       <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '12px 14px', marginBottom: 20 }}>
         <div className="label" style={{ marginBottom: 6 }}>
-          Entry hash
+          Entry hash · simulated
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-2)', wordBreak: 'break-all', lineHeight: 1.5 }}>
           {entryHash(entry.id)}

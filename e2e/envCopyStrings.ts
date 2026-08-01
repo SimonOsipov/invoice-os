@@ -32,4 +32,18 @@ export const FORBIDDEN_STRINGS = [
   'cryptographic proof',
   // Leading `the ` again — separates the assertion from a conditional/capability sentence.
   'the tax authority rejected',
+  // The evidence bundle's digests are deterministic fabrications, so calling it SIGNED is a
+  // cryptographic claim nothing performs. A bare `signed` needle is impossible: `signed in`,
+  // `assigned`, `unassigned`, `designed` and landing's real `signed webhooks` are all
+  // legitimate under a case-insensitive substring match. These five are the forms the copy
+  // actually reaches for — the prose/label register, then the `·`-separated tag register in
+  // both positions (`SIGNED · SIMULATED`, `ACCEPTED BY NRS/MBS · SIGNED`).
+  'signed evidence',
+  'signed bundle',
+  'evidence signed',
+  // Both tag-register needles carry their separator AND a leading boundary, because
+  // `assigned`/`designed`/`unsigned` all contain `signed`: `un signed ·` never occurs, so
+  // ` signed ·` clears the honest retraction `· UNSIGNED ·` while still catching `SIGNED · x`.
+  ' signed ·',
+  '· signed',
 ] as const

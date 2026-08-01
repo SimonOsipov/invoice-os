@@ -110,7 +110,7 @@ function Console() {
   const reDriveAll = () => {
     const ids = jobs.filter((j) => j.state === 'dead-letter').map((j) => j.id)
     setJobs((prev) => prev.map((j) => (j.state === 'dead-letter' ? { ...j, state: 'queued', lastError: '—' } : j)))
-    showToast('Re-drove ' + ids.length + ' dead-letter submissions', 'QUEUED')
+    showToast('Re-drive queued · ' + ids.length + ' dead-letter submissions', 'QUEUED')
   }
   const cancelJob = (id: string) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'failed', lastError: 'Cancelled by user' } : j)))
@@ -202,7 +202,7 @@ function Console() {
           env={env}
           onClose={() => setDrawer(null)}
           onCopy={() => showToast('Evidence JSON copied to clipboard', 'CLIPBOARD')}
-          onDownload={() => showToast('Signed evidence bundle downloaded', 'PDF + JSON')}
+          onDownload={() => showToast('Evidence bundle downloaded', 'PDF + JSON')}
         />
       )}
 

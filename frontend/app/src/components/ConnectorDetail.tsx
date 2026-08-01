@@ -3,8 +3,9 @@
 // lib/connectors.ts `connectorDetail()`, which derives internally-consistent figures from
 // the connector id, so each connector reads distinct but never re-rolls between visits.
 //
-// The env pill's LIVE segment is disabled, per Header.tsx; saved field mappings live in the
-// workspace (ctx) so they survive navigating away from Settings entirely.
+// The env pill is a read-only indicator here (both segments disabled) — unlike Header.tsx's,
+// which switches; saved field mappings live in the workspace (ctx) so they survive navigating
+// away from Settings entirely.
 
 import { useMemo } from 'react'
 
@@ -108,11 +109,15 @@ export function ConnectorDetail({
           </div>
         </div>
         <div data-testid="connector-env-pill" style={{ flex: 'none', display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${live ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, borderRadius: 999, padding: 2 }}>
+          {/* Both segments are disabled: this pill reports the connector's environment, it
+              does not switch it (there is no setter on this screen). LIVE is disabled for the
+              Header.tsx reason; SANDBOX because an enabled control that cannot act is a lie. */}
           <button
             type="button"
+            disabled
             aria-pressed={!live}
             className="pf-btn"
-            style={{ ...SEG, background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--text-on-dark)' }}
+            style={{ ...SEG, cursor: 'default', background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--text-on-dark)' }}
           >
             <span style={{ width: 5, height: 5, borderRadius: 99, background: live ? 'var(--status-amber-text)' : 'var(--text-on-dark)' }} />
             SANDBOX

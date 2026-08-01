@@ -579,6 +579,10 @@ ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET
 -- would be a fabricated wire capture rather than a recorded one. Idempotency is a NOT EXISTS
 -- guard on (submission_job_id, operation, attempt) -- the table has no unique constraint to
 -- key an ON CONFLICT off, and is append-only by grant.
+--
+-- The join is pinned to the seed's OWN job by idempotency_key: a real submit adds a second job
+-- for the same invoice (ensureSubmissionJob runs before every gate in worker.go), and an
+-- invoice_id-only join would re-attribute this synthetic evidence to it on the next re-seed.
 WITH exchange_seed (invoice_number, operation, attempt_from, attempt_to, http_status, latency_ms) AS (
   VALUES
     ('DEMO-2026-7001', 'submit', 1, 1, 200,  142),
@@ -600,6 +604,7 @@ JOIN invoices i
   ON i.tenant_id = '22222222-2222-2222-2222-222222222222' AND i.invoice_number = x.invoice_number
 JOIN submission_jobs j
   ON j.tenant_id = i.tenant_id AND j.invoice_id = i.id
+ AND j.idempotency_key = 'demo-seed:' || i.invoice_number
 CROSS JOIN LATERAL generate_series(x.attempt_from, x.attempt_to) AS a(attempt)
 WHERE NOT EXISTS (
     SELECT 1 FROM app_exchange e

@@ -36,7 +36,7 @@
 // note); a high `offset` for empty-state (the shared dev tenant already
 // carries invoices from other specs, so there is no truly empty list).
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, validateInvoice, rawFetch, PERSONAS, type Entity } from './client'
+import { login, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -236,6 +236,21 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const pagination = body.pagination as Record<string, unknown>
       expect(typeof pagination.total, 'pagination.total should be numeric').toBe('number')
       expect(pagination.offset, 'pagination.offset should echo the requested high offset').toBe(100000000)
+    })
+
+    test('search-contract: q matches buyer and supplier TIN through the gateway', async () => {
+      // Uses the typed listInvoices() helper deliberately (not rawFetch like the rest
+      // of this block) -- widening ListInvoicesQuery only proves anything if something
+      // calls it through the gateway.
+      const buyerTin = freshTin()
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        invoice_number: `INV-L-${freshTin()}`,
+        buyer_tin: buyerTin,
+      })
+      const res = await listInvoices(token, { q: buyerTin })
+      expect(res.invoices.some((inv) => inv.id === created.id), 'q should match the invoice by buyer_tin').toBe(true)
+      expect(res.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
     })
 
     test('list with no auth -> 401 {error: string}', async () => {

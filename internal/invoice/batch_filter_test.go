@@ -131,6 +131,25 @@ func seedInvoiceWithBuyer(t *testing.T, super *pgxpool.Pool, tenantID, entityID,
 	return id
 }
 
+// seedInvoiceWithTINs seeds an invoice with explicit buyer_tin/supplier_tin
+// -- needed for the Query (q) filter's TIN arms; no existing helper writes
+// these columns. Pass "" for whichever TIN a given test doesn't care about.
+func seedInvoiceWithTINs(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, buyerTIN, supplierTIN string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, buyer_tin, supplier_tin) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		tenantID, entityID, number, buyerTIN, supplierTIN,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed invoices (with TINs): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id)
+	})
+	return id
+}
+
 // TestStoreList_ImportBatchIDNarrowsBeforePaging (spec 1, AC-2): batch A's 3
 // invoices are seeded at the OLDEST created_at; 60 "other" (no batch)
 // invoices are seeded strictly newer, so the unfiltered newest-50
@@ -541,6 +560,40 @@ func TestStoreList_QueryMatchesNumberOrBuyer(t *testing.T) {
 	}
 }
 
+// TestStoreList_QueryMatchesTINs (BUG-01-04, AC-1): one invoice matches only
+// via buyer_tin, a second only via supplier_tin -- proving the widened q
+// clause's two new OR arms, not just invoice_number/buyer_name. RED today
+// (0/0): store.go's q fragment has no buyer_tin/supplier_tin arm yet.
+func TestStoreList_QueryMatchesTINs(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-Q-TIN tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-Q-TIN entity")
+
+	buyerTinMatch := seedInvoiceWithTINs(t, super, tenantID, entityID, "BATCHQ-TIN-BUYER-001", "20033344-0003", "")
+	supplierTinMatch := seedInvoiceWithTINs(t, super, tenantID, entityID, "BATCHQ-TIN-SUPPLIER-002", "", "99988877-0006")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Query: "20033344-0003", Limit: 50})
+	if err != nil {
+		t.Fatalf("List (Query: buyer_tin): %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != buyerTinMatch {
+		t.Fatalf("List (Query: buyer_tin) = (items=%+v, total=%d), want exactly [%s]/1", items, total, buyerTinMatch)
+	}
+
+	items, total, err = store.List(c, ListFilter{Query: "99988877-0006", Limit: 50})
+	if err != nil {
+		t.Fatalf("List (Query: supplier_tin): %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != supplierTinMatch {
+		t.Fatalf("List (Query: supplier_tin) = (items=%+v, total=%d), want exactly [%s]/1", items, total, supplierTinMatch)
+	}
+}
+
 // seedInvoiceWithBatchAndBuyer seeds an invoice with both an explicit
 // import_batch_id (nil for none) and buyer_name -- needed only by
 // TestStoreList_QueryANDsWithImportBatchID below, which composes the two.
@@ -598,6 +651,39 @@ func TestStoreList_QueryANDsWithImportBatchID(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ID != inBatch {
 		t.Fatalf("List (ImportBatchID: batchA, Query: acme) items = %+v, want exactly [%s]", items, inBatch)
+	}
+}
+
+// TestStoreList_QueryANDsWithEntityID (BUG-01-04, AC-3): two entities each
+// hold a row carrying the SAME buyer_tin -- an unparenthesised q fragment
+// (`entity_id = $1 AND (... OR buyer_tin ILIKE $2 ...)` missing its outer
+// parens) would let entity B's matching row leak past the entity_id filter
+// via OR, same trap as TestStoreList_QueryANDsWithImportBatchID above but
+// exercising the new TIN arm specifically.
+func TestStoreList_QueryANDsWithEntityID(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-Q-AND-ENTITY tenant")
+	entityA := seedEntity(t, super, tenantID, "BATCH-FILTER-Q-AND-ENTITY A")
+	entityB := seedEntity(t, super, tenantID, "BATCH-FILTER-Q-AND-ENTITY B")
+
+	const tin = "20033344-0003"
+	rowA := seedInvoiceWithTINs(t, super, tenantID, entityA, "BATCHQ-AND-ENTITY-A", tin, "")
+	seedInvoiceWithTINs(t, super, tenantID, entityB, "BATCHQ-AND-ENTITY-B", tin, "")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{EntityID: entityA, Query: tin, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (EntityID: A, Query: tin): %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("List (EntityID: A, Query: tin).total = %d, want 1 -- an unparenthesised q fragment would let entity B's matching row leak in via OR", total)
+	}
+	if len(items) != 1 || items[0].ID != rowA {
+		t.Fatalf("List (EntityID: A, Query: tin) items = %+v, want exactly [%s]", items, rowA)
 	}
 }
 

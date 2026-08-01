@@ -93,9 +93,8 @@ function Console() {
   }
 
   // ---- job actions (proto:1114) ----
-  // Every one of these is a cross-tenant mutation, which is why each toast carries an
-  // AUDIT LOGGED tag: in the real system these are the operator actions the append-only
-  // log exists to attribute.
+  // Cross-tenant mutations. Nothing reaches the audit log until accreditation (TopBar.tsx,
+  // KillConfirm.tsx), so the tag names that gate rather than asserting a write happened.
   const openJob = (id: string) => {
     setDrawer({ type: 'job', id })
     setReqOpen(true)
@@ -104,17 +103,17 @@ function Console() {
   const reDriveOne = (id: string) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'queued', lastError: '—' } : j)))
     setDrawer(null)
-    showToast('Re-drive queued · ' + id, 'AUDIT LOGGED')
+    showToast('Re-drive queued · ' + id, 'AUDIT ON ACCREDITATION')
   }
   const reDriveAll = () => {
     const n = jobs.filter((j) => j.state === 'dead-letter').length
     setJobs((prev) => prev.map((j) => (j.state === 'dead-letter' ? { ...j, state: 'queued', lastError: '—' } : j)))
-    showToast(`Re-drove ${n} dead-letter ${n === 1 ? 'job' : 'jobs'}`, 'AUDIT LOGGED')
+    showToast(`Re-drove ${n} dead-letter ${n === 1 ? 'job' : 'jobs'}`, 'AUDIT ON ACCREDITATION')
   }
   const cancelJob = (id: string) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'failed', lastError: 'Cancelled by operator' } : j)))
     setDrawer(null)
-    showToast('Cancelled · ' + id, 'AUDIT LOGGED', 'red')
+    showToast('Cancelled · ' + id, 'AUDIT ON ACCREDITATION', 'red')
   }
 
   // ---- rule actions (proto:1099) ----
@@ -133,7 +132,7 @@ function Console() {
   const doKill = () => {
     if (!confirmKill) return
     setRules((prev) => prev.map((r) => (r.key === confirmKill ? { ...r, enabled: false } : r)))
-    showToast('Kill-switch · ' + confirmKill + ' disabled', 'AUDIT LOGGED', 'red')
+    showToast('Kill-switch · ' + confirmKill + ' disabled', 'AUDIT ON ACCREDITATION', 'red')
     setConfirmKill(null)
   }
 
@@ -168,7 +167,7 @@ function Console() {
               onSubTabChange={setSubTab}
               onOpenJob={openJob}
               onReDriveAll={reDriveAll}
-              onReconcile={(id, appLabel) => showToast(`Reconciled ${id} → ${appLabel}`, 'AUDIT LOGGED')}
+              onReconcile={(id, appLabel) => showToast(`Reconciled ${id} → ${appLabel}`, 'AUDIT ON ACCREDITATION')}
               onRunSweep={() => showToast('Reconciliation sweep dispatched', 'RECONCILIATION')}
             />
           )}
@@ -200,7 +199,7 @@ function Console() {
               onQueryChange={setTenantQuery}
               onSelect={setTenantId}
               onViewJobs={() => go('submissions')}
-              onViewAs={(name) => showToast(`Opened ${name} in read-only view-as`, 'AUDIT LOGGED')}
+              onViewAs={(name) => showToast(`Opened ${name} in read-only view-as`, 'AUDIT ON ACCREDITATION')}
             />
           )}
           {screen === 'health' && <Health deadLetterCount={dlCount} />}

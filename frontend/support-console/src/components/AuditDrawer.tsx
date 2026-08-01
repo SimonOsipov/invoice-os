@@ -11,9 +11,8 @@ type Props = {
   onExport: () => void
 }
 
-// proto:1196. The hash chain is the evidence claim this screen makes: each entry carries
-// its own digest and a pointer to the previous one. Fabricated here, but shaped so the
-// real append-only audit_log (internal/audit) can fill it verbatim.
+// proto:1196. Both digests are fabricated and do not chain; audit_log (internal/audit) has
+// no digest column either, so the drawer's banner claims only what the grants enforce.
 function entryHash(id: string): string {
   return `sha256:9f${id.slice(-4)}a3e1b7c4d09f${id.slice(-2)}8e2c5a1f0b6d3e7c9a4`
 }
@@ -55,7 +54,7 @@ export function AuditDrawer({ entry, env, onClose, onCopy, onExport }: Props) {
         <div style={{ flex: 'none', background: 'var(--status-muted-bg)', borderBottom: '1px solid var(--line-1)', padding: '9px 22px', display: 'flex', alignItems: 'center', gap: 9 }}>
           {LOCK_ICON}
           <span className="mono" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--fg-2)', letterSpacing: '0.03em' }}>
-            READ-ONLY EVIDENCE · CANNOT BE EDITED OR DELETED · HASH-CHAINED
+            READ-ONLY EVIDENCE · CANNOT BE EDITED OR DELETED
           </span>
         </div>
       }

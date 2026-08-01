@@ -124,6 +124,13 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
       'sub="IRN + CSID returned"',
       'operating against the NRS test adapter',
       'recorded in the immutable audit log against your operator identity',
+      'ACCEPTED BY NRS/MBS · SIGNED',
+      'the bundle was accepted by MBS',
+      "showToast('Cancelled', 'AUDIT LOGGED')",
+      'This action is recorded against your account',
+      'SIGNED · HASH-CHAINED',
+      'cryptographic proof it cleared',
+      'The tax authority rejected this invoice',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts')

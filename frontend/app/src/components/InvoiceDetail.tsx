@@ -606,7 +606,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="card-title">
-                    {rejectionProvenance(inv.status) === 'current' ? 'The tax authority rejected this invoice' : 'Last APP rejection'}
+                    {rejectionProvenance(inv.status) === 'current' ? 'This invoice was rejected' : 'Last APP rejection'}
                   </span>
                 </div>
                 <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>

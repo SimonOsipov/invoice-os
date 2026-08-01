@@ -69,10 +69,10 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
 
 // InvoicesList reads exactly these ctx fields (grep-confirmed) — same narrowing idiom
 // as Header.test.tsx's HeaderCtx.
-function listCtx(): PlatformCtx {
+function listCtx(entityId = 'ent-1'): PlatformCtx {
   const ctx = {
     mode: 'firm',
-    active: { entityId: 'ent-1' },
+    active: { entityId },
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     openCreate: () => {},
@@ -302,6 +302,29 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect(pager.textContent).toContain('SHOWING 51–52 OF 52')
     expect((screen.getByRole('button', { name: '← Previous' }) as HTMLButtonElement).disabled, 'Previous stays usable so the user can page back').toBe(false)
   }, 8000)
+
+  it('QA (bug-01-03 cycle 3): switching the active entity settles on the NEW entity\'s rows, never sticks on Loading', async () => {
+    // d35a692's `fresh` check is keyed on identity (fetchedEntityId), not row count or
+    // content shape -- unlike f3b2b54, it can't get confused by which entity's envelope
+    // happens to be empty. This can't observe the one-commit transient itself (jsdom's
+    // act() flushes straight through it, same as every other switch-transient claim in
+    // this file), but it DOES prove the thing that actually matters: the switch settles
+    // on entity B's own rows, not stuck showing entity A's or a permanent spinner.
+    const entA = [row({ id: 'a1', invoice_number: 'INV-ENT-A', entity_id: 'ent-1' })]
+    const entB = [row({ id: 'b1', invoice_number: 'INV-ENT-B', entity_id: 'ent-2' })]
+    const fetchMock = mockFetchSequence([listResponse(entA, { limit: 50, offset: 0, total: 1 }), listResponse(entB, { limit: 50, offset: 0, total: 1 })])
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1')} />)
+    await screen.findByText('INV-ENT-A')
+
+    rerender(<InvoicesList ctx={listCtx('ent-2')} />)
+
+    await screen.findByText('INV-ENT-B')
+    expect(screen.queryByText('INV-ENT-A')).toBeNull()
+
+    const [, secondCallUrl] = fetchMock.mock.calls.map((c) => c[0] as string)
+    expect(urlParams(secondCallUrl).get('entity_id'), 'the refetch triggered by the switch must be scoped to the NEW entity').toBe('ent-2')
+  })
 
   it('(c) two Next clicks batched into the same commit fire exactly one navigation, not two skipped-ahead ones', async () => {
     const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))

@@ -308,9 +308,16 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	// rule_set_version_id, whose FK carries no ON DELETE clause (NO ACTION) --
 	// [v2-down-is-dev-irreversible], carried over for v3. Clearing them restores the
 	// premise this simulated Down needs; harmless, since the enclosing tx is always
-	// rolled back (mirrors TestRuleSetV2_DownRestoresV1 verbatim).
-	if _, err := tx.Exec(ctx, `DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`); err != nil {
-		t.Fatalf("clear rule-set-stamped seed invoices before the simulated Down: %v", err)
+	// rolled back (mirrors TestRuleSetV2_DownRestoresV1 verbatim, delete order included:
+	// app_exchange -> submission_jobs -> invoices, both ON DELETE RESTRICT).
+	for _, stmt := range []string{
+		`DELETE FROM app_exchange WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
+		`DELETE FROM submission_jobs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
+		`DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`,
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("clear rule-set-stamped seed invoices before the simulated Down: %v", err)
+		}
 	}
 
 	// The migration's own Down, reproduced verbatim (migrations/20260731090000_rule_set_v3.sql).

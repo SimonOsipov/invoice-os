@@ -404,9 +404,17 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	// post-conditions below are still asserted against a real v2 delete. Superuser pool,
 	// so FORCE RLS on invoices does not hide rows from the DELETE. line_items and
 	// invoice_status_history follow via ON DELETE CASCADE off invoice_id.
-	// Same reasoning as internal/platform/db's resetInvoicesBeforeFullSchemaReset.
-	if _, err := tx.Exec(ctx, `DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`); err != nil {
-		t.Fatalf("clear rule-set-stamped seed invoices before the simulated Down: %v", err)
+	// Same reasoning as internal/platform/db's resetInvoicesBeforeFullSchemaReset -- including
+	// its delete ORDER: app_exchange -> submission_jobs -> invoices, both ON DELETE RESTRICT,
+	// which db.Seed now populates (task-323).
+	for _, stmt := range []string{
+		`DELETE FROM app_exchange WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
+		`DELETE FROM submission_jobs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
+		`DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`,
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("clear rule-set-stamped seed invoices before the simulated Down: %v", err)
+		}
 	}
 
 	// The v2 migration's Down, per task-111 §a: delete v2 (rules cascade,

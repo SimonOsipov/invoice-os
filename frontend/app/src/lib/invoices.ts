@@ -434,6 +434,21 @@ export async function listInvoices(
   return authedFetch<InvoiceListResponse>(`${base}/api/invoice/v1/invoices${query}`)
 }
 
+// The register's own page size (mirrors REVIEW_PAGE_SIZE, reviewBatch.ts:702). Stays
+// under BATCH_SUBMIT_MAX_IDS (reviewBatch.ts) with zero margin -- a full page selected
+// and submitted exactly saturates the batch-submit id cap. reviewBatch.ts already
+// imports from this module, so the comparison is asserted in invoices.test.ts (a leaf),
+// never imported back here.
+export const REGISTER_PAGE_SIZE = 50
+
+// [empty-is-total-zero]: the SET's own total, never `invoices.length` -- a mid-set empty
+// PAGE (total>0, this page's slice is []) must resolve 'ready' with the envelope intact,
+// not 'empty' (which nulls `data` and loses `pagination`), or the register strands the
+// user on a lying zero-state with no pager back to page 1.
+export function invoiceListIsEmpty(r: InvoiceListResponse): boolean {
+  return r.pagination.total === 0
+}
+
 // One row of the violation-summary aggregate (RuleCount, store.go:639-642): a distinct
 // rule_key and the number of DISTINCT invoices failing it in this batch -- an invoice
 // naming the same rule twice counts ONCE, so these never sum to the invoice total.
@@ -925,7 +940,7 @@ export function shouldFetchInvoices(base: string | null): boolean {
   return base != null
 }
 
-export function invoicesViewState(base: string | null, s: AsyncState<InvoiceRecord[]>): AsyncStatus {
+export function invoicesViewState(base: string | null, s: AsyncState<unknown>): AsyncStatus {
   if (base == null) return 'idle'
   return s.status
 }

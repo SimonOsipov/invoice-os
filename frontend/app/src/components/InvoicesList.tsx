@@ -38,6 +38,7 @@ import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
   gateByActiveEntity,
+  invoiceListIsEmpty,
   invoiceStatusStyle,
   invoicesViewState,
   isRowSelectable,
@@ -45,6 +46,7 @@ import {
   listInvoices,
   newIdempotencyKey,
   pruneSelection,
+  REGISTER_PAGE_SIZE,
   selectableIds,
   selectAllState,
   shouldFetchInvoices,
@@ -53,16 +55,19 @@ import {
   submitInvoices,
   toggleSelection,
   type BatchSubmitResultItem,
+  type InvoiceListResponse,
   type InvoiceRecord,
 } from '../lib/invoices'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import type { PlatformCtx } from '../types'
+import { Pager } from './Pager'
 
 const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 130px'
 
 export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [needsAttention, setNeedsAttention] = useState(false)
+  const [offset, setOffset] = useState(0)
   // In-house has no business_entities row ([entity-picker] trap 1) so its one "client"
   // IS the tenant -- entity_id omitted entirely, same as before this param existed. A
   // null entityId in firm mode (entities still loading/errored) ALSO omits it -- the
@@ -71,20 +76,28 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   const activeEntityId = ctx.mode === 'inhouse' ? undefined : (ctx.active.entityId ?? undefined)
   // Same `base ? … : …` narrowing as ClientsView.tsx:38-41 — `immediate:
   // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
-  // re-runs the effect (and re-fetches) whenever the toggle flips OR the active company
-  // changes ([entity-id-restored]: entity_id is now a server-side param, so switching
-  // companies must trigger a real refetch, not just a client-side recompute).
-  const list = useAsync<InvoiceRecord[]>(
+  // re-runs the effect (and re-fetches) whenever the toggle flips, the page changes, OR
+  // the active company changes ([entity-id-restored]: entity_id is now a server-side
+  // param, so switching companies must trigger a real refetch, not just a client-side
+  // recompute).
+  const list = useAsync<InvoiceListResponse>(
     () =>
       base
-        ? // listInvoices resolves the {invoices, pagination} envelope (INVCR-01-08); this
-          // screen is deliberately un-paged and sends no limit/offset, so it reads the
-          // rows and drops the pagination -- the review screen is what needs `total`.
-          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId }).then((r) => r.invoices)
+        ? // Keeps the {invoices, pagination} envelope whole -- the pager below reads
+          // `pagination` off this same response, never a client constant.
+          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset })
         : Promise.reject(new Error('no gateway configured')),
-    { immediate: shouldFetchInvoices(base), deps: [needsAttention, ctx.mode, ctx.active.entityId] },
+    {
+      isEmpty: invoiceListIsEmpty,
+      immediate: shouldFetchInvoices(base),
+      deps: [needsAttention, ctx.mode, ctx.active.entityId, offset],
+    },
   )
   const state = invoicesViewState(base, list)
+  // A plain boolean, not a re-compared `state === 'loading'`, at the two Pager call
+  // sites below: both sit inside a `state === 'ready'` branch, where TS narrows `state`
+  // to the literal 'ready' and rejects that comparison as unreachable.
+  const loading = state === 'loading'
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) — a poll tick never calls
   // list.run() (THE LOAD-BEARING TRAP: that dispatches useAsync's 'start' action, nulls
@@ -126,7 +139,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // `live`/`list.data` so that frame is covered immediately, without waiting on the
   // refetch.
   const rows = useMemo(
-    () => gateByActiveEntity(live ?? list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    () => gateByActiveEntity(live ?? list.data?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
     [live, list.data, ctx.mode, ctx.active.entityId],
   )
 
@@ -187,7 +200,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       if (tickInFlight.current) return
       tickInFlight.current = true
       const g = gen.current
-      listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId })
+      listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset })
         .then((r) => {
           if (g === gen.current) setLive(r.invoices)
         })
@@ -277,7 +290,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{ctx.user.tenantName ?? 'Your workspace'} · create, validate, and transmit.</p>
         </div>
         <button
-          onClick={() => setNeedsAttention((v) => !v)}
+          onClick={() => {
+            setNeedsAttention((v) => !v)
+            setOffset(0)
+            setSelected([])
+          }}
           data-testid="needs-attention-toggle"
           className="pf-chip"
           style={{
@@ -325,14 +342,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
-      {/* `state` now reflects the ENTITY-SCOPED fetch itself ([entity-id-restored]) -- a
-          genuinely invoice-less entity resolves to 'empty' directly, server-side, rather
-          than a non-empty tenant-wide 'ready' result filtered down to zero in the browser.
-          `state === 'ready' && rows.length === 0` still matters for the one window the
-          server can't cover: entityId not yet resolved, where gateByActiveEntity blanks a
-          tenant-wide 'ready' result down to [] -- the SAME honest empty state either way,
-          never a bare table with only a header row. */}
-      {(state === 'idle' || state === 'empty' || (state === 'ready' && rows.length === 0)) && (
+      {/* `state` reflects the ENTITY-SCOPED fetch itself ([entity-id-restored]) -- a
+          genuinely invoice-less entity resolves to 'empty' directly, server-side
+          (invoiceListIsEmpty reads `pagination.total`, never `rows.length`), so this rung
+          fires only on a genuine zero-total set. */}
+      {(state === 'idle' || state === 'empty') && (
         <div data-testid="invoices-empty">
           <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
@@ -343,11 +357,33 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'ready' && rows.length > 0 && (
+      {/* A MID-SET empty page: total>0 (else `state` would be 'empty' above) but this
+          page's own slice is []. Also the one window the server can't cover -- entityId
+          not yet resolved / a company switch's pre-refetch frame -- where
+          gateByActiveEntity blanks a non-empty response down to []. The pager stays
+          mounted either way so the user (or the next refetch) can get back. */}
+      {state === 'ready' && list.data != null && rows.length === 0 && (
+        <div data-testid="invoices-empty-page">
+          <EmptyState title="No invoices on this page" message="Go back to see the rest of the register." />
+          <div style={{ marginTop: 16 }}>
+            <Pager
+              pagination={list.data.pagination}
+              busy={loading}
+              onGo={(o) => {
+                setOffset(o)
+                setSelected([])
+              }}
+              testId="invoices-pager"
+            />
+          </div>
+        </div>
+      )}
+
+      {state === 'ready' && list.data != null && rows.length > 0 && (
         <>
           {selected.length > 0 && (
             <div data-testid="batch-submit-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 18px', marginBottom: 14 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{selected.length} selected</span>
+              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{selected.length} selected on this page</span>
               <button
                 data-testid="batch-submit"
                 onClick={submitSelection}
@@ -434,6 +470,20 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                 </div>
               )
             })}
+          </div>
+
+          {/* Fed the response's own echoed pagination, never REGISTER_PAGE_SIZE -- the
+              server clamps `limit`, and a client constant here would hide that clamp. */}
+          <div style={{ marginTop: 16 }}>
+            <Pager
+              pagination={list.data.pagination}
+              busy={loading}
+              onGo={(o) => {
+                setOffset(o)
+                setSelected([])
+              }}
+              testId="invoices-pager"
+            />
           </div>
         </>
       )}

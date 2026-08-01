@@ -252,7 +252,7 @@ WITH invoice_seed (
 INSERT INTO invoices (
     tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
     buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons,
-    irn, csid, qr_payload
+    irn, csid, qr_payload, created_at
 )
 SELECT
     '11111111-1111-1111-1111-111111111111', e.id, s.invoice_number, s.status, s.issue_date::date,
@@ -271,7 +271,12 @@ SELECT
         format('{"irn":"%s","csid":"%s","tin":"%s","amt":"%s","cur":"%s"}',
                f.irn, f.csid, s.supplier_tin, s.total::numeric(14,2), 'NGN'),
         'UTF8'), 'base64'), E'+/=\n', '-_')
-    END
+    END,
+    -- Explicit per-row offset, not a bare now(): the whole file runs in one implicit
+    -- transaction, so now() is identical for every row and the register's created_at DESC
+    -- would tie-break on a random uuid. Ceiling: keep each tenant under ~47 curated rows,
+    -- or a mid-run re-seed re-anchors above enough e2e rows to rot the page-1 specs.
+    now() - make_interval(secs => row_number() OVER (ORDER BY s.issue_date::date DESC, s.invoice_number DESC))
 FROM invoice_seed s
 JOIN business_entities e
   ON e.tenant_id = '11111111-1111-1111-1111-111111111111' AND e.tin = s.tin
@@ -299,7 +304,8 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
     rejection_reasons   = EXCLUDED.rejection_reasons,
     irn                 = EXCLUDED.irn,
     csid                = EXCLUDED.csid,
-    qr_payload          = EXCLUDED.qr_payload;
+    qr_payload          = EXCLUDED.qr_payload,
+    created_at          = EXCLUDED.created_at;
 
 -- The in-house tenant's own portfolio. Honeywell owns exactly ONE entity
 -- ([in-house-single-entity]) and had zero invoices, so Overview, Invoices, Approvals and
@@ -340,7 +346,7 @@ WITH inhouse_invoice_seed (
 INSERT INTO invoices (
     tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
     buyer_tin, buyer_name, currency, subtotal, vat, total, violations, rule_set_version_id, rejection_reasons,
-    irn, csid, qr_payload
+    irn, csid, qr_payload, created_at
 )
 SELECT
     '22222222-2222-2222-2222-222222222222', e.id, s.invoice_number, s.status, s.issue_date::date,
@@ -354,7 +360,9 @@ SELECT
         format('{"irn":"%s","csid":"%s","tin":"%s","amt":"%s","cur":"%s"}',
                f.irn, f.csid, e.tin, s.total::numeric(14,2), 'NGN'),
         'UTF8'), 'base64'), E'+/=\n', '-_')
-    END
+    END,
+    -- Explicit per-row offset, same reason and same ceiling as the firm block above.
+    now() - make_interval(secs => row_number() OVER (ORDER BY s.issue_date::date DESC, s.invoice_number DESC))
 FROM inhouse_invoice_seed s
 JOIN business_entities e
   ON e.tenant_id = '22222222-2222-2222-2222-222222222222' AND e.tin = '20665510-0001'
@@ -379,7 +387,8 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
     rejection_reasons   = EXCLUDED.rejection_reasons,
     irn                 = EXCLUDED.irn,
     csid                = EXCLUDED.csid,
-    qr_payload          = EXCLUDED.qr_payload;
+    qr_payload          = EXCLUDED.qr_payload,
+    created_at          = EXCLUDED.created_at;
 
 -- Line items for the invoices above. Conflict target is line_items_invoice_line_no_uq
 -- (invoice_id, line_no); invoice_id is resolved by joining back on invoice_number, which

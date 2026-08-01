@@ -126,7 +126,7 @@ export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer
   { label: 'import from file or ERP', admin: true, preparer: true, reviewer: true },
   { label: 'run validation', admin: true, preparer: true, reviewer: true },
   { label: 'approve in approval steps', admin: true, preparer: false, reviewer: true },
-  { label: 'transmit to FIRS/MBS', admin: true, preparer: false, reviewer: true },
+  { label: 'transmit to NRS/MBS', admin: true, preparer: false, reviewer: true },
   { label: 'invite and manage members', admin: true, preparer: false, reviewer: false },
   { label: 'manage ERP connectors', admin: true, preparer: false, reviewer: false },
   { label: 'manage signing certificates', admin: true, preparer: false, reviewer: false },

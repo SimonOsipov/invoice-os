@@ -111,9 +111,9 @@ export const CRUMB_BY_SCREEN: Record<Screen, string> = {
 export const SEED_SUBMISSIONS: Job[] = [
   { id: 'sub_9f2a91', buyer: 'Konga Online Ltd', btin: '20184412-0001', invoice: 'ZP-INV-0088412', raw: 4120000, desc: 'Marketplace settlement', state: 'accepted', attempts: 1, lastError: '—', age: '2m', latency: '1.6s' },
   { id: 'sub_9f2a72', buyer: 'Bolt Nigeria', btin: '19847720-0001', invoice: 'ZP-INV-0088410', raw: 918500, desc: 'Ride commission', state: 'submitting', attempts: 1, lastError: '—', age: '3m', latency: '—' },
-  { id: 'sub_9f2a55', buyer: 'ShopRite NG', btin: '22310984-0001', invoice: 'ZP-INV-0088402', raw: 2740000, desc: 'POS settlement', state: 'pending', attempts: 2, lastError: 'Awaiting FIRS clearance', age: '11m', latency: '—' },
+  { id: 'sub_9f2a55', buyer: 'ShopRite NG', btin: '22310984-0001', invoice: 'ZP-INV-0088402', raw: 2740000, desc: 'POS settlement', state: 'pending', attempts: 2, lastError: 'Awaiting NRS clearance', age: '11m', latency: '—' },
   { id: 'sub_9f29d1', buyer: 'Jumia Foods', btin: '20991043-0001', invoice: 'ZP-INV-0088388', raw: 663200, desc: 'Vendor payout', state: 'rejected', attempts: 3, lastError: 'MBS-422 buyer TIN not registered', age: '24m', latency: '2.1s' },
-  { id: 'sub_9f29a8', buyer: 'MTN Nigeria', btin: '18772300-0001', invoice: 'ZP-INV-0088371', raw: 15400000, desc: 'Airtime bulk settlement', state: 'dead-letter', attempts: 5, lastError: 'FIRS 503 — gateway timeout (x5)', age: '1h 12m', latency: '—' },
+  { id: 'sub_9f29a8', buyer: 'MTN Nigeria', btin: '18772300-0001', invoice: 'ZP-INV-0088371', raw: 15400000, desc: 'Airtime bulk settlement', state: 'dead-letter', attempts: 5, lastError: 'NRS 503 — gateway timeout (x5)', age: '1h 12m', latency: '—' },
   { id: 'sub_9f2987', buyer: 'GTBank Merchant Svcs', btin: '21004552-0001', invoice: 'ZP-INV-0088355', raw: 8730000, desc: 'Card settlement', state: 'failed', attempts: 4, lastError: 'Schema: lines[2].description missing', age: '2h 03m', latency: '—' },
   { id: 'sub_9f2961', buyer: 'Chowdeck Ltd', btin: '20554418-0001', invoice: 'ZP-INV-0088340', raw: 412700, desc: 'Delivery commission', state: 'accepted', attempts: 1, lastError: '—', age: '2h', latency: '1.5s' },
   { id: 'sub_9f2944', buyer: 'Konga Online Ltd', btin: '20184412-0001', invoice: 'ZP-INV-0088331', raw: 1240000, desc: 'Marketplace settlement', state: 'queued', attempts: 0, lastError: '—', age: '6s', latency: '—' },
@@ -309,7 +309,7 @@ export const STATUS_COMPONENTS: StatusComponent[] = [
   { name: 'API gateway', status: 'OPERATIONAL', latency: '20ms', uptime: '100%', tone: 'green', strip: upStrip(1, []) },
   { name: 'Validation engine', status: 'OPERATIONAL', latency: '40ms', uptime: '99.99%', tone: 'green', strip: upStrip(2, []) },
   { name: 'Submission pipeline', status: 'OPERATIONAL', latency: '1.6s', uptime: '99.97%', tone: 'green', strip: upStrip(3, []) },
-  { name: 'Tax-authority connection (FIRS/MBS)', status: 'DEGRADED', latency: '2.1s', uptime: '99.91%', tone: 'amber', strip: upStrip(4, [86, 87, 88, 89]) },
+  { name: 'Tax-authority connection (NRS/MBS)', status: 'DEGRADED', latency: '2.1s', uptime: '99.91%', tone: 'amber', strip: upStrip(4, [86, 87, 88, 89]) },
   { name: 'Webhook delivery', status: 'OPERATIONAL', latency: '130ms', uptime: '99.98%', tone: 'green', strip: upStrip(5, []) },
   { name: 'Evidence store', status: 'OPERATIONAL', latency: '55ms', uptime: '100%', tone: 'green', strip: upStrip(6, []) },
 ]
@@ -319,11 +319,11 @@ export const STATUS_COMPONENTS: StatusComponent[] = [
 export const INCIDENTS: Incident[] = [
   {
     date: 'Jul 14',
-    title: 'Elevated FIRS clearance latency',
+    title: 'Elevated NRS clearance latency',
     status: 'MONITORING',
     tone: 'amber',
     detail:
-      'p95 clearance time rose to 2.1s during peak hours. Submissions are still clearing; retries and webhooks are unaffected. FIRS has acknowledged upstream load.',
+      'p95 clearance time rose to 2.1s during peak hours. Submissions are still clearing; retries and webhooks are unaffected. NRS has acknowledged upstream load.',
   },
   {
     date: 'Jul 02',

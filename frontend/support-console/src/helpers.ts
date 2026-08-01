@@ -112,7 +112,7 @@ export function responseJSON(j: { state: JobState; invoice: string }): string {
       return `{
   "status": "REJECTED",
   "code": "MBS-422",
-  "errors": [ { "field": "buyer.tin", "msg": "TIN not registered with FIRS" } ]
+  "errors": [ { "field": "buyer.tin", "msg": "TIN not registered with NRS" } ]
 }`
     case 'dead-letter':
       return `{

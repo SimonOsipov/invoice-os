@@ -256,7 +256,7 @@ export const API_BASE = 'https://api.ascomply.com/v1'
 export type ApiKeyDef = { env: 'LIVE' | 'TEST'; envBg: string; envColor: string; key: string; note: string }
 
 export const API_KEYS: ApiKeyDef[] = [
-  { env: 'LIVE', envBg: 'var(--status-green-bg)', envColor: 'var(--status-green-text)', key: 'sk_live_a3F8b91c••••••••••••Kp2Q', note: 'Production — transmits to FIRS' },
+  { env: 'LIVE', envBg: 'var(--status-green-bg)', envColor: 'var(--status-green-text)', key: 'sk_live_a3F8b91c••••••••••••Kp2Q', note: 'Production — transmits to NRS' },
   { env: 'TEST', envBg: 'var(--status-amber-bg)', envColor: 'var(--status-amber-text)', key: 'sk_test_9bX24fe1••••••••••••Lq7', note: 'Sandbox — simulated transmissions' },
 ]
 
@@ -265,7 +265,7 @@ export type EndpointDef = { m: 'POST' | 'GET'; path: string; desc: string }
 export const ENDPOINTS: EndpointDef[] = [
   { m: 'POST', path: '/invoices', desc: 'Create & validate an invoice' },
   { m: 'GET', path: '/invoices/{id}', desc: 'Retrieve invoice + validation result' },
-  { m: 'POST', path: '/invoices/{id}/transmit', desc: 'Transmit to FIRS · returns IRN, CSID, QR' },
+  { m: 'POST', path: '/invoices/{id}/transmit', desc: 'Transmit to NRS · returns IRN, CSID, QR' },
   { m: 'GET', path: '/invoices/{id}/status', desc: 'Poll transmission status' },
 ]
 
@@ -290,8 +290,8 @@ export type CertDef = {
 }
 
 export const CERTS: CertDef[] = [
-  { name: 'Digital signing certificate', cn: 'CN=ASComply SI · O=Okafor & Partners', issuer: 'FIRS MBS Root CA', serial: '3A:F2:8B:14:9C:02:7D:E1', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--action)' },
-  { name: 'CSID stamping key', cn: 'RSA-2048 · SHA-256 signature', issuer: 'FIRS APP CA', serial: '7B:11:6E:A0:33:91:C4:4E', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--action)' },
+  { name: 'Digital signing certificate', cn: 'CN=ASComply SI · O=Okafor & Partners', issuer: 'NRS MBS Root CA', serial: '3A:F2:8B:14:9C:02:7D:E1', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--action)' },
+  { name: 'CSID stamping key', cn: 'RSA-2048 · SHA-256 signature', issuer: 'NRS APP CA', serial: '7B:11:6E:A0:33:91:C4:4E', issued: '2026-01-12', expires: '2027-01-12', daysLeft: '209 days', pct: '58%', barColor: 'var(--action)' },
 ]
 
 export const EXPORTS_LIST: { name: string; fmt: string }[] = [
@@ -305,5 +305,5 @@ export const ONBOARD_STEPS: { n: string; title: string; body: string; done: bool
   { n: '1', title: 'Company profile set', body: 'Tax details & numbering', done: true },
   { n: '2', title: 'Import or create invoices', body: 'CSV / XLSX or API', done: false },
   { n: '3', title: 'Run first validation', body: '16-check MBS rule pack', done: false },
-  { n: '4', title: 'Activate transmission', body: 'FIRS adapter on accreditation', done: false },
+  { n: '4', title: 'Activate transmission', body: 'NRS adapter on accreditation', done: false },
 ]

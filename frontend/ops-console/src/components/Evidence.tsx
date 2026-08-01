@@ -50,7 +50,7 @@ export function Evidence({ query, onQueryChange, onOpen, onExportAll }: Props) {
       </div>
 
       <p style={{ fontSize: 13, color: 'var(--fg-2)', margin: '0 0 16px', maxWidth: 720, lineHeight: 1.5 }}>
-        Every cleared invoice returns a signed evidence bundle — cryptographic proof it was accepted by FIRS/MBS. Bundles are immutable and chained; export
+        Every cleared invoice returns a signed evidence bundle — cryptographic proof it was accepted by NRS/MBS. Bundles are immutable and chained; export
         them for your own records or audits.
       </p>
 

@@ -697,7 +697,7 @@ describe('CAPABILITY_ROWS copy (QA18, §6)', () => {
       'import from file or ERP',
       'run validation',
       'approve in approval steps',
-      'transmit to FIRS/MBS',
+      'transmit to NRS/MBS',
       'invite and manage members',
       'manage ERP connectors',
       'manage signing certificates',

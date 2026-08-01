@@ -190,7 +190,7 @@ export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignI
             }}
           >
             <div className="mono" style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--teal-300)', marginBottom: 2 }}>
-              FIRS REFERENCE
+              NRS REFERENCE
             </div>
             <div className="mono" style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.02em' }}>
               CSID · pending transmit

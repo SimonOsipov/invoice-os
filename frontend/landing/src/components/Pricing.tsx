@@ -23,7 +23,7 @@ export function Pricing({ onBookDemo }: { onBookDemo: () => void }) {
             Priced by compliance need, not seats.
           </h2>
           <p style={{ fontSize: 16, color: 'var(--fg-2)', margin: '0 0 26px' }}>
-            Start with validation and archiving. Activate live MBS/FIRS transmission when you're ready.
+            Start with validation and archiving. Activate live MBS/NRS transmission when you're ready.
           </p>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg-3)', borderRadius: 999, padding: 4 }}>
             <button

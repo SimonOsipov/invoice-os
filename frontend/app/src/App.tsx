@@ -98,7 +98,7 @@ const ENV_BANNER = {
     border: 'var(--status-amber-border)',
     text: 'var(--status-amber-text)',
     icon: flaskGlyph,
-    msg: 'Sandbox environment — transmissions are simulated against the FIRS test adapter. No live data is sent.',
+    msg: 'Sandbox environment — transmissions are simulated against the NRS test adapter. No live data is sent.',
     tag: 'TEST DATA · SIMULATED',
   },
   live: {
@@ -106,8 +106,8 @@ const ENV_BANNER = {
     border: 'var(--teal-200)',
     text: 'var(--action-soft)',
     icon: shieldGlyph15,
-    msg: 'Live environment — transmissions are sent to FIRS and return legally-valid clearance evidence.',
-    tag: 'PRODUCTION · FIRS',
+    msg: 'Live environment — transmissions are sent to NRS and return legally-valid clearance evidence.',
+    tag: 'PRODUCTION · NRS',
   },
 } as const
 

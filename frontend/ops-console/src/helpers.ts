@@ -66,7 +66,7 @@ export function resJSON(j: { state: JobState; invoice: string }): string {
       '-A91",\n  "csid": "MBS.9f2a\u2026c7",\n  "qr": "data:csid;base64,iVBORw0\u2026",\n  "cleared_at": "2026-07-18T09:14:22Z"\n}'
     )
   if (j.state === 'rejected')
-    return '{\n  "status": "REJECTED",\n  "code": "MBS-422",\n  "errors": [ { "field": "buyer.tin", "msg": "TIN not registered with FIRS" } ]\n}'
+    return '{\n  "status": "REJECTED",\n  "code": "MBS-422",\n  "errors": [ { "field": "buyer.tin", "msg": "TIN not registered with NRS" } ]\n}'
   if (j.state === 'dead-letter')
     return '{\n  "status": "ERROR",\n  "http": 503,\n  "code": "GATEWAY_TIMEOUT",\n  "retries_exhausted": true,\n  "last_attempt": "2026-07-18T08:02:10Z"\n}'
   if (j.state === 'failed')
@@ -119,7 +119,7 @@ export function buildSubmissionDrawer(j: Job, env: Env, amount: string, checkGly
   const timeline: JobTimelineStep[] = [
     timelineStep('Received', true, false, '08:01:55', 'POST /v2/invoices \u00b7 validated locally'),
     timelineStep('Queued', true, false, '08:01:58', 'idempotency key assigned'),
-    timelineStep('Submitting', true, false, '08:02:01', 'forwarded to FIRS/MBS'),
+    timelineStep('Submitting', true, false, '08:02:01', 'forwarded to NRS/MBS'),
     isDeadEnd
       ? timelineStep(finalLabel, true, true, '08:02:10', j.lastError)
       : timelineStep(

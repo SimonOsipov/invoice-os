@@ -80,7 +80,7 @@ export const STEPS: Step[] = [
     num: '03',
     title: 'Approve, archive & transmit',
     glyph: <Icon paths={['M22 11.08V12a10 10 0 1 1-5.93-9.14', 'm22 4-10 10.01-3-3']} size={20} />,
-    body: 'Route for approval, generate branded PDF + UBL data, store an immutable audit trail, and transmit to FIRS.',
+    body: 'Route for approval, generate branded PDF + UBL data, store an immutable audit trail, and transmit to NRS (Nigeria Revenue Service).',
     points: ['Approval workflow', 'PDF + JSON/XML/UBL export', 'Immutable audit log'],
   },
 ]
@@ -243,7 +243,7 @@ export const FIRM: Audience = {
 export const INHOUSE: Audience = {
   tabIcon: tg(['M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z', 'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2', 'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2', 'M10 6h4', 'M10 10h4', 'M10 14h4']),
   headline: 'Give your finance team a compliance cockpit.',
-  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house — from first draft to FIRS transmission.',
+  body: 'Route invoices through your own approval chain, assign reviewer and approver roles, and keep one company audit-ready. Built for finance departments that own the whole process in-house — from first draft to NRS transmission.',
   features: [
     { title: 'Role-based approval chain', body: 'Creator → reviewer → approver, with rejection notes.', glyph: fg(['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']) },
     { title: 'Departmental readiness dashboard', body: 'One company, every metric your controller needs.', glyph: fg(['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z']) },
@@ -307,7 +307,7 @@ export const API_POINTS: ApiPoint[] = [
   { glyph: ag(['M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.8 1.7', 'M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7']), text: 'REST API — create, validate, fetch status, fetch documents' },
   { glyph: ag(['M22 12h-4l-3 9L9 3l-3 9H2']), text: 'Signed webhooks on status change & transmission events' },
   { glyph: ag(['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']), text: 'OAuth2 + scoped API keys, per-tenant isolation' },
-  { glyph: ag(['M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z', 'M3.6 9h16.8M3.6 15h16.8']), text: 'Sandbox MBS/FIRS adapter — production on accreditation' },
+  { glyph: ag(['M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z', 'M3.6 9h16.8M3.6 15h16.8']), text: 'Sandbox MBS/NRS adapter — production on accreditation' },
 ]
 
 /* ------------------------------------------------------------------ */
@@ -355,7 +355,7 @@ export const PLANS: Plan[] = [
     metaAnnual: 'BILLED ANNUALLY · UP TO 5 TENANTS',
     cta: 'Book a demo',
     variant: 'featured',
-    features: ['Up to 25,000 invoices / mo', 'API v1 + signed webhooks', 'Approval workflows & roles', 'Live MBS/FIRS transmission', 'ERP connectors', 'Priority support'],
+    features: ['Up to 25,000 invoices / mo', 'API v1 + signed webhooks', 'Approval workflows & roles', 'Live MBS/NRS transmission', 'ERP connectors', 'Priority support'],
   },
   {
     name: 'Firm / Enterprise',

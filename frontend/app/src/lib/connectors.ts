@@ -85,7 +85,7 @@ function activityFeed(rnd: () => number, def: ConnectorDef): SyncEvent[] {
     const doc = docId(rnd)
     const desc =
       kind === 'transmitted'
-        ? 'Transmitted to FIRS · IRN assigned'
+        ? 'Transmitted to NRS · IRN assigned'
         : kind === 'validated'
           ? 'Passed 16-check MBS rule pack'
           : kind === 'held'

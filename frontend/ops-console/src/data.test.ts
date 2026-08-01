@@ -290,7 +290,7 @@ describe('STATUS_COMPONENTS', () => {
     expect(STATUS_COMPONENTS.length).toBeGreaterThan(0)
     const degraded = STATUS_COMPONENTS.filter((c) => c.status === 'DEGRADED')
     expect(degraded.length).toBe(1)
-    expect(degraded[0]!.name).toBe('Tax-authority connection (FIRS/MBS)')
+    expect(degraded[0]!.name).toBe('Tax-authority connection (NRS/MBS)')
     expect(degraded[0]!.tone).toBe('amber')
     const operational = STATUS_COMPONENTS.filter((c) => c.status === 'OPERATIONAL')
     expect(operational.length).toBe(5)

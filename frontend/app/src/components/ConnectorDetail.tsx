@@ -138,7 +138,7 @@ export function ConnectorDetail({
       {/* Reconciliation funnel */}
       <div style={{ ...CARD, marginBottom: 16 }}>
         <div style={CARD_HEAD}>
-          <span className="card-title">Reconciliation · ERP ↔ FIRS</span>
+          <span className="card-title">Reconciliation · ERP ↔ NRS</span>
           <span
             className="mono"
             style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', borderRadius: 999, padding: '4px 9px', background: driftClean ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', border: `1px solid ${driftClean ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, color: driftClean ? 'var(--status-green-text)' : 'var(--status-amber-text)' }}
@@ -152,12 +152,12 @@ export function ConnectorDetail({
             <Arrow />
             <FunnelStep n={d.funnel.validated} label="Validated" sub="Passed rule pack" />
             <Arrow />
-            <FunnelStep n={d.funnel.transmitted} label="Transmitted" sub="Sent to FIRS" />
+            <FunnelStep n={d.funnel.transmitted} label="Transmitted" sub="Sent to NRS" />
             <Arrow />
-            <FunnelStep n={d.funnel.accepted} label="FIRS-accepted" sub="IRN + CSID returned" />
+            <FunnelStep n={d.funnel.accepted} label="NRS-accepted" sub="IRN + CSID returned" />
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--line-1)' }}>
-            {driftClean ? 'Every transmitted document has been acknowledged by FIRS.' : `${d.funnel.drift} document${d.funnel.drift === 1 ? '' : 's'} not yet acknowledged by FIRS.`}
+            {driftClean ? 'Every transmitted document has been acknowledged by NRS.' : `${d.funnel.drift} document${d.funnel.drift === 1 ? '' : 's'} not yet acknowledged by NRS.`}
           </div>
         </div>
       </div>

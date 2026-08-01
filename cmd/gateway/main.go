@@ -134,12 +134,16 @@ func main() {
 		if err != nil {
 			fatal(app.Logger, "gateway: mock issuer: %v", err)
 		}
+		// Read raw rather than off app.Config, which substitutes a literal default for
+		// an unset value — that would classify a local or CI run as a real deployment.
+		posture := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME"))
+
 		app.Mux.Handle("GET /.well-known/jwks.json", issuer.JWKSHandler())
 		// /auth/login is called cross-origin by the browser, so wrap it in the same CORS
 		// layer. Register POST (the mint) and OPTIONS (the preflight CORS answers) — a
 		// method-scoped POST route alone would 405 the preflight instead of letting CORS
 		// handle it.
-		login := withCORS(gateway.MockLoginHandler(issuer))
+		login := withCORS(gateway.MockLoginHandler(issuer, posture))
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
 		app.Logger.Warn("mock issuer enabled — dev/CI only, never production")

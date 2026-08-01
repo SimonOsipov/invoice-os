@@ -51,7 +51,6 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
   const { active, view, sandbox } = ctx
   const crumb = CRUMB_MAP[view] || 'Overview'
   const sbx = segStyle(sandbox, 'sandbox')
-  const liv = segStyle(!sandbox, 'live')
 
   return (
     <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'oklch(98.5% .008 85 / .82)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
@@ -91,7 +90,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
             aria-pressed={!sandbox}
             title="Live filing switches on at NRS accreditation."
             className="pf-btn"
-            style={{ ...SEG_BASE, background: liv.bg, color: 'var(--fg-4)', cursor: 'not-allowed' }}
+            style={{ ...SEG_BASE, background: 'transparent', color: 'var(--fg-4)', cursor: 'not-allowed' }}
           >
             <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--fg-4)' }} />
             LIVE

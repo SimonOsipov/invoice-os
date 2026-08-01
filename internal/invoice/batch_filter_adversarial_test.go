@@ -516,3 +516,158 @@ func TestStoreList_SeveralImportBatchIDsANDsWithOtherFilters(t *testing.T) {
 		}
 	})
 }
+
+// TestStoreList_QueryUnderscoreWildcardIsEscaped (QA Mode B adversarial,
+// BUG-01-04, AC-2): escapeLike's existing "%" test (TestStoreList_
+// QueryMatchesNumberOrBuyer) does not exercise "_", LIKE's other
+// single-character wildcard. A pasted TIN fragment like "2003_344" must
+// require a literal underscore, not match "20033344" by wildcarding the
+// '_' against the digit '3'.
+func TestStoreList_QueryUnderscoreWildcardIsEscaped(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-Q-UNDERSCORE tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-Q-UNDERSCORE entity")
+
+	seedInvoiceWithTINs(t, super, tenantID, entityID, "BATCHQ-UNDERSCORE-001", "20033344-0003", "")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Query: "2003_344", Limit: 50})
+	if err != nil {
+		t.Fatalf("List (Query: \"2003_344\"): %v", err)
+	}
+	if total != 0 {
+		t.Errorf("List (Query: \"2003_344\").total = %d, want 0 -- an unescaped '_' wildcards onto the '3' in \"20033344\"", total)
+	}
+	if len(items) != 0 {
+		t.Errorf("List (Query: \"2003_344\") len = %d, want 0", len(items))
+	}
+}
+
+// TestStoreList_QueryBuyerNameCaseInsensitive (QA Mode B adversarial,
+// BUG-01-04): TINs are numeric so case never matters there, but buyer_name
+// is free text. Pins ILIKE (not LIKE) on the buyer_name arm explicitly, so
+// a future "optimisation" to LIKE regresses a real, visible search bug.
+func TestStoreList_QueryBuyerNameCaseInsensitive(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-Q-CASE tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-Q-CASE entity")
+
+	match := seedInvoiceWithBuyer(t, super, tenantID, entityID, "BATCHQ-CASE-001", "ACME Traders Ltd")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Query: "acme traders", Limit: 50})
+	if err != nil {
+		t.Fatalf("List (Query: \"acme traders\" against \"ACME Traders Ltd\"): %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != match {
+		t.Fatalf("List (Query: \"acme traders\") = (items=%+v, total=%d), want exactly [%s]/1 -- ILIKE must match across case", items, total, match)
+	}
+}
+
+// TestStoreList_QueryTINFilteredTotalSpansMultiplePages (QA Mode B
+// adversarial, BUG-01-04, AC-3): four rows share one buyer_tin among three
+// unrelated noise rows; a page size smaller than the filtered set proves
+// pagination.total reflects the full filtered count (4) -- computed by the
+// shared COUNT(*) query -- independent of the page window, and that walking
+// every page (not just the first) covers the filtered set exactly once each,
+// with no omissions or duplicates. This is the property BUG-01-05's UI will
+// depend on for its results-count display.
+func TestStoreList_QueryTINFilteredTotalSpansMultiplePages(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-Q-PAGES tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-Q-PAGES entity")
+
+	const tin = "30044455-0009"
+	var matchIDs []string
+	for i := 0; i < 4; i++ {
+		matchIDs = append(matchIDs, seedInvoiceWithTINs(t, super, tenantID, entityID, fmt.Sprintf("BATCHQ-PAGES-MATCH-%d", i), tin, ""))
+	}
+	for i := 0; i < 3; i++ {
+		seedInvoiceWithTINs(t, super, tenantID, entityID, fmt.Sprintf("BATCHQ-PAGES-NOISE-%d", i), "99988877-0006", "")
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	seen := map[string]int{}
+
+	page1, total1, err := store.List(c, ListFilter{Query: tin, Limit: 3, Offset: 0})
+	if err != nil {
+		t.Fatalf("List (Query: tin, Limit: 3, Offset: 0): %v", err)
+	}
+	if total1 != 4 {
+		t.Fatalf("page 1 total = %d, want 4 (the filtered count), even though only 3 rows fit on this page", total1)
+	}
+	if len(page1) != 3 {
+		t.Fatalf("page 1 len = %d, want 3", len(page1))
+	}
+	for _, inv := range page1 {
+		seen[inv.ID]++
+	}
+
+	page2, total2, err := store.List(c, ListFilter{Query: tin, Limit: 3, Offset: 3})
+	if err != nil {
+		t.Fatalf("List (Query: tin, Limit: 3, Offset: 3): %v", err)
+	}
+	if total2 != 4 {
+		t.Fatalf("page 2 total = %d, want 4 -- total must not shift between pages of the same filter", total2)
+	}
+	if len(page2) != 1 {
+		t.Fatalf("page 2 len = %d, want 1 (the remainder)", len(page2))
+	}
+	for _, inv := range page2 {
+		seen[inv.ID]++
+	}
+
+	if len(seen) != 4 {
+		t.Fatalf("union of both pages covered %d distinct invoices, want 4: %v", len(seen), seen)
+	}
+	for _, id := range matchIDs {
+		if seen[id] != 1 {
+			t.Errorf("invoice %s appeared %d times across both pages, want exactly 1", id, seen[id])
+		}
+	}
+}
+
+// TestRLS_QueryTINCrossTenantIsEmpty (QA Mode B adversarial, BUG-01-04): two
+// tenants each hold a row carrying the SAME buyer_tin. Store.List has no
+// explicit `WHERE tenant_id` (RLS alone scopes it, same trap named by
+// TestRLS_ListImportBatchIDCrossTenantIsEmptyNot404 above) -- the widened q
+// predicate must not become a cross-tenant read via the new buyer_tin arm.
+func TestRLS_QueryTINCrossTenantIsEmpty(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenant1 := seedTenant(t, super, "BATCH-FILTER-Q-RLS tenant 1")
+	tenant2 := seedTenant(t, super, "BATCH-FILTER-Q-RLS tenant 2")
+	entity1 := seedEntity(t, super, tenant1, "BATCH-FILTER-Q-RLS entity 1")
+	entity2 := seedEntity(t, super, tenant2, "BATCH-FILTER-Q-RLS entity 2")
+
+	const tin = "20033344-0003"
+	own := seedInvoiceWithTINs(t, super, tenant1, entity1, "BATCHQ-RLS-OWN", tin, "")
+	seedInvoiceWithTINs(t, super, tenant2, entity2, "BATCHQ-RLS-OTHER", tin, "")
+
+	store := NewStore(app)
+	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
+
+	items, total, err := store.List(c1, ListFilter{Query: tin, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (tenant 1, Query: tin shared with tenant 2): %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("total = %d, want 1 -- tenant 2's row with the same buyer_tin must not leak in via the widened q predicate", total)
+	}
+	if len(items) != 1 || items[0].ID != own {
+		t.Fatalf("items = %+v, want exactly [%s] -- got tenant 2's row instead/also", items, own)
+	}
+}

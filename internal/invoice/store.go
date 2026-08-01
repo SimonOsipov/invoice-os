@@ -636,9 +636,10 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		}
 		if f.Query != "" {
 			args = append(args, escapeLike(f.Query))
+			// All four arms bind the same escaped $n -- one argument, one wildcard.
 			conditions = append(conditions, fmt.Sprintf(
-				`(invoice_number ILIKE '%%'||$%d||'%%' ESCAPE '\' OR buyer_name ILIKE '%%'||$%d||'%%' ESCAPE '\')`,
-				len(args), len(args),
+				`(invoice_number ILIKE '%%'||$%d||'%%' ESCAPE '\' OR buyer_name ILIKE '%%'||$%d||'%%' ESCAPE '\' OR buyer_tin ILIKE '%%'||$%d||'%%' ESCAPE '\' OR supplier_tin ILIKE '%%'||$%d||'%%' ESCAPE '\')`,
+				len(args), len(args), len(args), len(args),
 			))
 		}
 

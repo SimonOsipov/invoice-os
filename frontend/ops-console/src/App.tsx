@@ -64,7 +64,7 @@ function Console() {
   // Submissions (the search input and the empty state), `evQuery` likewise with
   // Evidence, and `reveal`/`confirmRotate` with API & webhooks.
   const [screen, setScreen] = useState<Screen>('overview')
-  const [env, setEnv] = useState<Env>('live')
+  const [env, setEnv] = useState<Env>('sandbox')
   const [range, setRange] = useState<Range>('30d')
   const [filter, setFilter] = useState<JobFilter>('all')
   const [subQuery, setSubQuery] = useState('')

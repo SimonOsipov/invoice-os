@@ -3,9 +3,8 @@
 // lib/connectors.ts `connectorDetail()`, which derives internally-consistent figures from
 // the connector id, so each connector reads distinct but never re-rolls between visits.
 //
-// The env pill (LIVE/SANDBOX) is a per-connector view toggle owned by SettingsView, since
-// it is scoped to this tab; saved field mappings live in the workspace (ctx) so they
-// survive navigating away from Settings entirely.
+// The env pill's LIVE segment is disabled, per Header.tsx; saved field mappings live in the
+// workspace (ctx) so they survive navigating away from Settings entirely.
 
 import { useMemo } from 'react'
 
@@ -17,6 +16,10 @@ import type { PlatformCtx } from '../types'
 
 const CARD: React.CSSProperties = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }
 const CARD_HEAD: React.CSSProperties = { padding: '14px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }
+
+// Env-switch segment. Header.tsx's SEG_BASE at this card header's smaller scale — the two
+// controls share the pattern and the tokens, not a module.
+const SEG: React.CSSProperties = { border: 0, cursor: 'pointer', height: 22, padding: '0 10px', borderRadius: 999, fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', display: 'inline-flex', alignItems: 'center', gap: 6 }
 
 // Faint = the connector doing its own housekeeping (a scheduled pull, a poll); the
 // document outcomes are the ones that get colour.
@@ -67,14 +70,12 @@ export function ConnectorDetail({
   ctx,
   def,
   env,
-  onToggleEnv,
   onBack,
   onEditMapping,
 }: {
   ctx: PlatformCtx
   def: ConnectorDef
   env: 'LIVE' | 'SANDBOX'
-  onToggleEnv: () => void
   onBack: () => void
   onEditMapping: () => void
 }) {
@@ -106,15 +107,29 @@ export function ConnectorDetail({
             {def.host} · {def.module}
           </div>
         </div>
-        <button
-          onClick={onToggleEnv}
-          className="pf-btn"
-          aria-label={`Environment: ${env} — switch to ${live ? 'sandbox' : 'live'}`}
-          style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: live ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', border: `1px solid ${live ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, borderRadius: 999, padding: '5px 11px' }}
-        >
-          <span style={{ width: 5, height: 5, borderRadius: 99, background: live ? 'var(--status-green-text)' : 'var(--status-amber-text)' }} />
-          <span className="mono" style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: live ? 'var(--status-green-text)' : 'var(--status-amber-text)' }}>{env}</span>
-        </button>
+        <div data-testid="connector-env-pill" style={{ flex: 'none', display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${live ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, borderRadius: 999, padding: 2 }}>
+          <button
+            type="button"
+            aria-pressed={!live}
+            className="pf-btn"
+            style={{ ...SEG, background: live ? 'transparent' : 'var(--status-amber-text)', color: live ? 'var(--fg-3)' : 'var(--text-on-dark)' }}
+          >
+            <span style={{ width: 5, height: 5, borderRadius: 99, background: live ? 'var(--status-amber-text)' : 'var(--text-on-dark)' }} />
+            SANDBOX
+          </button>
+          <button
+            type="button"
+            data-testid="connector-env-pill-live"
+            disabled
+            aria-pressed={live}
+            title="Live filing switches on at NRS accreditation."
+            className="pf-btn"
+            style={{ ...SEG, background: 'transparent', color: 'var(--fg-4)', cursor: 'not-allowed' }}
+          >
+            <span style={{ width: 5, height: 5, borderRadius: 99, background: 'var(--fg-4)' }} />
+            LIVE
+          </button>
+        </div>
         <button className="v2-btn v2-btn-primary pf-btn" style={{ flex: 'none', height: 34, fontSize: 13, padding: '0 14px' }}>
           <span style={{ display: 'inline-flex' }}>{refreshGlyph}</span> Sync now
         </button>
@@ -138,7 +153,7 @@ export function ConnectorDetail({
       {/* Reconciliation funnel */}
       <div style={{ ...CARD, marginBottom: 16 }}>
         <div style={CARD_HEAD}>
-          <span className="card-title">Reconciliation · ERP ↔ NRS</span>
+          <span className="card-title">Reconciliation · ERP ↔ clearance</span>
           <span
             className="mono"
             style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', borderRadius: 999, padding: '4px 9px', background: driftClean ? 'var(--status-green-bg)' : 'var(--status-amber-bg)', border: `1px solid ${driftClean ? 'var(--status-green-border)' : 'var(--status-amber-border)'}`, color: driftClean ? 'var(--status-green-text)' : 'var(--status-amber-text)' }}
@@ -147,17 +162,21 @@ export function ConnectorDetail({
           </span>
         </div>
         <div style={{ padding: '20px 20px 18px' }}>
+          {/* Labels state the honest claim; the funnel fields keep the pipeline-stage names. */}
           <div className="pf-funnel" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr auto 1fr', gap: 14, alignItems: 'start' }}>
             <FunnelStep n={d.funnel.inErp} label="In ERP" sub="Pulled · 30 days" />
             <Arrow />
             <FunnelStep n={d.funnel.validated} label="Validated" sub="Passed rule pack" />
             <Arrow />
-            <FunnelStep n={d.funnel.transmitted} label="Transmitted" sub="Sent to NRS" />
+            <FunnelStep n={d.funnel.transmitted} label="Submitted" sub="Queued for clearance" />
             <Arrow />
-            <FunnelStep n={d.funnel.accepted} label="NRS-accepted" sub="IRN + CSID returned" />
+            <FunnelStep n={d.funnel.accepted} label="Cleared" sub="Simulated · IRN + CSID assigned" />
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--line-1)' }}>
-            {driftClean ? 'Every transmitted document has been acknowledged by NRS.' : `${d.funnel.drift} document${d.funnel.drift === 1 ? '' : 's'} not yet acknowledged by NRS.`}
+            {driftClean ? 'Every submitted document has cleared.' : `${d.funnel.drift} document${d.funnel.drift === 1 ? '' : 's'} submitted, not yet cleared.`}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 6 }}>
+            Clearance is simulated until NRS accreditation — nothing here has been filed with NRS.
           </div>
         </div>
       </div>
@@ -306,7 +325,7 @@ export function ConnectorDetail({
             <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', display: 'grid', placeItems: 'center' }}>{warnTriGlyph}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 600 }}>Held documents</div>
-              <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>{fmtPlain(d.heldTotal)} pulled but not transmitted</div>
+              <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 2 }}>{fmtPlain(d.heldTotal)} pulled, not submitted</div>
             </div>
           </div>
           <button className="v2-btn v2-btn-ghost pf-btn" style={{ flex: 'none', height: 30, fontSize: 12.5, padding: '0 12px' }}>

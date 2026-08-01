@@ -27,7 +27,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--status-amber-border)',
         text: 'var(--status-amber-text)',
         icon: SANDBOX_ICON,
-        msg: 'Sandbox — operating against the NRS test adapter. Re-drives and kill-switches affect simulated traffic only.',
+        msg: 'Sandbox — operating against simulated clearance. Re-drives and kill-switches affect simulated traffic only.',
         tag: 'CROSS-TENANT · ALL ENTITIES',
       }
     : {
@@ -35,8 +35,8 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--status-red-border)',
         text: 'var(--status-red-text)',
         icon: ALERT_ICON,
-        msg: 'LIVE — actions here transmit to the production Access Point and are written to the immutable audit log.',
-        tag: 'CROSS-TENANT · PRODUCTION',
+        msg: 'LIVE — cross-tenant scope. Nothing here reaches production traffic or the audit log until NRS accreditation.',
+        tag: 'CROSS-TENANT · PENDING ACCREDITATION',
       }
 
   return (

@@ -4,8 +4,8 @@
 // signing & certificates. The last three are ported from Platform.dc.html ~L847-951 +
 // the settings slices of renderVals() (~L1397-1435).
 //
-// The open connector, its env pill, and the mapping modal are view state scoped to this
-// tab, so they live here rather than in ctx (the EntityFormModal/ClientsView precedent).
+// The open connector and the mapping modal are view state scoped to this tab, so they live
+// here rather than in ctx (the EntityFormModal/ClientsView precedent).
 // Saved mappings are the exception — those are workspace state (ctx.connectorMappings),
 // so they outlive navigating away from Settings.
 //
@@ -45,7 +45,6 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
   const connCount = CONNECTOR_DEFS.filter((c) => connectors[c.id]).length
   const [openId, setOpenId] = useState<ConnectorId | null>(null)
   const [mappingOpen, setMappingOpen] = useState(false)
-  const [envs, setEnvs] = useState<Partial<Record<ConnectorId, 'SANDBOX'>>>({})
   // A connector disconnected from another surface must not leave its detail view mounted.
   const openDef = CONNECTOR_DEFS.find((c) => c.id === openId && connectors[c.id]) ?? null
 
@@ -178,8 +177,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           <ConnectorDetail
             ctx={ctx}
             def={openDef}
-            env={envs[openDef.id] ?? 'LIVE'}
-            onToggleEnv={() => setEnvs((e) => ({ ...e, [openDef.id]: e[openDef.id] ? undefined : 'SANDBOX' }))}
+            env="SANDBOX"
             onBack={goList}
             onEditMapping={() => setMappingOpen(true)}
           />

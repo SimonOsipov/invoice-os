@@ -52,9 +52,9 @@ describe('environment posture copy', () => {
     expect(files.length, 'the source walk found nothing to scan').toBeGreaterThanOrEqual(20)
 
     for (const file of files) {
-      const src = readFileSync(file, 'utf8')
+      const src = readFileSync(file, 'utf8').toLowerCase()
       for (const phrase of FORBIDDEN) {
-        expect(src, `${file} contains "${phrase}"`).not.toContain(phrase)
+        expect(src, `${file} contains "${phrase}"`).not.toContain(phrase.toLowerCase())
       }
     }
   })

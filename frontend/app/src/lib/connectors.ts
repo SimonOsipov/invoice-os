@@ -4,10 +4,10 @@
 //
 // The figures are internally consistent, not independently random:
 // - IN ERP  = the sum of the 30-day pull volume (the funnel's period IS the chart's period)
-// - HELD    = IN ERP - TRANSMITTED  ("pulled but not transmitted")
-// - DRIFT   = TRANSMITTED - FIRS-ACCEPTED  ("not yet acknowledged by FIRS")
+// - HELD    = IN ERP - SUBMITTED  ("pulled, not submitted")
+// - DRIFT   = SUBMITTED - CLEARED  ("not yet cleared")
 // - the master-data tax-code count is the length of the tax-code list rendered beside it
-// - write-back covers the FIRS-accepted documents: stamped + pending + failed = ACCEPTED
+// - write-back covers the cleared documents: stamped + pending + failed = ACCEPTED
 
 import { hash, mulberry } from './prng'
 import { pad2 } from './format'
@@ -85,7 +85,7 @@ function activityFeed(rnd: () => number, def: ConnectorDef): SyncEvent[] {
     const doc = docId(rnd)
     const desc =
       kind === 'transmitted'
-        ? 'Transmitted to NRS · IRN assigned'
+        ? 'Submitted · simulated IRN assigned'
         : kind === 'validated'
           ? 'Passed 16-check MBS rule pack'
           : kind === 'held'

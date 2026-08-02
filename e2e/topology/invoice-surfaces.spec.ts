@@ -1295,3 +1295,72 @@ test('customers-whole-set: every buyer appears and no KPI cards render', async (
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// RED (task-335, BUG-01-09) -- ReportsView shares BUG-01-F's un-paged aggregation defect:
+// it feeds `rows` from a single, un-paged listInvoices call (server default limit 50), so
+// "Invoices in period"/"Top customers by value" undercount past 50. No nav helper and no
+// data-testid exist on this surface yet (goToReports/reportsKpiValue below are this file's
+// own, not shared with goToInvoices/openInvoiceRow -- Reports has none of the row/id hooks
+// those assume).
+async function goToReports(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /Reports/ }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Reports & analytics', exact: true })).toBeVisible()
+}
+
+// The KPI tile row's own markup (ReportsView.tsx): a `<div className="label">` holding the
+// tile's label, sibling to the `.money` value span one level up -- AC #5 keeps this layout
+// unchanged, only the underlying data source moves.
+function reportsKpiValue(page: Page, label: string) {
+  return page.locator(`xpath=//div[@class="label" and normalize-space(text())="${label}"]/parent::div/following-sibling::span[contains(@class,"money")]`)
+}
+
+test('reports-whole-set: the period invoice count covers the whole set', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-09 reports count ${Date.now()}`, tin: freshTin() })
+  const BULK_COUNT = 50
+  await buildAnchoredPage(token, entity.id, BULK_COUNT) // 1 anchor (oldest) + 50 bulk = 51
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToReports(page)
+
+  // RED today: ReportsView's un-paged listInvoices call caps at the server's default page
+  // (50), so a 51-invoice entity under-counts by exactly 1 here.
+  await expect(reportsKpiValue(page, 'Invoices in period'), 'must equal the whole set, not the server default page').toHaveText(String(BULK_COUNT + 1))
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('reports-whole-set: top customers ranks over the whole set', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-09 reports top-cust ${Date.now()}`, tin: freshTin() })
+  const stamp = Date.now()
+  const anchorName = `BUG-01-09 Anchor Buyer ${stamp}`
+  // Fixture design (the one open choice this subtask leaves to its test author): the 50
+  // bulk rows all keep cleanInvoiceFields' shared buyer_tin, so aggregateCustomers collapses
+  // them into ONE bucket totalling 50 x 1075 = 53,750. The anchor gets its OWN distinct
+  // buyer_tin plus a total (60,000) that exceeds that whole summed bucket -- so it can only
+  // head "Top customers by value" once ALL 51 rows, not just the newest 50, feed the
+  // aggregation. The anchor is also the OLDEST row (buildAnchoredPage's own invariant), so
+  // an un-paged, newest-50-only fetch never sees it at all: this fixture fails for the SAME
+  // reason a page-1-only fetch would (missing row), not an incidental tie or rounding
+  // artifact, which is what makes the assertion robust rather than just incidentally true.
+  await buildAnchoredPage(token, entity.id, 50, { buyer_tin: freshTin(), buyer_name: anchorName, total: '60000.00' })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToReports(page)
+
+  const card = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
+  const names = card.locator('span:not(.money):not(.card-title)')
+  await expect(names).not.toHaveCount(0)
+  await expect(names.first(), 'the anchor buyer must head the list once the whole set feeds the aggregation').toHaveText(anchorName)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

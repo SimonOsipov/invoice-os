@@ -943,6 +943,26 @@ domain_expect_refusal() {
   esac
 }
 
+# T5/T6/T8 discard stdout and only assert stderr content, so a refusal that
+# ALSO leaks onto stdout (e.g. a stray debug echo) would slip past them. AC #10
+# pins stdout-must-be-empty because subtask 02 pipes this command's stdout
+# into jq — a leak here corrupts that pipe.
+domain_expect_refusal_stdout_empty() {
+  local id="$1" json="$2" out rc=0
+  out=$(select_domain "$json" 2>/dev/null) || rc=$?
+  if [ "$rc" = "0" ]; then
+    echo "::error::self-test $id FAILED: expected a refusal, got exit 0"
+    failures=$((failures + 1))
+    return 0
+  fi
+  if [ -n "$out" ]; then
+    echo "::error::self-test $id FAILED: refusal leaked onto stdout: '$out'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> stdout empty on refusal (exit $rc)"
+}
+
 domain_self_test() {
   local failures=0
 
@@ -964,12 +984,25 @@ domain_self_test() {
   # T8 present-but-null. The case has("customDomains") passes and then silently
   # falls back to the generated domain.
   domain_expect_refusal T8 '{"data":{"domains":{"customDomains":null,"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}'
+  # T9 is reserved for the CI job's own property (see AC #5) — not a JSON fixture.
+  # T10 pins [no-syncstatus-filter]: an INITIALIZING custom domain still beats an
+  # ACTIVE generated one. Deliberate; this makes a future change to it visible.
+  domain_expect_select T10 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"INITIALIZING"}],"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}' '{"count":2,"domain":"api.ascomply.com","targetPort":8080}'
+  # T11 a real GraphQL error response: data is null, errors carries the failure.
+  domain_expect_refusal T11 '{"errors":[{"message":"boom"}],"data":null}'
+  # T12 the whole body is a bare `null` — distinct from T6's {"data":{"domains":null}}.
+  domain_expect_refusal T12 'null'
+  # T13 a non-object top level hits jq's index-type error, not null propagation —
+  # a different failure mechanism than T5/T6/T12, still refused.
+  domain_expect_refusal T13 '[]'
+  # T14 refusal-path stdout must stay empty; T5/T6/T8 never check that dimension.
+  domain_expect_refusal_stdout_empty T14 '{"data":{"domains":null}}'
 
   if [ "$failures" != "0" ]; then
     echo "::error::domain selection self-test: $failures fixture(s) FAILED."
     exit 1
   fi
-  echo "Domain selection self-test: 8 fixtures passed, no token read, no network call."
+  echo "Domain selection self-test: 13 fixtures passed, no token read, no network call."
 }
 
 # cmd_select_domain [--self-test]

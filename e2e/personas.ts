@@ -126,7 +126,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       // drove NAV_CUSTOMERS the same way -- its cell moved below.)
       { navConst: 'NAV_CUSTOMERS', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_RULES', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
-      { navConst: 'NAV_REPORTS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_REPORTS', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_SETTINGS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
     ],
   },

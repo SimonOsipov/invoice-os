@@ -28,6 +28,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
+import type { AuthedFetch } from './portfolio'
 import {
   clampFilterText,
   computedLineSum,
@@ -2396,6 +2397,287 @@ describe('shouldShowRejectionCard over a failed invoice (regression guard, BUG-0
   it('reasons present shows the card; [] does not', () => {
     expect(shouldShowRejectionCard({ status: 'failed', rejection_reasons: [{ code: 'X', message: 'y' }] })).toBe(true)
     expect(shouldShowRejectionCard({ status: 'failed', rejection_reasons: [] })).toBe(false)
+  })
+})
+
+// RED specs (task-333, BUG-01-07, Mode A) -- AGGREGATE_PAGE_SIZE/AGGREGATE_MAX_PAGES/
+// remainingPageOffsets/AllInvoices/allInvoicesIsEmpty/fetchAllInvoices don't exist yet.
+// Read off invoicesNS (defined above, same index-signature idiom as glyphs.test.ts /
+// hasBlockingViolationUnderTest above) so a missing export fails as an ASSERTION, never
+// an import/compile error. AllInvoices is a TYPE, not a runtime value -- mirrored locally
+// as AllInvoicesShape rather than imported, same reason clampFilterText's own RED section
+// never imports a not-yet-existing symbol by name.
+interface AllInvoicesShape {
+  invoices: InvoiceRecord[]
+  total: number
+  fetched: number
+  truncated: boolean
+}
+
+type FetchAllInvoicesOpts = Omit<ListInvoicesOptions, 'limit' | 'offset'>
+
+type RemainingPageOffsetsFn = (total: number, limit: number, maxPages: number) => { offsets: number[]; truncated: boolean }
+type FetchAllInvoicesFn = (authedFetch: AuthedFetch, base: string, opts: FetchAllInvoicesOpts) => Promise<AllInvoicesShape>
+type AllInvoicesIsEmptyFn = (r: AllInvoicesShape) => boolean
+
+function remainingPageOffsetsUnderTest(total: number, limit: number, maxPages: number): { offsets: number[]; truncated: boolean } {
+  const fn = invoicesNS.remainingPageOffsets as RemainingPageOffsetsFn | undefined
+  expect(fn, 'remainingPageOffsets is not exported by invoices.ts yet').toBeDefined()
+  return fn!(total, limit, maxPages)
+}
+
+function fetchAllInvoicesUnderTest(
+  authedFetch: AuthedFetch,
+  base: string,
+  opts: FetchAllInvoicesOpts = {},
+): Promise<AllInvoicesShape> {
+  const fn = invoicesNS.fetchAllInvoices as FetchAllInvoicesFn | undefined
+  expect(fn, 'fetchAllInvoices is not exported by invoices.ts yet').toBeDefined()
+  return fn!(authedFetch, base, opts)
+}
+
+function allInvoicesIsEmptyUnderTest(r: AllInvoicesShape): boolean {
+  const fn = invoicesNS.allInvoicesIsEmpty as AllInvoicesIsEmptyFn | undefined
+  expect(fn, 'allInvoicesIsEmpty is not exported by invoices.ts yet').toBeDefined()
+  return fn!(r)
+}
+
+function invoiceRow(id: string): InvoiceRecord {
+  return { ...draftInvoice, id }
+}
+
+function requestedOffset(url: string): number {
+  return Number(new URL(url).searchParams.get('offset') ?? '0')
+}
+
+function requestedOffsets(fetchMock: { mock: { calls: unknown[][] } }): number[] {
+  return (fetchMock.mock.calls as [string, RequestInit][]).map(([url]) => requestedOffset(url))
+}
+
+// A full page of `count` rows echoing `{limit, offset, total}` -- the shape every
+// fetchAllInvoices page request resolves to.
+function pageResponse(limit: number, offset: number, total: number, count: number): MockResponse {
+  return {
+    ok: true,
+    status: 200,
+    json: () =>
+      Promise.resolve({
+        invoices: Array.from({ length: count }, (_, i) => invoiceRow(`inv-${offset}-${i}`)),
+        pagination: { limit, offset, total },
+      }),
+  }
+}
+
+function errorResponse(status: number): MockResponse {
+  return { ok: false, status, statusText: 'boom', json: () => Promise.resolve({ error: 'boom' }) }
+}
+
+function stubFetch(impl: (url: string) => MockResponse | Promise<MockResponse>) {
+  const fetchMock = vi.fn((url: string, _init?: RequestInit) => Promise.resolve(impl(url)))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+// Cheap bounded microtask wait -- fetchAllInvoices' page-1 await needs a few ticks to
+// unwind (listInvoices -> authedFetch -> apiFetch -> res.json()) before the fan-out's
+// remaining fetch() calls happen; bounded so a broken stub fails fast, not hangs.
+async function waitUntil(predicate: () => boolean, maxTicks = 50): Promise<void> {
+  for (let i = 0; i < maxTicks && !predicate(); i++) await Promise.resolve()
+}
+
+describe('AGGREGATE_PAGE_SIZE / AGGREGATE_MAX_PAGES (task-333, BUG-01-07)', () => {
+  it('mirror the server ceiling (200) and the 2000-invoice cap (10 pages)', () => {
+    const pageSize = invoicesNS.AGGREGATE_PAGE_SIZE
+    const maxPages = invoicesNS.AGGREGATE_MAX_PAGES
+    expect(pageSize, 'AGGREGATE_PAGE_SIZE is not exported by invoices.ts yet').toBeDefined()
+    expect(maxPages, 'AGGREGATE_MAX_PAGES is not exported by invoices.ts yet').toBeDefined()
+    expect(pageSize).toBe(200)
+    expect(maxPages).toBe(10)
+  })
+})
+
+describe('remainingPageOffsets (task-333, BUG-01-07)', () => {
+  it('remainingPageOffsets returns nothing when the set fits one page', () => {
+    expect(remainingPageOffsetsUnderTest(200, 200, 10)).toEqual({ offsets: [], truncated: false })
+    expect(remainingPageOffsetsUnderTest(0, 200, 10)).toEqual({ offsets: [], truncated: false })
+    expect(remainingPageOffsetsUnderTest(1, 200, 10)).toEqual({ offsets: [], truncated: false })
+  })
+
+  it('remainingPageOffsets covers the set', () => {
+    expect(remainingPageOffsetsUnderTest(259, 200, 10)).toEqual({ offsets: [200], truncated: false })
+    expect(remainingPageOffsetsUnderTest(600, 200, 10)).toEqual({ offsets: [200, 400], truncated: false })
+  })
+
+  it('remainingPageOffsets caps and reports truncation', () => {
+    const result = remainingPageOffsetsUnderTest(5000, 200, 10)
+    expect(result.offsets).toEqual([200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800])
+    expect(result.truncated).toBe(true)
+  })
+
+  it('remainingPageOffsets guards a nonsensical limit', () => {
+    const result = remainingPageOffsetsUnderTest(500, 0, 10)
+    expect(result).toEqual({ offsets: [], truncated: false })
+    expect(Number.isFinite(result.offsets.length)).toBe(true)
+  })
+
+  // Implementation Notes #2 (exact-cap boundary): total === maxPages*limit exactly (2000
+  // with 10x200) means the cap was reached with nothing left over -- truncated is false.
+  // The Test Specs table only covers clearly-over (5000) and clearly-under.
+  it('is not truncated when total lands exactly on the cap boundary', () => {
+    const result = remainingPageOffsetsUnderTest(2000, 200, 10)
+    expect(result.offsets).toHaveLength(9)
+    expect(result.truncated).toBe(false)
+  })
+})
+
+describe('fetchAllInvoices (task-333, BUG-01-07)', () => {
+  it('fetchAllInvoices concatenates every page of the set', async () => {
+    const fetchMock = stubFetch((url) => {
+      const offset = requestedOffset(url)
+      if (offset === 0) return pageResponse(200, 0, 259, 200)
+      if (offset === 200) return pageResponse(200, 200, 259, 59)
+      throw new Error(`unexpected offset requested: ${offset}`)
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await fetchAllInvoicesUnderTest(af, base, {})
+
+    expect(result.invoices).toHaveLength(259)
+    expect(result.total).toBe(259)
+    expect(result.fetched).toBe(259)
+    expect(result.truncated).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(requestedOffsets(fetchMock).sort((a, b) => a - b)).toEqual([0, 200])
+    // Page 1 is requested at AGGREGATE_PAGE_SIZE -- the client doesn't know what the
+    // server will echo back until it answers.
+    const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(firstUrl).searchParams.get('limit')).toBe('200')
+  })
+
+  it('fetchAllInvoices paginates on the echoed limit, not the constant', async () => {
+    const fetchMock = stubFetch((url) => {
+      const offset = requestedOffset(url)
+      if (offset === 0) return pageResponse(50, 0, 130, 50)
+      if (offset === 50) return pageResponse(50, 50, 130, 50)
+      if (offset === 100) return pageResponse(50, 100, 130, 30)
+      throw new Error(`unexpected offset requested: ${offset}`)
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await fetchAllInvoicesUnderTest(af, base, {})
+
+    // An implementation that trusts AGGREGATE_PAGE_SIZE (200) instead of the echoed
+    // limit (50) would see total:130 <= 200 and request only offset 0 -- this is the
+    // one assertion that catches it.
+    expect(requestedOffsets(fetchMock).sort((a, b) => a - b)).toEqual([0, 50, 100])
+    expect(result.invoices).toHaveLength(130)
+    expect(result.total).toBe(130)
+  })
+
+  it('fetchAllInvoices reports truncation at the cap', async () => {
+    const fetchMock = stubFetch((url) => pageResponse(200, requestedOffset(url), 5000, 200))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await fetchAllInvoicesUnderTest(af, base, {})
+
+    expect(result.truncated).toBe(true)
+    expect(result.fetched).toBe(2000)
+    expect(result.invoices).toHaveLength(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(10)
+    expect(requestedOffsets(fetchMock).sort((a, b) => a - b)).toEqual([0, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800])
+  })
+
+  it('fetchAllInvoices forwards entityId to every page', async () => {
+    const fetchMock = stubFetch((url) => pageResponse(200, requestedOffset(url), 400, 200))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await fetchAllInvoicesUnderTest(af, base, { entityId: 'E' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [url] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(new URL(url).searchParams.get('entity_id')).toBe('E')
+    }
+  })
+
+  // Build the stub so a SERIAL implementation deadlocks: each remaining-page request
+  // hangs until every remaining offset (200/400/600/800, from a total:1000 set) has been
+  // seen. .map()-then-Promise.all issues all four synchronously, so the last one observed
+  // unblocks all four at once; an await-in-a-loop implementation would never even issue
+  // the 2nd..4th request (it awaits the 1st's promise first, which never resolves), so
+  // this test times out against it instead of passing.
+  it('fetchAllInvoices issues the pages after the first concurrently', async () => {
+    const wantOffsets = [200, 400, 600, 800]
+    const requested = new Set<number>()
+    const pending: Array<() => void> = []
+    const fetchMock = stubFetch((url) => {
+      const offset = requestedOffset(url)
+      if (offset === 0) return pageResponse(200, 0, 1000, 200)
+      requested.add(offset)
+      return new Promise<MockResponse>((resolve) => {
+        pending.push(() => resolve(pageResponse(200, offset, 1000, 200)))
+        if (wantOffsets.every((o) => requested.has(o))) for (const release of pending.splice(0)) release()
+      })
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await fetchAllInvoicesUnderTest(af, base, {})
+
+    expect(result.invoices).toHaveLength(1000)
+    expect(requested.size).toBe(4)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  it('fetchAllInvoices concatenates in ascending-offset order whatever the resolution order', async () => {
+    const resolvers = new Map<number, (v: MockResponse) => void>()
+    const rowFor = (offset: number): MockResponse => ({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [invoiceRow(`row-${offset}`)], pagination: { limit: 200, offset, total: 600 } }),
+    })
+    stubFetch((url) => {
+      const offset = requestedOffset(url)
+      if (offset === 0) return rowFor(0)
+      return new Promise<MockResponse>((resolve) => resolvers.set(offset, resolve))
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const resultPromise = fetchAllInvoicesUnderTest(af, base, {})
+    await waitUntil(() => resolvers.size === 2)
+    expect(resolvers.has(200), 'offset 200 was not requested').toBe(true)
+    expect(resolvers.has(400), 'offset 400 was not requested').toBe(true)
+
+    // Resolve 400 BEFORE 200, deliberately out of offset order.
+    resolvers.get(400)!(rowFor(400))
+    resolvers.get(200)!(rowFor(200))
+
+    const result = await resultPromise
+    expect(result.invoices.map((inv) => inv.id)).toEqual(['row-0', 'row-200', 'row-400'])
+  })
+})
+
+// Implementation Notes #1 (partial failure): Promise.all's default behaviour -- one
+// rejected page rejects the WHOLE call, no partial-results-plus-flag degradation. Matches
+// listInvoices' own non-2xx-rejects-unchanged contract (invoices.ts:55-56).
+describe('fetchAllInvoices partial failure (task-333, BUG-01-07)', () => {
+  it('rejects the whole call, carrying the underlying error unchanged, when one page of the fan-out rejects', async () => {
+    stubFetch((url) => {
+      const offset = requestedOffset(url)
+      return offset === 200 ? errorResponse(500) : pageResponse(200, offset, 600, 200)
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => fetchAllInvoicesUnderTest(af, base, {}))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(500)
+  })
+})
+
+describe('allInvoicesIsEmpty (task-333, BUG-01-07)', () => {
+  it('allInvoicesIsEmpty is true only when the set is empty', () => {
+    expect(allInvoicesIsEmptyUnderTest({ invoices: [], total: 0, fetched: 0, truncated: false })).toBe(true)
+    expect(allInvoicesIsEmptyUnderTest({ invoices: [draftInvoice], total: 259, fetched: 259, truncated: false })).toBe(false)
   })
 })
 

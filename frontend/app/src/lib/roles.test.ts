@@ -140,6 +140,33 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
   })
 })
 
+// QA — DELETE this describe block in subtask 05/06, alongside WF_ROLES and Member.position:
+// it exists only to catch the two live seed sources (roles.ts vs workflows.ts/members.ts)
+// drifting apart, which typecheck cannot see. Once the originals are gone there is nothing
+// left to compare against.
+describe('QA — SEED_INHOUSE_ROLES agrees with the two seed sources it is replacing', () => {
+  it('titles and descs match WF_ROLES key-for-key', () => {
+    const byKey = new Map(WF_ROLES.map((r) => [r.key, r]))
+    expect(SEED_INHOUSE_ROLES.length).toBe(WF_ROLES.length) // guard against a vacuous pass
+    for (const r of SEED_INHOUSE_ROLES) {
+      const wf = byKey.get(r.key)
+      expect(wf).toBeDefined()
+      expect(r.title).toBe(wf?.title)
+      expect(r.desc).toBe(wf?.line)
+    }
+  })
+
+  it('holder lists match the shipped Member.position groupings exactly, in seed order', () => {
+    const grouped = new Map<string, string[]>()
+    for (const m of SEED_INHOUSE_MEMBERS) {
+      if (!m.position) continue
+      grouped.set(m.position, [...(grouped.get(m.position) ?? []), m.id])
+    }
+    expect(grouped.size).toBeGreaterThan(0) // guard against a vacuous pass
+    for (const r of SEED_INHOUSE_ROLES) expect(r.members).toEqual(grouped.get(r.key) ?? [])
+  })
+})
+
 describe('AC-3 — seedRoles deep-clones', () => {
   it('seedRoles deep-clones so mutating one mode cannot reach the constant', () => {
     const a = seedRoles()
@@ -190,6 +217,28 @@ describe('AC-5 — newRoleKey', () => {
     expect(firm.length).toBeGreaterThan(0) // guard against a vacuous pass
     const keys = new Set(firm.map((r) => r.key))
     for (const r of firm) expect(keys.has(newRoleKey(firm, r.title))).toBe(false)
+  })
+})
+
+describe("QA — newRoleKey's empty-slug fallback (Save gates on name, not on slug legality)", () => {
+  it("falls back to the literal key 'role' when the title slugifies to nothing", () => {
+    expect(newRoleKey([], '###')).toBe('role')
+  })
+
+  it('composes the fallback with the ordinary collision suffix', () => {
+    const withRole = [role('role', 'Role', '', [])]
+    expect(newRoleKey(withRole, '###')).toBe('role-2')
+    const withRole2 = [...withRole, role('role-2', 'Role', '', [])]
+    expect(newRoleKey(withRole2, '###')).toBe('role-3')
+  })
+
+  it('an emoji-only title hits the same fallback, not a different one', () => {
+    expect(newRoleKey([], '🎉🎉🎉')).toBe('role')
+  })
+
+  it('a title mixing non-latin letters with ascii keeps only the ascii', () => {
+    // 'Ω' is stripped like any other non a-z0-9 character — no unicode-aware slugifier here.
+    expect(newRoleKey([], 'Ω Reviewer')).toBe('reviewer')
   })
 })
 

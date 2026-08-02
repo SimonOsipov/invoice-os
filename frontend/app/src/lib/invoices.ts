@@ -641,6 +641,11 @@ export function verdictStatus(staleSinceEdit: boolean, inv: InvoiceRecord): 'sta
   return demotedSinceValidation ? 'stale' : 'current'
 }
 
+// Disclosure of the violation fact only -- never re-derive needs_attention from this.
+export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): boolean {
+  return inv.violations.some((v) => v.severity === 'error')
+}
+
 // A total mapper over the APP's dotted MBS payload vocabulary (MBSPayload,
 // internal/invoice/payload.go:85-125; party(), :152-157) -- NOT the snake_case column
 // names (the fiscal-outcome migration header's `"path": "supplier_tin"` example is

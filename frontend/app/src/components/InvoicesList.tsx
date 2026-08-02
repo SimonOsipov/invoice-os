@@ -38,6 +38,7 @@ import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
   gateByActiveEntity,
+  hasBlockingViolation,
   invoiceListIsEmpty,
   invoiceStatusStyle,
   invoicesViewState,
@@ -451,6 +452,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
             </div>
             {rows.map((r) => {
               const st = invoiceStatusStyle(r.status)
+              const errorCount = r.violations.filter((v) => v.severity === 'error').length
               return (
                 // Click-only row (no keyboard affordance) predates this story --
                 // CodeRabbit fix cycle 2 flagged it alongside the checkbox aria-label gap,
@@ -485,7 +487,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                   </span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>
-                  <span>
+                  <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
                     <span
                       data-testid="invoice-status-badge"
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}
@@ -493,6 +495,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       <span style={{ width: 6, height: 6, borderRadius: 99, background: st.text }} />
                       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
                     </span>
+                    {hasBlockingViolation(r) && (
+                      <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-red-text)', letterSpacing: '0.04em' }}>
+                        {errorCount} ERROR{errorCount === 1 ? '' : 'S'}
+                      </span>
+                    )}
                   </span>
                 </div>
               )

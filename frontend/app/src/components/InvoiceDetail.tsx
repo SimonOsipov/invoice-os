@@ -537,6 +537,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 </div>
                 <div style={{ padding: 16, fontSize: 12.5, color: 'var(--fg-2)' }}>
                   This submission failed and is terminal — it cannot be re-driven from this screen.
+                  {inv.rejection_reasons.length === 0 && (
+                    <>
+                      <br />
+                      No reason recorded for this failure.
+                    </>
+                  )}
                 </div>
               </div>
             )}

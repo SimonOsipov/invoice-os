@@ -256,7 +256,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                     color: needsAttention > 0 ? 'var(--status-red-text)' : 'var(--status-green-text)',
                   }}
                 >
-                  {needsAttention > 0 ? 'REJECTED / FAILED' : 'ALL CLEAR'}
+                  {needsAttention > 0 ? 'REJECTED / FAILED / BLOCKED' : 'ALL CLEAR'}
                 </span>
               </div>
               <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: '14px 0 0' }}>

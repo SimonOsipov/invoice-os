@@ -264,6 +264,23 @@ describe('CustomersView: `fresh` gates the populated/truncation branch, not just
   })
 })
 
+// QA (task-336, BUG-01-10, Mode B): [customers-fresh-gate] above covers only the populated
+// branch -- BUG-01-09's QA found and closed the identical gap for ReportsView across all
+// three branches (loading-insert, empty, populated) and flagged this file's other two as
+// still unguarded. Same oracle: jsdom flushes the stale-envelope transient synchronously,
+// so a source scan is the only way to pin these.
+describe('CustomersView: `fresh` gates the loading-insert and empty-state branches too (task-336, [customers-fresh-gate])', () => {
+  const src = () => readFileSync(path.join(process.cwd(), 'src/components/CustomersView.tsx'), 'utf8')
+
+  it('the loading-insert branch requires `!fresh` alongside `list.data != null`', () => {
+    expect(src()).toMatch(/state === 'ready' && list\.data != null && !fresh && <Loading/)
+  })
+
+  it('the empty-state branch requires `fresh` alongside `list.data != null`', () => {
+    expect(src()).toMatch(/state === 'ready' && list\.data != null && fresh && customers\.length === 0/)
+  })
+})
+
 // QA (task-334, BUG-01-08, Mode B): [empty-is-total-zero] requires the SHARED
 // allInvoicesIsEmpty predicate, not a second inline copy of the same rule. Not behaviorally
 // distinguishable at this layer (mutation-verified): AllInvoices.invoices is the whole-set

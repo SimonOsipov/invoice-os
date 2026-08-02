@@ -224,10 +224,8 @@ test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// RED specs: ClientsView has no status filter yet, so the "Active"/"Archived"/"All"
-// buttons these tests drive don't exist -- the click()s below time out against a
-// not-yet-built control. Same fresh active + fresh offboardEntity-archived seed as the
-// status-pill test above (no new API helper needed).
+// Same fresh active + fresh offboardEntity-archived seed as the status-pill test above
+// (no new API helper needed).
 test('status-filter: each position requests its status and renders only those rows', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -274,11 +272,9 @@ test('status-filter: each position requests its status and renders only those ro
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// RED today: the header count reads `ctx.entities.length`, the full unfiltered roster,
-// constant regardless of filter position -- this test proves it must instead equal the
-// rows actually rendered under each position. Structural (rendered-row-count vs.
-// parsed-header-number), not a hardcoded portfolio size, since the dev DB is shared and
-// not reset between spec runs.
+// Proves the header count equals the rows actually rendered under each position.
+// Structural (rendered-row-count vs. parsed-header-number), not a hardcoded portfolio
+// size, since the dev DB is shared and not reset between spec runs.
 test('status-filter: the header count follows the filter', async ({ page }) => {
   const errors = collectErrors(page)
 

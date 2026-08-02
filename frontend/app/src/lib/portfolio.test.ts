@@ -423,12 +423,10 @@ describe('visibleEntityIds', () => {
 })
 
 // --- Status filter (Clients portfolio) ---------------------------------------------
-// RED specs: entityStatusParam/portfolioCountLabel/entityListIsEmpty don't exist yet,
-// and listEntities doesn't yet take an opts arg or return the {entities,pagination}
-// envelope. Read off the module namespace (mirrors invoices.test.ts's own idiom) so a
-// missing export or a stale signature fails as an assertion, never an import/compile
-// error -- the real, unretyped `listEntities` import above (still 2-arg, still
-// Entity[]-returning) is left untouched for the pre-existing P1-P21/V1-V6 specs.
+// Read off the module namespace (mirrors invoices.test.ts's own idiom) rather than a
+// typed import, so a missing export or a signature drift fails as an assertion, never an
+// import/compile error -- the top-level `listEntities` import above is left untouched for
+// the pre-existing P1-P21/V1-V6 specs.
 const portfolioNS = portfolioModule as unknown as Record<string, unknown>
 
 type EntityFilterPosShape = 'all' | 'active' | 'archived'

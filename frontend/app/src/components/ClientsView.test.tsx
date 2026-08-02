@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
-// Mode A RED specs -- ClientsView has no status filter yet: it renders `ctx.entities`
-// verbatim and never issues its own entities fetch. These pin the All/Active/Archived
-// control (defaulting to All, nothing hidden), a server-side status request per position,
-// the filter-aware header count, a filter-specific empty state, and ctx.entities staying
-// untouched by the filter. Mirrors CustomersView.test.tsx/ReportsView.test.tsx's own
-// mock-fetch-by-pathname idiom, since ClientsView also fires an independent rollup fetch.
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+// Pins the All/Active/Archived control (defaulting to All, nothing hidden), a
+// server-side status request per position, the filter-aware header count, a
+// filter-specific empty state, and ctx.entities staying untouched by the filter. Mirrors
+// CustomersView.test.tsx/ReportsView.test.tsx's own mock-fetch-by-pathname idiom, since
+// ClientsView also fires an independent rollup fetch.
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -190,6 +189,31 @@ describe('ClientsView: the header count follows the filter', () => {
   })
 })
 
+// QA (task-336, BUG-01-10, Mode B): every fixture above sets pagination.total ===
+// rows.length, so a shown/total argument swap at the ClientsView call site
+// (portfolioCountLabel(total, shown) instead of (shown, total)) is invisible to them --
+// mutation-verified. This pins a genuine shown<total (server-truncated) response so the
+// call-site argument order is actually exercised, not just portfolioCountLabel's own
+// pure-function tests in portfolio.test.ts.
+describe('ClientsView: the header count keeps shown/total in order when the server reports more than was returned', () => {
+  it('renders "<rendered rows> of <server total> companies", not the reverse', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      return Promise.resolve(entitiesResponse(ACTIVE_ROWS)).then((r) => ({
+        ...r,
+        json: () => Promise.resolve({ entities: ACTIVE_ROWS, pagination: { limit: 2, offset: 0, total: 5 } }),
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    expect(headerCountText(), 'shown (2 rendered rows) must come first, server total (5) second').toContain('2 of 5 companies')
+    expect(headerCountText()).not.toContain('5 of 2')
+  })
+})
+
 describe('ClientsView: a narrowing position with zero rows renders a filter-specific empty state', () => {
   it('Archived with no archived clients shows a filter-specific message, not "No entities yet"', async () => {
     const activeOnly = [entity({ id: 'x1', name: 'Solo Client', status: 'active' })]
@@ -209,6 +233,52 @@ describe('ClientsView: a narrowing position with zero rows renders a filter-spec
     // Copy chosen here (not pinned by the story) -- see the RED-run report.
     await screen.findByText('No clients match this filter')
     expect(screen.queryByText('No entities yet'), 'the generic empty state is wrong while active clients exist').toBeNull()
+  })
+})
+
+// QA (task-336, BUG-01-10, Mode B): EntityFormModal's onSuccess must fire BOTH
+// refetchEntities() (the switcher's shared roster) and filtered.run() (this view's own
+// rows) -- ClientsView no longer reads ctx.entities for its rows at all, so a create that
+// only refreshed ctx.entities would leave the new client invisible here until a manual
+// reload. Drives a real Add-client round trip through the modal, not a direct prop call.
+describe('ClientsView: creating a client refetches BOTH the switcher roster and this view\'s filtered rows', () => {
+  it('after Add client succeeds, refetchEntities fires once and the new client appears without a manual reload', async () => {
+    const newEntity = entity({ id: 'new1', name: 'Fresh Co', status: 'active' })
+    let created = false
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (init?.method === 'POST') {
+        created = true
+        return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve(newEntity) })
+      }
+      const status = new URL(url).searchParams.get('status')
+      const rows = created ? [...rowsForStatus(status), newEntity] : rowsForStatus(status)
+      return Promise.resolve(entitiesResponse(rows))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const ctx = clientsCtx(ALL_ROWS)
+    const refetchEntities = vi.fn()
+    ctx.refetchEntities = refetchEntities
+
+    render(<ClientsView ctx={ctx} />)
+    await screen.findByText('Okafor & Partners')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add client' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const nameInput = dialog.querySelectorAll('.pf-input')[0] as HTMLInputElement
+    const tinInput = within(dialog).getByPlaceholderText('########-####')
+    fireEvent.change(nameInput, { target: { value: 'Fresh Co' } })
+    fireEvent.change(tinInput, { target: { value: '00000000099' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add client' }))
+
+    await waitFor(() => expect(created, 'the create POST never fired').toBe(true))
+
+    // Proves filtered.run() actually refired: the row list is driven solely by
+    // `filtered.data`, never ctx.entities, so this can only appear via a refetch.
+    await screen.findByText('Fresh Co')
+    expect(refetchEntities, 'onSuccess must also call ctx.refetchEntities for the switcher').toHaveBeenCalledTimes(1)
   })
 })
 

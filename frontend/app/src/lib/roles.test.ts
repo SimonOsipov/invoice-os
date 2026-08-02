@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS } from './members'
 import {
+  filterRoles,
   holderCount,
   holders,
   inspectorResolve,
+  intro,
   newRoleKey,
   pruneMember,
   replaceRole,
@@ -402,5 +404,57 @@ describe('AC-13 — RoleKey widening leaves workflows.ts exports intact', () => 
     expect(WF_ROLES.map((r) => r.key)).toEqual(['preparer', 'line_mgr', 'fin_mgr', 'controller', 'fin_dir', 'compliance', 'cfo', 'ceo'])
     expect(wfRoleOf('cfo')).toEqual({ key: 'cfo', title: 'CFO', line: 'Executive' })
     expect(seedPolicies().firm.map((p) => p.id)).toEqual(SEED_FIRM_POLICIES.map((p) => p.id))
+  })
+})
+
+// QA (task-344) — RolesView's search box and intro line, lifted here so a spec can reach them.
+describe('QA — filterRoles', () => {
+  it('matches case-insensitively on title', () => {
+    // Not "INVOICE": that substring also hits fin_mgr's and cfo's descs.
+    expect(filterRoles(SEED_FIRM_ROLES, 'PREPARER').map((r) => r.key)).toEqual(['preparer'])
+  })
+
+  it('matches case-insensitively on desc when the title does not match', () => {
+    // 'Tax Reviewer' never contains "vat" — only its desc does.
+    const hits = filterRoles(SEED_FIRM_ROLES, 'VAT')
+    expect(hits.map((r) => r.key)).toEqual(['compliance'])
+    expect(hits[0].title.toLowerCase()).not.toContain('vat')
+  })
+
+  it('returns nothing for a query no role matches', () => {
+    expect(filterRoles(SEED_FIRM_ROLES, 'zzz-nonexistent')).toEqual([])
+  })
+
+  it('an empty (or whitespace) query returns every role, as a copy', () => {
+    const result = filterRoles(SEED_FIRM_ROLES, '   ')
+    expect(result).toEqual(SEED_FIRM_ROLES)
+    expect(result).not.toBe(SEED_FIRM_ROLES)
+  })
+})
+
+describe('QA — intro', () => {
+  it('firm names its own first two role titles', () => {
+    expect(intro(SEED_FIRM_ROLES)).toBe(
+      'A role is a named seat in your approval policies — Invoice Preparer, Engagement Manager. Workflow steps point at the role; the people here are who actually signs.',
+    )
+  })
+
+  it('inhouse names its own first two role titles, not firm’s', () => {
+    expect(intro(SEED_INHOUSE_ROLES)).toBe(
+      'A role is a named seat in your approval policies — Preparer, Line Manager. Workflow steps point at the role; the people here are who actually signs.',
+    )
+  })
+
+  it('drops the named-roles clause entirely with one role', () => {
+    const text = intro([role('cfo', 'Engagement Partner', '', [])])
+    expect(text).toBe('A role is a named seat in your approval policies. Workflow steps point at the role; the people here are who actually signs.')
+    expect(text).not.toContain('—')
+    expect(text).not.toContain('Engagement Partner')
+  })
+
+  it('drops the named-roles clause entirely with zero roles', () => {
+    const text = intro([])
+    expect(text).toBe('A role is a named seat in your approval policies. Workflow steps point at the role; the people here are who actually signs.')
+    expect(text).not.toContain('—')
   })
 })

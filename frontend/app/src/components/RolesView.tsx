@@ -6,15 +6,18 @@
 //
 // Almost nothing is DEFINED in this file: vitest is `environment: node`, so a string or a
 // derivation authored inside a component is one no spec can reach. Every sentence and every
-// count on a card comes from lib/roles.ts. The three exceptions are marked below.
+// count on a card comes from lib/roles.ts, `filterRoles` and `intro` included. The one
+// exception is marked below.
 
 import { useEffect, useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
 import {
+  filterRoles,
   holderCount,
   holders,
+  intro,
   resolve,
   roleUsage,
   steps,
@@ -25,11 +28,6 @@ import {
 import { AmberNote, InitialsChip } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
-// Naming this mode's own first two roles teaches the word with vocabulary the reader can
-// already see on the cards below, so the clause is worth nothing at all below two roles.
-const INTRO_HEAD = 'A role is a named seat in your approval policies'
-const INTRO_TAIL = 'Workflow steps point at the role; the people here are who actually signs.'
-
 const EMPTY_TITLE = 'No roles yet'
 // NOT IN BRIEF: §2.5 asks for "one explanatory line" without supplying its words.
 const EMPTY_MESSAGE = 'Create the seats your approval policies point at — a step names a role, and whoever holds it signs.'
@@ -37,19 +35,6 @@ const NO_MATCH = 'No role matches that search.'
 
 /** Beyond this the stack overflows to a `+N` chip. */
 const AVATAR_MAX = 5
-
-// NOT LIB: `lib/roles.ts` has no `filterRoles` and this subtask does not widen it. Title and
-// description — the two strings a card actually shows.
-function filterRoles(list: readonly Role[], query: string): Role[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return list.slice()
-  return list.filter((r) => r.title.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q))
-}
-
-function intro(list: readonly Role[]): string {
-  const named = list.slice(0, 2).map((r) => r.title)
-  return named.length === 2 ? `${INTRO_HEAD} — ${named.join(', ')}. ${INTRO_TAIL}` : `${INTRO_HEAD}. ${INTRO_TAIL}`
-}
 
 export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   const { roles, members } = ctx

@@ -227,11 +227,29 @@ export function stepsForMember(policies: readonly Policy[], roles: readonly Role
   return found.total > 0 ? found : null
 }
 
+/** Case-insensitive match on either card string — title or desc. Empty query returns a copy. */
+export function filterRoles(list: readonly Role[], query: string): Role[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return list.slice()
+  return list.filter((r) => r.title.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q))
+}
+
 // ---------------------------------------------------------------------------
 // Copy
 // ---------------------------------------------------------------------------
 // Living in lib/ rather than in a component for the reason members.ts records: vitest is
 // `environment: node`, so a string authored inside a component is a string no spec can hold.
+
+/**
+ * Names this mode's own first two roles — vocabulary the reader can already see on the
+ * cards below — and drops the clause entirely below two roles.
+ */
+export function intro(list: readonly Role[]): string {
+  const head = 'A role is a named seat in your approval policies'
+  const tail = 'Workflow steps point at the role; the people here are who actually signs.'
+  const named = list.slice(0, 2).map((r) => r.title)
+  return named.length === 2 ? `${head} — ${named.join(', ')}. ${tail}` : `${head}. ${tail}`
+}
 
 /** Sentence case; the role card uppercases it in CSS. */
 export function roleUsage(roleSteps: RoleSteps): string {

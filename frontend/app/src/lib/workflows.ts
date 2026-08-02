@@ -19,8 +19,11 @@
 
 import { fmt } from './format'
 
-/** Approver roles, in the order the inspector's role select lists them. */
-export type RoleKey = 'preparer' | 'line_mgr' | 'fin_mgr' | 'controller' | 'fin_dir' | 'compliance' | 'cfo' | 'ceo'
+/**
+ * A role's stable key. An ALIAS, not a union: roles are runtime data (lib/roles.ts), and
+ * widening the old eight-literal union leaves every signature below byte-identical.
+ */
+export type RoleKey = string
 
 export type Role = { key: RoleKey; title: string; line: string }
 

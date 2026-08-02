@@ -90,12 +90,12 @@ export function nodeTitle(n: BranchNode): string {
 }
 
 /**
- * An approval position already resolved to a person AND already worded for the surface that
- * asked — the canvas and the inspector phrase the same resolution differently. The tone
- * travels with the copy because both come from one `PositionResolution` the components never
- * see: `lib/members.ts` is barred from the canvas and the inspector (MEMB-01 §15.2), so
- * `WorkflowBuilder` renders the string and hands it down. `amber` is true for "nobody holds
- * this position" and "the only holder is suspended" alike.
+ * A workflow role already resolved to a person AND already worded for the surface that asked
+ * — the canvas and the inspector phrase the same resolution differently. The tone travels
+ * with the copy because both come from one `roles.ts` `Resolved` the components never see:
+ * `lib/roles.ts` is barred from the canvas and the inspector, so `WorkflowBuilder` renders
+ * the string and hands it down. `amber` is true for "nobody holds this role", "the only
+ * holder is suspended" and "the role is gone" alike.
  */
 export type ResolvedLine = { line: string; amber: boolean }
 

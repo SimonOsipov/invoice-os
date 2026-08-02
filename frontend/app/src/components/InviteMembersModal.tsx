@@ -32,9 +32,10 @@ import {
   type Department,
   type InviteOptions,
 } from '../lib/members'
+import { INVITE_ROLE_HELPER } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
-import { ClientAccessPicker, PositionFields, RoleCards } from './MemberParts'
-import type { RoleKey } from '../lib/workflows'
+import { ClientAccessPicker, DepartmentField, RoleCards } from './MemberParts'
+import { WfSelect, type WfOption } from './WorkflowParts'
 import type { PlatformCtx } from '../types'
 
 // The surface's own titles. They stay here rather than joining the four strings this subtask
@@ -42,6 +43,12 @@ import type { PlatformCtx } from '../types'
 // §7 names them as the modal's chrome, not as its content.
 const TITLE = 'Invite people'
 const EYEBROW = "THEY'LL RECEIVE AN EMAIL INVITE"
+
+// A SENTINEL option mapped back to null on the way out — the `'all'`-as-just-another-option
+// idiom MembersView.tsx records, where the caller narrows on the way back. `Role.key` is a
+// free-form slug (`newRoleKey`), so a role could in principle be keyed `none`; no seeded one
+// is, and members.test.ts pins that.
+const NO_WF_ROLE = 'none'
 
 export function InviteMembersModal({ ctx, onClose, onFlash }: {
   ctx: PlatformCtx
@@ -65,7 +72,9 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
   // the way out, and no second place that could disagree with what the picker is showing.
   const [clientAccess, setClientAccess] = useState<'all' | number[]>('all')
   const [department, setDepartment] = useState<Department>(DEPARTMENTS[0])
-  const [position, setPosition] = useState<RoleKey | null>(null)
+  // Optional and in BOTH modes (`[invite-single-role]`). One select here, the multi-picker in
+  // the drawer: an invite is a first guess, and the asymmetry is deliberate.
+  const [wfRole, setWfRole] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -89,6 +98,7 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
   // why can never disagree.
   const needsClients = ctx.mode === 'firm' && needsClientPick(clientAccess)
   const canSend = pending.length > 0 && !needsClients
+  const wfRoleOptions: WfOption[] = [{ value: NO_WF_ROLE, label: 'None' }, ...ctx.roles.map((r) => ({ value: r.key, label: r.title }))]
 
   function commit(raw: string) {
     setChips((cur) => mergeChips(cur, parseEmailInput(raw)))
@@ -153,8 +163,10 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
       // from a module-private counter (T2.22/QA24), so a whole list minted in one tick still
       // gets distinct ids. Neither needs re-implementing here.
       const opts: InviteOptions =
-        ctx.mode === 'firm' ? { mode: 'firm', role, clientAccess } : { mode: 'inhouse', role, department, position }
-      ctx.inviteMembers(ok.map((address) => memberFromInvite(address, opts, ctx.user.name)))
+        ctx.mode === 'firm' ? { mode: 'firm', role, clientAccess } : { mode: 'inhouse', role, department }
+      // `[invite-writes-both-stores]` — the minted ids land in the chosen role in the same
+      // commit as the roster; App.tsx is the only place that sees both stores.
+      ctx.inviteMembers(ok.map((address) => memberFromInvite(address, opts, ctx.user.name)), wfRole)
       // Only when this modal is actually closing. MembersView renders the flash in normal
       // document flow with no z-index (MembersView.tsx:122-129), so on a PARTIAL send — where
       // §7 keeps the modal open — it paints BEHIND the scrim (zIndex 80, blurred) and its
@@ -339,14 +351,25 @@ export function InviteMembersModal({ ctx, onClose, onFlash }: {
               <ClientAccessPicker idPrefix="invite" value={clientAccess} onChange={setClientAccess} />
             </>
           ) : (
-            <PositionFields
-              idPrefix="invite"
-              department={department}
-              position={position}
-              onDepartment={setDepartment}
-              onPosition={setPosition}
-            />
+            <div style={{ marginTop: 16 }}>
+              <DepartmentField department={department} onDepartment={setDepartment} />
+            </div>
           )}
+
+          {/* BOTH modes. Drawn from `ctx.roles`, so a role created on the Roles tab is
+              offerable here without a second list to keep in step. */}
+          <div style={{ marginTop: 16 }}>
+            <WfSelect
+              label="Workflow role"
+              value={wfRole ?? NO_WF_ROLE}
+              options={wfRoleOptions}
+              onChange={(v) => setWfRole(v === NO_WF_ROLE ? null : v)}
+              width="100%"
+            />
+          </div>
+          <div data-testid="invite-wfrole-helper" style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+            {INVITE_ROLE_HELPER}
+          </div>
         </div>
 
         <div style={{ flex: 'none', display: 'flex', justifyContent: 'flex-end', gap: 9, padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>

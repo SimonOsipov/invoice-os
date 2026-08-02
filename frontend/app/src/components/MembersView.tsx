@@ -6,8 +6,8 @@
 //
 // Everything transient lives here rather than on ctx — the search box, the role filter,
 // and (later) which drawer or menu is open — following the rationale SettingsView states
-// for its own view state at SettingsView.tsx:6-9. The roster itself is on ctx, because
-// in-house Workflows resolves approval positions against the same list.
+// for its own view state at SettingsView.tsx:6-9. The roster itself is on ctx, because the
+// Workflows builder resolves a step's role against the same list.
 //
 // The consequence, accepted rather than worked around: switching to another Settings tab
 // unmounts this one, so the search text and role filter reset.
@@ -16,8 +16,8 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { ACCESS_ROLES, filterMembers, isFiltering, unassignedNotice, unassignedPositions, type AccessRole } from '../lib/members'
-import { roleOf } from '../lib/workflows'
+import { ACCESS_ROLES, filterMembers, isFiltering, type AccessRole } from '../lib/members'
+import { unassignedNotice, unassignedRoles } from '../lib/roles'
 import { InviteMembersModal } from './InviteMembersModal'
 import { MemberDrawer } from './MemberDrawer'
 import { AmberNote } from './MemberParts'
@@ -76,11 +76,11 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     return () => window.clearTimeout(t)
   }, [flash])
   const shown = filterMembers(members, query, roleFilter)
-  // Gated on MODE, not on the count. `unassignedPositions` counts every WF_ROLES position
-  // with no holder, and firm rows carry no position at all (members.test.ts:222) — so in
-  // firm mode it returns all eight, and a count-only guard would render "8 approval
-  // positions have nobody assigned" on a screen that has no approval positions.
-  const unassigned = mode === 'inhouse' ? unassignedPositions(members) : []
+  // `[two-banners]` / `[members-banner-loses-mode-gate]`: the mode gate is GONE. It existed
+  // because firm rows carried no approval position, so every role read as unstaffed there;
+  // both modes now seed real holders, and this renders the same `unassignedNotice` the Roles
+  // tab does so the two cannot drift.
+  const unassigned = unassignedRoles(ctx.roles, members)
   // Two different empty surfaces, and whether a filter is running decides which. "It's
   // just you" is a statement about the ROSTER, so it must never appear over a live
   // search — that reads as the search having deleted everyone. Filtered-to-zero always
@@ -139,7 +139,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       {unassigned.length > 0 && (
         <AmberNote testId="members-unassigned" style={{ marginBottom: 16 }}>
           {unassignedNotice(unassigned.length)}{' '}
-          <span style={{ fontWeight: 600 }}>{unassigned.map((key) => roleOf(key).title).join(' · ')}</span>
+          <span style={{ fontWeight: 600 }}>{unassigned.map((r) => r.title).join(' · ')}</span>
         </AmberNote>
       )}
 
@@ -155,7 +155,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           </div>
         </div>
       ) : (
-        <MembersTable ctx={ctx} rows={shown} policies={ctx.policies} onOpen={setDrawerId} onFlash={setFlash} />
+        <MembersTable ctx={ctx} rows={shown} policies={ctx.policies} roles={ctx.roles} onOpen={setDrawerId} onFlash={setFlash} />
       )}
 
       {/* AFTER the ternary, not inside its last arm — so both render over the

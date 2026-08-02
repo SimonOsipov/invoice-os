@@ -18,14 +18,8 @@ import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
 import { NodeGlyph, NODE_TONE, PolicyStatusPill, TARGET_OPTIONS, toOptions, WfSelect, wfBackGlyph, type ResolvedLine, type WfPending, pendingNodeType } from './WorkflowParts'
-import {
-  canvasApprovalLine,
-  delegateCandidates,
-  inhouseNotifyTargets,
-  inspectorApprovalLine,
-  resolvePosition,
-  type PositionResolution,
-} from '../lib/members'
+import { delegateCandidates, inhouseNotifyTargets } from '../lib/members'
+import { inspectorResolve, resolve } from '../lib/roles'
 import {
   appendNode,
   canDrop,
@@ -182,23 +176,23 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const selected = selId ? (findNode(policy, selId)?.node ?? null) : null
   const pending = drag ?? armed
 
-  // --- The in-house resolution seam (MEMB-01 §15.2) -------------------------
+  // --- The resolution seam --------------------------------------------------
   //
-  // This is the ONLY component in the Workflows surface that imports lib/members.ts. The
-  // canvas and the inspector receive already-rendered values, so they never learn a member
+  // This is the ONLY component in the Workflows surface that imports lib/roles.ts. The canvas
+  // and the inspector receive already-rendered values, so they never learn a role or member
   // list exists and never learn which mode they are in.
   //
-  // Firm mode is unchanged BY CONSTRUCTION, not by inspection: `resolve` and `delegates` are
-  // `undefined`, so every branch those two props gate is unreachable, and `notifyOptions` is
-  // the TARGET_OPTIONS object itself — the same reference the inspector used to import, not a
-  // copy of it. Do not "symmetrise" that into `toOptions(TARGET_OPTIONS.map(...))`.
+  // BOTH modes resolve now — firm workspaces staff real roles too, so the `inhouse ?` gates
+  // that used to blank `resolve`/`delegates` are gone. `notifyOptions` keeps its fork, and its
+  // firm arm is the TARGET_OPTIONS object itself — the same reference the inspector used to
+  // import, not a copy. Do not "symmetrise" that into `toOptions(TARGET_OPTIONS.map(...))`.
   const inhouse = ctx.mode === 'inhouse'
 
-  // Two closures over one resolution: the tone is shared (`kind !== 'ok'`) but the copy is
-  // not — the canvas says "Ngozi Balogun +1", the inspector "Currently: Ngozi Balogun".
-  const line = (fmt: (r: PositionResolution) => string) => (position: RoleKey): ResolvedLine => {
-    const res = resolvePosition(ctx.members, position)
-    return { line: fmt(res), amber: res.kind !== 'ok' }
+  // Two closures over one resolution: the tone travels with the copy (`warn`) but the wording
+  // does not — the canvas says "Musa Danjuma +1", the inspector "Currently: Musa Danjuma".
+  const line = (fmt: typeof resolve) => (key: RoleKey): ResolvedLine => {
+    const res = fmt(ctx.roles, ctx.members, key)
+    return { line: res.text, amber: res.warn }
   }
 
   // Per-node by design: a value stored on the SELECTED node stays selectable, so moving the
@@ -302,7 +296,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
           onSlotLeave={onSlotLeave}
           onSlotDrop={onSlotDrop}
           onSlotClick={onSlotClick}
-          resolve={inhouse ? line(canvasApprovalLine) : undefined}
+          resolve={line(resolve)}
         />
 
         <div style={{ position: 'sticky', top: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -310,8 +304,8 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             node={selected}
             onPatch={patchNode}
             onRemove={removeNode}
-            resolve={inhouse ? line(inspectorApprovalLine) : undefined}
-            delegates={inhouse ? delegateCandidates(ctx.members) : undefined}
+            resolve={line(inspectorResolve)}
+            delegates={delegateCandidates(ctx.members)}
             notifyOptions={notifyOptions}
           />
           <WorkflowSimulator policy={policy} sim={sim} onSim={setSim} />

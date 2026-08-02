@@ -9,7 +9,7 @@
 // meta column must not re-case itself (members.ts warns that re-casing drifts silently). The
 // workflows.ts edge stays type-only.
 
-import { accessRoleLabel, type Member } from './members'
+import { accessRoleLabel, type AccessRole, type Member } from './members'
 import type { Policy, WorkflowMode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -102,6 +102,11 @@ export function pruneMember(list: readonly Role[], memberId: string): Role[] {
   return list.map((r) => ({ ...r, members: r.members.filter((id) => id !== memberId) }))
 }
 
+/** The invite path's write: minted ids join the chosen role in the same commit as the roster. */
+export function addRoleMembers(list: readonly Role[], key: string, memberIds: readonly string[]): Role[] {
+  return list.map((r) => (r.key === key ? { ...r, members: [...r.members, ...memberIds] } : r))
+}
+
 /**
  * Slug of the title, suffixed only on collision within the mode. Same slug form as rules.ts's
  * `tenantSlug` and deliberately not shared: a rules-domain edit there must not re-key roles.
@@ -146,6 +151,18 @@ export function activeHolders(list: readonly Role[], members: readonly Member[],
 
 export function rolesOfMember(list: readonly Role[], memberId: string): Role[] {
   return list.filter((r) => r.members.includes(memberId))
+}
+
+/**
+ * The roster column's cell — the first title plus `+N`, every title in the tooltip. Newline-
+ * joined for the reason the Client access tooltip is: a list of names on one line is a tooltip
+ * nobody reads. An empty tooltip is the caller's own signal for "no roles".
+ */
+export function rosterRoleCell(list: readonly Role[], memberId: string): { text: string; tooltip: string } {
+  const titles = rolesOfMember(list, memberId).map((r) => r.title)
+  if (titles.length === 0) return { text: '—', tooltip: '' }
+  const extra = titles.length - 1
+  return { text: extra > 0 ? `${titles[0]} +${extra}` : titles[0], tooltip: titles.join('\n') }
 }
 
 type Resolution =
@@ -289,6 +306,21 @@ export function stepsNamedLine(total: number): string {
 /** The drawer's amber note, and the half `stepsNamedLine` leaves unsaid. */
 export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will block until someone else holds this role.'
 
+/**
+ * Beneath the drawer's pill toggles. Forks on the ACCESS role, not on any workflow role: a
+ * Preparer cannot act on an approval step at all, so for them a workflow role is inert until
+ * the cards above change — which is the one thing the general sentence does not say.
+ */
+export function drawerRoleHelper(role: AccessRole): string {
+  return role === 'preparer'
+    ? 'Preparers cannot approve. Give them the Reviewer access role above before a workflow role means anything.'
+    : 'Roles decide which approval steps this person can act on.'
+}
+
+/** Beneath the invite modal's `Workflow role` select, in both modes. */
+export const INVITE_ROLE_HELPER =
+  'The workflow role decides which approval steps they can sign. You can change it later in Settings › Roles.'
+
 // ---------------------------------------------------------------------------
 // Role modal — the picker's derivations, and the modal's own copy
 // ---------------------------------------------------------------------------
@@ -322,6 +354,17 @@ export function filterPickerMembers(list: readonly Member[], query: string): Mem
  */
 export function pickerSelectionCount(selected: number, list: readonly Member[]): string {
   return `${selected} of ${pickerMembers(list).length} selected`
+}
+
+/**
+ * How many of a selection the picker will never render a row for — the gap the count above
+ * cannot explain on its own, now that an invite can put a fresh (still `invited`) id straight
+ * into a role. Additive: `pickerMembers` and `pickerSelectionCount` are unchanged, and a caller
+ * that ignores this renders exactly what it rendered before.
+ */
+export function pickerHiddenAmongSelected(selected: readonly string[], list: readonly Member[]): number {
+  const shown = new Set(pickerMembers(list).map((m) => m.id))
+  return selected.filter((id) => !shown.has(id)).length
 }
 
 /** The footnote naming how many invited people the picker hides. Callers gate on a zero count. */

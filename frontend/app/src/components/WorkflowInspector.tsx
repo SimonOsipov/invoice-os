@@ -41,8 +41,8 @@ const FIELD_DEFAULT: Record<CondField, number | WfDocType | boolean> = {
 }
 
 // `delegateTo` has no "unset" value a <select> can emit — `WfSelect` is `value: string` — so
-// the default is a SENTINEL option valued `''`, the idiom MemberParts' `NO_POSITION` uses for
-// the same reason. `''` and absent both mean "anyone", which is why nothing maps it back out:
+// the default is a SENTINEL option valued `''`, the idiom the invite modal's `NO_WF_ROLE`
+// uses for the same reason. `''` and absent both mean "anyone", so nothing maps it back out:
 // toggling delegation off and on leaves the key present as `''`, still the default.
 const ANY_REVIEWER = ''
 

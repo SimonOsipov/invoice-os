@@ -47,6 +47,8 @@ import {
 // `addRole` is aliased: ctx's verb of that name is this file's own wrapper below.
 import {
   addRole as appendRole,
+  addRoleMembers,
+  pruneMember,
   removeRole,
   replaceRole,
   seedRoles,
@@ -293,8 +295,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // The workspace's people, PER WORKSPACE MODE (lib/members.ts) — the policyStore shape
   // above, for the same reason: a firm's staff and an in-house finance team are two
   // different rosters, and `mode` is fixed by the signed-in persona for the session.
-  // Held here rather than in MembersView because in-house Workflows resolves approval
-  // positions to these people, so it is not one tab's private state.
+  // Held here rather than in MembersView because the Workflows builder resolves a step's
+  // role to these people, so it is not one tab's private state.
   const [memberStore, setMemberStore] = useState<MemberStore>(seedMembers)
   const members = memberStore[mode]
   // The approval seats a policy's steps point at, PER WORKSPACE MODE (lib/roles.ts) — the
@@ -1035,12 +1037,20 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     updateMembers((list) => replaceMember(list, next))
   }
 
-  function inviteMembers(next: Member[]) {
+  // Two stores, one commit: holders live on the ROLE, and this file is the only place that
+  // sees both. React batches the pair, so no render observes a half-applied write.
+  function inviteMembers(next: Member[], roleKey: string | null) {
     updateMembers((list) => addMembers(list, next))
+    if (roleKey == null) return
+    const ids = next.map((m) => m.id)
+    updateRoles((list) => addRoleMembers(list, roleKey, ids))
   }
 
   function dropMember(id: string) {
     updateMembers((list) => removeMember(list, id))
+    // `[remove-prunes-suspend-keeps]` — `setMemberStatus` deliberately does not, which is what
+    // keeps the suspended-only-holder state reachable.
+    updateRoles((list) => pruneMember(list, id))
   }
 
   // The one-funnel shape once more, and the same pure pass-through: nothing is refused

@@ -5,14 +5,13 @@
 // CustomersView, RulesView). The one real <table>, ViolationsTable, is a shared component
 // embedded inside screens rather than a screen's own layout.
 //
-// Two column sets, one per workspace mode, and neither renders the other's columns (AC#1).
-// Firm scopes a person to CLIENT COMPANIES; in-house places them in a DEPARTMENT and an
-// APPROVAL POSITION. A `Member` is one flat row that carries one set or the other
-// (members.ts:47-66), so there is no row that could fill both grids.
+// ONE column set differs per workspace mode: firm scopes a person to CLIENT COMPANIES,
+// in-house places them in a DEPARTMENT. `Workflow roles` renders in BOTH — a role staffs
+// people in either workspace now — so the two grids differ by that one column only.
 //
-// Nothing is derived here. Every value comes from lib/members.ts or lib/workflows.ts —
-// vitest is `environment: node` in this project, so a derivation written into a component
-// is a derivation no test can reach (§15.8).
+// Nothing is derived here. Every value comes from lib/members.ts or lib/roles.ts — vitest
+// is `environment: node` in this project, so a derivation written into a component is a
+// derivation no test can reach (§15.8).
 
 import { Fragment, useCallback, useState } from 'react'
 
@@ -23,14 +22,10 @@ import {
   isProtectedAdmin,
   lastActiveLabel,
   PROTECTED_ADMIN_NOTE,
-  stepsFor,
-  stepsWarning,
   type Member,
 } from '../lib/members'
-// `roleOf` comes from the workflows MODULE, never from a Workflow* component: §15.2 bars
-// only the reverse edge (workflows.ts must not learn members exist), and members.ts
-// already depends on ./lib/workflows for WF_ROLES.
-import { roleOf, type Policy } from '../lib/workflows'
+import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
+import type { Policy } from '../lib/workflows'
 import { AmberNote, InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
@@ -40,36 +35,40 @@ type Mode = PlatformCtx['mode']
 // the gap and the row padding. Both are the house constants — gap 16, head '11px 18px',
 // row '14px 18px' (InvoicesList.tsx:361/:392, ClientsView.tsx:140/:157).
 const COLS: Record<Mode, string> = {
-  firm: 'minmax(190px,1fr) 130px 130px 120px 140px 44px',
+  firm: 'minmax(190px,1fr) 130px 130px 160px 120px 140px 44px',
   inhouse: 'minmax(190px,1fr) 120px 150px 160px 110px 130px 44px',
 }
 
 const HEADS: Record<Mode, string[]> = {
   // The trailing '' is the `⋯` column: at 44px no uppercase 10.5px label fits, and every
   // action column in the app is unlabelled.
-  firm: ['Person', 'Access role', 'Client access', 'Status', 'Last active', ''],
-  inhouse: ['Person', 'Access role', 'Department', 'Approval position', 'Status', 'Last active', ''],
+  firm: ['Person', 'Access role', 'Client access', 'Workflow roles', 'Status', 'Last active', ''],
+  inhouse: ['Person', 'Access role', 'Department', 'Workflow roles', 'Status', 'Last active', ''],
 }
 
 // The width the grid actually needs, per mode. RulesView.tsx:19-29's arithmetic redone for
 // this table — RulesView's own 790 does not transfer, because its rationale is sitting
 // beside a fixed 244px rail and this table has none.
 //
-//   firm    = 190 person floor + 564 fixed (130+130+120+140+44) + 5 gaps x 16 + 36 padding =  870
+//   firm    = 190 person floor + 724 fixed (130+130+160+120+140+44) + 6 gaps x 16 + 36 padding = 1046
 //   inhouse = 190 person floor + 714 fixed (120+150+160+110+130+44) + 6 gaps x 16 + 36 padding = 1036
 //
+// Firm gained a seventh column with `Workflow roles` and is now the WIDER of the two; 160px
+// is the in-house Approval-position column's own width, which already carried titles this
+// long. "WORKFLOW ROLES" as a 10.5px uppercase `.label` measures ~102px, so no head truncates.
+//
 // The Settings content box is ~1116px at a 1440px viewport (1440 - 252 sidebar,
-// Sidebar.tsx:132 - 72 page padding, SettingsView.tsx:47), which leaves the in-house person
-// column ~270px — above its 190px floor, but §15.7's stated ">=300px" headroom is not the
-// real figure and must not be relied on. In-house therefore overflows on any viewport below
-// ~1400px, an ordinary laptop.
+// Sidebar.tsx:132 - 72 page padding, SettingsView.tsx:47), which leaves the firm person
+// column ~260px — above its 190px floor, but §15.7's stated ">=300px" headroom is not the
+// real figure and must not be relied on. Both modes therefore overflow on any viewport below
+// ~1420px, an ordinary laptop.
 //
 // Without a scroll container of its own that overflow would scroll the WHOLE Settings page
 // sideways, dragging the h1 and the tab strip with it: App.tsx:800's `.pf-scroll` sets only
 // `overflowY: 'auto'`, and CSS raises the other axis from `visible` to `auto`. So the
 // container below takes `overflowX` and every direct child restates `minWidth`, exactly as
 // RulesView.tsx:49/69/196/208/241/273 does.
-const TABLE_MIN_WIDTH: Record<Mode, number> = { firm: 870, inhouse: 1036 }
+const TABLE_MIN_WIDTH: Record<Mode, number> = { firm: 1046, inhouse: 1036 }
 
 // `overflowX: 'auto'` makes that container a scroll container on BOTH axes, for the same
 // reason `.pf-scroll` is — so the absolutely-positioned `⋯` menu would be clipped, and
@@ -88,17 +87,18 @@ const MENU_CLEARANCE = 168
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-export function MembersTable({ ctx, rows, policies, onOpen, onFlash }: {
+export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
   /**
-   * The CURRENT workspace's approval policies, off `ctx` (types.ts:251). Named as its own
-   * prop rather than read through `ctx` so that `stepsFor`'s input is visible at the call
-   * site: the tempting wrong answer is `seedPolicies()`, which never reflects an edit made
-   * on the Workflows screen.
+   * The CURRENT workspace's approval policies and workflow roles, both off `ctx`. Named as
+   * their own props rather than read through `ctx` so that `stepsForMember`'s inputs are
+   * visible at the call site: the tempting wrong answers are `seedPolicies()` / `seedRoles()`,
+   * neither of which ever reflects an edit made on the Workflows or Roles screen.
    */
   policies: Policy[]
+  roles: Role[]
   /** Opens that member's drawer. MembersView owns the open id (types.ts:255-265). */
   onOpen: (id: string) => void
   /** Raises the top-bar confirmation flash; MembersView owns the state and the timer. */
@@ -203,11 +203,12 @@ export function MembersTable({ ctx, rows, policies, onOpen, onFlash }: {
           // — it returns true for a detached object that is not in the list at all
           // (members.test.ts:1421) — so a stale row read from a closure gives a wrong answer.
           const protectedAdmin = isProtectedAdmin(members, m)
-          // Gated on the member HOLDING a position, not on mode. Firm rows carry no position
-          // at all (members.test.ts:222), so this guard is already mode-proof; a mode check
-          // beside it would be a second rule that can drift from the first.
-          const steps = m.status === 'suspended' && m.position != null ? stepsFor(policies, m.position) : null
+          // Status alone: `stepsForMember` unions every role they hold and already answers
+          // `null` for someone no policy names, so a second gate here would be a rule that
+          // can drift from that one.
+          const steps = m.status === 'suspended' ? stepsForMember(policies, roles, m.id) : null
           const blocked = steps ? steps.total : 0
+          const roleCell = rosterRoleCell(roles, m.id)
           return (
             <Fragment key={m.id}>
               <div
@@ -268,13 +269,17 @@ export function MembersTable({ ctx, rows, policies, onOpen, onFlash }: {
                     {clientAccessLabel(m.clientAccess ?? [])}
                   </span>
                 ) : (
-                  <>
-                    <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{m.department ?? '—'}</span>
-                    <span style={{ ...ELLIPSIS, fontSize: 13, color: m.position ? 'var(--fg-2)' : 'var(--fg-4)' }}>
-                      {m.position ? roleOf(m.position).title : '—'}
-                    </span>
-                  </>
+                  <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{m.department ?? '—'}</span>
                 )}
+
+                {/* Newline-joined for the same reason the Client access tooltip is; empty on
+                    a roleless row, which is the `—` case and wants no tooltip at all. */}
+                <span
+                  title={roleCell.tooltip || undefined}
+                  style={{ ...ELLIPSIS, fontSize: 13, color: roleCell.tooltip ? 'var(--fg-2)' : 'var(--fg-4)' }}
+                >
+                  {roleCell.text}
+                </span>
 
                 <span style={{ minWidth: 0 }}>
                   <MemberStatusPill status={m.status} />

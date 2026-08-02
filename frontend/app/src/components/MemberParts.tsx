@@ -6,11 +6,10 @@
 // where the specs are (§15.8). `ClientAccessPicker` is the one that holds state rather than
 // taking it all as props, and its docblock says why.
 //
-// MEMB-01-06's invite modal and MEMB-01-07's drawer reuse `InitialsChip`,
-// `MemberStatusPill`, `RoleCards`, `ClientAccessPicker`, `PositionFields` and `useDismiss`
-// from here. The last two arrived in MEMB-01-07: they were the invite modal's own JSX until
-// the drawer became their second call site, which is when extraction stops being
-// speculative (see their docblocks).
+// The invite modal and the member drawer reuse `InitialsChip`, `MemberStatusPill`,
+// `RoleCards`, `ClientAccessPicker` and `DepartmentField` from here. `WorkflowRolePills` has
+// only the drawer as a call site — the invite modal takes a single select instead — and lives
+// here anyway, beside the drawer's other controls.
 
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
@@ -24,13 +23,12 @@ import {
   needsClientPick,
   NO_CLIENT_MATCH,
   NO_CLIENTS_NOTE,
-  REVIEWER_HINT,
   type AccessRole,
   type Department,
   type MemberStatus,
 } from '../lib/members'
-import { ROLE_OPTIONS, WfSelect, type WfOption } from './WorkflowParts'
-import type { RoleKey } from '../lib/workflows'
+import type { Role } from '../lib/roles'
+import { WfSelect, type WfOption } from './WorkflowParts'
 
 // ---------------------------------------------------------------------------
 // Initials chip
@@ -139,8 +137,8 @@ export function YouChip() {
 // ---------------------------------------------------------------------------
 
 /**
- * One amber banner shape for both of the story's warnings — §6's unassigned-positions
- * notice above the table and §10.4's suspended-in-steps row warning. Treatment copied
+ * One amber banner shape for both of the story's warnings — the unassigned-roles notice
+ * above the table and §10.4's suspended-in-steps row warning. Treatment copied
  * from the app's shipped inline warning (InvoiceDetail.tsx:583-589). No icon, because
  * that one has none and a second, icon-bearing amber banner would read as a different
  * severity rather than the same one.
@@ -399,56 +397,86 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
 }
 
 // ---------------------------------------------------------------------------
-// Department + approval position (IN-HOUSE)
+// Department (IN-HOUSE) and the workflow-role pill toggles (BOTH MODES)
 // ---------------------------------------------------------------------------
 
-// `position` is `RoleKey | null`, so `None` is a SENTINEL option mapped back to null on the
-// way out — the `'all'`-as-just-another-option idiom MembersView.tsx:27-33 records, where the
-// caller narrows on the way back. `department` gets no sentinel: it is required and
-// non-nullable on both call sites, so there is no unassigned value for a placeholder to
-// stand for. Moved here from InviteMembersModal.tsx:56-58 with the control itself, so the
-// sentinel mapping exists in exactly one place — which is what QA48 guards.
-const NO_POSITION = 'none'
-const POSITION_OPTIONS: WfOption[] = [{ value: NO_POSITION, label: 'None' }, ...ROLE_OPTIONS]
 const DEPARTMENT_OPTIONS: WfOption[] = DEPARTMENTS.map((d) => ({ value: d, label: d }))
 
 /**
- * §7/§8's in-house pair — Department, Approval position, and §3's Reviewer hint beneath the
- * second. Extracted alongside `ClientAccessPicker` for the same reason and one more of its
- * own: the sentinel above must not be re-derived in a second file.
+ * What is left of `PositionFields` once Axis B became a workflow role. It SPLIT rather than
+ * growing a mode branch: the pills below render in both modes and this select renders in
+ * neither firm surface, so one atom would have had to know which mode it was in.
  *
- * Fully controlled, unlike its sibling — there is no internal state a mis-click could
- * destroy here, so the caller owns both values outright.
+ * Fully controlled — there is no internal state a mis-click could destroy, so the caller owns
+ * the value outright. No `None` sentinel: `department` is required and non-nullable on both
+ * call sites, so there is no unassigned value for a placeholder to stand for.
  */
-export function PositionFields({ department, position, onDepartment, onPosition, idPrefix }: {
+export function DepartmentField({ department, onDepartment, marginBottom }: {
   department: Department
-  position: RoleKey | null
   onDepartment: (next: Department) => void
-  onPosition: (next: RoleKey | null) => void
-  /** Names the hint's `data-testid`, so two mounts cannot claim the same handle. */
+  marginBottom?: number
+}) {
+  return (
+    <WfSelect
+      label="Department"
+      value={department}
+      options={DEPARTMENT_OPTIONS}
+      onChange={(v) => onDepartment(v as Department)}
+      width="100%"
+      marginBottom={marginBottom}
+    />
+  )
+}
+
+/**
+ * §4's workflow-role picker — a wrapped row of pill toggles, one per role, ticked when held,
+ * assigning and unassigning immediately. The ReviewInvoicesTab filter-pill idiom verbatim
+ * (ReviewInvoicesTab.tsx:363-380): `.pf-chip`, `aria-pressed`, teal fill when on. No inline
+ * `borderRadius` — `.pf-chip` is `border-radius: var(--radius-pill) !important`
+ * (app-layer.css:275), so a radius here would be a declaration that never applies.
+ *
+ * NOT `RoleCards`: those are a three-way EXCLUSIVE choice over a closed union and carry real
+ * radios. This is a multi-select over a list the user can edit, which is why the testids are
+ * `-wfrole-` and cannot collide with `-role-` in the same drawer.
+ */
+export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
+  roles: readonly Role[]
+  /** Keys this person holds — `rolesOfMember`'s answer, never re-derived here. */
+  held: readonly string[]
+  onToggle: (key: string) => void
+  /** Names each pill's `data-testid`, exactly as `RoleCards` does. */
   idPrefix: string
 }) {
   return (
-    <>
-      <WfSelect
-        label="Department"
-        value={department}
-        options={DEPARTMENT_OPTIONS}
-        onChange={(v) => onDepartment(v as Department)}
-        width="100%"
-        marginBottom={16}
-      />
-      <WfSelect
-        label="Approval position"
-        value={position ?? NO_POSITION}
-        options={POSITION_OPTIONS}
-        onChange={(v) => onPosition(v === NO_POSITION ? null : (v as RoleKey))}
-        width="100%"
-      />
-      <div data-testid={`${idPrefix}-reviewer-hint`} style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
-        {REVIEWER_HINT}
-      </div>
-    </>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+      {roles.map((r) => {
+        const on = held.includes(r.key)
+        return (
+          <button
+            key={r.key}
+            type="button"
+            data-testid={`${idPrefix}-wfrole-${r.key}`}
+            aria-pressed={on}
+            onClick={() => onToggle(r.key)}
+            className="pf-chip"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              height: 28,
+              padding: '0 12px',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 12.5,
+              fontWeight: 500,
+              border: `1px solid ${on ? 'var(--action)' : 'var(--line-2)'}`,
+              background: on ? 'var(--action)' : 'var(--bg-1)',
+              color: on ? 'var(--text-on-dark)' : 'var(--fg-2)',
+            }}
+          >
+            {r.title}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

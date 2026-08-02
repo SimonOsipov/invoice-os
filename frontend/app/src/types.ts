@@ -316,8 +316,8 @@ export type PlatformCtx = {
   // --- Settings › Members tab -----------------------------------------------
   // The CURRENT WORKSPACE's people, already resolved out of the per-mode store in
   // App.tsx — per mode, not per client, the same reasoning as `policies` above.
-  // Held on ctx rather than in MembersView because in-house Workflows resolves
-  // approval positions to these people, so two surfaces read the one list.
+  // Held on ctx rather than in MembersView because the Workflows builder resolves a
+  // step's role to these people, so two surfaces read the one list.
   //
   // Everything transient inside the tab — search text, the role filter, which drawer
   // or menu is open, the invite modal — is local to MembersView, following the
@@ -475,7 +475,9 @@ export type PlatformCtx = {
   // back, so App.tsx never needs to know a member's shape. Deliberately no
   // suspend/reactivate/setRole pair — those are `saveMember` with a different row.
   saveMember: (next: Member) => void
-  inviteMembers: (next: Member[]) => void
+  /** `roleKey` staffs the minted rows into that workflow role; `null` is the None sentinel. */
+  inviteMembers: (next: Member[], roleKey: string | null) => void
+  /** Also prunes the id from every role — suspending, deliberately, does not. */
   dropMember: (id: string) => void
   // Settings › Roles, same one-funnel contract again. `addRole` takes a whole Role because
   // the key is minted at compose time by `newRoleKey`, which needs the existing list.

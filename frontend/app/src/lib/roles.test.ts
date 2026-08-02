@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { delegateCandidates, SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS, setMemberStatus } from './members'
+import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS, setMemberStatus } from './members'
 import {
   canSaveRole,
   deleteRoleConfirm,

@@ -455,6 +455,20 @@ describe('InvoicesList: header search wiring (task-331, BUG-01-05)', () => {
     await screen.findByText('INV-COMPLETELY-UNRELATED')
   })
 
+  it('AC-4: while a search is active, the count the user reads is still pagination.total, not the on-screen row count', async () => {
+    // Server returns exactly 1 row for this page but reports total=37 (a deliberate
+    // mismatch, impossible in a real response but exactly what proves the pager reads
+    // the ENVELOPE field, not rows.length) -- if InvoicesList ever derived the count from
+    // `rows.length` while a query is active, this would read "OF 1", not "OF 37".
+    const oneRow = [row({ id: 'r1', invoice_number: 'INV-R1' })]
+    mockFetchSequence([listResponse(oneRow, { limit: 50, offset: 0, total: 37 })])
+
+    render(<InvoicesList ctx={listCtx('ent-1', 'term')} />)
+    await screen.findByText('INV-R1')
+
+    expect(screen.getByTestId('invoices-pager').textContent).toContain('OF 37')
+  })
+
   it('(c) the poll tick includes q, matching the currently active search — a dropped q would re-install the unfiltered set every 2s', async () => {
     // status:'queued' keeps shouldPollList active (mirrors the existing AC-6 poll test's
     // own real-timer approach, avoiding fake-timer/act() interaction pitfalls).

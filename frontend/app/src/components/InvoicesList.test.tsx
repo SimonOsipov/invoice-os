@@ -68,8 +68,9 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
 }
 
 // InvoicesList reads exactly these ctx fields (grep-confirmed) — same narrowing idiom
-// as Header.test.tsx's HeaderCtx.
-function listCtx(entityId = 'ent-1'): PlatformCtx {
+// as Header.test.tsx's HeaderCtx. invoiceQuery (task-331, BUG-01-05) defaults to '' so
+// every pre-existing call site (unfiltered register) is unaffected.
+function listCtx(entityId = 'ent-1', invoiceQuery = ''): PlatformCtx {
   const ctx = {
     mode: 'firm',
     active: { entityId },
@@ -77,6 +78,7 @@ function listCtx(entityId = 'ent-1'): PlatformCtx {
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     openCreate: () => {},
     openImportedInvoice: () => {},
+    invoiceQuery,
   }
   return ctx as unknown as PlatformCtx
 }
@@ -348,5 +350,191 @@ describe('InvoicesList pagination (task-329, BUG-01-03)', () => {
     expect(fetchMock, 'exactly one nav-triggered fetch beyond the initial mount fetch').toHaveBeenCalledTimes(2)
     const [secondUrl] = fetchMock.mock.calls[1] as [string]
     expect(urlParams(secondUrl).get('offset'), 'must land on page 2, never skip to an offset=100 double-advance').toBe('50')
+  })
+})
+
+// QA (task-331, BUG-01-05) — the header search box wired to this register.
+describe('InvoicesList: header search wiring (task-331, BUG-01-05)', () => {
+  it('AC-6: a new search term (from page 1) resets offset to 0 (no-op) and clears the selection', async () => {
+    // The SAME id, still validated, reappears in the "search" response (mirrors the
+    // existing AC-5 (adversarial) test's own technique): on the FINAL rows alone,
+    // pruneSelection would not explain a clear. Caveat verified by mutation-testing this
+    // scenario: it does NOT fully isolate the query-reset effect's explicit
+    // setSelected([]) from the transient list.data=null -> rows=[] window every refetch
+    // passes through, which independently clears the selection via the same [rows]-keyed
+    // prune effect (the AC-5 (adversarial) sibling above has this identical property).
+    // What this DOES verify is the user-observable AC #6 outcome — the selection bar is
+    // gone after a new search term — regardless of which mechanism did the clearing.
+    const p1 = [row({ id: 'dup', invoice_number: 'INV-DUP', status: 'validated' })]
+    const filtered = [row({ id: 'dup', invoice_number: 'INV-DUP', status: 'validated' })]
+    const fetchMock = mockFetchSequence([
+      listResponse(p1, { limit: 50, offset: 0, total: 1 }),
+      listResponse(filtered, { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1', '')} />)
+    await screen.findByText('INV-DUP')
+
+    fireEvent.click(screen.getByLabelText('Select invoice INV-DUP'))
+    await screen.findByTestId('batch-submit-summary')
+
+    rerender(<InvoicesList ctx={listCtx('ent-1', 'search-term')} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    // From page 1 the offset-reset effect's setOffset(0) is a no-op (already 0) — exactly
+    // one extra fetch, not the two a non-zero-offset search produces (see the (d) test
+    // below).
+    expect(fetchMock, 'from page 1, the offset reset is a no-op — exactly one extra fetch').toHaveBeenCalledTimes(2)
+    const [searchUrl] = fetchMock.mock.calls[1] as [string]
+    expect(urlParams(searchUrl).get('offset')).toBe('0')
+    expect(urlParams(searchUrl).get('q')).toBe('search-term')
+    expect(screen.queryByTestId('batch-submit-summary'), 'a new search term must clear the selection too').toBeNull()
+  })
+
+  it('clearing the query (ctx.invoiceQuery -> "") emits NO q param at all — never q=', async () => {
+    const filteredRows = [row({ id: 'f1', invoice_number: 'INV-F1' })]
+    const allRows = [row({ id: 'a1', invoice_number: 'INV-A1' })]
+    const fetchMock = mockFetchSequence([
+      listResponse(filteredRows, { limit: 50, offset: 0, total: 1 }),
+      listResponse(allRows, { limit: 50, offset: 0, total: 5 }),
+    ])
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1', 'term')} />)
+    await screen.findByText('INV-F1')
+    expect(urlParams(fetchMock.mock.calls[0][0] as string).get('q')).toBe('term')
+
+    rerender(<InvoicesList ctx={listCtx('ent-1', '')} />)
+    await screen.findByText('INV-A1')
+
+    const clearedUrl = fetchMock.mock.calls[1][0] as string
+    expect(urlParams(clearedUrl).has('q'), 'clearing must omit q entirely, never send an empty q=').toBe(false)
+    expect(clearedUrl).not.toContain('q=')
+  })
+
+  it('q composes with needs_attention in a single request, not dropped by the toggle', async () => {
+    const initial = [row({ id: 'r1', invoice_number: 'INV-R1' })]
+    const combined = [row({ id: 'r2', invoice_number: 'INV-R2' })]
+    const fetchMock = mockFetchSequence([
+      listResponse(initial, { limit: 50, offset: 0, total: 1 }),
+      listResponse(combined, { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx('ent-1', 'term')} />)
+    await screen.findByText('INV-R1')
+    expect(urlParams(fetchMock.mock.calls[0][0] as string).get('q')).toBe('term')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-R2')
+
+    const url = fetchMock.mock.calls[1][0] as string
+    expect(urlParams(url).get('needs_attention')).toBe('true')
+    expect(urlParams(url).get('q'), 'toggling needs-attention must not silently drop the active search').toBe('term')
+  })
+
+  it('[search-is-server-side]: a row that textually matches nothing in the query still renders — proves no client-side re-filter on top of the server response', async () => {
+    // The server already decided this row belongs in the result set; the row's own
+    // fields deliberately share no substring with the query. A naive client-side
+    // `rows.filter(r => r.invoice_number.includes(q))` on top of the server response
+    // would hide it even though the server returned it — asserting the row DOES render
+    // is the only way to catch that regression (a "does the URL carry q" test alone
+    // can't see it).
+    const nonMatching = [
+      row({
+        id: 'x1',
+        invoice_number: 'INV-COMPLETELY-UNRELATED',
+        buyer_name: 'Zzz Corp',
+        supplier_name: 'Www Ltd',
+        buyer_tin: '11111111',
+        supplier_tin: '22222222',
+      }),
+    ]
+    mockFetchSequence([listResponse(nonMatching, { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx('ent-1', 'needle-shares-nothing-with-this-row')} />)
+
+    await screen.findByText('INV-COMPLETELY-UNRELATED')
+  })
+
+  it('(c) the poll tick includes q, matching the currently active search — a dropped q would re-install the unfiltered set every 2s', async () => {
+    // status:'queued' keeps shouldPollList active (mirrors the existing AC-6 poll test's
+    // own real-timer approach, avoiding fake-timer/act() interaction pitfalls).
+    const filtered = [row({ id: 'q0', invoice_number: 'INV-Q0', status: 'queued' })]
+    const fetchMock = mockFetchSequence([
+      listResponse(filtered, { limit: 50, offset: 0, total: 1 }),
+      listResponse(filtered, { limit: 50, offset: 0, total: 1 }), // the poll tick itself
+    ])
+
+    render(<InvoicesList ctx={listCtx('ent-1', 'ABC123')} />)
+    await screen.findByText('INV-Q0')
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 3500, interval: 100 })
+
+    const [initialUrl] = fetchMock.mock.calls[0] as [string]
+    const [tickUrl] = fetchMock.mock.calls[1] as [string]
+    expect(urlParams(initialUrl).get('q')).toBe('ABC123')
+    expect(urlParams(tickUrl).get('q'), 'a poll tick that dropped q would re-install the UNFILTERED set over a filtered page every 2s').toBe('ABC123')
+  }, 8000)
+
+  it('(d) searching from a non-zero offset: traces both fetches fired, and a stale off-page response arriving AFTER the correct one must not win', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const p2 = [row({ id: 'p2', invoice_number: 'INV-P2' })]
+    const staleAtOffset50 = [row({ id: 'stale-hit', invoice_number: 'INV-STALE-HIT' })]
+    const correctAtOffset0 = [row({ id: 'correct-hit', invoice_number: 'INV-CORRECT-HIT' })]
+
+    // Manual promise control (unlike mockFetchSequence's auto-resolve) — needed to force
+    // the adversarial resolution ORDER below, which is the actual thing under test.
+    const calls: { url: string; resolve: (r: MockResponse) => void }[] = []
+    const fetchMock = vi.fn((url: string) => new Promise<MockResponse>((resolve) => calls.push({ url, resolve })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1', '')} />)
+
+    await waitFor(() => expect(calls).toHaveLength(1))
+    calls[0].resolve(listResponse(p1, { limit: 50, offset: 0, total: 60 }))
+    await screen.findByText('INV-0')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    calls[1].resolve(listResponse(p2, { limit: 50, offset: 50, total: 60 }))
+    await screen.findByText('INV-P2')
+
+    // Simulate the header committing a new query while this component is still on page 2
+    // (its own `offset` state, 50, is untouched by the ctx update — App.tsx re-renders
+    // this component with a new ctx.invoiceQuery via a completely separate piece of
+    // state).
+    rerender(<InvoicesList ctx={listCtx('ent-1', 'search-term')} />)
+
+    // Trace: exactly two fetches fire from this one search action — the query-driven
+    // refetch (useAsync's own effect, registered before the offset-reset effect in hook
+    // order) fires FIRST, at the OLD offset; only then does the offset-reset effect run
+    // and trigger a SECOND, corrected fetch at offset=0.
+    await waitFor(() => expect(calls).toHaveLength(4))
+    const staleCall = calls[2]
+    const correctCall = calls[3]
+    expect(urlParams(staleCall.url).get('offset'), 'the query-driven refetch fires before the offset-reset effect, at the OLD offset').toBe('50')
+    expect(urlParams(staleCall.url).get('q')).toBe('search-term')
+    expect(urlParams(correctCall.url).get('offset'), 'the offset-reset effect then fires its own corrected refetch').toBe('0')
+    expect(urlParams(correctCall.url).get('q')).toBe('search-term')
+
+    // Adversarial order: resolve the CORRECT (offset=0) response FIRST, then the STALE
+    // (offset=50) one SECOND. If useAsync's runId guard did not actually invalidate the
+    // stale call before this point, this late-arriving stale response would overwrite the
+    // correct, already-rendered one.
+    await act(async () => {
+      correctCall.resolve(listResponse(correctAtOffset0, { limit: 50, offset: 0, total: 1 }))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    await screen.findByText('INV-CORRECT-HIT')
+
+    await act(async () => {
+      staleCall.resolve(listResponse(staleAtOffset50, { limit: 50, offset: 50, total: 1 }))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(screen.queryByText('INV-STALE-HIT'), 'a stale off-page response arriving AFTER the correct one must never overwrite it').toBeNull()
+    expect(screen.getByText('INV-CORRECT-HIT')).toBeDefined()
+    expect(screen.getByTestId('invoices-pager').textContent).toContain('OF 1')
+    // No further fetches beyond the four traced above (no runaway refetch loop).
+    expect(calls).toHaveLength(4)
   })
 })

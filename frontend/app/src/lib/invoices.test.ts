@@ -29,6 +29,7 @@ import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-
 
 import { createAuthedFetch } from './authedFetch'
 import {
+  clampFilterText,
   computedLineSum,
   createInvoice,
   diffLineItems,
@@ -2198,6 +2199,106 @@ describe('clampFilterText (BUG-01-05)', () => {
     expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(200)
     expect(result).not.toContain('�')
     expect(result).toBe('a'.repeat(199))
+  })
+})
+
+// QA adversarial (task-331, BUG-01-05): the byte-cutoff boundary itself, exhaustively --
+// the RED specs above hit "mid-character" and one exact multiple-of-char-width boundary
+// (the 60-emoji case), but never the two single-byte-decision edges the while loop's
+// condition actually turns on, nor every offset a 4-byte sequence can straddle.
+describe('clampFilterText: exhaustive boundary decisions (QA adversarial)', () => {
+  const emoji = '😀' // F0 9F 98 80 -- 4 bytes, 2 UTF-16 code units
+  const clamp = clampFilterText
+
+  // bytes[200] itself is the LEAD byte of the next character (11110xxx, &0xc0 === 0xc0):
+  // the while loop's condition is false on the first check, so `end` never decrements.
+  // Correct, because .subarray(0, 200) already excludes byte 200 -- the character
+  // starting there contributes zero bytes to the output, so there is nothing to split.
+  it('byte 200 is a lead byte: the loop does not decrement, and the character is cleanly excluded whole', () => {
+    const s = 'a'.repeat(200) + emoji
+    const result = clamp(s)
+
+    expect(new TextEncoder().encode(result).length).toBe(200)
+    expect(result).not.toContain('�')
+    expect(result).toBe('a'.repeat(200))
+  })
+
+  // bytes[200] is a plain ASCII byte (0xxxxxxx, &0xc0 === 0x00): same non-decrementing
+  // path as the lead-byte case, for the opposite reason (nothing multi-byte anywhere
+  // near the cut). Restates the existing 250-char ASCII case as an explicit boundary
+  // check rather than an incidental one.
+  it('byte 200 is a plain ASCII byte: the loop does not decrement', () => {
+    const s = 'a'.repeat(210)
+    const result = clamp(s)
+
+    expect(new TextEncoder().encode(result).length).toBe(200)
+    expect(result).toBe('a'.repeat(200))
+  })
+
+  // Every offset a 4-byte character can straddle the cut at: 0 bytes of it included (the
+  // lead-byte case above, restated inline for the loop below), 1/2/3 bytes included (the
+  // cut lands on one of its three continuation bytes, and the loop must back off through
+  // ALL of them to reach the lead byte, not stop at the first continuation byte it sees),
+  // and all 4 bytes included (the character fits and the cut is clean ASCII beyond it).
+  // Never partial: the emoji is either wholly present or wholly absent, and the result is
+  // never a stray lone surrogate (`result.length` would report an odd-looking value) or a
+  // U+FFFD replacement char.
+  it.each([0, 1, 2, 3, 4])('a 4-byte emoji with %i of its bytes before the 200-byte cut is never split', (bytesIncluded) => {
+    const prefixLen = 200 - bytesIncluded
+    const s = 'a'.repeat(prefixLen) + emoji + 'a'.repeat(10)
+
+    const result = clamp(s)
+    const byteLen = new TextEncoder().encode(result).length
+
+    expect(byteLen, `bytesIncluded=${bytesIncluded}`).toBeLessThanOrEqual(200)
+    expect(result, `bytesIncluded=${bytesIncluded}`).not.toContain('�')
+
+    if (bytesIncluded === 4) {
+      // The whole emoji fits inside the 200-byte budget -- included whole.
+      expect(result, `bytesIncluded=${bytesIncluded}`).toBe('a'.repeat(prefixLen) + emoji)
+      expect(byteLen, `bytesIncluded=${bytesIncluded}`).toBe(200)
+    } else {
+      // 0/1/2/3 bytes of the emoji before the cut -- the loop backs off past every one
+      // of them, dropping the whole character rather than emitting a partial sequence.
+      expect(result, `bytesIncluded=${bytesIncluded}`).toBe('a'.repeat(prefixLen))
+    }
+  })
+
+  // `end === 0` (a clamp with nothing left) would require a single Unicode code point to
+  // encode past 200 bytes -- impossible, since UTF-8 caps every code point (up to
+  // U+10FFFF) at 4 bytes. The tightest real case is many consecutive 4-byte characters
+  // near the cut: the loop can back off at most 3 bytes (the longest run of continuation
+  // bytes any single character has) before it must hit a lead byte, so `end` can never
+  // fall below (200 - 3) when bytes.length > 200. Asserted here over a run of ten
+  // consecutive emoji straddling the cut, rather than argued only in a comment.
+  it('a run of consecutive 4-byte characters at the cut still resolves to a valid, non-empty clamp', () => {
+    const s = 'a'.repeat(197) + emoji.repeat(10)
+
+    const result = clamp(s)
+    const byteLen = new TextEncoder().encode(result).length
+
+    expect(byteLen).toBeGreaterThan(0)
+    expect(byteLen).toBeLessThanOrEqual(200)
+    expect(result).not.toContain('�')
+    // 197 'a' bytes + 0 whole emoji (the first emoji's lead byte lands at 197, well
+    // inside the 3-byte decrement budget from 200) -- confirms the loop lands exactly
+    // where the arithmetic above predicts, not merely "somewhere valid".
+    expect(result).toBe('a'.repeat(197))
+  })
+
+  // TextDecoder() defaults to fatal:false, which SILENTLY substitutes U+FFFD for a
+  // malformed sequence rather than throwing -- clampFilterText relies on its input
+  // always being a valid boundary (never fatal, by construction), so this documents
+  // that reliance is actually load-bearing: decoding a deliberately-broken sequence
+  // (with the same non-fatal decoder clampFilterText uses) DOES produce a replacement
+  // char, proving the earlier "no U+FFFD" assertions are a real signal, not vacuously
+  // true because TextDecoder can't ever produce one.
+  it('control: a genuinely split multi-byte sequence DOES decode to U+FFFD without {fatal:true} -- proving the no-\\uFFFD assertions above are meaningful', () => {
+    const bytes = new TextEncoder().encode('a'.repeat(199) + '文')
+    const brokenSlice = bytes.subarray(0, 200) // splits the 3-byte CJK char after 1 byte
+    const decoded = new TextDecoder().decode(brokenSlice)
+
+    expect(decoded).toContain('�')
   })
 })
 

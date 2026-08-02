@@ -395,7 +395,9 @@ test('archive-restore: a redundant transition surfaces the 409', async ({ page }
   // Not reported as changed: the row never refetches on failure, so the pre-race pill stands.
   await expect(row.getByText('ACTIVE', { exact: true })).toBeVisible()
 
-  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  // Chromium logs the deliberate 409 network response as a console error; only that one is expected.
+  const unexpectedErrors = errors.filter((e) => !e.includes('status of 409'))
+  expect(unexpectedErrors, `console errors on the app:\n${unexpectedErrors.join('\n')}`).toEqual([])
 })
 
 test('archive-restore: archiving the open client leaves the switcher and the table in agreement', async ({ page }) => {

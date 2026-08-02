@@ -20,7 +20,9 @@
 //
 // NO reload or page.goto() after the first sign-in in any test below: every store this file
 // touches is useState with no persistence, so a reload would wipe the mutation and the test
-// would go red for entirely the wrong reason.
+// would go red for entirely the wrong reason. The same fact is why the mutation below needs
+// no cleanup and cannot poison the two sweeps: only the SESSION reaches localStorage
+// (lib/session.ts), so each signInAs reseeds roles, members and policies outright.
 import { test, expect, type Page } from '@playwright/test'
 
 import { collectErrors, signInAs } from '../personaSession'
@@ -257,9 +259,11 @@ test('in-house Settings › Roles: its own seats, three that cannot be signed, a
 // ---------------------------------------------------------------------------------------
 // Test 3 -- create a seat, point a step at it, delete it
 // ---------------------------------------------------------------------------------------
-// In-house because the journey needs an ACTIVE person holding no seat at all: the roster cell
-// renders the first title plus `+N`, so staffing someone who already holds one would hide the
-// new title behind a count. Every firm member with a seat-free row is invited or suspended.
+// In-house because the journey needs a person the modal's picker will offer who holds no seat
+// at all: the roster cell renders the first title plus `+N`, so staffing someone who already
+// holds one would leave the new title only in a tooltip. Firm has no such candidate — mf1-mf5
+// each hold a seat, mf7 is suspended, and mf6 is invited, which the picker excludes outright.
+// The `+N` form and its tooltip are covered by Test 1 instead.
 test('in-house: a created role is staffable, selectable on a step, and blocks that step once deleted', async ({ page }) => {
   const errors = collectErrors(page)
 

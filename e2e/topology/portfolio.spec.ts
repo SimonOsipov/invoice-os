@@ -191,13 +191,13 @@ test('status-pill: a fresh active entity and a fresh offboardEntity-archived ent
 
 // Gap 3 (steady-state; the live-update half is covered by invoice-surfaces.spec.ts's Day-60
 // arc). ClientsView.tsx's HealthCell/entityHealth (lib/dashboard.ts:153-158): an entity with
-// zero invoices ever created has no row in the rollup's `clients` (INNER JOIN) -> "no
-// invoices yet"; an entity with exactly one needs_attention invoice -> "1 NEEDS ATTENTION".
+// zero invoices ever created has no row in the rollup's `clients` (INNER JOIN) -> "NO
+// INVOICES YET"; an entity with exactly one needs_attention invoice -> "1 NEEDS ATTENTION".
 // The third health state (ALL CLEAR -- a validated entity with zero violations) is NOT
 // covered here: the story's AC #4 names only these two cases, and invoice-surfaces.spec.ts's
 // Day-60 arc already exercises ALL CLEAR as its own post-fix assertion. Adding it here would
 // be scope creep on a test-and-docs-only subtask.
-test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS ATTENTION"; a fresh entity with no invoices reads "no invoices yet"', async ({
+test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS ATTENTION"; a fresh entity with no invoices reads "NO INVOICES YET"', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -219,7 +219,7 @@ test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS 
   const attnRow = page.locator('.pf-list-row').filter({ hasText: attnEntity.name })
   const emptyRow = page.locator('.pf-list-row').filter({ hasText: emptyEntity.name })
   await expect(attnRow).toContainText('1 NEEDS ATTENTION')
-  await expect(emptyRow).toContainText('no invoices yet')
+  await expect(emptyRow).toContainText('NO INVOICES YET')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

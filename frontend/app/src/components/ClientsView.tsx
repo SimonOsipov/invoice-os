@@ -17,15 +17,19 @@
 
 import { useState } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
 import {
+  archiveActionFor,
   entityListIsEmpty,
   entityStatusParam,
   entityStatusStyle,
   listEntities,
+  offboardEntity,
+  onboardEntity,
   portfolioCountLabel,
+  type ArchiveAction,
   type Entity,
   type EntityFilterPos,
   type EntityListResponse,
@@ -133,6 +137,39 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   // Workspace ctx. EntityFormModal receives it as props.
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; entity?: Entity } | null>(null)
 
+  // Archive/restore (BUG-01-12): armedId is the one row currently primed to fire on its
+  // next click ([archive-arms-then-confirms]); archivingId is a JS-level in-flight guard
+  // (archiveActionFor's `armed` is only two-state, so it cannot itself stop a fast
+  // double-click on confirm from posting twice — EntityFormModal's submitting guard is
+  // the same idiom, one row scoped).
+  const [armedId, setArmedId] = useState<string | null>(null)
+  const [archivingId, setArchivingId] = useState<string | null>(null)
+  const [archiveError, setArchiveError] = useState<{ id: string; message: string } | null>(null)
+  const activeEntityId = ctx.activeEntity?.id ?? null
+
+  async function handleArchiveClick(entity: Entity, action: ArchiveAction) {
+    if (base == null || archivingId === entity.id) return
+    if (!action.confirming) {
+      setArmedId(entity.id)
+      setArchiveError(null)
+      return
+    }
+    setArchivingId(entity.id)
+    try {
+      if (action.kind === 'offboard') await offboardEntity(ctx.authedFetch, base, entity.id)
+      else await onboardEntity(ctx.authedFetch, base, entity.id)
+      setArmedId(null)
+      setArchiveError(null)
+      refetchEntities()
+      filtered.run()
+    } catch (err) {
+      setArmedId(null)
+      setArchiveError({ id: entity.id, message: err instanceof ApiError ? err.message : 'Something went wrong. Please try again.' })
+    } finally {
+      setArchivingId(null)
+    }
+  }
+
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
@@ -198,24 +235,26 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
         <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div
             className="pf-list-head"
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px 160px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
           >
             <span className="label">Company</span>
             <span className="label">Sector</span>
             <span className="label">Status</span>
             <span className="label">Health</span>
+            <span className="label">Action</span>
           </div>
           {rows.map((e) => {
             const st = entityStatusStyle(e.status)
             // Join by id (Entity.id === RollupClient.entity_id). null while the rollup is
             // not 'ready' → HealthCell renders a neutral cell (QA finding #1).
             const health = rollupData ? entityHealth(rollupData.clients, e.id) : null
+            const action = archiveActionFor(e, activeEntityId, armedId === e.id)
             return (
               <div
                 key={e.id}
                 onClick={() => setModal({ mode: 'edit', entity: e })}
                 className="pf-row pf-list-row"
-                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px 160px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                   <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-input)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
@@ -234,6 +273,22 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                   </span>
                 </span>
                 <HealthCell health={health} />
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation() // the row's own onClick opens the edit modal (AC #6)
+                      void handleArchiveClick(e, action)
+                    }}
+                    disabled={archivingId === e.id}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={{ height: 28, padding: '0 10px', fontSize: 12 }}
+                  >
+                    {action.label}
+                  </button>
+                  {action.notice && <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>{action.notice}</span>}
+                  {archiveError?.id === e.id && <span style={{ fontSize: 10.5, color: 'var(--status-red-text)' }}>{archiveError.message}</span>}
+                </span>
               </div>
             )
           })}

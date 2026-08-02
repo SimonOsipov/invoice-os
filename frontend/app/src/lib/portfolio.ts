@@ -151,3 +151,33 @@ export function visibleEntityIds(entities: Entity[], selectedId: string | null):
   if (selectedId != null) ids.add(selectedId)
   return ids
 }
+
+// Archive/restore (BUG-01-12): thin wrappers over the shipped offboard/onboard routes,
+// mirroring updateEntity's no-try/catch shape so a non-2xx ApiError propagates unchanged.
+export async function offboardEntity(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities/${id}/offboard`, { method: 'POST' })
+}
+
+export async function onboardEntity(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities/${id}/onboard`, { method: 'POST' })
+}
+
+export interface ArchiveAction {
+  label: string
+  kind: 'offboard' | 'onboard'
+  confirming: boolean
+  notice: string | null
+}
+
+// Pure arm/confirm/disclosure decision for the per-row action ([archive-arms-then-confirms]).
+// `notice` fires only when armed on the entity that is the currently-open workspace, since
+// neither action ever switches the user away from it ([archiving-the-open-client-keeps-you-there]).
+export function archiveActionFor(entity: Entity, activeEntityId: string | null, armed: boolean): ArchiveAction {
+  const notice = armed && entity.id === activeEntityId ? "You'll stay in this workspace after this." : null
+  switch (entity.status) {
+    case 'active':
+      return { label: armed ? 'Confirm archive' : 'Archive', kind: 'offboard', confirming: armed, notice }
+    case 'archived':
+      return { label: armed ? 'Confirm restore' : 'Restore', kind: 'onboard', confirming: armed, notice }
+  }
+}

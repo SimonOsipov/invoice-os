@@ -62,7 +62,7 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type Request } from '@playwright/test'
 import { login, createEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
@@ -170,9 +170,17 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
   await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
 }
 
+// requestBody(): the multipart body Chromium recorded, for the ONE spec below that
+// inspects a request rather than a response. postDataBuffer first (postData() decodes
+// as text and is null for some bodies); '' when nothing was recorded, so an assertion
+// over it fails loudly instead of passing vacuously.
+function requestBody(req: Request): string {
+  return req.postDataBuffer()?.toString('utf8') ?? req.postData() ?? ''
+}
+
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
-  // Sign-in, nav, TWO full uploads of the same bytes ([preview-stateless] --
-  // preview then import), and render, on a possibly cold 11-service fleet.
+  // Sign-in, nav, ONE upload ([upload-once] -- preview stores the bytes and the
+  // import that follows sends only the id), and render, on a possibly cold 11-service fleet.
   // import.spec.ts already spends 120s on the API-only path with a 60s budget; this
   // UI path needs more headroom.
   test.setTimeout(240_000)
@@ -1486,6 +1494,67 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel]): a cross-file duplicate
     page.getByTestId('review-files-strip-row').filter({ hasText: 'partial-dupe.csv' }),
     'the reason survives the reload -- it was never sourced from `run`',
   ).toContainText('An invoice with this number already exists for this entity.')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// DOC-E2E-01 (Core AC 5): the deployed bundle runs on the document-id contract. The
+// preview RESPONSE is the only place a client ever learns a document id, so asserting
+// the import request carries THAT id is what ties the two calls together -- a part-name
+// check alone would also pass on a hardcoded value. The whole-request assertion is the
+// only one in this file that reads a request body; every other spec matches on method
+// and path alone.
+test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and never re-sends the file', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-01 wire ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'doc-wire.csv', mimeType: 'text/csv', buffer: Buffer.from(buildSingleInvoiceCsv(`INV-E2E-DOC-${Date.now()}`), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  const previewBody = (await (await previewResp).json()) as { document_id?: string }
+  const documentId = previewBody.document_id
+  expect(typeof documentId, 'preview mints and returns the stored document id').toBe('string')
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  // endsWith, never includes(): '/v1/imports' is a PREFIX of '/v1/imports/preview', so
+  // a relaxed matcher would resolve both of these on the preview request.
+  const importReq = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+
+  const body = requestBody(await importReq)
+  expect(body, 'the import names a document').toContain('name="document_id"')
+  expect(body, "and it is preview's own id, not one this spec invented").toContain(String(documentId))
+  expect(body, 'the bytes are never re-sent').not.toContain('name="file"')
+  expect((await importResp).status(), 'a real import returns 201').toBe(201)
+
+  // The run reaches its end state, so the console gate below covers the whole journey
+  // and not just the moment the import response landed (same fixture and mapping as
+  // INVCR-E2E-2 above, which owns this route).
+  await expect(page.getByTestId('invoice-detail'), 'the document-id contract completes the run').toBeVisible({ timeout: 30_000 })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

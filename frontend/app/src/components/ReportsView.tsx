@@ -8,12 +8,7 @@
 // comment covers why its row-level check stays too) feeds the monetary KPIs + top-customers list,
 // and `roll` (getRollup) feeds the Validation summary card via scopedBucket/topFailures —
 // the SAME helpers DashboardActive.tsx already uses, not a second implementation of
-// either. NOTE (regression-fix follow-up): the monetary KPIs below sum over `rows`, which
-// is still bounded by listInvoices' un-set `limit` (server default 50, [D8]) — correct
-// for every ENTITY this app seeds/creates today (all comfortably under 50 invoices), but
-// an entity with more than 50 invoices would still under-count here. That's a pre-existing
-// pagination-vs-aggregation gap, not something entity_id introduced or fixes; flagged, not
-// fixed, in this pass.
+// either.
 //
 // Step 3 DELETED the WHT KPI here instead of SAMPLE-marking it, on the reasoning that a
 // fabricated withholding-tax figure on a tax-reporting screen was worse than a marked
@@ -38,9 +33,12 @@ import { EXPORTS_LIST } from '../data'
 import { fmt, fmtShort } from '../lib/format'
 import { aggregateCustomers } from '../lib/customers'
 import { dashboardViewState, getRollup, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
-import { gateByActiveEntity, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
+import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, type AllInvoices } from '../lib/invoices'
 import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
+
+// Tags the envelope with the entity it was fetched for, so `fresh` can gate stale renders.
+type FetchedAllInvoices = AllInvoices & { fetchedEntityId: string | undefined }
 
 export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
@@ -52,23 +50,26 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   // `base ? … : …` narrowing as InvoicesList.tsx:65-68/CustomersView.tsx. `deps`
   // re-fetches on a company switch ([entity-id-restored]: entity_id is a server-side
   // param now, so switching companies needs a real refetch, not just a recompute).
-  const list = useAsync<InvoiceRecord[]>(
+  const list = useAsync<FetchedAllInvoices>(
     () =>
       base
-        ? // listInvoices resolves the {invoices, pagination} envelope (INVCR-01-08); this
-          // screen sends no limit/offset and stays un-paged, so it keeps the rows only.
-          listInvoices(ctx.authedFetch, base, { entityId: activeEntityId }).then((r) => r.invoices)
+        ? // fetchAllInvoices pages through the whole set (AGGREGATE_PAGE_SIZE/_MAX_PAGES),
+          // not just the server's first page (this screen's own un-paged call was the bug).
+          fetchAllInvoices(ctx.authedFetch, base, { entityId: activeEntityId }).then((r) => ({ ...r, fetchedEntityId: activeEntityId }))
         : Promise.reject(new Error('no gateway configured')),
-    { immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
+    { isEmpty: allInvoicesIsEmpty, immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
   )
   const state = invoicesViewState(base, list)
+  // See InvoicesList.tsx's own `fresh` for the trap this closes: on a company switch,
+  // list.data still holds the PREVIOUS entity's envelope for one committed render.
+  const fresh = list.data != null && list.data.fetchedEntityId === activeEntityId
   // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
   // ([entity-id-restored]); gateByActiveEntity blanks the "not yet resolved" transient
   // window entirely and still row-filters otherwise (its own doc comment covers why:
   // avoids flashing the previous client's KPIs for a frame), same as
   // CustomersView.tsx/InvoicesList.tsx's own `rows`.
   const rows = useMemo(
-    () => gateByActiveEntity(list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    () => gateByActiveEntity(list.data?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
     [list.data, ctx.mode, ctx.active.entityId],
   )
 
@@ -134,12 +135,17 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
+      {/* Settling frame after a company switch (see `fresh`'s own comment) — never
+          render the previous client's rows or its truncation numbers. */}
+      {state === 'ready' && list.data != null && !fresh && <Loading label="Loading reports…" />}
+
       {/* Covers the no-gateway build ('idle'), a genuinely entity-less-of-invoices tenant
           ('empty', resolved server-side via `entity_id` — [entity-id-restored]), and the
           ready-but-gated-to-zero window (entityId not yet resolved, gateByActiveEntity) —
           same three-way union CustomersView.tsx/InvoicesList.tsx use for their own empty
-          rung. */}
-      {(state === 'idle' || state === 'empty' || (state === 'ready' && rows.length === 0)) && (
+          rung, plus the `fresh` gate so this never fires on a stale, not-yet-settled
+          envelope. */}
+      {(state === 'idle' || state === 'empty' || (state === 'ready' && list.data != null && fresh && rows.length === 0)) && (
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No data to report yet</div>
@@ -150,8 +156,16 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'ready' && rows.length > 0 && (
+      {state === 'ready' && list.data != null && fresh && rows.length > 0 && (
         <>
+          {list.data.truncated && (
+            <div
+              data-testid="reports-truncated-notice"
+              style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)', fontSize: 12.5, marginBottom: 16 }}
+            >
+              Showing {list.data.fetched} of {list.data.total} invoices — refine your search to see the rest.
+            </div>
+          )}
           {/* Five tiles now, not four — the restored WHT tile does not evict "Total
               invoiced" from the slot step 3 put it in. pf-grid-5 mirrors pf-grid-4's own
               collapse rules (platform.css), just one column wider at desktop width. */}

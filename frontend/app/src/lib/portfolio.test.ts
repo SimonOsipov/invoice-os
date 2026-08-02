@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type AsyncState, type AsyncStatus } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
+import * as portfolioModule from './portfolio'
 import {
   clientsViewState,
   createEntity,
@@ -27,8 +28,11 @@ import {
   shouldFetchEntities,
   updateEntity,
   visibleEntityIds,
+  type AuthedFetch,
   type Entity,
   type EntityInput,
+  type EntityListResponse,
+  type EntityStatus,
 } from './portfolio'
 
 interface MockResponse {
@@ -87,7 +91,7 @@ const archivedEntity: Entity = {
 }
 
 describe('listEntities', () => {
-  it('P1: GETs .../v1/entities?limit=200 with Authorization: Bearer <token>, resolves the unwrapped Entity[]', async () => {
+  it('P1: GETs .../v1/entities?limit=200 with Authorization: Bearer <token>, resolves the {entities,pagination} envelope', async () => {
     const fetchMock = mockFetchOnce({
       ok: true,
       status: 200,
@@ -101,7 +105,7 @@ describe('listEntities', () => {
 
     const result = await listEntities(af, base)
 
-    expect(result).toEqual([activeEntity, archivedEntity])
+    expect(result.entities).toEqual([activeEntity, archivedEntity])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/portfolio/v1/entities?limit=200')
@@ -120,7 +124,7 @@ describe('listEntities', () => {
 
     const result = await listEntities(af, base)
 
-    expect(result).toEqual([])
+    expect(result.entities).toEqual([])
   })
 })
 
@@ -239,7 +243,7 @@ describe('listEntities: malformed envelope (200 OK, but the body does not match 
   // gateway-contract posture (it does no validation of its own either). These specs
   // pin the ACTUAL runtime behavior so a future tightening (e.g. adding validation) is
   // a deliberate, visible change, not a silent one.
-  it('P12: `entities` key absent → returns undefined (not [], not a throw)', async () => {
+  it('P12: `entities` key absent → `.entities` is undefined (not [], not a throw)', async () => {
     mockFetchOnce({
       ok: true,
       status: 200,
@@ -249,7 +253,7 @@ describe('listEntities: malformed envelope (200 OK, but the body does not match 
 
     const result = await listEntities(af, base)
 
-    expect(result).toBeUndefined()
+    expect(result.entities).toBeUndefined()
   })
 
   it('P13: `entities` present but not an array → passed through unchanged, uncoerced', async () => {
@@ -262,7 +266,7 @@ describe('listEntities: malformed envelope (200 OK, but the body does not match 
 
     const result = await listEntities(af, base)
 
-    expect(result).toBe('not-an-array')
+    expect(result.entities).toBe('not-an-array')
   })
 })
 
@@ -415,5 +419,234 @@ describe('visibleEntityIds', () => {
 
   it('V6: empty entities list + null selectedId returns an empty set', () => {
     expect(visibleEntityIds([], null)).toEqual(new Set())
+  })
+})
+
+// --- Status filter (Clients portfolio) ---------------------------------------------
+// Read off the module namespace (mirrors invoices.test.ts's own idiom) rather than a
+// typed import, so a missing export or a signature drift fails as an assertion, never an
+// import/compile error -- the top-level `listEntities` import above is left untouched for
+// the pre-existing P1-P21/V1-V6 specs.
+const portfolioNS = portfolioModule as unknown as Record<string, unknown>
+
+type EntityFilterPosShape = 'all' | 'active' | 'archived'
+type EntityStatusParamFn = (pos: EntityFilterPosShape) => EntityStatus | undefined
+type ListEntitiesFn = (
+  authedFetch: AuthedFetch,
+  base: string,
+  opts?: { status?: EntityStatus; limit?: number },
+) => Promise<EntityListResponse>
+type EntityListIsEmptyFn = (r: EntityListResponse) => boolean
+type PortfolioCountLabelFn = (shown: number, total: number) => string
+
+function entityStatusParamUnderTest(pos: EntityFilterPosShape): EntityStatus | undefined {
+  const fn = portfolioNS.entityStatusParam as EntityStatusParamFn | undefined
+  expect(fn, 'entityStatusParam is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(pos)
+}
+
+function listEntitiesUnderTest(
+  authedFetch: AuthedFetch,
+  base: string,
+  opts?: { status?: EntityStatus; limit?: number },
+): Promise<EntityListResponse> {
+  const fn = portfolioNS.listEntities as ListEntitiesFn
+  return fn(authedFetch, base, opts)
+}
+
+function entityListIsEmptyUnderTest(r: EntityListResponse): boolean {
+  const fn = portfolioNS.entityListIsEmpty as EntityListIsEmptyFn | undefined
+  expect(fn, 'entityListIsEmpty is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(r)
+}
+
+function portfolioCountLabelUnderTest(shown: number, total: number): string {
+  const fn = portfolioNS.portfolioCountLabel as PortfolioCountLabelFn | undefined
+  expect(fn, 'portfolioCountLabel is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(shown, total)
+}
+
+describe('entityStatusParam maps each position', () => {
+  it("'all' -> undefined, 'active' -> 'active', 'archived' -> 'archived'", () => {
+    expect(entityStatusParamUnderTest('all')).toBeUndefined()
+    expect(entityStatusParamUnderTest('active')).toBe('active')
+    expect(entityStatusParamUnderTest('archived')).toBe('archived')
+  })
+})
+
+describe('listEntities emits status only when narrowing', () => {
+  it('opts.status forwards status=<value>; {} sends no status param at all', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const narrowedFetch = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: [archivedEntity], pagination: { limit: 200, offset: 0, total: 6 } }),
+    })
+    await listEntitiesUnderTest(af, base, { status: 'archived' })
+    const [narrowedUrl] = narrowedFetch.mock.calls[0] as [string, RequestInit]
+    expect(new URL(narrowedUrl).searchParams.get('status'), '{status:"archived"} must put status=archived on the wire').toBe('archived')
+
+    const allFetch = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: [activeEntity, archivedEntity], pagination: { limit: 200, offset: 0, total: 27 } }),
+    })
+    await listEntitiesUnderTest(af, base, {})
+    const [allUrl] = allFetch.mock.calls[0] as [string, RequestInit]
+    expect(new URL(allUrl).searchParams.has('status'), '{} (the All position) must omit the key entirely, not send status=').toBe(false)
+  })
+})
+
+describe('listEntities returns the pagination envelope', () => {
+  it('the resolved value carries both `entities` and `pagination`, not just the unwrapped array', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: [activeEntity, archivedEntity], pagination: { limit: 200, offset: 0, total: 27 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listEntitiesUnderTest(af, base)
+
+    expect(result.entities, 'listEntities must resolve the whole envelope, not the already-unwrapped array').toBeDefined()
+    expect(result.pagination, 'listEntities must resolve the whole envelope, not the already-unwrapped array').toBeDefined()
+    expect(result.entities).toEqual([activeEntity, archivedEntity])
+    expect(result.pagination).toEqual({ limit: 200, offset: 0, total: 27 })
+  })
+})
+
+describe('entityListIsEmpty is true only when the portfolio is empty', () => {
+  it('total===0 is true; a mid-set empty page (offset:200,total:27) is false', () => {
+    const genuineEmpty: EntityListResponse = { entities: [], pagination: { limit: 200, offset: 0, total: 0 } }
+    expect(entityListIsEmptyUnderTest(genuineEmpty)).toBe(true)
+
+    const midSetEmptyPage: EntityListResponse = { entities: [], pagination: { limit: 200, offset: 200, total: 27 } }
+    expect(entityListIsEmptyUnderTest(midSetEmptyPage)).toBe(false)
+  })
+})
+
+describe('portfolioCountLabel agrees with the rows shown', () => {
+  it('(21,21) -> "21 companies"; (200,247) -> "200 of 247 companies"; (0,0) -> "0 companies"', () => {
+    expect(portfolioCountLabelUnderTest(21, 21)).toBe('21 companies')
+    expect(portfolioCountLabelUnderTest(200, 247)).toBe('200 of 247 companies')
+    expect(portfolioCountLabelUnderTest(0, 0)).toBe('0 companies')
+  })
+})
+
+// --- Archive/restore (BUG-01-12): offboardEntity/onboardEntity + archiveActionFor -----
+// Read off portfolioNS (same index-signature-cast idiom as entityStatusParam above) --
+// none of the three exist in portfolio.ts yet, so a missing export fails as an assertion,
+// never an import/compile error.
+type OffboardOnboardFn = (authedFetch: AuthedFetch, base: string, id: string) => Promise<Entity>
+
+function offboardEntityUnderTest(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  const fn = portfolioNS.offboardEntity as OffboardOnboardFn | undefined
+  expect(fn, 'offboardEntity is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(authedFetch, base, id)
+}
+
+function onboardEntityUnderTest(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  const fn = portfolioNS.onboardEntity as OffboardOnboardFn | undefined
+  expect(fn, 'onboardEntity is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(authedFetch, base, id)
+}
+
+interface ArchiveAction {
+  label: string
+  kind: 'offboard' | 'onboard'
+  confirming: boolean
+  notice: string | null
+}
+type ArchiveActionForFn = (entity: Entity, activeEntityId: string | null, armed: boolean) => ArchiveAction
+
+function archiveActionForUnderTest(entity: Entity, activeEntityId: string | null, armed: boolean): ArchiveAction {
+  const fn = portfolioNS.archiveActionFor as ArchiveActionForFn | undefined
+  expect(fn, 'archiveActionFor is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(entity, activeEntityId, armed)
+}
+
+describe('offboardEntity and onboardEntity POST the right paths with no body', () => {
+  it('offboardEntity POSTs .../entities/{id}/offboard, no body', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(activeEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await offboardEntityUnderTest(af, base, 'E')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/portfolio/v1/entities/E/offboard')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+  })
+
+  it('onboardEntity POSTs .../entities/{id}/onboard, no body', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(archivedEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await onboardEntityUnderTest(af, base, 'E')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/portfolio/v1/entities/E/onboard')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+  })
+})
+
+// "unchanged" is proven by REFERENCE, not by re-checking kind/status/message -- a mocked
+// authedFetch rejects with a specific ApiError instance, and the wrapper must propagate
+// that EXACT object (no try/catch to rebuild or reshape it), mirroring updateEntity's own
+// no-try/catch shape (portfolio.ts:111-118).
+describe('offboardEntity/onboardEntity reject with the underlying ApiError unchanged (not swallowed)', () => {
+  it('offboardEntity rejects with the exact same ApiError instance authedFetch rejected with', async () => {
+    const boom = new ApiError('http', 'redundant transition', 409, { error: 'redundant transition' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => offboardEntityUnderTest(af, base, 'e1'))
+
+    expect(caught).toBe(boom)
+  })
+
+  it('onboardEntity rejects with the exact same ApiError instance authedFetch rejected with', async () => {
+    const boom = new ApiError('http', 'redundant transition', 409, { error: 'redundant transition' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => onboardEntityUnderTest(af, base, 'e2'))
+
+    expect(caught).toBe(boom)
+  })
+})
+
+describe('archiveActionFor offers archive for active and restore for archived', () => {
+  it("active -> kind:'offboard'; archived -> kind:'onboard'", () => {
+    expect(archiveActionForUnderTest(activeEntity, null, false).kind).toBe('offboard')
+    expect(archiveActionForUnderTest(archivedEntity, null, false).kind).toBe('onboard')
+  })
+})
+
+describe('archiveActionFor discloses the open-client consequence only when armed on the open client', () => {
+  it('armed on the currently-open (active) client -> notice names staying in the workspace', () => {
+    const result = archiveActionForUnderTest(activeEntity, activeEntity.id, true)
+    expect(result.notice).not.toBeNull()
+    expect(result.notice).toMatch(/stay/i)
+  })
+
+  it('the open client but not armed -> notice is null', () => {
+    const result = archiveActionForUnderTest(activeEntity, activeEntity.id, false)
+    expect(result.notice).toBeNull()
+  })
+
+  it('armed, but a different entity than the open one -> notice is null', () => {
+    const result = archiveActionForUnderTest(archivedEntity, activeEntity.id, true)
+    expect(result.notice).toBeNull()
+  })
+
+  // QA (BUG-01-12, Mode B): the 4th of 4 armed/open combinations. Without this, an XNOR
+  // (armed === isOpen) mutant escapes every other test here -- it only diverges from the
+  // real AND at (armed:false, isOpen:false).
+  it('not armed, and a different entity than the open one -> notice is null', () => {
+    const result = archiveActionForUnderTest(archivedEntity, activeEntity.id, false)
+    expect(result.notice).toBeNull()
   })
 })

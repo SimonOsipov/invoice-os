@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SANDBOX_DEFAULT } from '../App'
+import { clampFilterText } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 import { Header } from './Header'
 
@@ -13,17 +14,29 @@ afterEach(cleanup)
 
 // Header reads exactly five ctx fields. Typing them against the real PlatformCtx keeps a
 // rename breaking the typecheck; the cast then stands in for the ~90 fields it never reads.
-type HeaderCtx = Pick<PlatformCtx, 'view' | 'sandbox' | 'setSandbox' | 'openCreate'> & {
+// `nav` is a real PlatformCtx field (App.tsx) so it joins the Pick; `setInvoiceQuery`
+// (task-331, BUG-01-05) doesn't exist on PlatformCtx yet, so it's added as its own
+// intersection member instead -- same idiom `active` below already uses -- which is what
+// lets this widen without touching types.ts.
+type HeaderCtx = Pick<PlatformCtx, 'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav'> & {
   active: Pick<PlatformCtx['active'], 'initials'>
+  setInvoiceQuery: (q: string) => void
 }
 
-function headerCtx(over: { sandbox: boolean; setSandbox?: () => void }) {
+function headerCtx(over: {
+  sandbox: boolean
+  setSandbox?: () => void
+  nav?: PlatformCtx['nav']
+  setInvoiceQuery?: (q: string) => void
+}) {
   const ctx: HeaderCtx = {
     active: { initials: 'OP' },
     view: 'dashboard',
     openCreate: () => {},
     setSandbox: over.setSandbox ?? vi.fn(),
     sandbox: over.sandbox,
+    nav: over.nav ?? vi.fn(),
+    setInvoiceQuery: over.setInvoiceQuery ?? vi.fn(),
   }
   return ctx as unknown as PlatformCtx
 }
@@ -110,5 +123,147 @@ describe('Header environment pill', () => {
     render(<Header ctx={headerCtx({ sandbox: true })} />)
 
     expect(liveSeg().getAttribute('title')).toContain('accreditation')
+  })
+})
+
+// Specs (task-331, BUG-01-05, Mode A): the header search control -- a real `<input>` in a
+// `<form onSubmit>`, plus a clear control. Pinned testids the e2e layer also selects on.
+describe('Header search field (BUG-01-05)', () => {
+  it('renders exactly one input[type=text] capped at 200 characters', () => {
+    render(<Header ctx={headerCtx({ sandbox: true })} />)
+
+    const inputs = document.querySelectorAll('input[type="text"]')
+    expect(inputs).toHaveLength(1)
+    expect((inputs[0] as HTMLInputElement).maxLength).toBe(200)
+  })
+
+  it('submitting the search sets the query and navigates to invoices', async () => {
+    const setInvoiceQuery = vi.fn()
+    const nav = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, nav, setInvoiceQuery })} />)
+
+    const input = screen.queryByTestId('invoice-search-input')
+    expect(input).not.toBeNull()
+    await userEvent.type(input!, 'INV-9001{Enter}')
+
+    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
+    expect(setInvoiceQuery).toHaveBeenCalledWith('INV-9001')
+    expect(nav).toHaveBeenCalledTimes(1)
+    expect(nav).toHaveBeenCalledWith('invoices')
+  })
+
+  it('clicking clear emits an empty query', async () => {
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+
+    const input = screen.queryByTestId('invoice-search-input')
+    expect(input).not.toBeNull()
+    await userEvent.type(input!, 'abc')
+
+    const clearBtn = screen.queryByTestId('invoice-search-clear')
+    expect(clearBtn).not.toBeNull()
+    await userEvent.click(clearBtn!)
+
+    expect(setInvoiceQuery).toHaveBeenCalledWith('')
+  })
+})
+
+// QA adversarial (task-331, BUG-01-05) -- AC #7 says "including on paste". maxLength=200
+// is a browser CHARACTER cap (JS string length / UTF-16 code units); the server's cap is
+// 200 UTF-8 BYTES (see clampFilterText's own doc comment). 200 multi-byte characters pass
+// maxLength (200 chars) while serialising to well over 200 bytes -- these tests trace what
+// actually reaches setInvoiceQuery on that path, not just that clampFilterText itself is
+// byte-correct in isolation (already pinned in invoices.test.ts).
+describe('Header search field: paste vs maxLength vs the byte clamp (QA adversarial, AC #7)', () => {
+  it('maxLength blocks typing past 200 characters, but 200 CJK characters (600 bytes) still clamp further on submit', async () => {
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+
+    // A single fireEvent.paste-style change with 250 CJK chars, matching how a real paste
+    // delivers the whole string at once rather than one user-event keystroke per char.
+    fireEvent.change(input, { target: { value: '文'.repeat(250) } })
+
+    // maxLength is an HTML input CONSTRAINT enforced by the DOM on user input, not by our
+    // onChange handler (which does no clamping) -- assert what the input's own value
+    // actually holds after that change, rather than assume the attribute did its job.
+    expect(input.maxLength, 'attribute must still be 200').toBe(200)
+
+    fireEvent.submit(input.closest('form')!)
+
+    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
+    const sent = setInvoiceQuery.mock.calls[0][0] as string
+    expect(new TextEncoder().encode(sent).length, 'the value that reaches setInvoiceQuery must never exceed 200 BYTES').toBeLessThanOrEqual(200)
+    // Exact value: clampFilterText is independently pinned in invoices.test.ts; this
+    // confirms Header actually calls it on the submitted value, not a re-derivation.
+    expect(sent).toBe(clampFilterText(input.value))
+  })
+
+  it('clamp runs on submit, not on every keystroke: the DOM value stays the raw unclamped string until Enter', async () => {
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+
+    // Bypasses the browser's own maxLength enforcement (fireEvent sets the DOM value
+    // property directly, the same way a paste that outran a lagging constraint check
+    // would) -- proving the byte clamp is a real, independent safety net on submit, not
+    // merely relying on maxLength to have already done the job before onChange ever runs.
+    const raw = '文'.repeat(250)
+    fireEvent.change(input, { target: { value: raw } })
+
+    expect(input.value, 'no clamp on change -- the field still shows the raw value pre-submit').toBe(raw)
+    expect(setInvoiceQuery).not.toHaveBeenCalled()
+
+    fireEvent.submit(input.closest('form')!)
+
+    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
+    expect(setInvoiceQuery).toHaveBeenCalledWith(clampFilterText(raw))
+    expect(new TextEncoder().encode(setInvoiceQuery.mock.calls[0][0] as string).length).toBeLessThanOrEqual(200)
+  })
+
+  it('typing 200 CJK characters via user-event is itself capped to 200 characters by maxLength (browser-enforced, not app code)', async () => {
+    render(<Header ctx={headerCtx({ sandbox: true })} />)
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+
+    // 40 chars, well under 200, kept short so the per-keystroke user-event loop stays fast
+    // -- this test is about confirming user-event honours maxLength at all (a real-browser
+    // behaviour jsdom + user-event v14 emulate), not about re-proving the byte math.
+    await userEvent.type(input, '文'.repeat(40))
+
+    expect(input.value).toHaveLength(40)
+  })
+
+  it('a REAL userEvent.paste() of 250 CJK characters is itself capped to 200 characters by maxLength, and the submitted value still clamps further to 200 bytes', async () => {
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+    const user = userEvent.setup()
+
+    await user.click(input)
+    await user.paste('文'.repeat(250))
+
+    // maxLength is a CHARACTER cap (UTF-16 code units) -- 200 chars here is still 600
+    // bytes, well over the server's byte cap.
+    expect(input.value).toHaveLength(200)
+    expect(new TextEncoder().encode(input.value).length).toBe(600)
+
+    await user.keyboard('{Enter}')
+
+    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
+    const sent = setInvoiceQuery.mock.calls[0][0] as string
+    expect(new TextEncoder().encode(sent).length, 'maxLength alone (a char cap) is not enough -- the byte clamp on submit is what actually holds AC #7').toBeLessThanOrEqual(200)
+    expect(sent).toBe(clampFilterText(input.value))
+  })
+
+  it('a plain ASCII value at exactly 200 characters (200 bytes) needs no further clamping on submit', async () => {
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+    const exact200 = 'x'.repeat(200)
+
+    fireEvent.change(input, { target: { value: exact200 } })
+    fireEvent.submit(input.closest('form')!)
+
+    expect(setInvoiceQuery).toHaveBeenCalledWith(exact200)
   })
 })

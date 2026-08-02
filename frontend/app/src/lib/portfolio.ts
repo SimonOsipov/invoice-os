@@ -12,7 +12,8 @@
 // listEntities/createEntity/updateEntity are thin wrappers around an injected
 // authedFetch (the app-side 401 seam from M3-07-02, src/lib/authedFetch.ts) — these
 // helpers receive authedFetch and know nothing about tokens or onUnauthorized:
-// - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=200`, unwraps `.entities`.
+// - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=<n>[&status=<s>]`,
+//   resolves the whole `{entities,pagination}` envelope (no unwrapping).
 // - createEntity:  POST `${base}/api/portfolio/v1/entities`, full EntityInput body.
 // - updateEntity:  PATCH `${base}/api/portfolio/v1/entities/{id}`, Partial<EntityInput> body.
 // Non-2xx responses reject with the underlying ApiError unchanged (apiFetch's own
@@ -69,9 +70,34 @@ export interface EntityInput {
 // (src/lib/authedFetch.ts). No token/onUnauthorized knowledge lives here.
 export type AuthedFetch = <T>(url: string, opts?: ApiFetchOptions) => Promise<T>
 
-export async function listEntities(authedFetch: AuthedFetch, base: string): Promise<Entity[]> {
-  const res = await authedFetch<EntityListResponse>(`${base}/api/portfolio/v1/entities?limit=200`)
-  return res.entities
+// Status filter (Clients portfolio): a three-position UI toggle over the two-value wire
+// status. 'all' maps to `undefined` so entityStatusParam/listEntities omit the param
+// entirely, matching the server's own empty-status = no filter contract (portfolio.go:215-222).
+export type EntityFilterPos = 'all' | 'active' | 'archived'
+
+export function entityStatusParam(pos: EntityFilterPos): EntityStatus | undefined {
+  return pos === 'all' ? undefined : pos
+}
+
+export async function listEntities(
+  authedFetch: AuthedFetch,
+  base: string,
+  opts?: { status?: EntityStatus; limit?: number },
+): Promise<EntityListResponse> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 200) })
+  if (opts?.status) params.set('status', opts.status)
+  return authedFetch<EntityListResponse>(`${base}/api/portfolio/v1/entities?${params.toString()}`)
+}
+
+// [empty-is-total-zero], mirroring invoices.ts's invoiceListIsEmpty: a third named
+// predicate rather than reusing that one — lib/invoices.ts type-imports AuthedFetch from
+// this module, so a runtime import back would create the first runtime edge between them.
+export function entityListIsEmpty(r: EntityListResponse): boolean {
+  return r.pagination.total === 0
+}
+
+export function portfolioCountLabel(shown: number, total: number): string {
+  return shown === total ? `${shown} companies` : `${shown} of ${total} companies`
 }
 
 export async function createEntity(
@@ -124,4 +150,34 @@ export function visibleEntityIds(entities: Entity[], selectedId: string | null):
   const ids = new Set(entities.filter((e) => e.status === 'active').map((e) => e.id))
   if (selectedId != null) ids.add(selectedId)
   return ids
+}
+
+// Archive/restore (BUG-01-12): thin wrappers over the shipped offboard/onboard routes,
+// mirroring updateEntity's no-try/catch shape so a non-2xx ApiError propagates unchanged.
+export async function offboardEntity(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities/${id}/offboard`, { method: 'POST' })
+}
+
+export async function onboardEntity(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities/${id}/onboard`, { method: 'POST' })
+}
+
+export interface ArchiveAction {
+  label: string
+  kind: 'offboard' | 'onboard'
+  confirming: boolean
+  notice: string | null
+}
+
+// Pure arm/confirm/disclosure decision for the per-row action ([archive-arms-then-confirms]).
+// `notice` fires only when armed on the entity that is the currently-open workspace, since
+// neither action ever switches the user away from it ([archiving-the-open-client-keeps-you-there]).
+export function archiveActionFor(entity: Entity, activeEntityId: string | null, armed: boolean): ArchiveAction {
+  const notice = armed && entity.id === activeEntityId ? "You'll stay in this workspace after this." : null
+  switch (entity.status) {
+    case 'active':
+      return { label: armed ? 'Confirm archive' : 'Archive', kind: 'offboard', confirming: armed, notice }
+    case 'archived':
+      return { label: armed ? 'Confirm restore' : 'Restore', kind: 'onboard', confirming: armed, notice }
+  }
 }

@@ -8,22 +8,41 @@
 // M4-10-03: a second, independent rollup fetch drives a per-row needs-attention health
 // pill, joined to the entity by id — restoring a client-health column now that a live
 // source (the 06 rollup) exists. The pill is computed ONLY when the rollup fetch is
-// 'ready'; loading/error/idle renders a neutral cell, never a false "no invoices yet".
+// 'ready'; loading/error/idle renders a neutral cell, never a false "NO INVOICES YET".
 //
-// [entity-picker] step 1 of 3: the entity list itself is no longer this component's own
-// fetch — it now reads ctx.entities/entitiesState/entitiesError/refetchEntities, ONE
-// fetch shared with the workspace switcher (Sidebar) and CreateUpload's entity picker
-// (lifted to App.tsx), so all three surfaces render the same roster.
+// [entity-picker]: ctx.entities/refetchEntities remain the ONE fetch shared with the
+// workspace switcher (Sidebar) and CreateUpload's entity picker (lifted to App.tsx). The
+// status filter below adds a SECOND, independent fetch for this view's own rows —
+// ctx.entities itself stays unfiltered ([clients-fetches-its-own-filtered-list]).
 
 import { useState } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
-import { entityStatusStyle, type Entity } from '../lib/portfolio'
+import {
+  archiveActionFor,
+  entityListIsEmpty,
+  entityStatusParam,
+  entityStatusStyle,
+  listEntities,
+  offboardEntity,
+  onboardEntity,
+  portfolioCountLabel,
+  type ArchiveAction,
+  type Entity,
+  type EntityFilterPos,
+  type EntityListResponse,
+} from '../lib/portfolio'
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
+
+const FILTER_POSITIONS: Array<{ pos: EntityFilterPos; label: string }> = [
+  { pos: 'all', label: 'All' },
+  { pos: 'active', label: 'Active' },
+  { pos: 'archived', label: 'Archived' },
+]
 
 // Local avatar-bubble helper — deliberately NOT reused from lib/customers.ts (that
 // module is the customer/buyer domain; this surface is the portfolio-entity domain,
@@ -43,10 +62,10 @@ function initials(name: string): string {
 // text,label}, same shape as portfolio.ts entityStatusStyle), reusing the existing
 // --status-* token families so the health pill sits beside the lifecycle pill without
 // forking the palette. Only called on a non-null (ready) health value.
-function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: string; label: string } {
+export function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: string; label: string } {
   switch (h.kind) {
     case 'no-invoices':
-      return { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'no invoices yet' }
+      return { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'NO INVOICES YET' }
     case 'needs-attention':
       return {
         bg: 'var(--status-red-bg)',
@@ -60,7 +79,7 @@ function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: s
 }
 
 // One portfolio-row health cell. `health === null` is the not-ready window (rollup still
-// loading/error/idle) → a neutral em-dash, NOT "no invoices yet" (QA finding #1). Renders
+// loading/error/idle) → a neutral em-dash, NOT "NO INVOICES YET" (QA finding #1). Renders
 // a single element either way, so the row grid still sees exactly one Health cell.
 function HealthCell({ health }: { health: EntityHealth | null }) {
   if (health === null) {
@@ -79,7 +98,23 @@ function HealthCell({ health }: { health: EntityHealth | null }) {
 
 export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
-  const { entities, entitiesState: state, entitiesError, refetchEntities } = ctx
+  const { refetchEntities } = ctx
+
+  const [pos, setPos] = useState<EntityFilterPos>('all')
+
+  // Own filtered fetch, not a client-side filter over ctx.entities -- the switcher's
+  // roster (ctx.entities) must stay unfiltered ([clients-fetches-its-own-filtered-list]).
+  const filtered = useAsync<EntityListResponse>(
+    () =>
+      base
+        ? listEntities(ctx.authedFetch, base, { status: entityStatusParam(pos) })
+        : Promise.reject(new Error('no gateway configured')),
+    { isEmpty: entityListIsEmpty, immediate: base != null, deps: [pos] },
+  )
+  const filteredState = base == null ? 'idle' : filtered.status
+  const rows = filtered.data?.entities ?? []
+  const shown = rows.length
+  const total = filtered.data?.pagination.total ?? 0
 
   // Second, independent rollup fetch (Decision [fetch-per-surface]) driving the per-row
   // health pill — separate from the shared entity list, which alone gates row
@@ -91,17 +126,49 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   )
   // QA finding #1: read clients ONLY when the rollup fetch is 'ready'. On every other
   // status asyncReducer clears data to null (async-state.ts:51), so `rollupData` stays
-  // null and each row falls back to the neutral cell — NOT a false "no invoices yet"
+  // null and each row falls back to the neutral cell — NOT a false "NO INVOICES YET"
   // (which an unconditional `rollup.data?.clients ?? []` would produce during the fetch).
   const rollupData = rollup.status === 'ready' ? rollup.data : null
 
-  const count = entities.length
   const orgSegment = ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''
 
   // Add/edit form's open/mode/edit-target state ([A-l]) — local, not PlatformCtx: it
   // derives from this view's own live list + refetch handle, neither of which live on
   // Workspace ctx. EntityFormModal receives it as props.
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; entity?: Entity } | null>(null)
+
+  // Archive/restore (BUG-01-12): armedId is the one row currently primed to fire on its
+  // next click ([archive-arms-then-confirms]); archivingId is a JS-level in-flight guard
+  // (archiveActionFor's `armed` is only two-state, so it cannot itself stop a fast
+  // double-click on confirm from posting twice — EntityFormModal's submitting guard is
+  // the same idiom, one row scoped).
+  const [armedId, setArmedId] = useState<string | null>(null)
+  const [archivingId, setArchivingId] = useState<string | null>(null)
+  const [archiveError, setArchiveError] = useState<{ id: string; message: string } | null>(null)
+  const activeEntityId = ctx.activeEntity?.id ?? null
+
+  async function handleArchiveClick(entity: Entity, action: ArchiveAction) {
+    if (base == null || archivingId === entity.id) return
+    if (!action.confirming) {
+      setArmedId(entity.id)
+      setArchiveError(null)
+      return
+    }
+    setArchivingId(entity.id)
+    try {
+      if (action.kind === 'offboard') await offboardEntity(ctx.authedFetch, base, entity.id)
+      else await onboardEntity(ctx.authedFetch, base, entity.id)
+      setArmedId(null)
+      setArchiveError(null)
+      refetchEntities()
+      filtered.run()
+    } catch (err) {
+      setArmedId(null)
+      setArchiveError({ id: entity.id, message: err instanceof ApiError ? err.message : 'Something went wrong. Please try again.' })
+    } finally {
+      setArchivingId(null)
+    }
+  }
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
@@ -113,48 +180,81 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
             {orgSegment}
-            {count} companies · partner program
+            {portfolioCountLabel(shown, total)} · partner program
           </p>
         </div>
-        <button
-          onClick={() => setModal({ mode: 'create' })}
-          disabled={base == null}
-          className="v2-btn v2-btn-primary pf-btn"
-        >
-          <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {FILTER_POSITIONS.map(({ pos: p, label }) => (
+              <button
+                key={p}
+                onClick={() => setPos(p)}
+                className="pf-chip"
+                style={{
+                  height: 30,
+                  padding: '0 12px',
+                  borderRadius: 'var(--radius-md)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
+                  background: pos === p ? 'var(--action)' : 'var(--bg-2)',
+                  color: pos === p ? 'var(--text-on-dark)' : 'var(--fg-2)',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setModal({ mode: 'create' })}
+            disabled={base == null}
+            className="v2-btn v2-btn-primary pf-btn"
+          >
+            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
+          </button>
+        </div>
       </div>
 
-      {state === 'loading' && <Loading label="Loading entities…" />}
+      {filteredState === 'loading' && <Loading label="Loading entities…" />}
 
-      {state === 'error' && entitiesError && <ErrorState error={entitiesError} onRetry={refetchEntities} />}
+      {filteredState === 'error' && filtered.error && <ErrorState error={filtered.error} onRetry={filtered.run} />}
 
-      {(state === 'idle' || state === 'empty') && (
+      {filteredState === 'idle' && (
         <EmptyState title="No entities yet" message="Add your first business entity to get started." />
       )}
 
-      {state === 'ready' && (
+      {filteredState === 'empty' &&
+        (pos === 'all' ? (
+          <EmptyState title="No entities yet" message="Add your first business entity to get started." />
+        ) : (
+          <EmptyState title="No clients match this filter" message="Try a different status filter." />
+        ))}
+
+      {filteredState === 'ready' && (
         <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div
             className="pf-list-head"
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px 160px', gap: 16, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}
           >
             <span className="label">Company</span>
             <span className="label">Sector</span>
             <span className="label">Status</span>
             <span className="label">Health</span>
+            <span className="label">Action</span>
           </div>
-          {entities.map((e) => {
+          {rows.map((e) => {
             const st = entityStatusStyle(e.status)
             // Join by id (Entity.id === RollupClient.entity_id). null while the rollup is
             // not 'ready' → HealthCell renders a neutral cell (QA finding #1).
             const health = rollupData ? entityHealth(rollupData.clients, e.id) : null
+            const action = archiveActionFor(e, activeEntityId, armedId === e.id)
             return (
               <div
                 key={e.id}
                 onClick={() => setModal({ mode: 'edit', entity: e })}
                 className="pf-row pf-list-row"
-                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px 160px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                   <span style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--radius-input)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
@@ -173,6 +273,22 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                   </span>
                 </span>
                 <HealthCell health={health} />
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation() // the row's own onClick opens the edit modal (AC #6)
+                      void handleArchiveClick(e, action)
+                    }}
+                    disabled={archivingId === e.id}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={{ height: 28, padding: '0 10px', fontSize: 12 }}
+                  >
+                    {action.label}
+                  </button>
+                  {action.notice && <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>{action.notice}</span>}
+                  {archiveError?.id === e.id && <span style={{ fontSize: 10.5, color: 'var(--status-red-text)' }}>{archiveError.message}</span>}
+                </span>
               </div>
             )
           })}
@@ -188,6 +304,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           onClose={() => setModal(null)}
           onSuccess={() => {
             refetchEntities()
+            filtered.run()
             setModal(null)
           }}
         />

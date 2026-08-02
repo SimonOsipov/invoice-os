@@ -5,13 +5,12 @@
 // role/exact-text/CSS-class, the same idiom day30.spec.ts/topology.spec.ts already used
 // for this surface before this story split them out.
 //
-// OFFBOARD UI IS OUT OF SCOPE ([gap-2-edit-covered / offboard-deferred]): EntityFormModal's
-// edit mode ships only Cancel/Save (no archive/offboard button -- grep-verified against
-// EntityFormModal.tsx). offboardEntity() (../api/client, POST .../offboard) is used below
-// ONLY as an API-seam seed to produce an ARCHIVED row for the status-pill read -- it is
-// never exercised through the UI. Building an offboard control is production UI, which is
-// Out of Scope for this test-and-docs-only story.
-import { test, expect, type Page } from '@playwright/test'
+// Archive/restore via the per-row action is now in scope (BUG-01-12): ClientsView's
+// fifth column exercises offboardEntity/onboardEntity through the UI (arm-then-confirm).
+// offboardEntity() (../api/client) is ALSO still used, as before, as a pure API-seam seed
+// by the status-pill/filter specs below, and additionally as an out-of-band race tool by
+// the 409 spec.
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, offboardEntity, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { APP_URL, FIRM_PERSONA } from './targets'
@@ -47,6 +46,22 @@ async function signInFirm(page: Page): Promise<void> {
 // (Day-60 arc). Extracted here since every test in this file drives Clients.
 async function goToClients(page: Page): Promise<void> {
   await page.getByRole('button', { name: /Clients/ }).click()
+}
+
+// selectEntity(): a local copy of persona-surfaces.spec.ts's own helper of the same name
+// (that file exports nothing -- spec files don't import each other's module graph, see
+// this file's own precedent above for badInvoiceFields). Opens the firm workspace switcher
+// and picks the named company, making it the currently-open workspace.
+async function selectEntity(page: Page, entityName: string): Promise<void> {
+  await page.getByTestId('company-switcher').click()
+  await page.getByTestId('company-switcher-option').filter({ hasText: entityName }).click()
+}
+
+// archiveAction(): the per-row archive/restore button (BUG-01-12) -- the row itself has an
+// onClick (edit modal) but no button of its own, so the row's one <button> is unambiguous.
+// Copy is unpinned (executor's call), so this locates structurally, never by label text.
+function archiveAction(row: Locator): Locator {
+  return row.locator('button').first()
 }
 
 // badInvoiceFields(): mirrors invoice-surfaces.spec.ts's own helper of the same name --
@@ -191,13 +206,13 @@ test('status-pill: a fresh active entity and a fresh offboardEntity-archived ent
 
 // Gap 3 (steady-state; the live-update half is covered by invoice-surfaces.spec.ts's Day-60
 // arc). ClientsView.tsx's HealthCell/entityHealth (lib/dashboard.ts:153-158): an entity with
-// zero invoices ever created has no row in the rollup's `clients` (INNER JOIN) -> "no
-// invoices yet"; an entity with exactly one needs_attention invoice -> "1 NEEDS ATTENTION".
+// zero invoices ever created has no row in the rollup's `clients` (INNER JOIN) -> "NO
+// INVOICES YET"; an entity with exactly one needs_attention invoice -> "1 NEEDS ATTENTION".
 // The third health state (ALL CLEAR -- a validated entity with zero violations) is NOT
 // covered here: the story's AC #4 names only these two cases, and invoice-surfaces.spec.ts's
 // Day-60 arc already exercises ALL CLEAR as its own post-fix assertion. Adding it here would
 // be scope creep on a test-and-docs-only subtask.
-test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS ATTENTION"; a fresh entity with no invoices reads "no invoices yet"', async ({
+test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS ATTENTION"; a fresh entity with no invoices reads "NO INVOICES YET"', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -219,7 +234,229 @@ test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS 
   const attnRow = page.locator('.pf-list-row').filter({ hasText: attnEntity.name })
   const emptyRow = page.locator('.pf-list-row').filter({ hasText: emptyEntity.name })
   await expect(attnRow).toContainText('1 NEEDS ATTENTION')
-  await expect(emptyRow).toContainText('no invoices yet')
+  await expect(emptyRow).toContainText('NO INVOICES YET')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Same fresh active + fresh offboardEntity-archived seed as the status-pill test above
+// (no new API helper needed).
+test('status-filter: each position requests its status and renders only those rows', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const activeEntity = await createEntity(token, { name: `M4-14 portfolio filter-active ${Date.now()}`, tin: freshTin() })
+  const archivedEntity = await createEntity(token, { name: `M4-14 portfolio filter-archived ${Date.now()}`, tin: freshTin() })
+  await offboardEntity(token, archivedEntity.id)
+
+  await signInFirm(page)
+  await goToClients(page)
+
+  const activeRow = page.locator('.pf-list-row').filter({ hasText: activeEntity.name })
+  const archivedRow = page.locator('.pf-list-row').filter({ hasText: archivedEntity.name })
+  await expect(activeRow).toBeVisible()
+  await expect(archivedRow).toBeVisible()
+
+  function entitiesRequest(matchesStatus: (status: string | null) => boolean) {
+    return page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        new URL(r.url()).pathname.endsWith('/api/portfolio/v1/entities') &&
+        matchesStatus(new URL(r.url()).searchParams.get('status')),
+    )
+  }
+
+  const activeReq = entitiesRequest((s) => s === 'active')
+  await page.getByRole('button', { name: 'Active' }).click()
+  await activeReq
+  await expect(activeRow).toBeVisible()
+  await expect(archivedRow).not.toBeVisible()
+
+  const archivedReq = entitiesRequest((s) => s === 'archived')
+  await page.getByRole('button', { name: 'Archived' }).click()
+  await archivedReq
+  await expect(archivedRow).toBeVisible()
+  await expect(activeRow).not.toBeVisible()
+
+  const allReq = entitiesRequest((s) => s === null)
+  await page.getByRole('button', { name: 'All' }).click()
+  await allReq
+  await expect(activeRow).toBeVisible()
+  await expect(archivedRow).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Proves the header count equals the rows actually rendered under each position.
+// Structural (rendered-row-count vs. parsed-header-number), not a hardcoded portfolio
+// size, since the dev DB is shared and not reset between spec runs.
+test('status-filter: the header count follows the filter', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const activeEntity = await createEntity(token, { name: `M4-14 portfolio count-active ${Date.now()}`, tin: freshTin() })
+  const archivedEntity = await createEntity(token, { name: `M4-14 portfolio count-archived ${Date.now()}`, tin: freshTin() })
+  await offboardEntity(token, archivedEntity.id)
+
+  await signInFirm(page)
+  await goToClients(page)
+  await expect(page.locator('.pf-list-row').filter({ hasText: activeEntity.name })).toBeVisible()
+
+  async function assertCountMatchesRenderedRows(): Promise<void> {
+    const rowCount = await page.locator('.pf-list-row').count()
+    const headerText = (await page.locator('h1:has-text("Client portfolio") + p').textContent()) ?? ''
+    // First number in the phrase is always the SHOWN count, whether the phrase is
+    // "<N> companies" or the truncated "<N> of <M> companies" form.
+    const match = headerText.match(/(\d+)(?:\s+of\s+\d+)?\s+companies/)
+    expect(match, `header count text did not contain a "<N> companies" phrase: "${headerText}"`).not.toBeNull()
+    expect(Number(match![1]), `header count must equal the ${rowCount} rows actually rendered under this filter`).toBe(rowCount)
+  }
+
+  await assertCountMatchesRenderedRows()
+
+  await page.getByRole('button', { name: 'Active' }).click()
+  await expect(page.locator('.pf-list-row').filter({ hasText: archivedEntity.name })).not.toBeVisible()
+  await assertCountMatchesRenderedRows()
+
+  await page.getByRole('button', { name: 'Archived' }).click()
+  await expect(page.locator('.pf-list-row').filter({ hasText: activeEntity.name })).not.toBeVisible()
+  await assertCountMatchesRenderedRows()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- Archive/restore, per row (BUG-01-12) -------------------------------------------
+
+test('archive-restore: a client can be archived and restored from the row', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M4-14 portfolio archive-restore ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await goToClients(page)
+
+  const row = page.locator('.pf-list-row').filter({ hasText: entity.name })
+  await expect(row).toBeVisible()
+  await expect(row.getByText('ACTIVE', { exact: true })).toBeVisible()
+  const action = archiveAction(row)
+
+  await action.click() // arm
+  const offboardResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/api/portfolio/v1/entities/${entity.id}/offboard`),
+  )
+  await action.click() // confirm
+  await offboardResp
+  await expect(row.getByText('ARCHIVED', { exact: true })).toBeVisible()
+
+  await action.click() // arm
+  const onboardResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/api/portfolio/v1/entities/${entity.id}/onboard`),
+  )
+  await action.click() // confirm
+  await onboardResp
+  await expect(row.getByText('ACTIVE', { exact: true })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// A 409 is not organically reachable through the UI: every successful confirm refetches
+// and flips the row, so the next arm always reads the opposite action. Reached instead by
+// racing an out-of-band API call between this row's arm and confirm clicks, so the UI's
+// own snapshot goes stale before the confirm fires.
+test('archive-restore: a redundant transition surfaces the 409', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M4-14 portfolio archive-409 ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await goToClients(page)
+
+  const row = page.locator('.pf-list-row').filter({ hasText: entity.name })
+  await expect(row).toBeVisible()
+  const action = archiveAction(row)
+
+  await action.click() // arm, through the UI
+
+  // Out-of-band: archive the same entity via the API seam, bypassing this browser.
+  await offboardEntity(token, entity.id)
+
+  const conflictResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'POST' &&
+      new URL(r.url()).pathname.endsWith(`/api/portfolio/v1/entities/${entity.id}/offboard`) &&
+      r.status() === 409,
+  )
+  await action.click() // confirm, on the now-stale row
+  await conflictResp
+
+  await expect(row.getByText('redundant transition')).toBeVisible()
+  // Not reported as changed: the row never refetches on failure, so the pre-race pill stands.
+  await expect(row.getByText('ACTIVE', { exact: true })).toBeVisible()
+
+  // Chromium logs the deliberate 409 network response as a console error; only that one is expected.
+  const unexpectedErrors = errors.filter((e) => !e.includes('status of 409'))
+  expect(unexpectedErrors, `console errors on the app:\n${unexpectedErrors.join('\n')}`).toEqual([])
+})
+
+test('archive-restore: archiving the open client leaves the switcher and the table in agreement', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M4-14 portfolio archive-open ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await goToClients(page)
+  const row = page.locator('.pf-list-row').filter({ hasText: entity.name })
+  await expect(row).toBeVisible()
+  const action = archiveAction(row)
+
+  await action.click() // arm
+  const offboardResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/api/portfolio/v1/entities/${entity.id}/offboard`),
+  )
+  await action.click() // confirm
+  await offboardResp
+
+  await expect(row.getByText('ARCHIVED', { exact: true })).toBeVisible()
+
+  // Still in that workspace -- the switcher trigger keeps naming it, nothing auto-switched.
+  await expect(page.getByTestId('company-switcher')).toContainText(entity.name)
+
+  // The switcher dropdown carries no status pill (Sidebar.tsx) -- "agree" here means it
+  // still LISTS the entity, not that it shows a matching ARCHIVED badge.
+  await page.getByTestId('company-switcher').click()
+  await expect(page.getByTestId('company-switcher-option').filter({ hasText: entity.name })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('archive-restore: the row action does not open the edit modal', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M4-14 portfolio archive-noclick ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await goToClients(page)
+
+  const row = page.locator('.pf-list-row').filter({ hasText: entity.name })
+  await expect(row).toBeVisible()
+  const action = archiveAction(row)
+
+  await action.click() // first click -- must arm, not open the modal
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+
+  // Proves the first click actually armed it (not just "did nothing"): the second click
+  // confirms and fires the offboard POST.
+  const offboardResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/api/portfolio/v1/entities/${entity.id}/offboard`),
+  )
+  await action.click()
+  await offboardResp
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

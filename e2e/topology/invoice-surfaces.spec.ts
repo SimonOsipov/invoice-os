@@ -296,6 +296,41 @@ test('list surface: real rows render with real status badges, and Needs attentio
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// RED (task-332, BUG-01-06, Mode A) -- hasBlockingViolation's disclosure chip doesn't
+// exist yet. Reuses the same blocked/clean fixture shape as the list-surface test above
+// (badInvoiceFields fires exactly one error-severity violation, vat-standard-rate; the
+// invoice stays draft).
+test('register-disclosure: a blocked draft and a clean draft render differently', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-06 disclosure ${Date.now()}`, tin: freshTin() })
+
+  const blockedNumber = `INV-BUG0106-BLOCKED-${Date.now()}`
+  const blocked = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(blockedNumber) })
+  await validateInvoice(token, blocked.id)
+
+  const cleanNumber = `INV-BUG0106-CLEAN-${Date.now()}`
+  const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
+  await validateInvoice(token, clean.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const blockedRow = page.getByTestId('invoice-row').filter({ hasText: blockedNumber })
+  const cleanRow = page.getByTestId('invoice-row').filter({ hasText: cleanNumber })
+  await expect(blockedRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  // AC-1/AC-2: derived from `violations` alone (one error-severity violation here), never
+  // a re-derivation of needs_attention or a status arm.
+  await expect(blockedRow).toContainText(/1 ERROR\b/)
+  await expect(cleanRow).not.toContainText(/\d+ ERRORS?\b/)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('detail surface: violations render against the rule-set version, the fix loop clears them, and status history records both the round trip and the not-a-draft regression', async ({
   page,
 }) => {
@@ -1004,6 +1039,10 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   await expect(page.getByTestId('failed-dead-end')).toBeVisible()
   await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
+  // [failed-no-reason-lands-on-the-detail] (task-332, BUG-01-06): this invoice's
+  // rejection_reasons is [] (API-transitioned straight to failed, never rejected by the
+  // APP) -- the card must say so honestly, not render a silent gap.
+  await expect(page.getByTestId('failed-dead-end')).toContainText(/no reason recorded/i)
   // "no submit control at all": `can_edit` is false for a failed invoice
   // ([gates-on-the-wire], store.go's canEdit/canTransition), so the actions bar (Edit AND
   // Re-validate together) renders nothing at all -- `edit-invoice` itself would be vacuous
@@ -1064,6 +1103,264 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
   await createResp
   await expect(page.getByTestId('invoice-detail'), 'the real detail renders once the 201 lands').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// task-329 (BUG-01-03): the register's own pagination + page-scoped selection. Like every
+// other test() in this file, each builds its OWN fixture (no test.describe.serial / shared
+// module state -- see the M5-09-08 comment above for why).
+//
+// db/seed.dev.sql caps every curated entity under 51 rows (its own documented ceiling), so a
+// >50-row page can only come from a fixture built here, on a fresh entity -- paging through a
+// curated one would rot the page-1 specs earlier in this file. 51 sequential createInvoice
+// round trips against Railway is real wall-clock cost nothing else here pays, so each fixture
+// below is 1 sequential "anchor" invoice, awaited alone, then N invoices via Promise.all.
+// The anchor is always the OLDEST row (`ORDER BY created_at DESC, id DESC`, store.go), so it
+// always sorts onto page 2 regardless of how the concurrent batch ties against itself --
+// which row lands on page 2 is then known ahead of time without 51 sequential awaits.
+// anchorOverrides (task-331, BUG-01-05): mirrors submittableInvoiceFields' own override
+// pattern above -- cleanInvoiceFields' anchor gets a fixed buyer_tin ('87654321-0002'),
+// which the register-search test can't use since it needs a TIN unique to the anchor
+// alone. Optional and additive: both existing callers omit it and are unaffected.
+async function buildAnchoredPage(
+  token: string,
+  entityId: string,
+  bulkCount: number,
+  anchorOverrides?: Partial<ReturnType<typeof cleanInvoiceFields>>,
+): Promise<{ anchorNumber: string; bulk: Awaited<ReturnType<typeof createInvoice>>[] }> {
+  const anchorNumber = `INV-BUG0103-ANCHOR-${Date.now()}`
+  await createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(anchorNumber), ...anchorOverrides })
+  const bulk = await Promise.all(
+    Array.from({ length: bulkCount }, (_, i) =>
+      createInvoice(token, { entity_id: entityId, ...cleanInvoiceFields(`INV-BUG0103-BULK-${i}-${Date.now()}`) }),
+    ),
+  )
+  return { anchorNumber, bulk }
+}
+
+test('register-pagination: the list discloses its true total and the last page is reachable', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-03 page ${Date.now()}`, tin: freshTin() })
+  const { anchorNumber } = await buildAnchoredPage(token, entity.id, 50)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const pager = page.getByTestId('invoices-pager')
+  await expect(pager).toBeVisible()
+  await expect(pager).toContainText('SHOWING 1–50 OF 51')
+  await expect(pager).toContainText('PAGE 1 / 2')
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'the anchor row is the oldest, so it must not be on page 1').toHaveCount(0)
+
+  const page2Resp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('offset') === '50',
+  )
+  await pager.getByRole('button', { name: 'Next →' }).click()
+  await page2Resp
+
+  await expect(pager).toContainText('SHOWING 51–51 OF 51')
+  await expect(pager).toContainText('PAGE 2 / 2')
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'page 2 must render the row that was not reachable on page 1').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('register-selection: select-all is page-scoped and paging clears it', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-03 select ${Date.now()}`, tin: freshTin() })
+  // The anchor is never validated -- it always lands on page 2 (buildAnchoredPage), so
+  // page 2's own selectable-row count is not this test's concern.
+  const { bulk } = await buildAnchoredPage(token, entity.id, 50)
+
+  // All 50 `bulk` rows are strictly newer than the anchor, so ALL of them land on page 1
+  // regardless of how they tie-break against each other -- validating exactly this many
+  // makes page 1's select-all count known ahead of time without depending on row order.
+  const SELECTABLE_COUNT = 12
+  await Promise.all(bulk.slice(0, SELECTABLE_COUNT).map((inv) => validateInvoice(token, inv.id)))
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  await expect(page.getByTestId('invoices-pager')).toBeVisible()
+  await page.getByTestId('invoice-select-all').click()
+  await expect(page.getByTestId('batch-submit-summary'), 'select-all must select only this page\'s selectable rows').toContainText(`${SELECTABLE_COUNT} selected on this page`)
+
+  const page2Resp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('offset') === '50',
+  )
+  await page.getByTestId('invoices-pager').getByRole('button', { name: 'Next →' }).click()
+  await page2Resp
+
+  await expect(page.getByTestId('batch-submit-summary'), 'paging must clear the selection').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('register-search: a term matching only a row past page 1 is found, and the count is the server total', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-05 search ${Date.now()}`, tin: freshTin() })
+  // A TIN unique to the anchor alone -- the 50 bulk rows all keep cleanInvoiceFields' fixed
+  // buyer_tin, so a match on this one can only be the anchor, which buildAnchoredPage always
+  // places on page 2.
+  const searchTin = freshTin()
+  const { anchorNumber } = await buildAnchoredPage(token, entity.id, 50, { buyer_tin: searchTin })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  await expect(page.getByTestId('invoices-pager')).toContainText('OF 51')
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'the anchor is the oldest row, so an unfiltered page 1 must not show it').toHaveCount(0)
+
+  const searchResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('q') === searchTin,
+  )
+  await page.getByTestId('invoice-search-input').fill(searchTin)
+  await page.getByTestId('invoice-search-input').press('Enter')
+  const resp = await searchResp
+  const body = (await resp.json()) as { pagination: { total: number } }
+
+  // The unique TIN can only match the anchor -- proves the server actually narrowed the
+  // set, not just that the pager echoes whatever total it was given (register-pagination
+  // above already covers that half).
+  expect(body.pagination.total, 'the unique buyer TIN must match exactly the anchor row').toBe(1)
+  await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'search must surface the row even though it starts past page 1').toBeVisible()
+  await expect(page.getByTestId('invoices-pager')).toContainText(`OF ${body.pagination.total}`)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// task-334 (BUG-01-08): the Customers screen used to aggregate only the server's DEFAULT
+// (unpaged) page -- limit=50 -- so a client past 50 buyers silently dropped the rest
+// (the real production symptom this fixes: 47 of 256 buyers shown). Deliberately NOT
+// cleanInvoiceFields' shared buyer_tin: each invoice here gets its OWN distinct buyer, so
+// aggregateCustomers produces one row per invoice, never merging two into one.
+function customersFields(invoiceNumber: string, buyerTin: string, buyerName: string) {
+  return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin, buyer_name: buyerName }
+}
+
+test('customers-whole-set: every buyer appears and no KPI cards render', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-08 customers ${Date.now()}`, tin: freshTin() })
+
+  // Mirrors buildAnchoredPage's own anchor idiom above: created FIRST, sequentially, so
+  // `ORDER BY created_at DESC` sorts it OLDEST -- exactly the row a default (unpaged)
+  // listInvoices call used to drop once a client passed 50 buyers.
+  const BULK_COUNT = 50
+  const stamp = Date.now()
+  const anchorName = `BUG-01-08 Anchor Buyer ${stamp}`
+  await createInvoice(token, { entity_id: entity.id, ...customersFields(`INV-BUG0108-ANCHOR-${stamp}`, freshTin(), anchorName) })
+  await Promise.all(
+    Array.from({ length: BULK_COUNT }, (_, i) =>
+      createInvoice(token, { entity_id: entity.id, ...customersFields(`INV-BUG0108-BULK-${i}-${stamp}`, freshTin(), `BUG-01-08 Buyer ${i} ${stamp}`) }),
+    ),
+  )
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.getByRole('button', { name: /Customers/ }).click()
+  await expect(page.getByRole('heading', { name: 'Customers & vendors' })).toBeVisible()
+
+  await expect(
+    page.getByText(anchorName),
+    'a 50-row default-limit fetch would have dropped the oldest buyer -- proves the whole set was fetched',
+  ).toBeVisible()
+  await expect(page.locator('.pf-list-row')).toHaveCount(BULK_COUNT + 1)
+  await expect(page.locator('.pf-grid-4'), 'no KPI card row').toHaveCount(0)
+  await expect(page.getByText('Valid TINs')).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// RED (task-335, BUG-01-09) -- ReportsView shares BUG-01-F's un-paged aggregation defect:
+// it feeds `rows` from a single, un-paged listInvoices call (server default limit 50), so
+// "Invoices in period"/"Top customers by value" undercount past 50. No nav helper and no
+// data-testid exist on this surface yet (goToReports/reportsKpiValue below are this file's
+// own, not shared with goToInvoices/openInvoiceRow -- Reports has none of the row/id hooks
+// those assume).
+async function goToReports(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /Reports/ }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Reports & analytics', exact: true })).toBeVisible()
+}
+
+// The KPI tile row's own markup (ReportsView.tsx): a `<div className="label">` holding the
+// tile's label, sibling to the `.money` value span one level up -- AC #5 keeps this layout
+// unchanged, only the underlying data source moves.
+function reportsKpiValue(page: Page, label: string) {
+  return page.locator(`xpath=//div[@class="label" and normalize-space(text())="${label}"]/parent::div/following-sibling::span[contains(@class,"money")]`)
+}
+
+test('reports-whole-set: the period invoice count covers the whole set', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-09 reports count ${Date.now()}`, tin: freshTin() })
+  const BULK_COUNT = 50
+  await buildAnchoredPage(token, entity.id, BULK_COUNT) // 1 anchor (oldest) + 50 bulk = 51
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToReports(page)
+
+  // RED today: ReportsView's un-paged listInvoices call caps at the server's default page
+  // (50), so a 51-invoice entity under-counts by exactly 1 here.
+  await expect(reportsKpiValue(page, 'Invoices in period'), 'must equal the whole set, not the server default page').toHaveText(String(BULK_COUNT + 1))
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('reports-whole-set: top customers ranks over the whole set', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-09 reports top-cust ${Date.now()}`, tin: freshTin() })
+  const stamp = Date.now()
+  const anchorName = `BUG-01-09 Anchor Buyer ${stamp}`
+  // Fixture design (the one open choice this subtask leaves to its test author): the 50
+  // bulk rows all keep cleanInvoiceFields' shared buyer_tin, so aggregateCustomers collapses
+  // them into ONE bucket totalling 50 x 1075 = 53,750. The anchor gets its OWN distinct
+  // buyer_tin plus a total (60,000) that exceeds that whole summed bucket -- so it can only
+  // head "Top customers by value" once ALL 51 rows, not just the newest 50, feed the
+  // aggregation. The anchor is also the OLDEST row (buildAnchoredPage's own invariant), so
+  // an un-paged, newest-50-only fetch never sees it at all: this fixture fails for the SAME
+  // reason a page-1-only fetch would (missing row), not an incidental tie or rounding
+  // artifact, which is what makes the assertion robust rather than just incidentally true.
+  await buildAnchoredPage(token, entity.id, 50, { buyer_tin: freshTin(), buyer_name: anchorName, total: '60000.00' })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToReports(page)
+
+  const card = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
+  const names = card.locator('span:not(.money):not(.card-title)')
+  await expect(names).not.toHaveCount(0)
+  await expect(names.first(), 'the anchor buyer must head the list once the whole set feeds the aggregation').toHaveText(anchorName)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

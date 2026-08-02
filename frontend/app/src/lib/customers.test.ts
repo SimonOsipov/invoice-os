@@ -142,6 +142,50 @@ describe('aggregateCustomers', () => {
   })
 })
 
+// task-334 (BUG-01-08): aggregateCustomers itself is a plain forEach reduce with no
+// page-size assumption -- this pins that it already handles a whole-set (259-row,
+// 256-buyer) input correctly. The real gap this story fixes is the CALLER only ever
+// handing it a 50-row page (CustomersView.test.tsx covers that).
+describe('aggregateCustomers over a whole two-page set ([customers-aggregate-by-paging])', () => {
+  // 3 buyers appear twice, both occurrences inside the first 50 rows (47 distinct there);
+  // 44 more single-occurrence buyers fill out the first 50; 209 more land past row 50.
+  // 3+44+209 = 256 distinct buyers, 6+44+209 = 259 rows -- mirrors the story's own
+  // measured numbers (a 50-row page reads 47 of 256).
+  function buildWholeSet(): InvoiceRecord[] {
+    const rows: InvoiceRecord[] = []
+    for (let i = 0; i < 3; i++) {
+      const tin = `2000000${i}-0001`
+      rows.push(invoiceRecord({ id: `dup-${i}-a`, buyer_tin: tin, buyer_name: `Dup Buyer ${i}`, total: '100.00' }))
+      rows.push(invoiceRecord({ id: `dup-${i}-b`, buyer_tin: tin, buyer_name: `Dup Buyer ${i}`, total: '100.00' }))
+    }
+    for (let i = 0; i < 44; i++) {
+      rows.push(invoiceRecord({ id: `p1-${i}`, buyer_tin: `3000${String(i).padStart(4, '0')}-0001`, buyer_name: `Page1 Buyer ${i}`, total: '100.00' }))
+    }
+    for (let i = 0; i < 209; i++) {
+      rows.push(invoiceRecord({ id: `p2-${i}`, buyer_tin: `4000${String(i).padStart(4, '0')}-0001`, buyer_name: `Page2 Buyer ${i}`, total: '100.00' }))
+    }
+    return rows
+  }
+
+  it('a 50-row slice undercounts at 47 buyers -- the exact shape a single-page fetch used to see', () => {
+    const slice = buildWholeSet().slice(0, 50)
+    expect(slice).toHaveLength(50)
+    expect(aggregateCustomers(slice)).toHaveLength(47)
+  })
+
+  it('the whole 259-row, 256-buyer set counts every buyer and sums every invoice', () => {
+    const all = buildWholeSet()
+    expect(all).toHaveLength(259)
+
+    const result = aggregateCustomers(all)
+
+    expect(result).toHaveLength(256)
+    const expectedTotal = all.reduce((s, r) => s + Number(r.total), 0)
+    const actualTotal = result.reduce((s, c) => s + c.totalNum, 0)
+    expect(actualTotal).toBe(expectedTotal)
+  })
+})
+
 describe('initials', () => {
   it('takes the first letter of the first two words, uppercased', () => {
     expect(initials('Beta Traders Ltd')).toBe('BT')

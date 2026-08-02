@@ -316,6 +316,8 @@ export interface Invoice {
 export interface ListInvoicesQuery {
   limit?: number
   offset?: number
+  q?: string
+  entity_id?: string
 }
 
 export interface ListInvoicesResponse {
@@ -323,16 +325,16 @@ export interface ListInvoicesResponse {
   pagination: Pagination
 }
 
-// listInvoices(): GET /v1/invoices. Only limit/offset here, mirroring this file's
-// listEntities shape -- this test helper deliberately does NOT expose ListHandler's
-// entity_id/needs_attention query params ([D8]/[entity-id-restored],
-// internal/invoice/handlers.go), since no spec in this package needs them yet. Callers
-// that need to find one particular invoice among a tenant's whole history must page
-// and filter client-side (see api/perf.spec.ts's findInvoiceId).
+// listInvoices(): GET /v1/invoices. q/entity_id added (BUG-01-04) so contract
+// specs can exercise the search predicate through the typed seam, not just
+// limit/offset -- see api/perf.spec.ts's findInvoiceId for the older
+// page-and-filter-client-side workaround this makes unnecessary for q/entity_id.
 export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<ListInvoicesResponse> {
   const params = new URLSearchParams()
   if (query?.limit !== undefined) params.set('limit', String(query.limit))
   if (query?.offset !== undefined) params.set('offset', String(query.offset))
+  if (query?.q !== undefined) params.set('q', query.q)
+  if (query?.entity_id !== undefined) params.set('entity_id', query.entity_id)
   const qs = params.toString()
   return apiFetch<ListInvoicesResponse>(`${apiBase()}/api/invoice/v1/invoices${qs ? `?${qs}` : ''}`, { token })
 }

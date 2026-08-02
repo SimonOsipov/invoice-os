@@ -93,7 +93,7 @@ describe('makeAuthedFetch: AC-5 live-caller 401 integration', () => {
 
     const result = await listEntities(af, base)
 
-    expect(result).toEqual([])
+    expect(result.entities).toEqual([])
     expect(signOutSpy).not.toHaveBeenCalled()
   })
 
@@ -146,7 +146,7 @@ describe('makeAuthedFetch: token-read semantics', () => {
 
     const result = await listEntities(af, base)
 
-    expect(result).toEqual([])
+    expect(result.entities).toEqual([])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
     const headers = new Headers(init?.headers)

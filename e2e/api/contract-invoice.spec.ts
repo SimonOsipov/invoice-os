@@ -36,7 +36,7 @@
 // note); a high `offset` for empty-state (the shared dev tenant already
 // carries invoices from other specs, so there is no truly empty list).
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, validateInvoice, rawFetch, PERSONAS, type Entity } from './client'
+import { login, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -172,6 +172,42 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`)
       assertErrorEnvelope(res, 401, 'read no auth')
     })
+
+    // OPEN DISCREPANCY (task-332, BUG-01-06): the story recorded a seeded failed invoice
+    // (DEMO-2026-1004) as rejection_reasons: null off the LIVE API, even though its seed
+    // row (db/seed.dev.sql) literally writes '[]' and the column is `jsonb NOT NULL
+    // DEFAULT '[]'`. Both can be true if internal/invoice/invoice.go's Violations/
+    // RejectionReasons (json.RawMessage) ever reach marshal as a Go nil -- a nil
+    // json.RawMessage encodes to JSON `null`, not `[]`. rawFetch's parsed body (not the
+    // typed client, which never normalizes either key) is the only way to see the wire
+    // honestly. Allowed to fail at the deploy gate -- that would be a real finding in the
+    // Go serialization, not a broken test (the underlying cause is Out of Scope here).
+    test('a failed invoice\'s rejection_reasons and violations come back as arrays, never null', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-R-FAILED-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'queued' },
+      })
+      const failedRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'failed' },
+      })
+      expect(failedRes.status, 'queued -> failed should return 200').toBe(200)
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(res.status).toBe(200)
+      const body = res.body as Record<string, unknown>
+      expect(body.status, 'the fixture should now be failed').toBe('failed')
+      expect(Array.isArray(body.rejection_reasons), `rejection_reasons was ${JSON.stringify(body.rejection_reasons)}, not an array`).toBe(true)
+      expect(Array.isArray(body.violations), `violations was ${JSON.stringify(body.violations)}, not an array`).toBe(true)
+    })
   })
 
   test.describe('list', () => {
@@ -236,6 +272,37 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const pagination = body.pagination as Record<string, unknown>
       expect(typeof pagination.total, 'pagination.total should be numeric').toBe('number')
       expect(pagination.offset, 'pagination.offset should echo the requested high offset').toBe(100000000)
+    })
+
+    test('search-contract: q matches buyer and supplier TIN through the gateway', async () => {
+      // Uses the typed listInvoices() helper deliberately (not rawFetch like the rest
+      // of this block) -- widening ListInvoicesQuery only proves anything if something
+      // calls it through the gateway.
+      const buyerTin = freshTin()
+      const buyerMatch = await createInvoice(token, {
+        entity_id: entity.id,
+        invoice_number: `INV-L-${freshTin()}`,
+        buyer_tin: buyerTin,
+      })
+      const buyerRes = await listInvoices(token, { q: buyerTin })
+      expect(buyerRes.invoices.some((inv) => inv.id === buyerMatch.id), 'q should match the invoice by buyer_tin').toBe(true)
+      expect(buyerRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
+
+      // [supplier-from-entity] (internal/invoice/store.go's Store.Create, INVCR-01-17):
+      // supplier_tin is ALWAYS derived from the entity, overriding whatever the caller
+      // sends -- so a caller-supplied supplier_tin is never actually stored. This half
+      // needs its own fresh entity (one invoice under it, for a clean total) and must
+      // search the STORED value, read back off the create response.
+      const supplierEntityTin = freshTin()
+      const supplierEntity = await createEntity(token, { name: `M4-16-02 invoice supplier-tin ${supplierEntityTin}`, tin: supplierEntityTin })
+      const supplierMatch = await createInvoice(token, {
+        entity_id: supplierEntity.id,
+        invoice_number: `INV-L-${freshTin()}`,
+      })
+      const storedSupplierTin = supplierMatch.supplier_tin as string
+      const supplierRes = await listInvoices(token, { q: storedSupplierTin })
+      expect(supplierRes.invoices.some((inv) => inv.id === supplierMatch.id), 'q should match the invoice by supplier_tin').toBe(true)
+      expect(supplierRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
     })
 
     test('list with no auth -> 401 {error: string}', async () => {

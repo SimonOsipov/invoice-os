@@ -2,7 +2,7 @@
 // 1:1 from the prototype's `this.ic(paths, size, sw)` calls in `renderVals()`
 // (Platform.dc.html ~L1269-1304, 1288-1289, 1511).
 
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from './icons'
 
 export const chevDownGlyph = <Icon paths={['m6 9 6 6 6-6']} size={16} />
@@ -47,9 +47,6 @@ export const closeGlyph = <Icon paths={['M18 6 6 18M6 6l12 12']} size={16} strok
 export const backGlyph = <Icon paths={['M19 12H5', 'm12 19-7-7 7-7']} size={14} />
 export const refreshGlyph = <Icon paths={['M21 4v6h-6', 'M3 20v-6h6', 'M3.5 9a9 9 0 0 1 14.9-3.4L21 8', 'M20.5 15a9 9 0 0 1-14.9 3.4L3 16']} size={14} />
 export const warnTriGlyph = <Icon paths={['m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z', 'M12 9v4', 'M12 17h.01']} size={16} />
-// firmModeIcon doubles as the Clients nav glyph (NAV_CLIENTS). The former in-house
-// toggle icon was removed with the firm/in-house switch (workspace is persona-fixed).
-export const firmModeIcon = <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={14} />
 
 // Rules screen: the lock replaces the toggle on every inherited row, and the star
 // heads the "Suggested for you" card (same glyph the Support Console's learned-rules
@@ -65,14 +62,38 @@ export const moreGlyph = <Icon paths={['M12 5h.01', 'M12 12h.01', 'M12 19h.01']}
 
 export type NavDef = { id: 'dashboard' | 'invoices' | 'validation' | 'workflows' | 'rules' | 'clients' | 'approvals' | 'customers' | 'reports' | 'settings'; label: string; glyph: ReactNode }
 
+// Every NAV_* glyph renders at this size; the icon column is sized to fit it with room to
+// spare so label x-offset never depends on which glyph is in play (Sidebar.tsx:238).
+export const NAV_ICON_SIZE = 17
+export const NAV_ICON_COL = 18
+export const navIconColStyle: CSSProperties = {
+  flex: 'none',
+  display: 'inline-flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  width: NAV_ICON_COL,
+  height: NAV_ICON_COL,
+}
+
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
   id: 'invoices',
   label: 'Invoices',
   glyph: <Icon paths={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8M16 17H8']} size={17} />,
 }
-export const NAV_CLIENTS: NavDef = { id: 'clients', label: 'Clients', glyph: firmModeIcon }
-export const NAV_VALIDATION: NavDef = { id: 'validation', label: 'Validation', glyph: shieldGlyph }
+// Former firmModeIcon glyph, inlined at NAV_ICON_SIZE (was its sole consumer, at 14px).
+export const NAV_CLIENTS: NavDef = {
+  id: 'clients',
+  label: 'Clients',
+  glyph: <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={NAV_ICON_SIZE} />,
+}
+// Forked from shieldGlyph at NAV_ICON_SIZE; shieldGlyph itself stays at 16 for its other
+// three consumers ([nav-glyphs-forked-not-resized]).
+export const NAV_VALIDATION: NavDef = {
+  id: 'validation',
+  label: 'Validation',
+  glyph: <Icon paths={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z', 'm9 12 2 2 4-4']} size={NAV_ICON_SIZE} />,
+}
 // git-branch. The approval-policy builder — the prototype's own Workflows glyph,
 // carried over unchanged so the two surfaces read as the same screen.
 export const NAV_WORKFLOWS: NavDef = {

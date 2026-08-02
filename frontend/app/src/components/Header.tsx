@@ -4,7 +4,10 @@
 // deliberately adopted here in place of the prototype's single toggling pill so
 // both consoles state the environment the same way.
 
-import { plusGlyph, searchGlyph } from '../glyphs'
+import { useState } from 'react'
+
+import { crossGlyph, plusGlyph, searchGlyph } from '../glyphs'
+import { clampFilterText } from '../lib/invoices'
 import type { PlatformCtx, View } from '../types'
 
 const CRUMB_MAP: Record<View, string> = {
@@ -51,6 +54,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
   const { active, view, sandbox } = ctx
   const crumb = CRUMB_MAP[view] || 'Overview'
   const sbx = segStyle(sandbox, 'sandbox')
+  const [query, setQuery] = useState('')
 
   return (
     <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'oklch(98.5% .008 85 / .82)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
@@ -62,10 +66,40 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
         <span style={{ fontSize: 14, fontWeight: 600 }}>{crumb}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div className="pf-header-search" style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', background: 'var(--bg-2)', width: 240 }}>
-          <span style={{ color: 'var(--fg-3)' }}>{searchGlyph}</span>
-          <span style={{ fontSize: 13, color: 'var(--fg-4)' }}>Search invoices, TINs…</span>
-        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            ctx.setInvoiceQuery(clampFilterText(query))
+            ctx.nav('invoices')
+          }}
+          className="pf-header-search"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', background: 'var(--bg-2)', width: 240 }}
+        >
+          <span style={{ color: 'var(--fg-3)', display: 'inline-flex' }}>{searchGlyph}</span>
+          <input
+            type="text"
+            data-testid="invoice-search-input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            maxLength={200}
+            placeholder="Search invoices, TINs…"
+            style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-1)' }}
+          />
+          {query !== '' && (
+            <button
+              type="button"
+              data-testid="invoice-search-clear"
+              onClick={() => {
+                setQuery('')
+                ctx.setInvoiceQuery('')
+              }}
+              aria-label="Clear search"
+              style={{ display: 'inline-flex', alignItems: 'center', border: 0, padding: 0, background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer' }}
+            >
+              {crossGlyph}
+            </button>
+          )}
+        </form>
         {/* Sandbox / Live switch — segment heights (28 + 2px padding + 1px border = 34)
             keep the control flush with the search box and "New invoice" beside it. */}
         <div data-testid="env-pill" style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: `1px solid ${sandbox ? 'var(--status-amber-border)' : 'var(--status-green-border)'}`, borderRadius: 'var(--radius-md)', padding: 2 }}>

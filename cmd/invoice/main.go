@@ -46,12 +46,13 @@ func main() {
 
 	// The five DOCUMENT_* variables are required, and the store is built here so
 	// an unusable object-storage configuration fails at boot rather than on the
-	// first upload. DOC-01-04 mounts the document routes over it.
+	// first upload.
 	docCfg, err := document.ConfigFromEnv()
 	if err != nil {
 		fatal(app.Logger, "invoice: %v", err)
 	}
-	if _, err := document.NewS3Store(docCfg, nil); err != nil {
+	docObjects, err := document.NewS3Store(docCfg, nil)
+	if err != nil {
 		fatal(app.Logger, "invoice: document store: %v", err)
 	}
 
@@ -133,6 +134,12 @@ func main() {
 	// instead. Its literal /preview sibling above is unaffected by
 	// registration order (ServeMux resolves by specificity).
 	app.Mux.HandleFunc("GET /v1/imports/{id}", importer.GetHandler(impStore.GetBatch, app.Logger))
+
+	// GET /v1/documents/{id} -- the source-document download (DOC-01-05). Bytes are
+	// proxied through the service after an RLS-scoped row lookup rather than handed
+	// out as a presigned URL, so every read is authorised and audited.
+	docSvc := document.NewService(document.NewStore(pool), docObjects)
+	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.Open, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this

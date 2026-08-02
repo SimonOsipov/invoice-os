@@ -57,6 +57,10 @@ const EXPECTED_NAV_ONLY = new Set<string>([
 // failure here names the AC rather than a bare set difference; (2) it becomes load-bearing
 // the day a third grade lands. Do not read this comment, or row 17 below, as claiming this
 // is an independent check of anything G6a/row 16 don't already guarantee.
+//
+// A FIXED floor at those ACs, never a census of `drives` cells: firm x {Customers, Reports,
+// Settings} were each promoted out of EXPECTED_NAV_ONLY afterwards and stay absent here on
+// purpose -- row 16's set equality is what pins their grade.
 const EXPECTED_DRIVES_MIN = new Set<string>([
   'inhouse:NAV_DASHBOARD',
   'inhouse:NAV_INVOICES',
@@ -702,7 +706,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     }
 
     const notDriven = [...EXPECTED_DRIVES_MIN].filter((key) => !actualDrives.has(key))
-    expect(notDriven, `must be graded drives (Core AC 2/3/4): ${notDriven.join(', ')}`).toEqual([])
+    expect(notDriven, `the Core AC 2/3/4 floor requires drives: ${notDriven.join(', ')}`).toEqual([])
   })
 
   it('row 18 (G6c) -- the coverage map admits no third grade', () => {

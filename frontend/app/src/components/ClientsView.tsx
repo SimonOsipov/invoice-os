@@ -8,7 +8,7 @@
 // M4-10-03: a second, independent rollup fetch drives a per-row needs-attention health
 // pill, joined to the entity by id — restoring a client-health column now that a live
 // source (the 06 rollup) exists. The pill is computed ONLY when the rollup fetch is
-// 'ready'; loading/error/idle renders a neutral cell, never a false "no invoices yet".
+// 'ready'; loading/error/idle renders a neutral cell, never a false "NO INVOICES YET".
 //
 // [entity-picker]: ctx.entities/refetchEntities remain the ONE fetch shared with the
 // workspace switcher (Sidebar) and CreateUpload's entity picker (lifted to App.tsx). The
@@ -58,10 +58,10 @@ function initials(name: string): string {
 // text,label}, same shape as portfolio.ts entityStatusStyle), reusing the existing
 // --status-* token families so the health pill sits beside the lifecycle pill without
 // forking the palette. Only called on a non-null (ready) health value.
-function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: string; label: string } {
+export function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: string; label: string } {
   switch (h.kind) {
     case 'no-invoices':
-      return { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'no invoices yet' }
+      return { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'NO INVOICES YET' }
     case 'needs-attention':
       return {
         bg: 'var(--status-red-bg)',
@@ -75,7 +75,7 @@ function healthPillStyle(h: EntityHealth): { bg: string; border: string; text: s
 }
 
 // One portfolio-row health cell. `health === null` is the not-ready window (rollup still
-// loading/error/idle) → a neutral em-dash, NOT "no invoices yet" (QA finding #1). Renders
+// loading/error/idle) → a neutral em-dash, NOT "NO INVOICES YET" (QA finding #1). Renders
 // a single element either way, so the row grid still sees exactly one Health cell.
 function HealthCell({ health }: { health: EntityHealth | null }) {
   if (health === null) {
@@ -122,7 +122,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   )
   // QA finding #1: read clients ONLY when the rollup fetch is 'ready'. On every other
   // status asyncReducer clears data to null (async-state.ts:51), so `rollupData` stays
-  // null and each row falls back to the neutral cell — NOT a false "no invoices yet"
+  // null and each row falls back to the neutral cell — NOT a false "NO INVOICES YET"
   // (which an unconditional `rollup.data?.clients ?? []` would produce during the fetch).
   const rollupData = rollup.status === 'ready' ? rollup.data : null
 

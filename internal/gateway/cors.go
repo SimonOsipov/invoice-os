@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-// The browser round trip crosses origins: the app SPA (app-development-*.up.railway.app)
-// and the gateway are separate origins, so a fetch to POST /auth/login (JSON body) or
-// GET /api/tenancy/v1/me (Authorization header) is a non-simple request the browser
-// gates behind a CORS preflight. These are the grant this gateway makes — the exact
-// methods and request headers that round trip needs, nothing wider. PATCH is granted
-// for the portfolio entity edit (M3-08, PATCH /api/portfolio/v1/entities/{id}) — the
-// first PATCH caller from the browser.
+// The browser round trip crosses origins: the app SPA and the gateway are separate
+// origins, so a fetch to POST /auth/login (JSON body) or GET /api/tenancy/v1/me
+// (Authorization header) is a non-simple request the browser gates behind a CORS
+// preflight. These are the grant this gateway makes — the exact methods and request
+// headers that round trip needs, nothing wider. PATCH is granted for the portfolio
+// entity edit (M3-08, PATCH /api/portfolio/v1/entities/{id}) — the first PATCH caller
+// from the browser.
 const (
 	corsAllowMethods = "GET, POST, PATCH, OPTIONS"
 	corsAllowHeaders = "Authorization, Content-Type"

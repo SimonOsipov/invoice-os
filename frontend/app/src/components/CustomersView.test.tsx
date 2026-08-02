@@ -159,6 +159,11 @@ describe('CustomersView: whole-set aggregation via fetchAllInvoices (task-334, B
     expect(urlParams(firstUrl).get('offset')).toBe('0')
     expect(urlParams(secondUrl).get('limit')).toBe(String(AGGREGATE_PAGE_SIZE))
     expect(urlParams(secondUrl).get('offset')).toBe(String(AGGREGATE_PAGE_SIZE))
+    // QA (task-334): entity scoping must survive onto every page fetchAllInvoices makes,
+    // not just page 1 -- a page-2+ call that drops entity_id would silently widen to
+    // tenant-wide for every buyer past the first page.
+    expect(urlParams(firstUrl).get('entity_id'), 'page 1 must be scoped to the active entity').toBe('ent-1')
+    expect(urlParams(secondUrl).get('entity_id'), 'page 2 must also be scoped to the active entity, not tenant-wide').toBe('ent-1')
 
     // Every one of the 259 distinct buyers reaches the table -- a naive single-page fetch
     // would render 200 rows, not 259.
@@ -176,13 +181,17 @@ describe('CustomersView: truncation disclosure (task-334, BUG-01-08, [aggregate-
     // 2 page-1 rows + 9 one-row filler pages (pagedFetchMock) = 11.
     pagedFetchMock(2500, firstPage)
 
-    render(<CustomersView ctx={custCtx()} />)
+    const { container } = render(<CustomersView ctx={custCtx()} />)
     await screen.findByText('Alpha Traders')
 
     // New testid contract -- no [aggregate-cap-with-disclosure] UI consumer exists yet.
     const notice = await screen.findByTestId('customers-truncated-notice')
     expect(notice.textContent, 'must name what was actually fetched').toContain('11')
     expect(notice.textContent, 'must name the true set total').toContain('2500')
+    // QA (task-334): the disclosed "fetched" number must equal the rows the table ACTUALLY
+    // aggregated, not a number lifted from elsewhere (e.g. `total`) -- a notice that lies
+    // about what's on screen is worse than no notice at all.
+    expect(container.querySelectorAll('.pf-list-row'), 'fetched=11 must match the actual aggregated row count').toHaveLength(11)
   })
 
   it('an un-truncated fetch discloses nothing', async () => {
@@ -235,5 +244,37 @@ describe('CustomersView: entity switch settles on the new client (task-334, BUG-
     const [, secondUrl] = fetchMock.mock.calls.map((c) => c[0] as string)
     expect(urlParams(secondUrl).get('entity_id'), 'the switch-triggered refetch must be scoped to the new entity').toBe('ent-2')
     expect(urlParams(secondUrl).get('limit'), 'the refetch must go through the aggregate page shape too, not just the mount fetch').toBe(String(AGGREGATE_PAGE_SIZE))
+  })
+})
+
+// QA (task-334, BUG-01-08, Mode B): `fresh` must gate the POPULATED branch (the one that
+// also renders the truncation notice's fetched/total numbers), not just the row array
+// gateByActiveEntity already filters -- this is the exact bug class BUG-01-03 cost two fix
+// cycles. Mutation-verified: dropping `&& fresh` from that condition leaves every render
+// test in this file green (the one-commit stale-envelope transient it guards is
+// unobservable under jsdom -- React flushes the passive effect that nulls `list.data`
+// synchronously inside the same act() as the prop change, so a test can never catch the
+// component mid-render with a NEW activeEntityId and the OLD envelope still attached; see
+// InvoicesList.test.tsx's own identical caveat). A source scan is therefore the only oracle
+// available for this specific regression class.
+describe('CustomersView: `fresh` gates the populated/truncation branch, not just row filtering (task-334, [customers-fresh-gate])', () => {
+  it('the populated render branch requires `fresh` alongside `list.data != null`', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/components/CustomersView.tsx'), 'utf8')
+    expect(src).toMatch(/state === 'ready' && list\.data != null && fresh && customers\.length > 0 && \(/)
+  })
+})
+
+// QA (task-334, BUG-01-08, Mode B): [empty-is-total-zero] requires the SHARED
+// allInvoicesIsEmpty predicate, not a second inline copy of the same rule. Not behaviorally
+// distinguishable at this layer (mutation-verified): AllInvoices.invoices is the whole-set
+// concatenation across every fetched page, so `invoices.length === 0` iff `total === 0`
+// whenever the fetch behaves normally -- an inline `(r) => r.invoices.length === 0` arrow
+// passes every render test in this file unchanged. A source scan is the only oracle that
+// catches the drift [empty-is-total-zero] exists to prevent (a second, later-diverging copy
+// of "empty" for this envelope shape).
+describe('CustomersView: isEmpty is the shared allInvoicesIsEmpty predicate (task-334, [empty-is-total-zero])', () => {
+  it('passes allInvoicesIsEmpty by reference, not a local arrow', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/components/CustomersView.tsx'), 'utf8')
+    expect(src).toMatch(/isEmpty:\s*allInvoicesIsEmpty\b/)
   })
 })

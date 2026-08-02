@@ -69,6 +69,7 @@ import type { Session } from '../auth'
 import type { AuthedFetch } from './portfolio'
 
 export interface ImportPreview {
+  document_id: string // the stored source document; createImport sends this instead of the bytes
   format: string
   delimiter: string | null // JSON null for xlsx
   encoding: string | null // JSON null for xlsx
@@ -161,7 +162,7 @@ export interface ImportAuth {
 }
 
 export interface CreateImportRequest {
-  file: File
+  documentId: string
   entityId: string
   mapping: Record<string, string> // already null-stripped by toImportMapping (M4-08-03)
 }
@@ -279,7 +280,13 @@ export async function previewImport(
   form.append('file', file)
   // Preview emits no phases and needs no normalization — PRV-08 guarantees its
   // columns/sample_rows are arrays, and delimiter/encoding are genuinely nullable.
-  return (await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports/preview', form, null, xhrCtor)) as ImportPreview
+  const raw = (await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports/preview', form, null, xhrCtor)) as ImportPreview | null
+  // The one validated field: an absent id would reach createImport's FormData as the
+  // string "undefined" and 400 at the END of a run instead of naming this file now.
+  if (!raw || !raw.document_id) {
+    throw new ApiError('malformed', 'preview response is missing document_id', null, raw)
+  }
+  return raw
 }
 
 export async function createImport(
@@ -292,7 +299,7 @@ export async function createImport(
   const form = new FormData()
   form.append('entity_id', req.entityId)
   form.append('mapping', JSON.stringify(req.mapping))
-  form.append('file', req.file)
+  form.append('document_id', req.documentId)
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)

@@ -252,7 +252,9 @@ func CreateHandler(
 			}
 			return
 		}
-		defer obj.Body.Close()
+		if obj.Body != nil {
+			defer func() { _ = obj.Body.Close() }()
+		}
 
 		// The stored row is what both paths resolve the format from, so preview
 		// and import cannot disagree about the same upload.

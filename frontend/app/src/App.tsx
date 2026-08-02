@@ -12,6 +12,7 @@ import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
+  attachDocumentIds,
   canReadColumnsAll,
   markRunFailed,
   markRunRouted,
@@ -582,6 +583,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
           }
           previewed.push({ fileId: pf.id, preview: result })
         }
+        // Functional form, not the `files` snapshot: a file removed while the previews
+        // were in flight must stay removed, not be resurrected by a stale array.
+        setPickedFiles((cur) => attachDocumentIds(cur, previewed))
         setGroups(groupByLayout(previewed))
         setGroupIndex(0)
         setCreateStep('mapping')
@@ -699,17 +703,22 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     void (async () => {
       try {
         for (const rf of runFiles) {
-          const file = filesSnapshot.find((pf) => pf.id === rf.id)?.file
+          const documentId = filesSnapshot.find((pf) => pf.id === rf.id)?.documentId
           const group = groupOfFile(groupsSnapshot, rf.id)
-          if (!file || !group) {
-            // Should never happen: every picked file is bucketed into a group by
-            // readAllColumns before the Map step (and this function) is reachable at
-            // all. Recorded as a failed outcome rather than throwing, so the loop
-            // keeps going ([partial-success-kept]) instead of leaving the run stuck
-            // 'running' forever with reqInFlight never released.
+          if (!documentId || !group) {
+            // Should never happen: every picked file is bucketed into a group AND given
+            // its stored document's id by readAllColumns before the Map step (and this
+            // function) is reachable at all. Recorded as a failed outcome rather than
+            // throwing, so the loop keeps going ([partial-success-kept]) instead of
+            // leaving the run stuck 'running' forever with reqInFlight never released.
             localRun = runReducer(localRun, {
               type: 'settled',
-              outcome: { kind: 'failed', message: 'no mapping found for this file' },
+              outcome: {
+                kind: 'failed',
+                message: documentId
+                  ? 'no mapping found for this file'
+                  : 'this file was not uploaded — read its columns again',
+              },
             })
             setRun(localRun)
             continue
@@ -720,7 +729,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
             const report = await createImport(
               importAuth,
               base,
-              { file, entityId, mapping: toImportMapping(group.mapping) },
+              { documentId, entityId, mapping: toImportMapping(group.mapping) },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
                 setRun(localRun)

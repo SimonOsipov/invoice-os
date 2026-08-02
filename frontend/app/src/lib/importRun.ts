@@ -17,6 +17,9 @@ export const MAX_RUN_FILES = 5 // [five-file-cap] — Core AC 1: a run accepts a
 export interface PickedFile {
   id: string
   file: File
+  // The stored source document once preview has seen these bytes; null until then. Per
+  // FILE, not per MappingGroup — a group is keyed by column layout and can hold several.
+  documentId: string | null
 }
 
 export interface SelectionResult {
@@ -33,7 +36,7 @@ export function addFiles(current: PickedFile[], incoming: File[]): SelectionResu
   const room = Math.max(0, MAX_RUN_FILES - current.length)
   const accepted = incoming.slice(0, room)
   const dropped = incoming.length - accepted.length
-  const files = [...current, ...accepted.map((file) => ({ id: crypto.randomUUID(), file }))]
+  const files = [...current, ...accepted.map((file) => ({ id: crypto.randomUUID(), file, documentId: null }))]
   return { files, refusal: dropped > 0 ? capRefusal(dropped) : null }
 }
 
@@ -41,6 +44,19 @@ export function addFiles(current: PickedFile[], incoming: File[]): SelectionResu
 // no-op (`filter` simply keeps every entry).
 export function removeFile(current: PickedFile[], id: string): PickedFile[] {
   return current.filter((pf) => pf.id !== id)
+}
+
+// Writes each preview's document id onto its own file, in `files` order, null where no
+// entry matched. Keyed by fileId, NEVER by documentId: byte-identical files legitimately
+// share one document, and keying by it would collapse them into a single entry.
+export function attachDocumentIds(
+  files: PickedFile[],
+  previewed: { fileId: string; preview: ImportPreview }[],
+): PickedFile[] {
+  return files.map((pf) => ({
+    ...pf,
+    documentId: previewed.find((p) => p.fileId === pf.id)?.preview.document_id ?? null,
+  }))
 }
 
 // Sole copy owner of the cap-refusal text — CreateUpload renders whatever this returns
@@ -72,7 +88,7 @@ export function canReadColumnsAll(files: PickedFile[]): boolean {
 // 'settled' off that one call, so this reducer never has to reason about more than one
 // in-flight request at a time.
 import { routeAfterImport } from './reviewBatch'
-import type { ImportReport, UploadPhase } from './importApi'
+import type { ImportPreview, ImportReport, UploadPhase } from './importApi'
 
 // One file's state within a run. 'pending' before its turn; 'uploading' while
 // createImport's onPhase is firing (phase mirrors UploadPhase VERBATIM, no

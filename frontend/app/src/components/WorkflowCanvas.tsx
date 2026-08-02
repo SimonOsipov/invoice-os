@@ -24,13 +24,15 @@ import {
   wfSendGlyph,
   wfTargetGlyph,
   wfTriggerGlyph,
-  type ResolvedLine,
   type WfPending,
 } from './WorkflowParts'
+import type { Resolved, Role } from '../lib/roles'
 import { canDrop, parseLoc, type BranchNode, type ConditionNode, type Loc, type Policy, type RoleKey, type WfNode } from '../lib/workflows'
 
 export type CanvasProps = {
   policy: Policy
+  /** The workspace's approval seats. This component never learns which mode it is in. */
+  roles: readonly Role[]
   selId: string | null
   /** The drag in flight, or the armed step — slots treat both identically. */
   pending: WfPending | null
@@ -48,22 +50,20 @@ export type CanvasProps = {
   onSlotDrop: (loc: Loc, e: DragEvent) => void
   onSlotClick: (loc: Loc) => void
   /**
-   * IN-HOUSE only. `undefined` in firm mode — which is the whole firm-identity guarantee:
-   * with no resolver there is no `res`, so both approval cards below take their pre-existing
-   * branch and this file renders exactly what it rendered before (MEMB-01 §15.2). This
-   * component never imports `lib/members.ts`; `WorkflowBuilder` closes over the roster.
+   * The role resolved to whoever actually holds it, in BOTH modes. This component never
+   * imports `lib/members.ts`; `WorkflowBuilder` closes over the roster and hands down copy.
    */
-  resolve?: (position: RoleKey) => ResolvedLine
+  resolve: (position: RoleKey) => Resolved
 }
 
 /** The resolved sub-line's colour. Non-amber is the tone the sub-line already had. */
-function subColor(res: ResolvedLine | null): string {
-  return res?.amber ? 'var(--status-amber-text)' : 'var(--fg-3)'
+function subColor(res: Resolved | null): string {
+  return res?.warn ? 'var(--status-amber-text)' : 'var(--fg-3)'
 }
 
-/** Non-null ONLY for an approval node in in-house mode. */
-function resolved(api: CanvasProps, node: BranchNode): ResolvedLine | null {
-  return node.type === 'approval' && api.resolve ? api.resolve(node.role) : null
+/** Non-null ONLY for an approval node — nothing else points at a role. */
+function resolved(api: CanvasProps, node: BranchNode): Resolved | null {
+  return node.type === 'approval' ? api.resolve(node.role) : null
 }
 
 export function WorkflowCanvas(api: CanvasProps) {
@@ -181,7 +181,7 @@ function Slot({ api, loc, variant }: { api: CanvasProps; loc: Loc; variant: 'roo
 
 /** The two controls every step carries: arm-for-placement, and delete. */
 function StepActions({ api, node, size }: { api: CanvasProps; node: WfNode; size: number }) {
-  const label = node.type === 'condition' ? ruleText(node) : nodeTitle(node)
+  const label = node.type === 'condition' ? ruleText(node) : nodeTitle(node, api.roles)
   return (
     <>
       <WfIconButton label={`Move ${label}`} glyph={wfTargetGlyph} size={size} pressed={api.armedNodeId === node.id} onClick={() => api.onArmNode(node.id)} />
@@ -209,8 +209,8 @@ function SimpleCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
         <NodeGlyph type={node.type} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{nodeTitle(node)}</div>
-        <div style={{ fontSize: 11.5, color: subColor(res) }}>{nodeSub(node, res?.line)}</div>
+        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{nodeTitle(node, api.roles)}</div>
+        <div style={{ fontSize: 11.5, color: subColor(res) }}>{nodeSub(node, api.roles, res?.text)}</div>
       </div>
       <Badge tone={tone.badgeColor} bg={tone.badgeBg} border={tone.badgeBorder}>
         {tone.badge}
@@ -306,19 +306,16 @@ function MiniCard({ api, node }: { api: CanvasProps; node: BranchNode }) {
       <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 7, background: tone.bg, color: tone.color, display: 'grid', placeItems: 'center' }}>
         <NodeGlyph type={node.type} size={15} />
       </span>
-      {/* The `res === null` branch is this file's original line, moved but not edited — read
-          the two together and firm mode is unchanged by inspection. It cannot simply gain a
-          sibling: the title's typography sits ON the flex child, so a sub-line nested inside
-          it would inherit 12/600. In-house therefore lifts `flex`/`minWidth` onto a wrapper
-          and re-states the title's own type. 10.5/1.3 is the palette tile's sub-line
-          (WorkflowBuilder.tsx:245) — the app's other 10.5px sub-line under a compact title. */}
+      {/* Only an approval step carries a sub-line here. The title's typography sits ON the
+          flex child, so the two-line form lifts `flex`/`minWidth` onto a wrapper and re-states
+          it; 10.5/1.3 is the palette tile's sub-line. */}
       {res ? (
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node)}</div>
-          <div style={{ fontSize: 10.5, lineHeight: 1.3, marginTop: 1, color: subColor(res) }}>{nodeSub(node, res.line)}</div>
+          <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node, api.roles)}</div>
+          <div style={{ fontSize: 10.5, lineHeight: 1.3, marginTop: 1, color: subColor(res) }}>{nodeSub(node, api.roles, res.text)}</div>
         </div>
       ) : (
-        <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node)}</div>
+        <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, lineHeight: 1.25 }}>{nodeTitle(node, api.roles)}</div>
       )}
       <StepActions api={api} node={node} size={20} />
     </div>

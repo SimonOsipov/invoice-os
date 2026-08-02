@@ -16,18 +16,8 @@ import { DOC_TYPE_DEFS } from '../data'
 import { chevDownGlyph } from '../glyphs'
 import { Icon } from '../icons'
 import { fmtPlain } from '../lib/format'
-import {
-  findNode,
-  roleOf,
-  ruleText,
-  slaText,
-  WF_ROLES,
-  type BranchNode,
-  type NodeType,
-  type Policy,
-  type PolicyStatus,
-  type WfDocType,
-} from '../lib/workflows'
+import { roleOf, type Role } from '../lib/roles'
+import { findNode, ruleText, slaText, type BranchNode, type NodeType, type Policy, type PolicyStatus, type WfDocType } from '../lib/workflows'
 
 /**
  * What the builder is currently about to place: either a fresh block from the palette
@@ -83,33 +73,21 @@ export const NODE_TONE: Record<NodeType, NodeTone> = {
   autoapprove: { bg: 'var(--status-green-bg)', color: 'var(--status-green-text)', badge: 'AUTO', badgeBg: 'var(--status-green-bg)', badgeBorder: 'var(--status-green-border)', badgeColor: 'var(--status-green-text)' },
 }
 
-export function nodeTitle(n: BranchNode): string {
-  if (n.type === 'approval') return `${roleOf(n.role).title} must approve`
+// The workspace's roles arrive as an argument, never as a module constant: the two modes
+// staff different lists, and these four stay pure and node-testable.
+export function nodeTitle(n: BranchNode, roles: readonly Role[]): string {
+  if (n.type === 'approval') return `${roleOf(roles, n.role).title} must approve`
   if (n.type === 'notify') return `Notify ${n.target}`
   return 'Auto-approve'
 }
 
 /**
- * A workflow role already resolved to a person AND already worded for the surface that asked
- * — the canvas and the inspector phrase the same resolution differently. The tone travels
- * with the copy because both come from one `roles.ts` `Resolved` the components never see:
- * `lib/roles.ts` is barred from the canvas and the inspector, so `WorkflowBuilder` renders
- * the string and hands it down. `amber` is true for "nobody holds this role", "the only
- * holder is suspended" and "the role is gone" alike.
+ * `approvalLine` is the role already resolved to a person — `WorkflowBuilder` renders it,
+ * because only it may reach for the roster. Without one the role's own desc stands in, and a
+ * deleted role's is empty, which is why the join filters rather than emitting a leading ' · '.
  */
-export type ResolvedLine = { line: string; amber: boolean }
-
-/**
- * `approvalLine` REPLACES the abstract role line ("Finance") with a resolved person, and is
- * passed only in in-house mode. Called with one argument the output is byte-identical to
- * before, which is what keeps firm-mode cards unchanged.
- */
-export function nodeSub(n: BranchNode, approvalLine?: string): string {
-  if (n.type === 'approval') {
-    // roleOf's unknown-key fallback carries an empty line; joining unconditionally
-    // would render a leading " · " on a card whose role went missing.
-    return [approvalLine ?? roleOf(n.role).line, slaText(n.sla)].filter(Boolean).join(' · ')
-  }
+export function nodeSub(n: BranchNode, roles: readonly Role[], approvalLine?: string): string {
+  if (n.type === 'approval') return [approvalLine ?? roleOf(roles, n.role).desc, slaText(n.sla)].filter(Boolean).join(' · ')
   if (n.type === 'notify') return `Watcher · ${n.channel}`
   return 'Clears without manual sign-off'
 }
@@ -119,12 +97,12 @@ export { ruleText }
 
 // The simulator's rail is 320px wide at 12.5px, so its rows drop the " must approve"
 // suffix the canvas cards carry and lean on the mono sub-line for the rest.
-export function simTitle(n: BranchNode): string {
-  return n.type === 'approval' ? roleOf(n.role).title : nodeTitle(n)
+export function simTitle(n: BranchNode, roles: readonly Role[]): string {
+  return n.type === 'approval' ? roleOf(roles, n.role).title : nodeTitle(n, roles)
 }
 
-export function simSub(n: BranchNode): string {
-  if (n.type === 'approval') return roleOf(n.role).line.toUpperCase()
+export function simSub(n: BranchNode, roles: readonly Role[], approvalLine?: string): string {
+  if (n.type === 'approval') return (approvalLine ?? roleOf(roles, n.role).desc).toUpperCase()
   if (n.type === 'notify') return n.channel.toUpperCase()
   return 'NO SIGN-OFF NEEDED'
 }
@@ -135,7 +113,16 @@ export function simSub(n: BranchNode): string {
 
 export type WfOption = { value: string; label: string }
 
-export const ROLE_OPTIONS: WfOption[] = WF_ROLES.map((r) => ({ value: r.key, label: `${r.title} · ${r.line}` }))
+/**
+ * Titles alone — no desc suffix. A stored key naming no role is PREPENDED as `Deleted role`,
+ * or the select would render blank on a step whose role was deleted (`inhouseNotifyTargets`'
+ * hazard, and its falsy guard: `''` is "no approval step selected").
+ */
+export function roleOptions(roles: readonly Role[], current: string): WfOption[] {
+  const opts = roles.map((r) => ({ value: r.key, label: r.title }))
+  const role = roleOf(roles, current)
+  return current && role.deleted ? [{ value: current, label: role.title }, ...opts] : opts
+}
 
 export const SLA_OPTIONS: WfOption[] = [
   { value: '0', label: 'No deadline' },

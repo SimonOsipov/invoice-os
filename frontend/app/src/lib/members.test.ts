@@ -1279,7 +1279,7 @@ describe('accessRoleLabel (QA40–QA41, §6)', () => {
   })
 
   it('falls back to the raw id for a role this build does not know (QA41)', () => {
-    // The `roleOf` fallback's twin (workflows.ts:39-41): a persisted id from a newer build
+    // The `roleOf` fallback's twin (roles.ts): a persisted id from a newer build
     // must render as something rather than crash the row. Unreachable from the seed, which
     // is exactly why the screenshot gate cannot stand in for this spec.
     expect(accessRoleLabel('auditor' as never)).toBe('auditor')

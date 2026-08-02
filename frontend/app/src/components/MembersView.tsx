@@ -26,7 +26,7 @@ import { MembersTable } from './MembersTable'
 import { WfSelect, type WfOption } from './WorkflowParts'
 import type { PlatformCtx } from '../types'
 
-// A constant, not a derivation — the ROLE_OPTIONS idiom at WorkflowParts.tsx:123.
+// A constant, not a derivation — the SLA_OPTIONS idiom in WorkflowParts.tsx.
 // 'all' is just another option; WfSelect's `value`/`onChange` are plain strings and the
 // caller narrows on the way back, the WorkflowInspector.tsx:78 idiom.
 const ROLE_FILTER_OPTIONS: WfOption[] = [

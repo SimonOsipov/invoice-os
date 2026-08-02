@@ -25,24 +25,6 @@ import { fmt } from './format'
  */
 export type RoleKey = string
 
-export type Role = { key: RoleKey; title: string; line: string }
-
-export const WF_ROLES: readonly Role[] = [
-  { key: 'preparer', title: 'Preparer', line: 'Accounts Payable' },
-  { key: 'line_mgr', title: 'Line Manager', line: 'Requesting dept.' },
-  { key: 'fin_mgr', title: 'Finance Manager', line: 'Finance' },
-  { key: 'controller', title: 'Financial Controller', line: 'Finance' },
-  { key: 'fin_dir', title: 'Finance Director', line: 'Finance' },
-  { key: 'compliance', title: 'Compliance Officer', line: 'Tax & Compliance' },
-  { key: 'cfo', title: 'CFO', line: 'Executive' },
-  { key: 'ceo', title: 'CEO', line: 'Executive' },
-]
-
-/** Unknown key falls back to a generic approver rather than rendering a raw id. */
-export function roleOf(key: string): Role {
-  return WF_ROLES.find((r) => r.key === key) ?? { key: key as RoleKey, title: 'Approver', line: '' }
-}
-
 /**
  * Whole hours, as a STRING — '0' is the sentinel for "no deadline", which is why this
  * is not a number (0 hours and no-deadline would otherwise be the same value).

@@ -86,7 +86,7 @@ export const ACCESS_ROLES: readonly { id: AccessRole; label: string; description
  * the invite modal all want it and none of them may re-case `m.role`, which happens to
  * produce the right string today and diverges silently the first time a label changes.
  *
- * The fallback exists for the same reason `roleOf`'s does (workflows.ts:39-41): a persisted
+ * The fallback exists for the same reason `roleOf`'s does (roles.ts): a persisted
  * id this build does not know must render as SOMETHING rather than crash the row. It is a
  * branch no screenshot can reach, which is exactly why it is spec'd here and not inlined.
  */

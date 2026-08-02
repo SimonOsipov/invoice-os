@@ -10,12 +10,19 @@
 // still says the path was auto-approved even when later steps follow the ✓.
 
 import { NODE_TONE, DOC_OPTIONS, simSub, simTitle, WfAmountInput, WfSelect, WfToggle } from './WorkflowParts'
-import { simulate, type Policy, type SimContext, type WfDocType } from '../lib/workflows'
+import type { Resolved, Role } from '../lib/roles'
+import { simulate, type Policy, type RoleKey, type SimContext, type WfDocType } from '../lib/workflows'
 
-export function WorkflowSimulator({ policy, sim, onSim }: {
+export function WorkflowSimulator({ policy, roles, sim, onSim, resolve }: {
   policy: Policy
+  roles: readonly Role[]
   sim: SimContext
   onSim: (next: SimContext) => void
+  /**
+   * The canvas's prop, same shape: `roles` alone cannot say who holds a seat today, and only
+   * `WorkflowBuilder` may reach for the roster. This component never learns one exists.
+   */
+  resolve: (position: RoleKey) => Resolved
 }) {
   const result = simulate(policy, sim)
   const approvals = result.steps.filter((s) => s.node.type === 'approval').length
@@ -62,6 +69,7 @@ export function WorkflowSimulator({ policy, sim, onSim }: {
                 const n = s.node
                 const isApproval = n.type === 'approval'
                 if (isApproval) approvalSeen += 1
+                const res = n.type === 'approval' ? resolve(n.role) : null
                 const tone = NODE_TONE[n.type]
                 const notLast = i < result.steps.length - 1
                 return (
@@ -79,9 +87,9 @@ export function WorkflowSimulator({ policy, sim, onSim }: {
                       {isApproval ? approvalSeen : n.type === 'autoapprove' ? '✓' : '·'}
                     </span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.2 }}>{simTitle(n)}</div>
-                      <div className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', letterSpacing: '0.03em', marginTop: 2 }}>
-                        {simSub(n)}
+                      <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.2 }}>{simTitle(n, roles)}</div>
+                      <div className="mono" style={{ fontSize: 9.5, color: res?.warn ? 'var(--status-amber-text)' : 'var(--fg-3)', letterSpacing: '0.03em', marginTop: 2 }}>
+                        {simSub(n, roles, res?.text)}
                       </div>
                     </div>
                     {n.type === 'approval' && (

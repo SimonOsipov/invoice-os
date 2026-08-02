@@ -533,3 +533,112 @@ describe('portfolioCountLabel agrees with the rows shown', () => {
     expect(portfolioCountLabelUnderTest(0, 0)).toBe('0 companies')
   })
 })
+
+// --- Archive/restore (BUG-01-12): offboardEntity/onboardEntity + archiveActionFor -----
+// Read off portfolioNS (same index-signature-cast idiom as entityStatusParam above) --
+// none of the three exist in portfolio.ts yet, so a missing export fails as an assertion,
+// never an import/compile error.
+type OffboardOnboardFn = (authedFetch: AuthedFetch, base: string, id: string) => Promise<Entity>
+
+function offboardEntityUnderTest(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  const fn = portfolioNS.offboardEntity as OffboardOnboardFn | undefined
+  expect(fn, 'offboardEntity is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(authedFetch, base, id)
+}
+
+function onboardEntityUnderTest(authedFetch: AuthedFetch, base: string, id: string): Promise<Entity> {
+  const fn = portfolioNS.onboardEntity as OffboardOnboardFn | undefined
+  expect(fn, 'onboardEntity is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(authedFetch, base, id)
+}
+
+interface ArchiveAction {
+  label: string
+  kind: 'offboard' | 'onboard'
+  confirming: boolean
+  notice: string | null
+}
+type ArchiveActionForFn = (entity: Entity, activeEntityId: string | null, armed: boolean) => ArchiveAction
+
+function archiveActionForUnderTest(entity: Entity, activeEntityId: string | null, armed: boolean): ArchiveAction {
+  const fn = portfolioNS.archiveActionFor as ArchiveActionForFn | undefined
+  expect(fn, 'archiveActionFor is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(entity, activeEntityId, armed)
+}
+
+describe('offboardEntity and onboardEntity POST the right paths with no body', () => {
+  it('offboardEntity POSTs .../entities/{id}/offboard, no body', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(activeEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await offboardEntityUnderTest(af, base, 'E')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/portfolio/v1/entities/E/offboard')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+  })
+
+  it('onboardEntity POSTs .../entities/{id}/onboard, no body', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(archivedEntity) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await onboardEntityUnderTest(af, base, 'E')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/portfolio/v1/entities/E/onboard')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+  })
+})
+
+// "unchanged" is proven by REFERENCE, not by re-checking kind/status/message -- a mocked
+// authedFetch rejects with a specific ApiError instance, and the wrapper must propagate
+// that EXACT object (no try/catch to rebuild or reshape it), mirroring updateEntity's own
+// no-try/catch shape (portfolio.ts:111-118).
+describe('offboardEntity/onboardEntity reject with the underlying ApiError unchanged (not swallowed)', () => {
+  it('offboardEntity rejects with the exact same ApiError instance authedFetch rejected with', async () => {
+    const boom = new ApiError('http', 'redundant transition', 409, { error: 'redundant transition' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => offboardEntityUnderTest(af, base, 'e1'))
+
+    expect(caught).toBe(boom)
+  })
+
+  it('onboardEntity rejects with the exact same ApiError instance authedFetch rejected with', async () => {
+    const boom = new ApiError('http', 'redundant transition', 409, { error: 'redundant transition' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => onboardEntityUnderTest(af, base, 'e2'))
+
+    expect(caught).toBe(boom)
+  })
+})
+
+describe('archiveActionFor offers archive for active and restore for archived', () => {
+  it("active -> kind:'offboard'; archived -> kind:'onboard'", () => {
+    expect(archiveActionForUnderTest(activeEntity, null, false).kind).toBe('offboard')
+    expect(archiveActionForUnderTest(archivedEntity, null, false).kind).toBe('onboard')
+  })
+})
+
+describe('archiveActionFor discloses the open-client consequence only when armed on the open client', () => {
+  it('armed on the currently-open (active) client -> notice names staying in the workspace', () => {
+    const result = archiveActionForUnderTest(activeEntity, activeEntity.id, true)
+    expect(result.notice).not.toBeNull()
+    expect(result.notice).toMatch(/stay/i)
+  })
+
+  it('the open client but not armed -> notice is null', () => {
+    const result = archiveActionForUnderTest(activeEntity, activeEntity.id, false)
+    expect(result.notice).toBeNull()
+  })
+
+  it('armed, but a different entity than the open one -> notice is null', () => {
+    const result = archiveActionForUnderTest(archivedEntity, activeEntity.id, true)
+    expect(result.notice).toBeNull()
+  })
+})

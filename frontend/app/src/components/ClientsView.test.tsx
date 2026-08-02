@@ -298,3 +298,123 @@ describe("ClientsView: ctx.entities (the switcher's roster) is unchanged by the 
     expect(ctx.entities).toEqual(ALL_ROWS)
   })
 })
+
+// --- Archive/restore row action (BUG-01-12) -----------------------------------------
+// Routes a POST to .../offboard|onboard as the archive action; everything else falls
+// through to the plain entities/rollup responses. `rows` is fixed (no filter-position
+// interplay needed by these tests) -- unlike mockFetch() above, which keys off the
+// request's own status param.
+function isArchiveUrl(url: string): boolean {
+  return /\/(offboard|onboard)$/.test(new URL(url).pathname)
+}
+
+function mockFetchArchiveAware(rows: Entity[], archiveOutcome: { ok: boolean; status: number; body: unknown } = { ok: true, status: 200, body: null }) {
+  const archiveCalls: Array<{ url: string; method: string }> = []
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+    if (isArchiveUrl(url)) {
+      archiveCalls.push({ url, method: init?.method ?? '' })
+      const body = archiveOutcome.ok ? (archiveOutcome.body ?? rows[0]) : archiveOutcome.body
+      return Promise.resolve({ ok: archiveOutcome.ok, status: archiveOutcome.status, json: () => Promise.resolve(body) })
+    }
+    return Promise.resolve(entitiesResponse(rows))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, archiveCalls }
+}
+
+// Only genuine GET .../entities list calls -- excludes rollup AND the offboard/onboard
+// sub-resource POSTs (whose pathname does not end in "/entities"), so a POST firing
+// cannot be miscounted as filtered.run() having refetched the list.
+function entitiesListGetCalls(fetchMock: ReturnType<typeof mockFetchArchiveAware>['fetchMock']): number {
+  return fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
+    if (isRollupUrl(url)) return false
+    if (init?.method && init.method !== 'GET') return false
+    return new URL(url).pathname.endsWith('/entities')
+  }).length
+}
+
+function rowFor(name: string): HTMLElement {
+  return screen.getByText(name).closest('.pf-list-row') as HTMLElement
+}
+
+describe('ClientsView: archive/restore action, per row (BUG-01-12)', () => {
+  it('[archive-arms-then-confirms] arms on first click (no request yet), fires on second (POST offboard)', async () => {
+    const { archiveCalls } = mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+
+    fireEvent.click(action)
+    expect(archiveCalls, 'the first click must only arm -- it must not fire a request').toHaveLength(0)
+
+    fireEvent.click(action)
+    await waitFor(() => expect(archiveCalls).toHaveLength(1))
+    expect(archiveCalls[0].url).toContain('/offboard')
+  })
+
+  it('clicking the action never opens the edit modal', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+    fireEvent.click(action)
+
+    expect(screen.queryByRole('dialog'), 'the action must e.stopPropagation() -- the row-click edit modal must not open').toBeNull()
+  })
+
+  it('on success, both refetchEntities and filtered.run fire (table and switcher stay in agreement)', async () => {
+    const refetchEntities = vi.fn()
+    const { fetchMock } = mockFetchArchiveAware(ACTIVE_ROWS)
+    const ctx = clientsCtx(ACTIVE_ROWS)
+    ctx.refetchEntities = refetchEntities
+    render(<ClientsView ctx={ctx} />)
+    await screen.findByText('Okafor & Partners')
+
+    const entitiesGetsBefore = entitiesListGetCalls(fetchMock)
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm
+
+    await waitFor(() => expect(refetchEntities, 'onSuccess must call ctx.refetchEntities so the switcher follows').toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(entitiesListGetCalls(fetchMock), "onSuccess must also refetch this view's own filtered rows").toBeGreaterThan(entitiesGetsBefore),
+    )
+  })
+
+  it('on a 409, the server message renders inline on the row and the row is not reported as changed', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS, { ok: false, status: 409, body: { error: 'redundant transition' } })
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const row = rowFor('Okafor & Partners')
+    const action = within(row).getByRole('button')
+
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm -> 409
+
+    await within(row).findByText('redundant transition')
+    expect(within(row).getByText('ACTIVE', { exact: true }), 'a failed transition must not flip the row').toBeDefined()
+  })
+
+  // Gap flagged in architecture validation: archiveActionFor's `armed` is two-state (not
+  // bulkPhaseReducer's idle/armed/submitting) -- nothing stops a second confirm click from
+  // re-entering the handler while the first request is still in flight. The component
+  // needs its own in-flight guard.
+  it('a fast double-click on confirm fires exactly one POST', async () => {
+    const { archiveCalls } = mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm #1
+    fireEvent.click(action) // confirm #2, before #1's promise has settled
+
+    expect(archiveCalls, 'a fast double-click on confirm must not fire two POSTs').toHaveLength(1)
+  })
+})

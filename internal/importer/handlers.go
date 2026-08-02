@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -221,7 +222,7 @@ func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapp
 			return
 		}
 
-		res, err := imp(r.Context(), entityID, sanitizeFilename(fh.Filename), mapping, header, rows, dryRun)
+		res, err := imp(r.Context(), entityID, document.SanitizeFilename(fh.Filename), mapping, header, rows, dryRun)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

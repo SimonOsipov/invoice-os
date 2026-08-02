@@ -72,14 +72,15 @@ var DSNRequirements = []DSNRequirement{
 	{"tenancy", "DATABASE_URL", Required, KindDSN},
 	{"portfolio", "DATABASE_URL", Required, KindDSN},
 	{"invoice", "DATABASE_URL", Required, KindDSN},
-	// The five ${{source-documents.*}} references. IfPresent until DOC-01-03
-	// makes cmd/invoice/main.go read them at boot -- Required means "opens a
-	// pool at boot and cannot run without it", which is not true yet.
-	{"invoice", "DOCUMENT_BUCKET", IfPresent, KindOpaque},
-	{"invoice", "DOCUMENT_ENDPOINT", IfPresent, KindOpaque},
-	{"invoice", "DOCUMENT_REGION", IfPresent, KindOpaque},
-	{"invoice", "DOCUMENT_ACCESS_KEY_ID", IfPresent, KindOpaque},
-	{"invoice", "DOCUMENT_SECRET_ACCESS_KEY", IfPresent, KindOpaque},
+	// The five ${{source-documents.*}} references. Required since DOC-01-03:
+	// cmd/invoice/main.go calls document.ConfigFromEnv at boot and fatals on any
+	// one of them being unset, so an absent variable is a crash-loop, not a
+	// degraded mode.
+	{"invoice", "DOCUMENT_BUCKET", Required, KindOpaque},
+	{"invoice", "DOCUMENT_ENDPOINT", Required, KindOpaque},
+	{"invoice", "DOCUMENT_REGION", Required, KindOpaque},
+	{"invoice", "DOCUMENT_ACCESS_KEY_ID", Required, KindOpaque},
+	{"invoice", "DOCUMENT_SECRET_ACCESS_KEY", Required, KindOpaque},
 	{"validation", "DATABASE_URL", Required, KindDSN},
 	{"dashboard", "DATABASE_URL", Required, KindDSN},
 	{"submission", "DATABASE_URL", Required, KindDSN},

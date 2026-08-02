@@ -1,4 +1,4 @@
-package importer
+package document
 
 import (
 	"path/filepath"
@@ -6,9 +6,12 @@ import (
 	"unicode/utf8"
 )
 
-// sanitizeFilename coerces a multipart part's declared filename into something
+// SanitizeFilename coerces a multipart part's declared filename into something
 // safe to store in a text column and render in a browser. Never errors: an
 // unusable name yields "" and the store writes SQL NULL.
+//
+// It lives here rather than in internal/importer because both callers now need
+// it and two copies of a security coercion drift apart.
 //  1. strip any path segment the client sent: filepath.Base, then cut at the
 //     last '\' (filepath.Base does not split on backslash on unix; legacy
 //     browsers have sent "C:\Users\x\a.csv" verbatim).
@@ -17,7 +20,7 @@ import (
 //  3. strings.ToValidUTF8(s, ""): an invalid byte sequence is 22021 on insert.
 //  4. truncate to 255 RUNES (not bytes) -- the conventional filesystem limit.
 //  5. strings.TrimSpace; an empty result is "".
-func sanitizeFilename(raw string) string {
+func SanitizeFilename(raw string) string {
 	// 1. strip any path segment the client sent. filepath.Base("") is "." (a
 	// Go footgun, not a real filename), so an empty input is left alone here
 	// and falls out "" naturally via the trim in step 5.

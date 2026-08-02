@@ -10,10 +10,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -40,6 +43,17 @@ func main() {
 	// Readiness: the app-role pool can round-trip to Postgres. Liveness (/healthz)
 	// stays up regardless; /readyz flips to 503 while the DB is unreachable.
 	app.Ready("database", func(ctx context.Context) error { return pool.Ping(ctx) })
+
+	// The five DOCUMENT_* variables are required, and the store is built here so
+	// an unusable object-storage configuration fails at boot rather than on the
+	// first upload. DOC-01-04 mounts the document routes over it.
+	docCfg, err := document.ConfigFromEnv()
+	if err != nil {
+		fatal(app.Logger, "invoice: %v", err)
+	}
+	if _, err := document.NewS3Store(docCfg, nil); err != nil {
+		fatal(app.Logger, "invoice: document store: %v", err)
+	}
 
 	// Stub endpoint from the M2-04 skeleton — kept as the trivial reachability probe
 	// the gateway's proxy tests exercise (/api/invoice/v1/ping). Real endpoints
@@ -137,6 +151,20 @@ func main() {
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("invoice: %v", err)
 	}
+}
+
+// fatal logs a boot failure at ERROR and exits non-zero.
+//
+// It exists because log.Fatalf does NOT do that here: platform.New calls
+// slog.SetDefault (internal/platform/server.go), which routes the standard log
+// package through slog at INFO, so a log.Fatalf boot failure is emitted as
+// {"level":"INFO"} and NOWHERE AT ALL under LOG_LEVEL=warn or error. A
+// fail-closed guard that dies silently leaves an operator with a crash-loop and
+// no cause. Copied from cmd/gateway/main.go; this file's four pre-existing
+// log.Fatalf calls still carry the defect.
+func fatal(logger *slog.Logger, format string, args ...any) {
+	logger.Error(fmt.Sprintf(format, args...))
+	os.Exit(1)
 }
 
 func mustEnv(key string) string {

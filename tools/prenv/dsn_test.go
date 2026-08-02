@@ -59,7 +59,8 @@ func documentVarNames() []string {
 }
 
 // documentMap is healthyMap with the invoice service carrying all five rendered
-// DOCUMENT_* variables.
+// DOCUMENT_* variables. Since the DOC-01-03 flip healthyMap already carries
+// them; kept because it names what the call sites below are about.
 func documentMap() dsnMap {
 	m := healthyMap()
 	for k, v := range documentVars() {
@@ -87,7 +88,7 @@ func requireDocumentRows(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("DSNRequirements carries no invoice row for %v. tools/prenv/dsn.go:51-66 must gain the five DOCUMENT_* rows (IfPresent, KindOpaque); until then this assertion passes for the wrong reason -- the table cannot flag a variable it does not know about.", missing)
+		t.Fatalf("DSNRequirements carries no invoice row for %v. tools/prenv/dsn.go:51-66 must gain the five DOCUMENT_* rows (Required, KindOpaque); until then this assertion passes for the wrong reason -- the table cannot flag a variable it does not know about.", missing)
 	}
 }
 
@@ -100,21 +101,34 @@ func offenderStrings(offenders []Offender) []string {
 	return out
 }
 
-// T-DOC-1. The five DOCUMENT_* rows are `if-present-must-be-valid`, and it
-// takes BOTH directions to pin that -- same shape as T1-6/T1-7 for
-// notifications.DATABASE_URL.
+// T-DOC-1. The five DOCUMENT_* rows are required, and it takes BOTH directions
+// to pin that -- same shape as T1-6/T1-7 for notifications.DATABASE_URL.
 //
-// Absent is clean until DOC-01-03: cmd/invoice/main.go reads none of the five
-// yet, so Required here fails `assert-db-dsns --source-only` on every open PR
-// (dev-env.yml:315-327) before the operator has set the production variables.
-// Present-but-empty is the fork-rendering failure mode itself.
-func TestCheckDSNs_DocumentVarsAreIfPresentMustBeValid(t *testing.T) {
-	t.Run("absent is clean", func(t *testing.T) {
+// Absent is an offender since DOC-01-03: cmd/invoice/main.go fatals at boot on
+// any one of the five being unset, so an absent variable is a crash-loop rather
+// than a degraded mode. Present-but-empty is the fork-rendering failure mode
+// itself.
+func TestCheckDSNs_DocumentVarsAreRequired(t *testing.T) {
+	t.Run("absent is an offender", func(t *testing.T) {
 		requireDocumentRows(t)
 
-		offenders := CheckDSNs(healthyMap())
-		if len(offenders) != 0 {
-			t.Errorf("healthy fleet with no DOCUMENT_* variables reports %v. The five rows are IfPresent in this subtask -- Required is DOC-01-03's job, once cmd/invoice/main.go actually reads them.", offenderStrings(offenders))
+		// Built by walking the table so the expected order matches CheckDSNs'
+		// walk rather than documentVarNames' alphabetical sort.
+		var want []Offender
+		for _, req := range DSNRequirements {
+			if req.Service == "invoice" && strings.HasPrefix(req.Variable, "DOCUMENT_") {
+				want = append(want, Offender{"invoice", req.Variable, DefectMissing})
+			}
+		}
+
+		m := healthyMap()
+		for _, name := range documentVarNames() {
+			delete(m["invoice"], name)
+		}
+
+		offenders := CheckDSNs(m)
+		if !reflect.DeepEqual(offenders, want) {
+			t.Errorf("offenders = %v, want %v: a healthy fleet with no DOCUMENT_* variables must report all five -- cmd/invoice/main.go cannot boot without them.", offenderStrings(offenders), offenderStrings(want))
 		}
 	})
 
@@ -249,11 +263,8 @@ func TestCheckDSNs_OpaqueNeverPrintsValue(t *testing.T) {
 // T-DOC-5. Adding Kind must not move a single DATABASE offender. Every one of
 // the six defects appears exactly once below, in table order, and the whole
 // slice is compared -- so a Kind that leaks into the DSN path (skipping a check
-// it should run) or five DOCUMENT rows landed as Required (five extra
-// offenders, this fixture holds none of them) both fail here.
-//
-// HONESTY NOTE: green today. This is a regression guard for the Kind edit, not
-// a specification of unbuilt behaviour.
+// it should run) fails here. The fixture carries all five healthy DOCUMENT_*
+// values, so no DOCUMENT offender belongs in want.
 func TestCheckDSNs_DSNKindUnchanged(t *testing.T) {
 	m := healthyMap()
 	m["gateway"]["DATABASE_MIGRATION_URL"] = incidentDSN
@@ -304,7 +315,7 @@ func TestDSNRequirementKindIsTheStrictZeroValue(t *testing.T) {
 }
 
 // T-DOC-7. The table itself: exactly five invoice DOCUMENT_* rows, all
-// IfPresent, all one and the same non-zero Kind.
+// Required, all one and the same non-zero Kind.
 func TestDSNRequirementsCoverInvoiceDocumentVars(t *testing.T) {
 	if len(DSNRequirements) == 0 {
 		t.Fatalf("DSNRequirements is empty -- every check below would pass vacuously")
@@ -327,8 +338,8 @@ func TestDSNRequirementsCoverInvoiceDocumentVars(t *testing.T) {
 	}
 
 	for _, req := range documentRows {
-		if req.Severity != IfPresent {
-			t.Errorf("row %s %s has severity %v, want IfPresent. Required means 'the service opens a pool at boot and cannot run without it' (dsn.go:28) and cmd/invoice/main.go reads none of the five until DOC-01-03; shipping Required here reds every open PR via assert-db-dsns --source-only (dev-env.yml:315-327).", req.Service, req.Variable, req.Severity)
+		if req.Severity != Required {
+			t.Errorf("row %s %s has severity %v, want Required. cmd/invoice/main.go calls document.ConfigFromEnv at boot and fatals on any one of the five being unset (DOC-01-03), which is exactly what Required states; downgrading it would let the gate pass an environment the invoice service cannot boot in.", req.Service, req.Variable, req.Severity)
 		}
 	}
 

@@ -42,6 +42,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -436,9 +437,9 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 
 	const rawWithNUL = "a\x00b.csv"
 	const wantStripped = "ab.csv"
-	sanitized := sanitizeFilename(rawWithNUL)
+	sanitized := document.SanitizeFilename(rawWithNUL)
 	if sanitized != wantStripped {
-		t.Fatalf("sanitizeFilename(%q) = %q, want %q", rawWithNUL, sanitized, wantStripped)
+		t.Fatalf("document.SanitizeFilename(%q) = %q, want %q", rawWithNUL, sanitized, wantStripped)
 	}
 
 	id, err := store.CreateBatch(c, entityID, sanitized)
@@ -455,7 +456,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 }
 
 // TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString
-// (BULK-01-8): sanitizeFilename("   ") is "" (whitespace-only is unusable),
+// (BULK-01-8): document.SanitizeFilename("   ") is "" (whitespace-only is unusable),
 // and an unusable filename must persist as SQL NULL, never the empty
 // string -- the empty string would make an unrecorded source
 // indistinguishable from a file genuinely named nothing (migration's own
@@ -463,7 +464,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 // persists as its own value, non-NULL) so a CreateBatch that always writes
 // NULL regardless of input cannot
 // vacuously satisfy this spec. RED: the positive control fails first
-// (sanitizeFilename("   ") stub-returns "   " unchanged, so the very first
+// (document.SanitizeFilename("   ") stub-returns "   " unchanged, so the very first
 // assertion -- sanitized == "" -- already fails before the NULL check is
 // reached).
 func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *testing.T) {
@@ -492,9 +493,9 @@ func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *test
 		t.Fatalf("control filename = %v, want %q (positive control)", normalFilename, "good.csv")
 	}
 
-	sanitized := sanitizeFilename("   ")
+	sanitized := document.SanitizeFilename("   ")
 	if sanitized != "" {
-		t.Fatalf(`sanitizeFilename("   ") = %q, want "" (whitespace-only is unusable)`, sanitized)
+		t.Fatalf(`document.SanitizeFilename("   ") = %q, want "" (whitespace-only is unusable)`, sanitized)
 	}
 
 	unusableID, err := store.CreateBatch(c, entityID, sanitized)

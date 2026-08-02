@@ -641,4 +641,12 @@ describe('archiveActionFor discloses the open-client consequence only when armed
     const result = archiveActionForUnderTest(archivedEntity, activeEntity.id, true)
     expect(result.notice).toBeNull()
   })
+
+  // QA (BUG-01-12, Mode B): the 4th of 4 armed/open combinations. Without this, an XNOR
+  // (armed === isOpen) mutant escapes every other test here -- it only diverges from the
+  // real AND at (armed:false, isOpen:false).
+  it('not armed, and a different entity than the open one -> notice is null', () => {
+    const result = archiveActionForUnderTest(archivedEntity, activeEntity.id, false)
+    expect(result.notice).toBeNull()
+  })
 })

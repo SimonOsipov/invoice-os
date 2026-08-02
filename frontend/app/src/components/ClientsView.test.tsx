@@ -354,6 +354,25 @@ describe('ClientsView: archive/restore action, per row (BUG-01-12)', () => {
     expect(archiveCalls[0].url).toContain('/offboard')
   })
 
+  // QA (BUG-01-12, Mode B): every other test in this block only exercises ACTIVE_ROWS
+  // (offboard). Nothing local proved the archived branch calls onboardEntity rather than
+  // reusing offboardEntity -- only the e2e spec (deploy-gate) restores a row end to end.
+  it('restore on an archived row arms then fires POST onboard, never offboard', async () => {
+    const { archiveCalls } = mockFetchArchiveAware(ARCHIVED_ROWS)
+    render(<ClientsView ctx={clientsCtx(ARCHIVED_ROWS)} />)
+    await screen.findByText('Honeywell Group')
+
+    const action = within(rowFor('Honeywell Group')).getByRole('button')
+
+    fireEvent.click(action) // arm
+    expect(archiveCalls, 'the first click must only arm -- it must not fire a request').toHaveLength(0)
+
+    fireEvent.click(action) // confirm
+    await waitFor(() => expect(archiveCalls).toHaveLength(1))
+    expect(archiveCalls[0].url).toContain('/onboard')
+    expect(archiveCalls[0].url).not.toContain('/offboard')
+  })
+
   it('clicking the action never opens the edit modal', async () => {
     mockFetchArchiveAware(ACTIVE_ROWS)
     render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
@@ -383,6 +402,37 @@ describe('ClientsView: archive/restore action, per row (BUG-01-12)', () => {
     await waitFor(() =>
       expect(entitiesListGetCalls(fetchMock), "onSuccess must also refetch this view's own filtered rows").toBeGreaterThan(entitiesGetsBefore),
     )
+  })
+
+  // QA (BUG-01-12, Mode B): the test above only counts refetch calls -- it never proves
+  // the row's OWN pill actually flips, because mockFetchArchiveAware's GET handler is
+  // stateless (always returns the same fixed `rows`, regardless of any prior archive
+  // call). This stands up a stateful GET so AC #4's pill flip is observable locally, not
+  // provable only at the e2e/deploy-gate layer against a real backend.
+  it('on success, the refetched row itself flips from ACTIVE to ARCHIVED', async () => {
+    let status: 'active' | 'archived' = 'active'
+    const fetchMock = vi.fn((url: string) => {
+      if (isRollupUrl(url)) return Promise.resolve(rollupResponse())
+      if (isArchiveUrl(url)) {
+        status = 'archived'
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(entity({ id: 'a1', status })) })
+      }
+      return Promise.resolve(entitiesResponse([entity({ id: 'a1', name: 'Okafor & Partners', status })]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ClientsView ctx={clientsCtx([entity({ id: 'a1', name: 'Okafor & Partners', status: 'active' })])} />)
+    await screen.findByText('Okafor & Partners')
+
+    const row = rowFor('Okafor & Partners')
+    expect(within(row).getByText('ACTIVE', { exact: true })).toBeDefined()
+
+    const action = within(row).getByRole('button')
+    fireEvent.click(action) // arm
+    fireEvent.click(action) // confirm
+
+    await within(row).findByText('ARCHIVED', { exact: true })
+    expect(within(row).queryByText('ACTIVE', { exact: true }), 'the stale ACTIVE pill must not linger').toBeNull()
   })
 
   it('on a 409, the server message renders inline on the row and the row is not reported as changed', async () => {
@@ -416,5 +466,27 @@ describe('ClientsView: archive/restore action, per row (BUG-01-12)', () => {
     fireEvent.click(action) // confirm #2, before #1's promise has settled
 
     expect(archiveCalls, 'a fast double-click on confirm must not fire two POSTs').toHaveLength(1)
+  })
+
+  // QA (BUG-01-12, Mode B): gridTemplateColumns is two separate literals (header + row) --
+  // nothing else in this file catches the two drifting apart. 5 tracks, header and row
+  // agreeing exactly, so the Action column stays lined up with its own header label.
+  it('the header and every row share the same 5-track grid (the Action column stays aligned)', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    const { container } = render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS)} />)
+    await screen.findByText('Okafor & Partners')
+
+    const head = container.querySelector('.pf-list-head') as HTMLElement
+    const row = rowFor('Okafor & Partners')
+
+    // Tokenize on top-level whitespace only -- a naive \s+ split would cut
+    // "minmax(160px, 1fr)" into two tracks at its own internal comma-space.
+    const tracks = (v: string) => v.trim().match(/(?:[^\s(]|\([^)]*\))+/g) ?? []
+    const headCols = tracks(head.style.gridTemplateColumns)
+    const rowCols = tracks(row.style.gridTemplateColumns)
+
+    expect(headCols, 'header must carry the fifth (Action) track').toHaveLength(5)
+    expect(rowCols, 'row must carry the fifth (Action) track').toHaveLength(5)
+    expect(rowCols).toEqual(headCols)
   })
 })

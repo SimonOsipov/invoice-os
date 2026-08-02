@@ -43,9 +43,10 @@ const LEGAL_GRADES: Grade[] = ['drives', 'nav-only']
 
 // The complete nav-only set. Each entry carries its own one-line reason.
 // firm:NAV_CUSTOMERS left this set in BUG-01-08 -- driven by invoice-surfaces.spec.ts now.
+// firm:NAV_SETTINGS left it with the Roles tab -- driven by topology/roles.spec.ts now, and
+// leaving it here while a firm spec drives the surface would be a false coverage claim.
 const EXPECTED_NAV_ONLY = new Set<string>([
   'firm:NAV_RULES', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
-  'firm:NAV_SETTINGS', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
 ])
 
 // The 8 in-house cells (Core AC 2, including inhouse:NAV_APPROVALS -> Core AC 3 and
@@ -671,7 +672,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
   })
 
   it('row 16 (G6b) -- the nav-only set equals EXPECTED_NAV_ONLY exactly', () => {
-    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(2)
+    expect(EXPECTED_NAV_ONLY.size, 'EXPECTED_NAV_ONLY entries (vacuity guard)').toBe(1)
 
     const actualNavOnly = new Set<string>()
     for (const id of PERSONA_IDS) {

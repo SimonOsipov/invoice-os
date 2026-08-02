@@ -286,16 +286,19 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   // Pins STATIC COPY (SETTINGS_TABS, data.tsx:285-290), not a backend contract --
   // members/connectors/API keys/certificates are all mock. [workflows-included]'s trade-off.
   //
-  // MEMB-01 added Members as a FOURTH tab, first in the strip and the default one Settings
-  // opens on, and rewrote the subtitle to name people. Both strings below moved with it:
-  // the subtitle gained a leading "People," and a trailing full stop, and the tab loop
-  // gained 'Members'. Kept as an exact-copy assertion rather than loosened to a substring --
-  // this surface has no backend to check against, so the copy IS the contract.
+  // Members arrived as a FOURTH tab, first in the strip and the default one Settings opens
+  // on; Roles is the FIFTH, sitting directly after it. The subtitle moved with each of them
+  // -- it gained a leading "People," and then a "roles," -- and the loop gained both labels.
+  // Kept as an exact-copy assertion rather than loosened to a substring: this surface has no
+  // backend to check against, so the copy IS the contract.
+  //
+  // What the Roles tab RENDERS is topology/roles.spec.ts's, in both modes; this loop only
+  // proves it is present for the in-house persona.
   await goTo(page, 'Settings')
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByText('WORKSPACE CONFIGURATION', { exact: true })).toBeVisible()
-  await expect(page.getByText('People, integrations, developer access, and signing certificates.', { exact: true })).toBeVisible()
-  for (const tab of ['Members', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
+  await expect(page.getByText('People, roles, integrations, developer access, and signing certificates.', { exact: true })).toBeVisible()
+  for (const tab of ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
     await expect(page.getByRole('button', { name: tab, exact: true })).toBeVisible()
   }
 

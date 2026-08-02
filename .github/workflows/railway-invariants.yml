@@ -59,3 +59,16 @@ jobs:
       # No continue-on-error, no if: always() — a failure here must fail the run.
       - name: Assert PR Environments are OFF
         run: bash scripts/ci/railway-env.sh assert-project-settings
+
+  # Here, not ci.yml: the `go` job that runs the assert-db-dsns self-test is
+  # paths-filtered on a list without scripts/**, so it would not run on a PR that
+  # only edits this script. This workflow has no paths filter and no draft gate.
+  domain-selection-self-test:
+    name: Domain selection rule self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run select-domain --self-test
+        run: bash scripts/ci/railway-env.sh select-domain --self-test

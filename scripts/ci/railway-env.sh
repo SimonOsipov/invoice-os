@@ -2,6 +2,7 @@
 # scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
 #                            ensure-environment <name>|audit-sealed-variables|
 #                            assert-db-dsns <environment-id|--source-only|--self-test>|
+#                            select-domain [--self-test]|
 #                            reconcile-fork <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            delete-environment <name>|list-environments>
@@ -50,6 +51,9 @@
 # rendered, with a non-empty password. It reads the RENDERED variable map, which is the
 # only place a dangling `${{...}}` reference is visible. `--self-test` runs the identical
 # code path against a map on stdin with no token and no network.
+#
+# `select-domain` applies the one domain-preference rule — custom domain first, Railway-
+# generated as fallback — to a `domains` response on stdin. Pure: no token, no network.
 #
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
@@ -879,6 +883,98 @@ cmd_assert_db_dsns() {
   run_dsn_check "$map" "environment $env_id"
 }
 
+# --- Domain selection --------------------------------------------------------
+#
+# ONE preference rule for both callers: the custom domain if there is one, the
+# Railway-generated one otherwise. Concat-then-head, so hostname and targetPort
+# always come from the SAME element — a chain of `//` fallbacks can take them
+# from different ones. Guarded by `select-domain --self-test`.
+#
+# The guard is `.customDomains != null`, never `has("customDomains")`: `has()`
+# passes a present-but-null value, which then reads as [] and silently prefers
+# the generated domain. Fixture T8 fails on the `has()` form.
+DOMAIN_GUARD_JQ='(.data.domains? // {}) | .customDomains != null'
+DOMAIN_SELECT_JQ='.data.domains
+| ((.customDomains // []) + (.serviceDomains // []))
+| {count: length, domain: (.[0].domain // ""), targetPort: (.[0].targetPort)}'
+
+# select_domain <domains-response-json> is defined by the implementation subtask.
+# Deliberately absent here: this is the RED fixture suite, proven to fail on
+# select_domain's absence before it exists.
+
+# The two helpers increment `failures`, a `local` of domain_self_test (bash
+# dynamic scoping). Neither aborts on a miss: every fixture must report.
+domain_expect_select() {
+  local id="$1" json="$2" want="$3" got rc=0
+  got=$(select_domain "$json" 2>/dev/null) || rc=$?
+  if [ "$rc" != "0" ] || [ "$got" != "$want" ]; then
+    echo "::error::self-test $id FAILED: expected exit 0 and $want; got exit $rc and '$got'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> $got"
+}
+
+domain_expect_refusal() {
+  local id="$1" json="$2" err rc=0
+  err=$(select_domain "$json" 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" = "0" ]; then
+    echo "::error::self-test $id FAILED: expected a refusal, got exit 0"
+    failures=$((failures + 1))
+    return 0
+  fi
+  case "$err" in
+    *"carries no \`customDomains\` list"*) echo "  $id ok -> refused (exit $rc)" ;;
+    *) echo "::error::self-test $id FAILED: refused, but stderr lacks the drift message: $err"
+       failures=$((failures + 1)) ;;
+  esac
+}
+
+domain_self_test() {
+  local failures=0
+
+  # T1 production gateway: custom wins AND carries 8080 despite the generated null.
+  domain_expect_select T1 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"ACTIVE"}],"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}' '{"count":2,"domain":"api.ascomply.com","targetPort":8080}'
+  # T2 fork: generated fallback, null port preserved.
+  domain_expect_select T2 '{"data":{"domains":{"customDomains":[],"serviceDomains":[{"id":"s1","domain":"gateway-pr-9.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}' '{"count":1,"domain":"gateway-pr-9.up.railway.app","targetPort":null}'
+  # T3 after the generated domains are deleted: same answer as T1.
+  domain_expect_select T3 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"ACTIVE"}],"serviceDomains":[]}}}' '{"count":1,"domain":"api.ascomply.com","targetPort":8080}'
+  # T4 no domain of either kind: count 0, exit 0 — the CALLER decides refusal.
+  domain_expect_select T4 '{"data":{"domains":{"customDomains":[],"serviceDomains":[]}}}' '{"count":0,"domain":"","targetPort":null}'
+  # T5 selection set drifted: the key is absent.
+  domain_expect_refusal T5 '{"data":{"domains":{"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}'
+  # T6 domains itself null — must refuse, not raise a jq index error.
+  domain_expect_refusal T6 '{"data":{"domains":null}}'
+  # T7 two custom domains. The second carries a DIFFERENT port so a flipped order
+  # would change targetPort as well as domain.
+  domain_expect_select T7 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"ACTIVE"},{"id":"c2","domain":"legacy.ascomply.com","targetPort":9090,"syncStatus":"ACTIVE"}],"serviceDomains":[]}}}' '{"count":2,"domain":"api.ascomply.com","targetPort":8080}'
+  # T8 present-but-null. The case has("customDomains") passes and then silently
+  # falls back to the generated domain.
+  domain_expect_refusal T8 '{"data":{"domains":{"customDomains":null,"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}'
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::domain selection self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "Domain selection self-test: 8 fixtures passed, no token read, no network call."
+}
+
+# cmd_select_domain [--self-test]
+# No require_env anywhere in this path: the command is pure, so it runs on a fork
+# PR, which receives no secrets. Same ordering discipline as cmd_assert_db_dsns
+# (:837-841), which puts its --self-test branch ahead of require_env.
+cmd_select_domain() {
+  if [ "${1:-}" = "--self-test" ]; then
+    domain_self_test
+    return
+  fi
+  if [ -n "${1:-}" ]; then
+    echo "::error::usage: railway-env.sh select-domain [--self-test]   (domains response JSON on stdin)"
+    exit 2
+  fi
+  select_domain "$(cat)"
+}
+
 # --- Reconcile B: settle -----------------------------------------------------
 #
 # MEASURED: all 13 service instances materialise IMMEDIATELY after
@@ -1452,12 +1548,13 @@ case "${1:-}" in
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
   assert-db-dsns)            cmd_assert_db_dsns "${2:-}" ;;
+  select-domain)             cmd_select_domain "${2:-}" ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

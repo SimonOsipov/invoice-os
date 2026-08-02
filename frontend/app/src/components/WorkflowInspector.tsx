@@ -14,16 +14,15 @@ import {
   FIELD_OPTIONS,
   isDocType,
   OP_OPTIONS,
-  ROLE_OPTIONS,
   ruleText,
   SLA_OPTIONS,
   toOptions,
   WfAmountInput,
   WfSelect,
   WfToggle,
-  type ResolvedLine,
   type WfOption,
 } from './WorkflowParts'
+import type { Resolved } from '../lib/roles'
 import type { CondField, CondOp, NodePatch, RoleKey, Sla, WfDocType, WfNode } from '../lib/workflows'
 
 const TITLES: Record<WfNode['type'], string> = {
@@ -41,8 +40,8 @@ const FIELD_DEFAULT: Record<CondField, number | WfDocType | boolean> = {
 }
 
 // `delegateTo` has no "unset" value a <select> can emit — `WfSelect` is `value: string` — so
-// the default is a SENTINEL option valued `''`, the idiom MemberParts' `NO_POSITION` uses for
-// the same reason. `''` and absent both mean "anyone", which is why nothing maps it back out:
+// the default is a SENTINEL option valued `''`, the idiom the invite modal's `NO_WF_ROLE`
+// uses for the same reason. `''` and absent both mean "anyone", so nothing maps it back out:
 // toggling delegation off and on leaves the key present as `''`, still the default.
 const ANY_REVIEWER = ''
 
@@ -55,24 +54,26 @@ function hintStyle(amber = false) {
   return { marginTop: 6, fontSize: 11.5, lineHeight: 1.45, color: amber ? 'var(--status-amber-text)' : 'var(--fg-3)' } as const
 }
 
-export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates, notifyOptions }: {
+export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates, notifyOptions, roleOptions, onManageRoles }: {
   node: WfNode | null
   onPatch: (id: string, patch: NodePatch) => void
   onRemove: (id: string) => void
   /**
-   * IN-HOUSE only, `undefined` in firm mode — with no resolver there is no resolved line and
-   * no delegate picker, so firm renders exactly what it rendered before (MEMB-01 §15.2).
-   * This component never imports `lib/members.ts`, and never learns which mode it is in.
+   * The role resolved to whoever actually holds it, in BOTH modes. This component never
+   * imports `lib/members.ts`, and never learns which mode it is in.
    */
-  resolve?: (position: RoleKey) => ResolvedLine
-  /** IN-HOUSE only — active members holding the Reviewer access role. */
-  delegates?: string[]
+  resolve: (position: RoleKey) => Resolved
+  /** Active members holding the Reviewer access role, in both modes. */
+  delegates: string[]
   /**
    * ALWAYS passed, because the notify fork has to happen somewhere and it cannot happen here.
    * Firm mode is handed the untouched `TARGET_OPTIONS` object itself, so its five values are
    * identical by identity rather than merely by value.
    */
   notifyOptions: WfOption[]
+  /** The mode's roles, already carrying the selected step's key even when it names none. */
+  roleOptions: WfOption[]
+  onManageRoles: () => void
 }) {
   const card = { background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 16, overflow: 'hidden' } as const
 
@@ -88,9 +89,7 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
   }
 
   const patch = (p: NodePatch) => onPatch(node.id, p)
-  // Null in firm mode for every node kind, so the two approval-panel additions below are
-  // unreachable there and the panel renders its pre-existing three controls unchanged.
-  const res = node.type === 'approval' && resolve ? resolve(node.role) : null
+  const res = node.type === 'approval' ? resolve(node.role) : null
 
   return (
     <div style={card}>
@@ -107,16 +106,26 @@ export function WorkflowInspector({ node, onPatch, onRemove, resolve, delegates,
       </div>
 
       <div style={{ padding: 15 }}>
-        {node.type === 'approval' && (
+        {node.type === 'approval' && res && (
           <>
-            <WfSelect label="Who must approve" value={node.role} options={ROLE_OPTIONS} onChange={(v) => patch({ role: v as RoleKey })} marginBottom={res ? 0 : 14} />
-            {res && <div style={{ ...hintStyle(res.amber), marginBottom: 14 }}>{res.line}</div>}
+            <WfSelect label="Who must approve" value={node.role} options={roleOptions} onChange={(v) => patch({ role: v as RoleKey })} />
+            <div style={{ ...hintStyle(res.warn), display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+              <span>{res.text}</span>
+              <button
+                type="button"
+                onClick={onManageRoles}
+                className="pf-btn"
+                style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', color: 'var(--action)', fontSize: 11.5, fontWeight: 600, fontFamily: 'var(--font-sans)', cursor: 'pointer' }}
+              >
+                Manage roles
+              </button>
+            </div>
             <WfSelect label="Deadline" value={node.sla} options={SLA_OPTIONS} onChange={(v) => patch({ sla: v as Sla })} marginBottom={14} />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '4px 0' }}>
               <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Allow delegation</span>
               <WfToggle on={node.delegate} onToggle={() => patch({ delegate: !node.delegate })} label="Allow delegation" />
             </div>
-            {node.delegate && delegates && (
+            {node.delegate && (
               <div style={{ marginTop: 12 }}>
                 <WfSelect
                   label="Delegate to"

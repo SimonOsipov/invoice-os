@@ -17,15 +17,9 @@ import { useEffect, useState, type DragEvent } from 'react'
 import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
-import { NodeGlyph, NODE_TONE, PolicyStatusPill, TARGET_OPTIONS, toOptions, WfSelect, wfBackGlyph, type ResolvedLine, type WfPending, pendingNodeType } from './WorkflowParts'
-import {
-  canvasApprovalLine,
-  delegateCandidates,
-  inhouseNotifyTargets,
-  inspectorApprovalLine,
-  resolvePosition,
-  type PositionResolution,
-} from '../lib/members'
+import { NodeGlyph, NODE_TONE, PolicyStatusPill, roleOptions, TARGET_OPTIONS, toOptions, WfSelect, wfBackGlyph, type WfPending, pendingNodeType } from './WorkflowParts'
+import { delegateCandidates, inhouseNotifyTargets } from '../lib/members'
+import { inspectorResolve, resolve } from '../lib/roles'
 import {
   appendNode,
   canDrop,
@@ -182,24 +176,21 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const selected = selId ? (findNode(policy, selId)?.node ?? null) : null
   const pending = drag ?? armed
 
-  // --- The in-house resolution seam (MEMB-01 §15.2) -------------------------
+  // --- The resolution seam --------------------------------------------------
   //
-  // This is the ONLY component in the Workflows surface that imports lib/members.ts. The
-  // canvas and the inspector receive already-rendered values, so they never learn a member
-  // list exists and never learn which mode they are in.
+  // This is the ONLY component in the Workflows surface that imports lib/members.ts. The three
+  // panels below receive an already-rendered `Resolved`, so they never learn a member list
+  // exists and never learn which mode they are in.
   //
-  // Firm mode is unchanged BY CONSTRUCTION, not by inspection: `resolve` and `delegates` are
-  // `undefined`, so every branch those two props gate is unreachable, and `notifyOptions` is
-  // the TARGET_OPTIONS object itself — the same reference the inspector used to import, not a
-  // copy of it. Do not "symmetrise" that into `toOptions(TARGET_OPTIONS.map(...))`.
+  // BOTH modes resolve — firm workspaces staff real roles too, so the `inhouse ?` gates that
+  // used to blank `resolve`/`delegates` are gone. `notifyOptions` keeps its fork, and its firm
+  // arm is the TARGET_OPTIONS object itself — the same reference the inspector used to import,
+  // not a copy. Do not "symmetrise" that into `toOptions(TARGET_OPTIONS.map(...))`.
   const inhouse = ctx.mode === 'inhouse'
 
-  // Two closures over one resolution: the tone is shared (`kind !== 'ok'`) but the copy is
-  // not — the canvas says "Ngozi Balogun +1", the inspector "Currently: Ngozi Balogun".
-  const line = (fmt: (r: PositionResolution) => string) => (position: RoleKey): ResolvedLine => {
-    const res = resolvePosition(ctx.members, position)
-    return { line: fmt(res), amber: res.kind !== 'ok' }
-  }
+  // Two closures over one resolution: the tone travels with the copy (`warn`) but the wording
+  // does not — the canvas says "Musa Danjuma +1", the inspector "Currently: Musa Danjuma".
+  const line = (fmt: typeof resolve) => (key: RoleKey) => fmt(ctx.roles, ctx.members, key)
 
   // Per-node by design: a value stored on the SELECTED node stays selectable, so moving the
   // node off it drops it from the list. `''` covers "nothing selected" and "not a notify
@@ -207,6 +198,10 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   const notifyOptions = inhouse
     ? toOptions(inhouseNotifyTargets(ctx.members, selected?.type === 'notify' ? selected.target : ''))
     : TARGET_OPTIONS
+
+  // Same per-node reason as `notifyOptions`: the deleted key the list carries is the SELECTED
+  // step's, so moving off that step drops it again.
+  const roleChoices = roleOptions(ctx.roles, selected?.type === 'approval' ? selected.role : '')
 
   return (
     <>
@@ -288,6 +283,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) 320px', gap: 16, alignItems: 'start' }}>
         <WorkflowCanvas
           policy={policy}
+          roles={ctx.roles}
           selId={selId}
           pending={pending}
           canClickPlace={armed !== null}
@@ -302,7 +298,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
           onSlotLeave={onSlotLeave}
           onSlotDrop={onSlotDrop}
           onSlotClick={onSlotClick}
-          resolve={inhouse ? line(canvasApprovalLine) : undefined}
+          resolve={line(resolve)}
         />
 
         <div style={{ position: 'sticky', top: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -310,11 +306,16 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
             node={selected}
             onPatch={patchNode}
             onRemove={removeNode}
-            resolve={inhouse ? line(inspectorApprovalLine) : undefined}
-            delegates={inhouse ? delegateCandidates(ctx.members) : undefined}
+            resolve={line(inspectorResolve)}
+            delegates={delegateCandidates(ctx.members)}
             notifyOptions={notifyOptions}
+            roleOptions={roleChoices}
+            onManageRoles={() => {
+              ctx.setSettingsTab('roles')
+              ctx.nav('settings')
+            }}
           />
-          <WorkflowSimulator policy={policy} sim={sim} onSim={setSim} />
+          <WorkflowSimulator policy={policy} roles={ctx.roles} sim={sim} onSim={setSim} resolve={line(resolve)} />
         </div>
       </div>
     </>

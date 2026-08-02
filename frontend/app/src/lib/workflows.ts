@@ -19,26 +19,11 @@
 
 import { fmt } from './format'
 
-/** Approver roles, in the order the inspector's role select lists them. */
-export type RoleKey = 'preparer' | 'line_mgr' | 'fin_mgr' | 'controller' | 'fin_dir' | 'compliance' | 'cfo' | 'ceo'
-
-export type Role = { key: RoleKey; title: string; line: string }
-
-export const WF_ROLES: readonly Role[] = [
-  { key: 'preparer', title: 'Preparer', line: 'Accounts Payable' },
-  { key: 'line_mgr', title: 'Line Manager', line: 'Requesting dept.' },
-  { key: 'fin_mgr', title: 'Finance Manager', line: 'Finance' },
-  { key: 'controller', title: 'Financial Controller', line: 'Finance' },
-  { key: 'fin_dir', title: 'Finance Director', line: 'Finance' },
-  { key: 'compliance', title: 'Compliance Officer', line: 'Tax & Compliance' },
-  { key: 'cfo', title: 'CFO', line: 'Executive' },
-  { key: 'ceo', title: 'CEO', line: 'Executive' },
-]
-
-/** Unknown key falls back to a generic approver rather than rendering a raw id. */
-export function roleOf(key: string): Role {
-  return WF_ROLES.find((r) => r.key === key) ?? { key: key as RoleKey, title: 'Approver', line: '' }
-}
+/**
+ * A role's stable key. An ALIAS, not a union: roles are runtime data (lib/roles.ts), and
+ * widening the old eight-literal union leaves every signature below byte-identical.
+ */
+export type RoleKey = string
 
 /**
  * Whole hours, as a STRING — '0' is the sentinel for "no deadline", which is why this
@@ -64,8 +49,8 @@ export type ApprovalNode = {
    * `toEqual` in workflows.test.ts compiling and passing untouched.
    *
    * `''` and ABSENT both mean "Anyone with the Reviewer role" — `WfSelect` is `value: string`
-   * and cannot emit absence, so the default is the empty-string sentinel (the same idiom
-   * MemberParts' `NO_POSITION` uses). Round-tripping the toggle off and on therefore leaves
+   * and cannot emit absence, so the default is the empty-string sentinel (the same idiom the
+   * invite modal's `NO_WF_ROLE` uses). Round-tripping the toggle off and on therefore leaves
    * the key present as `''`, which is the default, not a stored choice.
    */
   delegateTo?: string

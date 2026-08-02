@@ -22,7 +22,6 @@ import {
   renamePolicy,
   replacePolicy,
   rescopePolicy,
-  roleOf,
   ruleText,
   SEED_FIRM_POLICIES,
   SEED_INHOUSE_POLICIES,
@@ -32,7 +31,6 @@ import {
   slaText,
   updateNode,
   WF_OPS,
-  WF_ROLES,
   WF_SCOPE_OPTIONS,
   WF_SLA_OPTIONS,
   type ApprovalNode,
@@ -42,6 +40,7 @@ import {
   type SimContext,
   type WfNode,
 } from './workflows'
+import * as Workflows from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // Every reducer test starts from a fresh clone, never from the frozen seed constants.
@@ -171,20 +170,21 @@ describe('seed integrity — whole-seed invariants (§2, §8.7)', () => {
     expect(new Set(ALL_SEED.map((p) => p.id)).size).toBe(ALL_SEED.length)
   })
 
-  // A seeded role or sla outside the inspector's own option lists would render as the
-  // 'Approver' fallback / a blank select.
-  it('every seeded approval uses a known role and a listed SLA', () => {
-    const roleKeys = WF_ROLES.map((r) => r.key)
-    for (const a of ALL_APPROVALS) {
-      expect(roleKeys).toContain(a.role)
-      expect(WF_SLA_OPTIONS).toContain(a.sla)
-      expect(roleOf(a.role).title).not.toBe('Approver')
-    }
+  // A seeded sla outside the inspector's own option list would render a blank select.
+  // The role-key half of this check now lives in roles.test.ts's per-mode
+  // "every seeded approval step names a role that exists in that mode" (WF_ROLES is gone).
+  it('every seeded approval uses a listed SLA', () => {
+    for (const a of ALL_APPROVALS) expect(WF_SLA_OPTIONS).toContain(a.sla)
   })
+})
 
-  it('roleOf falls back to a generic approver rather than rendering a raw id', () => {
-    expect(roleOf('fin_dir')).toEqual({ key: 'fin_dir', title: 'Finance Director', line: 'Finance' })
-    expect(roleOf('nope')).toEqual({ key: 'nope', title: 'Approver', line: '' })
+describe('AC-1 — workflows.ts no longer exports a role list (Core AC 5)', () => {
+  it('WF_ROLES and roleOf are gone; seedPolicies is unchanged', () => {
+    expect('WF_ROLES' in Workflows).toBe(false)
+    expect('roleOf' in Workflows).toBe(false)
+    // `Role` is a type — no runtime trace to assert; pnpm -r typecheck (AC-11) covers it.
+    expect(seedPolicies().firm.map((p) => p.id)).toEqual(['polF1', 'polF2', 'polF3'])
+    expect(seedPolicies().inhouse.map((p) => p.id)).toEqual(['polH1', 'polH2'])
   })
 })
 

@@ -246,6 +246,7 @@ export const CONNECTOR_TAX_CODES: { code: string; desc: string; rate: string }[]
 // never again leave two places to edit.
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'members', label: 'Members' },
+  { id: 'roles', label: 'Roles' },
   { id: 'connectors', label: 'ERP connectors' },
   { id: 'api', label: 'API & webhooks' },
   { id: 'signing', label: 'Signing & certificates' },

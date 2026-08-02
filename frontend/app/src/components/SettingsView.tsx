@@ -1,4 +1,5 @@
-// Settings — tabbed: Members (the workspace's people — MembersView, MEMB-01), ERP
+// Settings — tabbed: Members (the workspace's people — MembersView, MEMB-01), Roles (the
+// approval seats those people hold — RolesView), ERP
 // connectors (toggle connect/disconnect, plus a per-connector detail view behind Manage),
 // API & webhooks (base URL, keys dimmed by sandbox mode, endpoints, webhooks), and
 // signing & certificates. The last three are ported from Platform.dc.html ~L847-951 +
@@ -32,6 +33,7 @@ import { EntityFormModal } from './EntityFormModal'
 import { FieldMappingModal } from './FieldMappingModal'
 import type { Entity } from '../lib/portfolio'
 import { MembersView } from './MembersView'
+import { RolesView } from './RolesView'
 import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
 
 function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
@@ -73,7 +75,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
           WORKSPACE CONFIGURATION
         </div>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Settings</h1>
-        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>People, integrations, developer access, and signing certificates.</p>
+        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>People, roles, integrations, developer access, and signing certificates.</p>
       </div>
       <div style={{ display: 'flex', gap: 26, borderBottom: '1px solid var(--line-1)', marginBottom: 24 }}>
         {tabs.map((t) => {
@@ -170,6 +172,9 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
       {/* Members */}
       {settingsTab === 'members' && <MembersView ctx={ctx} />}
+
+      {/* Roles */}
+      {settingsTab === 'roles' && <RolesView ctx={ctx} />}
 
       {/* Connector detail — replaces the list while a connector is open */}
       {settingsTab === 'connectors' && openDef && (

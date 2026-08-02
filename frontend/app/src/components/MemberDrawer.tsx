@@ -32,7 +32,6 @@ import { useId, useState } from 'react'
 import { closeGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
-  approvalInvolvement,
   DEPARTMENTS,
   isProtectedAdmin,
   joinedLabel,
@@ -40,14 +39,23 @@ import {
   PROTECTED_ADMIN_NOTE,
   REMOVE_EXPLANATION,
   removeConfirmQuestion,
-  stepsNamedLine,
   SUSPEND_EXPLANATION,
-  SUSPENDED_STEPS_NOTE,
   type AccessRole,
 } from '../lib/members'
+import {
+  drawerRoleHelper,
+  rolesOfMember,
+  stepsForMember,
+  stepsNamedLine,
+  SUSPENDED_STEPS_NOTE,
+} from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
-import { AmberNote, ClientAccessPicker, InitialsChip, MemberStatusPill, PositionFields, RoleCards } from './MemberParts'
+import { AmberNote, ClientAccessPicker, DepartmentField, InitialsChip, MemberStatusPill, RoleCards, WorkflowRolePills } from './MemberParts'
 import type { PlatformCtx } from '../types'
+
+// §4 names this as the affordance, not as prose, so it stays a component constant rather
+// than joining the drawer's copy in lib/roles.ts — MATRIX_HEADING's posture.
+const MANAGE_ROLES = 'Manage roles'
 
 export function MemberDrawer({ ctx, memberId, onClose }: {
   ctx: PlatformCtx
@@ -81,15 +89,14 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
     ? ACCESS_ROLES.filter((r) => r.id !== row.role).map((r) => r.id)
     : undefined
 
-  // BOTH halves of the gate — holding a position, and actually being named in a step — are
-  // `approvalInvolvement`'s, not this component's. It is the rule that stops three shipped
-  // in-house drawers reading "Named in 0 approval steps" (T7.9), and a rule derived here is a
-  // rule no spec can hold (§15.8, and this file's header). `null` means render nothing; the
-  // gate below is that null, never a re-derived count. Gated on the position rather than on
-  // mode — firm rows carry no position at all (members.test.ts:222) — so it is mode-proof.
-  // `ctx.policies` is the CURRENT workspace's set (App.tsx); `seedPolicies()` would never
-  // reflect a Workflows edit.
-  const steps = approvalInvolvement(ctx.policies, row.position)
+  // BOTH halves of the gate — holding a role, and actually being named in a step — are
+  // `stepsForMember`'s, not this component's. It is the rule that stops the drawers of people
+  // whose role no policy names reading "Named in 0 approval steps", and a rule derived here
+  // is a rule no spec can hold (§15.8, and this file's header). `null` means render nothing;
+  // the gate below is that null, never a re-derived count. Both modes, no fork. `ctx.policies`
+  // / `ctx.roles` are the CURRENT workspace's; the seeds would never reflect an edit.
+  const steps = stepsForMember(ctx.policies, ctx.roles, row.id)
+  const heldRoleKeys = rolesOfMember(ctx.roles, row.id).map((r) => r.key)
 
   // §6's rule, and a SEPARATE one from the last-admin lock: your own row has no Remove.
   // Load-bearing rather than cosmetic — `dropMember` is an unguarded pass-through by design
@@ -105,6 +112,16 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
   const suspending = row.status !== 'suspended'
 
   const disabledGhost = { background: 'transparent', borderColor: 'var(--line-1)', color: 'var(--fg-4)', cursor: 'not-allowed' } as const
+
+  // Writes straight through, like every other control here — §8 says each change persists
+  // immediately and there is no Save button. Holders live on the ROLE, so the write funnel is
+  // `saveRole` and the composed row is the role, not the member.
+  function toggleWorkflowRole(key: string) {
+    const role = ctx.roles.find((r) => r.key === key)
+    if (!role) return
+    const members = role.members.includes(memberId) ? role.members.filter((id) => id !== memberId) : [...role.members, memberId]
+    ctx.saveRole({ ...role, members })
+  }
 
   return (
     <>
@@ -184,7 +201,7 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
               </div>
               {/* The one write on this surface that a spread does NOT cover: `{...row}` copies
                   the `clientAccess` REFERENCE, and `replaceMember` does not copy it either
-                  (members.ts:861-863 — its row is caller-built, so the caller owns that copy).
+                  (members.ts — its row is caller-built, so the caller owns that copy).
                   `ClientAccessPicker` emits a fresh array every time, so the row it hands back
                   never shares state with the row it replaced. */}
               <ClientAccessPicker
@@ -195,18 +212,40 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
             </>
           ) : (
             <div style={{ marginTop: 20 }}>
-              <PositionFields
-                idPrefix="drawer"
+              <DepartmentField
                 // `department` is optional on `Member` because a FIRM row carries none; every
                 // in-house row has one, by seed and by `memberFromInvite` alike. The fallback
                 // is the type's, not a state this branch can reach.
                 department={row.department ?? DEPARTMENTS[0]}
-                position={row.position ?? null}
                 onDepartment={(department) => ctx.saveMember({ ...row, department })}
-                onPosition={(position) => ctx.saveMember({ ...row, position })}
               />
             </div>
           )}
+
+          {/* BOTH modes — a role staffs people in either workspace now. */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '20px 0 6px' }}>
+            <div className="label" style={{ flex: 1, minWidth: 0 }}>
+              Workflow roles
+            </div>
+            {/* CreateUpload.tsx:261-262's shape — name the destination tab, then leave. Both
+                are state updates in one handler, so React commits the pair together. */}
+            <button
+              type="button"
+              onClick={() => {
+                ctx.setSettingsTab('roles')
+                onClose()
+              }}
+              className="pf-btn"
+              data-testid="drawer-manage-roles"
+              style={{ flex: 'none', padding: 0, border: 0, background: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 600, color: 'var(--action)' }}
+            >
+              {MANAGE_ROLES}
+            </button>
+          </div>
+          <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
+          <div data-testid="drawer-wfrole-helper" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg-3)' }}>
+            {drawerRoleHelper(row.role)}
+          </div>
 
           {/* Activity — AC#3. Label-left rows (the ConnectorDetail.tsx:200 form) rather than
               SettingsView's 3-up grid: at 560px minus 44px of padding each of three columns is
@@ -237,11 +276,10 @@ export function MemberDrawer({ ctx, memberId, onClose }: {
               <div data-testid="member-steps-named" style={{ fontSize: 13, color: 'var(--fg-1)' }}>
                 {stepsNamedLine(steps.total)}
               </div>
-              {/* The per-policy breakdown `stepsFor` has always returned and nothing rendered
-                  until now. Joined on ' · ', the same way MembersView.tsx joins the unassigned
-                  position titles — one separator for lists of names on this tab. */}
+              {/* Joined on ' · ', the same way MembersView joins the unassigned role titles —
+                  one separator for lists of names on this tab. */}
               <div style={{ marginTop: 3, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-                {steps.policies.map((p) => p.name).join(' · ')}
+                {steps.policies.map((p) => p.policyName).join(' · ')}
               </div>
               {row.status === 'suspended' && (
                 <AmberNote testId="member-drawer-steps-warning" style={{ marginTop: 10 }}>

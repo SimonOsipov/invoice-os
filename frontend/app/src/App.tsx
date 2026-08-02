@@ -44,6 +44,17 @@ import {
   type CustomRuleStore,
   type Suggestion,
 } from './lib/rules'
+// `addRole` is aliased: ctx's verb of that name is this file's own wrapper below.
+import {
+  addRole as appendRole,
+  addRoleMembers,
+  pruneMember,
+  removeRole,
+  replaceRole,
+  seedRoles,
+  type Role,
+  type RoleStore,
+} from './lib/roles'
 import {
   newPolicy,
   removePolicy,
@@ -284,10 +295,16 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // The workspace's people, PER WORKSPACE MODE (lib/members.ts) — the policyStore shape
   // above, for the same reason: a firm's staff and an in-house finance team are two
   // different rosters, and `mode` is fixed by the signed-in persona for the session.
-  // Held here rather than in MembersView because in-house Workflows resolves approval
-  // positions to these people, so it is not one tab's private state.
+  // Held here rather than in MembersView because the Workflows builder resolves a step's
+  // role to these people, so it is not one tab's private state.
   const [memberStore, setMemberStore] = useState<MemberStore>(seedMembers)
   const members = memberStore[mode]
+  // The approval seats a policy's steps point at, PER WORKSPACE MODE (lib/roles.ts) — the
+  // memberStore shape above, for the same reason. A firm's engagement seats and an in-house
+  // finance ladder are two different sets, and switching mode swaps the whole list rather
+  // than sharing any role object between them.
+  const [roleStore, setRoleStore] = useState<RoleStore>(seedRoles)
+  const roles = roleStore[mode]
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -1020,12 +1037,41 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     updateMembers((list) => replaceMember(list, next))
   }
 
-  function inviteMembers(next: Member[]) {
+  // Two stores, one commit: holders live on the ROLE, and this file is the only place that
+  // sees both. React batches the pair, so no render observes a half-applied write.
+  function inviteMembers(next: Member[], roleKey: string | null) {
     updateMembers((list) => addMembers(list, next))
+    if (roleKey == null) return
+    const ids = next.map((m) => m.id)
+    updateRoles((list) => addRoleMembers(list, roleKey, ids))
   }
 
   function dropMember(id: string) {
     updateMembers((list) => removeMember(list, id))
+    // `[remove-prunes-suspend-keeps]` — `setMemberStatus` deliberately does not, which is what
+    // keeps the suspended-only-holder state reachable.
+    updateRoles((list) => pruneMember(list, id))
+  }
+
+  // The one-funnel shape once more, and the same pure pass-through: nothing is refused
+  // here, because a funnel that declined a write silently would leave the tab no way to
+  // say why.
+  function updateRoles(fn: (list: Role[]) => Role[]) {
+    setRoleStore((store) => ({ ...store, [mode]: fn(store[mode]) }))
+  }
+
+  // The funnel's three verbs. The tab composes the next Role with the pure reducers in
+  // lib/roles.ts and hands the whole object back, so nothing here knows a role's shape.
+  function saveRole(next: Role) {
+    updateRoles((list) => replaceRole(list, next))
+  }
+
+  function addRole(next: Role) {
+    updateRoles((list) => appendRole(list, next))
+  }
+
+  function deleteRole(key: string) {
+    updateRoles((list) => removeRole(list, key))
   }
 
   const user: SignedInUser = {
@@ -1068,6 +1114,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     policies,
     editingPolicyId,
     members,
+    roles,
     entityId,
     pickedFiles,
     filesRefusal,
@@ -1126,6 +1173,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     saveMember,
     inviteMembers,
     dropMember,
+    saveRole,
+    addRole,
+    deleteRole,
     signOut: onSignOut,
   }
 

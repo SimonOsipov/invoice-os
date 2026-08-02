@@ -19,6 +19,9 @@ import type { MappingGroup } from './lib/mappingGroups'
 // value import here and emits a byte-identical bundle.
 import type { Member } from './lib/members'
 import type { CustomRule, Suggestion } from './lib/rules'
+// Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
+// `lib/members.ts`, which closes the same benign compile-erased loop.
+import type { Role } from './lib/roles'
 import type { Policy } from './lib/workflows'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
@@ -197,7 +200,7 @@ export type Mapping = Record<string, string | null>
 // to the tab strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
 // (data.tsx). A firm workspace already has a dedicated multi-entity portfolio screen
 // (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
-export type SettingsTab = 'members' | 'connectors' | 'api' | 'signing' | 'company'
+export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company'
 
 export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
 
@@ -313,14 +316,20 @@ export type PlatformCtx = {
   // --- Settings › Members tab -----------------------------------------------
   // The CURRENT WORKSPACE's people, already resolved out of the per-mode store in
   // App.tsx — per mode, not per client, the same reasoning as `policies` above.
-  // Held on ctx rather than in MembersView because in-house Workflows resolves
-  // approval positions to these people, so two surfaces read the one list.
+  // Held on ctx rather than in MembersView because the Workflows builder resolves a
+  // step's role to these people, so two surfaces read the one list.
   //
   // Everything transient inside the tab — search text, the role filter, which drawer
   // or menu is open, the invite modal — is local to MembersView, following the
   // SettingsView precedent at SettingsView.tsx:6-9 rather than the openRuleKey /
   // editingPolicyId one: those are screens reachable by nav, this is a tab panel.
   members: Member[]
+
+  // --- Settings › Roles tab -------------------------------------------------
+  // The CURRENT WORKSPACE's approval seats, resolved out of the per-mode store in
+  // App.tsx exactly as `members` above is. On ctx and not in RolesView because the
+  // Workflows builder resolves a step's role against this same list.
+  roles: Role[]
 
   // --- Multi-invoice import path (M4-08-04) ---------------------------------
   // These live on ctx rather than in CreateUpload's local state because the two
@@ -466,7 +475,14 @@ export type PlatformCtx = {
   // back, so App.tsx never needs to know a member's shape. Deliberately no
   // suspend/reactivate/setRole pair — those are `saveMember` with a different row.
   saveMember: (next: Member) => void
-  inviteMembers: (next: Member[]) => void
+  /** `roleKey` staffs the minted rows into that workflow role; `null` is the None sentinel. */
+  inviteMembers: (next: Member[], roleKey: string | null) => void
+  /** Also prunes the id from every role — suspending, deliberately, does not. */
   dropMember: (id: string) => void
+  // Settings › Roles, same one-funnel contract again. `addRole` takes a whole Role because
+  // the key is minted at compose time by `newRoleKey`, which needs the existing list.
+  saveRole: (next: Role) => void
+  addRole: (next: Role) => void
+  deleteRole: (key: string) => void
   signOut: () => void
 }

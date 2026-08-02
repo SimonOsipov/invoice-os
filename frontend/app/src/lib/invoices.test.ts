@@ -2681,3 +2681,142 @@ describe('allInvoicesIsEmpty (task-333, BUG-01-07)', () => {
   })
 })
 
+// QA adversarial coverage (task-333, BUG-01-07) -- gaps the RED Test Specs table didn't
+// require: remainingPageOffsets under malformed/extreme inputs, fetched's true semantics,
+// every filter (not just entityId) forwarded, and no unhandled rejection leaking from the
+// sibling in-flight requests on partial failure.
+describe('remainingPageOffsets under extreme/malformed inputs (QA adversarial)', () => {
+  it.each([
+    ['negative total', -100, 200, 10],
+    ['negative limit', 500, -5, 10],
+    ['NaN total', NaN, 200, 10],
+    ['NaN limit', 500, NaN, 10],
+    ['Infinity limit', 500, Infinity, 10],
+    ['maxPages 0', 500, 200, 0],
+    ['maxPages 1', 500, 200, 1],
+    ['total 0', 0, 200, 10],
+  ] as const)('%s never emits NaN/Infinity/negative offsets, bounded by maxPages', (_label, total, limit, maxPages) => {
+    const { offsets, truncated } = remainingPageOffsetsUnderTest(total, limit, maxPages)
+    for (const offset of offsets) {
+      expect(Number.isFinite(offset), `offset ${offset} is not finite`).toBe(true)
+      expect(offset, `offset ${offset} is negative`).toBeGreaterThanOrEqual(0)
+    }
+    // Pages 2..maxPages, so at most maxPages-1 offsets -- clamped at 0 since maxPages
+    // itself may be <=1 here (a length can never be negative).
+    expect(offsets.length).toBeLessThanOrEqual(Math.max(maxPages - 1, 0))
+    expect(typeof truncated).toBe('boolean')
+  })
+
+  // The one case where "more than the cap" is unambiguous even with a non-finite total --
+  // exact values, not just bounds, to prove the fill-to-cap arithmetic is right.
+  it('total: Infinity fills to the cap with finite offsets and reports truncated', () => {
+    const { offsets, truncated } = remainingPageOffsetsUnderTest(Infinity, 200, 10)
+    expect(offsets).toEqual([200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800])
+    expect(offsets.every(Number.isFinite)).toBe(true)
+    expect(truncated).toBe(true)
+  })
+
+  // KNOWN GAP (report-only, not fixed here): the only real caller passes the server-echoed
+  // pagination.limit, always a JSON integer, so this is unreachable in production -- but
+  // the pure function does not itself guard a fractional limit >= 1, and emits fractional
+  // offsets rather than rejecting or rounding. Pinned so this doesn't silently regress
+  // further (e.g. a future caller passing a computed, non-integer limit).
+  it('a fractional limit >= 1 produces fractional (non-integer) offsets', () => {
+    const { offsets } = remainingPageOffsetsUnderTest(500, 1.5, 10)
+    expect(offsets.some((o) => !Number.isInteger(o))).toBe(true)
+  })
+})
+
+describe('fetchAllInvoices "fetched" reflects actually retrieved rows, not total (QA adversarial)', () => {
+  it('fetched equals invoices.length even when a later page returns fewer rows than total implies', async () => {
+    stubFetch((url) => {
+      const offset = requestedOffset(url)
+      if (offset === 0) return pageResponse(200, 0, 300, 200)
+      // total said 100 more rows exist at offset 200, but only 40 come back -- e.g. rows
+      // were deleted between page 1 landing and this request.
+      if (offset === 200) return pageResponse(200, 200, 300, 40)
+      throw new Error(`unexpected offset requested: ${offset}`)
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await fetchAllInvoicesUnderTest(af, base, {})
+
+    expect(result.invoices).toHaveLength(240)
+    expect(result.fetched).toBe(240)
+    expect(result.fetched).not.toBe(result.total)
+    expect(result.total).toBe(300)
+  })
+})
+
+describe('fetchAllInvoices forwards every filter, not just entityId (QA adversarial, AC #5)', () => {
+  it('forwards needsAttention/status/needsFix/ruleKey/q/importBatchIds/keptAsIs to every page', async () => {
+    const fetchMock = stubFetch((url) => pageResponse(200, requestedOffset(url), 400, 200))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await fetchAllInvoicesUnderTest(af, base, {
+      entityId: 'E',
+      needsAttention: true,
+      status: 'rejected',
+      needsFix: true,
+      ruleKey: 'RULE-1',
+      q: 'acme',
+      importBatchIds: ['batch-1', 'batch-2'],
+      keptAsIs: true,
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [url] of fetchMock.mock.calls as [string, RequestInit][]) {
+      const params = new URL(url).searchParams
+      expect(params.get('entity_id')).toBe('E')
+      expect(params.get('needs_attention')).toBe('true')
+      expect(params.get('status')).toBe('rejected')
+      expect(params.get('needs_fix')).toBe('true')
+      expect(params.get('rule_key')).toBe('RULE-1')
+      expect(params.get('q')).toBe('acme')
+      expect(params.getAll('import_batch_id')).toEqual(['batch-1', 'batch-2'])
+      expect(params.get('kept_as_is')).toBe('true')
+    }
+  })
+})
+
+describe('fetchAllInvoices partial failure (QA adversarial)', () => {
+  it('carries the underlying message and body unchanged, not just kind/status', async () => {
+    stubFetch((url) => (requestedOffset(url) === 200 ? errorResponse(500) : pageResponse(200, requestedOffset(url), 600, 200)))
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => fetchAllInvoicesUnderTest(af, base, {}))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).message).toBe('boom')
+    expect((err as ApiError).body).toEqual({ error: 'boom' })
+  })
+
+  // Promise.all attaches a handler to EVERY input promise (not just the first to settle),
+  // so a sibling page rejecting alongside the one that wins the race must not surface as a
+  // separate unhandled rejection -- that can fail an unrelated CI run under Node/Vitest's
+  // unhandledRejection reporting.
+  it('produces no unhandled promise rejection from sibling in-flight pages when more than one fails', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      stubFetch((url) => {
+        const offset = requestedOffset(url)
+        if (offset === 200 || offset === 600) return errorResponse(500)
+        return pageResponse(200, offset, 1000, 200)
+      })
+      const af = createAuthedFetch(() => 'tok', vi.fn())
+
+      const err = await captureRejection(() => fetchAllInvoicesUnderTest(af, base, {}))
+      expect(err).toBeInstanceOf(ApiError)
+
+      // Let any dangling promise rejection surface before asserting none did.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await Promise.resolve()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+    expect(unhandled).toEqual([])
+  })
+})
+

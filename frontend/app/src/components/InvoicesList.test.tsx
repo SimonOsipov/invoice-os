@@ -606,4 +606,28 @@ describe('InvoicesList: violation disclosure chip (task-332, BUG-01-06)', () => 
 
     expect(screen.getByTestId('invoice-row').textContent).not.toMatch(/\d+ ERRORS?\b/)
   })
+
+  // QA Mode B adversarial (task-332, BUG-01-06, point d): errorCount filters by severity,
+  // it does not count the array length. A row with 1 error + 2 warnings must read exactly
+  // "1 ERROR", never "3 ERRORS" -- untested by the RED specs above, which only ever mix
+  // all-error or all-warning violations.
+  it('a mix of 1 error and 2 warnings renders "1 ERROR", not "3 ERRORS" -- errorCount filters by severity, not array length', async () => {
+    const mixed = row({
+      id: 'mixed-1',
+      invoice_number: 'INV-MIXED',
+      violations: [
+        { rule_key: 'r1', severity: 'warning', message: 'm1' },
+        { rule_key: 'r2', severity: 'error', message: 'm2' },
+        { rule_key: 'r3', severity: 'warning', message: 'm3' },
+      ],
+    })
+    mockFetchSequence([listResponse([mixed], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-MIXED')
+
+    const text = screen.getByTestId('invoice-row').textContent
+    expect(text, 'must count only the error-severity violation').toMatch(/1 ERROR\b/)
+    expect(text, 'must not count the two warnings into the chip').not.toMatch(/3 ERRORS?\b/)
+  })
 })

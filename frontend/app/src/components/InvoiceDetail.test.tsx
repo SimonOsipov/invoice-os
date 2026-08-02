@@ -111,4 +111,18 @@ describe('InvoiceDetail failed-dead-end card (task-332, BUG-01-06, [failed-no-re
     expect(card.textContent?.toLowerCase()).not.toContain('no reason recorded')
     expect(await screen.findByTestId('rejection-reasons')).toBeDefined()
   })
+
+  // QA Mode B adversarial (task-332, BUG-01-06, point e): the honest line is nested
+  // inside the `status === 'failed'` gate (failed-dead-end itself), so a non-failed
+  // invoice must never render either the card or the line -- even with rejection_reasons
+  // empty, the shape that triggers the line on a FAILED invoice.
+  it('a non-failed invoice (rejected, empty rejection_reasons) never renders failed-dead-end or the "no reason" line', async () => {
+    mockDetailFetch(detailRecord({ status: 'rejected', rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
+    expect(screen.queryByTestId('failed-dead-end')).toBeNull()
+    expect(screen.queryByText(/no reason recorded/i)).toBeNull()
+  })
 })

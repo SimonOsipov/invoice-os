@@ -1047,3 +1047,287 @@ func TestRLS_DocumentsTenantDeleteCascades(t *testing.T) {
 		t.Errorf("invoice rows after the tenant delete = %d, want 0", n)
 	}
 }
+
+// DOC-24: FORCE binds the owner on READS too, not just the INSERT DOC-06 covers. The
+// membership leg is the silent way this breaks — policy TO clauses match via
+// pg_has_role MEMBER, so a role grant would hand tenant_enumerate away with no policy edit.
+func TestRLS_DocumentsOwnerCannotEnumerateUnderForce(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupA := seedDocument(t, h.tenantA, "DOC-24/a.csv")
+	defer cleanupA()
+	docB, cleanupB := seedDocument(t, h.tenantB, "DOC-24/b.csv")
+	defer cleanupB()
+
+	tx, err := h.mig.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin as owner: %v", err)
+	}
+	n, err := scanCount(ctx, tx, `SELECT count(*) FROM documents WHERE id IN ($1, $2)`, docA, docB)
+	if failIfUndefinedDocuments(t, "owner SELECT with no tenant context", err) {
+		_ = tx.Rollback(ctx)
+		return
+	}
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("owner SELECT with no tenant context: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("documents visible to the owner (invoice_migrator) with no context = %d, want 0 — is FORCE effective?", n)
+	}
+	_ = tx.Rollback(ctx)
+
+	// With a context the owner is scoped like anyone else: A's row only, never B's.
+	if err := db.WithinTenantTx(ctx, h.mig, h.tenantA, func(tx pgx.Tx) error {
+		if got := mustCount(t, tx, `SELECT count(*) FROM documents WHERE id = $1`, docA); got != 1 {
+			t.Errorf("A's document visible to the owner under tenant A = %d, want 1", got)
+		}
+		if got := mustCount(t, tx, `SELECT count(*) FROM documents WHERE id = $1`, docB); got != 0 {
+			t.Errorf("B's document visible to the owner under tenant A = %d, want 0", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("owner SELECT under tenant A: %v", err)
+	}
+
+	for _, role := range []string{"invoice_migrator", "invoice_app"} {
+		var member bool
+		if err := h.super.QueryRow(ctx,
+			`SELECT pg_has_role($1, 'invoice_tenant_reader', 'MEMBER')`, role,
+		).Scan(&member); err != nil {
+			t.Fatalf("pg_has_role(%q, invoice_tenant_reader): %v", role, err)
+		}
+		if member {
+			t.Errorf("%s is a MEMBER of invoice_tenant_reader — tenant_enumerate's TO clause would apply "+
+				"to it and hand it every tenant's documents", role)
+		}
+	}
+}
+
+// DOC-25: the cross-tenant pointer refusal on the INSERT path. DOC-20/21 only exercise
+// UPDATE, but the importer and the invoice writer both set these columns at INSERT time.
+func TestRLS_DocumentsCrossTenantPointerRefRejectedOnInsert(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "DOC-25/a.csv")
+	defer cleanupDoc()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "DOC-25 B Corp")
+	defer cleanupEntityB()
+
+	for _, c := range []struct {
+		what   string
+		sql    string
+		verify string
+	}{
+		{
+			what: "invoices.source_document_id",
+			sql: `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, source_document_id)
+			      VALUES ($1, $2, $3, 'DOC-25-B', $4)`,
+			verify: `SELECT count(*) FROM invoices WHERE id = $1`,
+		},
+		{
+			what: "import_batches.document_id",
+			sql: `INSERT INTO import_batches (id, tenant_id, entity_id, document_id)
+			      VALUES ($1, $2, $3, $4)`,
+			verify: `SELECT count(*) FROM import_batches WHERE id = $1`,
+		},
+	} {
+		rowID := uuid.NewString()
+		// Superuser on purpose: this must hold with no policy in the way, since FK
+		// checks themselves run with RLS bypassed.
+		_, err := h.super.Exec(ctx, c.sql, rowID, h.tenantB, entityB, docA)
+		if failIfUndefinedDocuments(t, "INSERT "+c.what+" cross-tenant", err) {
+			return
+		}
+		if err == nil {
+			_, _ = h.super.Exec(ctx, `DELETE FROM invoices WHERE id = $1`, rowID)
+			_, _ = h.super.Exec(ctx, `DELETE FROM import_batches WHERE id = $1`, rowID)
+			t.Errorf("INSERT of a tenant-B row citing tenant A's document via %s succeeded, "+
+				"want 23503 — the FK is not composite", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23503" {
+			t.Errorf("INSERT %s cross-tenant: SQLSTATE = %q, want 23503 (foreign_key_violation): %v",
+				c.what, code, err)
+			continue
+		}
+		if n := mustCount(t, h.super, c.verify, rowID); n != 0 {
+			t.Errorf("rows after the refused INSERT of %s = %d, want 0", c.what, n)
+		}
+	}
+}
+
+// DOC-26: both pointer FKs are MATCH SIMPLE, which skips the check entirely when ANY
+// referencing column is NULL. The nullable pointer is the intended half; a nullable
+// tenant_id would void the cross-tenant defence DOC-20/21/25 assert, with no FK edit.
+func TestRLS_DocumentsPointerTenantIDNotNullable(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		table, column string
+		wantNullable  bool
+	}{
+		{"documents", "tenant_id", false},
+		{"invoices", "tenant_id", false},
+		{"invoices", "source_document_id", true},
+		{"import_batches", "tenant_id", false},
+		{"import_batches", "document_id", true},
+	} {
+		var nullable bool
+		err := h.super.QueryRow(ctx,
+			`SELECT NOT a.attnotnull
+			   FROM pg_attribute a
+			  WHERE a.attrelid = to_regclass('public.' || $1) AND a.attname = $2 AND a.attnum > 0`,
+			c.table, c.column,
+		).Scan(&nullable)
+		if errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("no pg_attribute row for %s.%s — the documents migration is not applied yet", c.table, c.column)
+		}
+		if err != nil {
+			t.Fatalf("read pg_attribute for %s.%s: %v", c.table, c.column, err)
+		}
+		if nullable != c.wantNullable {
+			t.Errorf("%s.%s nullable = %v, want %v", c.table, c.column, nullable, c.wantNullable)
+		}
+	}
+
+	for _, name := range []string{"invoices_tenant_source_document_fk", "import_batches_tenant_document_fk"} {
+		var matchType string
+		if err := h.super.QueryRow(ctx,
+			`SELECT confmatchtype::text FROM pg_constraint WHERE conname = $1`, name,
+		).Scan(&matchType); err != nil {
+			t.Fatalf("read confmatchtype for %s: %v", name, err)
+		}
+		if matchType != "s" {
+			t.Errorf("%s confmatchtype = %q, want %q — the NULL pointer must skip the check, "+
+				"which is what makes the column nullable at all", name, matchType, "s")
+		}
+	}
+}
+
+// DOC-27: the two GUC shapes DOC-05 (unset) does not reach — empty string collapses
+// through nullif, a malformed value raises on the ::uuid cast. WithinTenantTx rejects
+// both client-side, so this bypasses it to exercise what the SQL layer alone does.
+func TestRLS_DocumentsBadTenantGUCFailsClosed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupA := seedDocument(t, h.tenantA, "DOC-27/a.csv")
+	defer cleanupA()
+
+	for _, c := range []struct {
+		name, guc, wantCode string
+	}{
+		{"empty", "", "42501"},               // nullif -> NULL -> predicate NULL -> WITH CHECK fails
+		{"malformed", "not-a-uuid", "22P02"}, // ::uuid raises before any row is considered
+	} {
+		hash := docHash()
+		tx, err := h.app.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin (%s): %v", c.name, err)
+		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, c.guc); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("set %s app.current_tenant: %v", c.name, err)
+		}
+
+		n, selErr := scanCount(ctx, tx, `SELECT count(*) FROM documents WHERE id = $1`, docA)
+		switch c.name {
+		case "empty":
+			if selErr != nil {
+				t.Errorf("SELECT with an empty app.current_tenant: want 0 rows and no error, got: %v", selErr)
+			} else if n != 0 {
+				t.Errorf("documents visible with an empty app.current_tenant = %d, want 0", n)
+			}
+		case "malformed":
+			if code := pgCode(selErr); code != "22P02" {
+				t.Errorf("SELECT with a malformed app.current_tenant: SQLSTATE = %q, want 22P02: %v", code, selErr)
+			}
+			// The tx is poisoned by the failed SELECT; the INSERT leg needs a fresh one.
+			_ = tx.Rollback(ctx)
+			tx, err = h.app.Begin(ctx)
+			if err != nil {
+				t.Fatalf("re-begin (%s): %v", c.name, err)
+			}
+			if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, c.guc); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatalf("re-set %s app.current_tenant: %v", c.name, err)
+			}
+		}
+
+		_, insErr := tx.Exec(ctx,
+			`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, $4)`,
+			h.tenantA, "DOC-27/"+c.name+".csv", hash, 10,
+		)
+		if insErr == nil {
+			t.Errorf("INSERT with a %s app.current_tenant succeeded, want SQLSTATE %s", c.name, c.wantCode)
+		} else if code := pgCode(insErr); code != c.wantCode {
+			t.Errorf("INSERT with a %s app.current_tenant: SQLSTATE = %q, want %s: %v",
+				c.name, code, c.wantCode, insErr)
+		}
+		_ = tx.Rollback(ctx)
+
+		if got := mustCount(t, h.super, `SELECT count(*) FROM documents WHERE content_hash = $1`, hash); got != 0 {
+			t.Errorf("rows written under a %s app.current_tenant = %d, want 0", c.name, got)
+		}
+	}
+
+	// The same statement shape under a VALID context succeeds — without this the two
+	// legs above would also pass against a documents table nobody can write at all.
+	okHash := docHash()
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes) VALUES ($1, $2, $3, $4)`,
+			h.tenantA, "DOC-27/ok.csv", okHash, 10)
+		return e
+	}); err != nil {
+		t.Fatalf("INSERT under a valid tenant context: want success, got: %v", err)
+	}
+	_, _ = h.super.Exec(ctx, `DELETE FROM documents WHERE content_hash = $1`, okHash)
+}
+
+// DOC-28: RESTRICT guards the document in one direction only and is a live reference
+// count, not a permanent lock — deleting the citing invoice must succeed, leave the
+// document standing, and release the delete DOC-18 saw blocked.
+func TestRLS_DocumentsSurviveCitingInvoiceDeletion(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "DOC-28 A Corp")
+	defer cleanupEntityA()
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "DOC-28/a.csv")
+	defer cleanupDoc()
+	invoiceA, cleanupInvoice := seedInvoice(t, h.tenantA, entityA, "DOC-28-A")
+	defer cleanupInvoice()
+
+	if _, err := h.super.Exec(ctx,
+		`UPDATE invoices SET source_document_id = $1 WHERE id = $2`, docA, invoiceA,
+	); err != nil {
+		if failIfUndefinedDocuments(t, "point the invoice at the document", err) {
+			return
+		}
+		t.Fatalf("point the invoice at the document: %v", err)
+	}
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM invoices WHERE id = $1`, invoiceA); err != nil {
+		t.Fatalf("delete the citing invoice: %v — RESTRICT guards the document, not the invoice", err)
+	}
+
+	var storageKey string
+	if err := h.super.QueryRow(ctx, `SELECT storage_key FROM documents WHERE id = $1`, docA).Scan(&storageKey); err != nil {
+		t.Fatalf("read the document back after deleting the citing invoice: %v — it must not cascade", err)
+	}
+	if storageKey != "DOC-28/a.csv" {
+		t.Errorf("storage_key after the invoice delete = %q, want unchanged %q", storageKey, "DOC-28/a.csv")
+	}
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM documents WHERE id = $1`, docA); err != nil {
+		t.Fatalf("delete the document once nothing cites it: %v — RESTRICT must release with the last reference", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM documents WHERE id = $1`, docA); n != 0 {
+		t.Errorf("document rows after the unblocked DELETE = %d, want 0", n)
+	}
+}

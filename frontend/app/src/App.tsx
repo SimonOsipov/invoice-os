@@ -140,7 +140,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // mirrors `active` and reads none of these.
   const base = gatewayBase()
   const entitiesAsync = useAsync<Entity[]>(
-    () => (base ? listEntities(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    () => (base ? listEntities(authedFetch, base).then((r) => r.entities) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchEntities(base) },
   )
   const entitiesState = clientsViewState(base, entitiesAsync)

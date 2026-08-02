@@ -91,7 +91,7 @@ const archivedEntity: Entity = {
 }
 
 describe('listEntities', () => {
-  it('P1: GETs .../v1/entities?limit=200 with Authorization: Bearer <token>, resolves the unwrapped Entity[]', async () => {
+  it('P1: GETs .../v1/entities?limit=200 with Authorization: Bearer <token>, resolves the {entities,pagination} envelope', async () => {
     const fetchMock = mockFetchOnce({
       ok: true,
       status: 200,
@@ -105,7 +105,7 @@ describe('listEntities', () => {
 
     const result = await listEntities(af, base)
 
-    expect(result).toEqual([activeEntity, archivedEntity])
+    expect(result.entities).toEqual([activeEntity, archivedEntity])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('https://gw/api/portfolio/v1/entities?limit=200')
@@ -124,7 +124,7 @@ describe('listEntities', () => {
 
     const result = await listEntities(af, base)
 
-    expect(result).toEqual([])
+    expect(result.entities).toEqual([])
   })
 })
 
@@ -243,7 +243,7 @@ describe('listEntities: malformed envelope (200 OK, but the body does not match 
   // gateway-contract posture (it does no validation of its own either). These specs
   // pin the ACTUAL runtime behavior so a future tightening (e.g. adding validation) is
   // a deliberate, visible change, not a silent one.
-  it('P12: `entities` key absent → returns undefined (not [], not a throw)', async () => {
+  it('P12: `entities` key absent → `.entities` is undefined (not [], not a throw)', async () => {
     mockFetchOnce({
       ok: true,
       status: 200,
@@ -253,7 +253,7 @@ describe('listEntities: malformed envelope (200 OK, but the body does not match 
 
     const result = await listEntities(af, base)
 
-    expect(result).toBeUndefined()
+    expect(result.entities).toBeUndefined()
   })
 
   it('P13: `entities` present but not an array → passed through unchanged, uncoerced', async () => {
@@ -266,7 +266,7 @@ describe('listEntities: malformed envelope (200 OK, but the body does not match 
 
     const result = await listEntities(af, base)
 
-    expect(result).toBe('not-an-array')
+    expect(result.entities).toBe('not-an-array')
   })
 })
 

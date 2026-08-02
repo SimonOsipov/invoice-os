@@ -10,20 +10,35 @@
 // source (the 06 rollup) exists. The pill is computed ONLY when the rollup fetch is
 // 'ready'; loading/error/idle renders a neutral cell, never a false "no invoices yet".
 //
-// [entity-picker] step 1 of 3: the entity list itself is no longer this component's own
-// fetch — it now reads ctx.entities/entitiesState/entitiesError/refetchEntities, ONE
-// fetch shared with the workspace switcher (Sidebar) and CreateUpload's entity picker
-// (lifted to App.tsx), so all three surfaces render the same roster.
+// [entity-picker]: ctx.entities/refetchEntities remain the ONE fetch shared with the
+// workspace switcher (Sidebar) and CreateUpload's entity picker (lifted to App.tsx). The
+// status filter below adds a SECOND, independent fetch for this view's own rows —
+// ctx.entities itself stays unfiltered ([clients-fetches-its-own-filtered-list]).
 
 import { useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { plusGlyph } from '../glyphs'
-import { entityStatusStyle, type Entity } from '../lib/portfolio'
+import {
+  entityListIsEmpty,
+  entityStatusParam,
+  entityStatusStyle,
+  listEntities,
+  portfolioCountLabel,
+  type Entity,
+  type EntityFilterPos,
+  type EntityListResponse,
+} from '../lib/portfolio'
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
+
+const FILTER_POSITIONS: Array<{ pos: EntityFilterPos; label: string }> = [
+  { pos: 'all', label: 'All' },
+  { pos: 'active', label: 'Active' },
+  { pos: 'archived', label: 'Archived' },
+]
 
 // Local avatar-bubble helper — deliberately NOT reused from lib/customers.ts (that
 // module is the customer/buyer domain; this surface is the portfolio-entity domain,
@@ -79,7 +94,23 @@ function HealthCell({ health }: { health: EntityHealth | null }) {
 
 export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
-  const { entities, entitiesState: state, entitiesError, refetchEntities } = ctx
+  const { refetchEntities } = ctx
+
+  const [pos, setPos] = useState<EntityFilterPos>('all')
+
+  // Own filtered fetch, not a client-side filter over ctx.entities -- the switcher's
+  // roster (ctx.entities) must stay unfiltered ([clients-fetches-its-own-filtered-list]).
+  const filtered = useAsync<EntityListResponse>(
+    () =>
+      base
+        ? listEntities(ctx.authedFetch, base, { status: entityStatusParam(pos) })
+        : Promise.reject(new Error('no gateway configured')),
+    { isEmpty: entityListIsEmpty, immediate: base != null, deps: [pos] },
+  )
+  const filteredState = base == null ? 'idle' : filtered.status
+  const rows = filtered.data?.entities ?? []
+  const shown = rows.length
+  const total = filtered.data?.pagination.total ?? 0
 
   // Second, independent rollup fetch (Decision [fetch-per-surface]) driving the per-row
   // health pill — separate from the shared entity list, which alone gates row
@@ -95,7 +126,6 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   // (which an unconditional `rollup.data?.clients ?? []` would produce during the fetch).
   const rollupData = rollup.status === 'ready' ? rollup.data : null
 
-  const count = entities.length
   const orgSegment = ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''
 
   // Add/edit form's open/mode/edit-target state ([A-l]) — local, not PlatformCtx: it
@@ -113,27 +143,58 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Client portfolio</h1>
           <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
             {orgSegment}
-            {count} companies · partner program
+            {portfolioCountLabel(shown, total)} · partner program
           </p>
         </div>
-        <button
-          onClick={() => setModal({ mode: 'create' })}
-          disabled={base == null}
-          className="v2-btn v2-btn-primary pf-btn"
-        >
-          <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {FILTER_POSITIONS.map(({ pos: p, label }) => (
+              <button
+                key={p}
+                onClick={() => setPos(p)}
+                className="pf-chip"
+                style={{
+                  height: 30,
+                  padding: '0 12px',
+                  borderRadius: 'var(--radius-md)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
+                  background: pos === p ? 'var(--action)' : 'var(--bg-2)',
+                  color: pos === p ? 'var(--text-on-dark)' : 'var(--fg-2)',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setModal({ mode: 'create' })}
+            disabled={base == null}
+            className="v2-btn v2-btn-primary pf-btn"
+          >
+            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
+          </button>
+        </div>
       </div>
 
-      {state === 'loading' && <Loading label="Loading entities…" />}
+      {filteredState === 'loading' && <Loading label="Loading entities…" />}
 
-      {state === 'error' && entitiesError && <ErrorState error={entitiesError} onRetry={refetchEntities} />}
+      {filteredState === 'error' && filtered.error && <ErrorState error={filtered.error} onRetry={filtered.run} />}
 
-      {(state === 'idle' || state === 'empty') && (
+      {filteredState === 'idle' && (
         <EmptyState title="No entities yet" message="Add your first business entity to get started." />
       )}
 
-      {state === 'ready' && (
+      {filteredState === 'empty' &&
+        (pos === 'all' ? (
+          <EmptyState title="No entities yet" message="Add your first business entity to get started." />
+        ) : (
+          <EmptyState title="No clients match this filter" message="Try a different status filter." />
+        ))}
+
+      {filteredState === 'ready' && (
         <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div
             className="pf-list-head"
@@ -144,7 +205,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             <span className="label">Status</span>
             <span className="label">Health</span>
           </div>
-          {entities.map((e) => {
+          {rows.map((e) => {
             const st = entityStatusStyle(e.status)
             // Join by id (Entity.id === RollupClient.entity_id). null while the rollup is
             // not 'ready' → HealthCell renders a neutral cell (QA finding #1).
@@ -188,6 +249,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           onClose={() => setModal(null)}
           onSuccess={() => {
             refetchEntities()
+            filtered.run()
             setModal(null)
           }}
         />

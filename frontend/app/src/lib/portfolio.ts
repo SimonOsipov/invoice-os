@@ -12,7 +12,8 @@
 // listEntities/createEntity/updateEntity are thin wrappers around an injected
 // authedFetch (the app-side 401 seam from M3-07-02, src/lib/authedFetch.ts) — these
 // helpers receive authedFetch and know nothing about tokens or onUnauthorized:
-// - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=200`, unwraps `.entities`.
+// - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=<n>[&status=<s>]`,
+//   resolves the whole `{entities,pagination}` envelope (no unwrapping).
 // - createEntity:  POST `${base}/api/portfolio/v1/entities`, full EntityInput body.
 // - updateEntity:  PATCH `${base}/api/portfolio/v1/entities/{id}`, Partial<EntityInput> body.
 // Non-2xx responses reject with the underlying ApiError unchanged (apiFetch's own
@@ -69,9 +70,34 @@ export interface EntityInput {
 // (src/lib/authedFetch.ts). No token/onUnauthorized knowledge lives here.
 export type AuthedFetch = <T>(url: string, opts?: ApiFetchOptions) => Promise<T>
 
-export async function listEntities(authedFetch: AuthedFetch, base: string): Promise<Entity[]> {
-  const res = await authedFetch<EntityListResponse>(`${base}/api/portfolio/v1/entities?limit=200`)
-  return res.entities
+// Status filter (Clients portfolio): a three-position UI toggle over the two-value wire
+// status. 'all' maps to `undefined` so entityStatusParam/listEntities omit the param
+// entirely, matching the server's own empty-status = no filter contract (portfolio.go:215-222).
+export type EntityFilterPos = 'all' | 'active' | 'archived'
+
+export function entityStatusParam(pos: EntityFilterPos): EntityStatus | undefined {
+  return pos === 'all' ? undefined : pos
+}
+
+export async function listEntities(
+  authedFetch: AuthedFetch,
+  base: string,
+  opts?: { status?: EntityStatus; limit?: number },
+): Promise<EntityListResponse> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 200) })
+  if (opts?.status) params.set('status', opts.status)
+  return authedFetch<EntityListResponse>(`${base}/api/portfolio/v1/entities?${params.toString()}`)
+}
+
+// [empty-is-total-zero], mirroring invoices.ts's invoiceListIsEmpty: a third named
+// predicate rather than reusing that one — lib/invoices.ts type-imports AuthedFetch from
+// this module, so a runtime import back would create the first runtime edge between them.
+export function entityListIsEmpty(r: EntityListResponse): boolean {
+  return r.pagination.total === 0
+}
+
+export function portfolioCountLabel(shown: number, total: number): string {
+  return shown === total ? `${shown} companies` : `${shown} of ${total} companies`
 }
 
 export async function createEntity(

@@ -319,9 +319,9 @@ describe('AC-8 — resolve and inspectorResolve', () => {
   })
 })
 
-// AC-8 (MEMB-02-05) — a role actually removed from the list (not just an arbitrary unknown
-// key) still resolves to the deleted-role sentence, in both display functions. roles.ts is
-// already shipped, so this pins existing behaviour rather than going red.
+// AC-8 — a role actually removed from the list (not just an arbitrary unknown key) still
+// resolves to the deleted-role sentence, in both display functions. roles.ts is already
+// shipped, so this pins existing behaviour rather than going red.
 describe('AC-8 — a deleted role resolves to the deleted-role sentence, in both display functions', () => {
   it('resolve and inspectorResolve both flag a role removed from the list as missing', () => {
     const withoutCompliance = removeRole(SEED_FIRM_ROLES, 'compliance')

@@ -5,9 +5,8 @@ import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS } from '../lib/members'
 import { resolve, SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from '../lib/roles'
 import type { ApprovalNode, AutoApproveNode, NotifyNode, RoleKey, Sla } from '../lib/workflows'
 
-// MEMB-02-05 retires WF_ROLES/roleOf from workflows.ts: nodeTitle/nodeSub/simTitle/simSub now
-// take the workspace's role list as an argument instead of reading a module constant, and
-// roleOptions replaces the ROLE_OPTIONS constant the same way ROLE_OPTIONS mirrored it before.
+// nodeTitle/nodeSub/simTitle/simSub take the workspace's role list as an argument instead of
+// reading a module constant, and roleOptions replaces the old ROLE_OPTIONS constant.
 
 const A = (role: RoleKey, sla: Sla): ApprovalNode => ({ id: 'n', type: 'approval', role, sla, delegate: false })
 
@@ -25,6 +24,10 @@ describe('AC-2 — nodeSub', () => {
   it('never emits a leading separator when there is no resolved line and the role desc is empty', () => {
     // 'ghost' names no role — roleOf's deleted-role sentinel carries desc: ''.
     expect(nodeSub(A('ghost', '48'), SEED_FIRM_ROLES)).toBe('within 48h')
+  })
+
+  it('falls back to the role\'s own desc, not just the SLA, when the role still exists', () => {
+    expect(nodeSub(A('fin_dir', '48'), SEED_FIRM_ROLES)).toBe('Second sign-off above ₦250m · within 48h')
   })
 })
 
@@ -99,6 +102,14 @@ describe('AC-7 — simSub renders the resolved holder, uppercased, never the dep
     const auto: AutoApproveNode = { id: 'n', type: 'autoapprove' }
     expect(simSub(notify, SEED_FIRM_ROLES)).toBe('IN-APP')
     expect(simSub(auto, SEED_FIRM_ROLES)).toBe('NO SIGN-OFF NEEDED')
+  })
+
+  it('falls back to the role\'s own desc, uppercased, when no resolved line is supplied', () => {
+    expect(simSub(A('fin_dir', '48'), SEED_FIRM_ROLES)).toBe('SECOND SIGN-OFF ABOVE ₦250M')
+  })
+
+  it('a deleted role has no desc to fall back to — an empty string, not the resolved sentence', () => {
+    expect(simSub(A('ghost', '48'), SEED_FIRM_ROLES)).toBe('')
   })
 })
 

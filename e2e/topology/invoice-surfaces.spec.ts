@@ -1250,3 +1250,48 @@ test('register-search: a term matching only a row past page 1 is found, and the 
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// task-334 (BUG-01-08): the Customers screen used to aggregate only the server's DEFAULT
+// (unpaged) page -- limit=50 -- so a client past 50 buyers silently dropped the rest
+// (the real production symptom this fixes: 47 of 256 buyers shown). Deliberately NOT
+// cleanInvoiceFields' shared buyer_tin: each invoice here gets its OWN distinct buyer, so
+// aggregateCustomers produces one row per invoice, never merging two into one.
+function customersFields(invoiceNumber: string, buyerTin: string, buyerName: string) {
+  return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin, buyer_name: buyerName }
+}
+
+test('customers-whole-set: every buyer appears and no KPI cards render', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-08 customers ${Date.now()}`, tin: freshTin() })
+
+  // Mirrors buildAnchoredPage's own anchor idiom above: created FIRST, sequentially, so
+  // `ORDER BY created_at DESC` sorts it OLDEST -- exactly the row a default (unpaged)
+  // listInvoices call used to drop once a client passed 50 buyers.
+  const BULK_COUNT = 50
+  const stamp = Date.now()
+  const anchorName = `BUG-01-08 Anchor Buyer ${stamp}`
+  await createInvoice(token, { entity_id: entity.id, ...customersFields(`INV-BUG0108-ANCHOR-${stamp}`, freshTin(), anchorName) })
+  await Promise.all(
+    Array.from({ length: BULK_COUNT }, (_, i) =>
+      createInvoice(token, { entity_id: entity.id, ...customersFields(`INV-BUG0108-BULK-${i}-${stamp}`, freshTin(), `BUG-01-08 Buyer ${i} ${stamp}`) }),
+    ),
+  )
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.getByRole('button', { name: /Customers/ }).click()
+  await expect(page.getByRole('heading', { name: 'Customers & vendors' })).toBeVisible()
+
+  await expect(
+    page.getByText(anchorName),
+    'a 50-row default-limit fetch would have dropped the oldest buyer -- proves the whole set was fetched',
+  ).toBeVisible()
+  await expect(page.locator('.pf-list-row')).toHaveCount(BULK_COUNT + 1)
+  await expect(page.locator('.pf-grid-4'), 'no KPI card row').toHaveCount(0)
+  await expect(page.getByText('Valid TINs')).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

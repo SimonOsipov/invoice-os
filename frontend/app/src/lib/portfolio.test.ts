@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type AsyncState, type AsyncStatus } from '@invoice-os/api-client'
 
 import { createAuthedFetch } from './authedFetch'
+import * as portfolioModule from './portfolio'
 import {
   clientsViewState,
   createEntity,
@@ -27,8 +28,11 @@ import {
   shouldFetchEntities,
   updateEntity,
   visibleEntityIds,
+  type AuthedFetch,
   type Entity,
   type EntityInput,
+  type EntityListResponse,
+  type EntityStatus,
 } from './portfolio'
 
 interface MockResponse {
@@ -415,5 +419,119 @@ describe('visibleEntityIds', () => {
 
   it('V6: empty entities list + null selectedId returns an empty set', () => {
     expect(visibleEntityIds([], null)).toEqual(new Set())
+  })
+})
+
+// --- Status filter (Clients portfolio) ---------------------------------------------
+// RED specs: entityStatusParam/portfolioCountLabel/entityListIsEmpty don't exist yet,
+// and listEntities doesn't yet take an opts arg or return the {entities,pagination}
+// envelope. Read off the module namespace (mirrors invoices.test.ts's own idiom) so a
+// missing export or a stale signature fails as an assertion, never an import/compile
+// error -- the real, unretyped `listEntities` import above (still 2-arg, still
+// Entity[]-returning) is left untouched for the pre-existing P1-P21/V1-V6 specs.
+const portfolioNS = portfolioModule as unknown as Record<string, unknown>
+
+type EntityFilterPosShape = 'all' | 'active' | 'archived'
+type EntityStatusParamFn = (pos: EntityFilterPosShape) => EntityStatus | undefined
+type ListEntitiesFn = (
+  authedFetch: AuthedFetch,
+  base: string,
+  opts?: { status?: EntityStatus; limit?: number },
+) => Promise<EntityListResponse>
+type EntityListIsEmptyFn = (r: EntityListResponse) => boolean
+type PortfolioCountLabelFn = (shown: number, total: number) => string
+
+function entityStatusParamUnderTest(pos: EntityFilterPosShape): EntityStatus | undefined {
+  const fn = portfolioNS.entityStatusParam as EntityStatusParamFn | undefined
+  expect(fn, 'entityStatusParam is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(pos)
+}
+
+function listEntitiesUnderTest(
+  authedFetch: AuthedFetch,
+  base: string,
+  opts?: { status?: EntityStatus; limit?: number },
+): Promise<EntityListResponse> {
+  const fn = portfolioNS.listEntities as ListEntitiesFn
+  return fn(authedFetch, base, opts)
+}
+
+function entityListIsEmptyUnderTest(r: EntityListResponse): boolean {
+  const fn = portfolioNS.entityListIsEmpty as EntityListIsEmptyFn | undefined
+  expect(fn, 'entityListIsEmpty is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(r)
+}
+
+function portfolioCountLabelUnderTest(shown: number, total: number): string {
+  const fn = portfolioNS.portfolioCountLabel as PortfolioCountLabelFn | undefined
+  expect(fn, 'portfolioCountLabel is not exported by portfolio.ts yet').toBeDefined()
+  return fn!(shown, total)
+}
+
+describe('entityStatusParam maps each position', () => {
+  it("'all' -> undefined, 'active' -> 'active', 'archived' -> 'archived'", () => {
+    expect(entityStatusParamUnderTest('all')).toBeUndefined()
+    expect(entityStatusParamUnderTest('active')).toBe('active')
+    expect(entityStatusParamUnderTest('archived')).toBe('archived')
+  })
+})
+
+describe('listEntities emits status only when narrowing', () => {
+  it('opts.status forwards status=<value>; {} sends no status param at all', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const narrowedFetch = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: [archivedEntity], pagination: { limit: 200, offset: 0, total: 6 } }),
+    })
+    await listEntitiesUnderTest(af, base, { status: 'archived' })
+    const [narrowedUrl] = narrowedFetch.mock.calls[0] as [string, RequestInit]
+    expect(new URL(narrowedUrl).searchParams.get('status'), '{status:"archived"} must put status=archived on the wire').toBe('archived')
+
+    const allFetch = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: [activeEntity, archivedEntity], pagination: { limit: 200, offset: 0, total: 27 } }),
+    })
+    await listEntitiesUnderTest(af, base, {})
+    const [allUrl] = allFetch.mock.calls[0] as [string, RequestInit]
+    expect(new URL(allUrl).searchParams.has('status'), '{} (the All position) must omit the key entirely, not send status=').toBe(false)
+  })
+})
+
+describe('listEntities returns the pagination envelope', () => {
+  it('the resolved value carries both `entities` and `pagination`, not just the unwrapped array', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entities: [activeEntity, archivedEntity], pagination: { limit: 200, offset: 0, total: 27 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listEntitiesUnderTest(af, base)
+
+    expect(result.entities, 'listEntities must resolve the whole envelope, not the already-unwrapped array').toBeDefined()
+    expect(result.pagination, 'listEntities must resolve the whole envelope, not the already-unwrapped array').toBeDefined()
+    expect(result.entities).toEqual([activeEntity, archivedEntity])
+    expect(result.pagination).toEqual({ limit: 200, offset: 0, total: 27 })
+  })
+})
+
+describe('entityListIsEmpty is true only when the portfolio is empty', () => {
+  it('total===0 is true; a mid-set empty page (offset:200,total:27) is false', () => {
+    const genuineEmpty: EntityListResponse = { entities: [], pagination: { limit: 200, offset: 0, total: 0 } }
+    expect(entityListIsEmptyUnderTest(genuineEmpty)).toBe(true)
+
+    const midSetEmptyPage: EntityListResponse = { entities: [], pagination: { limit: 200, offset: 200, total: 27 } }
+    expect(entityListIsEmptyUnderTest(midSetEmptyPage)).toBe(false)
+  })
+})
+
+describe('portfolioCountLabel agrees with the rows shown', () => {
+  it('(21,21) -> "21 companies"; (200,247) -> "200 of 247 companies"; (0,0) -> "0 companies"', () => {
+    expect(portfolioCountLabelUnderTest(21, 21)).toBe('21 companies')
+    expect(portfolioCountLabelUnderTest(200, 247)).toBe('200 of 247 companies')
+    expect(portfolioCountLabelUnderTest(0, 0)).toBe('0 companies')
   })
 })

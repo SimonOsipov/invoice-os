@@ -223,3 +223,93 @@ test('health-pill: a fresh entity with a needs-attention invoice reads "1 NEEDS 
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// RED specs: ClientsView has no status filter yet, so the "Active"/"Archived"/"All"
+// buttons these tests drive don't exist -- the click()s below time out against a
+// not-yet-built control. Same fresh active + fresh offboardEntity-archived seed as the
+// status-pill test above (no new API helper needed).
+test('status-filter: each position requests its status and renders only those rows', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const activeEntity = await createEntity(token, { name: `M4-14 portfolio filter-active ${Date.now()}`, tin: freshTin() })
+  const archivedEntity = await createEntity(token, { name: `M4-14 portfolio filter-archived ${Date.now()}`, tin: freshTin() })
+  await offboardEntity(token, archivedEntity.id)
+
+  await signInFirm(page)
+  await goToClients(page)
+
+  const activeRow = page.locator('.pf-list-row').filter({ hasText: activeEntity.name })
+  const archivedRow = page.locator('.pf-list-row').filter({ hasText: archivedEntity.name })
+  await expect(activeRow).toBeVisible()
+  await expect(archivedRow).toBeVisible()
+
+  function entitiesRequest(matchesStatus: (status: string | null) => boolean) {
+    return page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        new URL(r.url()).pathname.endsWith('/api/portfolio/v1/entities') &&
+        matchesStatus(new URL(r.url()).searchParams.get('status')),
+    )
+  }
+
+  const activeReq = entitiesRequest((s) => s === 'active')
+  await page.getByRole('button', { name: 'Active' }).click()
+  await activeReq
+  await expect(activeRow).toBeVisible()
+  await expect(archivedRow).not.toBeVisible()
+
+  const archivedReq = entitiesRequest((s) => s === 'archived')
+  await page.getByRole('button', { name: 'Archived' }).click()
+  await archivedReq
+  await expect(archivedRow).toBeVisible()
+  await expect(activeRow).not.toBeVisible()
+
+  const allReq = entitiesRequest((s) => s === null)
+  await page.getByRole('button', { name: 'All' }).click()
+  await allReq
+  await expect(activeRow).toBeVisible()
+  await expect(archivedRow).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// RED today: the header count reads `ctx.entities.length`, the full unfiltered roster,
+// constant regardless of filter position -- this test proves it must instead equal the
+// rows actually rendered under each position. Structural (rendered-row-count vs.
+// parsed-header-number), not a hardcoded portfolio size, since the dev DB is shared and
+// not reset between spec runs.
+test('status-filter: the header count follows the filter', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const activeEntity = await createEntity(token, { name: `M4-14 portfolio count-active ${Date.now()}`, tin: freshTin() })
+  const archivedEntity = await createEntity(token, { name: `M4-14 portfolio count-archived ${Date.now()}`, tin: freshTin() })
+  await offboardEntity(token, archivedEntity.id)
+
+  await signInFirm(page)
+  await goToClients(page)
+  await expect(page.locator('.pf-list-row').filter({ hasText: activeEntity.name })).toBeVisible()
+
+  async function assertCountMatchesRenderedRows(): Promise<void> {
+    const rowCount = await page.locator('.pf-list-row').count()
+    const headerText = (await page.locator('h1:has-text("Client portfolio") + p').textContent()) ?? ''
+    // First number in the phrase is always the SHOWN count, whether the phrase is
+    // "<N> companies" or the truncated "<N> of <M> companies" form.
+    const match = headerText.match(/(\d+)(?:\s+of\s+\d+)?\s+companies/)
+    expect(match, `header count text did not contain a "<N> companies" phrase: "${headerText}"`).not.toBeNull()
+    expect(Number(match![1]), `header count must equal the ${rowCount} rows actually rendered under this filter`).toBe(rowCount)
+  }
+
+  await assertCountMatchesRenderedRows()
+
+  await page.getByRole('button', { name: 'Active' }).click()
+  await expect(page.locator('.pf-list-row').filter({ hasText: archivedEntity.name })).not.toBeVisible()
+  await assertCountMatchesRenderedRows()
+
+  await page.getByRole('button', { name: 'Archived' }).click()
+  await expect(page.locator('.pf-list-row').filter({ hasText: activeEntity.name })).not.toBeVisible()
+  await assertCountMatchesRenderedRows()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

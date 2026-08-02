@@ -30,9 +30,11 @@ name: Dev Env (deploy full fleet + verify)
 # dispatch both target the persistent environment, whose variables and domains
 # are the SOURCE OF TRUTH and must never be reconciled/overwritten. Guarding on
 # `!= workflow_dispatch` would let a push run `reconcile-urls` against the live
-# environment and rewrite VITE_GATEWAY_URL / CORS_ALLOWED_ORIGINS from its
-# custom domains (api./app./www.ascomply.com) to the generated *.up.railway.app
-# ones — `urls` below discovers `serviceDomains`, which excludes custom domains.
+# environment, overwriting VITE_GATEWAY_URL / CORS_ALLOWED_ORIGINS with hosts
+# that `urls` merely discovered. `urls` below now PREFERS the custom domain, so
+# today that write would land the same api./app./www.ascomply.com values back.
+# That is coincidence, not protection: a push must never write live env vars,
+# and one service lacking a custom domain restores the original damage.
 #
 # The persistent environment is addressed by ID, never by name: it was renamed
 # `development` -> `production` on 2026-07-27, which silently broke the
@@ -436,7 +438,7 @@ jobs:
             svc_id="$1"
             svc_label="$2"
             body=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$ENV_ID" --arg s "$svc_id" \
-              '{query: "query($p:String!,$e:String!,$s:String!){domains(projectId:$p,environmentId:$e,serviceId:$s){serviceDomains{domain}}}", variables: {p: $p, e: $e, s: $s}}')
+              '{query: "query($p:String!,$e:String!,$s:String!){domains(projectId:$p,environmentId:$e,serviceId:$s){customDomains{domain targetPort} serviceDomains{domain targetPort}}}", variables: {p: $p, e: $e, s: $s}}')
 
             if ! r=$(curl -fsS --connect-timeout 5 --max-time 15 \
                   --request POST \
@@ -452,11 +454,18 @@ jobs:
               return 1
             fi
 
-            d=$(echo "$r" | jq -r '.data.domains.serviceDomains[0].domain // empty')
-            if [ -z "$d" ]; then
-              echo "::error::No Railway-provided domain found for $svc_label (service $svc_id) in environment $ENV_ID — it must have a domain (docs/add-a-service.md step 6)." >&2
+            # select-domain owns the custom-first rule; guarded by its --self-test
+            # fixtures. errexit is SUSPENDED in this function (called in a `|| exit 1`
+            # list), so the refusal must be caught here or it emits `https://` hostless.
+            if ! sel=$(echo "$r" | bash scripts/ci/railway-env.sh select-domain); then
               return 1
             fi
+            count=$(echo "$sel" | jq -r '.count')
+            if [ "$count" = "0" ]; then
+              echo "::error::No domain found for $svc_label (service $svc_id) in environment $ENV_ID — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
+              return 1
+            fi
+            d=$(echo "$sel" | jq -r '.domain')
             echo "https://$d"
           }
 
@@ -480,15 +489,15 @@ jobs:
       # service that bakes or reads them deploys.
       #
       # PR ONLY, and this is the sharpest edge in the file. The persistent
-      # environment's URL variables are the SOURCE OF TRUTH; `urls` above reads
-      # `serviceDomains`, which returns only Railway-GENERATED domains and
-      # excludes custom ones. Running this against the persistent environment
-      # would therefore rewrite VITE_GATEWAY_URL and CORS_ALLOWED_ORIGINS from
-      # api./app./www.ascomply.com to *.up.railway.app — and because Vite bakes
-      # VITE_* at BUILD time, the very next SPA deploy would ship a bundle
-      # pointing at the wrong origin, with CORS reset to match. Guarding on
-      # `!= workflow_dispatch` instead of `== pull_request` is exactly how a push
-      # trigger would have done that silently on the first merge.
+      # environment's URL variables are the SOURCE OF TRUTH; this step overwrites
+      # them with whatever `urls` discovered. `urls` now PREFERS the custom
+      # domain, so that write would currently land the same
+      # api./app./www.ascomply.com values back — coincidence, not protection: one
+      # service lacking a custom domain restores the *.up.railway.app rewrite, and
+      # because Vite bakes VITE_* at BUILD time, the very next SPA deploy would
+      # ship a bundle pointing at the wrong origin, with CORS reset to match.
+      # Guarding on `!= workflow_dispatch` instead of `== pull_request` is exactly
+      # how a push trigger would have done that silently on the first merge.
       - name: Point the fork's URL variables at the fork (never at the source env)
         if: github.event_name == 'pull_request'
         env:

@@ -552,3 +552,58 @@ describe('InvoicesList: header search wiring (task-331, BUG-01-05)', () => {
     expect(calls).toHaveLength(4)
   })
 })
+
+// RED specs (task-332, BUG-01-06, Mode A) -- the Status cell renders no violation
+// indicator yet, so every assertion below fails on the row's actual textContent, not on
+// an import/compile error.
+describe('InvoicesList: violation disclosure chip (task-332, BUG-01-06)', () => {
+  it('a row with an error-severity violation renders an ERROR chip its clean sibling does not', async () => {
+    const blocked = row({
+      id: 'blocked-1',
+      invoice_number: 'INV-BLOCKED',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    const clean = row({ id: 'clean-1', invoice_number: 'INV-CLEAN', violations: [] })
+    mockFetchSequence([listResponse([blocked, clean], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const rows = screen.getAllByTestId('invoice-row')
+    const blockedRow = rows.find((r) => r.textContent?.includes('INV-BLOCKED'))
+    const cleanRow = rows.find((r) => r.textContent?.includes('INV-CLEAN'))
+    expect(blockedRow?.textContent, 'blocked row must carry a singular "1 ERROR" chip').toMatch(/1 ERROR\b/)
+    expect(cleanRow?.textContent, 'a violations:[] row must carry no ERROR chip').not.toMatch(/\d+ ERRORS?\b/)
+  })
+
+  it('two error-severity violations render the plural "2 ERRORS" (singular/plural threshold === 1)', async () => {
+    const blocked = row({
+      id: 'blocked-2',
+      invoice_number: 'INV-BLOCKED-2',
+      violations: [
+        { rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' },
+        { rule_key: 'supplier-tin-required', severity: 'error', message: 'missing tin' },
+      ],
+    })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BLOCKED-2')
+
+    expect(screen.getByTestId('invoice-row').textContent).toMatch(/2 ERRORS\b/)
+  })
+
+  it('a warning-only violation renders no ERROR chip -- only error severity is blocking', async () => {
+    const warnOnly = row({
+      id: 'warn-1',
+      invoice_number: 'INV-WARN',
+      violations: [{ rule_key: 'r', severity: 'warning', message: 'm' }],
+    })
+    mockFetchSequence([listResponse([warnOnly], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-WARN')
+
+    expect(screen.getByTestId('invoice-row').textContent).not.toMatch(/\d+ ERRORS?\b/)
+  })
+})

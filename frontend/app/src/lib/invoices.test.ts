@@ -2347,3 +2347,55 @@ function scanForIdentifier(rootDir: string, needle: string): string[] {
   return hits
 }
 
+// RED specs (task-332, BUG-01-06, Mode A) -- hasBlockingViolation doesn't exist yet.
+// Read off invoicesNS (defined above, same index-signature idiom as glyphs.test.ts) so a
+// missing export fails as an undefined ASSERTION (undefined !== the expected boolean),
+// never an import/compile error.
+type HasBlockingViolationFn = (inv: Pick<InvoiceRecord, 'violations'>) => boolean | undefined
+function hasBlockingViolationUnderTest(): HasBlockingViolationFn {
+  const fn = invoicesNS.hasBlockingViolation as HasBlockingViolationFn | undefined
+  return (inv) => fn?.(inv)
+}
+
+describe('hasBlockingViolation (task-332, BUG-01-06)', () => {
+  it('is true only for an error-severity violation', () => {
+    const call = hasBlockingViolationUnderTest()
+    const cases: Array<{ label: string; violations: InvoiceRecord['violations']; expected: boolean }> = [
+      { label: 'empty', violations: [], expected: false },
+      { label: 'warning only', violations: [{ rule_key: 'r1', severity: 'warning', message: 'm' }], expected: false },
+      { label: 'info only', violations: [{ rule_key: 'r1', severity: 'info', message: 'm' }], expected: false },
+      { label: 'error only', violations: [{ rule_key: 'r1', severity: 'error', message: 'm' }], expected: true },
+      {
+        label: 'mixed, one error',
+        violations: [
+          { rule_key: 'r1', severity: 'warning', message: 'm' },
+          { rule_key: 'r2', severity: 'error', message: 'm' },
+        ],
+        expected: true,
+      },
+    ]
+    for (const { label, violations, expected } of cases) {
+      expect(call({ violations }), label).toBe(expected)
+    }
+  })
+
+  // The attention set includes `rejected` on status ALONE (server-side needs_attention) --
+  // this helper must never re-derive that from an empty violations array, or the two
+  // predicates would silently drift out of sync with each other (Out of Scope fence).
+  it('does not restate needs_attention -- a rejected invoice with violations:[] is still false', () => {
+    const call = hasBlockingViolationUnderTest()
+    const rejectedNoViolations: InvoiceRecord = { ...draftInvoice, status: 'rejected', violations: [] }
+    expect(call(rejectedNoViolations)).toBe(false)
+  })
+})
+
+// Regression guard (task-332, BUG-01-06), not a red bug: shouldShowRejectionCard already
+// behaves this way (R-1/R-2 above). Restated over a `failed` invoice specifically, since
+// that's the status this story's honest-line addition touches.
+describe('shouldShowRejectionCard over a failed invoice (regression guard, BUG-01-06)', () => {
+  it('reasons present shows the card; [] does not', () => {
+    expect(shouldShowRejectionCard({ status: 'failed', rejection_reasons: [{ code: 'X', message: 'y' }] })).toBe(true)
+    expect(shouldShowRejectionCard({ status: 'failed', rejection_reasons: [] })).toBe(false)
+  })
+})
+

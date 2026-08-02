@@ -172,6 +172,42 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`)
       assertErrorEnvelope(res, 401, 'read no auth')
     })
+
+    // OPEN DISCREPANCY (task-332, BUG-01-06): the story recorded a seeded failed invoice
+    // (DEMO-2026-1004) as rejection_reasons: null off the LIVE API, even though its seed
+    // row (db/seed.dev.sql) literally writes '[]' and the column is `jsonb NOT NULL
+    // DEFAULT '[]'`. Both can be true if internal/invoice/invoice.go's Violations/
+    // RejectionReasons (json.RawMessage) ever reach marshal as a Go nil -- a nil
+    // json.RawMessage encodes to JSON `null`, not `[]`. rawFetch's parsed body (not the
+    // typed client, which never normalizes either key) is the only way to see the wire
+    // honestly. Allowed to fail at the deploy gate -- that would be a real finding in the
+    // Go serialization, not a broken test (the underlying cause is Out of Scope here).
+    test('a failed invoice\'s rejection_reasons and violations come back as arrays, never null', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-R-FAILED-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'queued' },
+      })
+      const failedRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'failed' },
+      })
+      expect(failedRes.status, 'queued -> failed should return 200').toBe(200)
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(res.status).toBe(200)
+      const body = res.body as Record<string, unknown>
+      expect(body.status, 'the fixture should now be failed').toBe('failed')
+      expect(Array.isArray(body.rejection_reasons), `rejection_reasons was ${JSON.stringify(body.rejection_reasons)}, not an array`).toBe(true)
+      expect(Array.isArray(body.violations), `violations was ${JSON.stringify(body.violations)}, not an array`).toBe(true)
+    })
   })
 
   test.describe('list', () => {

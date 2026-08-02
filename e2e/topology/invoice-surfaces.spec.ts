@@ -296,6 +296,41 @@ test('list surface: real rows render with real status badges, and Needs attentio
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// RED (task-332, BUG-01-06, Mode A) -- hasBlockingViolation's disclosure chip doesn't
+// exist yet. Reuses the same blocked/clean fixture shape as the list-surface test above
+// (badInvoiceFields fires exactly one error-severity violation, vat-standard-rate; the
+// invoice stays draft).
+test('register-disclosure: a blocked draft and a clean draft render differently', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-01-06 disclosure ${Date.now()}`, tin: freshTin() })
+
+  const blockedNumber = `INV-BUG0106-BLOCKED-${Date.now()}`
+  const blocked = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(blockedNumber) })
+  await validateInvoice(token, blocked.id)
+
+  const cleanNumber = `INV-BUG0106-CLEAN-${Date.now()}`
+  const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
+  await validateInvoice(token, clean.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const blockedRow = page.getByTestId('invoice-row').filter({ hasText: blockedNumber })
+  const cleanRow = page.getByTestId('invoice-row').filter({ hasText: cleanNumber })
+  await expect(blockedRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  // AC-1/AC-2: derived from `violations` alone (one error-severity violation here), never
+  // a re-derivation of needs_attention or a status arm.
+  await expect(blockedRow).toContainText(/1 ERROR\b/)
+  await expect(cleanRow).not.toContainText(/\d+ ERRORS?\b/)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('detail surface: violations render against the rule-set version, the fix loop clears them, and status history records both the round trip and the not-a-draft regression', async ({
   page,
 }) => {
@@ -1004,6 +1039,10 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   await expect(page.getByTestId('failed-dead-end')).toBeVisible()
   await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
+  // [failed-no-reason-lands-on-the-detail] (task-332, BUG-01-06): this invoice's
+  // rejection_reasons is [] (API-transitioned straight to failed, never rejected by the
+  // APP) -- the card must say so honestly, not render a silent gap.
+  await expect(page.getByTestId('failed-dead-end')).toContainText(/no reason recorded/i)
   // "no submit control at all": `can_edit` is false for a failed invoice
   // ([gates-on-the-wire], store.go's canEdit/canTransition), so the actions bar (Edit AND
   // Re-validate together) renders nothing at all -- `edit-invoice` itself would be vacuous

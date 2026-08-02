@@ -118,7 +118,8 @@ func TestDocument_ExportedAPINamesNoSDKType(t *testing.T) {
 
 // TestDocument_ImportsNoRepoPackage keeps the internal/importer ->
 // internal/document edge one-directional (precedent:
-// internal/submission/deps_test.go).
+// internal/submission/deps_test.go): internal/platform/* and internal/audit are
+// allowed, every other repo package — internal/importer above all — is not.
 func TestDocument_ImportsNoRepoPackage(t *testing.T) {
 	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -138,12 +139,19 @@ func TestDocument_ImportsNoRepoPackage(t *testing.T) {
 		t.Fatalf("go list -deps returned %d lines — the command did not resolve the package, so the check below "+
 			"is vacuous:\n%s", len(lines), out)
 	}
+	// The store methods need db.WithinRequestTenantTx, auth.IdentityFromContext and
+	// audit.Record; none of those three reaches internal/importer or back here.
+	allowed := func(dep string) bool {
+		return dep == module+"/internal/document" ||
+			dep == module+"/internal/audit" ||
+			strings.HasPrefix(dep, module+"/internal/platform/")
+	}
 	for _, line := range lines {
 		dep := strings.TrimSpace(line)
-		if dep == module+"/internal/document" || !strings.HasPrefix(dep, module) {
+		if !strings.HasPrefix(dep, module) || allowed(dep) {
 			continue
 		}
-		t.Errorf("internal/document imports %s — it must stay a leaf over stdlib and the AWS SDK so "+
-			"internal/importer can depend on it without a cycle", dep)
+		t.Errorf("internal/document imports %s — it may depend only on internal/platform/* and internal/audit "+
+			"so internal/importer can depend on it without a cycle", dep)
 	}
 }

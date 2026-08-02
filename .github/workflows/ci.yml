@@ -332,6 +332,13 @@ jobs:
         # (DASH-14 / DASH-27 cross-tenant refusal). Needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/dashboard/...
+      - name: Document store suite (RLS-scoped documents upsert/get + audit as invoice_app) + per-test visibility & skip gate
+        # DOC-01: proves the source-document store's Upsert/Get resolve to exactly the
+        # caller's tenant under RLS (per-tenant dedupe, cross-tenant refusal) and write
+        # document.created/reused/read in the same tx, plus the bytes-first service
+        # ordering. Needs DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both
+        # already in this job's env.
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/document/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

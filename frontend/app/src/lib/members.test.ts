@@ -2,15 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
 import { CFG } from '../data'
+import * as membersModule from './members'
 import {
   ACCESS_ROLES,
   accessRoleLabel,
   activeAdmins,
-  activeHolders,
   addMembers,
-  approvalInvolvement,
-  blockedPositions,
-  canvasApprovalLine,
   CAPABILITY_FOOTNOTE,
   CAPABILITY_ROWS,
   classifyInvites,
@@ -25,10 +22,8 @@ import {
   filterClientRoster,
   filterMembers,
   hasDerivableName,
-  holders,
   inhouseNotifyTargets,
   initialsFrom,
-  inspectorApprovalLine,
   INVITE_ERROR,
   invitedNotice,
   isFiltering,
@@ -48,26 +43,17 @@ import {
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
-  resolvePosition,
-  REVIEWER_HINT,
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
   seedMembers,
   setMemberRole,
   setMemberStatus,
-  stepsFor,
-  stepsNamedLine,
-  stepsWarning,
   SUSPEND_EXPLANATION,
-  SUSPENDED_STEPS_NOTE,
-  unassignedNotice,
-  unassignedPositions,
   type InviteOptions,
   type Member,
   type MemberStatus,
-  type PositionResolution,
 } from './members'
-import { SEED_INHOUSE_POLICIES, WF_ROLES, type Policy, type RoleKey } from './workflows'
+import { SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from './roles'
 
 // --- fixtures ---------------------------------------------------------------
 // Every spec starts from a fresh clone, never from a SEED_* constant — except T1.2/T1.2b,
@@ -76,7 +62,6 @@ const firm = () => seedMembers().firm
 const inhouse = () => seedMembers().inhouse
 const names = (list: readonly Member[]) => list.map((m) => m.name)
 const you = (list: readonly Member[]): Member => list.filter((m) => m.isYou)[0]
-const resolved = (position: RoleKey): PositionResolution => resolvePosition(inhouse(), position)
 
 /** Reads a subset-scoped `clientAccess` as the array it must be — T1.2b's clone probe. */
 const scopedIds = (list: readonly Member[], index: number): number[] => {
@@ -86,7 +71,7 @@ const scopedIds = (list: readonly Member[], index: number): number[] => {
 }
 
 /** A hand-built in-house row, for the frames the shipped seed deliberately cannot reach. */
-const inhouseRow = (name: string, status: MemberStatus, position: RoleKey | null): Member => ({
+const inhouseRow = (name: string, status: MemberStatus): Member => ({
   id: `m-${name.split(' ')[0].toLowerCase()}`,
   name,
   initials: name
@@ -101,7 +86,6 @@ const inhouseRow = (name: string, status: MemberStatus, position: RoleKey | null
   invitedBy: 'Ngozi Balogun',
   isYou: false,
   department: 'Finance',
-  position,
 })
 
 /**
@@ -125,38 +109,6 @@ const firmRow = (name: string, status: MemberStatus, clientAccess: 'all' | numbe
   invitedBy: 'Chinedu Okafor',
   isYou: false,
   clientAccess,
-})
-
-/** The seed's only non-empty `else` lane holds an autoapprove, so T1.18 builds its own. */
-const elseLanePolicy = (): Policy => ({
-  id: 'polX',
-  name: 'Else-lane policy',
-  scope: 'All invoices',
-  status: 'published',
-  updated: 'just now',
-  nodes: [
-    {
-      id: 'xn1',
-      type: 'condition',
-      field: 'amount',
-      op: '>',
-      value: 1_000_000_000,
-      then: [],
-      else: [{ id: 'xn2', type: 'approval', role: 'controller', sla: '48', delegate: false }],
-    },
-  ],
-})
-
-const noApprovalPolicy = (): Policy => ({
-  id: 'polY',
-  name: 'Notify-only policy',
-  scope: 'All invoices',
-  status: 'published',
-  updated: 'just now',
-  nodes: [
-    { id: 'yn1', type: 'notify', target: 'Board', channel: 'Email' },
-    { id: 'yn2', type: 'autoapprove' },
-  ],
 })
 
 const NOTIFY_BASE = [
@@ -224,13 +176,12 @@ describe('seed shape (T1.1–T1.6, §15.6)', () => {
     expect([row.name, row.initials, row.email]).toEqual([name, initials, email])
   })
 
-  it('the in-house you-row is the shipped in-house persona, and holds fin_dir (T1.4)', () => {
+  it('the in-house you-row is the shipped in-house persona (T1.4)', () => {
     const row = you(inhouse())
     expect(row).toMatchObject({
       name: 'Ngozi Balogun',
       initials: 'NB',
       role: 'admin',
-      position: 'fin_dir',
     })
 
     const { name, initials, email } = APP_PERSONAS.inhouse
@@ -242,143 +193,63 @@ describe('seed shape (T1.1–T1.6, §15.6)', () => {
     expect(inhouse().filter((m) => m.isYou)).toHaveLength(1)
   })
 
-  it('leaks no columns across modes — firm has no position, in-house no client access (T1.6)', () => {
+  it('leaks no columns across modes — firm has no department, in-house no client access (T1.6)', () => {
     const f = firm()
     const h = inhouse()
     expect(f).toHaveLength(7)
     expect(h).toHaveLength(16)
 
-    for (const m of f) {
-      expect(m.department).toBeUndefined()
-      expect(m.position).toBeUndefined()
+    for (const m of f) expect(m.department).toBeUndefined()
+    for (const m of h) expect(m.clientAccess).toBeUndefined()
+  })
+})
+
+// task-346 AC-1 — Member.position is gone from the type and from both seeds.
+describe('AC-1 — Member.position is gone', () => {
+  it('no seeded member, in either mode, carries a position field', () => {
+    for (const row of [...SEED_FIRM_MEMBERS, ...SEED_INHOUSE_MEMBERS]) {
+      expect('position' in row).toBe(false)
     }
-    for (const m of h) {
-      expect(m.clientAccess).toBeUndefined()
-    }
-  })
-})
-
-describe('holders / activeHolders (T1.7–T1.10, §5)', () => {
-  it('lists every holder of a position, in seed order (T1.7)', () => {
-    expect(names(holders(inhouse(), 'fin_dir'))).toEqual(['Ngozi Balogun', 'Yetunde Fashola'])
   })
 
-  it('returns nothing for a position nobody holds (T1.8)', () => {
-    expect(holders(inhouse(), 'fin_mgr')).toEqual([])
-  })
-
-  it('excludes a suspended holder, while `holders` still sees them (T1.9)', () => {
-    expect(names(holders(inhouse(), 'cfo'))).toEqual(['Adebayo Ogunlesi'])
-    expect(activeHolders(inhouse(), 'cfo')).toEqual([])
-  })
-
-  it('excludes an invited holder (T1.10)', () => {
-    // Hand-built: no seeded row is a position-holding *invited* member.
-    const list = [inhouseRow('Sadiq Ibrahim', 'invited', 'fin_mgr')]
-    expect(names(holders(list, 'fin_mgr'))).toEqual(['Sadiq Ibrahim'])
-    expect(activeHolders(list, 'fin_mgr')).toEqual([])
-  })
-})
-
-describe('unassignedPositions / blockedPositions (T1.11–T1.13, §6)', () => {
-  it('reports exactly fin_mgr and ceo as unassigned, in WF_ROLES order (T1.11)', () => {
-    expect(unassignedPositions(inhouse())).toEqual(['fin_mgr', 'ceo'])
-  })
-
-  it('reports exactly cfo as blocked (T1.12)', () => {
-    expect(blockedPositions(inhouse())).toEqual(['cfo'])
-  })
-
-  it('keeps blocked and unassigned disjoint (T1.13)', () => {
-    const list = inhouse()
-    const unassigned = unassignedPositions(list)
-    const blocked = blockedPositions(list)
-
-    expect(unassigned.length).toBeGreaterThan(0)
-    expect(blocked.length).toBeGreaterThan(0)
-    expect(blocked.filter((p) => unassigned.includes(p))).toEqual([])
-  })
-})
-
-describe('stepsFor (T1.14–T1.20, §15.5)', () => {
-  it('counts across the root lane and a then lane (T1.14)', () => {
-    expect(stepsFor(SEED_INHOUSE_POLICIES, 'fin_dir')).toEqual({
-      total: 2,
-      policies: [
-        { name: 'Company approval policy', count: 1 },
-        { name: 'Capital expenditure', count: 1 },
-      ],
-    })
-  })
-
-  it('counts a position whose every step sits inside a then lane (T1.15)', () => {
-    const steps = stepsFor(SEED_INHOUSE_POLICIES, 'cfo')
-    expect(steps.total).toBe(2)
-    expect(steps.policies).toEqual([
-      { name: 'Company approval policy', count: 1 },
-      { name: 'Capital expenditure', count: 1 },
+  it('the in-house seed is otherwise byte-identical — ids, names, statuses, departments', () => {
+    // Not expected to go red on its own: nothing here touches `position`, so this holds
+    // today too. Pinned as the regression guard that catches the deletion taking anything
+    // else with it, the same shape as AC-13's RoleKey-widening guard above.
+    expect(SEED_INHOUSE_MEMBERS.map((m) => [m.id, m.name, m.status, m.department])).toEqual([
+      ['mh1', 'Ngozi Balogun', 'active', 'Finance'],
+      ['mh2', 'Yetunde Fashola', 'active', 'Finance'],
+      ['mh3', 'Emeka Uzowulu', 'active', 'Procurement'],
+      ['mh4', 'Tunde Adeyemi', 'active', 'Finance'],
+      ['mh5', 'Ibrahim Bello', 'active', 'Tax & Compliance'],
+      ['mh6', 'Adebayo Ogunlesi', 'suspended', 'Executive'],
+      ['mh7', 'Zainab Lawal', 'active', 'Accounts Payable'],
+      ['mh8', 'Chidi Anyanwu', 'active', 'Accounts Payable'],
+      ['mh9', 'Aisha Mohammed', 'active', 'Accounts Payable'],
+      ['mh10', 'Segun Oyelaran', 'active', 'Procurement'],
+      ['mh11', 'Oluwafunmilayo Ademola-Oyediran', 'active', 'Tax & Compliance'],
+      ['mh12', 'Kelechi Obi', 'active', 'Finance'],
+      ['mh13', 'Hauwa Abubakar', 'active', 'Executive'],
+      ['mh14', 'Olumide Bakare', 'active', 'Procurement'],
+      ['mh15', 'Nneka Chukwu', 'invited', 'Accounts Payable'],
+      ['mh16', 'Sadiq Ibrahim', 'invited', 'Finance'],
     ])
   })
 
-  it('lists a single policy for a position named once (T1.16)', () => {
-    expect(stepsFor(SEED_INHOUSE_POLICIES, 'ceo')).toEqual({
-      total: 1,
-      policies: [{ name: 'Capital expenditure', count: 1 }],
-    })
-  })
+  it('memberFromInvite still forks the mode-specific columns, minus position', () => {
+    const firmRow = memberFromInvite('t.okonkwo@x.ng', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
+    expect(firmRow.clientAccess).toBe('all')
+    expect('department' in firmRow).toBe(false)
+    expect('position' in firmRow).toBe(false)
 
-  it('omits zero-count policies entirely (T1.17)', () => {
-    expect(stepsFor(SEED_INHOUSE_POLICIES, 'compliance')).toEqual({ total: 0, policies: [] })
-  })
-
-  it('reads else lanes as well as then lanes (T1.18)', () => {
-    // Hand-built: `h1n4.else` is the seed's only non-empty else lane and it holds an
-    // autoapprove, so no seeded approval node is else-lane reachable.
-    const steps = stepsFor([elseLanePolicy()], 'controller')
-    expect(steps.total).toBe(1)
-    expect(steps.policies).toEqual([{ name: 'Else-lane policy', count: 1 }])
-  })
-
-  it('ignores notify and autoapprove nodes (T1.19)', () => {
-    expect(stepsFor([noApprovalPolicy()], 'fin_dir')).toEqual({ total: 0, policies: [] })
-  })
-
-  it('includes draft policies (T1.20)', () => {
-    expect(SEED_INHOUSE_POLICIES[1].status).toBe('draft')
-    expect(SEED_INHOUSE_POLICIES[1].name).toBe('Capital expenditure')
-    expect(stepsFor(SEED_INHOUSE_POLICIES, 'fin_dir').policies.map((p) => p.name)).toContain('Capital expenditure')
-  })
-})
-
-describe('resolvePosition (T1.21–T1.24, §15.5)', () => {
-  it('resolves to the first active holder and counts the rest (T1.21)', () => {
-    expect(resolved('fin_dir')).toEqual({ kind: 'ok', primary: 'Ngozi Balogun', extra: 1 })
-  })
-
-  it('resolves a sole active holder with no extra (T1.22)', () => {
-    expect(resolved('line_mgr')).toEqual({ kind: 'ok', primary: 'Emeka Uzowulu', extra: 0 })
-  })
-
-  it('reports blocked when every holder is inactive (T1.23)', () => {
-    expect(resolved('cfo')).toEqual({ kind: 'blocked', primary: 'Adebayo Ogunlesi', extra: 0 })
-  })
-
-  it('reports none when nobody holds the position (T1.24)', () => {
-    expect(resolved('ceo')).toEqual({ kind: 'none' })
-  })
-})
-
-describe('approval lines (T1.25–T1.26, §11.1/§11.2)', () => {
-  it('formats the canvas sub-line for ok / blocked / none (T1.25)', () => {
-    expect(canvasApprovalLine(resolved('fin_dir'))).toBe('Ngozi Balogun +1')
-    expect(canvasApprovalLine(resolved('cfo'))).toBe('Adebayo Ogunlesi — suspended')
-    expect(canvasApprovalLine(resolved('ceo'))).toBe('Nobody assigned')
-  })
-
-  it('formats the inspector line for ok / blocked / none (T1.26)', () => {
-    expect(inspectorApprovalLine(resolved('line_mgr'))).toBe('Currently: Emeka Uzowulu')
-    expect(inspectorApprovalLine(resolved('cfo'))).toBe('Currently: Adebayo Ogunlesi — suspended — this step will block')
-    expect(inspectorApprovalLine(resolved('ceo'))).toBe('Nobody assigned — assign in Settings › Members')
+    const inhouseRow_ = memberFromInvite(
+      't.okonkwo@x.ng',
+      { mode: 'inhouse', role: 'reviewer', department: 'Finance' },
+      'Ngozi Balogun',
+    )
+    expect(inhouseRow_.department).toBe('Finance')
+    expect('clientAccess' in inhouseRow_).toBe(false)
+    expect('position' in inhouseRow_).toBe(false)
   })
 })
 
@@ -447,17 +318,17 @@ describe('client access (T1.33–T1.34, §6)', () => {
 
 describe('lastActiveLabel (T1.35–T1.37, §10.1)', () => {
   it('reads as the invite expiry for an invited member (T1.35)', () => {
-    expect(lastActiveLabel(inhouseRow('Nneka Chukwu', 'invited', null))).toBe('Expires in 6 days')
+    expect(lastActiveLabel(inhouseRow('Nneka Chukwu', 'invited'))).toBe('Expires in 6 days')
   })
 
   it('reads the stored value for an active member (T1.36)', () => {
-    const row = inhouseRow('Kelechi Obi', 'active', null)
+    const row = inhouseRow('Kelechi Obi', 'active')
     expect(row.lastActive).toBe('2 hours ago')
     expect(lastActiveLabel(row)).toBe('2 hours ago')
   })
 
   it('reads as an em dash for a non-invited member with no last-active value (T1.37)', () => {
-    const row = inhouseRow('Halima Yusuf', 'suspended', null)
+    const row = inhouseRow('Halima Yusuf', 'suspended')
     expect(row.lastActive).toBeNull()
     expect(lastActiveLabel(row)).toBe('—')
   })
@@ -494,10 +365,6 @@ describe('constants (T1.39–T1.40, §3/§6)', () => {
 // implementation. Each spec below was chosen because a mutation of the shipped code
 // SURVIVED that set: it names a behaviour §5/§6/§15.5/§15.6 states but nothing yet
 // pins. Nothing here re-asserts a T1 spec.
-
-/** A holder list the seed cannot produce: mixed statuses on one position. */
-const cfoHolders = (statuses: readonly MemberStatus[]): Member[] =>
-  statuses.map((s, i) => ({ ...inhouseRow(`Holder${i} Person`, s, 'cfo'), id: `m-cfo-${i}`, name: `Holder ${i}` }))
 
 describe('CLIENT_ROSTER (QA1, §14.5)', () => {
   it('is the six CFG companies, ids equal to their CFG index, in CFG order (QA1)', () => {
@@ -547,90 +414,6 @@ describe('client access — decided-but-unpinned behaviour (QA2–QA5, §6)', ()
   })
 })
 
-describe('resolvePosition and the two approval lines — frames the seed cannot reach (QA6–QA9, §15.5)', () => {
-  it('picks the first ACTIVE holder, not the first holder, and counts every holder as extra (QA6)', () => {
-    // No seeded position has an inactive holder ahead of an active one, so T1.21/T1.22
-    // pass just as happily against `primary = all[0].name`.
-    const list = cfoHolders(['suspended', 'active', 'invited'])
-    expect(names(list)).toEqual(['Holder 0', 'Holder 1', 'Holder 2'])
-    expect(resolvePosition(list, 'cfo')).toEqual({ kind: 'ok', primary: 'Holder 1', extra: 2 })
-  })
-
-  it('reports a position held only by an invited member as blocked, never as unassigned (QA7)', () => {
-    // §6's notice counts positions with NO holder; an invite that has not been accepted
-    // is a holder, so this belongs in the blocked bucket instead.
-    const list = [inhouseRow('Sadiq Ibrahim', 'invited', 'cfo')]
-    expect(resolvePosition(list, 'cfo')).toEqual({ kind: 'blocked', primary: 'Sadiq Ibrahim', extra: 0 })
-    expect(blockedPositions(list)).toEqual(['cfo'])
-    expect(unassignedPositions(list)).not.toContain('cfo')
-  })
-
-  it('keeps the "+n" suffix on a blocked canvas line (QA8)', () => {
-    // Decided, not specified: the "+n" rule is per-line, not per-variant. Unreachable
-    // from the seed, where the one blocked position has a single holder.
-    const res = resolvePosition(cfoHolders(['suspended', 'suspended', 'invited']), 'cfo')
-    expect(res).toEqual({ kind: 'blocked', primary: 'Holder 0', extra: 2 })
-    expect(canvasApprovalLine(res)).toBe('Holder 0 +2 — suspended')
-  })
-
-  it('omits "+n" from the inspector line even when the canvas shows it (QA9)', () => {
-    // §11.2's worked example is Ngozi with a second fin_dir holder and NO "+1". T1.26
-    // only ever passes resolutions with extra === 0, so the asymmetry was unpinned.
-    const res = resolved('fin_dir')
-    expect(res).toEqual({ kind: 'ok', primary: 'Ngozi Balogun', extra: 1 })
-    expect(canvasApprovalLine(res)).toBe('Ngozi Balogun +1')
-    expect(inspectorApprovalLine(res)).toBe('Currently: Ngozi Balogun')
-  })
-})
-
-describe('stepsFor — counting and empty input (QA10–QA11, §15.5)', () => {
-  it('counts every matching approval in a policy, not merely whether one exists (QA10)', () => {
-    // No seeded policy names one position twice, so `count` is never observed above 1.
-    const policy: Policy = {
-      id: 'polZ',
-      name: 'Twice-named policy',
-      scope: 'All invoices',
-      status: 'published',
-      updated: 'just now',
-      nodes: [
-        { id: 'zn1', type: 'approval', role: 'fin_mgr', sla: '24', delegate: false },
-        { id: 'zn2', type: 'approval', role: 'fin_mgr', sla: '48', delegate: false },
-        {
-          id: 'zn3',
-          type: 'condition',
-          field: 'amount',
-          op: '>',
-          value: 1_000_000,
-          then: [{ id: 'zn4', type: 'approval', role: 'fin_mgr', sla: '72', delegate: false }],
-          else: [],
-        },
-      ],
-    }
-    expect(stepsFor([policy], 'fin_mgr')).toEqual({ total: 3, policies: [{ name: 'Twice-named policy', count: 3 }] })
-  })
-
-  it('returns an empty result for an empty policy list (QA11)', () => {
-    expect(stepsFor([], 'fin_dir')).toEqual({ total: 0, policies: [] })
-  })
-})
-
-describe('empty-list boundaries (QA12, §5)', () => {
-  it('every list derivation degrades to empty — except unassignedPositions, which reports all eight (QA12)', () => {
-    const none: Member[] = []
-    expect(holders(none, 'cfo')).toEqual([])
-    expect(activeHolders(none, 'cfo')).toEqual([])
-    expect(blockedPositions(none)).toEqual([])
-    expect(departmentsInUse(none)).toEqual([])
-    expect(delegateCandidates(none)).toEqual([])
-    expect(activeAdmins(none)).toEqual([])
-    expect(resolvePosition(none, 'cfo')).toEqual({ kind: 'none' })
-
-    // The one asymmetry: with nobody in the workspace, every approval position is vacant.
-    expect(unassignedPositions(none)).toEqual(WF_ROLES.map((r) => r.key))
-    expect(unassignedPositions(none)).toHaveLength(8)
-  })
-})
-
 describe('inhouseNotifyTargets — empty current (QA13, §11.4)', () => {
   it('appends nothing when the node carries no stored target (QA13)', () => {
     // A new notify node's target starts empty; an unguarded push would put a blank
@@ -644,9 +427,9 @@ describe('activeAdmins and lastActiveLabel — status precedence (QA14–QA15, �
   it('counts only ACTIVE admins — a suspended or invited admin does not hold the lock (QA14)', () => {
     // Both seeds ship exactly one admin, so T1.38 reads 1 whether or not status filters.
     const list = [
-      { ...inhouseRow('Ngozi Balogun', 'active', 'fin_dir'), role: 'admin' as const },
-      { ...inhouseRow('Suspended Admin', 'suspended', null), role: 'admin' as const },
-      { ...inhouseRow('Invited Admin', 'invited', null), role: 'admin' as const },
+      { ...inhouseRow('Ngozi Balogun', 'active'), role: 'admin' as const },
+      { ...inhouseRow('Suspended Admin', 'suspended'), role: 'admin' as const },
+      { ...inhouseRow('Invited Admin', 'invited'), role: 'admin' as const },
     ]
     expect(names(activeAdmins(list))).toEqual(['Ngozi Balogun'])
   })
@@ -655,7 +438,7 @@ describe('activeAdmins and lastActiveLabel — status precedence (QA14–QA15, �
     // §10.1 makes the Last active column read the expiry for invited rows, full stop —
     // status wins over the stored string. Every seeded invited row has `null`, so the
     // precedence was unobservable.
-    const row: Member = { ...inhouseRow('Nneka Chukwu', 'invited', null), lastActive: '5 minutes ago' }
+    const row: Member = { ...inhouseRow('Nneka Chukwu', 'invited'), lastActive: '5 minutes ago' }
     expect(lastActiveLabel(row)).toBe('Expires in 6 days')
   })
 })
@@ -814,11 +597,7 @@ describe('classifyInvites (T2.15–T2.20, §7)', () => {
 
 describe('memberFromInvite (T2.21–T2.24, §7)', () => {
   it('mints an invited row with the derived name, the passed inviter and no activity (T2.21)', () => {
-    const m = memberFromInvite(
-      't.okonkwo@x.ng',
-      { mode: 'inhouse', role: 'reviewer', department: 'Finance', position: null },
-      'Ngozi Balogun',
-    )
+    const m = memberFromInvite('t.okonkwo@x.ng', { mode: 'inhouse', role: 'reviewer', department: 'Finance' }, 'Ngozi Balogun')
     expect(m).toMatchObject({
       email: 't.okonkwo@x.ng',
       name: 'T Okonkwo',
@@ -855,14 +634,10 @@ describe('memberFromInvite (T2.21–T2.24, §7)', () => {
     expect('position' in m).toBe(false)
   })
 
-  it('gives an in-house invite its department and position and NO clientAccess key (T2.24)', () => {
-    const m = memberFromInvite(
-      't.okonkwo@x.ng',
-      { mode: 'inhouse', role: 'reviewer', department: 'Finance', position: null },
-      'Ngozi Balogun',
-    )
+  it('gives an in-house invite its department and NO clientAccess key (T2.24)', () => {
+    const m = memberFromInvite('t.okonkwo@x.ng', { mode: 'inhouse', role: 'reviewer', department: 'Finance' }, 'Ngozi Balogun')
     expect(m.department).toBe('Finance')
-    expect(m.position).toBeNull()
+    expect('position' in m).toBe(false)
     expect('clientAccess' in m).toBe(false)
   })
 })
@@ -946,7 +721,7 @@ describe('reducers — immutability and misses (T2.25–T2.32b, §15.1)', () => 
 
     const cases = [
       { list: firm(), pristine: firm(), id: 'mf2', extra: firmRow('Tosin Okonkwo', 'invited', [0]) },
-      { list: inhouse(), pristine: inhouse(), id: 'mh4', extra: inhouseRow('Tosin Okonkwo', 'invited', null) },
+      { list: inhouse(), pristine: inhouse(), id: 'mh4', extra: inhouseRow('Tosin Okonkwo', 'invited') },
     ]
 
     for (const c of cases) {
@@ -1206,7 +981,7 @@ describe('minted ids are unique ACROSS modes, not only within one (QA24, §7)', 
       memberFromInvite(e, { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor'),
     )
     const inhouseInvites = ['q3@x.ng', 'q4@x.ng'].map((e) =>
-      memberFromInvite(e, { mode: 'inhouse', role: 'reviewer', department: 'Finance', position: null }, 'Ngozi Balogun'),
+      memberFromInvite(e, { mode: 'inhouse', role: 'reviewer', department: 'Finance' }, 'Ngozi Balogun'),
     )
 
     for (const m of firmInvites) expect(m.id.startsWith('mf')).toBe(true)
@@ -1230,7 +1005,7 @@ describe('the seed literals themselves, as an oracle no snapshot can launder (QA
     // five reducers over the constants THEMSELVES (not a clone) first, which is the one
     // call shape T2.32 never makes.
     const extraFirm = firmRow('Tosin Okonkwo', 'invited', [0])
-    const extraInhouse = inhouseRow('Tosin Okonkwo', 'invited', null)
+    const extraInhouse = inhouseRow('Tosin Okonkwo', 'invited')
 
     replaceMember(SEED_FIRM_MEMBERS, { ...SEED_FIRM_MEMBERS[1], role: 'admin' })
     addMembers(SEED_FIRM_MEMBERS, [extraFirm])
@@ -1318,24 +1093,6 @@ describe('the seed literals themselves, as an oracle no snapshot can launder (QA
       'active',
       'invited',
       'invited',
-    ])
-    expect(SEED_INHOUSE_MEMBERS.map((m) => m.position)).toEqual([
-      'fin_dir',
-      'fin_dir',
-      'line_mgr',
-      'controller',
-      'compliance',
-      'cfo',
-      'preparer',
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
     ])
     // The one row T2.34's 15-vs-16 split turns on.
     expect(SEED_INHOUSE_MEMBERS[10].email).toBe('o.ademola-oyediran@honeywellgroup.com.ng')
@@ -1530,55 +1287,10 @@ describe('accessRoleLabel (QA40–QA41, §6)', () => {
   })
 })
 
-describe('unassignedNotice — §6 copy, plural verbatim and singular reconstructed (QA42–QA44)', () => {
-  it('renders §6 verbatim at the seed count of 2 (QA42)', () => {
-    // The count the in-house seed actually produces: WF_ROLES holds 8 positions and the
-    // roster holds 6 of them, so `fin_mgr` and `ceo` are the two §6 names.
-    const unassigned = unassignedPositions(inhouse())
-    expect(unassigned).toEqual(['fin_mgr', 'ceo'])
-    expect(unassignedNotice(unassigned.length)).toBe(
-      '2 approval positions have nobody assigned. Policies that use them will block.',
-    )
-  })
-
-  it('reconstructs the singular phrase for phrase (QA43)', () => {
-    // INVENTED COPY, pinned so the reconstruction is reviewable as text rather than as a
-    // ternary buried in a component. Three agreements move together: positions→position,
-    // have→has, them→it. Reachable via MEMB-01-07's drawer.
-    expect(unassignedNotice(1)).toBe('1 approval position has nobody assigned. Policies that use it will block.')
-  })
-
-  it('takes the plural for every count that is not 1, zero included (QA44)', () => {
-    // Zero is not rendered — MembersView gates on `unassigned.length > 0` — but the branch
-    // must not be the singular if that gate is ever loosened, because "0 approval position
-    // has" is the one wording no reading of §6 permits.
-    expect(unassignedNotice(0)).toBe('0 approval positions have nobody assigned. Policies that use them will block.')
-    expect(unassignedNotice(8)).toBe('8 approval positions have nobody assigned. Policies that use them will block.')
-    // Firm mode's number, and the reason the notice is gated on MODE and not on this count:
-    // firm rows carry no position at all (T1.6), so every position reads as unassigned.
-    expect(unassignedPositions(firm()).length).toBe(WF_ROLES.length)
-  })
-})
-
-describe('stepsWarning — §10.4 copy over stepsFor().total (QA45–QA46)', () => {
-  it('renders §10.4 verbatim for the suspended CFO the seed is built around (QA45)', () => {
-    // The §2 headline frame end to end: the only cfo holder is suspended, and both cfo
-    // steps across the in-house policies are what "those steps will block" refers to.
-    const cfo = inhouse().find((m) => m.position === 'cfo')
-    expect(cfo?.status).toBe('suspended')
-    const steps = stepsFor(SEED_INHOUSE_POLICIES, 'cfo')
-    expect(steps.total).toBe(2)
-    expect(stepsWarning(steps.total)).toBe('Named in 2 approval steps · those steps will block')
-  })
-
-  it('reconstructs the singular, and keeps the plural everywhere else (QA46)', () => {
-    // INVENTED COPY. steps→step and those→that move together; the middle dot and its
-    // spacing are §10.4's, not a renderer's.
-    expect(stepsWarning(1)).toBe('Named in 1 approval step · that step will block')
-    expect(stepsWarning(3)).toBe('Named in 3 approval steps · those steps will block')
-    // 0 is never rendered (the row warning is gated on `total > 0`), but if it ever were,
-    // "Named in 0 approval step" would be wrong in the same way "0 positions has" is.
-    expect(stepsWarning(0)).toBe('Named in 0 approval steps · those steps will block')
+// task-346 AC-12 — [two-banners]: both banners render the SAME roles.ts constant now.
+describe('AC-12 — the members banner string is the roles-tab string', () => {
+  it('unassignedNotice is exported from roles.ts only; members.ts exports no such constant', () => {
+    expect('unassignedNotice' in membersModule).toBe(false)
   })
 })
 
@@ -1592,13 +1304,19 @@ describe('stepsWarning — §10.4 copy over stepsFor().total (QA45–QA46)', () 
 // the other half of that obligation, plus the `Client users` card's sentence.
 
 describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
-  it("carries §6's footnote and Client users copy verbatim (T5.1)", () => {
-    expect(CAPABILITY_FOOTNOTE).toBe(
-      'Approving also requires an approval position in the policy that routes the invoice. A person needs the Reviewer role to act on approval steps at all, and an approval position to decide which steps.',
-    )
+  it("carries §6's Client users copy verbatim (T5.1)", () => {
     expect(CLIENT_USERS_COPY).toBe(
       'Give a contact at one of your clients read-only access, or approval rights on their own invoices.',
     )
+  })
+})
+
+// task-346 AC-13 — the footnote and the drawer helper both speak in workflow roles now.
+describe('AC-13 — the capability footnote says workflow role, not position', () => {
+  it('CAPABILITY_FOOTNOTE mentions a workflow role and no longer a position; REVIEWER_HINT is gone', () => {
+    expect(CAPABILITY_FOOTNOTE).toContain('workflow role')
+    expect(CAPABILITY_FOOTNOTE).not.toContain('position')
+    expect('REVIEWER_HINT' in membersModule).toBe(false)
   })
 })
 
@@ -1611,16 +1329,7 @@ describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
 // `filterMembers`, and the chip gate that settles DEFECT D1. All of them would otherwise live
 // inside a component `environment: node` cannot mount (§15.8).
 
-describe('MEMB-01-06 invite modal copy (T6.1-T6.2, §3/§7)', () => {
-  it("carries §3's Reviewer hint verbatim (T6.1)", () => {
-    // §3 calls this vocabulary load-bearing: role means "may act on approval steps at all",
-    // position means "which steps". A fluent paraphrase collapses that distinction and reads
-    // as correct to a reviewer's eye, which is the whole reason it is pinned as text.
-    expect(REVIEWER_HINT).toBe(
-      'Only members with the Reviewer role can act on approval steps. The position decides which steps.',
-    )
-  })
-
+describe('MEMB-01-06 invite modal copy (T6.2, §7)', () => {
   it("carries §7's three chip errors, one per non-ok verdict (T6.2)", () => {
     expect(INVITE_ERROR.member).toBe('Already a member')
     expect(INVITE_ERROR.invited).toBe('Already invited')
@@ -1800,7 +1509,7 @@ describe('invitedNotice — the send confirmation (T6.8)', () => {
 // also puts Settings out of scope for browser E2E). These two are what remains inside
 // this module's reach — everything else on that list is a Phase 3.5 gate item.
 
-describe('MEMB-01-06 QA — the picker filter is literal, and the position sentinel is free (QA47–QA48)', () => {
+describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
   it('matches a LITERAL substring, not a pattern (QA47)', () => {
     // T6.5 pins the trim / case / substring rule, but every one of its queries is a plain
     // word, so `includes(q)` and `new RegExp(q).test(name)` agree on all of them and the
@@ -1815,20 +1524,17 @@ describe('MEMB-01-06 QA — the picker filter is literal, and the position senti
     // directions rather than only by what it refuses.
     expect(filterClientRoster('&').map((c) => c.id)).toEqual([0, 3])
   })
+})
 
-  it("leaves the invite modal's `none` position sentinel un-collided (QA48)", () => {
-    // InviteMembersModal.tsx:56 declares `NO_POSITION = 'none'` and maps it back to `null`
-    // on the way out, because `InviteOptions.position` is `RoleKey | null`. That sentinel is
-    // only safe while no real position is keyed 'none' — and a colliding key fails twice,
-    // silently: POSITION_OPTIONS would carry two `value="none"` <option>s (a duplicate-key
-    // render, AC#10), and choosing the real position would submit `position: null`.
-    //
-    // HONEST SCOPE, so nobody reads more into this than it does. `RoleKey` is a closed
-    // union, so the collision needs a deliberate widening — and when that widening happens,
-    // three seed-integrity specs (T1.11, QA42, workflows.test.ts:175-182) go red too. This
-    // one adds no NEW detection; it adds the diagnosis, naming the sentinel at
-    // InviteMembersModal.tsx:56 that those three failures do not mention.
-    expect(WF_ROLES.map((r) => r.key)).not.toContain('none')
+// task-346 — the `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The
+// invite modal's Workflow role select now draws from BOTH SEED_FIRM_ROLES and
+// SEED_INHOUSE_ROLES, and `Role.key` is a free-form slug (`newRoleKey`), not a closed union —
+// a role titled "None" collides with the sentinel on its own, with no widening required. This
+// makes the risk MORE reachable than QA48 described it, not less.
+describe("the invite modal's `none` sentinel stays un-collided (QA48, updated)", () => {
+  it('no seeded role, in either mode, is keyed `none`', () => {
+    expect(SEED_FIRM_ROLES.map((r) => r.key)).not.toContain('none')
+    expect(SEED_INHOUSE_ROLES.map((r) => r.key)).not.toContain('none')
   })
 })
 
@@ -1882,75 +1588,15 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     expect(removeConfirmQuestion('Oluwafunmilayo Ademola-Oyediran')).toContain('Remove Oluwafunmilayo Ademola-Oyediran?')
   })
 
-  it("pins §9's note and §8's amber steps note, both verbatim (T7.3)", () => {
+  it("pins §9's note, verbatim (T7.3)", () => {
     // MOVED out of MembersTable.tsx:91, where no spec could see it, because MEMB-01-07
     // needs the same sentence at three more places. A straight apostrophe, as the story
     // writes it — a smart quote here renders identically and fails a text assertion.
     expect(PROTECTED_ADMIN_NOTE).toBe("You're the only admin. Promote someone else first.")
     expect(PROTECTED_ADMIN_NOTE).toContain("You're")
     expect(PROTECTED_ADMIN_NOTE).not.toContain('’')
-
-    // §8's amber note. It names the REMEDY ('until someone else holds this position'),
-    // which is the half that makes it actionable rather than merely alarming.
-    expect(SUSPENDED_STEPS_NOTE).toBe('They are suspended, so those steps will block until someone else holds this position.')
-  })
-})
-
-describe('stepsNamedLine — the drawer line that is NOT the row warning (T7.4–T7.5)', () => {
-  it("gives §8's bare count on both sides of the plural boundary (T7.4)", () => {
-    // §8 supplies the plural verbatim; the singular is the same steps→step reconstruction
-    // `stepsWarning` and `unassignedNotice` already make.
-    expect(stepsNamedLine(2)).toBe('Named in 2 approval steps')
-    expect(stepsNamedLine(1)).toBe('Named in 1 approval step')
-    expect(stepsNamedLine(3)).toBe('Named in 3 approval steps')
-    // Never rendered — the drawer gates the whole section on `total > 0` — but the branch
-    // must not read 'Named in 0 approval step' if that gate is ever loosened.
-    expect(stepsNamedLine(0)).toBe('Named in 0 approval steps')
-  })
-
-  it("carries no consequence clause, which is the whole reason it is not `stepsWarning` (T7.5)", () => {
-    // The mistake this function exists to prevent: §10.4's ROW sentence rendered in the
-    // drawer, where the blocking fact is carried separately by SUSPENDED_STEPS_NOTE and
-    // only for a member who is actually suspended.
-    expect(stepsWarning(2)).toBe('Named in 2 approval steps · those steps will block')
-    expect(stepsNamedLine(2)).not.toContain('·')
-    expect(stepsNamedLine(2)).not.toContain('will block')
-    expect(stepsNamedLine(1)).not.toContain('will block')
-    // The two agree on their shared prefix and diverge only in the suffix — so a future
-    // pluralisation change to one is visible as a divergence from the other.
-    expect(stepsWarning(2).startsWith(stepsNamedLine(2))).toBe(true)
-    expect(stepsWarning(1).startsWith(stepsNamedLine(1))).toBe(true)
-  })
-})
-
-describe('the drawer\'s Approval-involvement gate is the COUNT, not the position (T7.6)', () => {
-  it('answers 0 for three shipped in-house rows that hold a position (T7.6)', () => {
-    // The correction this spec exists for. AC#5 and §8 both phrase the trigger as "when the
-    // member holds a position" — taken literally, these three drawers would render
-    // "Named in 0 approval steps" above an empty policy list, because the two in-house
-    // policies name only line_mgr / fin_dir / cfo / ceo (workflows.ts:167-193).
-    const list = inhouse()
-    const policies = SEED_INHOUSE_POLICIES as Policy[]
-    const held = (name: string): RoleKey => {
-      const position = list.filter((m) => m.name === name)[0]?.position
-      if (position == null) throw new Error(`${name} holds no position`)
-      return position
-    }
-    expect(held('Tunde Adeyemi')).toBe('controller')
-    expect(held('Ibrahim Bello')).toBe('compliance')
-    expect(held('Zainab Lawal')).toBe('preparer')
-    for (const name of ['Tunde Adeyemi', 'Ibrahim Bello', 'Zainab Lawal']) {
-      expect(stepsFor(policies, held(name)).total).toBe(0)
-      expect(stepsFor(policies, held(name)).policies).toEqual([])
-    }
-
-    // And the row §8 writes its own example from: Adebayo, suspended, cfo — "Named in 2
-    // approval steps", with BOTH policy names beside it and the amber note beneath.
-    const adebayo = list.filter((m) => m.name === 'Adebayo Ogunlesi')[0]
-    expect(adebayo.status).toBe('suspended')
-    const steps = stepsFor(policies, held('Adebayo Ogunlesi'))
-    expect(stepsNamedLine(steps.total)).toBe('Named in 2 approval steps')
-    expect(steps.policies.map((p) => p.name)).toEqual(['Company approval policy', 'Capital expenditure'])
+    // §8's amber note (SUSPENDED_STEPS_NOTE) moved to roles.ts, reworded "role" not
+    // "position" — no longer this module's to pin.
   })
 })
 
@@ -2001,45 +1647,12 @@ describe('needsClientPick — §7\'s zero-selected rule, now read by two compone
   })
 })
 
-describe('approvalInvolvement — the drawer gate itself, not just its inputs (T7.9)', () => {
-  it('answers null for a position no policy names, and the steps for one they do (T7.9)', () => {
-    // T7.6 pins `stepsFor`'s zeros; this pins what the DRAWER does with them. The gate used
-    // to be `steps != null && steps.total > 0` inside MemberDrawer.tsx — a rule vitest could
-    // not reach, so dropping it changed nothing any spec could see (§15.8).
-    const list = inhouse()
-    const policies = SEED_INHOUSE_POLICIES as Policy[]
-    const held = (name: string): RoleKey => {
-      const position = list.filter((m) => m.name === name)[0]?.position
-      if (position == null) throw new Error(`${name} holds no position`)
-      return position
-    }
-
-    // The three rows the gate exists for. Each one HOLDS a position, so the trigger §8 and
-    // AC#5 phrase literally — "when the member holds a position" — lets all three through
-    // and renders "Named in 0 approval steps" above an empty policy list.
-    for (const name of ['Tunde Adeyemi', 'Ibrahim Bello', 'Zainab Lawal']) {
-      expect(stepsFor(policies, held(name)).total).toBe(0)
-      expect(approvalInvolvement(policies, held(name))).toBeNull()
-    }
-
-    // §8's own example row — Adebayo, suspended, cfo. When it answers at all it answers with
-    // exactly what `stepsFor` returned, because the drawer renders `total` AND every policy
-    // name off the one value; a bare boolean would make it compute this twice.
-    const cfo = approvalInvolvement(policies, held('Adebayo Ogunlesi'))
-    expect(cfo).toEqual(stepsFor(policies, 'cfo'))
-    expect(stepsNamedLine(cfo?.total ?? 0)).toBe('Named in 2 approval steps')
-    expect(cfo?.policies.map((p) => p.name)).toEqual(['Company approval policy', 'Capital expenditure'])
-
-    // The gate's other half, which the drawer no longer forks on itself. "No position" ships
-    // in TWO shapes and both must reach the same answer: `undefined` on every firm row, which
-    // carries no such column (T1.6), and `null` on an in-house row holding no position.
-    expect(you(firm()).position).toBeUndefined()
-    expect(list.filter((m) => m.name === 'Chidi Anyanwu')[0].position).toBeNull()
-    expect(approvalInvolvement(policies, undefined)).toBeNull()
-    expect(approvalInvolvement(policies, null)).toBeNull()
-
-    // Stated without the seed too, so the rule outlives a Workflows edit that changes which
-    // positions the shipped policies name.
-    expect(approvalInvolvement([], 'cfo')).toBeNull()
+// task-346 AC-14 — delegateCandidates is unchanged, and firm mode had no spec of its own
+// (T1.32 only ever ran in-house).
+describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', () => {
+  it('lists the two active firm reviewers and excludes the admin', () => {
+    const candidates = delegateCandidates(SEED_FIRM_MEMBERS)
+    expect(candidates).toEqual(['Musa Danjuma', 'Chiamaka Nwosu'])
+    expect(candidates).not.toContain('Chinedu Okafor') // admin, not reviewer
   })
 })

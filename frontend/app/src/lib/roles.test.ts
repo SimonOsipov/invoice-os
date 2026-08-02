@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS } from './members'
+import { delegateCandidates, SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS, setMemberStatus } from './members'
 import {
   canSaveRole,
   deleteRoleConfirm,
+  drawerRoleHelper,
   filterPickerMembers,
   filterRoles,
   hiddenInvitedFootnote,
@@ -12,6 +13,7 @@ import {
   inspectorResolve,
   intro,
   newRoleKey,
+  pickerHiddenAmongSelected,
   pickerMembers,
   pickerMeta,
   pickerSelectionCount,
@@ -22,11 +24,13 @@ import {
   roleOf,
   roleUsage,
   rolesOfMember,
+  rosterRoleCell,
   SEED_FIRM_ROLES,
   SEED_INHOUSE_ROLES,
   seedRoles,
   setRoleMembers,
   stepsForMember,
+  stepsWarning,
   steps as roleSteps,
   unassignedNotice,
   unassignedRoles,
@@ -150,11 +154,11 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
   })
 })
 
-// QA — DELETE this describe block in subtask 05/06, alongside WF_ROLES and Member.position:
-// it exists only to catch the two live seed sources (roles.ts vs workflows.ts/members.ts)
-// drifting apart, which typecheck cannot see. Once the originals are gone there is nothing
-// left to compare against.
-describe('QA — SEED_INHOUSE_ROLES agrees with the two seed sources it is replacing', () => {
+// QA — DELETE this describe block in subtask 05/06, alongside WF_ROLES: it exists only to
+// catch SEED_INHOUSE_ROLES drifting from WF_ROLES, which typecheck cannot see. The holder-list
+// half of this block — checked against the shipped Member.position groupings — is gone: that
+// subtask deletes Member.position, so there is nothing left to compare holders against.
+describe('QA — SEED_INHOUSE_ROLES agrees with the seed source it is replacing', () => {
   it('titles and descs match WF_ROLES key-for-key', () => {
     const byKey = new Map(WF_ROLES.map((r) => [r.key, r]))
     expect(SEED_INHOUSE_ROLES.length).toBe(WF_ROLES.length) // guard against a vacuous pass
@@ -164,16 +168,6 @@ describe('QA — SEED_INHOUSE_ROLES agrees with the two seed sources it is repla
       expect(r.title).toBe(wf?.title)
       expect(r.desc).toBe(wf?.line)
     }
-  })
-
-  it('holder lists match the shipped Member.position groupings exactly, in seed order', () => {
-    const grouped = new Map<string, string[]>()
-    for (const m of SEED_INHOUSE_MEMBERS) {
-      if (!m.position) continue
-      grouped.set(m.position, [...(grouped.get(m.position) ?? []), m.id])
-    }
-    expect(grouped.size).toBeGreaterThan(0) // guard against a vacuous pass
-    for (const r of SEED_INHOUSE_ROLES) expect(r.members).toEqual(grouped.get(r.key) ?? [])
   })
 })
 
@@ -629,20 +623,26 @@ describe('[key-is-a-slug] — renaming a role never re-derives its key', () => {
   })
 })
 
-// Forward risk: a role holding an INVITED member's id is unreachable today (no seed does
-// it, inviteMembers does not write roles yet) but becomes reachable once
-// `[invite-writes-both-stores]` lands. Pinned so that lands on an explicit X-of-Y call
-// rather than inheriting this silent contract.
-describe('QA — a role holding an invited members id today', () => {
-  it('pickerMembers excludes the invited person regardless of any role membership', () => {
+// Forward risk, now DECIDED: [invite-writes-both-stores] makes a role holding an invited
+// member's id reachable (inviteMembers puts the fresh id straight into the chosen role), so
+// the picker's "X of Y selected" contract needs an explicit call rather than a silent one.
+// Decision: (a) — the numerator keeps counting the invited id (pickerMembers/pickerSelectionCount
+// are UNCHANGED, both still correct in isolation), and a NEW additive export names how many of
+// a selection are invited-and-hidden, so a caller can render the gap instead of leaving it
+// unexplained. Rejected: filtering the numerator down to the visible set (breaks the moment
+// `selected` is later used to save — an untickable row would either silently survive a save
+// nobody asked for, or vanish from a save that never touched it) and showing invited rows as
+// disabled (widens pickerMembers' return shape for every caller, not just this one).
+describe('the invited-holder picker contract, pinned on purpose', () => {
+  it('pickerMembers keeps excluding the invited person regardless of any role membership', () => {
     const mh15 = SEED_INHOUSE_MEMBERS.find((m) => m.id === 'mh15')!
     expect(mh15.status).toBe('invited') // guard
     expect(pickerMembers(SEED_INHOUSE_MEMBERS).some((m) => m.id === 'mh15')).toBe(false)
   })
 
-  it('pickerSelectionCount echoes whatever numerator it is given, uncrossed against the selectable set', () => {
-    // Stand-in for role.members once a role can hold an invited id: two real selectable
-    // holders plus one invited id the picker will never render as a row.
+  it('pickerSelectionCount keeps echoing its numerator, uncrossed against the selectable set', () => {
+    // Stand-in for role.members once a role holds an invited id: two real selectable holders
+    // plus one invited id the picker will never render as a row.
     const inflatedSelected = ['mh1', 'mh2', 'mh15']
     expect(pickerSelectionCount(inflatedSelected.length, SEED_INHOUSE_MEMBERS)).toBe('3 of 14 selected')
     const checkableRows = pickerMembers(SEED_INHOUSE_MEMBERS).map((m) => m.id)
@@ -650,5 +650,85 @@ describe('QA — a role holding an invited members id today', () => {
     // The picker can only ever tick 2 of those 3 ids — the numerator above does not know that.
     expect(checkableOfSelected).toEqual(['mh1', 'mh2'])
     expect(checkableOfSelected.length).not.toBe(inflatedSelected.length)
+  })
+
+  it('pickerHiddenAmongSelected names the gap the count above cannot explain on its own', () => {
+    const inflatedSelected = ['mh1', 'mh2', 'mh15']
+    expect(pickerHiddenAmongSelected(inflatedSelected, SEED_INHOUSE_MEMBERS)).toBe(1)
+    expect(pickerHiddenAmongSelected(['mh1', 'mh2'], SEED_INHOUSE_MEMBERS)).toBe(0)
+  })
+})
+
+// ============================================================================
+// task-346 — Members surfaces speak in workflow roles (Test Specs table, Mode A)
+// ============================================================================
+
+describe('rosterRoleCell — the roster column, first title plus N', () => {
+  it('shows the first title plus N, with the full list newline-joined in the tooltip', () => {
+    expect(rosterRoleCell(SEED_FIRM_ROLES, 'mf3')).toEqual({
+      text: 'Engagement Manager +1',
+      tooltip: 'Engagement Manager\nSenior Manager',
+    })
+  })
+
+  it('shows a bare title for a single role, with no +N and a one-line tooltip', () => {
+    expect(rosterRoleCell(SEED_FIRM_ROLES, 'mf4')).toEqual({ text: 'Tax Reviewer', tooltip: 'Tax Reviewer' })
+  })
+
+  it('is an em dash with an empty tooltip for nobody', () => {
+    expect(rosterRoleCell(SEED_FIRM_ROLES, 'mf6')).toEqual({ text: '—', tooltip: '' })
+  })
+})
+
+describe('stepsForMember and stepsWarning — the suspended-row warning counts every held role', () => {
+  it('the suspended in-house cfo holder still blocks the two cfo steps', () => {
+    const result = stepsForMember(SEED_INHOUSE_POLICIES, SEED_INHOUSE_ROLES, 'mh6')
+    expect(result?.total).toBe(2)
+    expect(result?.policies.map((p) => p.policyName)).toEqual(['Company approval policy', 'Capital expenditure'])
+  })
+
+  it('stepsWarning pluralises around one', () => {
+    expect(stepsWarning(1)).toBe('Named in 1 approval step · that step will block')
+    expect(stepsWarning(2)).toBe('Named in 2 approval steps · those steps will block')
+  })
+})
+
+describe('drawerRoleHelper — forks on the access role, not the workflow role', () => {
+  it('preparers get the Reviewer-first sentence; reviewers and admins get the general one', () => {
+    expect(drawerRoleHelper('preparer')).toBe(
+      'Preparers cannot approve. Give them the Reviewer access role above before a workflow role means anything.',
+    )
+    expect(drawerRoleHelper('reviewer')).toBe('Roles decide which approval steps this person can act on.')
+    expect(drawerRoleHelper('admin')).toBe('Roles decide which approval steps this person can act on.')
+  })
+})
+
+describe('[remove-prunes-suspend-keeps] — pruneMember vs setMemberStatus', () => {
+  it('pruning a removed member empties the role they solely held', () => {
+    const pruned = pruneMember(SEED_INHOUSE_ROLES, 'mh6')
+    const result = resolve(pruned, SEED_INHOUSE_MEMBERS, 'cfo')
+    expect(result.text).toBe('Nobody assigned')
+    expect(result.warn).toBe(true)
+  })
+
+  it('suspending does not unstaff — the role keeps the member, resolve just blocks', () => {
+    expect(SEED_FIRM_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual(['mf3']) // guard
+    const suspended = setMemberStatus(SEED_FIRM_MEMBERS, 'mf3', 'suspended')
+    const result = resolve(SEED_FIRM_ROLES, suspended, 'fin_mgr')
+    expect(result.text).toBe('Musa Danjuma')
+    expect(result.warn).toBe(true)
+  })
+})
+
+describe('the firm workspace resolves every seeded approval step to a named person', () => {
+  it('all ten seeded firm approval steps resolve without warn', () => {
+    const stepRoles = approvalRoles(SEED_FIRM_POLICIES)
+    expect(stepRoles.length).toBe(10) // guard against a vacuous pass
+    for (const key of stepRoles) {
+      const result = resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, key)
+      expect(result.warn).toBe(false)
+      expect(result.text).not.toBe('Nobody assigned')
+      expect(result.text).not.toBe('Role no longer exists')
+    }
   })
 })

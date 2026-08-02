@@ -2,13 +2,21 @@ import { describe, expect, it } from 'vitest'
 
 import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS } from './members'
 import {
+  canSaveRole,
+  deleteRoleConfirm,
+  filterPickerMembers,
   filterRoles,
+  hiddenInvitedFootnote,
   holderCount,
   holders,
   inspectorResolve,
   intro,
   newRoleKey,
+  pickerMembers,
+  pickerMeta,
+  pickerSelectionCount,
   pruneMember,
+  removeRole,
   replaceRole,
   resolve,
   roleOf,
@@ -456,5 +464,149 @@ describe('QA — intro', () => {
     const text = intro([])
     expect(text).toBe('A role is a named seat in your approval policies. Workflow steps point at the role; the people here are who actually signs.')
     expect(text).not.toContain('—')
+  })
+})
+
+// MEMB-02-03 (RoleModal) — RED. Every helper below is a stub in lib/roles.ts that throws
+// until the executor implements it; the seed counts are pinned against SEED_FIRM_MEMBERS /
+// SEED_INHOUSE_MEMBERS directly so a wrong stub body fails on OUR assertion, not on a
+// number this file invented.
+
+describe('AC-4 — pickerMembers excludes invited people in both modes', () => {
+  it('firm: 7 seeded, 1 invited (mf6) -> 6 rows, none invited', () => {
+    expect(SEED_FIRM_MEMBERS.filter((m) => m.status === 'invited').map((m) => m.id)).toEqual(['mf6']) // guard: pins the seed fact this test relies on
+    const rows = pickerMembers(SEED_FIRM_MEMBERS)
+    expect(rows).toHaveLength(6)
+    expect(rows.some((m) => m.status === 'invited')).toBe(false)
+  })
+
+  it('inhouse: 16 seeded, 2 invited (mh15, mh16) -> 14 rows, none invited', () => {
+    expect(SEED_INHOUSE_MEMBERS.filter((m) => m.status === 'invited').map((m) => m.id)).toEqual(['mh15', 'mh16']) // guard
+    const rows = pickerMembers(SEED_INHOUSE_MEMBERS)
+    expect(rows).toHaveLength(14)
+    expect(rows.some((m) => m.status === 'invited')).toBe(false)
+  })
+})
+
+describe('AC-4 — pickerMeta reads department in-house and the access-role label in firm', () => {
+  it("inhouse reads the member's department", () => {
+    const mh4 = SEED_INHOUSE_MEMBERS.find((m) => m.id === 'mh4')!
+    expect(mh4.department).toBe('Finance') // guard: pins the fixture fact, independent of pickerMeta
+    expect(pickerMeta('inhouse', mh4)).toBe('Finance')
+  })
+
+  it("firm reads the member's access-role LABEL, not the raw lowercase id", () => {
+    const mf3 = SEED_FIRM_MEMBERS.find((m) => m.id === 'mf3')!
+    expect(mf3.role).toBe('reviewer') // guard: pins the fixture fact — pickerMeta must NOT just echo this
+    expect(pickerMeta('firm', mf3)).toBe('Reviewer')
+  })
+})
+
+describe('AC-4 — filterPickerMembers matches name or email, case-insensitively, and trims', () => {
+  // Built directly rather than via pickerMembers(), so this spec's own failure reason can
+  // never be masked by the pickerMembers stub throwing first.
+  const inhouseSelectable = SEED_INHOUSE_MEMBERS.filter((m) => m.status !== 'invited')
+
+  it('a padded, wrong-case query matches on name', () => {
+    expect(filterPickerMembers(inhouseSelectable, '  LAWAL ').map((m) => m.id)).toEqual(['mh7'])
+  })
+
+  it('a query matches on email when it does not match the name', () => {
+    // 'honeywellgroup' only appears in mh11's email domain, not in any name.
+    expect(filterPickerMembers(inhouseSelectable, 'honeywellgroup').map((m) => m.id)).toEqual(['mh11'])
+  })
+
+  it('an empty (or whitespace) query returns the full input list, copied', () => {
+    const result = filterPickerMembers(inhouseSelectable, '   ')
+    expect(result).toEqual(inhouseSelectable)
+    expect(result).not.toBe(inhouseSelectable)
+  })
+
+  it('a query matching nobody returns an empty array, not the full list', () => {
+    expect(filterPickerMembers(inhouseSelectable, 'zzz-nonexistent')).toEqual([])
+  })
+})
+
+describe('AC-5 — pickerSelectionCount denominators on the selectable count, not the roster', () => {
+  it('firm: 2 selected of 6 selectable (mf6, invited, excluded from the denominator)', () => {
+    expect(SEED_FIRM_MEMBERS).toHaveLength(7) // guard: pins the roster length this test means to NOT use
+    expect(pickerSelectionCount(2, SEED_FIRM_MEMBERS)).toBe('2 of 6 selected')
+  })
+
+  it('inhouse: 5 selected of 14 selectable', () => {
+    expect(pickerSelectionCount(5, SEED_INHOUSE_MEMBERS)).toBe('5 of 14 selected')
+  })
+})
+
+describe('AC-5 — hiddenInvitedFootnote pluralises around one', () => {
+  it('firm has exactly one invited person -> the singular residue string', () => {
+    expect(hiddenInvitedFootnote(SEED_FIRM_MEMBERS)).toBe('1 invited person is hidden until they accept the invite.')
+  })
+
+  it('inhouse has two invited people -> the plural form', () => {
+    expect(hiddenInvitedFootnote(SEED_INHOUSE_MEMBERS)).toBe('2 invited people are hidden until they accept the invite.')
+  })
+})
+
+describe('AC-6 — canSaveRole gates on the name alone', () => {
+  it('an empty name cannot save', () => {
+    expect(canSaveRole('')).toBe(false)
+  })
+
+  it('a whitespace-only name cannot save', () => {
+    expect(canSaveRole('   ')).toBe(false)
+  })
+
+  it('a non-empty name can save even when that title already exists — duplicates are allowed', () => {
+    expect(SEED_FIRM_ROLES.some((r) => r.title === 'Tax Reviewer')).toBe(true) // guard: the title really is a duplicate
+    expect(canSaveRole('Tax Reviewer')).toBe(true)
+  })
+})
+
+describe('AC-7 — deleteRoleConfirm names the role and its usage', () => {
+  it('a used role names its usage sentence and warns those steps will block', () => {
+    // 'compliance' (Tax Reviewer) is named once each in polF1/polF2/polF3 — three approval
+    // steps across three policies (workflows.ts:162-183).
+    const usage = roleSteps(SEED_FIRM_POLICIES, 'compliance')
+    expect(usage).toEqual({
+      total: 3,
+      policies: [
+        { policyName: 'Standard approval policy', count: 1 },
+        { policyName: 'Cross-border & FX', count: 1 },
+        { policyName: 'Government supply (B2G)', count: 1 },
+      ],
+    }) // guard: pins the exact usage this test's assertion depends on
+    const text = deleteRoleConfirm('Tax Reviewer', usage)
+    expect(text).toContain('Tax Reviewer')
+    expect(text).toContain('3 approval steps · 3 policies')
+    expect(text).toContain('will block')
+  })
+
+  it('an unused role names "not used in any policy" and claims no blocking', () => {
+    const usage = roleSteps(SEED_FIRM_POLICIES, 'quality_reviewer')
+    expect(usage).toEqual({ total: 0, policies: [] }) // guard
+    const text = deleteRoleConfirm('Quality Reviewer', usage)
+    expect(text).toContain('Quality Reviewer')
+    expect(text).toContain('not used in any policy')
+    expect(text).not.toContain('will block')
+  })
+})
+
+// This one is NOT expected to go red: removeRole (task-344, already shipped) takes only a
+// role list and a key — it has no policies parameter to touch one through, so "removeRole
+// leaves every policy object untouched" is true by construction today. Pinned anyway, the
+// same shape as AC-13 above, as the regression guard for `[delete-does-not-demote]`: the
+// day removeRole's signature grows a policies argument, THIS is the test that must catch a
+// write into it.
+describe('AC-7 — removeRole never touches a policy object ([delete-does-not-demote])', () => {
+  it('policy references and their published status are unchanged after removing a role', () => {
+    const published = SEED_FIRM_POLICIES.filter((p) => p.status === 'published')
+    expect(published.length).toBeGreaterThan(0) // guard against a vacuous pass
+    const before = published.map((p) => p)
+    removeRole(SEED_FIRM_ROLES, 'compliance')
+    const after = SEED_FIRM_POLICIES.filter((p) => p.status === 'published')
+    expect(after).toEqual(before)
+    for (let i = 0; i < before.length; i++) expect(after[i]).toBe(before[i]) // same object references
+    for (const p of after) expect(p.status).toBe('published')
   })
 })

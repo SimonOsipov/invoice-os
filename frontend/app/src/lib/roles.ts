@@ -284,3 +284,42 @@ export function stepsNamedLine(total: number): string {
 
 /** The drawer's amber note, and the half `stepsNamedLine` leaves unsaid. */
 export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will block until someone else holds this role.'
+
+// ---------------------------------------------------------------------------
+// RoleModal (MEMB-02-03) — stubbed pure helpers, throw until the executor implements them
+// ---------------------------------------------------------------------------
+
+/** The picker's rows for one mode — an invited person holds no place in a role yet. */
+export function pickerMembers(_list: readonly Member[]): Member[] {
+  throw new Error('not implemented')
+}
+
+/** Right-aligned meta column: department in-house, access-role label in firm. */
+export function pickerMeta(_mode: WorkflowMode, _member: Member): string {
+  throw new Error('not implemented')
+}
+
+/** Case-insensitive name/email search over an already-selectable list; trims the query. */
+export function filterPickerMembers(_list: readonly Member[], _query: string): Member[] {
+  throw new Error('not implemented')
+}
+
+/** `X of Y selected` — Y is the selectable count, never the raw roster length. */
+export function pickerSelectionCount(_selected: number, _list: readonly Member[]): string {
+  throw new Error('not implemented')
+}
+
+/** The footnote naming how many invited people the picker hides. */
+export function hiddenInvitedFootnote(_list: readonly Member[]): string {
+  throw new Error('not implemented')
+}
+
+/** Save is inert on an empty or whitespace-only name; nothing else gates it — duplicate titles are allowed. */
+export function canSaveRole(_name: string): boolean {
+  throw new Error('not implemented')
+}
+
+/** The inline delete-confirm sentence, naming the role and its usage. */
+export function deleteRoleConfirm(_title: string, _roleSteps: RoleSteps): string {
+  throw new Error('not implemented')
+}

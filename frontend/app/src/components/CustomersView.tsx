@@ -1,6 +1,7 @@
-// Customers & vendors — buyer master data aggregated from the active client's LIVE,
-// entity-scoped invoices: KPIs + a table with TIN-validity status, or an honest empty
-// state. Ported from Platform.dc.html ~L733-779 + the customers slice of
+// Customers & vendors — buyer master data aggregated from the active client's whole,
+// entity-scoped invoice set: a table with TIN-validity status, or an honest empty
+// state (BUG-01-08 dropped the client-derived KPI cards -- see [e-and-f-ship-in-one-subtask]).
+// Ported from Platform.dc.html ~L733-779 + the customers slice of
 // renderVals() (~L1462-1468). persona-handoff-fix step 3 swapped the source off the
 // fabricated `active.invoices` overlay (attributing invented buyers to the real
 // selected company) onto the SAME live fetch InvoicesList.tsx already established; a
@@ -14,11 +15,16 @@ import { useMemo } from 'react'
 
 import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { fmt, fmtShort } from '../lib/format'
+import { fmt } from '../lib/format'
 import { aggregateCustomers, initials } from '../lib/customers'
-import { gateByActiveEntity, invoicesViewState, listInvoices, shouldFetchInvoices, type InvoiceRecord } from '../lib/invoices'
+import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, type AllInvoices } from '../lib/invoices'
 import { docGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
+
+// Tags the envelope with the entity it was fetched for, mirroring InvoicesList.tsx's
+// FetchedInvoiceList -- lets `fresh` gate the render so a company switch's pre-refetch
+// frame can't show the previous client's total/truncated numbers.
+type FetchedAllInvoices = AllInvoices & { fetchedEntityId: string | undefined }
 
 export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
@@ -29,16 +35,19 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   // shouldFetchInvoices(base)` keeps the no-gateway build at zero network. `deps`
   // re-fetches on a company switch ([entity-id-restored]: entity_id is a server-side
   // param now, so switching companies needs a real refetch, not just a recompute).
-  const list = useAsync<InvoiceRecord[]>(
+  const list = useAsync<FetchedAllInvoices>(
     () =>
       base
-        ? // listInvoices resolves the {invoices, pagination} envelope (INVCR-01-08); this
-          // screen sends no limit/offset and stays un-paged, so it keeps the rows only.
-          listInvoices(ctx.authedFetch, base, { entityId: activeEntityId }).then((r) => r.invoices)
+        ? // fetchAllInvoices pages through the whole set (AGGREGATE_PAGE_SIZE/_MAX_PAGES),
+          // not just the server's first page (INVCR-01-08 un-paged call was the bug).
+          fetchAllInvoices(ctx.authedFetch, base, { entityId: activeEntityId }).then((r) => ({ ...r, fetchedEntityId: activeEntityId }))
         : Promise.reject(new Error('no gateway configured')),
-    { immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
+    { isEmpty: allInvoicesIsEmpty, immediate: shouldFetchInvoices(base), deps: [ctx.mode, ctx.active.entityId] },
   )
   const state = invoicesViewState(base, list)
+  // See InvoicesList.tsx's own `fresh` for the trap this closes: on a company switch,
+  // list.data still holds the PREVIOUS entity's envelope for one committed render.
+  const fresh = list.data != null && list.data.fetchedEntityId === activeEntityId
 
   // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
   // ([entity-id-restored]); gateByActiveEntity blanks the "not yet resolved" transient
@@ -47,7 +56,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   // buyers) — a buyer's totals here can never disagree with the invoice rows the
   // Invoices page renders for this client.
   const rows = useMemo(
-    () => gateByActiveEntity(list.data ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    () => gateByActiveEntity(list.data?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
     [list.data, ctx.mode, ctx.active.entityId],
   )
   const custList = aggregateCustomers(rows)
@@ -62,13 +71,6 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
       ? { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'VALID' }
       : { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'NEEDS TIN' },
   }))
-  const custValid = customers.filter((c) => c.st.label === 'VALID').length
-  const custKpis = [
-    { label: 'Customers', value: String(customers.length) },
-    { label: 'Valid TINs', value: String(custValid) },
-    { label: 'Flagged', value: String(customers.length - custValid) },
-    { label: 'Total billed', value: fmtShort(custList.reduce((s, o) => s + o.totalNum, 0)) },
-  ]
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
@@ -84,20 +86,20 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
-      {state === 'ready' && customers.length > 0 && (
+      {/* Settling frame after a company switch (see `fresh`'s own comment) — never
+          render the previous client's rows or its truncation numbers. */}
+      {state === 'ready' && list.data != null && !fresh && <Loading label="Loading customers…" />}
+
+      {state === 'ready' && list.data != null && fresh && customers.length > 0 && (
         <div>
-          <div className="pf-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
-            {custKpis.map((k) => (
-              <div key={k.label} style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '16px 20px' }}>
-                <div className="label" style={{ marginBottom: 12 }}>
-                  {k.label}
-                </div>
-                <span className="money" style={{ fontSize: 24, fontWeight: 700 }}>
-                  {k.value}
-                </span>
-              </div>
-            ))}
-          </div>
+          {list.data.truncated && (
+            <div
+              data-testid="customers-truncated-notice"
+              style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)', fontSize: 12.5, marginBottom: 16 }}
+            >
+              Showing {list.data.fetched} of {list.data.total} invoices — refine your search to see the rest.
+            </div>
+          )}
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div className="pf-list-head" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1.6fr) 140px 70px 140px 104px', gap: 14, padding: '11px 18px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
               <span className="label">Customer</span>
@@ -131,8 +133,9 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
           ('empty', now resolved server-side via `entity_id` — [entity-id-restored]), and
           the ready-but-gated-to-zero window (entityId not yet resolved,
           gateByActiveEntity) — same three-way union InvoicesList.tsx's own empty rung
-          uses. */}
-      {(state === 'idle' || state === 'empty' || (state === 'ready' && customers.length === 0)) && (
+          uses, plus the `fresh` gate so this never fires on a stale, not-yet-settled
+          envelope. */}
+      {(state === 'idle' || state === 'empty' || (state === 'ready' && list.data != null && fresh && customers.length === 0)) && (
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No customers yet</div>

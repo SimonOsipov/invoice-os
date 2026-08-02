@@ -119,11 +119,12 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       { navConst: 'NAV_WORKFLOWS', grade: 'drives', coveredBy: 'e2e/topology/workflows.spec.ts' },
       // nav-only, and honestly so (PERSONA-01-03): persona-surfaces.spec.ts's roster test
       // asserts the firm sidebar's nav labels as an EXACT ordered list, so it pins that
-      // these four surfaces are present (and that Approvals is absent) for this persona --
+      // these surfaces are present (and that Approvals is absent) for this persona --
       // but it never opens them as the firm. Their firm-mode CONTENT is unproven, which is
       // exactly what `nav-only` states. (NAV_WORKFLOWS was a fifth such surface until
-      // [PERSONA-01-04] drove it; its cell now sits in the `drives` group above.)
-      { navConst: 'NAV_CUSTOMERS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      // [PERSONA-01-04] drove it; its cell now sits in the `drives` group above. BUG-01-08
+      // drove NAV_CUSTOMERS the same way -- its cell moved below.)
+      { navConst: 'NAV_CUSTOMERS', grade: 'drives', coveredBy: 'e2e/topology/invoice-surfaces.spec.ts' },
       { navConst: 'NAV_RULES', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_REPORTS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_SETTINGS', grade: 'nav-only', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },

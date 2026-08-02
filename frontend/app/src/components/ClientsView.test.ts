@@ -6,26 +6,26 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { EntityHealth } from '../lib/dashboard'
-import * as ClientsViewModule from './ClientsView'
+import { healthPillStyle } from './ClientsView'
 
-// healthPillStyle isn't exported yet (BUG-01-11) -- index-signature cast keeps this a
-// runtime lookup rather than a "has no exported member" compile error.
-const healthPillStyle = (ClientsViewModule as unknown as Record<string, (h: EntityHealth) => { label: string }>)
-  .healthPillStyle
-
-const ALL_HEALTH: EntityHealth[] = [
-  { kind: 'no-invoices' },
-  { kind: 'clear' },
-  { kind: 'needs-attention', count: 1 },
-  { kind: 'needs-attention', count: 4 },
-]
+// Keyed by EntityHealth['kind'] via a mapped type, not a hand-typed array: widening
+// EntityHealth with a new variant makes this object literal fail to typecheck until a
+// fixture is added for it -- so a 4th variant can't go untested by omission.
+type Fixtures = { [K in EntityHealth['kind']]: Extract<EntityHealth, { kind: K }> }
+const FIXTURES: Fixtures = {
+  'no-invoices': { kind: 'no-invoices' },
+  'needs-attention': { kind: 'needs-attention', count: 4 },
+  clear: { kind: 'clear' },
+}
 
 describe('healthPillStyle', () => {
-  it('every health pill label is upper-case', () => {
-    for (const h of ALL_HEALTH) {
-      const label = healthPillStyle(h).label
-      expect(label).toBe(label.toUpperCase())
-    }
+  it.each(Object.entries(FIXTURES))('%s label is upper-case', (_kind, h) => {
+    const label = healthPillStyle(h).label
+    expect(label).toBe(label.toUpperCase())
+  })
+
+  it('the singular 1 NEEDS ATTENTION count also stays upper-case', () => {
+    expect(healthPillStyle({ kind: 'needs-attention', count: 1 }).label).toBe('1 NEEDS ATTENTION')
   })
 
   it('the no-invoices pill reads NO INVOICES YET', () => {

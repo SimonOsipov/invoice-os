@@ -70,7 +70,7 @@ func impvHandlerRows() [][]string {
 
 // doImportCreateGate is doImportCreate's (handlers_test.go) twin, decoding
 // into importBatchBodyGate instead of importBatchBody.
-func doImportCreateGate(t *testing.T, imp importFunc, id *auth.Identity, query, contentType string, body io.Reader) (*httptest.ResponseRecorder, importBatchBodyGate) {
+func doImportCreateGate(t *testing.T, imp importFunc, open openSpec, id *auth.Identity, query, contentType string, body io.Reader) (*httptest.ResponseRecorder, importBatchBodyGate) {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/imports"+query, body)
 	r.Header.Set("Content-Type", contentType)
@@ -78,7 +78,7 @@ func doImportCreateGate(t *testing.T, imp importFunc, id *auth.Identity, query, 
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	CreateHandler(imp, nil).ServeHTTP(rec, r)
+	CreateHandler(imp, open, nil).ServeHTTP(rec, r)
 
 	var resp importBatchBodyGate
 	if len(rec.Body.Bytes()) > 0 {
@@ -109,8 +109,8 @@ func TestCreateHandler_RealResponseCarriesNewGateFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", csvBody(t, stdHeader, impvHandlerRows()))
-	rec, resp := doImportCreateGate(t, svc.Import, &id, "", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", csvBody(t, stdHeader, impvHandlerRows()))
+	rec, resp := doImportCreateGate(t, svc.Import, open, &id, "", contentType, body)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
@@ -154,8 +154,8 @@ func TestCreateHandler_DryRunResponseCarriesNewGateFieldsNoIDStatus(t *testing.T
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", csvBody(t, stdHeader, impvHandlerRows()))
-	rec, resp := doImportCreateGate(t, svc.Import, &id, "?dry_run=true", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", csvBody(t, stdHeader, impvHandlerRows()))
+	rec, resp := doImportCreateGate(t, svc.Import, open, &id, "?dry_run=true", contentType, body)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for ?dry_run=true (body=%s)", rec.Code, rec.Body.String())

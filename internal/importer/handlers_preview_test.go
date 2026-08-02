@@ -7,10 +7,11 @@
 // Mirrors handlers_test.go's httptest + auth.WithIdentity idiom and reuses
 // its buildMultipartBody/csvBody/xlsxBody/xlsxContentType helpers verbatim
 // -- no duplicate helpers here. Unlike CreateHandler's tests, every case
-// below is a plain httptest unit test: PreviewHandler is stateless
-// ([preview-stateless]), so none of these need dbTestPools/seedTenant/
-// seedEntity, a TestRLS_* name, or a service container -- they all run under
-// a bare `go test ./internal/importer/...` with no DSNs set.
+// below is a plain httptest unit test: since [upload-once] PreviewHandler
+// does write to object storage and the documents table, but its store seam is
+// injected, so none of these need dbTestPools/seedTenant/seedEntity, a
+// TestRLS_* name, or a service container -- they all run under a bare
+// `go test ./internal/importer/...` with no DSNs set.
 //
 // Spec-to-test map (Test Specs table, M4-08-01 story / task-170
 // Implementation Plan §C):
@@ -39,6 +40,7 @@ package importer
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,6 +51,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -63,6 +66,27 @@ type previewBody struct {
 	SampleRows [][]string `json:"sample_rows"`
 	RowsTotal  int        `json:"rows_total"`
 	Error      string     `json:"error"`
+}
+
+// previewStore is the default store seam for the specs below, none of which
+// are about storage: it mirrors document.Service.Store's reader handling byte
+// for byte (hash pass to EOF, one rewind, PUT pass to EOF, nothing after), so
+// every one of them exercises the handler's rewind. Records nothing, so it is
+// safe to share across goroutines. A spec that IS about storage passes its own
+// (handlers_upload_once_test.go's fakeDocStore).
+func previewStore() func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error) {
+	return func(_ context.Context, _, _ string, _ int64, body io.ReadSeeker) (document.Document, error) {
+		if _, err := io.Copy(io.Discard, body); err != nil {
+			return document.Document{}, err
+		}
+		if _, err := body.Seek(0, io.SeekStart); err != nil {
+			return document.Document{}, err
+		}
+		if _, err := io.Copy(io.Discard, body); err != nil {
+			return document.Document{}, err
+		}
+		return document.Document{ID: uuid.NewString()}, nil
+	}
 }
 
 // doPreviewRequest builds the POST /v1/imports/preview request, injects id
@@ -81,7 +105,7 @@ func doPreviewRequest(t *testing.T, id *auth.Identity, contentType string, body 
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	PreviewHandler().ServeHTTP(rec, r)
+	PreviewHandler(previewStore(), nil).ServeHTTP(rec, r)
 
 	raw := rec.Body.Bytes()
 	var resp previewBody

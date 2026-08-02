@@ -12,8 +12,8 @@
 //     surfaces as 400, never a panic/500; an unknown extension paired with an
 //     explicit "text/plain" Content-Type actually falls back to csv today --
 //     pinned here as observed behavior, not a spec requirement).
-//   - a request with no "file" part 400s rather than panicking on
-//     r.FormFile's error.
+//   - a document carrying no resolvable format 400s rather than panicking
+//     (the pre-[upload-once] shape of this case was a missing "file" part).
 //   - dry_run is an EXACT "true"/"false" string match (or absent, which is
 //     also a real import) -- anything else, e.g. "1"/"TRUE"/a typo, 400s
 //     rather than silently falling through to a real (persisting) import
@@ -46,14 +46,14 @@ import (
 // --- identity-before-upload-cap ordering ------------------------------------
 
 // TestCreateHandler_NoIdentityOversizedBody401NotTooLarge: a request that is
-// BOTH unauthenticated AND over the 10 MiB upload cap must 401, not 413 --
+// BOTH unauthenticated AND over the upload cap must 401, not 413 --
 // identity-first-401 (auth.IdentityFromContext) runs before
 // http.MaxBytesReader/ParseMultipartForm ever touch the body, per
 // CreateHandler's own doc comment ("identity-first-401 (IMP-API-01) ->
 // upload-cap"). imp fataling if called also proves neither check nor cap
 // enforcement reaches the service layer.
 func TestCreateHandler_NoIdentityOversizedBody401NotTooLarge(t *testing.T) {
-	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run without an identity, even for an oversized body")
 		return BatchResult{}, nil
 	}
@@ -61,9 +61,12 @@ func TestCreateHandler_NoIdentityOversizedBody401NotTooLarge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	oversized := bytes.Repeat([]byte("x"), 10<<20+1024) // > 10 MiB
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "data.csv", "", oversized)
-	rec, resp := doImportCreate(t, imp, nil, "", contentType, body)
+	// The padding rides in an unrelated part: since [upload-once] no file
+	// crosses this wire, and the cap bounds the WHOLE request anyway.
+	open := newFakeDocOpen("data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	body, contentType := buildImportForm(t, uuid.NewString(), string(mappingJSON), open.doc.ID,
+		importPart{field: "pad", filename: "pad.bin", content: bytes.Repeat([]byte("x"), maxUploadBytes+1024)})
+	rec, resp := doImportCreate(t, imp, open.fn(), nil, "", contentType, body)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for an oversized body with no identity (identity-first-401 must precede the upload cap; body=%s)", rec.Code, rec.Body.String())
@@ -104,7 +107,7 @@ func TestCreateHandler_FormatDetection_BadInputNoDBWrite400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-			imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when the uploaded file can't be recognized/decoded")
 				return BatchResult{}, nil
 			}
@@ -112,8 +115,8 @@ func TestCreateHandler_FormatDetection_BadInputNoDBWrite400(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal mapping: %v", err)
 			}
-			body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), tc.filename, tc.contentType, tc.content)
-			rec, resp := doImportCreate(t, imp, &id, "", contentType, body)
+			body, contentType, open := storedUpload(t, uuid.NewString(), string(mappingJSON), tc.filename, tc.contentType, tc.content)
+			rec, resp := doImportCreate(t, imp, open.fn(), &id, "", contentType, body)
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (no panic, no 500; body=%s)", rec.Code, rec.Body.String())
@@ -163,8 +166,8 @@ func TestCreateHandler_FormatDetection_ActualMapping201(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal mapping: %v", err)
 			}
-			body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), tc.filename, tc.contentType, csvBody(t, header, rows))
-			rec, resp := doImportCreate(t, svc.Import, &id, "", contentType, body)
+			body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), tc.filename, tc.contentType, csvBody(t, header, rows))
+			rec, resp := doImportCreate(t, svc.Import, open, &id, "", contentType, body)
 
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
@@ -176,25 +179,29 @@ func TestCreateHandler_FormatDetection_ActualMapping201(t *testing.T) {
 	}
 }
 
-// --- missing file part -------------------------------------------------------
+// --- a document carrying no format signal ------------------------------------
 
-// TestCreateHandler_MissingFilePart400: entity_id + mapping present, but no
-// "file" part at all must 400 (r.FormFile's error path), never panic/500.
-func TestCreateHandler_MissingFilePart400(t *testing.T) {
+// TestCreateHandler_DocumentWithNoFormatHints400: this was the missing-"file"-
+// part case before [upload-once] retired that part. Its successor: a document
+// row whose filename and declared content type are BOTH NULL (a name that
+// sanitized away, no declared type) leaves detectFormat nothing to resolve, and
+// must 400 -- never panic, never 500. The "no document_id at all" half of the
+// old case is TestImport_RequiresDocumentID.
+func TestCreateHandler_DocumentWithNoFormatHints400(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
-		t.Fatal("imp must not run when the file part is missing")
+	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		t.Fatal("imp must not run when the document's format cannot be resolved")
 		return BatchResult{}, nil
 	}
 	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "", "", nil)
-	rec, resp := doImportCreate(t, imp, &id, "", contentType, body)
+	body, contentType, open := storedUpload(t, uuid.NewString(), string(mappingJSON), "", "", []byte("Inv No\nINV-1\n"))
+	rec, resp := doImportCreate(t, imp, open.fn(), &id, "", contentType, body)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 when the file part is absent (body=%s)", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 when the document carries no format signal (body=%s)", rec.Code, rec.Body.String())
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
@@ -240,8 +247,8 @@ func TestCreateHandler_DryRunQueryParamVariants(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal mapping: %v", err)
 			}
-			body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
-			rec, resp := doImportCreate(t, svc.Import, &id, tc.query, contentType, body)
+			body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
+			rec, resp := doImportCreate(t, svc.Import, open, &id, tc.query, contentType, body)
 
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
@@ -322,8 +329,8 @@ func TestCreateHandler_SemicolonCSVEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", semicolonCSVBody(t, header, rows))
-	rec, resp := doImportCreate(t, svc.Import, &id, "", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", semicolonCSVBody(t, header, rows))
+	rec, resp := doImportCreate(t, svc.Import, open, &id, "", contentType, body)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
@@ -359,8 +366,8 @@ func TestCreateHandler_MappingMissingInvoiceNumber400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
-	rec, resp := doImportCreate(t, svc.Import, &id, "", contentType, body)
+	body, contentType, open := storedUpload(t, uuid.NewString(), string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
+	rec, resp := doImportCreate(t, svc.Import, open.fn(), &id, "", contentType, body)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 when mapping has no invoice_number key (body=%s)", rec.Code, rec.Body.String())

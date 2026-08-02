@@ -2,7 +2,7 @@
 // CreateHandler -- written BEFORE the real handler logic exists (RED against
 // handlers.go's not-implemented stub: CreateHandler currently always answers
 // 501 "not implemented" without checking identity, parsing the multipart
-// body, enforcing the 10 MiB upload cap, or calling the injected imp
+// body, enforcing the upload cap, or calling the injected imp
 // closure, so every assertion below fails on its status/body value, not on a
 // compile error). Mirrors internal/invoice/handlers_test.go's httptest +
 // auth.WithIdentity idiom; the non-DB cases (401/413/400) use a fake imp
@@ -47,8 +47,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xuri/excelize/v2"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -85,7 +87,7 @@ type importBatchBody struct {
 // importFunc is the exact signature CreateHandler's imp parameter expects
 // ((*Service).Import's signature) -- named here purely to keep the test
 // helpers below readable.
-type importFunc = func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error)
+type importFunc = func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error)
 
 // --- request-building helpers -------------------------------------------
 
@@ -194,29 +196,40 @@ func buildMultipartBody(t *testing.T, entityID, mappingJSON, filename, fileConte
 	return &buf, w.FormDataContentType()
 }
 
+// storedUpload is buildMultipartBody's [upload-once] counterpart for the
+// import path: the bytes that used to ride as a "file" part now sit in a
+// stored document, and the request names it by id. Returns the request body,
+// its Content-Type, and the open fake that serves those bytes back.
+func storedUpload(t *testing.T, entityID, mappingJSON, filename, contentType string, content []byte) (io.Reader, string, *fakeDocOpen) {
+	t.Helper()
+	open := newFakeDocOpen(filename, contentType, content)
+	body, ct := buildImportForm(t, entityID, mappingJSON, open.doc.ID)
+	return body, ct, open
+}
+
+// dbStoredUpload is storedUpload for the specs that actually PERSIST:
+// import_batches.document_id and invoices.source_document_id both carry a
+// composite FK, so a made-up id is a 23503. Stores through the real
+// document.Service over an in-memory object store, exactly as production does,
+// and returns its Open as the handler's seam.
+func dbStoredUpload(t *testing.T, app *pgxpool.Pool, tenantID, entityID, mappingJSON, filename, contentType string, content []byte) (io.Reader, string, openSpec) {
+	t.Helper()
+	docSvc := document.NewService(document.NewStore(app), newMemObjects())
+	doc := storeDocumentAs(t, docSvc, tenantID, filename, contentType, content)
+	body, ct := buildImportForm(t, entityID, mappingJSON, doc.ID)
+	return body, ct, docSvc.Open
+}
+
 // doImportCreate builds the POST /v1/imports request (query appended
 // verbatim, e.g. "?dry_run=true"), injects id into the context when non-nil
 // (auth.WithIdentity, mirroring invoice/handlers_test.go's doInvoiceCreate),
-// runs it through CreateHandler(imp, nil), and decodes the JSON response body
-// -- tolerating a completely empty body (the 501 stub writes no body at all,
-// so json.Unmarshal on 0 bytes would otherwise fail the test on a decode
-// error rather than on the real status/field assertions).
-func doImportCreate(t *testing.T, imp importFunc, id *auth.Identity, query, contentType string, body io.Reader) (*httptest.ResponseRecorder, importBatchBody) {
+// runs it through CreateHandler(imp, open, nil), and decodes the JSON
+// response body -- tolerating a completely empty body. Thin wrapper over
+// doImportUpload (handlers_upload_once_test.go) so the specs below keep their
+// two-value call shape.
+func doImportCreate(t *testing.T, imp importFunc, open openSpec, id *auth.Identity, query, contentType string, body io.Reader) (*httptest.ResponseRecorder, importBatchBody) {
 	t.Helper()
-	r := httptest.NewRequest("POST", "/v1/imports"+query, body)
-	r.Header.Set("Content-Type", contentType)
-	if id != nil {
-		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
-	}
-	rec := httptest.NewRecorder()
-	CreateHandler(imp, nil).ServeHTTP(rec, r)
-
-	var resp importBatchBody
-	if len(rec.Body.Bytes()) > 0 {
-		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("decode response %q: %v", rec.Body.String(), err)
-		}
-	}
+	rec, _, resp := doImportUpload(t, imp, open, id, query, contentType, body)
 	return rec, resp
 }
 
@@ -228,7 +241,7 @@ func doImportCreate(t *testing.T, imp importFunc, id *auth.Identity, query, cont
 // TestCreateHandler_NoIdentity401). RED against the 501 stub: the status
 // assertion fails (got 501, want 401).
 func TestCreateHandler_NoIdentity401(t *testing.T) {
-	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run without an identity")
 		return BatchResult{}, nil
 	}
@@ -236,8 +249,8 @@ func TestCreateHandler_NoIdentity401(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	rec, resp := doImportCreate(t, imp, nil, "", contentType, body)
+	body, contentType, open := storedUpload(t, uuid.NewString(), string(mappingJSON), "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	rec, resp := doImportCreate(t, imp, open.fn(), nil, "", contentType, body)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 when no identity in context (body=%s)", rec.Code, rec.Body.String())
@@ -272,8 +285,8 @@ func TestCreateHandler_201(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
-	rec, resp := doImportCreate(t, svc.Import, &id, "", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
+	rec, resp := doImportCreate(t, svc.Import, open, &id, "", contentType, body)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
@@ -316,8 +329,8 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
-	rec, resp := doImportCreate(t, svc.Import, &id, "?dry_run=true", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
+	rec, resp := doImportCreate(t, svc.Import, open, &id, "?dry_run=true", contentType, body)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for ?dry_run=true (body=%s)", rec.Code, rec.Body.String())
@@ -347,27 +360,29 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 
 // --- IMP-API-04: oversized body ---------------------------------------------
 
-// TestCreateHandler_OversizedBody413 (IMP-API-04): a multipart body whose
-// file part alone exceeds the 10 MiB upload cap ([upload-cap]) must 413 with
-// a non-empty error message, and imp must never run. No DB needed -- the cap
-// must fire before Decode/Import are ever reached. RED against the 501
-// stub: the status assertion fails (got 501, want 413).
+// TestCreateHandler_OversizedBody413 (IMP-API-04): a multipart body over the
+// upload cap ([upload-cap]) must 413 with a non-empty error message, and imp
+// must never run. No DB needed -- the cap must fire before Decode/Import are
+// ever reached. Since [upload-once] the file itself no longer crosses this
+// wire, so the padding rides in an unrelated part: the cap bounds the WHOLE
+// request, not one part.
 func TestCreateHandler_OversizedBody413(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
-		t.Fatal("imp must not run when the request body exceeds the 10 MiB cap")
+	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		t.Fatal("imp must not run when the request body exceeds the upload cap")
 		return BatchResult{}, nil
 	}
 	mappingJSON, err := json.Marshal(map[string]string{"invoice_number": "Inv No"})
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	oversized := bytes.Repeat([]byte("x"), 10<<20+1024) // > 10 MiB ([upload-cap])
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "data.csv", "", oversized)
-	rec, resp := doImportCreate(t, imp, &id, "", contentType, body)
+	open := newFakeDocOpen("data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	body, contentType := buildImportForm(t, uuid.NewString(), string(mappingJSON), open.doc.ID,
+		importPart{field: "pad", filename: "pad.bin", content: bytes.Repeat([]byte("x"), maxUploadBytes+1024)})
+	rec, resp := doImportCreate(t, imp, open.fn(), &id, "", contentType, body)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413 for a body over the 10 MiB cap (body=%s)", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 413 for a body over the upload cap (body=%s)", rec.Code, rec.Body.String())
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
@@ -390,12 +405,12 @@ func TestCreateHandler_BadMapping400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-			imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when mapping is missing or malformed")
 				return BatchResult{}, nil
 			}
-			body, contentType := buildMultipartBody(t, uuid.NewString(), tc.mappingRaw, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-			rec, resp := doImportCreate(t, imp, &id, "", contentType, body)
+			body, contentType, open := storedUpload(t, uuid.NewString(), tc.mappingRaw, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+			rec, resp := doImportCreate(t, imp, open.fn(), &id, "", contentType, body)
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
@@ -430,8 +445,8 @@ func TestCreateHandler_EntityNotFound404(t *testing.T) {
 		t.Fatalf("marshal mapping: %v", err)
 	}
 	unseededEntityID := uuid.NewString() // never seeded under tenantID
-	body, contentType := buildMultipartBody(t, unseededEntityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
-	rec, resp := doImportCreate(t, svc.Import, &id, "", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, unseededEntityID, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
+	rec, resp := doImportCreate(t, svc.Import, open, &id, "", contentType, body)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for an entity_id not seeded under the caller's tenant (body=%s)", rec.Code, rec.Body.String())
@@ -466,8 +481,8 @@ func TestCreateHandler_XLSX201(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, entityID, string(mappingJSON), "data.xlsx", xlsxContentType, xlsxBody(t, header, rows))
-	rec, resp := doImportCreate(t, svc.Import, &id, "", contentType, body)
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.xlsx", xlsxContentType, xlsxBody(t, header, rows))
+	rec, resp := doImportCreate(t, svc.Import, open, &id, "", contentType, body)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 for an xlsx upload (body=%s)", rec.Code, rec.Body.String())
@@ -598,16 +613,15 @@ func TestGetBatchHandler_NoIdentity401(t *testing.T) {
 
 // --- BULK-01-01 (task-305): filename threaded from the multipart part -----
 
-// TestCreateHandler_PassesSanitizedPartFilenameToImp (BULK-01-9): the
-// uploaded file part's OWN filename (sanitised) must reach imp -- not the
-// entity_id form field, not left blank. A spy imp records both so a
-// transposition (filename where entity_id belongs) would also be caught.
-// RED against the CreateHandler stub: the call site threads a hardcoded ""
-// rather than sanitizeFilename(fh.Filename), so capturedFilename never
-// matches the uploaded name.
+// TestCreateHandler_PassesSanitizedPartFilenameToImp (BULK-01-9): the source
+// document's OWN filename must reach imp -- not the entity_id form field, not
+// left blank. Since [upload-once] it is read off the document row (Store
+// already sanitised it) rather than off a multipart part. A spy imp records
+// both so a transposition (filename where entity_id belongs) would also be
+// caught.
 func TestCreateHandler_PassesSanitizedPartFilenameToImp(t *testing.T) {
 	var capturedEntityID, capturedFilename string
-	imp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		capturedEntityID = entityID
 		capturedFilename = filename
 		return BatchResult{}, nil
@@ -618,14 +632,14 @@ func TestCreateHandler_PassesSanitizedPartFilenameToImp(t *testing.T) {
 		t.Fatalf("marshal mapping: %v", err)
 	}
 	seededEntityID := uuid.NewString()
-	body, contentType := buildMultipartBody(t, seededEntityID, string(mappingJSON), "report.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	rec, _ := doImportCreate(t, imp, &id, "", contentType, body)
+	body, contentType, open := storedUpload(t, seededEntityID, string(mappingJSON), "report.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	rec, _ := doImportCreate(t, imp, open.fn(), &id, "", contentType, body)
 
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatalf("unexpected 401 (body=%s)", rec.Body.String())
 	}
 	if capturedFilename != "report.csv" {
-		t.Errorf("imp received filename = %q, want %q (the uploaded part's own sanitised name)", capturedFilename, "report.csv")
+		t.Errorf("imp received filename = %q, want %q (the document row's own name)", capturedFilename, "report.csv")
 	}
 	if capturedEntityID != seededEntityID {
 		t.Errorf("imp received entityID = %q, want %q", capturedEntityID, seededEntityID)
@@ -647,7 +661,7 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 	// Leg 1 (spy, no DB): filename threading survives the dry-run path.
 	var capturedFilename string
 	var capturedDryRun bool
-	spy := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	spy := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		capturedFilename = filename
 		capturedDryRun = dryRun
 		return BatchResult{RowsTotal: len(rows), RowsValid: len(rows)}, nil
@@ -657,8 +671,8 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "dryrun-report.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	rec, resp := doImportCreate(t, spy, &id, "?dry_run=true", contentType, body)
+	body, contentType, open := storedUpload(t, uuid.NewString(), string(mappingJSON), "dryrun-report.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+	rec, resp := doImportCreate(t, spy, open.fn(), &id, "?dry_run=true", contentType, body)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for ?dry_run=true (body=%s)", rec.Code, rec.Body.String())
@@ -692,8 +706,8 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	realBody, realContentType := buildMultipartBody(t, entityID, string(realMappingJSON), "dryrun-report.csv", "", csvBody(t, header, rows))
-	realRec, _ := doImportCreate(t, svc.Import, &realID, "?dry_run=true", realContentType, realBody)
+	realBody, realContentType, realOpen := dbStoredUpload(t, app, tenantID, entityID, string(realMappingJSON), "dryrun-report.csv", "", csvBody(t, header, rows))
+	realRec, _ := doImportCreate(t, svc.Import, realOpen, &realID, "?dry_run=true", realContentType, realBody)
 	if realRec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for ?dry_run=true (body=%s)", realRec.Code, realRec.Body.String())
 	}

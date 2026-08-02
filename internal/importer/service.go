@@ -379,7 +379,7 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 // ([supplier-from-entity]); batchID is the ONE minted id for this whole
 // import run — the guardrail is trivially satisfied since Import never
 // accepts a caller-supplied batch id.
-func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, supplierName string, supplierTIN *string) invoice.CreateInput {
+func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID, supplierName string, supplierTIN *string) invoice.CreateInput {
 	firstRow := rows[g.rowIdxs[0]]
 
 	issueDateStr := ""
@@ -405,6 +405,10 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 		VAT:           fieldValue(firstRow, colIndex, "vat"),
 		Total:         fieldValue(firstRow, colIndex, "total"),
 		ImportBatchID: &batchID,
+	}
+	// Nil, not &"": source_document_id is a uuid column, so "" is a 22P02.
+	if documentID != "" {
+		in.SourceDocumentID = &documentID
 	}
 	for _, ri := range g.rowIdxs {
 		row := rows[ri]
@@ -585,7 +589,12 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 // BOTH the early-finalize CreateBatch below and the main-path CreateBatch --
 // a zero-row file's 'failed' batch must be attributable too (BULK-01-11). It
 // is unused on the dry-run path: a dry run never creates a batch.
-func (s *Service) Import(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+//
+// documentID travels with it and lands on both the batch and every invoice the
+// run creates ([pointer-on-invoice]). It is likewise unused on the dry-run
+// path, which writes nothing to point at anything. "" is legal and persists as
+// NULL: a caller with no source document is still a caller.
+func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
 		return BatchResult{}, err
@@ -729,7 +738,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename string, mapping
 			// batchID is "" -- no batch exists on a dry-run and none is
 			// minted. MBSPayload never reads ImportBatchID, so it cannot
 			// reach 04 or affect a single verdict.
-			in := buildCreateInput(entityID, rows, colIndex, g, "", supplierName, supplierTIN)
+			in := buildCreateInput(entityID, rows, colIndex, g, "", "", supplierName, supplierTIN)
 			// Ref is the invoice_number, not an id: no id exists yet
 			// pre-Create. 04 echoes Ref back untouched and never interprets
 			// it, and group numbers are unique by construction (groups is
@@ -780,7 +789,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename string, mapping
 	// straight to 'failed' — never CreateBatch/Create for a real group,
 	// never a partial-split status for this case.
 	if rowsTotal == 0 {
-		batchID, err := s.batch.CreateBatch(ctx, entityID, filename)
+		batchID, err := s.batch.CreateBatch(ctx, entityID, filename, documentID)
 		if err != nil {
 			return BatchResult{}, err
 		}
@@ -790,7 +799,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename string, mapping
 		return BatchResult{ID: batchID, Status: "failed"}, nil
 	}
 
-	batchID, err := s.batch.CreateBatch(ctx, entityID, filename)
+	batchID, err := s.batch.CreateBatch(ctx, entityID, filename, documentID)
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -814,7 +823,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename string, mapping
 
 	readyCount := 0
 	for _, g := range readyGroups {
-		in := buildCreateInput(entityID, rows, colIndex, g, batchID, supplierName, supplierTIN)
+		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, supplierName, supplierTIN)
 		inv, createErr := s.inv.Create(ctx, in)
 		if createErr == nil {
 			readyCount++

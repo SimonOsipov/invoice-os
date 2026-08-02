@@ -117,14 +117,16 @@ func main() {
 	// exactly) -- no second gate, no adapter type, one gate driving both the
 	// manual validate endpoint and the importer's batch pre-check
 	// ([import-validates]/[dry-run-evaluates]).
-	// /v1/imports/preview sits on the same mux and middleware chain but is
-	// deliberately STATELESS ([preview-stateless]): it echoes back the header
-	// and first few rows of the bytes just uploaded, touching no store, no
-	// service and no entity, so it takes neither impSvc nor a logger.
+	// /v1/imports/preview sits on the same mux and middleware chain and is the
+	// ONLY route by which a source document reaches storage ([upload-once]): it
+	// writes the uploaded bytes to object storage and a row to documents, then
+	// previews them. POST /v1/imports takes the id it returns instead of a
+	// second copy of the file.
+	docSvc := document.NewService(document.NewStore(pool), docObjects)
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
-	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
-	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler())
+	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
 	// import_batches and, until now, reached the browser only inside the POST
@@ -138,7 +140,6 @@ func main() {
 	// GET /v1/documents/{id} -- the source-document download (DOC-01-05). Bytes are
 	// proxied through the service after an RLS-scoped row lookup rather than handed
 	// out as a presigned URL, so every read is authorised and audited.
-	docSvc := document.NewService(document.NewStore(pool), docObjects)
 	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.Open, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],

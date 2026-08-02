@@ -27,6 +27,11 @@
 // lookup (EntitySupplier) happens AFTER the against-store dedup precheck but
 // BEFORE the dry-run/real split, so entity-not-found 404s even under
 // ?dry_run=true (service.go's Import doc, point 4).
+//
+// [upload-once]: the file no longer crosses the POST /v1/imports wire. Every
+// case here previews first -- which STORES the bytes and returns a
+// document_id -- and then imports that id. A dry run needs the document too:
+// it decodes the bytes, it just writes nothing.
 import { test, expect } from '@playwright/test'
 import { login, createEntity, apiBase, PERSONAS } from './client'
 import { freshTin } from './fixtures'
@@ -78,11 +83,42 @@ function buildCleanCsv(num: string): string {
   return `${IMPORT_HEADER}\n${row}`
 }
 
-function buildForm(entityId: string, num: string): FormData {
+// previewFetch(): POST /v1/imports/preview -- since [upload-once] the ONLY
+// route by which a file reaches the server. Returns the whole RawResult
+// because its two POST-STORE 4xx bodies carry document_id alongside error,
+// which the unrecognized-format case below relies on.
+async function previewFetch(token: string, csv: string, filename = 'import.csv', type = 'text/csv'): Promise<RawResult> {
+  const form = new FormData()
+  form.set('file', new Blob([csv], { type }), filename)
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
+}
+
+// uploadDocument(): preview a file and hand back the id of the document it
+// stored, whatever the preview's own status was.
+async function uploadDocument(token: string, csv: string, filename = 'import.csv', type = 'text/csv'): Promise<string> {
+  const res = await previewFetch(token, csv, filename, type)
+  const id = (res.body as Record<string, unknown> | undefined)?.document_id
+  expect(typeof id, `preview should carry a document_id (status ${res.status}, body ${JSON.stringify(res.body)})`).toBe('string')
+  return id as string
+}
+
+// buildForm(): the POST /v1/imports body -- three text fields, no file.
+function buildForm(entityId: string, documentId: string): FormData {
   const f = new FormData()
   f.set('entity_id', entityId)
   f.set('mapping', JSON.stringify(IMPORT_MAPPING))
-  f.set('file', new Blob([buildCleanCsv(num)], { type: 'text/csv' }), 'import.csv')
+  f.set('document_id', documentId)
   return f
 }
 
@@ -95,7 +131,8 @@ test.describe('import contract (API E2E, over the deployed gateway)', () => {
 
   test('real import -> 201 {errors: null|[], numeric counters, format: "csv"}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
-    const res = await importFetch(token, buildForm(entity.id, `INV-${freshTin()}`))
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const res = await importFetch(token, buildForm(entity.id, documentId))
     expect(res.status, 'a real clean-CSV import should return 201').toBe(201)
     const body = res.body as Record<string, unknown>
     expect(
@@ -112,7 +149,10 @@ test.describe('import contract (API E2E, over the deployed gateway)', () => {
 
   test('dry-run import -> 200 {errors: null|[], id omitted}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
-    const res = await importFetch(token, buildForm(entity.id, `INV-${freshTin()}`), '?dry_run=true')
+    // A dry run decodes the bytes, so it needs the document too -- it just
+    // persists nothing, because it creates no batch.
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const res = await importFetch(token, buildForm(entity.id, documentId), '?dry_run=true')
     expect(res.status, 'a dry-run clean-CSV import should return 200').toBe(200)
     const body = res.body as Record<string, unknown>
     expect(
@@ -126,54 +166,69 @@ test.describe('import contract (API E2E, over the deployed gateway)', () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
     const badMapping = { ...IMPORT_MAPPING }
     delete badMapping.invoice_number
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
     const form = new FormData()
     form.set('entity_id', entity.id)
     form.set('mapping', JSON.stringify(badMapping))
-    form.set('file', new Blob([buildCleanCsv(`INV-${freshTin()}`)], { type: 'text/csv' }), 'import.csv')
+    form.set('document_id', documentId)
     const res = await importFetch(token, form)
     assertErrorEnvelope(res, 400, 'mapping missing invoice_number')
   })
 
   test('unrecognized file format -> 400 {error: string}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
-    const form = new FormData()
-    form.set('entity_id', entity.id)
-    form.set('mapping', JSON.stringify(IMPORT_MAPPING))
-    form.set('file', new Blob([buildCleanCsv(`INV-${freshTin()}`)], { type: 'application/octet-stream' }), 'import.dat')
-    const res = await importFetch(token, form)
+    // Preview 400s on this file too, and STILL names the document it stored
+    // ([error-body-carries-document-id]) -- that is what makes an unparseable
+    // upload retrievable rather than only theoretically stored. Import then
+    // resolves the same unrecognized format off the same row.
+    const preview = await previewFetch(token, buildCleanCsv(`INV-${freshTin()}`), 'import.dat', 'application/octet-stream')
+    expect(preview.status, 'preview should reject the format but still store the bytes').toBe(400)
+    const documentId = (preview.body as Record<string, unknown>).document_id
+    expect(typeof documentId, 'a post-store 4xx body must carry document_id').toBe('string')
+    const res = await importFetch(token, buildForm(entity.id, documentId as string))
     assertErrorEnvelope(res, 400, 'unrecognized file format')
   })
 
   test('entity not in tenant, even on dry_run -> 404 {error: string}', async () => {
-    const res = await importFetch(token, buildForm(crypto.randomUUID(), `INV-${freshTin()}`), '?dry_run=true')
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const res = await importFetch(token, buildForm(crypto.randomUUID(), documentId), '?dry_run=true')
     assertErrorEnvelope(res, 404, 'entity not in tenant (dry_run)')
   })
 
-  test('oversized upload (> 10 MiB) -> 413 {error: string}', async () => {
+  test('oversized request (> 15 MiB) -> 413 {error: string}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
     const form = new FormData()
     form.set('entity_id', entity.id)
     form.set('mapping', JSON.stringify(IMPORT_MAPPING))
-    // 11 MiB > the 10 MiB maxUploadBytes cap (handlers.go) -- unambiguously over.
-    form.set('file', new Blob(['a'.repeat(11 * 1024 * 1024)], { type: 'text/csv' }), 'big.csv')
+    form.set('document_id', documentId)
+    // 16 MiB > the 15 MiB maxUploadBytes cap (handlers.go) -- unambiguously
+    // over. The padding rides in an unrelated part, which the handler ignores:
+    // no file crosses this wire any more, and the cap bounds the WHOLE request.
+    form.set('pad', new Blob(['a'.repeat(16 * 1024 * 1024)], { type: 'application/octet-stream' }), 'big.bin')
     const res = await importFetch(token, form)
-    assertErrorEnvelope(res, 413, 'oversized upload')
+    assertErrorEnvelope(res, 413, 'oversized request')
   })
 
   test('no auth -> 401 {error: string}', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
-    const res = await importFetch(null, buildForm(entity.id, `INV-${freshTin()}`))
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const res = await importFetch(null, buildForm(entity.id, documentId))
     assertErrorEnvelope(res, 401, 'no auth')
   })
 
   test('dedup: against-store, not in-file -- a seeded real import is caught by a dry-run reimport', async () => {
     const entity = await createEntity(token, { name: `M4-16 imp ${freshTin()}`, tin: freshTin() })
     const num = `INV-DUP-${freshTin()}`
+    // ONE document, imported twice ([reupload-new-batch]): a re-import of the
+    // same stored bytes is a new batch, not an error -- the duplicate is caught
+    // by the against-store precheck, exactly as before.
+    const documentId = await uploadDocument(token, buildCleanCsv(num))
 
-    const first = await importFetch(token, buildForm(entity.id, num))
+    const first = await importFetch(token, buildForm(entity.id, documentId))
     expect(first.status, 'the seeding import should succeed').toBe(201)
 
-    const second = await importFetch(token, buildForm(entity.id, num), '?dry_run=true')
+    const second = await importFetch(token, buildForm(entity.id, documentId), '?dry_run=true')
     expect(second.status, 'the dry-run reimport of the same (entity, number) should still return 200').toBe(200)
     const body = second.body as Record<string, unknown>
     expect(body.errors, 'errors should contain the against-store duplicate hit').toContainEqual(

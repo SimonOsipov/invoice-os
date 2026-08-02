@@ -133,7 +133,7 @@ func TestSpineIntegration(t *testing.T) {
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	svc := newTestServiceWithGate(app, invoice.NewGate(invoice.NewStore(app), validator))
 
-	res, err := svc.Import(idCtx, entityID, "", stdMapping, header, rows, false)
+	res, err := svc.Import(idCtx, entityID, "", "", stdMapping, header, rows, false)
 	if err != nil {
 		t.Fatalf("Import green_500.csv: %v", err)
 	}

@@ -156,7 +156,7 @@ func TestStoreCreateBatchFinalize_RoundTripsCountsStatusAndErrors(t *testing.T) 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID, "")
+	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestStoreFinalize_EmptyErrorsMarshalsToEmptyArrayNotNull(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID, "")
+	id, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestStoreCreateBatch_PersistsEntityIDAndFilenameTogetherNotTransposed(t *te
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "branch-lagos.csv"
-	id, err := store.CreateBatch(c, entityID, wantFilename)
+	id, err := store.CreateBatch(c, entityID, wantFilename, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 	// against a vacuous pass below (if CreateBatch never wrote ANY filename,
 	// the NUL-specific leg would trivially "pass" against a NULL that was
 	// never meant to prove anything).
-	controlID, err := store.CreateBatch(c, entityID, "plain.csv")
+	controlID, err := store.CreateBatch(c, entityID, "plain.csv", "")
 	if err != nil {
 		t.Fatalf("CreateBatch (control): %v", err)
 	}
@@ -442,7 +442,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 		t.Fatalf("document.SanitizeFilename(%q) = %q, want %q", rawWithNUL, sanitized, wantStripped)
 	}
 
-	id, err := store.CreateBatch(c, entityID, sanitized)
+	id, err := store.CreateBatch(c, entityID, sanitized, "")
 	if err != nil {
 		t.Fatalf("CreateBatch (NUL-stripped filename): %v, want no error (a raw NUL would 22021 -- the store must never see one)", err)
 	}
@@ -481,7 +481,7 @@ func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *test
 	// NULL -- guards against a vacuous pass on the unusable leg below (a
 	// CreateBatch that writes NULL unconditionally would otherwise "pass"
 	// the unusable-name check for the wrong reason).
-	normalID, err := store.CreateBatch(c, entityID, "good.csv")
+	normalID, err := store.CreateBatch(c, entityID, "good.csv", "")
 	if err != nil {
 		t.Fatalf("CreateBatch (positive control): %v", err)
 	}
@@ -498,7 +498,7 @@ func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *test
 		t.Fatalf(`document.SanitizeFilename("   ") = %q, want "" (whitespace-only is unusable)`, sanitized)
 	}
 
-	unusableID, err := store.CreateBatch(c, entityID, sanitized)
+	unusableID, err := store.CreateBatch(c, entityID, sanitized, "")
 	if err != nil {
 		t.Fatalf("CreateBatch (unusable filename): %v", err)
 	}
@@ -531,7 +531,7 @@ func TestServiceImport_ZeroRowEarlyFinalizePathPersistsFilename(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "header-only.csv"
-	res, err := svc.Import(c, entityID, wantFilename, stdMapping, stdHeader, nil, false)
+	res, err := svc.Import(c, entityID, wantFilename, "", stdMapping, stdHeader, nil, false)
 	if err != nil {
 		t.Fatalf("Import (zero data rows): %v", err)
 	}
@@ -575,7 +575,7 @@ func TestStoreGetBatch_FilenamePopulatesBatchStructDirectly(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "direct-field-check.csv"
-	batchID, err := store.CreateBatch(c, entityID, wantFilename)
+	batchID, err := store.CreateBatch(c, entityID, wantFilename, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -627,7 +627,7 @@ func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", stdMapping, stdHeader, nil, true)
+	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", "", stdMapping, stdHeader, nil, true)
 	if err != nil {
 		t.Fatalf("Import (dry-run, zero data rows): %v", err)
 	}

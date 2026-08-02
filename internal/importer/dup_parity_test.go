@@ -262,7 +262,7 @@ func TestPredicateParity_SelfExclusionReimportLeavesStoredRowUntouched(t *testin
 		mkRow("INV-SELF", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "SelfItem", "1", "10.00"), // sheet 2
 	}
 
-	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

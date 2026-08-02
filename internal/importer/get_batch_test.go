@@ -141,7 +141,7 @@ func TestGetBatch_ReturnsFrozenCountsAndErrors(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	batchID, err := store.CreateBatch(c, entityID, "")
+	batchID, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestGetBatch_RuleSetVersionIsMinNotArbitrary(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	batchID, err := store.CreateBatch(c, entityID, "")
+	batchID, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestGetBatch_ZeroInvoicesVersionIsNullAndBodyRendersNull(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	// Leg A -- stamped: the genuine leg.
-	stampedBatch, err := store.CreateBatch(c, entityID, "")
+	stampedBatch, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch (stamped): %v", err)
 	}
@@ -284,7 +284,7 @@ func TestGetBatch_ZeroInvoicesVersionIsNullAndBodyRendersNull(t *testing.T) {
 	// Leg B -- zero invoices: a real batch with NOTHING linked to it. Kept
 	// in the SAME test as leg A per task-283's own vacuity ruling -- in
 	// isolation this leg passes against ANY nil-returning stub.
-	emptyBatch, err := store.CreateBatch(c, entityID, "")
+	emptyBatch, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch (empty): %v", err)
 	}
@@ -348,7 +348,7 @@ func TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 	c1 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant1})
 	c2 := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenant2})
 
-	batch1, err := store.CreateBatch(c1, entity1, "")
+	batch1, err := store.CreateBatch(c1, entity1, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch (tenant 1): %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRLS_GetBatchCrossTenantIs404AndIdenticalToUnknown(t *testing.T) {
 		t.Fatalf("Finalize (tenant 1): %v", err)
 	}
 
-	batch2, err := store.CreateBatch(c2, entity2, "")
+	batch2, err := store.CreateBatch(c2, entity2, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch (tenant 2): %v", err)
 	}
@@ -413,7 +413,7 @@ func TestGetBatch_ProcessingStatusUnfinalizedBatchReturns200(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	batchID, err := store.CreateBatch(c, entityID, "")
+	batchID, err := store.CreateBatch(c, entityID, "", "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestGetBatch_RowsInvalidAgreesWithErrorRowCount(t *testing.T) {
 		mkRow("", "2026-01-10", "T3", "B3", "NGN", "5.00", "0.00", "5.00", "Blank", "1", "5.00"),                 // sheet 5 -- blank invoice number
 	}
 
-	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestGetBatch_ServesFilenameViaStoreAndWire(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "branch-lagos.csv"
-	batchID, err := store.CreateBatch(c, entityID, wantFilename)
+	batchID, err := store.CreateBatch(c, entityID, wantFilename, "")
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}

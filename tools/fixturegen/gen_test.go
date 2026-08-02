@@ -19,9 +19,9 @@ import (
 )
 
 // canonicalUploadCap mirrors internal/importer/handlers.go's maxUploadBytes
-// (10 MiB); pinned as a literal since fixturegen doesn't import
+// (15 MiB); pinned as a literal since fixturegen doesn't import
 // internal/importer.
-const canonicalUploadCap = 10 << 20
+const canonicalUploadCap = 15 << 20
 
 // isoDateRE / tinRE are the ISO-date and buyer-TIN shape oracles.
 var isoDateRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)

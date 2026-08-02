@@ -2,6 +2,7 @@
 # scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
 #                            ensure-environment <name>|audit-sealed-variables|
 #                            assert-db-dsns <environment-id|--source-only|--self-test>|
+#                            select-domain [--self-test]|
 #                            reconcile-fork <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            delete-environment <name>|list-environments>
@@ -50,6 +51,9 @@
 # rendered, with a non-empty password. It reads the RENDERED variable map, which is the
 # only place a dangling `${{...}}` reference is visible. `--self-test` runs the identical
 # code path against a map on stdin with no token and no network.
+#
+# `select-domain` applies the one domain-preference rule — custom domain first, Railway-
+# generated as fallback — to a `domains` response on stdin. Pure: no token, no network.
 #
 # `audit-sealed-variables` and `reconcile-fork <environment-id>` (M4-23-04) close the
 # fork-fidelity gaps. See the M4-23-04 banner further down: two checks the design asked
@@ -614,13 +618,14 @@ cmd_disable_pr_environments() {
 # is, which is exactly why it is the authoritative gate.
 # ===========================================================================
 
-# Domains and the TCP proxy were both measured to CARRY into a fork (auto-renamed
-# `<svc>-pr-<N>.up.railway.app`, and a proxy with its own distinct port). The
-# create path below is INSURANCE, not the expected path: the normal run is one
-# query per service and zero mutations.
+# Railway-GENERATED domains carry into a fork (auto-renamed
+# `<svc>-pr-<N>.up.railway.app`), custom domains never do, and the TCP proxy
+# carries with its own distinct port. A service whose source environment has only
+# a custom domain therefore forks with NO domain, and the create path below runs.
 # shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
 DOMAINS_QUERY='query dom($p: String!, $e: String!, $s: String!) {
   domains(projectId: $p, environmentId: $e, serviceId: $s) {
+    customDomains { id domain targetPort syncStatus }
     serviceDomains { id domain targetPort syncStatus }
   }
 }'
@@ -879,6 +884,144 @@ cmd_assert_db_dsns() {
   run_dsn_check "$map" "environment $env_id"
 }
 
+# --- Domain selection --------------------------------------------------------
+#
+# ONE preference rule for both callers: the custom domain if there is one, the
+# Railway-generated one otherwise. Concat-then-head, so hostname and targetPort
+# always come from the SAME element — a chain of `//` fallbacks can take them
+# from different ones. Guarded by `select-domain --self-test`.
+#
+# The guard is `.customDomains != null`, never `has("customDomains")`: `has()`
+# passes a present-but-null value, which then reads as [] and silently prefers
+# the generated domain. Fixture T8 fails on the `has()` form.
+DOMAIN_GUARD_JQ='(.data.domains? // {}) | .customDomains != null'
+DOMAIN_SELECT_JQ='.data.domains
+| ((.customDomains // []) + (.serviceDomains // []))
+| {count: length, domain: (.[0].domain // ""), targetPort: (.[0].targetPort)}'
+
+# select_domain <domains-response-json>
+# Pure: no token, no network. Echoes {count, domain, targetPort} compactly.
+select_domain() {
+  local resp="$1"
+
+  # stderr is deliberately NOT redirected here: on unparseable input jq's own
+  # parse error is the only thing distinguishing it from a drifted selection set.
+  if ! printf '%s' "$resp" | jq -e "$DOMAIN_GUARD_JQ" >/dev/null; then
+    echo "::error::The Railway domains response carries no \`customDomains\` list — the caller's GraphQL selection set omits it, or it came back null, or \`domains\` itself did. Refusing to select: an absent collection reads as empty and would silently prefer the generated domain." >&2
+    return 1
+  fi
+
+  # Last command on purpose: its status is the function's, so a jq failure here
+  # is never swallowed.
+  printf '%s' "$resp" | jq -c "$DOMAIN_SELECT_JQ"
+}
+
+# The two helpers increment `failures`, a `local` of domain_self_test (bash
+# dynamic scoping). Neither aborts on a miss: every fixture must report.
+domain_expect_select() {
+  local id="$1" json="$2" want="$3" got rc=0
+  got=$(select_domain "$json" 2>/dev/null) || rc=$?
+  if [ "$rc" != "0" ] || [ "$got" != "$want" ]; then
+    echo "::error::self-test $id FAILED: expected exit 0 and $want; got exit $rc and '$got'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> $got"
+}
+
+domain_expect_refusal() {
+  local id="$1" json="$2" err rc=0
+  err=$(select_domain "$json" 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" = "0" ]; then
+    echo "::error::self-test $id FAILED: expected a refusal, got exit 0"
+    failures=$((failures + 1))
+    return 0
+  fi
+  case "$err" in
+    *"carries no \`customDomains\` list"*) echo "  $id ok -> refused (exit $rc)" ;;
+    *) echo "::error::self-test $id FAILED: refused, but stderr lacks the drift message: $err"
+       failures=$((failures + 1)) ;;
+  esac
+}
+
+# T5/T6/T8 discard stdout and only assert stderr content, so a refusal that
+# ALSO leaks onto stdout (e.g. a stray debug echo) would slip past them. AC #10
+# pins stdout-must-be-empty because subtask 02 pipes this command's stdout
+# into jq — a leak here corrupts that pipe.
+domain_expect_refusal_stdout_empty() {
+  local id="$1" json="$2" out rc=0
+  out=$(select_domain "$json" 2>/dev/null) || rc=$?
+  if [ "$rc" = "0" ]; then
+    echo "::error::self-test $id FAILED: expected a refusal, got exit 0"
+    failures=$((failures + 1))
+    return 0
+  fi
+  if [ -n "$out" ]; then
+    echo "::error::self-test $id FAILED: refusal leaked onto stdout: '$out'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> stdout empty on refusal (exit $rc)"
+}
+
+domain_self_test() {
+  local failures=0
+
+  # T1 production gateway: custom wins AND carries 8080 despite the generated null.
+  domain_expect_select T1 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"ACTIVE"}],"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}' '{"count":2,"domain":"api.ascomply.com","targetPort":8080}'
+  # T2 fork: generated fallback, null port preserved.
+  domain_expect_select T2 '{"data":{"domains":{"customDomains":[],"serviceDomains":[{"id":"s1","domain":"gateway-pr-9.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}' '{"count":1,"domain":"gateway-pr-9.up.railway.app","targetPort":null}'
+  # T3 after the generated domains are deleted: same answer as T1.
+  domain_expect_select T3 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"ACTIVE"}],"serviceDomains":[]}}}' '{"count":1,"domain":"api.ascomply.com","targetPort":8080}'
+  # T4 no domain of either kind: count 0, exit 0 — the CALLER decides refusal.
+  domain_expect_select T4 '{"data":{"domains":{"customDomains":[],"serviceDomains":[]}}}' '{"count":0,"domain":"","targetPort":null}'
+  # T5 selection set drifted: the key is absent.
+  domain_expect_refusal T5 '{"data":{"domains":{"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}'
+  # T6 domains itself null — must refuse, not raise a jq index error.
+  domain_expect_refusal T6 '{"data":{"domains":null}}'
+  # T7 two custom domains. The second carries a DIFFERENT port so a flipped order
+  # would change targetPort as well as domain.
+  domain_expect_select T7 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"ACTIVE"},{"id":"c2","domain":"legacy.ascomply.com","targetPort":9090,"syncStatus":"ACTIVE"}],"serviceDomains":[]}}}' '{"count":2,"domain":"api.ascomply.com","targetPort":8080}'
+  # T8 present-but-null. The case has("customDomains") passes and then silently
+  # falls back to the generated domain.
+  domain_expect_refusal T8 '{"data":{"domains":{"customDomains":null,"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}'
+  # T9 is reserved for the CI job's own property (see AC #5) — not a JSON fixture.
+  # T10 pins [no-syncstatus-filter]: an INITIALIZING custom domain still beats an
+  # ACTIVE generated one. Deliberate; this makes a future change to it visible.
+  domain_expect_select T10 '{"data":{"domains":{"customDomains":[{"id":"c1","domain":"api.ascomply.com","targetPort":8080,"syncStatus":"INITIALIZING"}],"serviceDomains":[{"id":"s1","domain":"gateway-development-997b.up.railway.app","targetPort":null,"syncStatus":"ACTIVE"}]}}}' '{"count":2,"domain":"api.ascomply.com","targetPort":8080}'
+  # T11 a real GraphQL error response: data is null, errors carries the failure.
+  domain_expect_refusal T11 '{"errors":[{"message":"boom"}],"data":null}'
+  # T12 the whole body is a bare `null` — distinct from T6's {"data":{"domains":null}}.
+  domain_expect_refusal T12 'null'
+  # T13 a non-object top level hits jq's index-type error, not null propagation —
+  # a different failure mechanism than T5/T6/T12, still refused.
+  domain_expect_refusal T13 '[]'
+  # T14 refusal-path stdout must stay empty; T5/T6/T8 never check that dimension.
+  domain_expect_refusal_stdout_empty T14 '{"data":{"domains":null}}'
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::domain selection self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "Domain selection self-test: 13 fixtures passed, no token read, no network call."
+}
+
+# cmd_select_domain [--self-test]
+# No require_env anywhere in this path: the command is pure, so it runs on a fork
+# PR, which receives no secrets. Same ordering discipline as cmd_assert_db_dsns
+# (:837-841), which puts its --self-test branch ahead of require_env.
+cmd_select_domain() {
+  if [ "${1:-}" = "--self-test" ]; then
+    domain_self_test
+    return
+  fi
+  if [ -n "${1:-}" ]; then
+    echo "::error::usage: railway-env.sh select-domain [--self-test]   (domains response JSON on stdin)"
+    exit 2
+  fi
+  select_domain "$(cat)"
+}
+
 # --- Reconcile B: settle -----------------------------------------------------
 #
 # MEASURED: all 13 service instances materialise IMMEDIATELY after
@@ -923,44 +1066,44 @@ settle_fork() {
 # untouched `urls` step remains the sole discoverer and still fails if any is
 # missing, so no URL is ever constructed from a pattern.
 reconcile_domain() {
-  local env_id="$1" svc_id="$2" label="$3" existing target src_count input body
+  local env_id="$1" svc_id="$2" label="$3" existing target src_count input body sel count
 
   graphql_post "$(gql_body "$DOMAINS_QUERY" \
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
     "reading $label domains in environment $env_id"
 
-  existing=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].domain // empty')
-  if [ -n "$existing" ]; then
-    echo "  $label: domain already present ($existing, targetPort=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].targetPort // "null"')) — no mutation. This is the expected path; domains were measured to carry into a fork."
+  sel=$(select_domain "$GQL_RESPONSE")
+  count=$(echo "$sel" | jq -r '.count')
+  if [ "$count" != "0" ]; then
+    existing=$(echo "$sel" | jq -r '.domain')
+    echo "  $label: domain already present ($existing, targetPort=$(echo "$sel" | jq -r '.targetPort')) — no mutation."
     return 0
   fi
 
-  echo "::warning::$label has NO domain in environment $env_id. Domains were measured to CARRY into a fork, so this is the unexpected branch — creating one as insurance."
+  echo "  $label: no domain in environment $env_id — creating one."
 
-  # AC #4: targetPort is READ from `development`, never hardcoded.
+  # targetPort is READ from the source environment, never hardcoded.
   graphql_post "$(gql_body "$DOMAINS_QUERY" \
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
     "reading the $label targetPort from the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
 
-  src_count=$(echo "$GQL_RESPONSE" | jq '[.data.domains.serviceDomains[]?] | length')
+  sel=$(select_domain "$GQL_RESPONSE")
+  src_count=$(echo "$sel" | jq -r '.count')
   if [ "$src_count" = "0" ]; then
-    echo "::error::$label (service $svc_id) has no domain in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID either, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
+    echo "::error::$label (service $svc_id) has no domain of EITHER kind — neither a custom domain nor a Railway-generated one — in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
     exit 1
   fi
-  target=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].targetPort // empty')
+  target=$(echo "$sel" | jq -r '.targetPort // empty')
 
   if [ -n "$target" ]; then
     input=$(jq -n --arg e "$env_id" --arg s "$svc_id" --argjson t "$target" \
       '{input: {environmentId: $e, serviceId: $s, targetPort: $t}}')
     echo "  $label: creating a domain with targetPort=$target, read from the source environment."
   else
-    # MEASURED: targetPort is null on the gateway domain in BOTH the fork and
-    # `development`. Null is the normal state, so this is NOT a failure — it is
-    # Railway's magic-port detection, which is exactly what the source
-    # environment relies on. Replicate that by OMITTING targetPort. Hardcoding
-    # 8080 here would invent a value the source environment does not have.
+    # A null targetPort means Railway magic-port detection; omit the field rather
+    # than substitute one. `select-domain --self-test` pins that null survives.
     input=$(jq -n --arg e "$env_id" --arg s "$svc_id" '{input: {environmentId: $e, serviceId: $s}}')
-    echo "  $label: the source environment domain has a null targetPort (measured normal — Railway magic-port detection), so targetPort is OMITTED rather than invented."
+    echo "  $label: the selected source domain has a null targetPort (Railway magic-port detection), so targetPort is OMITTED rather than invented."
   fi
 
   body=$(gql_body "$DOMAIN_CREATE_MUTATION" "$input")
@@ -973,11 +1116,13 @@ reconcile_domain() {
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
     "re-reading $label domains in environment $env_id after create"
 
-  existing=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].domain // empty')
-  if [ -z "$existing" ]; then
+  sel=$(select_domain "$GQL_RESPONSE")
+  count=$(echo "$sel" | jq -r '.count')
+  if [ "$count" = "0" ]; then
     echo "::error::serviceDomainCreate reported success for $label (service $svc_id) in environment $env_id but an INDEPENDENT re-query still finds no domain. The urls step below would fail to discover it."
     exit 1
   fi
+  existing=$(echo "$sel" | jq -r '.domain')
   echo "  $label: created and confirmed by re-query ($existing)."
 }
 
@@ -1452,12 +1597,13 @@ case "${1:-}" in
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
   assert-db-dsns)            cmd_assert_db_dsns "${2:-}" ;;
+  select-domain)             cmd_select_domain "${2:-}" ;;
   reconcile-fork)            cmd_reconcile_fork "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

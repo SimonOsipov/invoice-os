@@ -257,6 +257,15 @@ returned by step 1.
    mutation { serviceDomainCreate(input: {
      environmentId: "$ENV", serviceId: "$SVC", targetPort: 8080 }) { domain } }
    ```
+   **Production is custom-domain-only.** INFRA-01 retired the Railway-generated domains
+   on the production environment, so a new public service needs a **custom** domain
+   there. The `serviceDomainCreate` above stays correct for **PR environments**, which
+   keep their generated URLs — now the only place generated domains live.
+   CI's discovery (`railway-env.sh select-domain`) accepts **either** kind — custom
+   preferred, generated as fallback — so both refusals that cite this step
+   (`dev-env.yml`'s `urls` step and `reconcile_domain` in `railway-env.sh`) mean the
+   same thing: the service has no domain of either kind in the environment named in the
+   message. Give it one — a custom domain if that environment is production.
 
 > ⚠️ **Deployment triggers are now forbidden — remove one before opening a PR.**
 > `railway-invariants.yml` (M4-23-02) fails **any** PR while **any** deployment trigger

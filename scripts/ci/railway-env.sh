@@ -723,6 +723,39 @@ SERVICE_VARIABLES_QUERY='query svcVars($p: String!, $e: String!, $s: String!) {
   variables(projectId: $p, environmentId: $e, serviceId: $s)
 }'
 
+# Buckets are project-scoped with one instance per environment. `Environment` has
+# no `buckets` field, so this listing is the only way to resolve one, and the
+# display name is the only stable handle — a bucket id would be a hardcoded UUID.
+# shellcheck disable=SC2016  # $p is a GraphQL variable — not a shell expansion.
+PROJECT_BUCKETS_QUERY='query buckets($p: String!) {
+  project(id: $p) {
+    buckets(first: 100) {
+      edges { node { id name } }
+      pageInfo { hasNextPage }
+    }
+  }
+}'
+
+# The per-environment instance probe. Returns `[BucketS3CompatibleCredentials!]!`,
+# so a pair with NO instance comes back as a GraphQL error, never as `[]` — read
+# it with graphql_try and treat a failure as UNKNOWN, not as "absent".
+# Only `bucketName` is selected: the same payload carries the access key and
+# secret, and nothing here needs them.
+# shellcheck disable=SC2016  # $b/$e/$p are GraphQL variables — not shell expansions.
+BUCKET_CREDENTIALS_QUERY='query bucketCreds($b: String!, $e: String!, $p: String!) {
+  bucketS3Credentials(bucketId: $b, environmentId: $e, projectId: $p) { bucketName }
+}'
+
+# BucketCreateInput is {projectId String!, environmentId String, name String} —
+# there is NO region field. The selection set is thin because `Bucket` exposes no
+# `environmentId`: its return cannot prove placement, so the confirm poll does.
+# shellcheck disable=SC2016  # $input is a GraphQL variable — not a shell expansion.
+BUCKET_CREATE_MUTATION='mutation bucketCreate($input: BucketCreateInput!) {
+  bucketCreate(input: $input) { id name }
+}'
+
+SOURCE_DOCUMENTS_BUCKET="source-documents"
+
 # Attempt counts, not wall-clock deadlines: a count remains bounded when `sleep` is
 # stubbed out under test, whereas a $SECONDS deadline would spin forever.
 SETTLE_ATTEMPTS=6          # x10s = 60s. Insurance only — see settle_fork.
@@ -801,11 +834,13 @@ cmd_audit_sealed_variables() {
 # absent is fatal -- lives in tools/prenv/dsn.go and NOWHERE else. This command
 # ships it the whole environment and lets it decide.
 #
-# CONSTRAINT: every variable named in that table must start with $DSN_VAR_PREFIX.
-# The filter below drops everything else before it leaves this script (the
-# rendered map is the most credential-dense object here), so a table row naming
-# anything else would be silently dropped and never checked.
-DSN_VAR_PREFIX="DATABASE"
+# CONSTRAINT: every variable named in that table must start with one of
+# $DSN_VAR_PREFIXES. The filter below drops everything else before it leaves this
+# script (the rendered map is the most credential-dense object here), so a table
+# row naming anything else would be silently dropped and never checked.
+# Asserted by TestEverySeverityTableRowSurvivesTheShellPrefixFilter, which parses
+# this ONE assignment line -- a second declaration is a hard failure there.
+DSN_VAR_PREFIXES="DATABASE DOCUMENT"
 
 # run_dsn_check <rendered-map-json> <context-label>
 # The map goes to prenv on STDIN -- argv is visible in `ps` -- and is never
@@ -862,7 +897,8 @@ cmd_assert_db_dsns() {
   graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
     "listing service instances in environment $env_id"
 
-  local instances map='{}' sid sname vars
+  local instances map='{}' sid sname vars prefixes
+  prefixes=$(printf '%s' "$DSN_VAR_PREFIXES" | jq -R 'split(" ")')
   instances=$(echo "$GQL_RESPONSE" | jq -r \
     '.data.environment.serviceInstances.edges[]?.node | "\(.serviceId)\t\(.serviceName)"')
   if [ -z "$instances" ]; then
@@ -876,8 +912,8 @@ cmd_assert_db_dsns() {
     graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
       "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$sid" '{p: $p, e: $e, s: $s}')")" \
       "reading the $sname variables in environment $env_id"
-    vars=$(echo "$GQL_RESPONSE" | jq -c --arg pre "$DSN_VAR_PREFIX" \
-      '(.data.variables // {}) | with_entries(select(.key | startswith($pre)))')
+    vars=$(echo "$GQL_RESPONSE" | jq -c --argjson pre "$prefixes" \
+      '(.data.variables // {}) | with_entries(.key as $k | select(any($pre[]; . as $p | $k | startswith($p))))')
     map=$(jq -cn --argjson m "$map" --arg n "$sname" --argjson v "$vars" '$m + {($n): $v}')
   done <<< "$instances"
 
@@ -1533,6 +1569,151 @@ ensure_postgres_volume() {
   exit 1
 }
 
+# --- Reconcile D: the source-documents bucket instance -----------------------
+#
+# Railway auto-provisions a bucket instance into a duplicated environment, so
+# "already present" is the NORMAL path here, not the exception. The isolation
+# assertion is what makes that path safe, which is why it gates every successful
+# return rather than only the create one.
+
+# The source environment's bucketName. Resolved once per run and reused.
+SOURCE_BUCKET_NAME=""
+
+# bucket_credentials_body <bucket-id> <environment-id>
+bucket_credentials_body() {
+  gql_body "$BUCKET_CREDENTIALS_QUERY" \
+    "$(jq -n --arg b "$1" --arg e "$2" --arg p "$RAILWAY_PROJECT_ID" '{b: $b, e: $e, p: $p}')"
+}
+
+# The instance's globally-unique bucketName from the last response, or empty.
+bucket_name_from_response() {
+  echo "$GQL_RESPONSE" | jq -r \
+    '[.data.bucketS3Credentials[]?.bucketName | select(. != null and . != "")][0] // empty'
+}
+
+# assert_bucket_isolation <bucket-id> <environment-id> <fork-bucket-name>
+assert_bucket_isolation() {
+  local bucket_id="$1" env_id="$2" fork_name="$3" try
+
+  if [ -z "$SOURCE_BUCKET_NAME" ]; then
+    for try in 1 2 3; do
+      if graphql_try "$(bucket_credentials_body "$bucket_id" "$RAILWAY_DEV_ENVIRONMENT_ID")" \
+        "reading the '$SOURCE_DOCUMENTS_BUCKET' instance of the source environment $RAILWAY_DEV_ENVIRONMENT_ID"; then
+        SOURCE_BUCKET_NAME=$(bucket_name_from_response)
+        if [ -n "$SOURCE_BUCKET_NAME" ]; then
+          break
+        fi
+      fi
+      sleep 3
+    done
+  fi
+
+  if [ -z "$SOURCE_BUCKET_NAME" ]; then
+    echo "::error::Could not read the '$SOURCE_DOCUMENTS_BUCKET' instance of the source environment $RAILWAY_DEV_ENVIRONMENT_ID after 3 attempts (last failure: ${GQL_ERROR:-none — the read succeeded but named no bucket}), so the isolation of $env_id is UNVERIFIED — which is NOT the same as isolated. Refusing to proceed: if the two share one bucket, every document this PR environment uploads lands in live evidence."
+    exit 1
+  fi
+
+  if [ "$fork_name" = "$SOURCE_BUCKET_NAME" ]; then
+    echo "::error::Environment $env_id and the source environment $RAILWAY_DEV_ENVIRONMENT_ID resolve to the SAME storage bucket ('$fork_name'). Every document this PR environment uploads would land in live evidence. Refusing to proceed."
+    exit 1
+  fi
+
+  echo "bucket isolation confirmed: $env_id -> $fork_name, source $RAILWAY_DEV_ENVIRONMENT_ID -> $SOURCE_BUCKET_NAME."
+}
+
+ensure_bucket() {
+  local env_id="$1" bucket_id matches has_next fork_name="" input try staged probe_err="" create_err=""
+
+  graphql_post "$(gql_body "$PROJECT_BUCKETS_QUERY" "$(jq -n --arg p "$RAILWAY_PROJECT_ID" '{p: $p}')")" \
+    "listing the buckets of project $RAILWAY_PROJECT_ID"
+
+  has_next=$(echo "$GQL_RESPONSE" | jq -r '.data.project.buckets.pageInfo.hasNextPage // false')
+  if [ "$has_next" = "true" ]; then
+    echo "::error::Project $RAILWAY_PROJECT_ID carries more than 100 buckets, so this listing is truncated and '$SOURCE_DOCUMENTS_BUCKET' being absent from it proves nothing. Refusing to resolve a bucket from a partial page."
+    exit 1
+  fi
+
+  matches=$(echo "$GQL_RESPONSE" | jq --arg n "$SOURCE_DOCUMENTS_BUCKET" \
+    '[.data.project.buckets.edges[]?.node | select(.name == $n)] | length')
+  if [ "$matches" = "0" ]; then
+    echo "::error::Project $RAILWAY_PROJECT_ID has no bucket named '$SOURCE_DOCUMENTS_BUCKET'. That is drift in the source environment rather than a fork problem: the \${{$SOURCE_DOCUMENTS_BUCKET.*}} variable references resolve nowhere, so NO environment can store a source document."
+    exit 1
+  fi
+  if [ "$matches" != "1" ]; then
+    echo "::error::$matches buckets in project $RAILWAY_PROJECT_ID are named '$SOURCE_DOCUMENTS_BUCKET'. Refusing to guess which one the \${{$SOURCE_DOCUMENTS_BUCKET.*}} references resolve to — that ambiguity must be resolved by hand."
+    exit 1
+  fi
+  bucket_id=$(echo "$GQL_RESPONSE" | jq -r --arg n "$SOURCE_DOCUMENTS_BUCKET" \
+    '[.data.project.buckets.edges[]?.node | select(.name == $n)][0].id')
+
+  if graphql_try "$(bucket_credentials_body "$bucket_id" "$env_id")" \
+    "probing the '$SOURCE_DOCUMENTS_BUCKET' instance of environment $env_id"; then
+    fork_name=$(bucket_name_from_response)
+  else
+    probe_err="$GQL_ERROR"
+  fi
+
+  if [ -n "$fork_name" ]; then
+    echo "bucket '$SOURCE_DOCUMENTS_BUCKET' already has an instance in $env_id — no mutation."
+    assert_bucket_isolation "$bucket_id" "$env_id" "$fork_name"
+    return 0
+  fi
+
+  echo "no '$SOURCE_DOCUMENTS_BUCKET' instance confirmed in $env_id — creating one ..."
+  input=$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg n "$SOURCE_DOCUMENTS_BUCKET" \
+    '{projectId: $p, environmentId: $e, name: $n}')
+  # A create error is NOT fatal: bucketCreate rejects a name that already exists
+  # project-wide, which is indistinguishable from a probe that could not see an
+  # instance already sitting there. Only the confirm poll below decides.
+  if ! graphql_try "$(gql_body "$BUCKET_CREATE_MUTATION" "$(jq -n --argjson i "$input" '{input: $i}')")" \
+    "creating the '$SOURCE_DOCUMENTS_BUCKET' instance in environment $env_id"; then
+    create_err="$GQL_ERROR"
+  fi
+
+  # `Bucket` exposes no environmentId, so bucketCreate's own return cannot prove
+  # the instance landed in THIS environment — only an independent re-query can.
+  for try in $(seq 1 "$VOLUME_CONFIRM_ATTEMPTS"); do
+    if graphql_try "$(bucket_credentials_body "$bucket_id" "$env_id")" \
+      "confirming the '$SOURCE_DOCUMENTS_BUCKET' instance in environment $env_id"; then
+      fork_name=$(bucket_name_from_response)
+      if [ -n "$fork_name" ]; then
+        echo "CONFIRMED by independent re-query (attempt $try): '$SOURCE_DOCUMENTS_BUCKET' now has an instance in $env_id."
+        assert_bucket_isolation "$bucket_id" "$env_id" "$fork_name"
+        return 0
+      fi
+    fi
+    sleep "$VOLUME_CONFIRM_INTERVAL"
+  done
+
+  # Bucket create STAGES rather than applies while the environment has unmerged
+  # changes, so tell that apart from a silent no-op before failing.
+  if graphql_try "$(gql_body "$ENV_STAGED_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "reading staged changes in environment $env_id"; then
+    staged=$(echo "$GQL_RESPONSE" | jq -r '.data.environment.unmergedChangesCount // 0')
+    if [ "$staged" != "0" ] && [ "$staged" != "null" ]; then
+      echo "::warning::the '$SOURCE_DOCUMENTS_BUCKET' instance may be STAGED rather than applied ($staged unmerged change(s) in $env_id) — committing them, then re-confirming."
+      if ! graphql_try "$(gql_body "$COMMIT_STAGED_MUTATION" \
+        "$(jq -n --arg e "$env_id" --arg m "DOC-01: apply the source-documents bucket instance created by CI" '{e: $e, m: $m}')")" \
+        "committing staged changes in environment $env_id"; then
+        echo "::error::environmentPatchCommitStaged failed in environment $env_id: $GQL_ERROR. Any staged bucket instance stays staged, so the invoice service in this environment has no object storage to write to."
+        exit 1
+      fi
+      if graphql_try "$(bucket_credentials_body "$bucket_id" "$env_id")" \
+        "re-confirming the '$SOURCE_DOCUMENTS_BUCKET' instance after committing staged changes in environment $env_id"; then
+        fork_name=$(bucket_name_from_response)
+        if [ -n "$fork_name" ]; then
+          echo "CONFIRMED after committing staged changes: '$SOURCE_DOCUMENTS_BUCKET' now has an instance in $env_id."
+          assert_bucket_isolation "$bucket_id" "$env_id" "$fork_name"
+          return 0
+        fi
+      fi
+    fi
+  fi
+
+  echo "::error::No '$SOURCE_DOCUMENTS_BUCKET' bucket instance could be confirmed in environment $env_id after $((VOLUME_CONFIRM_ATTEMPTS * VOLUME_CONFIRM_INTERVAL))s of independent re-queries${probe_err:+ (probe: $probe_err)}${create_err:+ (create: $create_err)}. bucketS3Credentials answers 'Not Authorized' both when an instance is absent and when this token may not read it, so neither is asserted here — and neither is a successful create. Without an instance the invoice service forks with \${{$SOURCE_DOCUMENTS_BUCKET.*}} references that resolve to nothing, and every document upload in this environment fails."
+  exit 1
+}
+
 # --- ENVIRONMENT audit (RECORD ONLY — sets nothing) --------------------------
 #
 # MEASURED: `ENVIRONMENT` in a fork resolves to the literal `development`
@@ -1587,6 +1768,7 @@ cmd_reconcile_fork() {
   # accepts a connection.
   ensure_postgres_volume "$env_id"
   ensure_postgres_running "$env_id" "$POSTGRES_VOLUME_CREATED"
+  ensure_bucket "$env_id"
   record_environment_variable "$env_id"
   echo "Fork reconciliation complete for $env_id."
 }

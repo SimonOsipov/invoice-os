@@ -9,7 +9,7 @@
 // count on a card comes from lib/roles.ts, `filterRoles` and `intro` included. The one
 // exception is marked below.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { EmptyState } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
@@ -26,6 +26,7 @@ import {
   type Role,
 } from '../lib/roles'
 import { AmberNote, InitialsChip } from './MemberParts'
+import { RoleModal, type RoleModalSubject } from './RoleModal'
 import type { PlatformCtx } from '../types'
 
 const EMPTY_TITLE = 'No roles yet'
@@ -41,8 +42,8 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   const [query, setQuery] = useState('')
   // MembersView's flash idiom (MembersView.tsx:72-77) retimed to 3000ms: one transient
   // string plus one effect-owned timer, so a second save restarts the flash rather than
-  // stacking a timer that would clear the newer message early. Nothing raises it yet —
-  // the create/edit modal that does is the next subtask's.
+  // stacking a timer that would clear the newer message early. The modal raises it through
+  // `onFlash` — `setFlash` is stable, so it is passed straight down.
   const [flash, setFlash] = useState<string | null>(null)
   useEffect(() => {
     if (!flash) return
@@ -50,9 +51,14 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
     return () => window.clearTimeout(t)
   }, [flash])
 
-  // The seam for the create/edit modal: the next subtask replaces this body with the state
-  // it opens from, and edits no JSX — both call sites already pass what it will need.
-  function openRoleModal(_mode: 'create' | 'edit', _role?: Role) {}
+  // Local, not on ctx: nothing outside this tab can open the modal. The union is what the
+  // modal reads, so an edit without a subject is unrepresentable.
+  const [modal, setModal] = useState<RoleModalSubject | null>(null)
+  function openRoleModal(mode: 'create' | 'edit', role?: Role) {
+    setModal(mode === 'edit' && role ? { mode: 'edit', role } : { mode: 'create' })
+  }
+  // STABLE — it is a `useDismiss` dependency inside the modal (useDismiss.ts:36-37).
+  const closeModal = useCallback(() => setModal(null), [])
 
   const unassigned = unassignedRoles(roles, members)
   const shown = filterRoles(roles, query)
@@ -122,6 +128,9 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
           ))}
         </div>
       )}
+
+      {/* Conditional, so every open is a fresh mount and the draft it seeds is the CURRENT role. */}
+      {modal && <RoleModal ctx={ctx} subject={modal} onClose={closeModal} onFlash={setFlash} />}
     </>
   )
 }

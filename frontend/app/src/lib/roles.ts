@@ -1,11 +1,15 @@
 // Workflow roles (Settings › Roles) — the approval seat as one object owning both its title
 // and its holders.
 //
-// Dependency direction is ONE-WAY and type-only: roles.ts → members.ts, roles.ts → workflows.ts.
-// Member and policy lists arrive as ARGUMENTS (the shape `stepsFor` already uses), so nothing
-// imports this module back and the graph stays acyclic.
+// Dependency direction is ONE-WAY: roles.ts → members.ts, roles.ts → workflows.ts. Member and
+// policy lists arrive as ARGUMENTS (the shape `stepsFor` already uses), so nothing imports this
+// module back and the graph stays acyclic.
+//
+// The members.ts edge carries ONE runtime import — `accessRoleLabel`, which the picker's firm
+// meta column must not re-case itself (members.ts warns that re-casing drifts silently). The
+// workflows.ts edge stays type-only.
 
-import type { Member } from './members'
+import { accessRoleLabel, type Member } from './members'
 import type { Policy, WorkflowMode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -286,40 +290,75 @@ export function stepsNamedLine(total: number): string {
 export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will block until someone else holds this role.'
 
 // ---------------------------------------------------------------------------
-// RoleModal (MEMB-02-03) — stubbed pure helpers, throw until the executor implements them
+// Role modal — the picker's derivations, and the modal's own copy
 // ---------------------------------------------------------------------------
 
 /** The picker's rows for one mode — an invited person holds no place in a role yet. */
-export function pickerMembers(_list: readonly Member[]): Member[] {
-  throw new Error('not implemented')
+export function pickerMembers(list: readonly Member[]): Member[] {
+  return list.filter((m) => m.status !== 'invited')
 }
 
-/** Right-aligned meta column: department in-house, access-role label in firm. */
-export function pickerMeta(_mode: WorkflowMode, _member: Member): string {
-  throw new Error('not implemented')
+/**
+ * Right-aligned meta column: department in-house, access-role LABEL in firm. The label comes
+ * from `accessRoleLabel` rather than from re-casing `m.role` — the one thing members.ts:104-115
+ * says not to do, because a label edit there would leave this column behind.
+ */
+export function pickerMeta(mode: WorkflowMode, member: Member): string {
+  // `department` is optional only because a FIRM row carries none; every in-house row has one,
+  // by seed and by `memberFromInvite` alike.
+  return mode === 'firm' ? accessRoleLabel(member.role) : (member.department ?? '')
 }
 
 /** Case-insensitive name/email search over an already-selectable list; trims the query. */
-export function filterPickerMembers(_list: readonly Member[], _query: string): Member[] {
-  throw new Error('not implemented')
+export function filterPickerMembers(list: readonly Member[], query: string): Member[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return list.slice()
+  return list.filter((m) => m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q))
 }
 
-/** `X of Y selected` — Y is the selectable count, never the raw roster length. */
-export function pickerSelectionCount(_selected: number, _list: readonly Member[]): string {
-  throw new Error('not implemented')
+/**
+ * `X of Y selected` — `clientSelectionCount`'s idiom, but Y is the SELECTABLE count and never
+ * the roster length: a person the picker will not show cannot be one of the Y you may pick.
+ */
+export function pickerSelectionCount(selected: number, list: readonly Member[]): string {
+  return `${selected} of ${pickerMembers(list).length} selected`
 }
 
-/** The footnote naming how many invited people the picker hides. */
-export function hiddenInvitedFootnote(_list: readonly Member[]): string {
-  throw new Error('not implemented')
+/** The footnote naming how many invited people the picker hides. Callers gate on a zero count. */
+export function hiddenInvitedFootnote(list: readonly Member[]): string {
+  const n = list.length - pickerMembers(list).length
+  // NOT IN BRIEF: the singular.
+  return n === 1
+    ? '1 invited person is hidden until they accept the invite.'
+    : `${n} invited people are hidden until they accept the invite.`
 }
 
 /** Save is inert on an empty or whitespace-only name; nothing else gates it — duplicate titles are allowed. */
-export function canSaveRole(_name: string): boolean {
-  throw new Error('not implemented')
+export function canSaveRole(name: string): boolean {
+  return name.trim() !== ''
 }
 
-/** The inline delete-confirm sentence, naming the role and its usage. */
-export function deleteRoleConfirm(_title: string, _roleSteps: RoleSteps): string {
-  throw new Error('not implemented')
+/**
+ * The inline delete-confirm sentence, naming the role and its usage. The blocking clause is
+ * dropped entirely on an unused role: nothing points at it, so nothing can block.
+ */
+export function deleteRoleConfirm(title: string, roleSteps: RoleSteps): string {
+  const usage = roleUsage(roleSteps)
+  // NOT IN BRIEF: the unused half. The used half is the brief's sentence.
+  if (roleSteps.total === 0) return `Delete ${title}? It is ${usage}.`
+  return `Delete ${title}? ${usage}. Those steps will block until you point them somewhere else.`
+}
+
+// NOT IN BRIEF: §2 asks the header for "a one-line subtitle" and supplies neither line.
+export const NEW_ROLE_SUBTITLE = 'Name the seat and say who fills it.'
+export const EDIT_ROLE_SUBTITLE = 'Rename the seat, or change who fills it.'
+
+/** The toolbar flash after a save — §2's string. `invitedNotice`'s posture on the Members tab. */
+export function savedNotice(title: string): string {
+  return `${title} saved`
+}
+
+/** NOT IN BRIEF: the delete half of the pair, so the two cannot drift. */
+export function deletedNotice(title: string): string {
+  return `${title} deleted`
 }

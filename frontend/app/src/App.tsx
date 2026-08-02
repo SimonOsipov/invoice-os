@@ -248,6 +248,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // this state with an inline object literal — go through a constructor.
   const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
   const [filter, setFilter] = useState('all')
+  // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
+  const [invoiceQuery, setInvoiceQuery] = useState('')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   // Every deployment is a sandbox today, so this is a client-side constant, not a
   // posture value fetched from the server.
@@ -1052,6 +1054,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     dragField,
     selectedId: detailSel.selectedId,
     filter,
+    invoiceQuery,
     switcherOpen,
     sandbox,
     settingsTab,
@@ -1077,6 +1080,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     importedInvoiceId: detailSel.importedInvoiceId,
     nav,
     setFilter,
+    setInvoiceQuery,
     toggleSwitcher,
     switchClient,
     openCreate,

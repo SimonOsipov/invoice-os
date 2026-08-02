@@ -243,14 +243,24 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       // of this block) -- widening ListInvoicesQuery only proves anything if something
       // calls it through the gateway.
       const buyerTin = freshTin()
-      const created = await createInvoice(token, {
+      const buyerMatch = await createInvoice(token, {
         entity_id: entity.id,
         invoice_number: `INV-L-${freshTin()}`,
         buyer_tin: buyerTin,
       })
-      const res = await listInvoices(token, { q: buyerTin })
-      expect(res.invoices.some((inv) => inv.id === created.id), 'q should match the invoice by buyer_tin').toBe(true)
-      expect(res.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
+      const buyerRes = await listInvoices(token, { q: buyerTin })
+      expect(buyerRes.invoices.some((inv) => inv.id === buyerMatch.id), 'q should match the invoice by buyer_tin').toBe(true)
+      expect(buyerRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
+
+      const supplierTin = freshTin()
+      const supplierMatch = await createInvoice(token, {
+        entity_id: entity.id,
+        invoice_number: `INV-L-${freshTin()}`,
+        supplier_tin: supplierTin,
+      })
+      const supplierRes = await listInvoices(token, { q: supplierTin })
+      expect(supplierRes.invoices.some((inv) => inv.id === supplierMatch.id), 'q should match the invoice by supplier_tin').toBe(true)
+      expect(supplierRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
     })
 
     test('list with no auth -> 401 {error: string}', async () => {

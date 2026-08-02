@@ -10,7 +10,7 @@ const src = readFileSync(fileURLToPath(new URL('./InvoicesList.tsx', import.meta
 
 describe('poll-tick call-shape guard ([poll-tick-follows-the-page])', () => {
   it('the main fetch and the poll tick pass the literally identical listInvoices options shape', () => {
-    const callSites = src.match(/listInvoices\(ctx\.authedFetch, base, \{ needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset \}\)/g) ?? []
+    const callSites = src.match(/listInvoices\(ctx\.authedFetch, base, \{ needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset, q: ctx\.invoiceQuery \|\| undefined \}\)/g) ?? []
     expect(callSites, 'exactly two listInvoices call sites (main fetch + poll tick), same options shape').toHaveLength(2)
   })
 })

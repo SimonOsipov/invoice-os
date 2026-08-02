@@ -291,6 +291,18 @@ export interface ListInvoicesOptions {
   keptAsIs?: boolean
 }
 
+// The server's `q` cap is 200 UTF-8 BYTES, not JS string length (handlers.go
+// maxFilterTextLen -- a byte count, enforced via Go's len()). Encode, cut at the byte
+// boundary, then back off over any dangling continuation bytes (0b10xxxxxx) so a
+// multi-byte character is never split and no `�` can appear.
+export function clampFilterText(s: string): string {
+  const bytes = new TextEncoder().encode(s)
+  if (bytes.length <= 200) return s
+  let end = 200
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--
+  return new TextDecoder().decode(bytes.subarray(0, end))
+}
+
 // One entry of editInvoice's optional `line_items` array (lineItemReq,
 // handlers.go:42-48, INVED-01-05). Five nullable strings -- NO `id` and NO `line_no`:
 // line_no is system-assigned 1..N by array POSITION ([line-no-by-position]) and a

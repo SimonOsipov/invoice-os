@@ -265,6 +265,9 @@ export type PlatformCtx = {
   dragField: string | null
   selectedId: string | null
   filter: string
+  // The header search box's committed term (BUG-01-05) -- set on submit, read by
+  // InvoicesList as the `q` server-side filter. `''` means unfiltered.
+  invoiceQuery: string
   switcherOpen: boolean
   sandbox: boolean
   settingsTab: SettingsTab
@@ -382,6 +385,7 @@ export type PlatformCtx = {
 
   nav: (id: NavId) => void
   setFilter: (f: string) => void
+  setInvoiceQuery: (q: string) => void
   toggleSwitcher: () => void
   // [entity-picker] keystone: takes a real entity id, never an array index — the active
   // selection is never again "the mock array position the switcher happened to click".

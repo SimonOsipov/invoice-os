@@ -88,14 +88,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       base
         ? // Keeps the {invoices, pagination} envelope whole -- the pager below reads
           // `pagination` off this same response, never a client constant.
-          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset }).then(
+          listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset, q: ctx.invoiceQuery || undefined }).then(
             (r) => ({ ...r, fetchedEntityId: activeEntityId }),
           )
         : Promise.reject(new Error('no gateway configured')),
     {
       isEmpty: invoiceListIsEmpty,
       immediate: shouldFetchInvoices(base),
-      deps: [needsAttention, ctx.mode, ctx.active.entityId, offset],
+      deps: [needsAttention, ctx.mode, ctx.active.entityId, offset, ctx.invoiceQuery],
     },
   )
   const state = invoicesViewState(base, list)
@@ -154,6 +154,15 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
   const [selected, setSelected] = useState<string[]>([])
 
+  // A new search term resets the page and clears the selection
+  // ([paging-clears-the-selection]), mirroring the inline reset the needs-attention
+  // toggle does below. A no-op setOffset(0) when already on page 1 bails out of the
+  // re-render, so this doesn't double-fetch in the common case.
+  useEffect(() => {
+    setOffset(0)
+    setSelected([])
+  }, [ctx.invoiceQuery])
+
   // Drops any selected id that fell out of `rows` (paged/filtered away) or is no longer
   // `validated` (submitted, edited, or re-validated out from under a stale selection)
   // whenever `rows` changes — e.g. a live-refresh poll tick (M5-09-07) that advances a
@@ -209,7 +218,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
       if (tickInFlight.current) return
       tickInFlight.current = true
       const g = gen.current
-      listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset })
+      listInvoices(ctx.authedFetch, base, { needsAttention, entityId: activeEntityId, limit: REGISTER_PAGE_SIZE, offset, q: ctx.invoiceQuery || undefined })
         .then((r) => {
           if (g === gen.current) setLive(r.invoices)
         })

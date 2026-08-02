@@ -898,9 +898,22 @@ DOMAIN_SELECT_JQ='.data.domains
 | ((.customDomains // []) + (.serviceDomains // []))
 | {count: length, domain: (.[0].domain // ""), targetPort: (.[0].targetPort)}'
 
-# select_domain <domains-response-json> is defined by the implementation subtask.
-# Deliberately absent here: this is the RED fixture suite, proven to fail on
-# select_domain's absence before it exists.
+# select_domain <domains-response-json>
+# Pure: no token, no network. Echoes {count, domain, targetPort} compactly.
+select_domain() {
+  local resp="$1"
+
+  # stderr is deliberately NOT redirected here: on unparseable input jq's own
+  # parse error is the only thing distinguishing it from a drifted selection set.
+  if ! printf '%s' "$resp" | jq -e "$DOMAIN_GUARD_JQ" >/dev/null; then
+    echo "::error::The Railway domains response carries no \`customDomains\` list — the caller's GraphQL selection set omits it, or it came back null, or \`domains\` itself did. Refusing to select: an absent collection reads as empty and would silently prefer the generated domain." >&2
+    return 1
+  fi
+
+  # Last command on purpose: its status is the function's, so a jq failure here
+  # is never swallowed.
+  printf '%s' "$resp" | jq -c "$DOMAIN_SELECT_JQ"
+}
 
 # The two helpers increment `failures`, a `local` of domain_self_test (bash
 # dynamic scoping). Neither aborts on a miss: every fixture must report.

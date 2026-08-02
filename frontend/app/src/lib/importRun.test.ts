@@ -994,3 +994,72 @@ describe('attachDocumentIds — the per-file document id (BULK-DOC-01, 03, 04, 0
     expect(result.map((pf) => pf.documentId)).toEqual([null, DOC_1])
   })
 })
+
+// QA Mode B adversarial coverage on attachDocumentIds. BULK-DOC-01..05 pin the happy
+// pairing; these pin what happens when `previewed` and `files` disagree — the shapes a
+// re-preview, a mid-preview removal, or a duplicated entry actually produce.
+describe('attachDocumentIds — adversarial (QA)', () => {
+  it('BULK-DOC-06: a re-run REPLACES stale ids rather than keeping them — a file absent from the new previewed goes back to null', () => {
+    const files = mkPicked(['a.csv', 'b.csv'])
+    const firstPass = attachDocumentIds(files, [
+      { fileId: files[0].id, preview: mkDocPreview(SHARED_COLS, DOC_1) },
+      { fileId: files[1].id, preview: mkDocPreview(SHARED_COLS, DOC_2) },
+    ])
+    expect(firstPass.map((pf) => pf.documentId)).toEqual([DOC_1, DOC_2])
+
+    // Second read-columns: only file b previewed this time.
+    const secondPass = attachDocumentIds(firstPass, [{ fileId: files[1].id, preview: mkDocPreview(SHARED_COLS, DOC_3) }])
+
+    expect(secondPass.map((pf) => pf.documentId)).toEqual([null, DOC_3])
+    expect(secondPass).toHaveLength(2)
+  })
+
+  it('BULK-DOC-07: an empty previewed clears every id — no entry survives from a previous pass', () => {
+    const attached = attachDocumentIds(mkPicked(['a.csv', 'b.csv']), [])
+    expect(attached.map((pf) => pf.documentId)).toEqual([null, null])
+    expect(attached).toHaveLength(2)
+  })
+
+  it('BULK-DOC-08: duplicate fileIds in previewed resolve to the first entry and never duplicate the file', () => {
+    const files = mkPicked(['a.csv'])
+    const result = attachDocumentIds(files, [
+      { fileId: files[0].id, preview: mkDocPreview(SHARED_COLS, DOC_1) },
+      { fileId: files[0].id, preview: mkDocPreview(SHARED_COLS, DOC_2) },
+    ])
+
+    expect(result).toHaveLength(1)
+    expect(result[0].documentId).toBe(DOC_1)
+  })
+
+  it('BULK-DOC-09: a previewed entry matching no file is dropped — the result is one entry per FILE, never per preview', () => {
+    const files = mkPicked(['a.csv'])
+    const result = attachDocumentIds(files, [
+      { fileId: 'removed-mid-preview', preview: mkDocPreview(SHARED_COLS, DOC_2) },
+      { fileId: files[0].id, preview: mkDocPreview(SHARED_COLS, DOC_1) },
+    ])
+
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe(files[0].id)
+    expect(result[0].documentId).toBe(DOC_1)
+    expect(attachDocumentIds([], [{ fileId: 'x', preview: mkDocPreview(SHARED_COLS, DOC_1) }])).toEqual([])
+  })
+
+  it('BULK-DOC-10: at MAX_RUN_FILES the order is preserved and every File object survives the copy by identity', () => {
+    const names = ['1.csv', '2.csv', '3.csv', '4.csv', '5.csv']
+    expect(names).toHaveLength(MAX_RUN_FILES)
+    const files = mkPicked(names)
+    const ids = [DOC_1, DOC_2, DOC_3, DOC_DUPE, '44444444-4444-4444-8444-444444444444']
+    // Reverse order in, to catch a positional pairing that only works pre-sorted.
+    const previewed = [...files].reverse().map((pf, i) => ({
+      fileId: pf.id,
+      preview: mkDocPreview(SHARED_COLS, ids[files.length - 1 - i]),
+    }))
+
+    const result = attachDocumentIds(files, previewed)
+
+    expect(result.map((pf) => pf.file.name)).toEqual(names)
+    expect(result.map((pf) => pf.documentId)).toEqual(ids)
+    // `file` must survive the spread by REFERENCE — readAllColumns re-previews from it.
+    result.forEach((pf, i) => expect(pf.file).toBe(files[i].file))
+  })
+})

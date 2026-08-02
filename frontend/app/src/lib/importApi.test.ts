@@ -761,6 +761,37 @@ describe('transport edge cases beyond IMPAPI-15..20 (QA)', () => {
     expect(result).toEqual(wrongShape)
   })
 
+  // A bare `raw.document_id` read would TypeError here instead of rejecting an ApiError,
+  // and readAllColumns' catch would surface a stack trace as the operator-facing message.
+  it('QA-12: a 200 whose body is literal JSON null rejects ApiError{kind:"malformed"} — not a TypeError', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, 'null')
+
+    const err = await captureRejection(() => promise)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('malformed')
+    expect((err as ApiError).status).toBeNull()
+    expect((err as ApiError).body).toBeNull()
+  })
+
+  // The document_id check must stay BELOW the status check. The preview endpoint now
+  // echoes document_id on its post-store 400s, so an impl that inspected the field first
+  // would relabel a real http error as malformed and lose both the status and the
+  // server's message.
+  it('QA-13: a 400 carrying a document_id still rejects kind:"http" with status 400 and the server message — the id check never shadows the status', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(400, JSON.stringify({ document_id: DOC_ID, error: 'unrecognized file format' }), 'Bad Request')
+
+    const err = await captureRejection(() => promise)
+
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('http')
+    expect(apiErr.status).toBe(400)
+    expect(apiErr.message).toBe('unrecognized file format')
+    expect(apiErr.body).toEqual({ document_id: DOC_ID, error: 'unrecognized file format' })
+  })
+
   it('QA-10: a non-2xx with an HTML proxy error page (embedded quotes/braces that could confuse a naive parser) still surfaces as a usable ApiError, message falling back to statusText, body undefined', async () => {
     const promise = createImport(fakeAuth(), base, makeReq(), () => {}, FakeXhrCtor)
     const html = '<html><body><h1>502 Bad Gateway</h1><p>nginx says: "upstream {timed out}"</p></body></html>'

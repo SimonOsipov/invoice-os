@@ -128,7 +128,8 @@ func (s *s3Store) Get(ctx context.Context, key, rangeHeader string) (Object, err
 		obj.Size = *out.ContentLength
 	}
 	// GetObjectOutput carries no HTTP status, so Partial is derived from the
-	// presence of Content-Range.
+	// presence of Content-Range. Known gap: a non-conformant 206 that omits the
+	// header entirely is indistinguishable here from a 200.
 	if out.ContentRange != nil {
 		obj.ContentRange = *out.ContentRange
 		obj.Partial = true

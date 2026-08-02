@@ -55,6 +55,14 @@ func DownloadHandler(
 			return
 		}
 
+		// A partial body with no Content-Range is an upstream fault, not a 200: a 200
+		// declares the complete representation, so it would ship a silent truncation.
+		if obj.Partial && obj.ContentRange == "" {
+			log.ErrorContext(r.Context(), "document: upstream partial response carries no Content-Range")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
 		// Fixed, never the row's declared_content_type: with nosniff and an
 		// attachment disposition this is the stated virus-scanning mitigation.
 		h := w.Header()
@@ -68,10 +76,10 @@ func DownloadHandler(
 			h.Set("Content-Length", strconv.FormatInt(obj.Size, 10))
 		}
 
-		// One condition, so a 206 can never go out without the Content-Range it is
-		// only meaningful with.
+		// The fault guard above already rejected a blank ContentRange, so a 206 can
+		// never go out without the Content-Range it is only meaningful with.
 		status := http.StatusOK
-		if obj.Partial && obj.ContentRange != "" {
+		if obj.Partial {
 			status = http.StatusPartialContent
 			h.Set("Content-Range", obj.ContentRange)
 		}

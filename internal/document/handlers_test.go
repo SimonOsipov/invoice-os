@@ -577,6 +577,43 @@ func TestDownloadHandler_RangeReturns206WithContentRange(t *testing.T) {
 	}
 }
 
+// The SDK sets a non-nil pointer to "" for a blank upstream Content-Range, so
+// Partial can arrive true with the header empty. A 200 there would present the
+// range bytes as the whole object and silently truncate the download.
+func TestDownloadHandler_PartialWithBlankContentRangeIs500(t *testing.T) {
+	id := testIdentity()
+	partial := []byte("0123456789")
+
+	cb := &countingBody{Reader: bytes.NewReader(partial)}
+	open := func(ctx context.Context, docID, rangeHeader string) (document.Document, document.Object, error) {
+		doc := namedDoc("big.pdf")
+		doc.SizeBytes = 1000
+		return doc, document.Object{Body: cb, Size: int64(len(partial)), Partial: true}, nil
+	}
+
+	rec := doDownload(t, open, &id, uuid.NewString(), "bytes=0-9")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 — %d partial bytes must not go out as a complete 200 (body=%q)",
+			rec.Code, len(partial), rec.Body.Bytes())
+	}
+	if bytes.Contains(rec.Body.Bytes(), partial) {
+		t.Errorf("500 body carries the object bytes %q — an upstream fault must yield none", partial)
+	}
+	h := rec.Result().Header
+	if got := h.Get("Content-Type"); got == "application/octet-stream" {
+		t.Errorf("Content-Type on a 500 = %q, want the error envelope's type", got)
+	}
+	for _, k := range []string{"Content-Disposition", "Accept-Ranges", "Content-Length", "Content-Range"} {
+		if got := h.Get(k); got != "" {
+			t.Errorf("%s on a 500 = %q, want unset", k, got)
+		}
+	}
+	if cb.closes != 1 {
+		t.Errorf("object body Close calls = %d, want 1", cb.closes)
+	}
+}
+
 func TestDownloadHandler_UnsatisfiableRangeReturns416(t *testing.T) {
 	id := testIdentity()
 	open := func(ctx context.Context, docID, rangeHeader string) (document.Document, document.Object, error) {

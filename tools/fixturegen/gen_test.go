@@ -446,6 +446,6 @@ func TestGen_EdgeVatMathWrong_VATZeroSubtotalPositiveLinesReconcile(t *testing.T
 func TestGen_OversizedInflator_ExceedsMaxUploadBytes(t *testing.T) {
 	data := buildOversized()
 	if len(data) <= canonicalUploadCap {
-		t.Errorf("buildOversized() returned %d bytes, want > %d (internal/importer/handlers.go's maxUploadBytes, 10 MiB)", len(data), canonicalUploadCap)
+		t.Errorf("buildOversized() returned %d bytes, want > %d (internal/importer/handlers.go's maxUploadBytes, 15 MiB)", len(data), canonicalUploadCap)
 	}
 }

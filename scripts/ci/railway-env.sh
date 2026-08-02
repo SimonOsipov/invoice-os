@@ -618,13 +618,14 @@ cmd_disable_pr_environments() {
 # is, which is exactly why it is the authoritative gate.
 # ===========================================================================
 
-# Domains and the TCP proxy were both measured to CARRY into a fork (auto-renamed
-# `<svc>-pr-<N>.up.railway.app`, and a proxy with its own distinct port). The
-# create path below is INSURANCE, not the expected path: the normal run is one
-# query per service and zero mutations.
+# Railway-GENERATED domains carry into a fork (auto-renamed
+# `<svc>-pr-<N>.up.railway.app`), custom domains never do, and the TCP proxy
+# carries with its own distinct port. A service whose source environment has only
+# a custom domain therefore forks with NO domain, and the create path below runs.
 # shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
 DOMAINS_QUERY='query dom($p: String!, $e: String!, $s: String!) {
   domains(projectId: $p, environmentId: $e, serviceId: $s) {
+    customDomains { id domain targetPort syncStatus }
     serviceDomains { id domain targetPort syncStatus }
   }
 }'
@@ -1065,44 +1066,44 @@ settle_fork() {
 # untouched `urls` step remains the sole discoverer and still fails if any is
 # missing, so no URL is ever constructed from a pattern.
 reconcile_domain() {
-  local env_id="$1" svc_id="$2" label="$3" existing target src_count input body
+  local env_id="$1" svc_id="$2" label="$3" existing target src_count input body sel count
 
   graphql_post "$(gql_body "$DOMAINS_QUERY" \
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
     "reading $label domains in environment $env_id"
 
-  existing=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].domain // empty')
-  if [ -n "$existing" ]; then
-    echo "  $label: domain already present ($existing, targetPort=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].targetPort // "null"')) — no mutation. This is the expected path; domains were measured to carry into a fork."
+  sel=$(select_domain "$GQL_RESPONSE")
+  count=$(echo "$sel" | jq -r '.count')
+  if [ "$count" != "0" ]; then
+    existing=$(echo "$sel" | jq -r '.domain')
+    echo "  $label: domain already present ($existing, targetPort=$(echo "$sel" | jq -r '.targetPort')) — no mutation."
     return 0
   fi
 
-  echo "::warning::$label has NO domain in environment $env_id. Domains were measured to CARRY into a fork, so this is the unexpected branch — creating one as insurance."
+  echo "  $label: no domain in environment $env_id — creating one."
 
-  # AC #4: targetPort is READ from `development`, never hardcoded.
+  # targetPort is READ from the source environment, never hardcoded.
   graphql_post "$(gql_body "$DOMAINS_QUERY" \
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
     "reading the $label targetPort from the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
 
-  src_count=$(echo "$GQL_RESPONSE" | jq '[.data.domains.serviceDomains[]?] | length')
+  sel=$(select_domain "$GQL_RESPONSE")
+  src_count=$(echo "$sel" | jq -r '.count')
   if [ "$src_count" = "0" ]; then
-    echo "::error::$label (service $svc_id) has no domain in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID either, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
+    echo "::error::$label (service $svc_id) has no domain of EITHER kind — neither a custom domain nor a Railway-generated one — in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
     exit 1
   fi
-  target=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].targetPort // empty')
+  target=$(echo "$sel" | jq -r '.targetPort // empty')
 
   if [ -n "$target" ]; then
     input=$(jq -n --arg e "$env_id" --arg s "$svc_id" --argjson t "$target" \
       '{input: {environmentId: $e, serviceId: $s, targetPort: $t}}')
     echo "  $label: creating a domain with targetPort=$target, read from the source environment."
   else
-    # MEASURED: targetPort is null on the gateway domain in BOTH the fork and
-    # `development`. Null is the normal state, so this is NOT a failure — it is
-    # Railway's magic-port detection, which is exactly what the source
-    # environment relies on. Replicate that by OMITTING targetPort. Hardcoding
-    # 8080 here would invent a value the source environment does not have.
+    # A null targetPort means Railway magic-port detection; omit the field rather
+    # than substitute one. `select-domain --self-test` pins that null survives.
     input=$(jq -n --arg e "$env_id" --arg s "$svc_id" '{input: {environmentId: $e, serviceId: $s}}')
-    echo "  $label: the source environment domain has a null targetPort (measured normal — Railway magic-port detection), so targetPort is OMITTED rather than invented."
+    echo "  $label: the selected source domain has a null targetPort (Railway magic-port detection), so targetPort is OMITTED rather than invented."
   fi
 
   body=$(gql_body "$DOMAIN_CREATE_MUTATION" "$input")
@@ -1115,11 +1116,13 @@ reconcile_domain() {
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
     "re-reading $label domains in environment $env_id after create"
 
-  existing=$(echo "$GQL_RESPONSE" | jq -r '.data.domains.serviceDomains[0].domain // empty')
-  if [ -z "$existing" ]; then
+  sel=$(select_domain "$GQL_RESPONSE")
+  count=$(echo "$sel" | jq -r '.count')
+  if [ "$count" = "0" ]; then
     echo "::error::serviceDomainCreate reported success for $label (service $svc_id) in environment $env_id but an INDEPENDENT re-query still finds no domain. The urls step below would fail to discover it."
     exit 1
   fi
+  existing=$(echo "$sel" | jq -r '.domain')
   echo "  $label: created and confirmed by re-query ($existing)."
 }
 

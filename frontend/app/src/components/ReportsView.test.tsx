@@ -278,3 +278,29 @@ describe('ReportsView: entity switch settles on the new client (task-335, BUG-01
     expect(urlParams(secondUrl).get('limit'), 'the refetch must go through the aggregate page shape too, not just the mount fetch').toBe(String(AGGREGATE_PAGE_SIZE))
   })
 })
+
+// QA (task-335, BUG-01-09, Mode B): `fresh` must gate all three list-half render branches
+// (loading-insert, empty, populated+truncation), not just the row array gateByActiveEntity
+// already filters -- same bug class BUG-01-03 cost two fix cycles, same posture as
+// CustomersView.test.tsx's own [customers-fresh-gate] guard (which only covers its populated
+// branch; extended here to all three since mutation-testing shows each is independently
+// silent). Mutation-verified: dropping `&& fresh` (or deleting the loading-insert line)
+// leaves every render test above green -- the one-commit stale-envelope transient is
+// unobservable under jsdom (React flushes the passive effect that nulls `list.data`
+// synchronously inside the same act() as the prop change), so a source scan is the only
+// oracle for this regression class.
+describe('ReportsView: `fresh` gates every list-half render branch (task-335, [reports-fresh-gate])', () => {
+  const src = () => readFileSync(path.join(process.cwd(), 'src/components/ReportsView.tsx'), 'utf8')
+
+  it('the loading-insert branch requires `!fresh` alongside `list.data != null`', () => {
+    expect(src()).toMatch(/state === 'ready' && list\.data != null && !fresh && <Loading/)
+  })
+
+  it('the empty-state branch requires `fresh` alongside `list.data != null`', () => {
+    expect(src()).toMatch(/state === 'ready' && list\.data != null && fresh && rows\.length === 0/)
+  })
+
+  it('the populated/truncation branch requires `fresh` alongside `list.data != null`', () => {
+    expect(src()).toMatch(/state === 'ready' && list\.data != null && fresh && rows\.length > 0 && \(/)
+  })
+})

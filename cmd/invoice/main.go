@@ -168,8 +168,8 @@ func main() {
 // package through slog at INFO, so a log.Fatalf boot failure is emitted as
 // {"level":"INFO"} and NOWHERE AT ALL under LOG_LEVEL=warn or error. A
 // fail-closed guard that dies silently leaves an operator with a crash-loop and
-// no cause. Copied from cmd/gateway/main.go; this file's four pre-existing
-// log.Fatalf calls still carry the defect.
+// no cause. Copied from cmd/gateway/main.go; this file's remaining log.Fatalf
+// calls, mustEnv's included, still carry the defect.
 func fatal(logger *slog.Logger, format string, args ...any) {
 	logger.Error(fmt.Sprintf(format, args...))
 	os.Exit(1)

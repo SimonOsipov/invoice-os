@@ -674,6 +674,34 @@ func TestImport_UnrecognizedDocumentFormatIs400(t *testing.T) {
 	}
 }
 
+// TestImport_NilObjectBodyIs500: a non-conformant store can hand back a nil
+// body alongside a nil error. Decoding that nil-dereferences inside
+// io.ReadAll, so the read path is guarded the same way the Close is —
+// internal/document's DownloadHandler guards both.
+func TestImport_NilObjectBodyIs500(t *testing.T) {
+	id := testIdentity()
+	docID := uuid.NewString()
+	filename, contentType := "q.csv", "text/csv"
+	open := func(ctx context.Context, _, rangeHeader string) (document.Document, document.Object, error) {
+		return document.Document{ID: docID, Filename: &filename, DeclaredContentType: &contentType},
+			document.Object{}, nil
+	}
+	imp := func(ctx context.Context, entityID, fn, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+		t.Fatal("Import must not run for a document with no body")
+		return BatchResult{}, nil
+	}
+
+	body, ct := buildImportForm(t, uuid.NewString(), mustMappingJSON(t, map[string]string{"invoice_number": "Inv No"}), docID)
+	rec, raw, resp := doImportUpload(t, imp, open, &id, "", ct, body)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != "internal server error" {
+		t.Errorf("error = %q, want the generic 500 body", resp.Error)
+	}
+}
+
 // --- AC-8: one whole-request cap, 15 MiB, on both endpoints -----------------
 
 // TestUploadCapIs15MiB pins the constant itself: 15 MiB binary, matching the

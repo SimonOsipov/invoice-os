@@ -265,6 +265,14 @@ func CreateHandler(
 			return
 		}
 
+		// Decode nil-dereferences inside io.ReadAll, so the read is guarded
+		// like the Close above. TestImport_NilObjectBodyIs500.
+		if obj.Body == nil {
+			log.ErrorContext(r.Context(), "importer: source document opened with no body")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
 		header, rows, facts, err := Decode(obj.Body, format)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "could not decode uploaded file")

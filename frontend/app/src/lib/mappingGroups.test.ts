@@ -54,6 +54,7 @@ const TILL_COLS = ['Invoice No', 'Currency'] // different layout
 
 function mkPreview(columns: string[]): ImportPreview {
   return {
+    document_id: '5e0a3b21-8d47-4c6f-b912-7fa4e6c30d58',
     format: 'csv',
     delimiter: ',',
     encoding: 'utf-8',

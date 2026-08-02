@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_RUN_FILES,
   addFiles,
+  attachDocumentIds,
   canReadColumnsAll,
   capRefusal,
   markRunFailed,
@@ -45,7 +46,11 @@ import {
   runReducer,
 } from './importRun'
 import type { FileOutcome, ImportRun, PickedFile, RunFile } from './importRun'
-import type { ImportReport } from './importApi'
+import type { ImportPreview, ImportReport } from './importApi'
+// Read-only cross-module import, same licence as filesStrip below: BULK-DOC-01's claim is
+// that document ids do NOT follow layout grouping, which needs the real groupByLayout as
+// the counterweight rather than a hand-rolled restatement of it.
+import { groupByLayout } from './mappingGroups'
 // Read-only cross-module import: filesStrip is reviewBatch.ts's, not this module's,
 // but the ONE describe block below that uses it exists to pin the actual App.tsx
 // wiring bug (BULK-01-07) at the one honest layer this no-jsdom suite can reach — see
@@ -58,7 +63,7 @@ import { filesStrip } from './reviewBatch'
 // that owns it. The real id-generation strategy (crypto.randomUUID or otherwise) is
 // addFiles's to decide; nothing here assumes a particular scheme for FRESH entries.
 function mkPicked(names: string[]): PickedFile[] {
-  return names.map((name) => ({ id: `existing:${name}`, file: new File([], name) }))
+  return names.map((name) => ({ id: `existing:${name}`, file: new File([], name), documentId: null }))
 }
 
 describe('addFiles — ordering and the five-file cap (BULK-03-1..5)', () => {
@@ -882,5 +887,110 @@ describe("filesStrip still reports a run-only failure after markRunRouted (BULK-
     const rows = filesStrip([], routed)
 
     expect(rows).toEqual([{ id: 'f1', filename: 'rejected-before-batch.csv', reason: 'the gateway refused this upload' }])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// DOC-01-07 (task-355, Test-first) — upload-once: the per-file document id.
+//
+// The id lives on PickedFile because that is already the fileId-keyed state startRun
+// snapshots and looks up, so removeFile/resetImport clear it with no new invariant.
+// attachDocumentIds is the ONE exported pure helper readAllColumns writes the ids
+// through; nothing in this suite mounts App.tsx, so that helper is the only honest
+// oracle for AC-4.
+//
+//   BULK-DOC-01  three files, two sharing a layout, keep three distinct ids     (AC4)
+//   BULK-DOC-03  two byte-identical files share one id, stay two entries        (AC4)
+//   BULK-DOC-04  addFiles seeds documentId null                                 (AC4)
+//   BULK-DOC-05  a file with no preview keeps null, never a neighbour's id      (AC4)
+// BULK-DOC-02 (readAllColumns' component-local catch) is dropped — it is unchanged by
+// this subtask and has no node-level oracle.
+
+const SHARED_COLS = ['Invoice No', 'Total']
+const OTHER_COLS = ['Invoice No', 'Currency']
+const DOC_1 = '11111111-1111-4111-8111-111111111111'
+const DOC_2 = '22222222-2222-4222-8222-222222222222'
+const DOC_3 = '33333333-3333-4333-8333-333333333333'
+const DOC_DUPE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+
+function mkDocPreview(columns: string[], documentId: string): ImportPreview {
+  return {
+    document_id: documentId,
+    format: 'csv',
+    delimiter: ',',
+    encoding: 'utf-8',
+    columns,
+    sample_rows: [columns.map((_unused, i) => `v${i}`)],
+    rows_total: 1,
+  }
+}
+
+describe('attachDocumentIds — the per-file document id (BULK-DOC-01, 03, 04, 05)', () => {
+  // Falsification: an impl that hangs the id off the MappingGroup (one preview per
+  // layout) — the first two files share a layout and would collapse onto one id.
+  it('BULK-DOC-01: three files, two sharing a layout but differing in content, carry three distinct document ids, each paired with its own file', () => {
+    const files = mkPicked(['lagos.csv', 'abuja.csv', 'till.csv'])
+    const previewed = [
+      { fileId: files[0].id, preview: mkDocPreview(SHARED_COLS, DOC_1) },
+      { fileId: files[1].id, preview: mkDocPreview(SHARED_COLS, DOC_2) },
+      { fileId: files[2].id, preview: mkDocPreview(OTHER_COLS, DOC_3) },
+    ]
+
+    const result = attachDocumentIds(files, previewed)
+
+    expect(result.map((pf) => [pf.file.name, pf.documentId])).toEqual([
+      ['lagos.csv', DOC_1],
+      ['abuja.csv', DOC_2],
+      ['till.csv', DOC_3],
+    ])
+    expect(new Set(result.map((pf) => pf.documentId)).size).toBe(3)
+    // The counterweight: grouping DOES collapse the first two files onto one group. The
+    // ids must not follow it.
+    const groups = groupByLayout(previewed)
+    expect(groups).toHaveLength(2)
+    expect(groups[0].fileIds).toEqual([files[0].id, files[1].id])
+    // A fresh array/entries — App.tsx feeds this straight to setPickedFiles.
+    expect(result).not.toBe(files)
+    expect(files.map((pf) => pf.documentId)).toEqual([null, null, null])
+  })
+
+  // Byte-identical files legitimately resolve to ONE document (per-tenant content-hash
+  // dedupe) while still being two files in the run. Falsification: keying the pairing by
+  // documentId instead of fileId, which collapses the pair into a single entry and loses
+  // one file's import entirely.
+  it('BULK-DOC-03: two byte-identical files share one document id while staying two entries with distinct file ids', () => {
+    const files = mkPicked(['branch-a.csv', 'branch-a-copy.csv', 'till.csv'])
+    const previewed = [
+      { fileId: files[0].id, preview: mkDocPreview(SHARED_COLS, DOC_DUPE) },
+      { fileId: files[1].id, preview: mkDocPreview(SHARED_COLS, DOC_DUPE) },
+      { fileId: files[2].id, preview: mkDocPreview(OTHER_COLS, DOC_3) },
+    ]
+
+    const result = attachDocumentIds(files, previewed)
+
+    expect(result).toHaveLength(3)
+    expect(result.map((pf) => pf.documentId)).toEqual([DOC_DUPE, DOC_DUPE, DOC_3])
+    expect(result.map((pf) => pf.id)).toEqual(files.map((pf) => pf.id))
+    expect(new Set(result.map((pf) => pf.id)).size).toBe(3)
+    // Two surviving entries is what makes startRun issue two createImport calls against
+    // the one document — two import_batches rows. The wire half of that is e2e's.
+    expect(result.filter((pf) => pf.documentId === DOC_DUPE)).toHaveLength(2)
+  })
+
+  it('BULK-DOC-04: addFiles seeds documentId null — a freshly picked file has no id until preview stores its bytes', () => {
+    const result = addFiles([], [new File([], 'a.csv'), new File([], 'b.csv')])
+    expect(result.files).toHaveLength(2)
+    expect(result.files.map((pf) => pf.documentId)).toEqual([null, null])
+  })
+
+  // Cross-file contamination guard: an index-shifted or positional pairing would hand
+  // file 2 file 1's id.
+  it("BULK-DOC-05: a file with no previewed entry keeps a null document id — it never inherits a neighbour's", () => {
+    const files = mkPicked(['a.csv', 'b.csv'])
+    const previewed = [{ fileId: files[1].id, preview: mkDocPreview(SHARED_COLS, DOC_1) }]
+
+    const result = attachDocumentIds(files, previewed)
+
+    expect(result.map((pf) => pf.documentId)).toEqual([null, DOC_1])
   })
 })

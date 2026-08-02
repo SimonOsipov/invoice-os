@@ -203,6 +203,54 @@ func TestAssertDBDSNsSelfTestNeedsNoToken(t *testing.T) {
 	}
 }
 
+// T2-DOC. The two DOCUMENT_* self-test fixtures, driven through the same
+// `assert-db-dsns --self-test` path as every other fixture here. The Go tests
+// in dsn_test.go prove the classification; this proves the shell reaches it for
+// the new rows and exits the right way.
+//
+// The clean half is not merely a false-positive guard: the five rendered values
+// are opaque tokens, not URLs, so a KindOpaque that forgot to skip the URL
+// checks fails here with five DefectNoPassword offenders.
+func TestAssertDBDSNsSelfTestCoversDocumentVars(t *testing.T) {
+	t.Run("document-vars-clean", func(t *testing.T) {
+		requireDocumentRows(t)
+
+		stdout, stderr, code := runSelfTest(t, documentMap(), nil)
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0: all five DOCUMENT_* variables are rendered and non-empty; stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if strings.Contains(stdout, "::error::") {
+			t.Errorf("stdout emits an ::error:: annotation for a fully rendered map; stdout = %q", stdout)
+		}
+	})
+
+	t.Run("document-vars-unrendered", func(t *testing.T) {
+		ref := unrenderedRef("DOCUMENT_BUCKET")
+		m := documentMap()
+		m["invoice"]["DOCUMENT_BUCKET"] = ref
+
+		stdout, stderr, code := runSelfTest(t, m, nil)
+		if code == 0 {
+			t.Errorf("exit code = 0, want non-zero: a DOCUMENT_BUCKET that forked as an unrendered reference boots the invoice service against a bucket that does not exist; stdout = %q, stderr = %q", stdout, stderr)
+		}
+		if !strings.Contains(stdout, "::error::") {
+			t.Errorf("stdout carries no ::error:: annotation -- the failure is invisible in the Actions UI; stdout = %q", stdout)
+		}
+		if !strings.Contains(stdout, "invoice") || !strings.Contains(stdout, "DOCUMENT_BUCKET") {
+			t.Errorf("stdout does not name the offending service and variable; stdout = %q", stdout)
+		}
+		if strings.Contains(stdout, ref) || strings.Contains(stderr, ref) {
+			t.Errorf("the report echoed the offending value %q; stdout = %q, stderr = %q", ref, stdout, stderr)
+		}
+		for _, secret := range []string{sentinelEndpoint, sentinelRegion, sentinelKeyID, sentinelSecret} {
+			if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+				t.Errorf("the report echoed %q, the value of a non-offending DOCUMENT_* variable; stdout = %q", secret, stdout)
+			}
+		}
+		assertNoSentinel(t, stdout, stderr)
+	})
+}
+
 // T2-5. The severity table must be derived from service NAMES, never from
 // hardcoded Railway service UUIDs. A UUID is environment-scoped: hardcoding
 // the `development` fleet's ids makes the check silently inert in every

@@ -467,10 +467,9 @@ describe('QA — intro', () => {
   })
 })
 
-// MEMB-02-03 (RoleModal) — RED. Every helper below is a stub in lib/roles.ts that throws
-// until the executor implements it; the seed counts are pinned against SEED_FIRM_MEMBERS /
-// SEED_INHOUSE_MEMBERS directly so a wrong stub body fails on OUR assertion, not on a
-// number this file invented.
+// RoleModal's picker and delete-confirm helpers. Seed counts are pinned against
+// SEED_FIRM_MEMBERS / SEED_INHOUSE_MEMBERS directly, so a wrong body fails on OUR
+// assertion, not a number this file invented.
 
 describe('AC-4 — pickerMembers excludes invited people in both modes', () => {
   it('firm: 7 seeded, 1 invited (mf6) -> 6 rows, none invited', () => {
@@ -592,12 +591,11 @@ describe('AC-7 — deleteRoleConfirm names the role and its usage', () => {
   })
 })
 
-// This one is NOT expected to go red: removeRole (task-344, already shipped) takes only a
-// role list and a key — it has no policies parameter to touch one through, so "removeRole
-// leaves every policy object untouched" is true by construction today. Pinned anyway, the
-// same shape as AC-13 above, as the regression guard for `[delete-does-not-demote]`: the
-// day removeRole's signature grows a policies argument, THIS is the test that must catch a
-// write into it.
+// This one is NOT expected to go red: removeRole takes only a role list and a key — it has
+// no policies parameter to touch one through, so "removeRole leaves every policy object
+// untouched" is true by construction today. Pinned anyway, the same shape as AC-13 above,
+// as the regression guard for `[delete-does-not-demote]`: the day removeRole's signature
+// grows a policies argument, THIS is the test that must catch a write into it.
 describe('AC-7 — removeRole never touches a policy object ([delete-does-not-demote])', () => {
   it('policy references and their published status are unchanged after removing a role', () => {
     const published = SEED_FIRM_POLICIES.filter((p) => p.status === 'published')
@@ -608,5 +606,49 @@ describe('AC-7 — removeRole never touches a policy object ([delete-does-not-de
     expect(after).toEqual(before)
     for (let i = 0; i < before.length; i++) expect(after[i]).toBe(before[i]) // same object references
     for (const p of after) expect(p.status).toBe('published')
+  })
+})
+
+describe('[key-is-a-slug] — renaming a role never re-derives its key', () => {
+  it('replaceRole matches by key and updates the rest, on a real hit not just a miss', () => {
+    const original = role('fin_mgr', 'Engagement Manager', 'First sign-off', ['mf3'])
+    const renamed = { ...original, title: 'Chief Engagement Officer' }
+    const result = replaceRole([original], renamed)
+    expect(result[0]).toEqual(renamed)
+    expect(result[0].key).toBe('fin_mgr')
+  })
+
+  it('the key a rename keeps is not what newRoleKey would derive from the new title', () => {
+    // The shipped edit path spreads the stored role and overrides title/desc/members only —
+    // this is the assertion that would catch RoleModal ever switching to re-deriving the key
+    // on save, the way it already does on create.
+    const original = role('fin_mgr', 'Engagement Manager', 'First sign-off', ['mf3'])
+    const renamedTitle = 'Chief Engagement Officer'
+    expect(newRoleKey([original], renamedTitle)).not.toBe('fin_mgr')
+    expect({ ...original, title: renamedTitle }.key).toBe('fin_mgr')
+  })
+})
+
+// Forward risk: a role holding an INVITED member's id is unreachable today (no seed does
+// it, inviteMembers does not write roles yet) but becomes reachable once
+// `[invite-writes-both-stores]` lands. Pinned so that lands on an explicit X-of-Y call
+// rather than inheriting this silent contract.
+describe('QA — a role holding an invited members id today', () => {
+  it('pickerMembers excludes the invited person regardless of any role membership', () => {
+    const mh15 = SEED_INHOUSE_MEMBERS.find((m) => m.id === 'mh15')!
+    expect(mh15.status).toBe('invited') // guard
+    expect(pickerMembers(SEED_INHOUSE_MEMBERS).some((m) => m.id === 'mh15')).toBe(false)
+  })
+
+  it('pickerSelectionCount echoes whatever numerator it is given, uncrossed against the selectable set', () => {
+    // Stand-in for role.members once a role can hold an invited id: two real selectable
+    // holders plus one invited id the picker will never render as a row.
+    const inflatedSelected = ['mh1', 'mh2', 'mh15']
+    expect(pickerSelectionCount(inflatedSelected.length, SEED_INHOUSE_MEMBERS)).toBe('3 of 14 selected')
+    const checkableRows = pickerMembers(SEED_INHOUSE_MEMBERS).map((m) => m.id)
+    const checkableOfSelected = inflatedSelected.filter((id) => checkableRows.includes(id))
+    // The picker can only ever tick 2 of those 3 ids — the numerator above does not know that.
+    expect(checkableOfSelected).toEqual(['mh1', 'mh2'])
+    expect(checkableOfSelected.length).not.toBe(inflatedSelected.length)
   })
 })

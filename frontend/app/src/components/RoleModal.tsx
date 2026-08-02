@@ -245,7 +245,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               </div>
               <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
                 <button type="button" onClick={() => setConfirming(false)} className="v2-btn v2-btn-ghost pf-btn" data-testid="role-delete-cancel" style={{ height: 32, fontSize: 12.5 }}>
-                  Cancel
+                  Keep role
                 </button>
                 <button
                   type="button"

@@ -288,13 +288,19 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(buyerRes.invoices.some((inv) => inv.id === buyerMatch.id), 'q should match the invoice by buyer_tin').toBe(true)
       expect(buyerRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
 
-      const supplierTin = freshTin()
+      // [supplier-from-entity] (internal/invoice/store.go's Store.Create, INVCR-01-17):
+      // supplier_tin is ALWAYS derived from the entity, overriding whatever the caller
+      // sends -- so a caller-supplied supplier_tin is never actually stored. This half
+      // needs its own fresh entity (one invoice under it, for a clean total) and must
+      // search the STORED value, read back off the create response.
+      const supplierEntityTin = freshTin()
+      const supplierEntity = await createEntity(token, { name: `M4-16-02 invoice supplier-tin ${supplierEntityTin}`, tin: supplierEntityTin })
       const supplierMatch = await createInvoice(token, {
-        entity_id: entity.id,
+        entity_id: supplierEntity.id,
         invoice_number: `INV-L-${freshTin()}`,
-        supplier_tin: supplierTin,
       })
-      const supplierRes = await listInvoices(token, { q: supplierTin })
+      const storedSupplierTin = supplierMatch.supplier_tin as string
+      const supplierRes = await listInvoices(token, { q: storedSupplierTin })
       expect(supplierRes.invoices.some((inv) => inv.id === supplierMatch.id), 'q should match the invoice by supplier_tin').toBe(true)
       expect(supplierRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
     })

@@ -981,3 +981,64 @@ export function gateByActiveEntity(rows: InvoiceRecord[], isInhouse: boolean, en
   if (entityId == null) return []
   return rows.filter((row) => row.entity_id === entityId)
 }
+
+// Documented mirror of the server's own ceiling (handlers.go:401-404, `if limit > 200`) --
+// the same drift-guard idiom as BATCH_SUBMIT_MAX_IDS (reviewBatch.ts). NOT a runtime
+// clamp: the server clamps an over-200 limit silently rather than rejecting it, so
+// fetchAllInvoices below reads the ECHOED pagination.limit, never this constant.
+export const AGGREGATE_PAGE_SIZE = 200
+
+export const AGGREGATE_MAX_PAGES = 10 // 2000 invoices
+
+// Offsets for pages 2..N (page 1 is already fetched), capped at maxPages. `limit < 1`
+// returns no offsets rather than NaN/Infinity -- same guard pagerLabels carries
+// (reviewBatch.ts:283-286), unreachable from a real response but not a case to crash on.
+export function remainingPageOffsets(
+  total: number,
+  limit: number,
+  maxPages: number,
+): { offsets: number[]; truncated: boolean } {
+  if (limit < 1) return { offsets: [], truncated: false }
+  const pages = Math.min(Math.ceil(total / limit), maxPages)
+  const offsets: number[] = []
+  for (let page = 2; page <= pages; page++) offsets.push((page - 1) * limit)
+  return { offsets, truncated: pages === maxPages && total > maxPages * limit }
+}
+
+// The whole-set result of fetchAllInvoices: every row across the fetched pages, plus the
+// set's own total/truncated so a consumer can disclose a capped fetch rather than silently
+// under-report.
+export interface AllInvoices {
+  invoices: InvoiceRecord[]
+  total: number
+  fetched: number
+  truncated: boolean
+}
+
+// [empty-is-total-zero]: AllInvoices is a plain object, so resolveStatus's default isEmpty
+// (Array.isArray-gated, async-state.ts) can never fire on it -- same trap invoiceListIsEmpty
+// closes for InvoiceListResponse above.
+export function allInvoicesIsEmpty(r: AllInvoices): boolean {
+  return r.total === 0
+}
+
+// Fetches a client's whole invoice set across pages: page 1 at AGGREGATE_PAGE_SIZE, then
+// the rest of the set (per the echoed limit/total) concurrently via Promise.all, capped at
+// AGGREGATE_MAX_PAGES. Concurrent because every offset past page 1 is independent once page
+// 1 resolves, and Promise.all preserves array order regardless of resolution order, so the
+// concatenation is deterministic ascending-offset. One rejected page rejects the whole call
+// (Promise.all default), matching listInvoices' own non-2xx-rejects-unchanged contract.
+export async function fetchAllInvoices(
+  authedFetch: AuthedFetch,
+  base: string,
+  opts: Omit<ListInvoicesOptions, 'limit' | 'offset'>,
+): Promise<AllInvoices> {
+  const first = await listInvoices(authedFetch, base, { ...opts, limit: AGGREGATE_PAGE_SIZE, offset: 0 })
+  const { limit, total } = first.pagination
+  const { offsets, truncated } = remainingPageOffsets(total, limit, AGGREGATE_MAX_PAGES)
+  const rest = await Promise.all(
+    offsets.map((offset) => listInvoices(authedFetch, base, { ...opts, limit, offset })),
+  )
+  const invoices = [first, ...rest].flatMap((page) => page.invoices)
+  return { invoices, total, fetched: invoices.length, truncated }
+}

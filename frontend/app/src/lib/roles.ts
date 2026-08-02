@@ -367,6 +367,11 @@ export function pickerHiddenAmongSelected(selected: readonly string[], list: rea
   return selected.filter((id) => !shown.has(id)).length
 }
 
+/** The `role-modal-count` addendum for that gap. Callers gate on a non-zero count. */
+export function hiddenSelectionNote(n: number): string {
+  return `+${n} invited`
+}
+
 /** The footnote naming how many invited people the picker hides. Callers gate on a zero count. */
 export function hiddenInvitedFootnote(list: readonly Member[]): string {
   const n = list.length - pickerMembers(list).length

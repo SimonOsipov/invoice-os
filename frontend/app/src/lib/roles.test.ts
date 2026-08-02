@@ -8,6 +8,7 @@ import {
   filterPickerMembers,
   filterRoles,
   hiddenInvitedFootnote,
+  hiddenSelectionNote,
   holderCount,
   holders,
   inspectorResolve,
@@ -58,6 +59,9 @@ function approvalRoles(policies: readonly Policy[]): string[] {
 }
 
 const role = (key: string, title: string, desc: string, members: string[]): Role => ({ key, title, desc, members })
+
+/** A hand-built policy, for traversal facts no seeded policy exercises (see QA note below). */
+const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, scope: 'test', status: 'published', updated: 'now', nodes })
 
 describe('AC-2 — seed keys, titles, descriptions', () => {
   it('seed firm has the six specified keys in brief order', () => {
@@ -657,10 +661,16 @@ describe('the invited-holder picker contract, pinned on purpose', () => {
     expect(pickerHiddenAmongSelected(inflatedSelected, SEED_INHOUSE_MEMBERS)).toBe(1)
     expect(pickerHiddenAmongSelected(['mh1', 'mh2'], SEED_INHOUSE_MEMBERS)).toBe(0)
   })
+
+  it('hiddenSelectionNote renders the role-modal-count addendum for that gap', () => {
+    const inflatedSelected = ['mh1', 'mh2', 'mh15']
+    const n = pickerHiddenAmongSelected(inflatedSelected, SEED_INHOUSE_MEMBERS)
+    expect(hiddenSelectionNote(n)).toBe('+1 invited')
+  })
 })
 
 // ============================================================================
-// task-346 — Members surfaces speak in workflow roles (Test Specs table, Mode A)
+// Members surfaces speak in workflow roles (Test Specs table, Mode A)
 // ============================================================================
 
 describe('rosterRoleCell — the roster column, first title plus N', () => {
@@ -730,5 +740,58 @@ describe('the firm workspace resolves every seeded approval step to a named pers
       expect(result.text).not.toBe('Nobody assigned')
       expect(result.text).not.toBe('Role no longer exists')
     }
+  })
+})
+
+// ============================================================================
+// QA (Stage 4) — traversal/resolution facts Mode A flagged as dropped with
+// stepsFor/resolvePosition and not portable from the seed alone: no seeded policy puts an
+// approval node in an else lane, repeats one role twice within one policy, or blocks a role
+// with more than one inactive holder. Hand-built fixtures, not seed data.
+// ============================================================================
+
+describe('steps — the else lane counts too, not just then', () => {
+  it('an approval node sitting only in the else lane is counted', () => {
+    const p = testPolicy('Else-only policy', [
+      { id: 'c1', type: 'condition', field: 'amount', op: '>', value: 1, then: [], else: [{ id: 'a1', type: 'approval', role: 'cfo', sla: '48', delegate: false }] },
+    ])
+    expect(roleSteps([p], 'cfo')).toEqual({ total: 1, policies: [{ policyName: 'Else-only policy', count: 1 }] })
+  })
+})
+
+describe('steps — notify and autoapprove nodes never count, only approval', () => {
+  it('ignores notify/autoapprove at root and in both branch lanes, even a notify target matching the key', () => {
+    const p = testPolicy('Notify-heavy policy', [
+      { id: 'n1', type: 'notify', target: 'cfo', channel: 'Email' },
+      { id: 'au1', type: 'autoapprove' },
+      {
+        id: 'c1',
+        type: 'condition',
+        field: 'amount',
+        op: '>',
+        value: 1,
+        then: [{ id: 'n2', type: 'notify', target: 'cfo', channel: 'Email' }],
+        else: [{ id: 'au2', type: 'autoapprove' }],
+      },
+    ])
+    expect(roleSteps([p], 'cfo')).toEqual({ total: 0, policies: [] })
+  })
+})
+
+describe('steps — one policy naming the same role twice reports 2, not 1', () => {
+  it('counts every occurrence within the policy, root plus a branch lane', () => {
+    const p = testPolicy('Belt-and-braces policy', [
+      { id: 'a1', type: 'approval', role: 'cfo', sla: '48', delegate: false },
+      { id: 'c1', type: 'condition', field: 'amount', op: '>', value: 1, then: [{ id: 'a2', type: 'approval', role: 'cfo', sla: '48', delegate: false }], else: [] },
+    ])
+    expect(roleSteps([p], 'cfo')).toEqual({ total: 2, policies: [{ policyName: 'Belt-and-braces policy', count: 2 }] })
+  })
+})
+
+describe('resolve — blocked with more than one inactive holder still appends +N', () => {
+  it('two inactive holders (suspended + invited): warn true, text carries +1', () => {
+    // mh6 suspended, mh16 invited — neither active, so the role is blocked with two holders.
+    const roles = [role('cfo', 'CFO', '', ['mh6', 'mh16'])]
+    expect(resolve(roles, SEED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi +1', warn: true })
   })
 })

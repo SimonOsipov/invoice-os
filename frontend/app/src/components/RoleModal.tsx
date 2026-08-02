@@ -19,8 +19,10 @@ import {
   EDIT_ROLE_SUBTITLE,
   filterPickerMembers,
   hiddenInvitedFootnote,
+  hiddenSelectionNote,
   NEW_ROLE_SUBTITLE,
   newRoleKey,
+  pickerHiddenAmongSelected,
   pickerMembers,
   pickerMeta,
   pickerSelectionCount,
@@ -67,6 +69,9 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   const shown = filterPickerMembers(selectable, query)
   // Off the two lib derivations rather than re-testing `status === 'invited'` here.
   const hidden = ctx.members.length - selectable.length
+  // `[invite-writes-both-stores]`: a role's `members` can hold a still-invited id the picker
+  // has no row for, which `selected.length` above would otherwise count with no way to untick.
+  const hiddenSelected = pickerHiddenAmongSelected(selected, ctx.members)
   const canSave = canSaveRole(name)
 
   function toggle(id: string) {
@@ -167,6 +172,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             {/* The denominator is the SELECTABLE count, so it agrees with the rows below. */}
             <span className="mono" data-testid="role-modal-count" style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>
               {pickerSelectionCount(selected.length, ctx.members)}
+              {hiddenSelected > 0 && <span data-testid="role-modal-count-hidden"> ({hiddenSelectionNote(hiddenSelected)})</span>}
             </span>
           </div>
 

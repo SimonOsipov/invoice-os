@@ -204,7 +204,7 @@ describe('seed shape (T1.1–T1.6, §15.6)', () => {
   })
 })
 
-// task-346 AC-1 — Member.position is gone from the type and from both seeds.
+// AC-1 — Member.position is gone from the type and from both seeds.
 describe('AC-1 — Member.position is gone', () => {
   it('no seeded member, in either mode, carries a position field', () => {
     for (const row of [...SEED_FIRM_MEMBERS, ...SEED_INHOUSE_MEMBERS]) {
@@ -1287,7 +1287,7 @@ describe('accessRoleLabel (QA40–QA41, §6)', () => {
   })
 })
 
-// task-346 AC-12 — [two-banners]: both banners render the SAME roles.ts constant now.
+// AC-12 — [two-banners]: both banners render the SAME roles.ts constant now.
 describe('AC-12 — the members banner string is the roles-tab string', () => {
   it('unassignedNotice is exported from roles.ts only; members.ts exports no such constant', () => {
     expect('unassignedNotice' in membersModule).toBe(false)
@@ -1311,7 +1311,7 @@ describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
   })
 })
 
-// task-346 AC-13 — the footnote and the drawer helper both speak in workflow roles now.
+// AC-13 — the footnote and the drawer helper both speak in workflow roles now.
 describe('AC-13 — the capability footnote says workflow role, not position', () => {
   it('CAPABILITY_FOOTNOTE mentions a workflow role and no longer a position; REVIEWER_HINT is gone', () => {
     expect(CAPABILITY_FOOTNOTE).toContain('workflow role')
@@ -1526,7 +1526,7 @@ describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
   })
 })
 
-// task-346 — the `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The
+// The `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The
 // invite modal's Workflow role select now draws from BOTH SEED_FIRM_ROLES and
 // SEED_INHOUSE_ROLES, and `Role.key` is a free-form slug (`newRoleKey`), not a closed union —
 // a role titled "None" collides with the sentinel on its own, with no widening required. This
@@ -1647,7 +1647,7 @@ describe('needsClientPick — §7\'s zero-selected rule, now read by two compone
   })
 })
 
-// task-346 AC-14 — delegateCandidates is unchanged, and firm mode had no spec of its own
+// AC-14 — delegateCandidates is unchanged, and firm mode had no spec of its own
 // (T1.32 only ever ran in-house).
 describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', () => {
   it('lists the two active firm reviewers and excludes the admin', () => {

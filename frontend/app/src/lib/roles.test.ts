@@ -38,7 +38,7 @@ import {
   type Role,
   type RoleSteps,
 } from './roles'
-import { roleOf as wfRoleOf, SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES, seedPolicies, WF_ROLES, type Policy } from './workflows'
+import { SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
 // Every approval node in a seeded policy set, root lane and both branch lanes, one level
@@ -155,23 +155,6 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
     for (const r of SEED_FIRM_ROLES) for (const id of r.members) counts.set(id, (counts.get(id) ?? 0) + 1)
     const multi = [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
     expect(multi).toEqual(['mf3'])
-  })
-})
-
-// QA — DELETE this describe block in subtask 05/06, alongside WF_ROLES: it exists only to
-// catch SEED_INHOUSE_ROLES drifting from WF_ROLES, which typecheck cannot see. The holder-list
-// half of this block — checked against the shipped Member.position groupings — is gone: that
-// subtask deletes Member.position, so there is nothing left to compare holders against.
-describe('QA — SEED_INHOUSE_ROLES agrees with the seed source it is replacing', () => {
-  it('titles and descs match WF_ROLES key-for-key', () => {
-    const byKey = new Map(WF_ROLES.map((r) => [r.key, r]))
-    expect(SEED_INHOUSE_ROLES.length).toBe(WF_ROLES.length) // guard against a vacuous pass
-    for (const r of SEED_INHOUSE_ROLES) {
-      const wf = byKey.get(r.key)
-      expect(wf).toBeDefined()
-      expect(r.title).toBe(wf?.title)
-      expect(r.desc).toBe(wf?.line)
-    }
   })
 })
 
@@ -336,6 +319,17 @@ describe('AC-8 — resolve and inspectorResolve', () => {
   })
 })
 
+// AC-8 (MEMB-02-05) — a role actually removed from the list (not just an arbitrary unknown
+// key) still resolves to the deleted-role sentence, in both display functions. roles.ts is
+// already shipped, so this pins existing behaviour rather than going red.
+describe('AC-8 — a deleted role resolves to the deleted-role sentence, in both display functions', () => {
+  it('resolve and inspectorResolve both flag a role removed from the list as missing', () => {
+    const withoutCompliance = removeRole(SEED_FIRM_ROLES, 'compliance')
+    expect(resolve(withoutCompliance, SEED_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
+    expect(inspectorResolve(withoutCompliance, SEED_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
+  })
+})
+
 describe('AC-9 — unassignedRoles', () => {
   it('unassignedRoles is empty when every role has an active holder', () => {
     const roles = [role('a', 'A', '', ['mf1']), role('b', 'B', '', ['mf2'])]
@@ -399,17 +393,6 @@ describe('AC-12 — copy helpers', () => {
   it('holderCount pluralises around one', () => {
     expect(holderCount(1)).toBe('1 person')
     expect(holderCount(3)).toBe('3 people')
-  })
-})
-
-// AC-13's Test Spec row files this against src/lib/workflows.test.ts. Kept here instead —
-// see the QA report: RoleKey's widening is type-only (zero runtime delta), so this cannot
-// go RED in Mode A regardless of which file it lives in; it is a same-file regression guard.
-describe('AC-13 — RoleKey widening leaves workflows.ts exports intact', () => {
-  it('WF_ROLES, roleOf and seedPolicies are unchanged', () => {
-    expect(WF_ROLES.map((r) => r.key)).toEqual(['preparer', 'line_mgr', 'fin_mgr', 'controller', 'fin_dir', 'compliance', 'cfo', 'ceo'])
-    expect(wfRoleOf('cfo')).toEqual({ key: 'cfo', title: 'CFO', line: 'Executive' })
-    expect(seedPolicies().firm.map((p) => p.id)).toEqual(SEED_FIRM_POLICIES.map((p) => p.id))
   })
 })
 

@@ -6,11 +6,10 @@
 // outside that tree resolves none of them.
 //
 // The shell owns all three load channels because `sourceDocumentState` needs all three
-// statuses at once. It also owns the bytes handle, and releases it on close or document
-// change; the canvas that renders the handle releases it on ITS unmount too, which is
-// safe because `release()` is idempotent by construction (lib/sourceDocument.ts:99-107).
+// statuses at once. It also owns every object URL it creates for that URL's whole life:
+// a canvas is handed a `blob:` string, never the handle, so only this file can revoke.
 
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 
 import { gatewayBase, useAsync, type ApiError } from '@invoice-os/api-client'
 
@@ -27,6 +26,7 @@ import {
   type DocumentSheet,
 } from '../lib/sourceDocument'
 import { useDismiss } from '../lib/useDismiss'
+import { SourceDocumentImage, SourceDocumentPdf } from './SourceDocumentPages'
 import { SourceDocumentRail } from './SourceDocumentRail'
 import { SourceDocumentSheet } from './SourceDocumentSheet'
 import {
@@ -78,16 +78,40 @@ export function SourceDocumentModal({
         : Promise.reject(new Error('no source document')),
     { immediate: base != null && documentId != null && kind === 'spreadsheet', deps: [documentId, kind] },
   )
+  // `useAsync`'s runId discards a superseded DISPATCH, but `fetchDocumentBytes` created the
+  // object URL before the promise resolved (lib/sourceDocument.ts:98) — so the handle itself
+  // is already on the floor. Registering every handle and releasing everything that is not
+  // the rendered one is total: `release()` is idempotent, so resolution order cannot matter.
+  const created = useRef<DocumentBytes[]>([])
+  const disposed = useRef(false)
+
   const bytes = useAsync<DocumentBytes>(
-    () =>
-      base && documentId && kind
-        ? fetchDocumentBytes(ctx.getToken, base, documentId, kind, record?.filename ?? null)
-        : Promise.reject(new Error('no source document')),
+    async () => {
+      if (!(base && documentId && kind)) throw new Error('no source document')
+      const h = await fetchDocumentBytes(ctx.getToken, base, documentId, kind, record?.filename ?? null)
+      if (disposed.current) h.release()
+      else created.current.push(h)
+      return h
+    },
     { immediate: base != null && documentId != null && (kind === 'pdf' || kind === 'image'), deps: [documentId, kind] },
   )
 
+  // Empty at mount, so StrictMode's doubled cleanup releases nothing and the second setup
+  // clears `disposed` again.
+  useEffect(() => {
+    disposed.current = false
+    return () => {
+      disposed.current = true
+      for (const h of created.current) h.release()
+      created.current = []
+    }
+  }, [])
+
   const handle = bytes.data
-  useEffect(() => () => handle?.release(), [handle])
+  useEffect(() => {
+    for (const h of created.current) if (h !== handle) h.release()
+    created.current = handle ? [handle] : []
+  }, [handle])
 
   useDismiss(true, onClose)
 
@@ -122,8 +146,13 @@ export function SourceDocumentModal({
         otherInvoiceRows={record?.other_invoice_rows ?? []}
       />
     )
+  } else if (state === 'pdf' && handle) {
+    canvas = <SourceDocumentPdf key={documentId ?? ''} url={handle.url} />
+  } else if (state === 'image' && handle) {
+    // Keyed for the same reason the sheet is: the image canvas holds zoom state that must
+    // not survive a document change.
+    canvas = <SourceDocumentImage key={documentId ?? ''} url={handle.url} filename={record?.filename ?? null} />
   }
-  // 'pdf' / 'image' render null here — DOC-02-07 fills them.
 
   const tone = record ? fileTypeTone(record.filename, record.declared_content_type) : { bg: 'var(--bg-3)', fg: 'var(--fg-3)' }
   const metaParts = record ? [formatLabel(record.filename, record.declared_content_type), formatBytes(record.size_bytes)] : []

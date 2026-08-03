@@ -45,8 +45,7 @@ import (
 // couples the Go table to a shell string. A future row named PGBOUNCER_DSN,
 // DB_DSN, or POSTGRES_URL would be filtered out upstream, arrive absent, and
 // -- if its severity is IfPresent -- be skipped in total silence. The row
-// would look like coverage
-// and be none.
+// would look like coverage and be none.
 //
 // WHY THE PREFIXES ARE READ FROM THE SCRIPT AND NOT HARDCODED HERE. A copy of
 // "DATABASE" in this file would drift the moment someone narrows the filter

@@ -201,13 +201,13 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			`INSERT INTO invoices
 			   (tenant_id, entity_id, invoice_number,
 			    issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name,
-			    currency, subtotal, vat, total, import_batch_id)
+			    currency, subtotal, vat, total, import_batch_id, source_document_id)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13)
+			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14)
 			 RETURNING `+invoiceColumns,
 			id.TenantID, in.EntityID, in.InvoiceNumber,
 			in.IssueDate, in.SupplierTIN, in.SupplierName, in.BuyerTIN, in.BuyerName,
-			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID,
+			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID, in.SourceDocumentID,
 		), &inv); err != nil {
 			switch pgCode(err) {
 			case "23505":

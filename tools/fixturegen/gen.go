@@ -332,12 +332,12 @@ func buildEdgeVatMathWrong(seed int64, invoices int) []byte {
 
 // oversizedSeed / oversizedTargetBytes drive buildOversized: a pinned
 // seed and a target comfortably past maxUploadBytes
-// (internal/importer/handlers.go, 10 MiB).
+// (internal/importer/handlers.go, 15 MiB).
 const oversizedSeed = 999003
-const oversizedTargetBytes = 10<<20 + 1<<20 // cap + 1 MiB margin
+const oversizedTargetBytes = 15<<20 + 1<<20 // cap + 1 MiB margin
 
 // buildOversized returns an in-memory CSV body exceeding the importer's
-// 10<<20-byte upload cap (internal/importer/handlers.go's maxUploadBytes).
+// 15<<20-byte upload cap (internal/importer/handlers.go's maxUploadBytes).
 func buildOversized() []byte {
 	count := 10000
 	for {

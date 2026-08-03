@@ -73,7 +73,7 @@ func TestServiceImport_ColumnCountAnomaliesDegradeGracefully(t *testing.T) {
 		"1.00", "11.00", "Item1", "1", "10.00",
 	}
 
-	res, err := svc.Import(c, entityID, "", stdMapping, anomalyHeader, [][]string{wideRow, shortRow}, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, anomalyHeader, [][]string{wideRow, shortRow}, false)
 	if err != nil {
 		t.Fatalf("Import: %v (column-count anomalies must never trigger wholesale rejection)", err)
 	}
@@ -144,7 +144,7 @@ func TestServiceImport_DrasticallyShortRowNoPanic(t *testing.T) {
 		"1.00", "11.00", "Item1", "1", "10.00", "10.00",
 	}
 
-	res, err := svc.Import(c, entityID, "", stdMapping, anomalyHeader, [][]string{tinyRow, fullRow}, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, anomalyHeader, [][]string{tinyRow, fullRow}, false)
 	if err != nil {
 		t.Fatalf("Import: %v (a drastically out-of-range row must never panic or wholesale-reject the batch)", err)
 	}

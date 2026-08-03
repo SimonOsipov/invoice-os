@@ -57,6 +57,7 @@ import type { CreateStep, Mapping } from '../types'
 
 function mkPreview(overrides: Partial<ImportPreview> = {}): ImportPreview {
   return {
+    document_id: '9c4e1f70-6a2b-4d18-9e33-0b57c8a1d2e4',
     format: 'csv',
     delimiter: ',',
     encoding: 'utf-8',
@@ -797,5 +798,19 @@ describe('canReadColumns — entity contract did not move (BULK-03-11, BULK-01-0
   it('BULK-03-11: a valid file, with no entity anywhere in scope, still opens the read gate', () => {
     expect(canReadColumns(new File([], 'ledger.csv'))).toBe(true)
     expect(canReadColumns(new File([], 'ledger.xlsx'))).toBe(true)
+  })
+})
+
+// FLOW-DOC-01 (DOC-01-07, task-355) — AC-6 is a "do not add" criterion, so this is a
+// regression guard, GREEN from the moment it is authored: no size gate exists anywhere in
+// frontend/app/src today and none may be introduced. The 15 MB cap is the server's, and
+// the 413 is the server's to give — a client-side gate would refuse files the server
+// would have accepted and would need its own copy of a limit it cannot see.
+describe('canReadColumns — no client-side size gate (FLOW-DOC-01)', () => {
+  it('FLOW-DOC-01: a 20 MB csv still opens the read gate — the cap stays server-side', () => {
+    const big = new File([], 'twenty-megabytes.csv')
+    Object.defineProperty(big, 'size', { value: 20 * 1024 * 1024 })
+    expect(big.size).toBe(20 * 1024 * 1024)
+    expect(canReadColumns(big)).toBe(true)
   })
 })

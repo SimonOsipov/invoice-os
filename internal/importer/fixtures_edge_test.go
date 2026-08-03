@@ -53,7 +53,7 @@ func importEdgeFixture(t *testing.T, path, tenantLabel, entityName string) (res 
 		Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID,
 	})
 
-	res, err = svc.Import(c, entityID, "", stdMapping, header, rows, false)
+	res, err = svc.Import(c, entityID, "", "", stdMapping, header, rows, false)
 	return res, err, entityID, super
 }
 
@@ -292,7 +292,7 @@ func TestFixtures_OversizedRejected413(t *testing.T) {
 	}
 
 	called := false
-	stubImp := func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	stubImp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		called = true
 		return BatchResult{}, nil
 	}
@@ -301,12 +301,16 @@ func TestFixtures_OversizedRejected413(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	body, contentType := buildMultipartBody(t, uuid.NewString(), string(mappingJSON), "green_500_inflated.csv", "", big.Bytes())
+	// The inflated bytes ride in an unrelated part: since [upload-once] no file
+	// crosses this wire, and the cap bounds the WHOLE request anyway.
+	open := newFakeDocOpen("green_500.csv", "", data)
+	body, contentType := buildImportForm(t, uuid.NewString(), string(mappingJSON), open.doc.ID,
+		importPart{field: "pad", filename: "green_500_inflated.csv", content: big.Bytes()})
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	rec, resp := doImportCreate(t, stubImp, &id, "", contentType, body)
+	rec, resp := doImportCreate(t, stubImp, open.fn(), &id, "", contentType, body)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413 for a body over the 10 MiB cap (body=%s)", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 413 for a body over the upload cap (body=%s)", rec.Code, rec.Body.String())
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")

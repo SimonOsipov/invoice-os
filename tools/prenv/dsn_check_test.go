@@ -69,9 +69,10 @@ const danglingDSN = "postgresql://invoice_migrator:${{MIGRATOR_PASSWORD}}@postgr
 type dsnMap map[string]map[string]string
 
 // healthyMap returns the full 9-entry fleet map, every entry valid. The nine
-// entries are exactly what a live read-back of the `development` environment
-// returned on 2026-07-19 (.ralph/ac3-development-dsn-readback.md) -- this is
-// the real fleet shape, not an invented one.
+// DATABASE_* entries are exactly what a live read-back of the `development`
+// environment returned on 2026-07-19 (.ralph/ac3-development-dsn-readback.md).
+// The five DOCUMENT_* values below are SENTINELS, not a read-back: they are
+// the shape Railway will render once an operator sets the references.
 func healthyMap() dsnMap {
 	app := "postgresql://invoice_app:" + sentinelPW + "@" + railwayHost
 	m := dsnMap{
@@ -82,6 +83,13 @@ func healthyMap() dsnMap {
 	}
 	for _, svc := range []string{"tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications"} {
 		m[svc] = map[string]string{"DATABASE_URL": app}
+	}
+	// The five DOCUMENT_* rows are Required since DOC-01-03, so a fleet without
+	// them is not healthy -- cmd/invoice/main.go fatals at boot on any one being
+	// unset. Absence is asserted on explicitly in
+	// TestCheckDSNs_DocumentVarsAreRequired, which deletes them again.
+	for k, v := range documentVars() {
+		m["invoice"][k] = v
 	}
 	return m
 }
@@ -121,13 +129,21 @@ func runDSNCheckRaw(t *testing.T, stdin string) (stdout, stderr string, exitCode
 // call site rather than only in one aggregate test: a credential must never
 // reach stdout or stderr, and the cheapest way to keep that true is to check
 // it on every single run that produces output.
+// The DOCUMENT_* sentinels are swept too: healthyMap now carries them, so a
+// secret access key rides along in every run below.
 func assertNoSentinel(t *testing.T, stdout, stderr string) {
 	t.Helper()
-	if strings.Contains(stdout, sentinelPW) {
-		t.Errorf("stdout leaked the password sentinel %q -- a DSN check must report WHICH var is bad, never its credential; stdout = %q", sentinelPW, stdout)
+	sentinels := map[string]string{"the password": sentinelPW}
+	for name, value := range documentVars() {
+		sentinels[name] = value
 	}
-	if strings.Contains(stderr, sentinelPW) {
-		t.Errorf("stderr leaked the password sentinel %q; stderr = %q", sentinelPW, stderr)
+	for name, value := range sentinels {
+		if strings.Contains(stdout, value) {
+			t.Errorf("stdout leaked the %s sentinel %q -- a DSN check must report WHICH var is bad, never its credential; stdout = %q", name, value, stdout)
+		}
+		if strings.Contains(stderr, value) {
+			t.Errorf("stderr leaked the %s sentinel %q; stderr = %q", name, value, stderr)
+		}
 	}
 }
 

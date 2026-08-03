@@ -7,7 +7,7 @@
 // doPreviewRequest/previewBody and handlers_test.go's buildMultipartBody/
 // csvBody/xlsxBody/xlsxContentType verbatim -- no duplicate helpers.
 //
-// PreviewHandler is stateless ([preview-stateless]), so -- like
+// PreviewHandler's store seam is injected, so -- like
 // handlers_preview_test.go -- every test here is a plain httptest unit test:
 // no dbTestPools, no TestRLS_* naming, no service container, no DSN.
 package importer
@@ -61,7 +61,7 @@ func TestPreviewHandler_NoIdentityOrdinaryBody401(t *testing.T) {
 // own; calling it directly bypasses the routing layer entirely.
 func TestPreviewHandler_WrongMethod405(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports/preview", PreviewHandler())
+	mux.HandleFunc("POST /v1/imports/preview", PreviewHandler(previewStore(), nil))
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
@@ -446,7 +446,7 @@ func TestPreviewHandler_ColumnsMatchDirectDecode_QuotedEmbeddedComma(t *testing.
 // must never see another goroutine's columns/rows. Cheap insurance against a
 // future edit accidentally introducing shared state (e.g. a reused buffer).
 func TestPreviewHandler_ConcurrentRequestsIsolated(t *testing.T) {
-	handler := PreviewHandler()
+	handler := PreviewHandler(previewStore(), nil)
 	const n = 20
 
 	var wg sync.WaitGroup

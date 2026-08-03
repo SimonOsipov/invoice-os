@@ -172,16 +172,18 @@ func sniffDelimiter(header []byte) rune {
 // maxXLSXUnzipBytes bounds excelize's Options.UnzipSizeLimit: the total
 // uncompressed size excelize will unpack across an .xlsx archive's entries
 // before it errors out, rather than the ~16 GiB it defaults to
-// (xuri/excelize/v2@v2.11.0's UnzipSizeLimit constant, templates.go). The 10
-// MiB maxUploadBytes cap ([upload-cap], handlers.go) only bounds the
-// COMPRESSED request body -- it does nothing to stop a small, maliciously
-// crafted zip from unzipping to gigabytes in memory (a zip bomb -> DoS). 10x
+// (xuri/excelize/v2@v2.11.0's UnzipSizeLimit constant, templates.go). The
+// maxUploadBytes cap ([upload-cap], handlers.go) only bounds the COMPRESSED
+// request body -- it does nothing to stop a small, maliciously crafted zip
+// from unzipping to gigabytes in memory (a zip bomb -> DoS). 10x
 // maxUploadBytes comfortably clears any legitimate ≤5k-row invoice workbook
 // (a few MB uncompressed at most) while keeping worst-case memory use two
-// orders of magnitude below excelize's own default. A package-level var
-// (not const) so a test can lower it to prove the option is actually wired
-// through to OpenReader without needing a real oversized fixture.
-var maxXLSXUnzipBytes int64 = 10 * maxUploadBytes // 100 MiB
+// orders of magnitude below excelize's own default. Defined as a MULTIPLE of
+// the cap, so raising the cap scales it rather than silently loosening the
+// ratio (TestMaxXLSXUnzipTracksUploadCap). A package-level var (not const) so
+// a test can lower it to prove the option is actually wired through to
+// OpenReader without needing a real oversized fixture.
+var maxXLSXUnzipBytes int64 = 10 * maxUploadBytes // 150 MiB
 
 // decodeXLSX implements the XLSX half of Decode: stream the first sheet's
 // rows via excelize's row iterator so display values (formatted dates,

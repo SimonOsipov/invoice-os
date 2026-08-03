@@ -33,6 +33,15 @@
 //   IMPAPI-19  createImport 401 -> onUnauthorized once, still rejects            (AC5)
 //   IMPAPI-20  previewImport 401 -> anti-fork guard, field-for-field vs IMPAPI-19 (AC5)
 //
+// DOC-01-07 (task-355, Test-first) — upload-once: preview stores the document and
+// returns its id; import takes that id instead of re-uploading the bytes.
+//   IMPAPI-21  previewImport surfaces document_id on the parsed ImportPreview   (07 AC1)
+//   IMPAPI-22  a 200 preview body with no document_id is a typed failure        (07 AC1)
+//   IMPAPI-23  createImport sends no File/Blob part at all                      (07 AC2)
+// IMPAPI-01 keeps preview's request shape (still exactly one `file` entry); IMPAPI-04 is
+// amended to entity_id/mapping/document_id; QA-09's no-shape-validation claim is narrowed
+// to every field EXCEPT document_id.
+//
 // Every spec below currently fails because previewImport/createImport/uploadPercent/
 // rowErrorRows/normalizeReport/makeImportAuth's stub bodies throw `new Error('not
 // implemented')` before ever constructing an XHR or returning anything — that IS the
@@ -60,6 +69,7 @@ import {
   uploadPercent,
   type CreateImportRequest,
   type ImportAuth,
+  type ImportPreview,
   type ImportReport,
   type UploadPhase,
   type XhrCtor,
@@ -160,9 +170,13 @@ function makeFile(name = 'invoices.csv'): File {
   return new File(['a,b\n1,2\n'], name, { type: 'text/csv' })
 }
 
+// uuid-shaped because the import endpoint uuid-parses the part before it opens the
+// document (internal/importer/handlers.go).
+const DOC_ID = '6f1d2c34-9b7a-4e51-8c02-5a3d7e19b4f0'
+
 function makeReq(): CreateImportRequest {
   return {
-    file: makeFile(),
+    documentId: DOC_ID,
     entityId: 'entity-1',
     mapping: { invoice_number: 'Invoice No', issue_date: 'Issue Date' },
   }
@@ -178,7 +192,10 @@ afterEach(() => {
 
 const base = 'https://gw'
 
-const PREVIEW_BODY_CSV = {
+// Annotated so a required `document_id` on ImportPreview is actually pinned here — these
+// were untyped literals, which would have let the new field ship unasserted.
+const PREVIEW_BODY_CSV: ImportPreview = {
+  document_id: DOC_ID,
   format: 'csv',
   delimiter: ',',
   encoding: 'utf-8',
@@ -187,7 +204,8 @@ const PREVIEW_BODY_CSV = {
   rows_total: 9,
 }
 
-const PREVIEW_BODY_XLSX = {
+const PREVIEW_BODY_XLSX: ImportPreview = {
+  document_id: '2b8e7a10-4c3f-4d99-a1e6-70b5c9f2d834',
   format: 'xlsx',
   delimiter: null,
   encoding: null,
@@ -266,7 +284,8 @@ describe('previewImport', () => {
   })
 
   it('IMPAPI-03: a ragged sample row (shorter than columns) resolves at its true length, unpadded — cell access past its end is undefined', async () => {
-    const raggedBody = {
+    const raggedBody: ImportPreview = {
+      document_id: DOC_ID,
       format: 'csv',
       delimiter: ',',
       encoding: 'utf-8',
@@ -282,10 +301,63 @@ describe('previewImport', () => {
     expect(result.sample_rows[0]).toHaveLength(2)
     expect(result.sample_rows[0][2]).toBeUndefined()
   })
+
+  // IMPAPI-21 is a TYPED-contract spec: previewImport already passes the parsed body
+  // through verbatim, so this only goes red at `tsc` until ImportPreview declares
+  // document_id. It stays as the guard against a later impl that reshapes the body.
+  it('IMPAPI-21: a preview 200 carrying document_id exposes it verbatim on the parsed ImportPreview', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, JSON.stringify(PREVIEW_BODY_CSV))
+
+    const result = await promise
+
+    expect(result.document_id).toBe(DOC_ID)
+    expect(result).toEqual(PREVIEW_BODY_CSV)
+  })
+
+  // Without this, `undefined` reaches createImport's FormData as the literal string
+  // "undefined" and 400s at the END of a five-file run instead of naming the offending
+  // file here. `status` is null, not 200: this check belongs to previewImport, which sits
+  // downstream of xhrJson and never sees a status (IMPAPI-18's 200 comes from inside the
+  // transport, where it is known). `body` must survive — readAllColumns' catch forwards
+  // it. `message` must name the field: it is what the operator reads, per file.
+  it('IMPAPI-22: a 200 preview body with no document_id rejects ApiError{kind:"malformed"} naming the field and carrying the parsed body — never resolves an id-less preview', async () => {
+    const idLess = { ...PREVIEW_BODY_CSV } as Partial<ImportPreview>
+    delete idLess.document_id
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, JSON.stringify(idLess))
+
+    const err = await captureRejection(() => promise)
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('malformed')
+    expect(apiErr.status).toBeNull()
+    expect(apiErr.message).toContain('document_id')
+    expect(apiErr.body).toEqual(idLess)
+  })
+
+  // The empty string is the shape a Go zero-value would marshal into — it is no more a
+  // usable id than a missing key, and must not slip past a bare `in`/`hasOwnProperty`
+  // check.
+  it('IMPAPI-22b: a 200 preview body whose document_id is empty or null rejects the same way', async () => {
+    for (const bad of ['', null]) {
+      FakeXhr.reset()
+      const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+      FakeXhr.last()?.respond(200, JSON.stringify({ ...PREVIEW_BODY_CSV, document_id: bad }))
+
+      const err = await captureRejection(() => promise)
+
+      expect(err).toBeInstanceOf(ApiError)
+      expect((err as ApiError).kind).toBe('malformed')
+    }
+  })
 })
 
 describe('createImport', () => {
-  it('IMPAPI-04: FormData carries exactly entity_id, mapping, file; mapping === JSON.stringify(req.mapping)', async () => {
+  // Amended for upload-once: the `file` part is now REJECTED by the endpoint with a 400,
+  // so sending it is a live defect, not surplus.
+  it('IMPAPI-04: FormData carries exactly entity_id, mapping, document_id; mapping === JSON.stringify(req.mapping)', async () => {
     const req = makeReq()
     const promise = createImport(fakeAuth(), base, req, () => {}, FakeXhrCtor)
     FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
@@ -293,10 +365,26 @@ describe('createImport', () => {
 
     const xhr = FakeXhr.last()!
     const entries = Array.from(xhr.body!.entries())
-    expect(entries.map(([k]) => k).sort()).toEqual(['entity_id', 'file', 'mapping'])
+    expect(entries.map(([k]) => k).sort()).toEqual(['document_id', 'entity_id', 'mapping'])
     expect(xhr.body!.get('entity_id')).toBe(req.entityId)
     expect(xhr.body!.get('mapping')).toBe(JSON.stringify(req.mapping))
-    expect((xhr.body!.get('file') as File).name).toBe(req.file.name)
+    expect(xhr.body!.get('document_id')).toBe(req.documentId)
+  })
+
+  // The `file` part is not merely surplus — the endpoint 400s on its presence, so a
+  // leftover `form.append('file', req.file)` on a request that no longer carries a File
+  // ships the literal string "undefined" under the one key that guarantees a rejection.
+  // Both halves are asserted: the retired key is gone, and nothing binary travels twice.
+  it('IMPAPI-23: no `file` part and no File/Blob entry at all — the bytes are not re-uploaded', async () => {
+    const promise = createImport(fakeAuth(), base, makeReq(), () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
+    await promise
+
+    const entries = Array.from(FakeXhr.last()!.body!.entries())
+    expect(entries.length).toBeGreaterThan(0)
+    expect(entries.map(([k]) => k)).not.toContain('file')
+    expect(entries.filter(([, v]) => v instanceof Blob)).toEqual([])
+    expect(entries.every(([, v]) => typeof v === 'string')).toBe(true)
   })
 
   it('IMPAPI-05: opened URL is exactly ${base}/api/invoice/v1/imports — no ?, no dry_run', async () => {
@@ -660,13 +748,48 @@ describe('transport edge cases beyond IMPAPI-15..20 (QA)', () => {
     expect((err as ApiError).status).toBe(200)
   })
 
-  it('QA-09: a 200 with well-formed JSON of the wrong shape resolves without crashing — xhrJson only checks that the body PARSES, it does not validate shape', async () => {
+  // Narrowed by DOC-01-07: document_id is the ONE field previewImport now requires
+  // (IMPAPI-22), because everything downstream keys off it. Every other field is still
+  // unvalidated — QA-09's original claim, minus the one exception.
+  it('QA-09: a 200 whose only correct field is document_id still resolves verbatim — no shape validation beyond that one field', async () => {
     const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
-    FakeXhr.last()?.respond(200, JSON.stringify({ unexpected: 'shape' }))
+    const wrongShape = { document_id: DOC_ID, unexpected: 'shape' }
+    FakeXhr.last()?.respond(200, JSON.stringify(wrongShape))
 
     const result = await promise
 
-    expect(result).toEqual({ unexpected: 'shape' })
+    expect(result).toEqual(wrongShape)
+  })
+
+  // A bare `raw.document_id` read would TypeError here instead of rejecting an ApiError,
+  // and readAllColumns' catch would surface a stack trace as the operator-facing message.
+  it('QA-12: a 200 whose body is literal JSON null rejects ApiError{kind:"malformed"} — not a TypeError', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(200, 'null')
+
+    const err = await captureRejection(() => promise)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('malformed')
+    expect((err as ApiError).status).toBeNull()
+    expect((err as ApiError).body).toBeNull()
+  })
+
+  // The document_id check must stay BELOW the status check. The preview endpoint now
+  // echoes document_id on its post-store 400s, so an impl that inspected the field first
+  // would relabel a real http error as malformed and lose both the status and the
+  // server's message.
+  it('QA-13: a 400 carrying a document_id still rejects kind:"http" with status 400 and the server message — the id check never shadows the status', async () => {
+    const promise = previewImport(fakeAuth(), base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(400, JSON.stringify({ document_id: DOC_ID, error: 'unrecognized file format' }), 'Bad Request')
+
+    const err = await captureRejection(() => promise)
+
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('http')
+    expect(apiErr.status).toBe(400)
+    expect(apiErr.message).toBe('unrecognized file format')
+    expect(apiErr.body).toEqual({ document_id: DOC_ID, error: 'unrecognized file format' })
   })
 
   it('QA-10: a non-2xx with an HTML proxy error page (embedded quotes/braces that could confuse a naive parser) still surfaces as a usable ApiError, message falling back to statusText, body undefined', async () => {

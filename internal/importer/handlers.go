@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -22,13 +23,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // maxUploadBytes is the whole-request upload cap ([upload-cap]): a request
-// body (multipart preamble + entity_id/mapping fields + the file part) over
-// this size 413s before ParseMultipartForm ever finishes reading it.
-const maxUploadBytes = 10 << 20 // 10 MiB
+// body over this size 413s before ParseMultipartForm ever finishes reading it.
+// Binary MiB, not 15,000,000 decimal: documents.size_bytes CHECKs <= 15728640.
+const maxUploadBytes = 15 << 20 // 15 MiB
 
 // maxMultipartMemory is ParseMultipartForm's in-memory threshold: parts
 // under this combined size are held in memory, anything larger spills to a
@@ -91,24 +93,42 @@ func nilIfEmpty(s string) *string {
 	return &s
 }
 
+// derefOr is nilIfEmpty's inverse, for the document row's two nullable
+// columns: a NULL filename or content type is simply no signal, not an error.
+func derefOr(p *string, fallback string) string {
+	if p == nil {
+		return fallback
+	}
+	return *p
+}
+
 // maxSampleRows caps the number of data rows previewResponse.SampleRows
 // echoes back to the caller (M4-08-01, task-170 Implementation Plan §B).
 const maxSampleRows = 5
 
-// previewResponse is the POST /v1/imports/preview success body: DecodeFacts
-// merged with Decode's header/rows, capped and reshaped for a preview (no
-// persistence, no BatchResult -- see PreviewHandler's doc comment). Field
-// order = JSON key order = the story's example. Delimiter/Encoding mirror
-// importResponse exactly (nilIfEmpty, JSON null for an xlsx upload).
-// Columns/SampleRows must always render as a JSON array, never null -- see
-// PreviewHandler's nil-slice guard.
+// previewResponse is the POST /v1/imports/preview success body: the stored
+// document's id plus DecodeFacts merged with Decode's header/rows, capped and
+// reshaped for a preview. Field order = JSON key order = the story's example.
+// Delimiter/Encoding mirror importResponse exactly (nilIfEmpty, JSON null for
+// an xlsx upload). Columns/SampleRows must always render as a JSON array,
+// never null -- see PreviewHandler's nil-slice guard.
 type previewResponse struct {
+	DocumentID string     `json:"document_id"`
 	Format     string     `json:"format"`
 	Delimiter  *string    `json:"delimiter"`
 	Encoding   *string    `json:"encoding"`
 	Columns    []string   `json:"columns"`
 	SampleRows [][]string `json:"sample_rows"`
 	RowsTotal  int        `json:"rows_total"`
+}
+
+// previewError is the envelope for preview's two POST-STORE failures
+// ([error-body-carries-document-id]): the bytes are already stored, so the
+// response must name them or a file that failed to parse is unretrievable.
+// Every PRE-store failure keeps writeError's bare envelope.
+type previewError struct {
+	Error      string `json:"error"`
+	DocumentID string `json:"document_id"`
 }
 
 // detectFormat resolves the uploaded file's format ("csv" | "xlsx") from its
@@ -143,12 +163,23 @@ func detectFormat(filename, contentType string) string {
 // CreateHandler factory: a closure over the injected Service.Import method ->
 // http.HandlerFunc). Flow: identity-first-401 (IMP-API-01) -> upload-cap via
 // http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (a MaxBytesError
-// -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping form
-// values (blank/malformed -> 400, IMP-API-05) -> the file part + format
-// detection (unrecognized -> 400) -> Decode (undecodable -> 400) -> imp
-// (Service.Import) -> statusForErr -> the shared {"error":"..."} envelope on
-// failure, or a 200 (dry run) / 201 (real) importResponse on success.
-func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error), log *slog.Logger) http.HandlerFunc {
+// -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping/
+// document_id form values (blank/malformed -> 400, IMP-API-05) -> open (the
+// document's bytes) -> format detection (unrecognized -> 400) -> Decode
+// (undecodable -> 400) -> imp (Service.Import) -> statusForErr -> the shared
+// {"error":"..."} envelope on failure, or a 200 (dry run) / 201 (real)
+// importResponse on success.
+//
+// [upload-once] The file itself no longer crosses this wire: it was stored by
+// POST /v1/imports/preview, and the caller sends that document's id. The read
+// happens BEFORE any database write, so an import cannot half-succeed while
+// object storage is down ([fail-closed]). A dry run needs the bytes too --
+// it decodes them, it just persists nothing.
+func CreateHandler(
+	imp func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
+	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
+	log *slog.Logger,
+) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -186,20 +217,63 @@ func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapp
 			return
 		}
 
-		file, fh, err := r.FormFile("file")
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "file is required")
+		// The retired part fails loudly rather than being silently ignored: a
+		// client still uploading here would otherwise import someone else's
+		// document id against its own bytes.
+		if r.MultipartForm != nil && len(r.MultipartForm.File["file"]) > 0 {
+			writeError(w, http.StatusBadRequest, "file is no longer accepted here: upload it to /v1/imports/preview and send the document_id it returns")
 			return
 		}
-		defer file.Close()
 
-		format := detectFormat(fh.Filename, fh.Header.Get("Content-Type"))
+		documentID := r.FormValue("document_id")
+		if documentID == "" {
+			writeError(w, http.StatusBadRequest, "document_id is required")
+			return
+		}
+		// Ahead of open, mirroring GetHandler: a malformed id must never reach
+		// the document store's own 22P02 mapping.
+		if _, err := uuid.Parse(documentID); err != nil {
+			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		doc, obj, err := open(r.Context(), documentID, "")
+		if err != nil {
+			// Mapped here, not through statusForErr: errors.Is(document.ErrNotFound,
+			// ErrNotFound) is false, so a cross-tenant id would 500.
+			switch {
+			case errors.Is(err, document.ErrNotFound):
+				writeError(w, http.StatusNotFound, "not found")
+			case errors.Is(err, document.ErrValidation):
+				writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			default:
+				log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
+				writeError(w, http.StatusInternalServerError, "internal server error")
+			}
+			return
+		}
+		if obj.Body != nil {
+			defer func() { _ = obj.Body.Close() }()
+		}
+
+		// The stored row is what both paths resolve the format from, so preview
+		// and import cannot disagree about the same upload.
+		filename := derefOr(doc.Filename, "")
+		format := detectFormat(filename, derefOr(doc.DeclaredContentType, ""))
 		if format == "" {
 			writeError(w, http.StatusBadRequest, "unrecognized file format")
 			return
 		}
 
-		header, rows, facts, err := Decode(file, format)
+		// Decode nil-dereferences inside io.ReadAll, so the read is guarded
+		// like the Close above. TestImport_NilObjectBodyIs500.
+		if obj.Body == nil {
+			log.ErrorContext(r.Context(), "importer: source document opened with no body")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		header, rows, facts, err := Decode(obj.Body, format)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
 			return
@@ -221,7 +295,7 @@ func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapp
 			return
 		}
 
-		res, err := imp(r.Context(), entityID, sanitizeFilename(fh.Filename), mapping, header, rows, dryRun)
+		res, err := imp(r.Context(), entityID, filename, documentID, mapping, header, rows, dryRun)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -256,18 +330,20 @@ func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapp
 	}
 }
 
-// PreviewHandler returns POST /v1/imports/preview: a stateless preview over
-// an uploaded file's bytes (no entity_id, no mapping, no persistence --
-// [preview-stateless]/[preview-auth]). Flow mirrors CreateHandler's exactly,
-// minus everything that touches state: identity-first-401 -> upload-cap via
-// http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (MaxBytesError ->
-// 413, any other parse error -> 400) -> the "file" part -> format detection
-// (unrecognized -> 400) -> Decode (undecodable -> 400) -> a 200
-// previewResponse. See handlers_preview_test.go for the PRV-01..PRV-16 map.
+// PreviewHandler returns POST /v1/imports/preview: the [upload-once] entry
+// point. It is the ONLY route by which a source document reaches storage --
+// it writes the bytes to object storage and a row to documents, then previews
+// them ([preview-auth] still holds; [preview-stateless] does not, which is why
+// it now takes a store and a logger). Flow: identity-first-401 -> upload-cap
+// via http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (MaxBytesError
+// -> 413, any other parse error -> 400) -> the "file" part -> store
+// ([store-before-decode], so an unparseable file is still retrievable) ->
+// format detection (unrecognized -> 400) -> Decode (undecodable -> 400) -> a
+// 200 previewResponse. See handlers_preview_test.go for the PRV-01..PRV-16 map.
 //
-// Takes NO logger, unlike its sibling factories: CreateHandler needs one only
-// for its 500 branch, and preview has no 500 path -- every failure here is
-// 401/413/400 -- so a logger parameter would be dead weight.
+// The store call sits after r.FormFile, so an oversized body 413s before any
+// object is written. The two 4xx paths BELOW it carry the document id
+// (previewError); the four above it, and the new 500, do not.
 //
 // It reuses detectFormat/Decode/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
 // writeJSON/writeError and adds NO second parsing path on purpose
@@ -275,7 +351,13 @@ func CreateHandler(imp func(ctx context.Context, entityID, filename string, mapp
 // the same bytes the import path will later read, or client and server
 // disagree about where the header is -- the exact failure [column-source]
 // exists to prevent. PRV-16 pins that by comparing against a direct Decode.
-func PreviewHandler() http.HandlerFunc {
+func PreviewHandler(
+	store func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, error),
+	log *slog.Logger,
+) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Ordering is load-bearing: the identity check precedes the upload
 		// cap, so an oversized body from an unauthenticated caller is 401,
@@ -303,15 +385,30 @@ func PreviewHandler() http.HandlerFunc {
 		}
 		defer file.Close()
 
+		// The RAW part filename: Service.Store owns the sanitization, and two
+		// copies of a security coercion drift apart.
+		doc, err := store(r.Context(), fh.Filename, fh.Header.Get("Content-Type"), fh.Size, file)
+		if err != nil {
+			log.ErrorContext(r.Context(), "importer: store source document", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		// Store leaves the reader at EOF; without this Decode reads zero bytes.
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			log.ErrorContext(r.Context(), "importer: rewind upload", slog.Any("err", err))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
 		format := detectFormat(fh.Filename, fh.Header.Get("Content-Type"))
 		if format == "" {
-			writeError(w, http.StatusBadRequest, "unrecognized file format")
+			writeJSON(w, http.StatusBadRequest, previewError{Error: "unrecognized file format", DocumentID: doc.ID})
 			return
 		}
 
 		header, rows, facts, err := Decode(file, format)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			writeJSON(w, http.StatusBadRequest, previewError{Error: "could not decode uploaded file", DocumentID: doc.ID})
 			return
 		}
 
@@ -337,6 +434,7 @@ func PreviewHandler() http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, previewResponse{
+			DocumentID: doc.ID,
 			Format:     facts.Format,
 			Delimiter:  nilIfEmpty(facts.Delimiter),
 			Encoding:   nilIfEmpty(facts.Encoding),

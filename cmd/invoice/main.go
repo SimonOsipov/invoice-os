@@ -10,10 +10,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -40,6 +43,18 @@ func main() {
 	// Readiness: the app-role pool can round-trip to Postgres. Liveness (/healthz)
 	// stays up regardless; /readyz flips to 503 while the DB is unreachable.
 	app.Ready("database", func(ctx context.Context) error { return pool.Ping(ctx) })
+
+	// The five DOCUMENT_* variables are required, and the store is built here so
+	// an unusable object-storage configuration fails at boot rather than on the
+	// first upload.
+	docCfg, err := document.ConfigFromEnv()
+	if err != nil {
+		fatal(app.Logger, "invoice: %v", err)
+	}
+	docObjects, err := document.NewS3Store(docCfg, nil)
+	if err != nil {
+		fatal(app.Logger, "invoice: document store: %v", err)
+	}
 
 	// Stub endpoint from the M2-04 skeleton — kept as the trivial reachability probe
 	// the gateway's proxy tests exercise (/api/invoice/v1/ping). Real endpoints
@@ -102,14 +117,16 @@ func main() {
 	// exactly) -- no second gate, no adapter type, one gate driving both the
 	// manual validate endpoint and the importer's batch pre-check
 	// ([import-validates]/[dry-run-evaluates]).
-	// /v1/imports/preview sits on the same mux and middleware chain but is
-	// deliberately STATELESS ([preview-stateless]): it echoes back the header
-	// and first few rows of the bytes just uploaded, touching no store, no
-	// service and no entity, so it takes neither impSvc nor a logger.
+	// /v1/imports/preview sits on the same mux and middleware chain and is the
+	// ONLY route by which a source document reaches storage ([upload-once]): it
+	// writes the uploaded bytes to object storage and a row to documents, then
+	// previews them. POST /v1/imports takes the id it returns instead of a
+	// second copy of the file.
+	docSvc := document.NewService(document.NewStore(pool), docObjects)
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
-	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, app.Logger))
-	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler())
+	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
 	// import_batches and, until now, reached the browser only inside the POST
@@ -119,6 +136,11 @@ func main() {
 	// instead. Its literal /preview sibling above is unaffected by
 	// registration order (ServeMux resolves by specificity).
 	app.Mux.HandleFunc("GET /v1/imports/{id}", importer.GetHandler(impStore.GetBatch, app.Logger))
+
+	// GET /v1/documents/{id} -- the source-document download (DOC-01-05). Bytes are
+	// proxied through the service after an RLS-scoped row lookup rather than handed
+	// out as a presigned URL, so every read is authorised and audited.
+	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.Open, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this
@@ -137,6 +159,20 @@ func main() {
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("invoice: %v", err)
 	}
+}
+
+// fatal logs a boot failure at ERROR and exits non-zero.
+//
+// It exists because log.Fatalf does NOT do that here: platform.New calls
+// slog.SetDefault (internal/platform/server.go), which routes the standard log
+// package through slog at INFO, so a log.Fatalf boot failure is emitted as
+// {"level":"INFO"} and NOWHERE AT ALL under LOG_LEVEL=warn or error. A
+// fail-closed guard that dies silently leaves an operator with a crash-loop and
+// no cause. Copied from cmd/gateway/main.go; this file's remaining log.Fatalf
+// calls, mustEnv's included, still carry the defect.
+func fatal(logger *slog.Logger, format string, args ...any) {
+	logger.Error(fmt.Sprintf(format, args...))
+	os.Exit(1)
 }
 
 func mustEnv(key string) string {

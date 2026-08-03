@@ -258,7 +258,7 @@ func runIMPVCleanFile(t *testing.T, dryRun bool) (res BatchResult, super, app *p
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	var err error
-	res, err = svc.Import(c, entityID, "", stdMapping, stdHeader, impvCleanFileFixture(), dryRun)
+	res, err = svc.Import(c, entityID, "", "", stdMapping, stdHeader, impvCleanFileFixture(), dryRun)
 	if err != nil {
 		t.Fatalf("Import (dryRun=%v): %v", dryRun, err)
 	}
@@ -282,7 +282,7 @@ func runIMPVConflictMix(t *testing.T) (res BatchResult, super, app *pgxpool.Pool
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	var err error
-	res, err = svc.Import(c, entityID, "", stdMapping, stdHeader, impvConflictMixFixture(), false)
+	res, err = svc.Import(c, entityID, "", "", stdMapping, stdHeader, impvConflictMixFixture(), false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -518,7 +518,7 @@ func TestServiceImport_GateValidateBatchCalledExactlyOnceWithAllCreated(t *testi
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	if _, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -552,7 +552,7 @@ func TestServiceImport_QuarantinedInvoiceNeverReachesGate(t *testing.T) {
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestServiceImport_ApplyValidationDBFaultAbortsRunNotLaunderedIntoRowErrors(
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err == nil {
 		t.Fatal("Import: err = nil, want the raw ApplyValidation fault to propagate (never laundered into a fake RowError) [create-error-classification]")
 	}
@@ -652,7 +652,7 @@ func TestServiceImport_ValidatorErrUpstreamAbortsRun(t *testing.T) {
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
 	if err == nil {
 		t.Fatal("Import: err = nil, want ErrUpstream to propagate -- an unreachable 04 is an outage, not \"everything is clean\"")
 	}
@@ -696,7 +696,7 @@ func TestServiceImport_TinLessEntityCleanFileStaysDraftWithSupplierTinRequired(t
 	rows := [][]string{
 		mkRow("IMPV12-CLEAN", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50", "Item1", "1", "100.00"),
 	}
-	if _, err := svc.Import(c, entityID, "", stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -775,7 +775,7 @@ func TestServiceImport_NoLineRowsMappedStaysDraftViaLineItemsSumSubtotal(t *test
 	rows := [][]string{
 		{"IMPV13-NOLINES", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50"},
 	}
-	if _, err := svc.Import(c, entityID, "", impvNoLineMapping, impvNoLineHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", "", impvNoLineMapping, impvNoLineHeader, rows, false); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -859,7 +859,7 @@ func TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate(t *testing.T
 			svc := newTestServiceWithGate(app, fg)
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
-			res, err := svc.Import(c, entityID, "", stdMapping, stdHeader, impvAllQuarantinedFixture(), tc.dryRun)
+			res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, impvAllQuarantinedFixture(), tc.dryRun)
 			if err != nil {
 				t.Fatalf("Import (dryRun=%v): %v", tc.dryRun, err)
 			}

@@ -75,18 +75,20 @@ func pgCode(err error) string {
 // filename is wrapped in nullif($3, '') so an unusable/empty name (already
 // coerced to "" by sanitizeFilename before it ever reaches here) persists as
 // SQL NULL, never the empty string (AC #4) -- '' would make an unrecorded
-// source indistinguishable from a file genuinely named nothing.
-func (s *Store) CreateBatch(ctx context.Context, entityID, filename string) (string, error) {
+// source indistinguishable from a file genuinely named nothing. documentID
+// gets the same treatment for a different reason: '' is not a uuid at all
+// (22P02), and a caller with no source document must stay writable.
+func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID string) (string, error) {
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		identity, _ := auth.IdentityFromContext(ctx)
 
 		if err := tx.QueryRow(ctx,
 			`INSERT INTO import_batches
-			   (tenant_id, entity_id, filename, status, rows_total, rows_valid, rows_invalid, errors)
-			 VALUES ($1, $2, nullif($3, ''), 'processing', 0, 0, 0, '[]'::jsonb)
+			   (tenant_id, entity_id, filename, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+			 VALUES ($1, $2, nullif($3, ''), nullif($4, '')::uuid, 'processing', 0, 0, 0, '[]'::jsonb)
 			 RETURNING id`,
-			identity.TenantID, entityID, filename,
+			identity.TenantID, entityID, filename, documentID,
 		).Scan(&id); err != nil {
 			switch pgCode(err) {
 			case "23503", "22P02":

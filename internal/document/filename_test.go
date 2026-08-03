@@ -1,4 +1,4 @@
-// BULK-01-01 (task-305): Mode A RED specs for sanitizeFilename (filename.go),
+// BULK-01-01 (task-305): Mode A RED specs for SanitizeFilename (filename.go),
 // written BEFORE the real implementation exists -- RED against filename.go's
 // STUB (which returns raw unchanged, see that file's doc comment), so every
 // assertion below fails on a value mismatch, never a compile error.
@@ -13,13 +13,15 @@
 //	BULK-01-6 TestSanitizeFilename_InvalidUTF8CoercedToValid
 //	BULK-01-7 TestSanitizeFilename_TruncatesTo255Runes
 //
-// No DB needed -- these are pure unit tests over sanitizeFilename.
-package importer
+// No DB needed -- these are pure unit tests over SanitizeFilename.
+package document_test
 
 import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/SimonOsipov/invoice-os/internal/document"
 )
 
 // TestSanitizeFilename_StripsPathSegmentsBothSeparators (BULK-01-4): a client
@@ -38,8 +40,8 @@ func TestSanitizeFilename_StripsPathSegmentsBothSeparators(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sanitizeFilename(tc.in); got != tc.want {
-				t.Errorf("sanitizeFilename(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := document.SanitizeFilename(tc.in); got != tc.want {
+				t.Errorf("document.SanitizeFilename(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -53,11 +55,11 @@ func TestSanitizeFilename_StripsPathSegmentsBothSeparators(t *testing.T) {
 // pass by e.g. always returning "".
 func TestSanitizeFilename_DropsC0ControlsAndDEL(t *testing.T) {
 	// Positive control: an ordinary filename is untouched by this rule.
-	if got := sanitizeFilename("plain.csv"); got != "plain.csv" {
-		t.Fatalf(`sanitizeFilename("plain.csv") = %q, want "plain.csv" unchanged (positive control)`, got)
+	if got := document.SanitizeFilename("plain.csv"); got != "plain.csv" {
+		t.Fatalf(`document.SanitizeFilename("plain.csv") = %q, want "plain.csv" unchanged (positive control)`, got)
 	}
-	if got := sanitizeFilename("a\x00b.csv"); got != "ab.csv" {
-		t.Errorf(`sanitizeFilename("a\x00b.csv") = %q, want %q (NUL stripped)`, got, "ab.csv")
+	if got := document.SanitizeFilename("a\x00b.csv"); got != "ab.csv" {
+		t.Errorf(`document.SanitizeFilename("a\x00b.csv") = %q, want %q (NUL stripped)`, got, "ab.csv")
 	}
 }
 
@@ -70,9 +72,9 @@ func TestSanitizeFilename_InvalidUTF8CoercedToValid(t *testing.T) {
 	if utf8.ValidString(invalid) {
 		t.Fatal("fixture assumption broken: input is already valid UTF-8")
 	}
-	got := sanitizeFilename(invalid)
+	got := document.SanitizeFilename(invalid)
 	if !utf8.ValidString(got) {
-		t.Errorf("sanitizeFilename(<invalid UTF-8>) = %q, want valid UTF-8 (coerced, e.g. via strings.ToValidUTF8)", got)
+		t.Errorf("document.SanitizeFilename(<invalid UTF-8>) = %q, want valid UTF-8 (coerced, e.g. via strings.ToValidUTF8)", got)
 	}
 }
 
@@ -82,9 +84,9 @@ func TestSanitizeFilename_InvalidUTF8CoercedToValid(t *testing.T) {
 // produce invalid UTF-8 or an off-by-one rune count for non-ASCII input.
 func TestSanitizeFilename_TruncatesTo255Runes(t *testing.T) {
 	long := strings.Repeat("a", 5000)
-	got := sanitizeFilename(long)
+	got := document.SanitizeFilename(long)
 	if n := len([]rune(got)); n != 255 {
-		t.Errorf("len([]rune(sanitizeFilename(<5000-rune name>))) = %d, want 255", n)
+		t.Errorf("len([]rune(document.SanitizeFilename(<5000-rune name>))) = %d, want 255", n)
 	}
 }
 
@@ -102,8 +104,8 @@ func TestSanitizeFilename_TruncatesTo255Runes(t *testing.T) {
 // by removing the `s != ""` guard) doesn't silently start mangling these too.
 func TestSanitizeFilename_DotAndDotDotSegmentsPassThroughUnchanged(t *testing.T) {
 	for _, in := range []string{".", ".."} {
-		if got := sanitizeFilename(in); got != in {
-			t.Errorf("sanitizeFilename(%q) = %q, want %q (unchanged)", in, got, in)
+		if got := document.SanitizeFilename(in); got != in {
+			t.Errorf("document.SanitizeFilename(%q) = %q, want %q (unchanged)", in, got, in)
 		}
 	}
 }
@@ -129,8 +131,8 @@ func TestSanitizeFilename_LoneAndTrailingSeparators(t *testing.T) {
 		{"a\\", ""},
 	}
 	for _, tc := range tests {
-		if got := sanitizeFilename(tc.in); got != tc.want {
-			t.Errorf("sanitizeFilename(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := document.SanitizeFilename(tc.in); got != tc.want {
+			t.Errorf("document.SanitizeFilename(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -141,24 +143,24 @@ func TestSanitizeFilename_LoneAndTrailingSeparators(t *testing.T) {
 // the general case BULK-01-5's own `"a\x00b.csv"` doesn't exercise (that
 // input has real characters surrounding the NUL).
 func TestSanitizeFilename_OnlyControlCharactersYieldsEmpty(t *testing.T) {
-	if got := sanitizeFilename("\x00\x01\x02\x1F\x7F"); got != "" {
-		t.Errorf("sanitizeFilename(<all C0/DEL>) = %q, want \"\"", got)
+	if got := document.SanitizeFilename("\x00\x01\x02\x1F\x7F"); got != "" {
+		t.Errorf("document.SanitizeFilename(<all C0/DEL>) = %q, want \"\"", got)
 	}
 }
 
 // TestSanitizeFilename_RTLOverridePassesThroughUncoveredByAC3: a Unicode
 // bidi-override character (U+202E RIGHT-TO-LEFT OVERRIDE) is NOT a C0
 // control/DEL, not invalid UTF-8, and not over the rune cap -- so AC #3, as
-// specified, does not require it to be touched, and sanitizeFilename does not
+// specified, does not require it to be touched, and SanitizeFilename does not
 // touch it. This is a DELIBERATE scope note, not a silent gap: a bidi
 // override in a rendered filename can visually disguise an extension (e.g.
 // "invoice<RLO>exe.csv" can render as if the extension were reversed) --
 // worth flagging to the executor as an optional hardening follow-up, but
 // out of scope for this AC, which only names C0 controls and DEL.
 func TestSanitizeFilename_RTLOverridePassesThroughUncoveredByAC3(t *testing.T) {
-	const in = "invoice‮exe.csv"
-	if got := sanitizeFilename(in); got != in {
-		t.Errorf("sanitizeFilename(%q) = %q, want %q unchanged (AC #3 scopes control-stripping to C0/DEL only, not bidi controls)", in, got, in)
+	const in = "invoice\u202eexe.csv"
+	if got := document.SanitizeFilename(in); got != in {
+		t.Errorf("document.SanitizeFilename(%q) = %q, want %q unchanged (AC #3 scopes control-stripping to C0/DEL only, not bidi controls)", in, got, in)
 	}
 }
 
@@ -180,12 +182,12 @@ func TestSanitizeFilename_CombiningCharactersTruncationStaysValidUTF8(t *testing
 		t.Fatalf("fixture assumption broken: input has %d runes, want 260", n)
 	}
 
-	got := sanitizeFilename(long)
+	got := document.SanitizeFilename(long)
 	if !utf8.ValidString(got) {
-		t.Fatalf("sanitizeFilename(<260-rune combining-char name>) = %q, not valid UTF-8", got)
+		t.Fatalf("document.SanitizeFilename(<260-rune combining-char name>) = %q, not valid UTF-8", got)
 	}
 	if n := utf8.RuneCountInString(got); n != 255 {
-		t.Errorf("utf8.RuneCountInString(sanitizeFilename(...)) = %d, want 255", n)
+		t.Errorf("utf8.RuneCountInString(document.SanitizeFilename(...)) = %d, want 255", n)
 	}
 }
 
@@ -200,12 +202,12 @@ func TestSanitizeFilename_EmojiAtRuneBoundaryNeverSplitsACodepoint(t *testing.T)
 		t.Fatalf("fixture assumption broken: input has %d runes, want 256", n)
 	}
 
-	got := sanitizeFilename(name)
+	got := document.SanitizeFilename(name)
 	if !utf8.ValidString(got) {
-		t.Fatalf("sanitizeFilename(<emoji at boundary>) = %q, not valid UTF-8", got)
+		t.Fatalf("document.SanitizeFilename(<emoji at boundary>) = %q, not valid UTF-8", got)
 	}
 	want := strings.Repeat("a", 254) + "\U0001F600"
 	if got != want {
-		t.Errorf("sanitizeFilename(<emoji at boundary>) = %q, want %q (keep the 255th rune whole, drop the 256th)", got, want)
+		t.Errorf("document.SanitizeFilename(<emoji at boundary>) = %q, want %q (keep the 255th rune whole, drop the 256th)", got, want)
 	}
 }

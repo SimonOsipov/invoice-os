@@ -159,12 +159,26 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     const entity = await createEntity(token, { name: 'M4-04 Perf Co', tin: freshTin() })
 
     const csv = buildPerfCsv()
+
+    // [upload-once]: the file reaches the server via preview, which stores it;
+    // the import then names the stored document instead of re-uploading. The
+    // budget below spans BOTH legs -- timing only the second one would shrink
+    // the measured number without the gate itself moving.
+    const start = performance.now()
+    const previewForm = new FormData()
+    previewForm.set('file', new Blob([csv], { type: 'text/csv' }), 'perf.csv')
+    const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: previewForm,
+    })
+    expect(preview.ok, `preview should return a 2xx, got ${preview.status}`).toBe(true)
+    const { document_id: documentId } = (await preview.json()) as { document_id: string }
+
     const form = new FormData()
     form.set('entity_id', entity.id)
     form.set('mapping', JSON.stringify(PERF_MAPPING))
-    form.set('file', new Blob([csv], { type: 'text/csv' }), 'perf.csv')
-
-    const start = performance.now()
+    form.set('document_id', documentId)
     const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -172,7 +186,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     })
     const elapsed = performance.now() - start
     console.log(
-      `PERF-01 (deployed): POST /api/invoice/v1/imports (500 invoices, import+validate combined via [import-validates]) took ${elapsed.toFixed(0)}ms`,
+      `PERF-01 (deployed): POST /api/invoice/v1/imports/preview + /imports (500 invoices, import+validate combined via [import-validates]) took ${elapsed.toFixed(0)}ms`,
     )
 
     expect(res.ok, `expected a 2xx response, got ${res.status}`).toBe(true)

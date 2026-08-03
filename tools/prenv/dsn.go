@@ -33,11 +33,26 @@ const (
 	IfPresent
 )
 
+// Kind is what the value IS, which decides which checks apply to it.
+type Kind int
+
+const (
+	// KindDSN: a database URL, fully checked. Zero value for the same
+	// fail-safe reason Required is -- a row that omits Kind gets the strict
+	// path, not the lax one.
+	KindDSN Kind = iota
+	// KindOpaque: a bucket name, region, endpoint or key. Only unset, empty
+	// and unrendered are statically detectable; the URL checks would report
+	// DefectNoPassword for every healthy value.
+	KindOpaque
+)
+
 // DSNRequirement is one row of the severity table.
 type DSNRequirement struct {
 	Service  string
 	Variable string
 	Severity Severity
+	Kind     Kind
 }
 
 // DSNRequirements is the severity table: the codified invariant this whole
@@ -49,20 +64,29 @@ type DSNRequirement struct {
 //
 // The order is fixed so the offender list is reproducible run to run.
 var DSNRequirements = []DSNRequirement{
-	{"gateway", "DATABASE_MIGRATION_URL", Required},
+	{"gateway", "DATABASE_MIGRATION_URL", Required, KindDSN},
 	// Optional by design: internal/platform/db/provision.go:169-172 is the
 	// guard-off boot path that runs without a superuser URL. Promoting this to
 	// Required would fail a supported configuration.
-	{"gateway", "DATABASE_SUPERUSER_URL", IfPresent},
-	{"tenancy", "DATABASE_URL", Required},
-	{"portfolio", "DATABASE_URL", Required},
-	{"invoice", "DATABASE_URL", Required},
-	{"validation", "DATABASE_URL", Required},
-	{"dashboard", "DATABASE_URL", Required},
-	{"submission", "DATABASE_URL", Required},
+	{"gateway", "DATABASE_SUPERUSER_URL", IfPresent, KindDSN},
+	{"tenancy", "DATABASE_URL", Required, KindDSN},
+	{"portfolio", "DATABASE_URL", Required, KindDSN},
+	{"invoice", "DATABASE_URL", Required, KindDSN},
+	// The five ${{source-documents.*}} references. Required since DOC-01-03:
+	// cmd/invoice/main.go calls document.ConfigFromEnv at boot and fatals on any
+	// one of them being unset, so an absent variable is a crash-loop, not a
+	// degraded mode.
+	{"invoice", "DOCUMENT_BUCKET", Required, KindOpaque},
+	{"invoice", "DOCUMENT_ENDPOINT", Required, KindOpaque},
+	{"invoice", "DOCUMENT_REGION", Required, KindOpaque},
+	{"invoice", "DOCUMENT_ACCESS_KEY_ID", Required, KindOpaque},
+	{"invoice", "DOCUMENT_SECRET_ACCESS_KEY", Required, KindOpaque},
+	{"validation", "DATABASE_URL", Required, KindDSN},
+	{"dashboard", "DATABASE_URL", Required, KindDSN},
+	{"submission", "DATABASE_URL", Required, KindDSN},
 	// cmd/notifications/main.go opens no pool -- it has no db/pgxpool/sql
 	// reference at all -- so an absent DATABASE_URL is not a defect there.
-	{"notifications", "DATABASE_URL", IfPresent},
+	{"notifications", "DATABASE_URL", IfPresent, KindDSN},
 }
 
 // DSNDefect is why a variable is an offender. The defects are kept DISTINCT
@@ -107,11 +131,30 @@ func CheckDSNs(rendered map[string]map[string]string) []Offender {
 			}
 			continue
 		}
-		if defect, bad := inspectDSN(value); bad {
+		inspect := inspectDSN
+		if req.Kind == KindOpaque {
+			inspect = inspectOpaque
+		}
+		if defect, bad := inspect(value); bad {
 			offenders = append(offenders, Offender{req.Service, req.Variable, defect})
 		}
 	}
 	return offenders
+}
+
+// inspectOpaque classifies one rendered value of any shape. These two defects
+// are the whole of what a KindOpaque value can be checked for statically, and
+// they are also the two the KindDSN path must reach first.
+func inspectOpaque(value string) (DSNDefect, bool) {
+	if strings.TrimSpace(value) == "" {
+		return DefectEmptyValue, true
+	}
+	// Checked BEFORE parsing: an unrendered reference is its own defect with
+	// its own remedy, and it can still parse as a well-formed URL.
+	if strings.Contains(value, "${{") {
+		return DefectUnrendered, true
+	}
+	return "", false
 }
 
 // inspectDSN classifies one rendered DSN value.
@@ -121,13 +164,8 @@ func CheckDSNs(rendered map[string]map[string]string) []Offender {
 // mis-slices those into a password that looks empty -- flagging a healthy
 // credential.
 func inspectDSN(value string) (DSNDefect, bool) {
-	if strings.TrimSpace(value) == "" {
-		return DefectEmptyValue, true
-	}
-	// Checked BEFORE parsing: an unrendered reference is its own defect with
-	// its own remedy, and it can still parse as a well-formed URL.
-	if strings.Contains(value, "${{") {
-		return DefectUnrendered, true
+	if defect, bad := inspectOpaque(value); bad {
+		return defect, true
 	}
 	u, err := url.Parse(value)
 	if err != nil {

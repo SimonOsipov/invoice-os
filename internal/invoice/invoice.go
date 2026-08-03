@@ -181,6 +181,11 @@ type CreateInput struct {
 	Total         *string
 	LineItems     []LineItemInput
 	ImportBatchID *string
+	// SourceDocumentID points at the documents row an import read this invoice
+	// out of; nil for a manual create. Deliberately absent from Invoice and
+	// invoiceColumns -- that projection feeds a POSITIONAL scanInvoice and the
+	// gate's MBS payload (TestInvoiceColumns_OmitsSourceDocumentID).
+	SourceDocumentID *string
 }
 
 // UpdateInput is the Store.Update argument: a partial update over invoices'

@@ -1364,3 +1364,102 @@ test('reports-whole-set: top customers ranks over the whole set', async ({ page 
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// DOC-02-09: the source-document previewer, reached only from invoice detail (fence 4 --
+// no other entry point). Folds the story's Test Specs rows 10+11 into ONE test() (Stage-1
+// correction C1, the same fold this file already did once for M5-09-08 -- row 11 has no
+// fixture of its own and this file's tests each get a fresh page/error collector).
+// buildMixedCsv is deterministic (importFixtures.ts): header + STRUCT(2) + STRUCT(3) +
+// VIOLATE(4) + CLEAN(5), rows_total 4 -- INV-UI-MIX-VIOLATE's source_rows is [4], so the
+// card renders the SINGULAR "Row 4 of this file became this invoice." (lib/sourceDocument.ts).
+test("invoice detail: the source-document card states the real range, and the modal opens on the whole file with this invoice's row marked", async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-02 preview ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  // import-wizard.spec.ts's own proven E2E-04 recipe, reused verbatim (this file's own
+  // Day-60 test above drives the identical steps).
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'doc02-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await goToInvoices(page)
+  await openInvoiceRow(page, 'INV-UI-MIX-VIOLATE')
+
+  await expect(page.getByTestId('source-document-card')).toBeVisible()
+  // Literal, not a `/Rows? \d+/` shape regex -- a shape regex passes for a WRONG row number
+  // too, the DOC-01 empty-id failure class this assertion exists to prevent (Stage-1
+  // correction C2).
+  await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
+
+  await page.getByTestId('view-source-document').click()
+  const modal = page.getByTestId('source-document-modal')
+  await expect(modal).toBeVisible()
+  // Middle dot (U+00B7) escaped, not typed literally -- this file's own precedent (:469)
+  // treats a non-ASCII assertion literal as a CI-shell encoding hazard.
+  await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file \u00b7 4 rows$/)
+  await expect(page.getByTestId('sheet-scope-invoice')).toBeVisible()
+  await expect(page.getByTestId('sheet-row-marked')).toHaveCount(1)
+  await expect(page.getByTestId('sheet-status')).toHaveText(/SHOWING ALL 4 ROWS/)
+  await expect(page.getByTestId('source-document-rail')).toBeVisible()
+  // A SHA-256 hex digest chunked 16 chars/line is always exactly 4 lines (64 / 16).
+  await expect(page.getByTestId('hash-line')).toHaveCount(4)
+
+  await page.getByTestId('source-modal-close').click()
+  await expect(modal).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('invoice detail: a manually created invoice shows the no-source state', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-02 no-source ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-DOC02-NOSRC-${freshTin()}`
+  await createInvoice(token, { entity_id: entity.id, invoice_number: invoiceNumber })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  await expect(page.getByTestId('source-document-card')).toContainText('No source document')
+  await expect(page.getByTestId('view-source-document')).toHaveCount(0)
+  const whyButton = page.getByTestId('why-no-source-document')
+  await expect(whyButton).toHaveText('Why there is no file')
+
+  await whyButton.click()
+  await expect(page.getByTestId('source-document-modal')).toBeVisible()
+  await expect(page.getByTestId('source-document-no-source')).toContainText('There is no source document')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

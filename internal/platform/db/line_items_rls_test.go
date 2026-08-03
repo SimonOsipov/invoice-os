@@ -864,7 +864,7 @@ func TestRLS_LineItemsReaderDeleteRefused(t *testing.T) {
 // non-empty) app.current_tenant reaching Postgres directly makes a DELETE ERROR, not
 // silently affect zero rows. This is a DIFFERENT failure mode from INV-01-T3 (a truly
 // UNSET GUC, which fails closed with 0 rows and no error): the tenant_isolation
-// policy's predicate is `nullif(current_setting('app.current_tenant', true), ”)::uuid`,
+// policy's predicate is `nullif(current_setting('app.current_tenant', true), '')::uuid`,
 // and casting a non-UUID string to ::uuid raises invalid_text_representation (22P02)
 // before any row is even considered. WithinTenantTx itself never lets a malformed
 // string this far (it validates client-side via uuid.Parse and returns ErrNoTenant —

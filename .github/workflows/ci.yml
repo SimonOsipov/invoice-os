@@ -339,6 +339,13 @@ jobs:
         # ordering. Needs DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both
         # already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/document/...
+      - name: Demo source-document seeder suite (allowlist + per-entity grouping as invoice_app) + per-test visibility & skip gate
+        # DOC-02: proves the boot-time seeder that gives db/seed.dev.sql's invoices a
+        # source document — one file per supplier entity, source_rows matching the rows
+        # it wrote, no relink of an already-linked invoice, and the tenant allowlist
+        # that keeps it off non-demo data wherever it runs. Needs DATABASE_URL (app) +
+        # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/demodocs/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

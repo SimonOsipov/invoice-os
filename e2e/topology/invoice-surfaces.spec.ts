@@ -25,7 +25,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { buildMixedCsv } from '../importFixtures'
+import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // collectErrors()/signInFirm(): the same console/pageerror + firm-persona
@@ -1435,6 +1435,109 @@ test("invoice detail: the source-document card states the real range, and the mo
   await expect(page.getByTestId('source-document-rail')).toBeVisible()
   // A SHA-256 hex digest chunked 16 chars/line is always exactly 4 lines (64 / 16).
   await expect(page.getByTestId('hash-line')).toHaveCount(4)
+
+  await page.getByTestId('source-modal-close').click()
+  await expect(modal).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The sheet's windowing is unit-tested as a pure function (lib/sourceDocument.test.ts
+// pins sheetWindow at 1,479 and 100,000 rows), but the 4-row fixture above never
+// scrolls, so no browser had ever rendered this component past one screen. The design
+// brief's own warning is the failure this covers: without the clamp the measured
+// viewport reads the full content height (~44,000px), every row renders, and the tab
+// hangs. buildPerfCsv is import-wizard.spec.ts's proven 500-invoice/1500-row fixture.
+test('invoice detail: a 1,500-row source file renders through the window, not all at once', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-02 window ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'doc02-window.csv', mimeType: 'text/csv', buffer: Buffer.from(buildPerfCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 120_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // buildPerfCsv shares buildMixedCsv's PERF_HEADER, so the same two hand-maps apply.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 120_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await goToInvoices(page)
+  // Any of the 500 will do -- they all share the one file -- and openInvoiceRow does
+  // not paginate, so naming a specific number would depend on the list's sort order.
+  await page
+    .getByTestId('invoices-list')
+    .getByText(/^INV-UI-\d{5}$/)
+    .first()
+    .click()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+  await page.getByTestId('view-source-document').click()
+  const modal = page.getByTestId('source-document-modal')
+  await expect(modal).toBeVisible()
+
+  // fmtPlain is toLocaleString('en-NG'), so four digits carry a thousands comma.
+  await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file · 1,500 rows$/)
+  await expect(page.getByTestId('sheet-status')).toHaveText(/SHOWING ALL 1,500 ROWS/)
+
+  // The window, not the file. An unclamped viewport measure renders all 1,500.
+  const rendered = await page.getByTestId('sheet-row-number').count()
+  expect(rendered, 'no rows rendered at all').toBeGreaterThan(0)
+  expect(rendered, `${rendered} of 1,500 rows are in the DOM; the window is not bounding the render`).toBeLessThan(200)
+
+  // Spacers are what keep the scrollbar honest while only a window exists.
+  await expect(page.getByTestId('sheet-spacer-top')).toHaveCount(1)
+  await expect(page.getByTestId('sheet-spacer-bottom')).toHaveCount(1)
+  await expect(page.getByTestId('sheet-marker-track')).toBeVisible()
+  await expect(page.getByTestId('marker-viewport')).toBeVisible()
+  await expect(page.getByTestId('marker-invoice-block')).not.toHaveCount(0)
+
+  // Scrolling must move the window. The modal opens auto-scrolled to THIS invoice's
+  // rows, and which invoice the list surfaced first is not fixed, so both ends are
+  // driven explicitly rather than measured from wherever entry happened to land.
+  const firstRowNumber = async () => Number((await page.getByTestId('sheet-row-number').first().innerText()).trim())
+  const scrollTo = async (top: number) =>
+    page.getByTestId('sheet-scroll').evaluate((el, t) => {
+      el.scrollTop = t
+    }, top)
+
+  await scrollTo(0)
+  await expect
+    .poll(firstRowNumber, { message: 'scrolling to the top did not show the first data row', timeout: 15_000 })
+    .toBe(2)
+
+  await scrollTo(30 * 1200)
+  await expect
+    .poll(firstRowNumber, { message: 'the window did not move after scrolling', timeout: 15_000 })
+    .toBeGreaterThan(1000)
+
+  const afterScroll = await page.getByTestId('sheet-row-number').count()
+  expect(afterScroll, 'the window grew unbounded while scrolling').toBeLessThan(200)
+
+  // No truncation notice: 1,500 is well inside the 5,000-row server cap, so a visible
+  // one would mean the cap is being applied at the wrong threshold.
+  await expect(page.getByTestId('sheet-truncation')).toHaveCount(0)
 
   await page.getByTestId('source-modal-close').click()
   await expect(modal).toHaveCount(0)

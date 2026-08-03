@@ -9,7 +9,7 @@
 // below duplicate that seam rather than import it -- both files are *.spec.ts, and
 // importing one into another registers its tests twice.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, apiBase, rawFetch, PERSONAS } from './client'
+import { login, createEntity, createInvoice, listInvoices, apiBase, rawFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { buildMixedCsv, PERF_MAPPING } from '../importFixtures'
@@ -140,6 +140,57 @@ test.describe('invoice source-document contract (API E2E, over the deployed gate
     assertErrorEnvelope(await sourceDocumentFetch(null, invoice.id), 401, 'no auth')
     assertErrorEnvelope(await sourceDocumentFetch(token, crypto.randomUUID()), 404, 'unknown invoice id')
     assertErrorEnvelope(await sourceDocumentFetch(token, 'not-a-uuid'), 400, 'malformed invoice id')
+  })
+
+  // The specs above all import a file first, so they prove the previewer works
+  // on data the test itself created. This one asserts the DEPLOYED environment's
+  // own seeded demo invoices carry a document -- the internal/demodocs boot step
+  // in cmd/invoice/main.go. Without it every demo invoice reads "no source
+  // document" and the populated states are unreachable outside a manual import.
+  test('source-document contract: the deployed environment seeds documents onto its demo invoices', async () => {
+    const list = await listInvoices(token, { q: 'DEMO-2026-', limit: 100 })
+    const seeded = list.invoices.filter((i) => i.invoice_number.startsWith('DEMO-2026-'))
+    expect(seeded.length, 'the deployed environment should carry db/seed.dev.sql demo invoices').toBeGreaterThan(0)
+
+    const records = await Promise.all(
+      seeded.map(async (invoice) => {
+        const res = await sourceDocumentFetch(token, invoice.id)
+        expect(res.status, `source-document for ${invoice.invoice_number}`).toBe(200)
+        return { invoice, body: res.body as { source_rows: number[] | null; document: Record<string, unknown> | null } }
+      }),
+    )
+
+    const withDocument = records.filter((r) => r.body.document !== null)
+    expect(
+      withDocument.length,
+      'no seeded invoice carries a source document -- the demodocs boot step did not run',
+    ).toBeGreaterThan(0)
+
+    for (const { invoice, body } of withDocument) {
+      const record = body.document as Record<string, unknown>
+      expect(record.id, invoice.invoice_number).toMatch(UUID_RE)
+      expect(record.content_hash, invoice.invoice_number).toMatch(SHA256_RE)
+      expect(record.size_bytes as number, `${invoice.invoice_number} size_bytes`).toBeGreaterThan(0)
+      // demodocs.filenameFor slugifies the supplier entity's name.
+      expect(record.filename as string, `${invoice.invoice_number} filename`).toMatch(/^[a-z0-9-]+-invoices\.csv$/)
+      // The seeded document is attributed to a real admin of the tenant, not to
+      // a synthetic seeder subject -- this is what the rail renders as
+      // "Uploaded by", so a fabricated uuid there would be a lying surface.
+      expect(record.uploaded_by, `${invoice.invoice_number} uploaded_by`).toBe(PERSONAS.A.subject)
+      // A linked invoice always carries the rows it occupies; the sheet-row
+      // floor is 2 because row 1 is the header.
+      expect(body.source_rows, `${invoice.invoice_number} source_rows`).not.toBeNull()
+      expect((body.source_rows as number[]).length).toBeGreaterThan(0)
+      for (const row of body.source_rows as number[]) {
+        expect(row, `${invoice.invoice_number} sheet row`).toBeGreaterThanOrEqual(2)
+      }
+    }
+
+    // Invoices with no line items are deliberately left unlinked (a row in an
+    // import file IS a line item), so a mixed result is correct and an
+    // all-or-nothing assertion would be wrong in both directions.
+    const bySupplierFile = new Set(withDocument.map((r) => (r.body.document as Record<string, unknown>).filename))
+    expect(bySupplierFile.size, 'demo documents should be one file per supplier entity, not one global file').toBeGreaterThan(1)
   })
 })
 

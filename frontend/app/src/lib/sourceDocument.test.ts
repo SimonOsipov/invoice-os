@@ -99,6 +99,23 @@ describe('classifyDocument', () => {
   it('content-type parameters are stripped', () => {
     expect(classifyDocument(null, 'text/csv; charset=utf-8')).toBe('spreadsheet')
   })
+
+  // QA adversarial (DOC-02-04).
+  it('an uppercase .CSV extension resolves the same as lowercase', () => {
+    expect(classifyDocument('A.CSV', null)).toBe('spreadsheet')
+    expect(classifyDocument('invoice.CsV', null)).toBe('spreadsheet')
+  })
+
+  it('a double extension keys off the LAST segment only', () => {
+    // "report.csv.zip" -> extension "zip", unrecognized -> falls through to content type,
+    // exactly like any other unrecognized extension (AC1).
+    expect(classifyDocument('report.csv.zip', 'text/csv')).toBe('spreadsheet')
+    expect(classifyDocument('report.csv.zip', null)).toBe('unrenderable')
+  })
+
+  it('multiple content-type parameters are all stripped, not just the first', () => {
+    expect(classifyDocument(null, 'text/csv; charset=utf-8; boundary=xyz')).toBe('spreadsheet')
+  })
 })
 
 // -- sourceDocumentState (AC2) ------------------------------------------------------
@@ -142,6 +159,16 @@ describe('sourceDocumentState', () => {
     expect(sourceDocumentState(mkMeta('ready', SPREADSHEET_DOC), 'ready', 'error')).toBe('spreadsheet')
     expect(sourceDocumentState(mkMeta('ready', PDF_DOC), 'error', 'ready')).toBe('pdf')
   })
+
+  // QA adversarial (DOC-02-04): the resolution table above only exercises documents
+  // classified by extension. This proves the state resolver generalizes to the
+  // content-type fallback path too, not just the fixtures with a recognized extension.
+  it('state resolution also generalizes over content-type-classified documents', () => {
+    const contentTypeOnlyPdf = mkDocument({ filename: null, declared_content_type: 'application/pdf' })
+    const contentTypeOnlyImage = mkDocument({ filename: null, declared_content_type: 'image/webp' })
+    expect(sourceDocumentState(mkMeta('ready', contentTypeOnlyPdf), 'idle', 'ready')).toBe('pdf')
+    expect(sourceDocumentState(mkMeta('ready', contentTypeOnlyImage), 'idle', 'ready')).toBe('image')
+  })
 })
 
 // -- sheetWindow (AC3) ---------------------------------------------------------------
@@ -180,6 +207,38 @@ describe('sheetWindow', () => {
 
     const negativeScroll = sheetWindow(-90, 600, 1479)
     expect(negativeScroll.start).toBe(0)
+  })
+
+  // QA adversarial (DOC-02-04). AC3 clamps measuredViewportH only -- scrollTop is a real
+  // DOM scrollTop, never NaN in practice, so this pins today's behavior rather than fixing it.
+  it('a non-finite scrollTop is not guarded and degenerates the window -- pinned, not fixed', () => {
+    const result = sheetWindow(NaN, 600, 100000)
+    expect(Number.isNaN(result.start)).toBe(true)
+    expect(Number.isNaN(result.end)).toBe(true)
+  })
+
+  it('scrollTop far beyond the content clamps both bounds to total', () => {
+    expect(sheetWindow(999_999_999, 600, 100)).toEqual({ start: 100, end: 100 })
+  })
+
+  // Surprising but pinned: -90 (the architect's own iOS rubber-band literal) still shows
+  // rows ({end: 39}), but a scrollTop past roughly -1260 collapses the window to fully
+  // empty ({0,0}) even though total > 0 -- worse than scrollTop=0's populated window. Real
+  // browsers bound rubber-band overscroll well inside this range, so it is not reachable
+  // in practice, but the asymmetry is real and undocumented.
+  it('an extreme negative scrollTop collapses the window to empty, unlike scrollTop=0', () => {
+    expect(sheetWindow(-90, 600, 1479)).toEqual({ start: 0, end: 39 })
+    expect(sheetWindow(-999_999, 600, 1479)).toEqual({ start: 0, end: 0 })
+    expect(sheetWindow(0, 600, 1479)).toEqual({ start: 0, end: 42 })
+  })
+
+  it('a zero row total yields an empty window regardless of scroll position', () => {
+    expect(sheetWindow(500, 600, 0)).toEqual({ start: 0, end: 0 })
+    expect(sheetWindow(-90, 600, 0)).toEqual({ start: 0, end: 0 })
+  })
+
+  it('a row total smaller than the overscan clamps end to total, not to the overscan term', () => {
+    expect(sheetWindow(0, 600, 5)).toEqual({ start: 0, end: 5 })
   })
 })
 
@@ -269,6 +328,55 @@ describe('rangeLabel', () => {
     expect(rangeLabel([44, 45, 46, 51])).toBe('ROWS 44–46 AND 51')
     expect(rangeLabel(null)).toBeNull()
     expect(rangeLabel([])).toBeNull()
+  })
+})
+
+// -- QA adversarial: contiguousRanges / describeSourceRows / rangeLabel edges (DOC-02-04) --
+
+describe('contiguousRanges / describeSourceRows / rangeLabel: adversarial edges', () => {
+  it('two adjacent rows form one range, not two singletons', () => {
+    expect(contiguousRanges([44, 45])).toEqual([[44, 45]])
+    expect(describeSourceRows([44, 45], 'spreadsheet')).toBe('Rows 44–45 of this file became this invoice.')
+    expect(rangeLabel([44, 45])).toBe('ROWS 44–45')
+  })
+
+  it('two rows far apart stay two singletons, joined by "and"', () => {
+    expect(contiguousRanges([10, 9999])).toEqual([
+      [10, 10],
+      [9999, 9999],
+    ])
+    expect(describeSourceRows([10, 9999], 'spreadsheet')).toBe('Rows 10 and 9999 of this file became this invoice.')
+    expect(rangeLabel([10, 9999])).toBe('ROWS 10 AND 9999')
+  })
+
+  it('an all-duplicate row list collapses to one singleton range', () => {
+    expect(contiguousRanges([7, 7, 7, 7])).toEqual([[7, 7]])
+    expect(describeSourceRows([7, 7, 7, 7], 'spreadsheet')).toBe('Row 7 of this file became this invoice.')
+    expect(rangeLabel([7, 7, 7, 7])).toBe('ROW 7')
+  })
+
+  // Design says "pluralise honestly", not "keep it short" -- there is no cap on range
+  // count. 50 non-contiguous rows already produce a 237-char sentence (measured below);
+  // scaling to a genuinely messy invoice (hundreds of scattered rows) would read as a
+  // wall of numbers, not a caption. Advisory: no design-system rule caps this, so this is
+  // NOT filed as a defect -- flagging for the human, not bouncing to the executor.
+  it('a long non-contiguous set stays structurally correct, but the sentence is not capped', () => {
+    const rows: number[] = []
+    for (let n = 2; n <= 100; n += 2) rows.push(n)
+
+    const ranges = contiguousRanges(rows)
+    expect(ranges).toHaveLength(50)
+    expect(ranges.every(([from, to]) => from === to)).toBe(true) // every entry a singleton
+
+    const sentence = describeSourceRows(rows, 'spreadsheet')
+    expect(sentence.startsWith('Rows 2, 4, 6,')).toBe(true)
+    expect(sentence.endsWith('and 100 of this file became this invoice.')).toBe(true)
+    expect(sentence).toContain(', 98 and 100') // final conjunction uses "and", not a comma
+    expect(sentence.length).toBe(237) // pinned so a future change to the join logic is visible here
+
+    const label = rangeLabel(rows)
+    expect(label?.startsWith('ROWS 2, 4, 6,')).toBe(true)
+    expect(label?.endsWith('AND 100')).toBe(true)
   })
 })
 
@@ -492,5 +600,22 @@ describe('fetchDocumentBytes', () => {
     expect(src).not.toContain('a.click(')
     expect(src).not.toContain('download=')
     expect(src).not.toContain('downloadGlyph')
+  })
+
+  // QA adversarial (DOC-02-04): the shipped spec only calls release() twice. Confirm the
+  // idempotency guard holds under repeated calls, not just a second one.
+  it('release stays idempotent across many repeated calls', async () => {
+    mockBytesFetch([1, 2, 3, 4])
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-1')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    const { release } = await fetchDocumentBytes(() => 'tok', BASE, DOCUMENT_ID, 'pdf', 'a.pdf')
+    release()
+    release()
+    release()
+    release()
+
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-1')
   })
 })

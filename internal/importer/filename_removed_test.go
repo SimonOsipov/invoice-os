@@ -13,6 +13,9 @@ import (
 // a control needle that must be found keeps a broken walk from passing
 // vacuously.
 func TestImporterHasNoLocalSanitizeFilename(t *testing.T) {
+	// Matched case-INSENSITIVELY: the control left this package as the EXPORTED
+	// document.SanitizeFilename, so a copy back could land under either spelling
+	// and an exact lowercase needle would miss the exported one.
 	banned := "func " + strings.ToLower("S") + "anitizeFilename("
 	const control = "func NewStore("
 
@@ -23,13 +26,14 @@ func TestImporterHasNoLocalSanitizeFilename(t *testing.T) {
 			"check below passed vacuously", control)
 	}
 	if len(bannedIn) != 0 {
-		t.Errorf("%q is still declared in %v -- it moved to internal/document as SanitizeFilename and must not "+
-			"have a second copy here", banned, bannedIn)
+		t.Errorf("%q (in any casing) is still declared in %v -- it moved to internal/document as the exported "+
+			"SanitizeFilename and must not have a second copy here", banned, bannedIn)
 	}
 }
 
 // scanPackageSources reports which .go files in this package contain each
-// needle.
+// needle. banned is matched case-insensitively so it catches both the exported
+// and the unexported spelling; control is matched exactly.
 func scanPackageSources(t *testing.T, banned, control string) (bannedIn, controlIn []string) {
 	t.Helper()
 
@@ -46,7 +50,7 @@ func scanPackageSources(t *testing.T, banned, control string) (bannedIn, control
 			t.Fatalf("read %s: %v", e.Name(), err)
 		}
 		src := string(b)
-		if strings.Contains(src, banned) {
+		if strings.Contains(strings.ToLower(src), strings.ToLower(banned)) {
 			bannedIn = append(bannedIn, e.Name())
 		}
 		if strings.Contains(src, control) {

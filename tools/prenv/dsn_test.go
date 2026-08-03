@@ -88,7 +88,7 @@ func requireDocumentRows(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("DSNRequirements carries no invoice row for %v. tools/prenv/dsn.go:51-66 must gain the five DOCUMENT_* rows (Required, KindOpaque); until then this assertion passes for the wrong reason -- the table cannot flag a variable it does not know about.", missing)
+		t.Fatalf("DSNRequirements carries no invoice row for %v. The DSNRequirements table in tools/prenv/dsn.go must gain the five DOCUMENT_* rows (Required, KindOpaque); until then this assertion passes for the wrong reason -- the table cannot flag a variable it does not know about.", missing)
 	}
 }
 
@@ -291,9 +291,10 @@ func TestCheckDSNs_DSNKindUnchanged(t *testing.T) {
 	}
 }
 
-// T-DOC-6. KindDSN must be iota-0, for the same fail-safe reason Required is
-// (dsn.go:29): a future row that omits Kind then gets the FULL checking, not
-// the lax path. Every pre-existing DATABASE row carries that zero value.
+// T-DOC-6. KindDSN must be iota-0, for the same fail-safe reason the Required
+// Severity constant is: a future row that omits Kind then gets the FULL
+// checking, not the lax path. Every pre-existing DATABASE row carries that
+// zero value.
 func TestDSNRequirementKindIsTheStrictZeroValue(t *testing.T) {
 	if len(DSNRequirements) == 0 {
 		t.Fatalf("DSNRequirements is empty -- the loop below would pass vacuously")
@@ -365,7 +366,7 @@ func kindOf(t *testing.T, req DSNRequirement) int64 {
 	t.Helper()
 	f := reflect.ValueOf(req).FieldByName("Kind")
 	if !f.IsValid() {
-		t.Fatalf("DSNRequirement has no Kind field. tools/prenv/dsn.go:37-41 must gain it, with the strict kind (KindDSN) as the iota-0 zero value; the five DOCUMENT_* rows then carry KindOpaque, which applies only DefectMissing/DefectEmptyValue/DefectUnrendered.")
+		t.Fatalf("DSNRequirement has no Kind field. The Kind declaration in tools/prenv/dsn.go must gain it, with the strict kind (KindDSN) as the iota-0 zero value; the five DOCUMENT_* rows then carry KindOpaque, which applies only DefectMissing/DefectEmptyValue/DefectUnrendered.")
 	}
 	if !f.CanInt() {
 		t.Fatalf("DSNRequirement.Kind has kind %s, want an integer iota type mirroring Severity so the strict kind can be the zero value", f.Kind())

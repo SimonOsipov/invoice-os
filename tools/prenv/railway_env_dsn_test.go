@@ -10,8 +10,9 @@
 // living anywhere else is a guard that can be skipped.
 //
 // TOKEN-FREE AND NETWORK-FREE, BY CONSTRUCTION. Every test here drives
-// `--self-test`, which must short-circuit BEFORE require_env
-// (scripts/ci/railway-env.sh:~127). Nothing below calls Railway, and T2-4
+// `--self-test`, which must short-circuit BEFORE require_env (the
+// `--self-test` branch at the top of cmd_assert_db_dsns in
+// scripts/ci/railway-env.sh). Nothing below calls Railway, and T2-4
 // asserts the short-circuit ordering directly by unsetting the token. No test
 // in this file skips: a test that silently skips in CI is a decorative test.
 //
@@ -182,9 +183,9 @@ func TestAssertDBDSNsSelfTestPassesOnGoodMap(t *testing.T) {
 }
 
 // T2-4. Pins the ORDERING that makes the self-test runnable at all: the
-// `--self-test` short-circuit must come BEFORE require_env
-// (scripts/ci/railway-env.sh:~127). With RAILWAY_API_TOKEN unset, a self-test
-// placed after require_env exits 1 with "RAILWAY_API_TOKEN is not set" --
+// `--self-test` short-circuit must come BEFORE require_env inside
+// cmd_assert_db_dsns. With RAILWAY_API_TOKEN unset, a self-test placed
+// after require_env exits 1 with "RAILWAY_API_TOKEN is not set" --
 // which is a FAILING self-test that never ran the check, and which on a fork
 // PR (no secrets, by design) would fail every build.
 //
@@ -205,8 +206,15 @@ func TestAssertDBDSNsSelfTestNeedsNoToken(t *testing.T) {
 
 // T2-DOC. The two DOCUMENT_* self-test fixtures, driven through the same
 // `assert-db-dsns --self-test` path as every other fixture here. The Go tests
-// in dsn_test.go prove the classification; this proves the shell reaches it for
-// the new rows and exits the right way.
+// in dsn_test.go prove the classification; this proves run_dsn_check and
+// CheckDSNs handle the new rows and exit the right way.
+//
+// WHAT THIS DOES *NOT* COVER. `--self-test` cats stdin straight into
+// run_dsn_check and returns before cmd_assert_db_dsns builds $prefixes or
+// applies the rendered-variable filter, so the DOCUMENT prefix never reaches
+// that filter here. TestEverySeverityTableRowSurvivesTheShellPrefixFilter is
+// the ONLY guard on the filter, and it is static -- a reader must not take
+// this test for end-to-end coverage of the prefix path.
 //
 // The clean half is not merely a false-positive guard: the five rendered values
 // are opaque tokens, not URLs, so a KindOpaque that forgot to skip the URL

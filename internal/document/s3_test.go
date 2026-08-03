@@ -463,6 +463,56 @@ const noSuchKeyXML = `<?xml version="1.0" encoding="UTF-8"?>` +
 const accessDeniedXML = `<?xml version="1.0" encoding="UTF-8"?>` +
 	`<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`
 
+const noSuchBucketXML = `<?xml version="1.0" encoding="UTF-8"?>` +
+	`<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>`
+
+// The 404 arm of classifyGet. GetObject models only NoSuchKey and
+// InvalidObjectState, so a bodiless 404 -- what an S3-compatible store may
+// answer -- carries no modeled type and would be a 500 without the status
+// fallback. NoSuchBucket is the row that keeps that fallback honest: it is a
+// 404 on the wire and a misconfiguration in fact, so mapping it to ErrNotFound
+// would tell a caller their evidence is gone during a bucket outage.
+func TestS3Store_GetNotFoundIsDistinguishable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		body   string
+		want   error
+		reason string
+	}{
+		{"404 with AWS's NoSuchKey body", noSuchKeyXML, document.ErrNotFound,
+			"the modeled *types.NoSuchKey path — what the live Tigris bucket was measured to return"},
+		{"404 with no body", "", document.ErrNotFound,
+			"no modeled type deserializes, so only the status identifies it"},
+		{"404 NoSuchBucket", noSuchBucketXML, nil,
+			"a missing bucket is a misconfiguration, not a missing document"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRoundTripper{respond: func(req *http.Request) *http.Response {
+				return newFakeResponse(req, http.StatusNotFound, http.Header{"Content-Type": {"application/xml"}}, tc.body)
+			}}
+			store := newWireStore(t, rt)
+
+			obj, err := store.Get(context.Background(), wireKey, "")
+			if err == nil {
+				if obj.Body != nil {
+					_ = obj.Body.Close()
+				}
+				t.Fatalf("Get() on a 404 = (%+v, nil), want an error", obj)
+			}
+
+			if tc.want == document.ErrNotFound && !errors.Is(err, document.ErrNotFound) {
+				t.Errorf("Get() error = %v, want it to wrap ErrNotFound (%s)", err, tc.reason)
+			}
+			if tc.want == nil && errors.Is(err, document.ErrNotFound) {
+				t.Errorf("Get() error = %v, want it NOT to wrap ErrNotFound (%s)", err, tc.reason)
+			}
+			if errors.Is(err, document.ErrRangeNotSatisfiable) {
+				t.Errorf("Get() on a 404 wraps ErrRangeNotSatisfiable; err = %v", err)
+			}
+		})
+	}
+}
+
 // AC-5. Detection keys on the HTTP STATUS, not on an error string: Tigris need
 // not emit AWS's literal. Measured — an XML-bodied 416 yields APIError code
 // "InvalidRange", a bodiless 416 yields "RequestedRangeNotSatisfiable"; only

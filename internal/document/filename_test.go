@@ -158,7 +158,7 @@ func TestSanitizeFilename_OnlyControlCharactersYieldsEmpty(t *testing.T) {
 // worth flagging to the executor as an optional hardening follow-up, but
 // out of scope for this AC, which only names C0 controls and DEL.
 func TestSanitizeFilename_RTLOverridePassesThroughUncoveredByAC3(t *testing.T) {
-	const in = "invoice‮exe.csv"
+	const in = "invoice\u202eexe.csv"
 	if got := document.SanitizeFilename(in); got != in {
 		t.Errorf("document.SanitizeFilename(%q) = %q, want %q unchanged (AC #3 scopes control-stripping to C0/DEL only, not bidi controls)", in, got, in)
 	}

@@ -410,7 +410,7 @@ func TestStoreGet_MalformedUUIDIsValidationError(t *testing.T) {
 // Without the step the whole package is untested in CI, and rls-test-gate.sh is
 // the only thing that fails the build on a DB test that silently SKIPs.
 func TestDocument_CIRLSJobRunsThisPackage(t *testing.T) {
-	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	root, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse --show-toplevel: %v", err)
 	}

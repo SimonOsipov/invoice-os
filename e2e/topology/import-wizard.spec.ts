@@ -1526,7 +1526,12 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
   await page.getByRole('button', { name: 'Read columns' }).click()
   const previewBody = (await (await previewResp).json()) as { document_id?: string }
   const documentId = previewBody.document_id
-  expect(typeof documentId, 'preview mints and returns the stored document id').toBe('string')
+  // A uuid, not just a string: typeof '' is 'string', and the toContain(documentId)
+  // assertion below is true of EVERY body when the id is empty -- the spec's central
+  // claim would pass vacuously. The server itself rejects a non-uuid document_id.
+  expect(documentId, 'preview mints and returns the stored document id').toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  )
 
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()

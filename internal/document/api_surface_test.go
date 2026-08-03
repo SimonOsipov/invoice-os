@@ -121,13 +121,14 @@ func TestDocument_ExportedAPINamesNoSDKType(t *testing.T) {
 // internal/submission/deps_test.go): internal/platform/* and internal/audit are
 // allowed, every other repo package — internal/importer above all — is not.
 func TestDocument_ImportsNoRepoPackage(t *testing.T) {
-	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	ctx := t.Context()
+	root, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse --show-toplevel: %v", err)
 	}
 
 	const module = "github.com/SimonOsipov/invoice-os"
-	cmd := exec.Command("go", "list", "-deps", "./internal/document")
+	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "./internal/document")
 	cmd.Dir = strings.TrimSpace(string(root))
 	out, err := cmd.CombinedOutput()
 	if err != nil {

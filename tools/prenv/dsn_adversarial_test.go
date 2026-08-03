@@ -7,12 +7,17 @@
 // the mutation was applied to the real source, `go test -count=1
 // ./tools/prenv/...` stayed GREEN, and the mutation was reverted.
 //
+// Source references here name the shell FUNCTION or VARIABLE, never a line
+// number: line numbers rot the next time railway-env.sh grows, and a failing
+// test that sends the operator to the wrong place is worse than one that names
+// nothing.
+//
 //	M-prefix    add {"invoice", "PGBOUNCER_DSN", IfPresent} to DSNRequirements
 //	            -> suite green. The shell filters the rendered map to
-//	            DATABASE* (railway-env.sh:803,874-875), so that row is dropped
+//	            $DSN_VAR_PREFIXES in cmd_assert_db_dsns, so that row is dropped
 //	            before it ever reaches CheckDSNs and is never checked.
-//	M-buildmsg  collapse run_dsn_check's build-failure message into the
-//	            defects-found message (railway-env.sh:818)
+//	M-buildmsg  collapse run_dsn_check's build-failure message into its
+//	            defects-found message
 //	            -> suite green. Nothing drives that branch at all.
 //
 // Neither spec restates behaviour an existing test already pins; each fails
@@ -33,13 +38,14 @@ import (
 //
 // WHY THIS IS NOT A STYLE RULE. cmd_assert_db_dsns enumerates every service
 // instance in the environment -- including landing/app/ops-console, which hold
-// no DSN -- so it filters values by prefix before they leave the script
-// (railway-env.sh:879-880). That filter is correct and deliberate: the
-// rendered map is the most credential-dense object the script ever holds and
-// narrowing it is a hygiene win. But it silently couples the Go table to a
-// shell string. A future row named PGBOUNCER_DSN, DB_DSN, or POSTGRES_URL
-// would be filtered out upstream, arrive absent, and -- if its severity is
-// IfPresent -- be skipped in total silence. The row would look like coverage
+// no DSN -- so it filters values by prefix before they leave the script (the
+// $DSN_VAR_PREFIXES jq filter in cmd_assert_db_dsns). That filter is correct
+// and deliberate: the rendered map is the most credential-dense object the
+// script ever holds and narrowing it is a hygiene win. But it silently
+// couples the Go table to a shell string. A future row named PGBOUNCER_DSN,
+// DB_DSN, or POSTGRES_URL would be filtered out upstream, arrive absent, and
+// -- if its severity is IfPresent -- be skipped in total silence. The row
+// would look like coverage
 // and be none.
 //
 // WHY THE PREFIXES ARE READ FROM THE SCRIPT AND NOT HARDCODED HERE. A copy of
@@ -67,7 +73,7 @@ func TestEverySeverityTableRowSurvivesTheShellPrefixFilter(t *testing.T) {
 			}
 		}
 		if !covered {
-			t.Errorf("severity-table row {%s, %s, %v} names a variable that starts with none of the shell's prefixes %v. scripts/ci/railway-env.sh:879-880 filters the rendered map to those prefixes, so this variable is dropped before it reaches CheckDSNs: the row is never checked, and for an IfPresent row that failure is SILENT. Either rename the variable, or widen the filter and its CONSTRAINT comment together.",
+			t.Errorf("severity-table row {%s, %s, %v} names a variable that starts with none of the shell's prefixes %v. The $DSN_VAR_PREFIXES jq filter in cmd_assert_db_dsns (scripts/ci/railway-env.sh) narrows the rendered map to those prefixes, so this variable is dropped before it reaches CheckDSNs: the row is never checked, and for an IfPresent row that failure is SILENT. Either rename the variable, or widen the filter and its CONSTRAINT comment together.",
 				req.Service, req.Variable, req.Severity, prefixes)
 		}
 	}
@@ -138,9 +144,10 @@ func shellDSNVarPrefixes(t *testing.T) []string {
 // WHY THIS BRANCH EXISTS AT ALL. run_dsn_check execs a BUILT binary rather
 // than `go run` precisely because `go run` collapses a COMPILE failure into
 // exit 1 with empty stdout -- byte-identical to a clean run of a checker that
-// found nothing (railway-env.sh:814-815, and main_test.go:168-175 on the same
-// `go run` collapse). Splitting the build out only helps if the split is
-// actually reported, which is what this pins.
+// found nothing (see run_dsn_check's BUILT-not-`go run` comment in
+// railway-env.sh, and main_test.go on the same `go run` collapse).
+// Splitting the build out only helps if the split is actually reported,
+// which is what this pins.
 //
 // HOW THE FAILURE IS INDUCED. A `go` shim that exits non-zero is prepended to
 // PATH, so `go build` fails exactly as a compile error would -- non-zero, no

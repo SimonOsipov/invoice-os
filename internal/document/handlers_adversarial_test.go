@@ -297,7 +297,7 @@ func TestRLS_DownloadConcurrentRequestsAuditExactlyOncePerRequest(t *testing.T) 
 // repoRoot resolves the module root from this package's directory.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse --show-toplevel: %v", err)
 	}

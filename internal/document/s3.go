@@ -12,6 +12,7 @@ import (
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 // Sentinels for the document error model — mirrors internal/importer's naming.
@@ -147,6 +148,21 @@ func classifyGet(key string, err error) error {
 	var respErr *awshttp.ResponseError
 	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusRequestedRangeNotSatisfiable {
 		return fmt.Errorf("document: get %s: %w", key, ErrRangeNotSatisfiable)
+	}
+	// Defence in depth, not a fix: measured against the live Tigris bucket, a
+	// real missing key DOES arrive as *types.NoSuchKey. But GetObject models only
+	// NoSuchKey and InvalidObjectState, so a BODILESS 404 deserializes to a
+	// generic APIError with the status-derived code "NotFound" and would
+	// otherwise be a 500.
+	//
+	// NoSuchBucket answers 404 too and is a misconfiguration rather than a
+	// missing document: it stays a 500, so a bucket outage never tells a caller
+	// their evidence is gone. Pinned by TestS3Store_GetNotFoundIsDistinguishable.
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "NoSuchBucket" {
+			return fmt.Errorf("document: get %s: %w", key, ErrNotFound)
+		}
 	}
 	return fmt.Errorf("document: get %s: %w", key, err)
 }

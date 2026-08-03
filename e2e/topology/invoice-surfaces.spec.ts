@@ -56,13 +56,17 @@ async function signInFirm(page: Page): Promise<void> {
 // goToInvoices()/openInvoiceRow(): the two navigation seams every scenario
 // below shares. The sidebar's "Invoices" nav button (glyphs.tsx's
 // NAV_INVOICES) is matched with a case-sensitive /Invoices/ so the header's
-// lowercase "New invoice" CTA can never collide. A row click routes through
-// InvoicesList's onClick -> ctx.openImportedInvoice(id) -> the SAME live-detail
-// seam an imported invoice uses ([reuse-imported-seam], InvoicesList.tsx) --
-// clicking ANY real invoice's row opens LiveInvoiceDetail, not the mock
-// placeholder, so this needs no import-flow detour at all.
+// lowercase "New invoice" CTA can never collide, and is scoped to the sidebar
+// <nav> (personaSession.ts:69's own selector) so CreateFlow.tsx's review-step
+// `← Invoices` exit cannot either -- a caller arriving straight off an import
+// has both on screen. Substring, not exact: the nav button's accessible name
+// absorbs its needs_attention badge (Sidebar.tsx's invoicesItem). A row click
+// routes through InvoicesList's onClick -> ctx.openImportedInvoice(id) -> the
+// SAME live-detail seam an imported invoice uses ([reuse-imported-seam],
+// InvoicesList.tsx) -- clicking ANY real invoice's row opens LiveInvoiceDetail,
+// not the mock placeholder, so this needs no import-flow detour at all.
 async function goToInvoices(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /Invoices/ }).click()
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
 }
 

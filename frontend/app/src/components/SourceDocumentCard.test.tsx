@@ -191,4 +191,31 @@ describe('SourceDocumentCard on the invoice detail', () => {
     expect(card.textContent).not.toContain('SHA-256')
     expect(screen.queryByTestId('view-source-document')).toBeNull()
   })
+
+  it('a null filename falls back to "Filename not recorded"', async () => {
+    mockFetch({ invoice_id: 'inv-1', source_rows: [44], document: sourceRecord({ filename: null }) })
+    render(<InvoiceDetail ctx={detailCtx()} />)
+
+    const card = await screen.findByTestId('source-document-card')
+    expect(card.textContent).toContain('Filename not recorded')
+  })
+
+  it('a long filename wraps with word-break: break-all rather than overflowing', async () => {
+    const longName = `${'a'.repeat(120)}.xlsx`
+    mockFetch({ invoice_id: 'inv-1', source_rows: [44], document: sourceRecord({ filename: longName }) })
+    render(<InvoiceDetail ctx={detailCtx()} />)
+
+    const filenameEl = await screen.findByText(longName)
+    expect(filenameEl.style.wordBreak).toBe('break-all')
+  })
+
+  // `source_rows: null` with a document present is every invoice imported before this
+  // story shipped -- distinct from the manual-invoice `document: null` case above.
+  it('a pre-story invoice (document present, rows never recorded) shows the honest fallback', async () => {
+    mockFetch({ invoice_id: 'inv-1', source_rows: null, document: sourceRecord() })
+    render(<InvoiceDetail ctx={detailCtx()} />)
+
+    const range = await screen.findByTestId('source-document-range')
+    expect(range.textContent).toBe('The rows of this file that became this invoice were not recorded.')
+  })
 })

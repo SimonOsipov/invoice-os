@@ -69,6 +69,18 @@ describe('SourceDocumentRail', () => {
     expect(lines.map((l) => l.textContent).join('')).toBe(HASH)
   })
 
+  // Nothing recomputes SHA-256 in the browser, so the rail must never claim a match --
+  // only that it wasn't checked this session. A fabricated "MATCHES" line is the failure
+  // mode this pins against.
+  it('the fingerprint status line never claims a verification this build cannot perform', () => {
+    renderRail()
+
+    const rail = screen.getByTestId('source-document-rail')
+    expect(rail.textContent).toContain('NOT VERIFIED THIS SESSION')
+    expect(rail.textContent).not.toMatch(/MATCHES/i)
+    expect(rail.textContent).not.toMatch(/VERIFYING/i)
+  })
+
   it('Copy flips to Copied and back', () => {
     vi.useFakeTimers()
     renderRail()

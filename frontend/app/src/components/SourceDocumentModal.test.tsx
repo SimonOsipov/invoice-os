@@ -217,4 +217,26 @@ describe('SourceDocumentModal shell', () => {
     expect(readyMeta.textContent).toContain('11 COLUMNS')
     expect(readyMeta.textContent).toContain('XLSX · 610 KB')
   })
+
+  // useDismiss registers a window keydown listener while the modal is mounted. Opening
+  // and closing it repeatedly (InvoiceDetail mounts/unmounts it on previewOpen) must not
+  // accumulate listeners the cleanup never removes.
+  it('opening and closing repeatedly leaves no leaked keydown listeners', async () => {
+    const addSpy = vi.spyOn(window, 'addEventListener')
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+
+    for (let i = 0; i < 4; i++) {
+      renderModal(metaAsync())
+      await screen.findByTestId('source-document-modal')
+      cleanup() // unmount == close, in this harness
+    }
+
+    const added = addSpy.mock.calls.filter(([type]) => type === 'keydown').length
+    const removed = removeSpy.mock.calls.filter(([type]) => type === 'keydown').length
+    expect(added).toBeGreaterThan(0) // vacuity floor: useDismiss really registered something
+    expect(removed).toBe(added)
+
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
 })

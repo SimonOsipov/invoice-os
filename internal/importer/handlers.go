@@ -533,6 +533,134 @@ func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *sl
 	}
 }
 
+// maxSheetRows caps the data rows the previewer receives. rows_total still
+// reports the true count, so a truncated response never understates the file.
+const maxSheetRows = 5000
+
+// sheetResponse is the GET /v1/documents/{id}/sheet success body.
+// Delimiter/Encoding mirror importResponse (nilIfEmpty -> JSON null for xlsx).
+// Columns/Rows are contracted to always be arrays, never null.
+type sheetResponse struct {
+	Format       string     `json:"format"`
+	Delimiter    *string    `json:"delimiter"`
+	Encoding     *string    `json:"encoding"`
+	Columns      []string   `json:"columns"`
+	Rows         [][]string `json:"rows"`
+	RowsTotal    int        `json:"rows_total"`
+	RowsReturned int        `json:"rows_returned"`
+	Truncated    bool       `json:"truncated"`
+}
+
+// SheetHandler is GET /v1/documents/{id}/sheet: a stored CSV/XLSX decoded
+// through the SAME Decode the import path reads, so the evidence surface
+// cannot disagree with the invoice it is evidence for. Adds no second parsing
+// path, in Go or JS. Flow: identity-first-401 -> uuid guard -> open -> nil-body
+// guard -> format detection (unrecognized -> 400) -> Decode (undecodable ->
+// 400) -> row cap -> 200.
+//
+// The returned window is ALWAYS the first rows_returned data rows in Decode
+// order, so rows[i] stays sheet row sheetRow(i) even when truncated.
+// Numbering from physical lines would skew: encoding/csv drops blank lines and
+// a quoted cell can span several (TestSheetHandler_RowNumberingMatchesImporterSheetRow).
+func SheetHandler(
+	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
+	log *slog.Logger,
+) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		id := r.PathValue("id")
+		if _, err := uuid.Parse(id); err != nil {
+			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+
+		doc, obj, err := open(r.Context(), id, "")
+		if err != nil {
+			// Mapped here, not through statusForErr: errors.Is(document.ErrNotFound,
+			// ErrNotFound) is false, so a cross-tenant id would 500 -- an
+			// existence oracle by status code.
+			switch {
+			case errors.Is(err, document.ErrNotFound):
+				writeError(w, http.StatusNotFound, "not found")
+			case errors.Is(err, document.ErrValidation):
+				writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			default:
+				log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
+				writeError(w, http.StatusInternalServerError, "internal server error")
+			}
+			return
+		}
+		if obj.Body != nil {
+			defer func() { _ = obj.Body.Close() }()
+		}
+
+		// Guarded BEFORE detectFormat, unlike CreateHandler: a document that is
+		// both unrecognized AND missing its bytes is a server fault, not a bad
+		// file. Decode nil-dereferences inside io.ReadAll.
+		if obj.Body == nil {
+			log.ErrorContext(r.Context(), "importer: source document opened with no body")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		format := detectFormat(derefOr(doc.Filename, ""), derefOr(doc.DeclaredContentType, ""))
+		if format == "" {
+			writeError(w, http.StatusBadRequest, "unrecognized file format")
+			return
+		}
+
+		header, rows, facts, err := Decode(obj.Body, format)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			return
+		}
+
+		// Decode returns nil for both on an empty file; a nil slice marshals to
+		// `null`, and columns/rows are contracted to be arrays (PRV-08).
+		columns := header
+		if columns == nil {
+			columns = []string{}
+		}
+
+		total := len(rows)
+		n := total
+		if n > maxSheetRows {
+			n = maxSheetRows
+		}
+		out := make([][]string, 0, n)
+		for _, row := range rows[:n] {
+			// excelize materializes a gap row as a nil []string, which would
+			// marshal to a `null` ELEMENT inside rows and crash any client doing
+			// row.map(...). Coercion, not padding: zero cells before, zero after.
+			if row == nil {
+				row = []string{}
+			}
+			// Otherwise verbatim: ragged rows stay ragged, no copy, no trimming.
+			out = append(out, row)
+		}
+
+		writeJSON(w, http.StatusOK, sheetResponse{
+			Format:    facts.Format,
+			Delimiter: nilIfEmpty(facts.Delimiter),
+			Encoding:  nilIfEmpty(facts.Encoding),
+			Columns:   columns,
+			Rows:      out,
+			// The TRUE total, even when truncated; rows_returned is read off the
+			// slice itself so it can never report a count it did not send.
+			RowsTotal:    total,
+			RowsReturned: len(out),
+			Truncated:    total > maxSheetRows,
+		})
+	}
+}
+
 // statusForErr maps a service error to the HTTP status + message this
 // handler writes to the response, mirroring internal/invoice's own
 // statusForErr: ErrValidation is 400 with the wrapped message, ErrNotFound is

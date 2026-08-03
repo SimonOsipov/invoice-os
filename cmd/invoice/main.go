@@ -142,6 +142,12 @@ func main() {
 	// proxied through the service after an RLS-scoped row lookup rather than handed
 	// out as a presigned URL, so every read is authorised and audited.
 	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.Open, app.Logger))
+	// GET /v1/documents/{id}/sheet -- the same bytes decoded through importer.Decode
+	// for the previewer, so the evidence surface cannot disagree with the invoice it
+	// is evidence for. Lives in importer because Decode does and the reverse import
+	// edge is a cycle (TestDocument_ImportsNoRepoPackage). Go 1.22's {id} wildcard
+	// matches one segment, so /sheet cannot be swallowed by the download route above.
+	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this

@@ -403,8 +403,8 @@ jobs:
       # earlier: that step queries all 13 service names and hard-fails if any is
       # missing, which is what proves the 8 context services have materialised.
       # settle_fork is NOT a sufficient barrier — it checks only the 6 service
-      # ids reconcile-fork acts on (railway-env.sh:~788-792), which excludes the
-      # 8 contexts.
+      # ids reconcile-fork acts on (the RAILWAY_SVC_*_ID list in
+      # require_service_ids, railway-env.sh), which excludes the 8 contexts.
       #
       # `pull_request` only, like the seam steps and for the same reasons: it
       # checks FORK fidelity, and railway-env.sh authenticates `Authorization:

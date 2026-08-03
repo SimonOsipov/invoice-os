@@ -14,6 +14,7 @@ import {
   rowsWithinSheet,
   sheetWindow,
   type DocumentSheet,
+  type NumberedRow,
 } from '../lib/sourceDocument'
 
 const ROW_H = 30
@@ -95,6 +96,18 @@ function pct(n: number, total: number): number {
   return Math.min(100, Math.max(0, (n / total) * 100))
 }
 
+/** numberSheetRows starts the data at sheet row 2, so file index 0 is sheet row 2. */
+const FIRST_DATA_SHEET_ROW = 2
+
+/** Nearest on-screen row to a file position; past the returned window that is the last row sent. */
+function nearestVisibleIndex(rows: NumberedRow[], sheetRow: number): number {
+  let best = 0
+  for (let i = 1; i < rows.length; i += 1) {
+    if (Math.abs(rows[i].sheetRow - sheetRow) < Math.abs(rows[best].sheetRow - sheetRow)) best = i
+  }
+  return best
+}
+
 export function SourceDocumentSheet({
   sheet,
   sourceRows,
@@ -152,6 +165,11 @@ export function SourceDocumentSheet({
 
   const { start, end } = sheetWindow(scrollTop, viewportH, viewRows.length)
 
+  // File-space like the invoice block and the ticks: view indices over rows_total agree only
+  // when the view IS the whole file. One run per contiguous stretch, so a filtered view of
+  // rows 44 and 1400 draws two slivers, not one bar claiming the 92% between them.
+  const viewRuns = contiguousRanges(viewRows.slice(start, end).map((r) => r.sheetRow))
+
   function scrollToIndex(index: number) {
     const top = Math.max(0, index * ROW_H)
     const el = scrollRef.current
@@ -163,8 +181,8 @@ export function SourceDocumentSheet({
     const r = e.currentTarget.getBoundingClientRect()
     // An unlaid-out track returns an all-zero rect; the division would poison scrollTop with NaN.
     if (!(r.height > 0)) return
-    const index = Math.round(((e.clientY - r.top) / r.height) * total)
-    scrollToIndex(Math.min(Math.max(index, 0), Math.max(0, viewRows.length - 1)))
+    const target = Math.round(((e.clientY - r.top) / r.height) * total) + FIRST_DATA_SHEET_ROW
+    scrollToIndex(nearestVisibleIndex(viewRows, target))
   }
 
   function onJump() {
@@ -330,18 +348,21 @@ export function SourceDocumentSheet({
             <div
               key={from}
               data-testid="marker-invoice-block"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - 2, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--accent)' }}
+              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - FIRST_DATA_SHEET_ROW, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--accent)' }}
             />
           ))}
-          <div
-            data-testid="marker-viewport"
-            style={{ position: 'absolute', left: 0, right: 0, top: `${pct(start, total)}%`, height: `${pct(end - start, total)}%`, minHeight: 4, background: 'var(--action-tint)', border: '1px solid var(--action)' }}
-          />
+          {viewRuns.map(([from, to]) => (
+            <div
+              key={from}
+              data-testid="marker-viewport"
+              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - FIRST_DATA_SHEET_ROW, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--action-tint)', border: '1px solid var(--action)' }}
+            />
+          ))}
           {ticks.map((n, i) => (
             <div
               key={i}
               data-testid="marker-tick"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(n - 2, total)}%`, height: 1, background: 'var(--line-3)' }}
+              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(n - FIRST_DATA_SHEET_ROW, total)}%`, height: 1, background: 'var(--line-3)' }}
             />
           ))}
         </div>

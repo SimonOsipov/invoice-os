@@ -272,6 +272,109 @@ describe('SourceDocumentSheet', () => {
     expect(Number.isFinite(scrollBox().scrollTop)).toBe(true)
   })
 
+  // The track is one coordinate system — the file — for all three markers. The rectangle is
+  // therefore pinned against the FILE positions of the rows on screen, never against view
+  // indices, which agree only when the view is the whole file.
+
+  it('the viewport rectangle sits at the invoice, not the top, in filtered mode', async () => {
+    renderSheet(sheet(1479), [744, 745, 746])
+    // Whole-file scope opens scrolled to the invoice, so the rectangle is already ~49% down
+    // and 38 rows tall — the filtered view must keep the position and collapse only the span.
+    expect(parseFloat(screen.getByTestId('marker-viewport').style.height)).toBeCloseTo((38 / 1479) * 100, 2)
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+
+    expect(sheetNumbers(allRows())).toEqual([744, 745, 746]) // floor: the filter really applied
+
+    const viewport = screen.getByTestId('marker-viewport')
+    expect(parseFloat(viewport.style.top)).toBeCloseTo((742 / 1479) * 100, 2)
+    expect(parseFloat(viewport.style.top)).toBeGreaterThan(40) // not pinned to the track's head
+    expect(parseFloat(viewport.style.height)).toBeCloseTo((3 / 1479) * 100, 2)
+
+    // Every row on screen IS an invoice row, so the two markers must coincide exactly.
+    expect(viewport.style.top).toBe(screen.getAllByTestId('marker-invoice-block')[0].style.top)
+  })
+
+  it('a discontiguous visible set draws one rectangle per run, not one spanning bar', async () => {
+    renderSheet(sheet(1479), [44, 1400])
+
+    expect(screen.getAllByTestId('marker-viewport')).toHaveLength(1) // floor: whole file is one run
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    expect(sheetNumbers(allRows())).toEqual([44, 1400]) // floor
+
+    const runs = screen.getAllByTestId('marker-viewport')
+    expect(runs).toHaveLength(2)
+    expect(parseFloat(runs[0].style.top)).toBeCloseTo((42 / 1479) * 100, 2)
+    expect(parseFloat(runs[1].style.top)).toBeCloseTo((1398 / 1479) * 100, 2)
+    // Two rows on screen cover two rows of the file, never the 92% between them.
+    for (const run of runs) expect(parseFloat(run.style.height)).toBeCloseTo((1 / 1479) * 100, 2)
+  })
+
+  it('the viewport rectangle never claims rows past the returned window', () => {
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), INVOICE_ROWS)
+
+    const el = scrollBox()
+    el.scrollTop = 150000
+    fireEvent.scroll(el)
+
+    const nums = sheetNumbers(allRows())
+    expect(nums).toHaveLength(8)
+    expect(Math.max(...nums)).toBe(5001) // floor: the window really is at the returned tail
+
+    const viewport = screen.getByTestId('marker-viewport')
+    const top = parseFloat(viewport.style.top)
+    const height = parseFloat(viewport.style.height)
+    expect(top).toBeCloseTo((4992 / 5001) * 100, 2)
+    expect(height).toBeCloseTo((8 / 5001) * 100, 2)
+    // The strip's last sliver is row 5002 — stored, never sent, so nothing may cover it.
+    expect(top + height).toBeCloseTo((5000 / 5001) * 100, 2)
+    expect(top + height).toBeLessThan(100)
+  })
+
+  it('a truncated file in filtered mode still places the rectangle by file position', async () => {
+    renderSheet(sheet(5000, { rows_total: 50000, truncated: true }), [3000, 3001])
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    expect(sheetNumbers(allRows())).toEqual([3000, 3001]) // floor
+
+    const viewport = screen.getByTestId('marker-viewport')
+    // 50,000 rows_total, 5,000 returned: view indices would put this at 0%, file space at ~6%.
+    expect(parseFloat(viewport.style.top)).toBeCloseTo((2998 / 50000) * 100, 2)
+    expect(parseFloat(viewport.style.top)).toBeGreaterThan(1)
+  })
+
+  it('clicking the track in filtered mode lands on the nearest visible row', async () => {
+    renderSheet(sheet(1479), Array.from({ length: 61 }, (_, i) => 700 + i))
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    expect(scrollBox().scrollTop).toBe(0) // floor: the click, not the open, moved the canvas
+    expect(sheetNumbers(allRows())[0]).toBe(700)
+
+    const track = screen.getByTestId('sheet-marker-track')
+    track.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 600, height: 600, left: 0, right: 16, width: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    fireEvent.click(track, { clientY: 300 }) // half way down the FILE, i.e. sheet row 742
+
+    expect(scrollBox().scrollTop).toBe(1260) // index 42 of the filtered rows, i.e. row 742
+    expect(scrollBox().scrollTop).not.toBe(1800) // the last filtered row, where a clamp lands
+    const nums = sheetNumbers(allRows())
+    expect(Math.min(...nums)).toBe(734)
+    expect(Math.max(...nums)).toBe(760)
+  })
+
+  it('clicking past the returned window clamps to the last row that was sent', () => {
+    renderSheet(sheet(5000, { rows_total: 50000, truncated: true }), [44])
+
+    const track = screen.getByTestId('sheet-marker-track')
+    track.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 600, height: 600, left: 0, right: 16, width: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    fireEvent.click(track, { clientY: 480 }) // 80% down a file whose last 90% was never sent
+
+    expect(scrollBox().scrollTop).toBe(149970) // index 4999 — sheet row 5001, the last one sent
+    expect(Math.max(...sheetNumbers(allRows()))).toBe(5001)
+  })
+
   it('the sheet never names a property the design system lacks', () => {
     // cwd, not import.meta.url: under jsdom the latter is an http: URL and fileURLToPath throws.
     const src = readFileSync(path.join(process.cwd(), 'src/components/SourceDocumentSheet.tsx'), 'utf8')

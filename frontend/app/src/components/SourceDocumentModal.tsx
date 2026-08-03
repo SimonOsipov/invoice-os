@@ -28,6 +28,7 @@ import {
 } from '../lib/sourceDocument'
 import { useDismiss } from '../lib/useDismiss'
 import { SourceDocumentRail } from './SourceDocumentRail'
+import { SourceDocumentSheet } from './SourceDocumentSheet'
 import {
   FailedCanvas,
   formatLabel,
@@ -110,8 +111,19 @@ export function SourceDocumentModal({
     canvas = <FailedCanvas error={failed.error} onRetry={failed.run} />
   } else if (state === 'unrenderable' && record) {
     canvas = <UnrenderableCanvas record={record} />
+  } else if (state === 'spreadsheet' && sheetData) {
+    // `key` is the only guard against component-state staleness: scope, scrollTop and the
+    // auto-scroll effect would otherwise survive a document change.
+    canvas = (
+      <SourceDocumentSheet
+        key={documentId ?? ''}
+        sheet={sheetData}
+        sourceRows={meta.data?.source_rows ?? null}
+        otherInvoiceRows={record?.other_invoice_rows ?? []}
+      />
+    )
   }
-  // 'spreadsheet' / 'pdf' / 'image' render null here — DOC-02-06 and DOC-02-07 fill them.
+  // 'pdf' / 'image' render null here — DOC-02-07 fills them.
 
   const tone = record ? fileTypeTone(record.filename, record.declared_content_type) : { bg: 'var(--bg-3)', fg: 'var(--fg-3)' }
   const metaParts = record ? [formatLabel(record.filename, record.declared_content_type), formatBytes(record.size_bytes)] : []

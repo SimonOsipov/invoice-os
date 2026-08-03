@@ -71,6 +71,7 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/invoices", invoice.CreateHandler(store.Create, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invoices/{id}/source-document", invoice.SourceDocumentHandler(store.SourceDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, app.Logger))
 	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
 	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the

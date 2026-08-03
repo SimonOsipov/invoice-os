@@ -860,6 +860,35 @@ func HistoryHandler(history func(ctx context.Context, id string) ([]StatusChange
 	}
 }
 
+// SourceDocumentHandler returns GET /v1/invoices/{id}/source-document. Shaped
+// exactly like HistoryHandler, including the absent uuid.Parse: the path id
+// goes straight to the store, whose 22P02 -> ErrValidation mapping is what
+// makes a malformed id a 400. An invoice with no document is a 200 with null
+// fields, never a 404.
+func SourceDocumentHandler(get func(ctx context.Context, id string) (SourceDocument, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		out, err := get(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: source document", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
 // batchSubmitReq is the POST /v1/invoices/submissions wire body ([batch-key-in-the-body],
 // task-231): idempotency_key is a JSON body field, not a header.
 type batchSubmitReq struct {

@@ -59,6 +59,12 @@ type StoreFunc func(ctx context.Context, filename, contentType string, size int6
 type Result struct {
 	DocumentsStored int
 	InvoicesLinked  int
+	// EligibleRows and Note exist for the boot log. "Did nothing" has several
+	// distinct causes -- absent tenant, no admin to attribute the upload to,
+	// nothing left unlinked -- and they are not interchangeable when this is
+	// running unattended on a deploy.
+	EligibleRows int
+	Note         string
 }
 
 // lineRow is one row of the generated file: an invoice's field values repeated
@@ -90,17 +96,30 @@ type lineRow struct {
 // through the (tenant_id, content_hash) unique index.
 func Seed(ctx context.Context, pool *pgxpool.Pool, store StoreFunc, logger *slog.Logger) (Result, error) {
 	var total Result
+	var failed []string
 	for _, tenantID := range DemoTenants {
 		res, err := seedTenant(ctx, pool, store, tenantID)
-		if err != nil {
-			return total, fmt.Errorf("demodocs: tenant %s: %w", tenantID, err)
-		}
 		total.DocumentsStored += res.DocumentsStored
 		total.InvoicesLinked += res.InvoicesLinked
-		if res.InvoicesLinked > 0 && logger != nil {
-			logger.Info("demodocs: seeded source documents",
-				"tenant", tenantID, "documents", res.DocumentsStored, "invoices", res.InvoicesLinked)
+		total.EligibleRows += res.EligibleRows
+
+		// Every tenant reports, including the ones that did nothing. A boot step
+		// that is silent on a no-op is indistinguishable from one that never ran,
+		// which is exactly the ambiguity this cost an afternoon to resolve once.
+		if logger != nil {
+			logger.Info("demodocs: tenant scanned",
+				"tenant", tenantID, "outcome", res.Note, "eligible_rows", res.EligibleRows,
+				"documents", res.DocumentsStored, "invoices", res.InvoicesLinked, "error", err)
 		}
+		// One tenant's failure must not cost the others theirs -- object storage
+		// or a single malformed row should degrade, not abort.
+		if err != nil {
+			failed = append(failed, tenantID)
+		}
+	}
+	if len(failed) > 0 {
+		return total, fmt.Errorf("demodocs: %d of %d tenants failed: %s",
+			len(failed), len(DemoTenants), strings.Join(failed, ", "))
 	}
 	return total, nil
 }
@@ -112,27 +131,35 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, store StoreFunc, tenant
 	// (internal/invoice/source_document.go). A made-up uuid there would render
 	// as a fabricated uploader.
 	actor, err := tenantAdmin(ctx, pool, tenantID)
-	if err != nil || actor == "" {
-		return Result{}, err
+	if err != nil {
+		return Result{Note: "admin lookup failed"}, err
+	}
+	if actor == "" {
+		return Result{Note: "no admin membership; nothing to attribute an upload to"}, nil
 	}
 	ctx = auth.WithIdentity(ctx, auth.Identity{Subject: actor, Role: "authenticated", TenantID: tenantID})
 
 	rows, err := pendingRows(ctx, pool)
 	if err != nil {
-		return Result{}, err
+		return Result{Note: "pending-row query failed"}, err
+	}
+	if len(rows) == 0 {
+		return Result{Note: "no unlinked invoice with line items"}, nil
 	}
 
-	var res Result
+	res := Result{EligibleRows: len(rows), Note: "seeded"}
 	for _, group := range groupByEntity(rows) {
 		body, sheetRows := buildCSV(group.rows)
 		doc, err := store(ctx, filenameFor(group.entityName), "text/csv", int64(len(body)), bytes.NewReader(body))
 		if err != nil {
+			res.Note = "storing " + group.entityName + "'s file failed"
 			return res, err
 		}
 		res.DocumentsStored++
 
 		linked, err := linkInvoices(ctx, pool, doc.ID, sheetRows)
 		if err != nil {
+			res.Note = "linking " + group.entityName + "'s invoices failed"
 			return res, err
 		}
 		res.InvoicesLinked += linked

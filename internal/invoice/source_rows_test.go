@@ -323,3 +323,195 @@ func TestRLS_InvoicesSourceRowsCrossTenantRefused(t *testing.T) {
 		t.Fatalf("WithinTenantTx (tenant B visibility check): %v", err)
 	}
 }
+
+// --- QA adversarial coverage (task-357 Stage 4) -----------------------------
+
+// TestStoreCreate_TwoDArraySourceRowsRejected: array_ndims(source_rows) = 1 is
+// the only clause that catches a 2-D array -- cardinality and 2 <= ALL both
+// operate elementwise regardless of dimensionality, so without array_ndims a
+// 2-D array would satisfy the rest of the CHECK. Same bypass as
+// TestStoreCreate_NullElementSourceRowsRejected: pgx cannot express a 2-D
+// array from a Go []int.
+func TestStoreCreate_TwoDArraySourceRowsRejected(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-02-01 QA 2d-array tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-02-01 QA 2d-array entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	_, err := super.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id, source_rows)
+		 VALUES ($1, $2, $3, $4, '{{2,3},{4,5}}')`,
+		tenantID, entityID, "DOC-02-01-QA-2D", documentID,
+	)
+	if pgCode(err) != "23514" {
+		t.Fatalf("direct insert with source_rows='{{2,3},{4,5}}' err = %v (code %q), want 23514", err, pgCode(err))
+	}
+	if got := pgConstraint(err); got != "invoices_source_rows_are_sheet_rows" {
+		t.Errorf("ConstraintName = %q, want invoices_source_rows_are_sheet_rows", got)
+	}
+}
+
+// TestRLS_InvoicesSourceRowsUnknownIDIndistinguishableFromCrossTenant: tenant
+// A's count for tenant B's REAL invoice id must equal tenant A's count for a
+// wholly UNKNOWN id -- both zero, via the same code path, with no error
+// distinguishing "hidden by RLS" from "does not exist". If the two counts (or
+// error shapes) ever diverged, source_rows visibility would become an
+// existence oracle for other tenants' invoices.
+func TestRLS_InvoicesSourceRowsUnknownIDIndistinguishableFromCrossTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "DOC-02-01 QA oracle tenant A")
+	tenantB := seedTenant(t, super, "DOC-02-01 QA oracle tenant B")
+	entityB := seedEntity(t, super, tenantB, "DOC-02-01 QA oracle B entity")
+	documentB := seedDocument(t, super, tenantB)
+
+	store := NewStore(app)
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	invB, err := store.Create(cB, CreateInput{
+		EntityID:         entityB,
+		InvoiceNumber:    "DOC-02-01-QA-ORACLE-B",
+		SourceDocumentID: &documentB,
+		SourceRows:       []int{2, 3},
+	})
+	if err != nil {
+		t.Fatalf("Create (as tenant B): %v", err)
+	}
+
+	countUnder := func(tenantID, invoiceID string) (int, error) {
+		var n int
+		err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT count(*) FROM invoices WHERE id = $1 AND source_rows IS NOT NULL`, invoiceID).Scan(&n)
+		})
+		return n, err
+	}
+
+	nReal, errReal := countUnder(tenantA, invB.ID)
+	if errReal != nil {
+		t.Fatalf("count under tenant A for tenant B's real invoice id: %v", errReal)
+	}
+	nUnknown, errUnknown := countUnder(tenantA, uuid.NewString())
+	if errUnknown != nil {
+		t.Fatalf("count under tenant A for a wholly unknown id: %v", errUnknown)
+	}
+
+	if nReal != 0 {
+		t.Fatalf("tenant A sees %d rows for tenant B's real invoice id, want 0", nReal)
+	}
+	if nUnknown != 0 {
+		t.Fatalf("tenant A sees %d rows for an unknown id, want 0", nUnknown)
+	}
+	if nReal != nUnknown {
+		t.Errorf("real cross-tenant id count (%d) != unknown id count (%d) -- existence is distinguishable", nReal, nUnknown)
+	}
+}
+
+// TestStoreCreate_SourceRowAtTwoAccepted (boundary): {1} is rejected
+// (TestStoreCreate_SourceRowBelowTwoRejected) -- {2} must be the genuine
+// floor, not merely ">= 2 in name only". Traced: sheetRow(i) = i+2
+// (internal/importer/service.go:270-272) and Decode returns header/rows
+// separately (decode.go:29, CSV records[0]/records[1:] at :109), so rows[0]
+// (i=0) is the first DATA row and maps to sheet row 2 -- the floor can never
+// reject legitimate importer output.
+func TestStoreCreate_SourceRowAtTwoAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-02-01 QA at-two tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-02-01 QA at-two entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{
+		EntityID:         entityID,
+		InvoiceNumber:    "DOC-02-01-QA-AT-TWO",
+		SourceDocumentID: &documentID,
+		SourceRows:       []int{2},
+	})
+	if err != nil {
+		t.Fatalf("Create(SourceRows=[2]): %v", err)
+	}
+
+	got := sourceRowsOf(t, super, inv.ID)
+	if len(got) != 1 {
+		t.Fatalf("source_rows length = %d, want 1 (got %v)", len(got), got)
+	}
+	if got[0] != 2 {
+		t.Errorf("source_rows = %v, want [2]", got)
+	}
+}
+
+// TestStoreCreate_DescendingSourceRowsAccepted: the CHECK imposes no order --
+// only sheetRows (the Go helper) sorts before Store.Create ever sees the
+// value. {7,3} must round-trip unchanged, proving sortedness is a caller
+// convention, not a database invariant.
+func TestStoreCreate_DescendingSourceRowsAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-02-01 QA descending tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-02-01 QA descending entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{
+		EntityID:         entityID,
+		InvoiceNumber:    "DOC-02-01-QA-DESC",
+		SourceDocumentID: &documentID,
+		SourceRows:       []int{7, 3},
+	})
+	if err != nil {
+		t.Fatalf("Create(SourceRows=[7,3]): %v", err)
+	}
+
+	got := sourceRowsOf(t, super, inv.ID)
+	if want := []int{7, 3}; !intSliceEqual(got, want) {
+		t.Errorf("source_rows = %v, want %v (unchanged order, not sorted)", got, want)
+	}
+}
+
+// TestStoreCreate_LargeSparseSourceRowsAccepted: a long, non-contiguous array
+// carrying one pathologically large value -- the CHECK has no upper bound and
+// no contiguity requirement, only 1-D, non-empty, and every element >= 2.
+func TestStoreCreate_LargeSparseSourceRowsAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-02-01 QA large-sparse tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-02-01 QA large-sparse entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	rows := make([]int, 0, 335)
+	for i := 2; i < 1000; i += 3 { // sparse: every third sheet row
+		rows = append(rows, i)
+	}
+	rows = append(rows, 1_000_000) // no upper bound in the CHECK
+
+	inv, err := store.Create(c, CreateInput{
+		EntityID:         entityID,
+		InvoiceNumber:    "DOC-02-01-QA-LARGE-SPARSE",
+		SourceDocumentID: &documentID,
+		SourceRows:       rows,
+	})
+	if err != nil {
+		t.Fatalf("Create(large sparse SourceRows, len=%d): %v", len(rows), err)
+	}
+
+	got := sourceRowsOf(t, super, inv.ID)
+	if len(got) != len(rows) {
+		t.Fatalf("source_rows length = %d, want %d", len(got), len(rows))
+	}
+	if !intSliceEqual(got, rows) {
+		n := min(len(got), 5)
+		t.Errorf("source_rows round-trip mismatch (first %d: got=%v want=%v)", n, got[:n], rows[:n])
+	}
+}

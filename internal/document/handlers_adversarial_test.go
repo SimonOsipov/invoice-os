@@ -333,8 +333,20 @@ func mainRoutePattern(t *testing.T) (pattern string, handler *ast.CallExpr, file
 		if !strings.Contains(p, "/v1/documents") {
 			return true
 		}
+		// The download route is the one on the document ITSELF, not a
+		// sub-resource of it (.../{id}/sheet). Selected by path depth rather
+		// than by anything the callers below assert, so their pattern and
+		// handler checks stay non-vacuous. Method is deliberately not filtered:
+		// a second verb on this same path SHOULD trip the guard below.
+		path := p
+		if i := strings.LastIndex(p, " "); i >= 0 {
+			path = p[i+1:]
+		}
+		if len(strings.Split(path, "/")) != 4 { // "", "v1", "documents", "{id}"
+			return true
+		}
 		if pattern != "" {
-			t.Errorf("cmd/invoice/main.go registers more than one /v1/documents route (%q and %q)", pattern, p)
+			t.Errorf("cmd/invoice/main.go registers more than one /v1/documents/{id} route (%q and %q)", pattern, p)
 		}
 		pattern = p
 		handler, _ = call.Args[1].(*ast.CallExpr)
@@ -345,7 +357,7 @@ func mainRoutePattern(t *testing.T) (pattern string, handler *ast.CallExpr, file
 		t.Fatal("no HandleFunc call found in cmd/invoice/main.go — the scan matched nothing, so every assertion is vacuous")
 	}
 	if pattern == "" {
-		t.Fatal("cmd/invoice/main.go registers no /v1/documents route — the download handler is unreachable in production")
+		t.Fatal("cmd/invoice/main.go registers no /v1/documents/{id} route — the download handler is unreachable in production")
 	}
 	return pattern, handler, f
 }

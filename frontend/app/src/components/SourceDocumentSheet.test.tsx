@@ -348,4 +348,121 @@ describe('SourceDocumentSheet', () => {
     const canvas = screen.getByTestId('source-document-canvas')
     expect(canvas.querySelectorAll('[data-testid="sheet-row-marked"]').length).toBeGreaterThan(0)
   })
+
+  // --- QA adversarial coverage below ---
+
+  it('a sheet with zero data rows renders no rows and no spacer height', () => {
+    renderSheet(sheet(0), null)
+
+    expect(allRows()).toHaveLength(0)
+    expect(screen.getByTestId('sheet-spacer-top').style.height).toBe('0px')
+    expect(screen.getByTestId('sheet-spacer-bottom').style.height).toBe('0px')
+    expect(screen.getByTestId('sheet-status').textContent).toBe('SHOWING ALL 0 ROWS')
+  })
+
+  it('a sheet with exactly one data row renders it marked, with no spacer artifact', () => {
+    renderSheet(sheet(1), [2])
+
+    const rows = allRows()
+    expect(rows).toHaveLength(1)
+    expect(sheetNumbers(rows)).toEqual([2])
+    expect(screen.getAllByTestId('sheet-row-marked')).toHaveLength(1)
+    expect(screen.getByTestId('sheet-spacer-top').style.height).toBe('0px')
+    expect(screen.getByTestId('sheet-spacer-bottom').style.height).toBe('0px')
+  })
+
+  it('a 30-row sheet (just at the window bound) renders every row', () => {
+    renderSheet(sheet(30), null)
+
+    expect(allRows()).toHaveLength(30)
+    expect(screen.getByTestId('sheet-spacer-bottom').style.height).toBe('0px')
+  })
+
+  it('a 31-row sheet (just past the window bound) holds one row back', () => {
+    renderSheet(sheet(31), null)
+
+    expect(allRows()).toHaveLength(30)
+    expect(screen.getByTestId('sheet-spacer-bottom').style.height).toBe('30px')
+  })
+
+  it('source_rows arriving unsorted still marks the right rows in sheet order', () => {
+    renderSheet(sheet(1479), [47, 44]) // the CHECK constraint does not require sorted input
+
+    const marked = screen.getAllByTestId('sheet-row-marked')
+    expect(sheetNumbers(marked)).toEqual([44, 47]) // rendered in sheet order, not input order
+    expect(screen.getByTestId('sheet-jump').textContent).toBe('Jump to ROWS 44 AND 47')
+  })
+
+  it('source_rows carrying a duplicate de-dupes for both marking and the invoice count', async () => {
+    renderSheet(sheet(1479), [44, 44, 45]) // the CHECK constraint does not require distinct input
+
+    expect(sheetNumbers(screen.getAllByTestId('sheet-row-marked'))).toEqual([44, 45])
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    expect(screen.getByTestId('sheet-scope-invoice').textContent).toBe('This invoice · 2 rows')
+  })
+
+  it('a short row (fewer cells than the header) renders only its own cells, no padding', () => {
+    const s = sheet(3)
+    s.rows[0] = ['INV-2', 'only-one-more-cell']
+    renderSheet(s, null)
+
+    const row = rowByCell('INV-2')
+    expect(row.children).toHaveLength(1 + 2) // number cell + exactly the 2 cells this row has
+  })
+
+  it('a long row (more cells than the header) renders every cell, none dropped', () => {
+    const s = sheet(3)
+    const extra = Array.from({ length: COLUMNS.length + 4 }, (_, i) => `extra-${i}`)
+    s.rows[1] = ['INV-3', ...extra]
+    renderSheet(s, null)
+
+    const row = rowByCell('INV-3')
+    expect(row.children).toHaveLength(1 + 1 + extra.length) // number cell + INV-3 + every extra cell
+  })
+
+  it('a header with an empty-string column name still renders and reserves its width', () => {
+    const s: DocumentSheet = {
+      format: 'xlsx',
+      delimiter: null,
+      encoding: null,
+      columns: ['Invoice No', '', 'Total'],
+      rows: [['INV-2', 'x', '100']],
+      rows_total: 1,
+      rows_returned: 1,
+      truncated: false,
+    }
+    renderSheet(s, null)
+
+    const headCells = Array.from(screen.getByTestId('sheet-header').children) as HTMLElement[]
+    expect(headCells).toHaveLength(4) // # + 3 columns, including the empty one
+    expect(headCells[2].textContent).toBe('')
+    expect(headCells[2].style.width).toBe('106px') // an empty name still reserves its column
+  })
+
+  it('never calls console.error for a truncated sheet, a not-recorded range, or an empty file', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [5002, 5003])
+    cleanup()
+    renderSheet(sheet(1479), null)
+    cleanup()
+    renderSheet(sheet(0), null)
+
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('toggling to filtered mode and back preserves row identity and its sheet number', async () => {
+    renderSheet(sheet(1479), INVOICE_ROWS)
+    const before = labelOf(rowByCell('INV-44'))
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    await userEvent.click(screen.getByTestId('sheet-scope-file'))
+
+    const after = labelOf(rowByCell('INV-44'))
+    expect(after).toBe(before)
+    expect(after).toBe('44')
+    expect(screen.getByTestId('sheet-scope-file').getAttribute('aria-pressed')).toBe('true')
+  })
 })

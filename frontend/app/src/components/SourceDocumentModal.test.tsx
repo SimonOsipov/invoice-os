@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +11,7 @@ import { createAuthedFetch } from '../lib/authedFetch'
 import type { DocumentSheet, SourceDocumentRecord, SourceDocumentResponse } from '../lib/sourceDocument'
 import type { PlatformCtx } from '../types'
 import { SourceDocumentModal } from './SourceDocumentModal'
+import { SourceDocumentSheet } from './SourceDocumentSheet'
 import type { SourceDocumentAsync } from './SourceDocumentStates'
 
 const HASH = '3f9a1c02b7d4e6108a5c93f21e0d47b6c8a2f5039e1b7d4c60a8f3e2d5a86560'
@@ -80,6 +81,32 @@ function mockFetch(bodyForSheet: DocumentSheet | null) {
         ? new Promise(() => {})
         : Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bodyForSheet) }),
     ),
+  )
+}
+
+// Column 0 carries a per-document prefix, so a row is identifiable by content across a
+// document switch -- never by DOM position.
+function docSheet(prefix: string, n: number): DocumentSheet {
+  return {
+    ...sheet(),
+    rows: Array.from({ length: n }, (_, i) => [`${prefix}-${i + 2}`, ...Array.from({ length: 10 }, () => 'x')]),
+    rows_total: n,
+    rows_returned: n,
+  }
+}
+
+// Dispatches by the documentId in the URL, unlike `mockFetch` above which cannot tell two
+// documents' sheet requests apart.
+function mockFetchByDoc(sheets: Record<string, DocumentSheet>) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      const id = /\/documents\/([^/]+)\/sheet/.exec(url)?.[1]
+      const body = id ? sheets[decodeURIComponent(id)] : undefined
+      return body
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+        : Promise.reject(new Error(`no sheet fixture for ${url}`))
+    }),
   )
 }
 
@@ -241,5 +268,96 @@ describe('SourceDocumentModal shell', () => {
 
     addSpy.mockRestore()
     removeSpy.mockRestore()
+  })
+
+  // End-to-end: switching the invoice/document the shell previews shows the NEW document's
+  // own fresh scope/scroll state, not a stale carry-over. NOTE: this does not by itself pin
+  // `key={documentId}` (SourceDocumentModal.tsx:119) -- `useAsync`'s `run()` unconditionally
+  // dispatches `{type:'start'}` on any `deps` change (async-state.ts:96), which drops `state`
+  // to `'loading'` and swaps the canvas to `LoadingCanvas` before the new sheet arrives. That
+  // type swap alone already unmounts the old `SourceDocumentSheet`, so this spec passes even
+  // with the `key` prop deleted (verified). The next spec isolates the `key` mechanism itself.
+  it("switching documents resets the canvas's own scope and scroll position", async () => {
+    mockFetchByDoc({ 'doc-1': docSheet('D1', 60), 'doc-2': docSheet('D2', 60) })
+
+    const { rerender } = renderModal(
+      metaAsync({ data: response({ document: record({ id: 'doc-1' }), source_rows: [10, 11] }) }),
+    )
+
+    await screen.findAllByTestId('sheet-row-marked')
+    expect(screen.getAllByTestId('sheet-row-marked').map((el) => el.children[1]?.textContent)).toEqual([
+      'D1-10',
+      'D1-11',
+    ])
+
+    await userEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    expect(screen.getByTestId('sheet-scope-invoice').getAttribute('aria-pressed')).toBe('true')
+
+    const scrollEl = screen.getByTestId('sheet-scroll')
+    scrollEl.scrollTop = 900
+    fireEvent.scroll(scrollEl)
+    expect(scrollEl.scrollTop).toBe(900) // floor: the stale value really was set
+
+    rerender(
+      <SourceDocumentModal
+        ctx={modalCtx()}
+        meta={metaAsync({ data: response({ document: record({ id: 'doc-2' }), source_rows: [40, 41] }) })}
+        invoiceNumber="INV-2026-0037"
+        invoiceCreatedAt="2026-06-12T09:15:00Z"
+        createdBy={null}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('sheet-row-marked').map((el) => el.children[1]?.textContent)).toEqual([
+        'D2-40',
+        'D2-41',
+      ])
+    })
+
+    // Scope did not survive the switch: back to the whole-file default, not still 'invoice'.
+    expect(screen.getByTestId('sheet-scope-file').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sheet-scope-invoice').getAttribute('aria-pressed')).toBe('false')
+
+    // Scroll position did not survive either: doc-2's own auto-scroll target (row 40 is
+    // numbered index 38, lead-in 3), not the 900px left over from doc-1.
+    expect(screen.getByTestId('sheet-scroll').scrollTop).toBe(1050)
+  })
+
+  // Isolates the `key={documentId ?? ''}` pattern itself (SourceDocumentModal.tsx:119),
+  // bypassing `useAsync` entirely so no incidental loading-state unmount can confound the
+  // result. `SourceDocumentSheet` keeps no reset-on-prop-change logic of its own -- `key` is
+  // the only thing making a document switch discard its scope/scrollTop. Delete that prop
+  // and this spec fails (verified): the previous spec's mutation-run does not.
+  it('keying the canvas by documentId is what discards its stale scope and scroll state', () => {
+    function KeyedCanvas({ documentId, sheet: s, sourceRows }: { documentId: string; sheet: DocumentSheet; sourceRows: number[] }) {
+      return <SourceDocumentSheet key={documentId} sheet={s} sourceRows={sourceRows} otherInvoiceRows={[]} />
+    }
+
+    const { rerender } = render(<KeyedCanvas documentId="doc-1" sheet={docSheet('D1', 60)} sourceRows={[10, 11]} />)
+
+    expect(screen.getAllByTestId('sheet-row-marked').map((el) => el.children[1]?.textContent)).toEqual([
+      'D1-10',
+      'D1-11',
+    ])
+
+    fireEvent.click(screen.getByTestId('sheet-scope-invoice'))
+    expect(screen.getByTestId('sheet-scope-invoice').getAttribute('aria-pressed')).toBe('true')
+
+    const scrollEl = screen.getByTestId('sheet-scroll')
+    scrollEl.scrollTop = 900
+    fireEvent.scroll(scrollEl)
+    expect(scrollEl.scrollTop).toBe(900) // floor: the stale value really was set
+
+    rerender(<KeyedCanvas documentId="doc-2" sheet={docSheet('D2', 60)} sourceRows={[40, 41]} />)
+
+    expect(screen.getAllByTestId('sheet-row-marked').map((el) => el.children[1]?.textContent)).toEqual([
+      'D2-40',
+      'D2-41',
+    ])
+    expect(screen.getByTestId('sheet-scope-file').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sheet-scope-invoice').getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByTestId('sheet-scroll').scrollTop).toBe(1050)
   })
 })

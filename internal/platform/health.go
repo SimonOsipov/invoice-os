@@ -38,7 +38,7 @@ func (rd *readiness) snapshot() map[string]ReadyCheck {
 
 // healthzHandler is a liveness probe: 200 as long as the process is running.
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "build": BuildSHA})
 }
 
 // readyzHandler runs every registered readiness check. All pass → 200; any

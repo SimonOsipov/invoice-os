@@ -132,7 +132,7 @@ func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 }
 
 // fetchDemoBusinessEntities returns tenantID's business_entities rows as
-// (name, tin, sector, status), ordered by name. sector is coalesced to ''
+// (name, tin, sector, status), ordered by name. sector is coalesced to ”
 // like tin — a junk/probe row inserted without one (several tests below)
 // has sector NULL, and entityRow has no room for a NULL.
 func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string) []entityRow {

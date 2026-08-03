@@ -134,3 +134,91 @@ func TestFleetHealthUnreachableIsDown(t *testing.T) {
 		t.Errorf("tenancy = %+v, want down with an error reason", s)
 	}
 }
+
+// buildUpstream answers /healthz with a real body carrying the given build, so
+// the probe's decode path is exercised rather than assumed.
+func buildUpstream(t *testing.T, build string, body string) *url.URL {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if body != "" {
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","build":"` + build + `"}`))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	return u
+}
+
+// The deploy gate blocks until every service reports the commit under test, so
+// the per-service build has to survive the probe and reach the payload.
+func TestFleetReportsEachServiceBuild(t *testing.T) {
+	_, body := doFleet(t, map[string]*url.URL{
+		"invoice":   buildUpstream(t, "abc1234", ""),
+		"tenancy":   buildUpstream(t, "abc1234", ""),
+		"dashboard": buildUpstream(t, "0000000", ""),
+	})
+
+	got := map[string]string{}
+	for _, s := range body.Services {
+		got[s.Name] = s.Build
+	}
+	if got["invoice"] != "abc1234" || got["tenancy"] != "abc1234" {
+		t.Errorf("builds = %v, want invoice and tenancy on abc1234", got)
+	}
+	// A service left on an older build must be visible as itself, not smoothed
+	// over -- that difference is the entire point of the field.
+	if got["dashboard"] != "0000000" {
+		t.Errorf("dashboard build = %q, want 0000000", got["dashboard"])
+	}
+	// The gateway answers for itself and must report its own compiled-in sha.
+	if got["gateway"] != BuildSHAForTest() {
+		t.Errorf("gateway build = %q, want %q", got["gateway"], BuildSHAForTest())
+	}
+}
+
+// A build mismatch is not an outage: /healthz/fleet must still be 200/ok, or the
+// two independent questions ("is it serving?" / "is it the right commit?")
+// collapse into one and the endpoint starts lying in the other direction.
+func TestFleetBuildMismatchIsStillHealthy(t *testing.T) {
+	rec, body := doFleet(t, map[string]*url.URL{
+		"invoice": buildUpstream(t, "aaaaaaa", ""),
+		"tenancy": buildUpstream(t, "bbbbbbb", ""),
+	})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 -- differing builds are not an outage", rec.Code)
+	}
+	if body.Status != fleetOK {
+		t.Errorf("fleet status = %q, want %q", body.Status, fleetOK)
+	}
+}
+
+// An undecodable body still settled up/down on the 2xx; Build stays empty and
+// the gate reports the mismatch on its own terms rather than the probe failing.
+func TestFleetUndecodableHealthzBodyStaysUpWithEmptyBuild(t *testing.T) {
+	rec, body := doFleet(t, map[string]*url.URL{
+		"invoice": buildUpstream(t, "", "not json at all"),
+	})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	for _, s := range body.Services {
+		if s.Name == "invoice" {
+			if s.Status != statusUp {
+				t.Errorf("status = %q, want up", s.Status)
+			}
+			if s.Build != "" {
+				t.Errorf("build = %q, want empty", s.Build)
+			}
+		}
+	}
+}

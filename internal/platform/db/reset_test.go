@@ -25,6 +25,11 @@ package db_test
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -108,14 +113,53 @@ func TestResetEnabledArbitrarilyLargePRNumber(t *testing.T) {
 
 // ---- DB-backed: db.Reset itself --------------------------------------------
 
-// resetTargetTables is every table db.Reset truncates (reset.go's resetTables
-// list), reused here rather than re-declared inline so this test fails loudly
-// if the two ever drift apart.
-var resetTargetTables = []string{
-	"invoices", "line_items", "invoice_status_history", "business_entities",
-	"import_batches", "submission_jobs", "app_exchange", "idempotency_keys",
-	"submission_rate_limits", "audit_log",
-	"river_job", "river_leader", "river_queue", "river_notification",
+// resetTargetTables is every table db.Reset truncates, PARSED OUT of reset.go's
+// resetTables rather than re-typed. The previous hand-copy claimed it would
+// "fail loudly if the two ever drift apart" and did no such thing: `documents`
+// was added to the schema by DOC-01, never added to either list, and survived
+// every PR-environment reset until it broke uploader attribution in the
+// source-document previewer. Deriving the list is what makes that class of
+// omission impossible rather than merely discouraged.
+// reset.go is read rather than imported: every test file in this package is
+// package db_test, so the unexported constant is out of reach. Same technique
+// internal/demodocs uses to pin its tenant allowlist to db/seed.dev.sql.
+var resetTargetTables = parseResetTables()
+
+func parseResetTables() []string {
+	src, err := os.ReadFile("reset.go")
+	if err != nil {
+		return nil
+	}
+	m := regexp.MustCompile("(?s)const resetTables = `TRUNCATE(.*?)RESTART IDENTITY`").FindSubmatch(src)
+	if m == nil {
+		return nil
+	}
+	var out []string
+	for _, name := range strings.Split(string(m[1]), ",") {
+		if n := strings.TrimSpace(name); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// A parser that silently yields nothing would make every assertion below
+// vacuous, so the floor is pinned independently of the list's contents.
+func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
+	if len(resetTargetTables) < 14 {
+		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
+			len(resetTargetTables), resetTargetTables)
+	}
+	for _, want := range []string{"invoices", "audit_log", "documents"} {
+		if !slices.Contains(resetTargetTables, want) {
+			t.Errorf("resetTables does not truncate %q", want)
+		}
+	}
+	for _, got := range resetTargetTables {
+		if strings.ContainsAny(got, " \t\n") {
+			t.Errorf("parsed table name %q still carries whitespace", got)
+		}
+	}
 }
 
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
@@ -217,6 +261,18 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, marker, marker,
 	); err != nil {
 		t.Fatalf("seed audit_log fixture: %v", err)
+	}
+
+	// content_hash is CHECKed at exactly 64 chars. Left unreferenced by the
+	// invoices row above: this only has to prove documents is truncated, and a
+	// RESTRICT pointer would add nothing the single TRUNCATE does not already
+	// exercise.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes, filename)
+		 VALUES ($1, $2, $3, 1, $4)`,
+		tenantID, "reset-fixture/"+marker, fmt.Sprintf("%064d", 7), marker,
+	); err != nil {
+		t.Fatalf("seed documents fixture: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx,

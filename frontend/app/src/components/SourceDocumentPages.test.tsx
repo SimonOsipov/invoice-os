@@ -387,6 +387,142 @@ describe('the shell owns the object URL', () => {
   })
 })
 
+describe('QA adversarial coverage', () => {
+  it('an empty url renders without throwing on either canvas', () => {
+    // React special-cases an empty-string `src`: it never writes the DOM attribute (so the
+    // browser cannot re-request the page), only the JS property -- measured on both
+    // elements. `hasAttribute` is the honest check; `getAttribute` would read back `null`.
+    render(<SourceDocumentPdf url="" />)
+    const embed = screen.getByTestId('pdf-embed')
+    expect(embed.hasAttribute('src')).toBe(false)
+    expect((embed as unknown as { src: string }).src).toBe('')
+
+    cleanup()
+    render(<SourceDocumentImage url="" filename="receipt.jpg" />)
+    const img = screen.getByTestId('source-image')
+    expect(img.hasAttribute('src')).toBe(false)
+    expect((img as unknown as { src: string }).src).toBe('')
+  })
+
+  // jsdom never decodes an <img src> -- naturalWidth stays 0 for a real blob: URL and for
+  // garbage alike, so a real-decode assertion (the QR-code e2e's naturalWidth > 0) has
+  // nothing to observe here. This surface has no e2e path at all (`[all-six-states]`: the
+  // picker stays csv/xlsx), so the only honest check is that nothing here reacts to
+  // load/error in the first place -- a url that never resolves cannot leave anything stuck.
+  it('the image canvas has no onLoad/onError wiring to race an unresolved decode', () => {
+    render(<SourceDocumentImage url="blob:never-resolves" filename="receipt.jpg" />)
+    const img = screen.getByTestId('source-image')
+    expect(img.getAttribute('src')).toBe('blob:never-resolves') // floor: the element rendered
+    expect(img.getAttribute('onerror')).toBeNull()
+    expect(img.getAttribute('onload')).toBeNull()
+  })
+
+  it('the photograph shadow is the exact literal, not just non-empty', () => {
+    render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
+    // boxShadow round-trips raw under this jsdom (measured, unlike `background`), so the
+    // authored literal is assertable exactly rather than only checking length > 0.
+    expect(screen.getByTestId('source-image').style.boxShadow).toBe('0 18px 44px -14px oklch(20% .02 210 / 0.55)')
+  })
+
+  it('a zoom round trip returns exactly to 100%', () => {
+    render(<SourceDocumentImage url="blob:img-1" filename="receipt.jpg" />)
+    const img = () => screen.getByTestId('source-image')
+    const pressed = (id: string) => screen.getByTestId(id).getAttribute('aria-pressed')
+
+    fireEvent.click(screen.getByTestId('zoom-150'))
+    fireEvent.click(screen.getByTestId('zoom-50'))
+    fireEvent.click(screen.getByTestId('zoom-100'))
+
+    expect(img().style.width).toBe('520px') // floor: the round trip really moved and came back
+    expect(pressed('zoom-100')).toBe('true')
+    expect(pressed('zoom-150')).toBe('false')
+    expect(pressed('zoom-50')).toBe('false')
+  })
+})
+
+describe('the shell owns the object URL -- QA adversarial coverage', () => {
+  it('a rapid open/close/open cycle leaks nothing across two full mounts', async () => {
+    mockBytesFetch()
+    const first = render(modalElement(metaAsync()))
+    expect((await screen.findByTestId('pdf-embed')).getAttribute('src')).toBe('blob:1')
+
+    first.unmount()
+    expect(revoked()).toEqual(['blob:1'])
+
+    const second = render(modalElement(metaAsync()))
+    expect((await screen.findByTestId('pdf-embed')).getAttribute('src')).toBe('blob:2')
+    expect(revoked()).toEqual(['blob:1']) // the fresh mount's own handle is still live
+
+    second.unmount()
+    expect(revoked()).toEqual(['blob:1', 'blob:2'])
+  })
+
+  it('switching document kind pdf -> image -> pdf releases each url and drops stale UI', async () => {
+    mockBytesFetch()
+    const { rerender, unmount } = render(modalElement(metaAsync()))
+
+    expect((await screen.findByTestId('pdf-embed')).getAttribute('src')).toBe('blob:1')
+
+    rerender(
+      modalElement(
+        metaAsync({
+          data: response({ document: pdfRecord({ id: 'doc-2', filename: 'receipt.jpg', declared_content_type: 'image/jpeg' }) }),
+        }),
+      ),
+    )
+    const img = await screen.findByTestId('source-image')
+    expect(img.getAttribute('src')).toBe('blob:2')
+    expect(screen.getByTestId('zoom-100').getAttribute('aria-pressed')).toBe('true') // fresh mount, zoom reset
+    expect(screen.queryByTestId('pdf-embed')).toBeNull()
+    expect(revoked()).toEqual(['blob:1'])
+
+    fireEvent.click(screen.getByTestId('zoom-150')) // proves the switch back below is a fresh instance, not reused
+
+    rerender(modalElement(metaAsync({ data: response({ document: pdfRecord({ id: 'doc-3' }) }) })))
+    const embed = await screen.findByTestId('pdf-embed')
+    expect(embed.getAttribute('src')).toBe('blob:3')
+    expect(screen.queryByTestId('source-image')).toBeNull()
+    expect(revoked()).toEqual(['blob:1', 'blob:2'])
+
+    unmount()
+    expect(revoked()).toEqual(['blob:1', 'blob:2', 'blob:3'])
+  })
+
+  // A stronger sibling of "arrives after the modal closes": TWO requests are still
+  // in flight -- a switch mid-flight, not just one -- when the modal closes, and both
+  // resolve only afterward. `disposed.current` is checked per-handle in the producer, so
+  // this is not a new code path, but the four-scenario list (open/close, switch mid-flight,
+  // unmount mid-flight, straggler after its successor) never combines switch + unmount
+  // with BOTH requests still outstanding, so it earns its own spec.
+  it('two requests still pending at unmount are both released once they land', async () => {
+    const openers: Record<string, () => void> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (url: string) =>
+          new Promise((resolve) => {
+            const id = /\/documents\/([^/]+)$/.exec(url)?.[1]
+            if (id) openers[id] = () => resolve(bytesResponse())
+          }),
+      ),
+    )
+
+    const { rerender, unmount } = render(modalElement(metaAsync()))
+    await screen.findByTestId('source-document-loading')
+
+    rerender(modalElement(metaAsync({ data: response({ document: pdfRecord({ id: 'doc-2' }) }) })))
+    await waitFor(() => expect(openers['doc-2']).toBeDefined())
+    expect(createSpy).not.toHaveBeenCalled() // floor: both requests really are still pending
+
+    unmount()
+    openers['doc-1']()
+    openers['doc-2']()
+
+    await waitFor(() => expect(revoked().sort()).toEqual(['blob:1', 'blob:2']))
+    expect(urls().sort()).toEqual(['blob:1', 'blob:2'])
+  })
+})
+
 describe('design-system surface', () => {
   it('neither canvas names anything the design system lacks', () => {
     // cwd, not import.meta.url: under jsdom the latter is an http: URL and fileURLToPath throws.

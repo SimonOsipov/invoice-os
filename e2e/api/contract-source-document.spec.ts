@@ -9,7 +9,7 @@
 // below duplicate that seam rather than import it -- both files are *.spec.ts, and
 // importing one into another registers its tests twice.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, apiBase, PERSONAS } from './client'
+import { login, createEntity, createInvoice, apiBase, rawFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { buildMixedCsv, PERF_MAPPING } from '../importFixtures'
@@ -64,30 +64,19 @@ async function importFetch(token: string, form: FormData): Promise<RawResult> {
   return { status: res.status, body }
 }
 
-async function sourceDocumentFetch(token: string | null, invoiceId: string): Promise<RawResult> {
-  const headers: Record<string, string> = {}
-  if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(`${apiBase()}/api/invoice/v1/invoices/${invoiceId}/source-document`, { headers })
-  let body: unknown
-  try {
-    body = await res.json()
-  } catch {
-    body = undefined
-  }
-  return { status: res.status, body }
+// Both reads are plain JSON and need neither response headers nor bytes, so they go
+// through rawFetch like every other contract spec -- the hand-rolled seams above survive
+// only because rawFetch cannot produce multipart. token=null omits Authorization.
+function authHeaders(token: string | null): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-async function sheetFetch(token: string | null, documentId: string): Promise<RawResult> {
-  const headers: Record<string, string> = {}
-  if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(`${apiBase()}/api/invoice/v1/documents/${documentId}/sheet`, { headers })
-  let body: unknown
-  try {
-    body = await res.json()
-  } catch {
-    body = undefined
-  }
-  return { status: res.status, body }
+function sourceDocumentFetch(token: string | null, invoiceId: string): Promise<RawResult> {
+  return rawFetch(`/api/invoice/v1/invoices/${invoiceId}/source-document`, { headers: authHeaders(token) })
+}
+
+function sheetFetch(token: string | null, documentId: string): Promise<RawResult> {
+  return rawFetch(`/api/invoice/v1/documents/${documentId}/sheet`, { headers: authHeaders(token) })
 }
 
 test.describe('invoice source-document contract (API E2E, over the deployed gateway)', () => {

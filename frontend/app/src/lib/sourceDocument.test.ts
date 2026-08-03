@@ -292,16 +292,16 @@ describe('formatBytes', () => {
 
 describe('rowsWithinSheet', () => {
   it("a truncated window splits the invoice's rows", () => {
-    expect(rowsWithinSheet([4999, 5001, 5002], 5000)).toEqual({ present: [4999], missing: [5001, 5002] })
+    expect(rowsWithinSheet([4999, 5001, 5002], 5000)).toEqual({ present: [4999, 5001], missing: [5002] })
     expect(rowsWithinSheet([44, 47], 5000)).toEqual({ present: [44, 47], missing: [] })
     expect(rowsWithinSheet(null, 5000)).toEqual({ present: [], missing: [] })
   })
 
-  // Literal values pin the boundary at N<=rowsReturned (row 5001 missing when
-  // rowsReturned=5000). The architect's own prose elsewhere says "2<=N<=rowsReturned+1"
-  // -- that contradicts these literals and is flagged, not silently reconciled.
+  // sheetRow(i)=i+2 and the endpoint returns data rows 0..rowsReturned-1, so the last row
+  // actually sent is rowsReturned+1.
   it('the boundary is rows_returned + 1', () => {
-    expect(rowsWithinSheet([5001], 5000)).toEqual({ present: [], missing: [5001] })
+    expect(rowsWithinSheet([5001], 5000)).toEqual({ present: [5001], missing: [] })
+    expect(rowsWithinSheet([5002], 5000)).toEqual({ present: [], missing: [5002] })
     expect(rowsWithinSheet([5000], 5000)).toEqual({ present: [5000], missing: [] })
     expect(rowsWithinSheet([2], 5000)).toEqual({ present: [2], missing: [] })
     expect(rowsWithinSheet([1], 5000)).toEqual({ present: [], missing: [1] }) // row 1 is the header

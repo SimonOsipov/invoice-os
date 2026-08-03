@@ -1,8 +1,7 @@
 // Source-document previewer data + pure logic layer (DOC-02-04). Every decision the
 // modal makes lives here as a pure exported function, so it has an oracle without a DOM.
-// STUB — bodies throw until the feat commit; sourceDocument.test.ts's RED specs pin the
-// contract first.
 
+import { ApiError } from '@invoice-os/api-client'
 import type { AuthedFetch } from './portfolio'
 
 // internal/invoice/source_document.go:21-41. No omitempty: explicit null is the contract.
@@ -65,68 +64,219 @@ export interface DocumentBytes {
 }
 
 export async function getSourceDocument(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _invoiceId: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  invoiceId: string,
 ): Promise<SourceDocumentResponse> {
-  throw new Error('not implemented')
+  return authedFetch<SourceDocumentResponse>(
+    `${base}/api/invoice/v1/invoices/${encodeURIComponent(invoiceId)}/source-document`,
+  )
 }
 
-export async function getDocumentSheet(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _documentId: string,
-): Promise<DocumentSheet> {
-  throw new Error('not implemented')
+export async function getDocumentSheet(authedFetch: AuthedFetch, base: string, documentId: string): Promise<DocumentSheet> {
+  return authedFetch<DocumentSheet>(`${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}/sheet`)
 }
 
+// Bare fetch, not authedFetch: the response is bytes and apiFetch always res.json()s.
+// GET /v1/documents/{id} fixes Content-Type: application/octet-stream + nosniff, so the
+// bytes must be re-typed client-side before any renderer can accept them.
 export async function fetchDocumentBytes(
-  _getToken: () => string | null,
-  _base: string,
-  _documentId: string,
-  _kind: DocumentKind,
-  _filename: string | null,
+  getToken: () => string | null,
+  base: string,
+  documentId: string,
+  kind: DocumentKind,
+  filename: string | null,
 ): Promise<DocumentBytes> {
-  throw new Error('not implemented')
+  const res = await fetch(`${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  if (!res.ok) throw new ApiError('http', res.statusText, res.status)
+
+  const blob = new Blob([await res.arrayBuffer()], { type: mimeFor(kind, filename) })
+  const url = URL.createObjectURL(blob)
+  let released = false
+  return {
+    url,
+    release: () => {
+      if (released) return
+      released = true
+      URL.revokeObjectURL(url)
+    },
+  }
 }
 
-export function classifyDocument(_filename: string | null, _declaredContentType: string | null): DocumentKind {
-  throw new Error('not implemented')
+function mimeFor(kind: DocumentKind, filename: string | null): string {
+  if (kind === 'pdf') return 'application/pdf'
+  if (kind !== 'image') return 'application/octet-stream'
+  switch (fileExtension(filename)) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'webp':
+      return 'image/webp'
+    default:
+      return 'image/png'
+  }
 }
 
-export function sourceDocumentState(
-  _meta: SourceDocumentMeta,
-  _sheet: LoadStatus,
-  _bytes: LoadStatus,
-): SourceDocumentState {
-  throw new Error('not implemented')
+const EXTENSION_KINDS: Record<string, DocumentKind | undefined> = {
+  csv: 'spreadsheet',
+  xlsx: 'spreadsheet',
+  pdf: 'pdf',
+  png: 'image',
+  jpg: 'image',
+  jpeg: 'image',
+  webp: 'image',
 }
 
-export function sheetWindow(_scrollTop: number, _measuredViewportH: number, _total: number): SheetWindow {
-  throw new Error('not implemented')
+// text/plain is load-bearing: detectFormat maps it to csv, so /sheet WILL 200 for such a
+// file and calling it unrenderable would deny a sheet the server is serving.
+const CONTENT_TYPE_KINDS: Record<string, DocumentKind | undefined> = {
+  'text/csv': 'spreadsheet',
+  'text/plain': 'spreadsheet',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'spreadsheet',
+  'application/pdf': 'pdf',
+  'image/png': 'image',
+  'image/jpeg': 'image',
+  'image/webp': 'image',
 }
 
-export function numberSheetRows(_rows: string[][]): NumberedRow[] {
-  throw new Error('not implemented')
+function fileExtension(filename: string | null): string {
+  const dot = filename ? filename.lastIndexOf('.') : -1
+  return dot < 0 ? '' : (filename as string).slice(dot + 1).toLowerCase()
 }
 
-export function contiguousRanges(_rows: number[] | null): Array<[number, number]> {
-  throw new Error('not implemented')
+// Mirrors internal/importer/handlers.go:139-160 detectFormat: a RECOGNIZED extension is a
+// verdict, an unrecognized one falls through to the content type (params stripped as
+// mime.ParseMediaType does).
+export function classifyDocument(filename: string | null, declaredContentType: string | null): DocumentKind {
+  const byExtension = EXTENSION_KINDS[fileExtension(filename)]
+  if (byExtension) return byExtension
+
+  const mediaType = (declaredContentType ?? '').split(';')[0].trim().toLowerCase()
+  return CONTENT_TYPE_KINDS[mediaType] ?? 'unrenderable'
 }
 
-export function rowsWithinSheet(_sourceRows: number[] | null, _rowsReturned: number): { present: number[]; missing: number[] } {
-  throw new Error('not implemented')
+export function sourceDocumentState(meta: SourceDocumentMeta, sheet: LoadStatus, bytes: LoadStatus): SourceDocumentState {
+  if (meta.status === 'error') return 'failed'
+  if (meta.status !== 'ready' || meta.value === null) return 'loading'
+
+  const record = meta.value.document
+  if (record === null) return 'no-source'
+
+  const kind = classifyDocument(record.filename, record.declared_content_type)
+  if (kind === 'unrenderable') return 'unrenderable' // nothing is fetched for it
+
+  const channel = kind === 'spreadsheet' ? sheet : bytes
+  if (channel === 'error') return 'failed'
+  if (channel !== 'ready') return 'loading'
+  return kind
+}
+
+const ROW_HEIGHT = 30
+const OVERSCAN_ABOVE = 8
+const OVERSCAN_BELOW = 22
+const VIEWPORT_MIN = 240
+const VIEWPORT_MAX = 1200
+
+// end builds off `first`, not the clamped `start` — the design's `to +ceil(viewportH/30)+22`
+// continues from the same base, and the spacer heights depend on it. The non-finite guard
+// matters because an unmounted ref.current?.clientHeight is undefined -> NaN, and
+// min(1200, max(240, NaN)) is NaN.
+export function sheetWindow(scrollTop: number, measuredViewportH: number, total: number): SheetWindow {
+  const h = Number.isFinite(measuredViewportH)
+    ? Math.min(VIEWPORT_MAX, Math.max(VIEWPORT_MIN, measuredViewportH))
+    : VIEWPORT_MIN
+  const first = Math.floor(scrollTop / ROW_HEIGHT)
+  const start = Math.max(0, Math.min(first - OVERSCAN_ABOVE, total))
+  const end = Math.max(start, Math.min(first + Math.ceil(h / ROW_HEIGHT) + OVERSCAN_BELOW, total))
+  return { start, end }
+}
+
+// Row 1 is the header; sheetRow(i) = i + 2, mirroring internal/importer/service.go:270.
+const FIRST_DATA_SHEET_ROW = 2
+
+// The number is bound BEFORE any filtering, which is what makes it structural: consumers
+// filter and slice NumberedRow[], so no view mode can renumber.
+export function numberSheetRows(rows: string[][]): NumberedRow[] {
+  return rows.map((cells, i) => ({ sheetRow: i + FIRST_DATA_SHEET_ROW, cells }))
+}
+
+// source_rows is neither sorted nor deduped by the CHECK constraint ({7,3} and {3,3} are legal).
+function sortedUnique(rows: number[] | null): number[] {
+  if (!rows) return []
+  return Array.from(new Set(rows)).sort((a, b) => a - b)
+}
+
+export function contiguousRanges(rows: number[] | null): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  for (const n of sortedUnique(rows)) {
+    const last = ranges[ranges.length - 1]
+    if (last && n === last[1] + 1) last[1] = n
+    else ranges.push([n, n])
+  }
+  return ranges
+}
+
+// The sheet endpoint returns the first `rowsReturned` data rows in decode order, i.e. sheet
+// rows 2 … rowsReturned+1. Rows past that are stored but off-screen, and the surface must
+// say so instead of silently omitting them.
+export function rowsWithinSheet(
+  sourceRows: number[] | null,
+  rowsReturned: number,
+): { present: number[]; missing: number[] } {
+  const present: number[] = []
+  const missing: number[] = []
+  for (const n of sortedUnique(sourceRows)) {
+    if (n >= FIRST_DATA_SHEET_ROW && n <= rowsReturned + 1) present.push(n)
+    else missing.push(n)
+  }
+  return { present, missing }
+}
+
+function joinRanges(ranges: Array<[number, number]>, conjunction: string): string {
+  const parts = ranges.map(([from, to]) => (from === to ? String(from) : `${from}–${to}`))
+  if (parts.length <= 1) return parts.join('')
+  return `${parts.slice(0, -1).join(', ')}${conjunction}${parts[parts.length - 1]}`
+}
+
+function isSingleRow(ranges: Array<[number, number]>): boolean {
+  return ranges.length === 1 && ranges[0][0] === ranges[0][1]
 }
 
 // Toolbar mono short form, e.g. "ROWS 44–47" (en dash).
-export function rangeLabel(_rows: number[] | null): string | null {
-  throw new Error('not implemented')
+export function rangeLabel(rows: number[] | null): string | null {
+  const ranges = contiguousRanges(rows)
+  if (ranges.length === 0) return null
+  return `${isSingleRow(ranges) ? 'ROW' : 'ROWS'} ${joinRanges(ranges, ' AND ')}`
 }
 
-export function describeSourceRows(_rows: number[] | null, _kind: DocumentKind): string {
-  throw new Error('not implemented')
+// Kind decides before rows. A null/[] source_rows renders the not-recorded sentence, never
+// a guessed range.
+export function describeSourceRows(rows: number[] | null, kind: DocumentKind): string {
+  if (kind === 'image') return 'This photograph became this invoice.'
+  if (kind === 'unrenderable') return 'Stored, but the previewer cannot render this format.'
+  if (kind === 'pdf') return 'The page of this document that became this invoice was not recorded.'
+
+  const ranges = contiguousRanges(rows)
+  if (ranges.length === 0) return 'The rows of this file that became this invoice were not recorded.'
+  return `${isSingleRow(ranges) ? 'Row' : 'Rows'} ${joinRanges(ranges, ' and ')} of this file became this invoice.`
 }
 
-export function formatBytes(_n: number): string {
-  throw new Error('not implemented')
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB']
+
+// 1024-base: the design's "610 KB" is 624640/1024 exactly. Rounding happens before the
+// integer check so 1048575 reads "1 MB", not "1.0 MB".
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '0 B'
+  if (n < 1024) return `${n} B`
+
+  let value = n / 1024
+  let unit = 1
+  while (unit < BYTE_UNITS.length - 1 && Math.round(value * 10) / 10 >= 1024) {
+    value /= 1024
+    unit += 1
+  }
+  const rounded = Math.round(value * 10) / 10
+  return `${Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)} ${BYTE_UNITS[unit]}`
 }

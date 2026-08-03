@@ -407,8 +407,12 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 		ImportBatchID: &batchID,
 	}
 	// Nil, not &"": source_document_id is a uuid column, so "" is a 22P02.
+	// SourceRows belongs INSIDE this guard: source_rows without a document
+	// violates invoices_source_rows_requires_document, and that 23514 is not a
+	// domain error -- it aborts the whole run with a 500.
 	if documentID != "" {
 		in.SourceDocumentID = &documentID
+		in.SourceRows = sheetRows(g.rowIdxs)
 	}
 	for _, ri := range g.rowIdxs {
 		row := rows[ri]

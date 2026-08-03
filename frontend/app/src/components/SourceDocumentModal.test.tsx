@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -213,7 +213,10 @@ describe('SourceDocumentModal shell', () => {
     mockFetch(sheet())
     renderModal(metaAsync())
 
-    const readyMeta = await screen.findByText(/1,479 ROWS/)
+    // Scoped to the header line: the sheet canvas prints the same count in its status line,
+    // so an unscoped text match now resolves two nodes.
+    const readyMeta = screen.getByTestId('source-document-meta')
+    await waitFor(() => expect(readyMeta.textContent).toContain('1,479 ROWS'))
     expect(readyMeta.textContent).toContain('11 COLUMNS')
     expect(readyMeta.textContent).toContain('XLSX · 610 KB')
   })

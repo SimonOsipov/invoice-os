@@ -174,7 +174,11 @@ export function SourceDocumentModal({
           data-testid="source-document-modal-body"
           style={{ display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${RAIL_WIDTH}px`, gridTemplateRows: 'minmax(0, 1fr)', flex: 1, minHeight: 0, overflow: 'hidden' }}
         >
-          <div style={{ background: 'var(--bg-1)', borderRight: '1px solid var(--line-1)', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+          {/* The canvas cell needs its own `minWidth`/`minHeight: 0` for the same reason
+              the grid does — a grid item's automatic minimum is content-based. DOC-02-06
+              and DOC-02-07 render here off `sheetData` and `handle`, both already held
+              above: neither canvas fetches for itself. */}
+          <div data-testid="source-document-canvas" style={{ background: 'var(--bg-1)', borderRight: '1px solid var(--line-1)', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
             {canvas}
           </div>
           <SourceDocumentRail

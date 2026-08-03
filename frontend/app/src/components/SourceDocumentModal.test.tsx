@@ -124,6 +124,13 @@ describe('SourceDocumentModal shell', () => {
     expect(body.style.flexGrow).toBe('1')
     expect(body.style.minHeight).not.toBe('')
     expect(parseFloat(body.style.minHeight)).toBe(0)
+
+    // The canvas cell needs the same floor: a grid item's automatic minimum is
+    // content-based, so the row rule alone does not stop the sheet growing this cell.
+    const canvas = screen.getByTestId('source-document-canvas')
+    expect(parseFloat(canvas.style.minHeight)).toBe(0)
+    expect(parseFloat(canvas.style.minWidth)).toBe(0)
+    expect(canvas.style.overflow).toBe('hidden')
   })
 
   it("renders each non-sheet state's own copy", async () => {

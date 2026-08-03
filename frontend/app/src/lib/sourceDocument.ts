@@ -60,6 +60,8 @@ export interface NumberedRow {
 
 export interface DocumentBytes {
   url: string
+  // Callers must release on unmount AND on document id change — an un-revoked object URL
+  // pins the blob for the page's lifetime.
   release: () => void
 }
 

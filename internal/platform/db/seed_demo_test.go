@@ -4141,3 +4141,67 @@ func TestSeedLeavesNoDanglingEntityReferences(t *testing.T) {
 		t.Errorf("count(app_exchange referencing a missing invoice) = %d, want 0", orphanExchange)
 	}
 }
+
+// TestSeedDefaultClientIsAlphabeticallyFirst: task-380 AC-4 -- the trim must
+// not disturb which entity sorts first (frontend's clients[0]).
+func TestSeedDefaultClientIsAlphabeticallyFirst(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var name string
+	err := pool.QueryRow(ctx,
+		`SELECT name FROM business_entities WHERE tenant_id = $1 ORDER BY name ASC, id ASC LIMIT 1`,
+		demoTenantID,
+	).Scan(&name)
+	if err != nil {
+		t.Fatalf("query first entity by name: %v", err)
+	}
+	if name != "Adeyemi & Sons Trading Ltd" {
+		t.Errorf("first entity by name ASC = %q, want %q", name, "Adeyemi & Sons Trading Ltd")
+	}
+}
+
+// demoWithdrawnTINs are the 17 TINs the trim (0d90831) dropped from the
+// firm's business_entities block. Sourced from db/seed.dev.sql as it stood
+// at 0d90831~1.
+var demoWithdrawnTINs = []string{
+	"10090123-0009", "10101234-0010", "10112345-0011", "10123456-0012",
+	"10134567-0013", "10145678-0014", "10156789-0015", "10167890-0016",
+	"10178901-0017", "10189012-0018", "10190123-0019", "10201234-0020",
+	"10212345-0021", "10245678-0024", "10256789-0025", "10267890-0026",
+	"10278901-0027",
+}
+
+// TestSeedNeverReintroducesAWithdrawnTIN: guards against a future edit to
+// db/seed.dev.sql quietly re-adding one of the 17 rows the trim withdrew --
+// checks the seeded DB state directly, not just the curatedDemoEntities
+// literal, so it catches drift in the SQL file itself.
+func TestSeedNeverReintroducesAWithdrawnTIN(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	withdrawn := make(map[string]bool, len(demoWithdrawnTINs))
+	for _, tin := range demoWithdrawnTINs {
+		withdrawn[tin] = true
+	}
+	for _, r := range got {
+		if withdrawn[r.tin] {
+			t.Errorf("withdrawn TIN %s (%s) reappeared in business_entities for the demo tenant", r.tin, r.name)
+		}
+	}
+}

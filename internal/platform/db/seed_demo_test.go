@@ -3905,8 +3905,8 @@ func TestSeedIssueDatesAreWithinDeclared2026H1Window(t *testing.T) {
 	}
 }
 
-// demoTrimmedActiveTINs / demoTrimmedArchivedTINs are the 10 TINs a future
-// trim of the demo firm's business_entities block keeps. Sourced from
+// demoTrimmedActiveTINs / demoTrimmedArchivedTINs are the 10 TINs the demo
+// firm's trimmed business_entities block keeps. Sourced from
 // curatedDemoEntities by TIN rather than retyped, so a name/sector edit
 // there can't silently drift out of sync with this list.
 var (
@@ -3985,11 +3985,9 @@ func TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived(t *testing.T) {
 }
 
 // TestSeedHistoryBearingEntitiesSurviveWithInvoices: the six invoice-history
-// entities must survive any future trim and keep their invoices — the
-// seed's invoice CTE JOINs business_entities, so a dropped or mistyped TIN
-// would silently zero out that entity's rows rather than fail loudly.
-// Green today: nothing has been removed yet, so this only pins that a trim
-// must not touch these six.
+// entities must survive the trim and keep their invoices — the seed's
+// invoice CTE JOINs business_entities, so a dropped or mistyped TIN would
+// silently zero out that entity's rows rather than fail loudly.
 func TestSeedHistoryBearingEntitiesSurviveWithInvoices(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -4041,9 +4039,7 @@ func TestSeedHistoryBearingEntitiesSurviveWithInvoices(t *testing.T) {
 
 // TestSeedDemoPortfolioHasAnEmptyActiveAndAnArchivedClient: the empty-state
 // and the archived filter both need live data behind them — at least one
-// active entity with zero invoices, at least one archived entity. Green
-// today: the current portfolio already has both; this must keep holding
-// after any trim.
+// active entity with zero invoices, at least one archived entity.
 func TestSeedDemoPortfolioHasAnEmptyActiveAndAnArchivedClient(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)

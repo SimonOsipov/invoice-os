@@ -3461,3 +3461,219 @@ func TestSeedPreservesDeliberatelyMalformedTINs(t *testing.T) {
 		t.Errorf("DEMO-2026-6003 violations[0].rule_key = %q, want %q", ruleKey6003, "buyer-tin-format")
 	}
 }
+
+// TestSeedCleanDemoInvoicesReconcile: every seeded demo invoice carrying no violations, and
+// at least one line item, satisfies the whole-portfolio arithmetic -- vat is 7.5% of
+// subtotal, total is subtotal+vat, and the line items sum to the subtotal. INNER JOIN
+// line_items, not LEFT JOIN + coalesce(sum(...),0): an invoice with a non-zero subtotal and
+// zero line items by design has no line_items row to join to, so it is excluded here rather
+// than wrongly forced through a sum(line_total)=subtotal check it was never meant to satisfy.
+func TestSeedCleanDemoInvoicesReconcile(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT i.invoice_number,
+		        i.subtotal::text, i.vat::text, i.total::text, sum(l.line_total)::text,
+		        i.vat = round(i.subtotal * 0.075, 2),
+		        i.total = i.subtotal + i.vat,
+		        sum(l.line_total) = i.subtotal
+		   FROM invoices i
+		   INNER JOIN line_items l ON l.invoice_id = i.id
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%' AND i.violations::text = '[]'
+		  GROUP BY i.id, i.subtotal, i.vat, i.total
+		  ORDER BY i.invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query clean demo invoices: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var number, subtotal, vat, total, lineSum string
+		var vatOK, totalOK, lineSumOK bool
+		if err := rows.Scan(&number, &subtotal, &vat, &total, &lineSum, &vatOK, &totalOK, &lineSumOK); err != nil {
+			t.Fatalf("scan clean invoice row: %v", err)
+		}
+		checked++
+		if !vatOK {
+			t.Errorf("%s: vat = %s, want 7.5%% of subtotal %s", number, vat, subtotal)
+		}
+		if !totalOK {
+			t.Errorf("%s: total = %s, want subtotal %s + vat %s", number, total, subtotal, vat)
+		}
+		if !lineSumOK {
+			t.Errorf("%s: sum(line_total) = %s, want subtotal %s", number, lineSum, subtotal)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate clean invoice rows: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("zero clean (violations=[]) demo invoices with line items found -- query or seed drifted")
+	}
+}
+
+// TestSeedVATViolationIsVisiblyWrong: every seeded demo invoice flagged with the
+// vat-standard-rate violation must be wrong by a round fraction a reader can check by eye --
+// vat exactly a tenth of the subtotal -- not merely some other number that isn't 7.5%.
+func TestSeedVATViolationIsVisiblyWrong(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, subtotal::text, vat::text,
+		        vat = round(subtotal / 10, 2),
+		        vat = round(subtotal * 0.075, 2)
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		    AND coalesce(violations->0->>'rule_key', '') = 'vat-standard-rate'
+		  ORDER BY invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query vat-standard-rate invoices: %v", err)
+	}
+	defer rows.Close()
+
+	var numbers []string
+	for rows.Next() {
+		var number, subtotal, vat string
+		var tenthOK, standardOK bool
+		if err := rows.Scan(&number, &subtotal, &vat, &tenthOK, &standardOK); err != nil {
+			t.Fatalf("scan vat-standard-rate row: %v", err)
+		}
+		numbers = append(numbers, number)
+		if !tenthOK {
+			t.Errorf("%s: vat = %s, want exactly a tenth of subtotal %s", number, vat, subtotal)
+		}
+		if standardOK {
+			t.Errorf("%s: vat = %s equals the standard 7.5%% rate on subtotal %s -- the violation is invisible", number, vat, subtotal)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate vat-standard-rate rows: %v", err)
+	}
+
+	want := []string{"DEMO-2026-1006", "DEMO-2026-2005", "DEMO-2026-8005"}
+	if !reflect.DeepEqual(numbers, want) {
+		t.Fatalf("vat-standard-rate demo invoices = %v, want exactly %v", numbers, want)
+	}
+}
+
+// TestSeedSubtotalMismatchIsExactlyOneInvoice: DEMO-2026-4002 stays the single deliberate
+// line-items-sum-subtotal example, with a shortfall a reader can check by eye. INNER JOIN,
+// not LEFT JOIN + coalesce: a zero-line-item invoice with a non-zero subtotal by design has
+// no line_items row to join to, so it can never surface here as a second, spurious mismatch.
+func TestSeedSubtotalMismatchIsExactlyOneInvoice(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT i.invoice_number, i.subtotal::text, sum(l.line_total)::text,
+		        mod(i.subtotal - sum(l.line_total), 1000::numeric) = 0
+		   FROM invoices i
+		   INNER JOIN line_items l ON l.invoice_id = i.id
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  GROUP BY i.id, i.subtotal
+		 HAVING sum(l.line_total) <> i.subtotal
+		  ORDER BY i.invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query subtotal-mismatch invoices: %v", err)
+	}
+	defer rows.Close()
+
+	var numbers []string
+	for rows.Next() {
+		var number, subtotal, lineSum string
+		var wholeThousand bool
+		if err := rows.Scan(&number, &subtotal, &lineSum, &wholeThousand); err != nil {
+			t.Fatalf("scan subtotal-mismatch row: %v", err)
+		}
+		numbers = append(numbers, number)
+		if !wholeThousand {
+			t.Errorf("%s: subtotal %s minus sum(line_total) %s is not a whole number of thousands", number, subtotal, lineSum)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate subtotal-mismatch rows: %v", err)
+	}
+
+	want := []string{"DEMO-2026-4002"}
+	if !reflect.DeepEqual(numbers, want) {
+		t.Fatalf("subtotal-mismatch demo invoices = %v, want exactly %v", numbers, want)
+	}
+}
+
+// TestSeedEveryLineTotalIsQuantityTimesUnitPrice: every seeded demo line item's stated total
+// is its own quantity times unit price, independent of whether that line's invoice reconciles
+// to its subtotal -- DEMO-2026-4002 fails that check on purpose, but its one line item must
+// still pass this one.
+func TestSeedEveryLineTotalIsQuantityTimesUnitPrice(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT i.invoice_number, l.line_no,
+		        l.quantity::text, l.unit_price::text, l.line_total::text,
+		        l.line_total = l.quantity * l.unit_price
+		   FROM line_items l
+		   JOIN invoices i ON i.id = l.invoice_id
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY i.invoice_number, l.line_no`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query demo line items: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var number string
+		var lineNo int
+		var quantity, unitPrice, lineTotal string
+		var ok bool
+		if err := rows.Scan(&number, &lineNo, &quantity, &unitPrice, &lineTotal, &ok); err != nil {
+			t.Fatalf("scan demo line item row: %v", err)
+		}
+		checked++
+		if !ok {
+			t.Errorf("%s line %d: line_total = %s, want quantity %s * unit_price %s", number, lineNo, lineTotal, quantity, unitPrice)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate demo line item rows: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("zero demo line items found -- query or seed drifted")
+	}
+}

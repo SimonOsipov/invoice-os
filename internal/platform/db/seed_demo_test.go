@@ -809,10 +809,10 @@ func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
 // duplicated here.
 
 // task-322: irn/csid/qr_payload on the demo tenant's seeded `accepted` invoices
-// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 27
+// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 30
 // DEMO-2026-* invoices, 8 of them accepted.
 const (
-	demoInvoiceTotalCount    = 27
+	demoInvoiceTotalCount    = 30
 	demoAcceptedInvoiceCount = 8
 
 	// demoIRNServiceID / demoIRNDateLayout mirror mock_script.go's mockServiceID /
@@ -1285,14 +1285,18 @@ type invoiceOutcomeRow struct {
 	invoiceNumber string
 	buyerTIN      string
 	status        string
+	irn           *string
+	csid          *string
+	qrPayload     *string
 }
 
 // fetchDemoInvoiceOutcomes returns every seeded DEMO-2026-* invoice across BOTH tenants
-// (buyer_tin, status), for the reachability and history-consistency checks below.
+// (buyer_tin, status, fiscal columns), for the reachability and history-consistency checks
+// below.
 func fetchDemoInvoiceOutcomes(t *testing.T, pool *pgxpool.Pool) []invoiceOutcomeRow {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
-		`SELECT tenant_id, invoice_number, coalesce(buyer_tin, ''), status
+		`SELECT tenant_id, invoice_number, coalesce(buyer_tin, ''), status, irn, csid, qr_payload
 		   FROM invoices
 		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
 		  ORDER BY tenant_id, invoice_number`,
@@ -1306,7 +1310,8 @@ func fetchDemoInvoiceOutcomes(t *testing.T, pool *pgxpool.Pool) []invoiceOutcome
 	var got []invoiceOutcomeRow
 	for rows.Next() {
 		var r invoiceOutcomeRow
-		if err := rows.Scan(&r.tenantID, &r.invoiceNumber, &r.buyerTIN, &r.status); err != nil {
+		if err := rows.Scan(&r.tenantID, &r.invoiceNumber, &r.buyerTIN, &r.status,
+			&r.irn, &r.csid, &r.qrPayload); err != nil {
 			t.Fatalf("scan invoice outcome row: %v", err)
 		}
 		got = append(got, r)
@@ -1494,6 +1499,11 @@ func TestSeedLeavesNoInvoiceInFlight(t *testing.T) {
 	}
 }
 
+// A row that has never been submitted claims no APP outcome, so the reachable-status map has
+// nothing to check it against. TestSeedSeedsSubmittableTriggerTwinsInBothTenants is what stops
+// a SKIPPED row carrying a non-convergent trigger; do not weaken it alone.
+var preSubmissionStatuses = map[string]bool{"draft": true, "validated": true}
+
 // TestSeedNeverClaimsUnreachableOutcomeForReservedTIN: the sharpest test in this
 // subtask. Fails if any seeded invoice claims a terminal status its OWN buyer TIN
 // cannot produce -- e.g. -0004 seeded as "accepted" (unreachable: Retryable on every
@@ -1514,6 +1524,12 @@ func TestSeedNeverClaimsUnreachableOutcomeForReservedTIN(t *testing.T) {
 	for _, r := range fetchDemoInvoiceOutcomes(t, pool) {
 		want, reserved := reservedTINReachableStatus[r.buyerTIN]
 		if !reserved {
+			continue
+		}
+		if preSubmissionStatuses[r.status] {
+			if r.irn != nil || r.csid != nil || r.qrPayload != nil {
+				t.Errorf("%s: buyer_tin=%s status=%q carries a fiscal identifier (irn/csid/qr_payload), want all three NULL -- a row that was never submitted has no APP outcome to claim", r.invoiceNumber, r.buyerTIN, r.status)
+			}
 			continue
 		}
 		checked++
@@ -2081,6 +2097,7 @@ func fetchDemoInvoiceOrder(t *testing.T, pool *pgxpool.Pool, tenantID string) []
 // db/seed.dev.sql's invoice_seed / inhouse_invoice_seed CTEs, the "declared expected
 // order" C2's detector checks the observed created_at DESC, id DESC sequence against.
 var wantFirmInvoiceOrder = []string{
+	"DEMO-2026-1009", "DEMO-2026-1008", "DEMO-2026-1007",
 	"DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
 	"DEMO-2026-2004", "DEMO-2026-1006", "DEMO-2026-5003", "DEMO-2026-3004", "DEMO-2026-1005",
 	"DEMO-2026-4003", "DEMO-2026-2003", "DEMO-2026-6002", "DEMO-2026-1004", "DEMO-2026-3003",
@@ -2090,6 +2107,7 @@ var wantFirmInvoiceOrder = []string{
 }
 
 var wantInHouseInvoiceOrder = []string{
+	"DEMO-2026-9003", "DEMO-2026-9002", "DEMO-2026-9001",
 	"DEMO-2026-8005", "DEMO-2026-8004", "DEMO-2026-8003", "DEMO-2026-7006", "DEMO-2026-7004",
 	"DEMO-2026-8002", "DEMO-2026-7003", "DEMO-2026-7002", "DEMO-2026-8001", "DEMO-2026-7001",
 }
@@ -2219,7 +2237,7 @@ func TestSeedInvoiceCreatedAtStrictlyPast(t *testing.T) {
 // TestSeedReanchorsFirmInvoicesAheadOfOlderResidue: C12 row 5 (AC-3). Backdating first is
 // what forces the UPDATE path -- a test that only ever inserts fresh rows proves nothing
 // about the ON CONFLICT ... DO UPDATE SET list. The firm register is entity-scoped
-// (InvoicesList.tsx:71/:83 -> store.go:598); Adeyemi & Sons is clients[0] with 6 curated
+// (InvoicesList.tsx:71/:83 -> store.go:598); Adeyemi & Sons is clients[0] with 9 curated
 // rows, so this asserts positionally against the entity-scoped page (C8), not "dominates
 // the first 50".
 func TestSeedReanchorsFirmInvoicesAheadOfOlderResidue(t *testing.T) {
@@ -2285,19 +2303,22 @@ func TestSeedReanchorsFirmInvoicesAheadOfOlderResidue(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate Adeyemi's entity-scoped page: %v", err)
 	}
-	if len(got) != 7 {
-		t.Fatalf("Adeyemi's entity-scoped page has %d rows, want 7 (6 curated + 1 residue)", len(got))
+	if len(got) != 10 {
+		t.Fatalf("Adeyemi's entity-scoped page has %d rows, want 10 (9 curated + 1 residue)", len(got))
 	}
 
-	top6 := append([]string{}, got[:6]...)
-	sort.Strings(top6)
-	wantTop6 := []string{"DEMO-2026-1001", "DEMO-2026-1002", "DEMO-2026-1003", "DEMO-2026-1004", "DEMO-2026-1005", "DEMO-2026-1006"}
-	sort.Strings(wantTop6)
-	if !reflect.DeepEqual(top6, wantTop6) {
-		t.Errorf("Adeyemi's top 6 entity-scoped rows = %v, want exactly the 6 curated DEMO-2026-100x rows %v", got[:6], wantTop6)
+	top9 := append([]string{}, got[:9]...)
+	sort.Strings(top9)
+	wantTop9 := []string{
+		"DEMO-2026-1001", "DEMO-2026-1002", "DEMO-2026-1003", "DEMO-2026-1004", "DEMO-2026-1005",
+		"DEMO-2026-1006", "DEMO-2026-1007", "DEMO-2026-1008", "DEMO-2026-1009",
 	}
-	if got[6] != residueNumber {
-		t.Errorf("Adeyemi's entity-scoped row 7 = %q, want the older residue %q to sort last", got[6], residueNumber)
+	sort.Strings(wantTop9)
+	if !reflect.DeepEqual(top9, wantTop9) {
+		t.Errorf("Adeyemi's top 9 entity-scoped rows = %v, want exactly the 9 curated DEMO-2026-100x rows %v", got[:9], wantTop9)
+	}
+	if got[9] != residueNumber {
+		t.Errorf("Adeyemi's entity-scoped row 10 = %q, want the older residue %q to sort last", got[9], residueNumber)
 	}
 }
 
@@ -2371,19 +2392,19 @@ func TestSeedReanchorsInHouseInvoicesAheadOfOlderResidue(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate Honeywell's tenant-wide page: %v", err)
 	}
-	if len(numbers) != 11 {
-		t.Fatalf("Honeywell's tenant-wide page has %d rows, want 11 (10 curated + 1 residue)", len(numbers))
+	if len(numbers) != 14 {
+		t.Fatalf("Honeywell's tenant-wide page has %d rows, want 14 (13 curated + 1 residue)", len(numbers))
 	}
 
-	top10 := append([]string{}, numbers[:10]...)
-	sort.Strings(top10)
-	wantTop10 := append([]string{}, wantInHouseInvoiceOrder...)
-	sort.Strings(wantTop10)
-	if !reflect.DeepEqual(top10, wantTop10) {
-		t.Errorf("Honeywell's top 10 rows = %v, want exactly the 10 curated DEMO-2026-7xxx/8xxx rows %v -- fails if created_at was added to the FIRM upsert's SET list only (C1)", numbers[:10], wantTop10)
+	top13 := append([]string{}, numbers[:13]...)
+	sort.Strings(top13)
+	wantTop13 := append([]string{}, wantInHouseInvoiceOrder...)
+	sort.Strings(wantTop13)
+	if !reflect.DeepEqual(top13, wantTop13) {
+		t.Errorf("Honeywell's top 13 rows = %v, want exactly the 13 curated DEMO-2026-7xxx/8xxx/9xxx rows %v -- fails if created_at was added to the FIRM upsert's SET list only (C1)", numbers[:13], wantTop13)
 	}
-	if numbers[10] != residueNumber {
-		t.Errorf("Honeywell's row 11 = %q, want the older residue %q to sort last", numbers[10], residueNumber)
+	if numbers[13] != residueNumber {
+		t.Errorf("Honeywell's row 14 = %q, want the older residue %q to sort last", numbers[13], residueNumber)
 	}
 
 	for _, want := range []string{"accepted", "rejected", "failed"} {
@@ -2520,5 +2541,235 @@ func TestSeedLeavesJunkInvoiceCreatedAtUntouched(t *testing.T) {
 	}
 	if !unchanged {
 		t.Errorf("junk invoice's created_at after Seed = %v, want unchanged (%s) -- the upsert must not touch a row it does not curate", gotCreatedAt, junkCreatedAt)
+	}
+}
+
+// submittableTriggerTINs are the three reserved TINs the mock adapter converges on, so a
+// `validated` row carrying one is genuinely submittable from the demo UI.
+var submittableTriggerTINs = []string{"99999999-0001", "99999999-0002", "99999999-0003"}
+
+// nonConvergentTriggerTINs return Retryable forever (or are unallocated to a converging
+// script), so a submittable row carrying one strands at `failed` after eight attempts.
+var nonConvergentTriggerTINs = []string{"99999999-0004", "99999999-0006", "99999999-0007"}
+
+// terminalTwinBuyerName is the DEMO-01 terminal row that already holds each trigger. A twin
+// reusing its buyer name makes the two indistinguishable on the register.
+var terminalTwinBuyerName = map[string]string{
+	"99999999-0001": "Sandbox APP (accepted)",
+	"99999999-0002": "Sandbox APP (rejected)",
+	"99999999-0003": "Sandbox APP (deferred verdict)",
+}
+
+// submittableTwinRow is one seeded trigger twin plus everything a claimed-outcome check needs.
+type submittableTwinRow struct {
+	id               string
+	invoiceNumber    string
+	buyerTIN         string
+	buyerName        string
+	irn              *string
+	csid             *string
+	qrPayload        *string
+	ruleSetVersionID *string
+	violations       string
+	rejectionReasons string
+}
+
+// reservedTINList is reservedTINReachableStatus's key set, sorted so a failure message reads
+// the same on every run.
+func reservedTINList() []string {
+	out := make([]string, 0, len(reservedTINReachableStatus))
+	for tin := range reservedTINReachableStatus {
+		out = append(out, tin)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestSeedSeedsSubmittableTriggerTwinsInBothTenants: each demo tenant carries exactly three
+// `validated` rows on the accept/reject/deferred triggers, so an operator can click Submit and
+// watch a real clearance, refusal and poll cycle. Every clause is a sub-assertion of the count
+// check on purpose: the twins do not exist yet, so a per-row test split out of this function
+// would iterate an empty set and pass vacuously.
+func TestSeedSeedsSubmittableTriggerTwinsInBothTenants(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	twinIDs := []string{}
+	for _, tc := range []struct{ name, tenantID string }{
+		{"firm", demoTenantID},
+		{"in-house", honeywellTenantID},
+	} {
+		rows, err := pool.Query(ctx,
+			`SELECT id, invoice_number, coalesce(buyer_tin, ''), coalesce(buyer_name, ''),
+			        irn, csid, qr_payload, rule_set_version_id,
+			        violations::text, rejection_reasons::text
+			   FROM invoices
+			  WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'
+			    AND status = 'validated' AND buyer_tin = ANY($2)
+			  ORDER BY buyer_tin`,
+			tc.tenantID, reservedTINList(),
+		)
+		if err != nil {
+			t.Fatalf("%s: query validated reserved-TIN invoices: %v", tc.name, err)
+		}
+		var got []submittableTwinRow
+		for rows.Next() {
+			var r submittableTwinRow
+			if err := rows.Scan(&r.id, &r.invoiceNumber, &r.buyerTIN, &r.buyerName,
+				&r.irn, &r.csid, &r.qrPayload, &r.ruleSetVersionID,
+				&r.violations, &r.rejectionReasons); err != nil {
+				rows.Close()
+				t.Fatalf("%s: scan twin row: %v", tc.name, err)
+			}
+			got = append(got, r)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatalf("%s: iterate twin rows: %v", tc.name, err)
+		}
+		rows.Close()
+
+		gotTINs := make([]string, len(got))
+		for i, r := range got {
+			gotTINs[i] = r.buyerTIN
+			twinIDs = append(twinIDs, r.id)
+		}
+		if len(got) != len(submittableTriggerTINs) {
+			t.Errorf("%s tenant: %d validated reserved-TIN invoices %v, want %d carrying exactly %v -- nothing in this tenant is submittable otherwise",
+				tc.name, len(got), gotTINs, len(submittableTriggerTINs), submittableTriggerTINs)
+		}
+		if !reflect.DeepEqual(gotTINs, submittableTriggerTINs) {
+			t.Errorf("%s tenant: validated reserved buyer TINs = %v, want exactly %v (one each, no non-convergent trigger)",
+				tc.name, gotTINs, submittableTriggerTINs)
+		}
+
+		for _, r := range got {
+			if r.buyerName == "" {
+				t.Errorf("%s tenant: %s (buyer_tin=%s) has an empty buyer_name", tc.name, r.invoiceNumber, r.buyerTIN)
+			}
+			if terminal, ok := terminalTwinBuyerName[r.buyerTIN]; ok && r.buyerName == terminal {
+				t.Errorf("%s tenant: %s buyer_name = %q, want a name distinct from the terminal row already holding %s",
+					tc.name, r.invoiceNumber, r.buyerName, r.buyerTIN)
+			}
+			if r.irn != nil || r.csid != nil || r.qrPayload != nil {
+				t.Errorf("%s tenant: %s carries irn/csid/qr_payload, want all three NULL -- a non-NULL irn is the \"already cleared\" sentinel and makes the twin unsubmittable",
+					tc.name, r.invoiceNumber)
+			}
+			if r.ruleSetVersionID == nil {
+				t.Errorf("%s tenant: %s has a NULL rule_set_version_id, want the active rule set", tc.name, r.invoiceNumber)
+			}
+			if r.violations != "[]" {
+				t.Errorf("%s tenant: %s violations = %s, want []", tc.name, r.invoiceNumber, r.violations)
+			}
+			if r.rejectionReasons != "[]" {
+				t.Errorf("%s tenant: %s rejection_reasons = %s, want []", tc.name, r.invoiceNumber, r.rejectionReasons)
+			}
+		}
+	}
+
+	// The only thing stopping a non-convergent trigger from being seeded submittable:
+	// TestSeedNeverClaimsUnreachableOutcomeForReservedTIN now skips pre-submission statuses,
+	// and its exemption is keyed on status, not TIN.
+	stranded := mustCount(t, pool,
+		`SELECT count(*) FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		    AND status IN ('draft', 'validated') AND buyer_tin = ANY($2)`,
+		[]string{demoTenantID, honeywellTenantID}, nonConvergentTriggerTINs,
+	)
+	if stranded != 0 {
+		t.Errorf("count(seeded draft/validated invoices on a non-convergent trigger %v) = %d, want 0 -- submitting one strands it at failed after eight attempts",
+			nonConvergentTriggerTINs, stranded)
+	}
+
+	if n := mustCount(t, pool, `SELECT count(*) FROM submission_jobs WHERE invoice_id = ANY($1)`, twinIDs); n != 0 {
+		t.Errorf("count(submission_jobs for the twins) = %d, want 0 -- they were never submitted, and seeding evidence is the fabrication DEMO-01 removed", n)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM app_exchange WHERE invoice_id = ANY($1)`, twinIDs); n != 0 {
+		t.Errorf("count(app_exchange for the twins) = %d, want 0 -- they were never submitted", n)
+	}
+}
+
+// fetchRegisterFirstPage returns a register's first page in the SPA's own order. entityID ""
+// means tenant-wide (the in-house register); a non-empty one scopes to a firm client.
+func fetchRegisterFirstPage(t *testing.T, pool *pgxpool.Pool, tenantID, entityID string) []string {
+	t.Helper()
+	sql := `SELECT invoice_number FROM invoices WHERE tenant_id = $1
+	          ORDER BY created_at DESC, id DESC LIMIT 50`
+	args := []any{tenantID}
+	if entityID != "" {
+		sql = `SELECT invoice_number FROM invoices WHERE tenant_id = $1 AND entity_id = $2
+		        ORDER BY created_at DESC, id DESC LIMIT 50`
+		args = append(args, entityID)
+	}
+	rows, err := pool.Query(context.Background(), sql, args...)
+	if err != nil {
+		t.Fatalf("query register first page for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatalf("scan invoice_number: %v", err)
+		}
+		got = append(got, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate register first page for tenant %s: %v", tenantID, err)
+	}
+	return got
+}
+
+// TestSeedSubmittableTwinsLeadTheRegisterFirstPage: the twins must be rows 1-3 of each
+// register, not merely present somewhere in the first page -- an operator opening the demo has
+// to reach something submittable without paging or filtering. Positional, not membership: a
+// membership check fails today too, but says nothing about where the rows landed.
+func TestSeedSubmittableTwinsLeadTheRegisterFirstPage(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	// The firm register is entity-scoped and Adeyemi & Sons is clients[0], the default
+	// workspace -- twins under any other entity sit behind a client switch.
+	const adeyemiTIN = "10012345-0001"
+	var adeyemiEntityID string
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
+		demoTenantID, adeyemiTIN,
+	).Scan(&adeyemiEntityID); err != nil {
+		t.Fatalf("look up Adeyemi entity id (precondition): %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		tenantID string
+		entityID string
+		want     []string
+	}{
+		{"firm (Adeyemi-scoped)", demoTenantID, adeyemiEntityID,
+			[]string{"DEMO-2026-1009", "DEMO-2026-1008", "DEMO-2026-1007"}},
+		{"in-house (tenant-wide)", honeywellTenantID, "",
+			[]string{"DEMO-2026-9003", "DEMO-2026-9002", "DEMO-2026-9001"}},
+	} {
+		got := fetchRegisterFirstPage(t, pool, tc.tenantID, tc.entityID)
+		if len(got) < len(tc.want) {
+			t.Errorf("%s register first page has %d rows, want at least %d", tc.name, len(got), len(tc.want))
+			continue
+		}
+		if !reflect.DeepEqual(got[:len(tc.want)], tc.want) {
+			t.Errorf("%s register rows 1-3 = %v, want the submittable twins %v leading the page", tc.name, got[:len(tc.want)], tc.want)
+		}
 	}
 }

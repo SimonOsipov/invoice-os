@@ -122,13 +122,19 @@ type sehInvoice struct {
 	number string
 }
 
-// sehSeededInvoices returns every DEMO-2026-* invoice in the demo tenant carrying buyerTIN,
-// ordered so the caller's "exactly one" check reports the same set on every run.
+// sehSeededInvoices returns the DEMO-2026-* invoices in the demo tenant that carry buyerTIN AND
+// an EVIDENCE trail the seed itself wrote, keyed on submission_jobs.idempotency_key. The seed
+// also writes never-submitted rows on these same triggers, so "carries the TIN" no longer
+// identifies the trail this file checks. Ordered so "exactly one" reports the same set each run.
 func sehSeededInvoices(ctx context.Context, pool *pgxpool.Pool, buyerTIN string) ([]sehInvoice, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT id, invoice_number FROM invoices
-		  WHERE tenant_id = $1 AND buyer_tin = $2 AND invoice_number LIKE 'DEMO-2026-%'
-		  ORDER BY invoice_number ASC`,
+		`SELECT i.id, i.invoice_number FROM invoices i
+		   JOIN submission_jobs j
+		     ON j.tenant_id = i.tenant_id
+		    AND j.invoice_id = i.id
+		    AND j.idempotency_key = 'demo-seed:' || i.invoice_number
+		  WHERE i.tenant_id = $1 AND i.buyer_tin = $2 AND i.invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY i.invoice_number ASC`,
 		sehDemoTenantID, buyerTIN)
 	if err != nil {
 		return nil, err

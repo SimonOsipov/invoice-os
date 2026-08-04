@@ -225,7 +225,7 @@ jobs:
         # re-assertion, fail-closed on a missing/empty password GUC, idempotency,
         # deterministic password rotation, and schema-grant shape. Needs only
         # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run TestBootstrapSQL ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestBootstrap|TestMakefileDevDB' ./internal/platform/db/...
       - name: Gateway boot-path provisioning suite (bootstrap->migrate->reset->seed) + per-test visibility & skip gate
         # M4-21-04 (task-128, AC-6): proves db.Provision — the entry point
         # cmd/gateway/main.go calls at boot — composes bootstrap (gated) -> migrate
@@ -239,7 +239,7 @@ jobs:
         # DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL/DATABASE_URL, all already in
         # this job's env; the gate turns a silently-skipped test (e.g. a future PR
         # that drops DATABASE_URL again) into a failed step instead of a quiet pass.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestSuperuserDSNNotRetainedForRequestPath' ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestSuperuserDSNNotRetainedForRequestPath|TestGatewayMain' ./internal/platform/db/...
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real

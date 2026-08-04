@@ -3763,3 +3763,116 @@ func TestSeedLineItemMismatchRowHasStandardVAT(t *testing.T) {
 		t.Errorf("DEMO-2026-4002: total = %s, want subtotal %s + vat %s", total, subtotal, vat)
 	}
 }
+
+// issueDateMonthSpan is the minimum count of distinct calendar months a tenant's seeded
+// issue_dates must cover -- a single-month cluster reads as "this month only", never a
+// working book over time.
+const issueDateMonthSpan = 5
+
+// TestSeedIssueDatesSpanMultipleMonths: pins the SHAPE of the spread, not a hardcoded date
+// list -- each tenant's DEMO-2026-* issue_dates must land in at least issueDateMonthSpan
+// distinct calendar months, leaving the executor free to choose which dates.
+func TestSeedIssueDatesSpanMultipleMonths(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		n := mustCount(t, pool,
+			`SELECT count(DISTINCT date_trunc('month', issue_date)) FROM invoices
+			  WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+			tenantID,
+		)
+		if n < issueDateMonthSpan {
+			t.Errorf("tenant %s: count(DISTINCT month(issue_date)) = %d, want >= %d", tenantID, n, issueDateMonthSpan)
+		}
+	}
+}
+
+// TestSeedIssueDatesAreDistinctWithinTenant: count(DISTINCT issue_date) must equal the
+// tenant's own DEMO-2026-* invoice count -- any shared date means two rows still cluster on
+// the same day.
+func TestSeedIssueDatesAreDistinctWithinTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tc := range []struct {
+		tenantID string
+		want     int
+	}{
+		{demoTenantID, demoInvoiceTotalCount},
+		{honeywellTenantID, len(wantInHouseInvoiceOrder)},
+	} {
+		total := mustCount(t, pool,
+			`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+			tc.tenantID,
+		)
+		if total != tc.want {
+			t.Fatalf("tenant %s: count(DEMO-2026-* invoices) = %d, want %d", tc.tenantID, total, tc.want)
+		}
+		distinct := mustCount(t, pool,
+			`SELECT count(DISTINCT issue_date) FROM invoices WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+			tc.tenantID,
+		)
+		if distinct != tc.want {
+			t.Errorf("tenant %s: count(DISTINCT issue_date) = %d, want %d -- two invoices still share a date", tc.tenantID, distinct, tc.want)
+		}
+	}
+}
+
+// TestSeedIssueDatesArePastRelativeToCreatedAt: created_at is derived as now() minus a small
+// per-row offset (db/seed.dev.sql's row_number()-based anchor), so it sits at ~seed-run time.
+// Every committed 2026 H1 date already precedes any real seed run, so this is GREEN BY DESIGN
+// today -- it exists as a regression guard against a future-dated issue_date (or an anchor
+// that stops trailing the dates it anchors), a property no other test in this file checks.
+func TestSeedIssueDatesArePastRelativeToCreatedAt(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT tenant_id, invoice_number, issue_date, created_at FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query issue_date/created_at: %v", err)
+	}
+	defer rows.Close()
+
+	var checked int
+	for rows.Next() {
+		var tenantID, invoiceNumber string
+		var issueDate, createdAt time.Time
+		if err := rows.Scan(&tenantID, &invoiceNumber, &issueDate, &createdAt); err != nil {
+			t.Fatalf("scan issue_date/created_at row: %v", err)
+		}
+		checked++
+		if !issueDate.Before(createdAt) {
+			t.Errorf("tenant %s: %s issue_date = %v, want strictly before its own created_at anchor %v", tenantID, invoiceNumber, issueDate, createdAt)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate issue_date/created_at rows: %v", err)
+	}
+	wantChecked := demoInvoiceTotalCount + len(wantInHouseInvoiceOrder)
+	if checked != wantChecked {
+		t.Fatalf("checked %d rows, want %d", checked, wantChecked)
+	}
+}

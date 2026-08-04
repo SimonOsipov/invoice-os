@@ -33,6 +33,7 @@ import {
   clampFilterText,
   computedLineSum,
   createInvoice,
+  DETAIL_SUBMIT_COPY,
   diffLineItems,
   editInvoice,
   gateByActiveEntity,
@@ -59,6 +60,7 @@ import {
   shouldRefreshHistory,
   shouldShowFiscalRecord,
   shouldShowRejectionCard,
+  singleSubmitOutcome,
   skipReasonLabel,
   submitInvoices,
   toggleSelection,
@@ -563,6 +565,8 @@ describe('getInvoice', () => {
       can_edit: false,
       can_revalidate: false,
       revalidate_blocked_reason: null,
+      can_submit: false,
+      submit_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -584,6 +588,8 @@ describe('getInvoice', () => {
       can_edit: true,
       can_revalidate: true,
       revalidate_blocked_reason: null,
+      can_submit: false,
+      submit_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -592,6 +598,91 @@ describe('getInvoice', () => {
     const result = await getInvoice(af, base, 'inv-1')
 
     expect(result.qr_png_base64).toBeNull()
+  })
+
+  it('getInvoice: can_submit true passes through', async () => {
+    const detailInvoice: InvoiceDetailRecord = {
+      ...draftInvoice,
+      status: 'validated',
+      rule_set_version: 2,
+      qr_png_base64: null,
+      can_edit: true,
+      can_revalidate: false,
+      revalidate_blocked_reason: 'Validated invoices cannot be re-validated.',
+      can_submit: true,
+      submit_blocked_reason: null,
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_submit).toBe(true)
+    expect(result.can_edit).toBe(true)
+    expect(result.can_revalidate).toBe(false)
+  })
+
+  it('getInvoice: a stringly-typed "false" can_submit is denied', async () => {
+    const detailInvoice = {
+      ...draftInvoice,
+      status: 'validated',
+      rule_set_version: 2,
+      qr_png_base64: null,
+      can_edit: true,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
+      can_submit: 'false', // non-boolean truthy: mutation oracle for `=== true` over `?? false`
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_submit).toBe(false)
+    expect(result.can_edit).toBe(true)
+  })
+
+  it('getInvoice: a wire missing can_submit fails closed', async () => {
+    const detailInvoice: InvoiceDetailRecord = {
+      ...draftInvoice,
+      status: 'validated',
+      rule_set_version: 2,
+      qr_png_base64: null,
+      can_edit: true,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
+      can_submit: true,
+      submit_blocked_reason: null,
+    }
+    const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_submit).toBe(false)
+  })
+
+  it('getInvoice: submit_blocked_reason passes through byte-identically', async () => {
+    const reasonText = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    const wire = { ...draftInvoice, can_edit: true, can_submit: false, submit_blocked_reason: reasonText }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(reasonText)
+  })
+
+  it('getInvoice: a wire missing submit_blocked_reason normalizes to null', async () => {
+    const wire = { ...draftInvoice, can_edit: true, can_submit: false }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBeNull()
+    expect(result.submit_blocked_reason).not.toBeUndefined()
   })
 })
 
@@ -850,6 +941,174 @@ describe('skipReasonLabel', () => {
     expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
     expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
     expect(skipReasonLabel('wat')).toBe('wat')
+  })
+})
+
+describe('singleSubmitOutcome', () => {
+  it('singleSubmitOutcome: an enqueued item for this invoice is queued', () => {
+    const items: BatchSubmitResultItem[] = [{ invoice_id: 'inv-1', enqueued: true, status: 'queued' }]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'queued' })
+  })
+
+  it('singleSubmitOutcome: not_validated is skipped, not queued', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('not_validated') })
+  })
+
+  it('singleSubmitOutcome: duplicate_request is skipped even though the item reports status queued', () => {
+    // status:'queued' here is the trap -- enqueued is what decides, never status.
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'queued', reason: 'duplicate_request' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).not.toBe('queued')
+    expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('duplicate_request') })
+  })
+
+  it('singleSubmitOutcome: a non-boolean truthy enqueued is not queued', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: 'false', status: 'validated' } as unknown as BatchSubmitResultItem,
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.notQueued)
+    }
+  })
+
+  it('singleSubmitOutcome: an undefined results array is unresolved', () => {
+    const result = singleSubmitOutcome('inv-1', undefined)
+
+    expect(result.kind).toBe('unresolved')
+    if (result.kind === 'unresolved') {
+      expect(result.message).not.toBe('undefined')
+    }
+  })
+
+  it('singleSubmitOutcome: a result naming a different invoice is unresolved', () => {
+    const items: BatchSubmitResultItem[] = [{ invoice_id: 'other', enqueued: true, status: 'queued' }]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('unresolved')
+    expect(result.kind).not.toBe('queued')
+  })
+
+  it('singleSubmitOutcome: a skipped item with no reason gets the neutral label', () => {
+    const items: BatchSubmitResultItem[] = [{ invoice_id: 'inv-1', enqueued: false, status: 'validated' }]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.notQueued)
+      expect(result.message).not.toBe('undefined')
+    }
+  })
+})
+
+describe('singleSubmitOutcome: adversarial coverage', () => {
+  it('picks the item naming this invoice, ignoring an enqueued item for another invoice', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'other-1', enqueued: true, status: 'queued' },
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+      { invoice_id: 'other-2', enqueued: false, status: 'validated', reason: 'not_validated' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('not_validated') })
+  })
+
+  it('a malformed response repeating this invoice id resolves the first match (skip then enqueue)', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+      { invoice_id: 'inv-1', enqueued: true, status: 'queued' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('not_validated') })
+  })
+
+  it('a malformed response repeating this invoice id resolves the first match (enqueue then skip)', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: true, status: 'queued' },
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'queued' })
+  })
+
+  it('an empty results array is unresolved, distinct from an undefined results array', () => {
+    const result = singleSubmitOutcome('inv-1', [])
+
+    expect(result.kind).toBe('unresolved')
+    if (result.kind === 'unresolved') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.unresolved)
+    }
+  })
+
+  it('enqueued: null is not queued', () => {
+    const items = [
+      { invoice_id: 'inv-1', enqueued: null, status: 'validated' },
+    ] as unknown as BatchSubmitResultItem[]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.notQueued)
+      expect(result.message).not.toBe('undefined')
+    }
+  })
+
+  it('a matching item with enqueued absent entirely is not queued', () => {
+    const items = [{ invoice_id: 'inv-1', status: 'validated' }] as unknown as BatchSubmitResultItem[]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.notQueued)
+    }
+  })
+
+  it('an unknown reason code surfaces the reason itself, never undefined or the neutral label', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'app_unreachable' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe('app_unreachable')
+      expect(result.message).not.toBe('undefined')
+      expect(result.message).not.toBe(DETAIL_SUBMIT_COPY.notQueued)
+    }
+  })
+})
+
+describe('DETAIL_SUBMIT_COPY', () => {
+  it('DETAIL_SUBMIT_COPY matches the acceptance criterion verbatim', () => {
+    expect(`${DETAIL_SUBMIT_COPY.prompt} ${DETAIL_SUBMIT_COPY.detail}`).toBe(
+      'Send this invoice for transmission? Nothing here can pull it back.',
+    )
   })
 })
 

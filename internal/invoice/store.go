@@ -1367,6 +1367,11 @@ func canEdit(s Status) bool {
 // by weakening the test.
 func canRevalidate(s Status) bool { return s == StatusDraft }
 
+// canSubmit is a deliberate literal, not canTransition(s, StatusQueued):
+// BatchSubmit hardwires its FROM state to validated, so submittability is
+// the endpoint's own contract, not an edge-table property.
+func canSubmit(s Status) bool { return s == StatusValidated }
+
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
 // (M4-04-05's extraction moved the SOLE-writer-of-invoices.status role down

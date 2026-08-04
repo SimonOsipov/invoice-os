@@ -227,6 +227,8 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
+  can_submit: boolean
+  submit_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -491,15 +493,16 @@ export async function violationSummary(
   return res.rules
 }
 
-// The two action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The three action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
 // defensive normalization on a permission-shaped flag only earns its keep fail-closed.
-// `revalidate_blocked_reason` keeps `?? null` (its declared type is nullable, so `??` is
-// reachable and idiomatic) and is passed through BYTE-IDENTICALLY -- no fallback string,
-// no rewriting: that copy is the backend's ([revalidate-reason-from-backend]), and an
-// SPA-authored default here is exactly the drift that decision forbids.
+// `revalidate_blocked_reason` and `submit_blocked_reason` both keep `?? null` (their
+// declared type is nullable, so `??` is reachable and idiomatic) and are passed through
+// BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
+// ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here
+// is exactly the drift that decision forbids.
 export async function getInvoice(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceDetailRecord> {
   const res = await authedFetch<InvoiceDetailRecord>(`${base}/api/invoice/v1/invoices/${id}`)
   return {
@@ -509,6 +512,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     can_edit: res.can_edit === true,
     can_revalidate: res.can_revalidate === true,
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
+    can_submit: res.can_submit === true,
+    submit_blocked_reason: res.submit_blocked_reason ?? null,
   }
 }
 
@@ -868,6 +873,39 @@ const SKIP_REASON_LABELS: Record<string, string> = {
 
 export function skipReasonLabel(reason: string): string {
   return SKIP_REASON_LABELS[reason] ?? reason
+}
+
+// Founder-pinned, verbatim (Core AC #2) -- do not paraphrase or re-tone.
+export const DETAIL_SUBMIT_COPY = {
+  submit: 'Submit',
+  prompt: 'Send this invoice for transmission?',
+  detail: 'Nothing here can pull it back.',
+  confirm: 'Yes, send it now',
+  cancel: 'Cancel',
+  sending: 'Sending…',
+  unresolved: 'The server did not confirm this invoice was sent. Reload to check its status.',
+  notQueued: 'Not queued',
+} as const
+
+export type SingleSubmitOutcome =
+  | { kind: 'queued' }
+  | { kind: 'skipped'; message: string }
+  | { kind: 'unresolved'; message: string }
+
+// `enqueued === true` strictly, never truthiness or the item's own `status` --
+// duplicate_request reports status:'queued' while nothing was enqueued, which is
+// exactly the trap the "duplicate_request is skipped" test below closes.
+export function singleSubmitOutcome(
+  invoiceId: string,
+  items: BatchSubmitResultItem[] | undefined,
+): SingleSubmitOutcome {
+  const item = items?.find((i) => i.invoice_id === invoiceId)
+  if (item === undefined) return { kind: 'unresolved', message: DETAIL_SUBMIT_COPY.unresolved }
+  if (item.enqueued === true) return { kind: 'queued' }
+  return {
+    kind: 'skipped',
+    message: item.reason != null ? skipReasonLabel(item.reason) : DETAIL_SUBMIT_COPY.notQueued,
+  }
 }
 
 // Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`

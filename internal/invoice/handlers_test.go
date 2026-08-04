@@ -3750,8 +3750,8 @@ func TestGetHandler_RevalidateBlockedReasonExactCopy(t *testing.T) {
 
 // TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys (T10; STRENGTHENED by
 // QA/Mode B, task-266 Part B #1): every pre-existing getResponse key must
-// keep its name/position (AC #5), and the three new action-flag keys must be
-// purely ADDITIVE -- exactly len(preExisting)+3 top-level keys total,
+// keep its name/position (AC #5), and the four new action-flag keys must be
+// purely ADDITIVE -- exactly len(preExisting)+4 top-level keys total,
 // modeled on TestValidateHandler_TopLevelKeysNotNested's exact-key-set
 // technique.
 //
@@ -3770,7 +3770,7 @@ func TestGetHandler_RevalidateBlockedReasonExactCopy(t *testing.T) {
 // permanently undetected.
 //
 // Strengthened two ways, both applied via a 2-case table:
-//  1. VALUE assertions on all three new keys, not just presence -- also
+//  1. VALUE assertions on all four new keys, not just presence -- also
 //     catches a value-computation bug (e.g. a status switch that always
 //     emits can_edit:true) that presence-only checks cannot see.
 //  2. A SECOND case at a status where both booleans are FALSE (queued), so
@@ -3801,7 +3801,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"rule_set_version", "qr_png_base64",
 	}
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason"}
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -3809,9 +3809,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		wantCanEdit       string
 		wantCanRevalidate string
 		wantReasonNull    bool
+		wantCanSubmit     string
 	}{
-		{"validated_true_can_edit", StatusValidated, "true", "false", false},
-		{"queued_false_both_flags", StatusQueued, "false", "false", true},
+		{"validated_true_can_edit", StatusValidated, "true", "false", false, "true"},
+		{"queued_false_both_flags", StatusQueued, "false", "false", true, "false"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3844,7 +3845,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 
 			for _, k := range preExisting {
 				if _, ok := raw[k]; !ok {
-					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the three new action-flag keys must be purely additive", k, rec.Body.String())
+					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the five new action-flag keys must be purely additive", k, rec.Body.String())
 				}
 			}
 			for _, k := range newKeys {
@@ -3871,6 +3872,9 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 				}
 			} else if reasonRaw == "" || reasonRaw == "null" {
 				t.Errorf("%s: revalidate_blocked_reason raw = %q, want a non-null quoted string (body=%s)", tt.status, reasonRaw, rec.Body.String())
+			}
+			if got := string(raw["can_submit"]); got != tt.wantCanSubmit {
+				t.Errorf("%s: can_submit raw = %q, want %q (body=%s)", tt.status, got, tt.wantCanSubmit, rec.Body.String())
 			}
 		})
 	}
@@ -3940,10 +3944,12 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// here in wire order too.
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"line_items",
-		// getResponse's own fields, in declaration order -- the three
-		// action-flag keys MUST be last (AC #5's additive/position clause).
+		// getResponse's own fields, in declaration order -- the action-flag
+		// keys MUST be last (AC #5's additive/position clause): can_submit
+		// appended after revalidate_blocked_reason, submit_blocked_reason
+		// appended last of all.
 		"rule_set_version", "qr_png_base64",
-		"can_edit", "can_revalidate", "revalidate_blocked_reason",
+		"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -3983,6 +3989,58 @@ func topLevelKeyOrder(t *testing.T, body []byte) []string {
 	return keys
 }
 
+// TestGetHandler_CanSubmitAllStatuses (INVED-02-01): table over all 7
+// statuses; expected values are a hard-coded truth table, never canSubmit(...)
+// itself, so this cannot degrade into a tautology.
+func TestGetHandler_CanSubmitAllStatuses(t *testing.T) {
+	want := map[Status]string{
+		StatusDraft:     "false",
+		StatusValidated: "true",
+		StatusQueued:    "false",
+		StatusSubmitted: "false",
+		StatusAccepted:  "false",
+		StatusRejected:  "false",
+		StatusFailed:    "false",
+	}
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, s := range allStatuses {
+		invoiceID := uuid.NewString()
+		want2 := Invoice{ID: invoiceID, Status: s}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want2, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body=%s)", s, rec.Code, rec.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("%s: decode raw body %q: %v", s, rec.Body.String(), err)
+		}
+		if got := string(raw["can_submit"]); got != want[s] {
+			t.Errorf("%s: can_submit raw = %q, want %q (body=%s)", s, got, want[s], rec.Body.String())
+		}
+	}
+}
+
+// TestGetHandler_CanSubmitFalseNotOmitted: on accepted, the raw body must
+// contain the literal "can_submit":false -- no omitempty, same reason as its
+// three siblings (a missing key would be indistinguishable from an older
+// server that has never heard of can_submit).
+func TestGetHandler_CanSubmitFalseNotOmitted(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusAccepted}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"can_submit":false`) {
+		t.Errorf("body = %s, want the literal \"can_submit\":false for an accepted invoice", rec.Body.String())
+	}
+}
+
 // TestGetHandler_ActionFlagsAreDerivedNotHardcoded (task-266 Part C mutation
 // finding): perturbs legalTransitions at runtime -- same technique as
 // TestCanEdit_TracksLegalTransitions (transition_test.go) -- and confirms
@@ -4016,7 +4074,7 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
-// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all three
+// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all five
 // action-flag keys, mirroring TestListHandler_NoRuleSetVersionKey -- they
 // live only on GetHandler's getResponse wrapper, never on the domain
 // Invoice struct List marshals directly. ALREADY GREEN at RED (neither key
@@ -4033,7 +4091,7 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`} {
+	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
 		}
@@ -4076,6 +4134,406 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 	}
 	if !strings.Contains(body, `"revalidate_blocked_reason":null`) {
 		t.Errorf("body = %s, want the literal \"revalidate_blocked_reason\":null for a freshly seeded draft row", body)
+	}
+}
+
+// TestGetHandler_RealStore_ValidatedCanSubmit (INVED-02-01): wires the REAL
+// Store.Get/Transition into the REAL GetHandler against a freshly seeded
+// row -- pins the can_submit contract end to end, DB row through to wire
+// byte, mirroring TestGetHandler_RealStore_DraftActionFlags. A seeded draft
+// row reads can_submit:false; after Store.Transition promotes it to
+// validated, the SAME row reads can_submit:true.
+func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INVED-02-01-e2e-get tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-02-01-e2e-get entity")
+	store := NewStore(app)
+
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-E2E-GET")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	get := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+		r.SetPathValue("id", invoiceID)
+		r = r.WithContext(c)
+		rec := httptest.NewRecorder()
+		GetHandler(store.Get, nil).ServeHTTP(rec, r)
+		return rec
+	}
+
+	draftRec := get()
+	if draftRec.Code != http.StatusOK {
+		t.Fatalf("draft: status = %d, want 200 (body=%s)", draftRec.Code, draftRec.Body.String())
+	}
+	if !strings.Contains(draftRec.Body.String(), `"can_submit":false`) {
+		t.Errorf("draft: body = %s, want the literal \"can_submit\":false for a freshly seeded draft row", draftRec.Body.String())
+	}
+
+	if _, err := store.Transition(c, invoiceID, StatusValidated); err != nil {
+		t.Fatalf("Transition(draft->validated): %v", err)
+	}
+
+	validatedRec := get()
+	if validatedRec.Code != http.StatusOK {
+		t.Fatalf("validated: status = %d, want 200 (body=%s)", validatedRec.Code, validatedRec.Body.String())
+	}
+	if !strings.Contains(validatedRec.Body.String(), `"can_submit":true`) {
+		t.Errorf("validated: body = %s, want the literal \"can_submit\":true after Transition to validated", validatedRec.Body.String())
+	}
+}
+
+// --- QA Mode B (INVED-02-01) adversarial coverage --------------------------
+
+// TestGetHandler_CanSubmitKeyAppearsExactlyOnce: guards the embed boundary --
+// getResponse embeds Invoice, so a future field added to Invoice tagged
+// json:"can_submit" would either shadow (if depths differ) or, per
+// encoding/json's ambiguous-field rule, silently DROP both same-depth
+// entries. Counting occurrences (not just presence) catches either failure
+// mode; presence-only tests above cannot.
+func TestGetHandler_CanSubmitKeyAppearsExactlyOnce(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if got := strings.Count(rec.Body.String(), `"can_submit":`); got != 1 {
+		t.Errorf("body has %d occurrences of \"can_submit\": key, want exactly 1 (body=%s)", got, rec.Body.String())
+	}
+}
+
+// TestGetHandler_ErrorPathsNeverLeakCanSubmit: the 404 and 401 exit paths run
+// through writeError, a {"error":"..."} map literal -- structurally unable
+// to carry can_submit -- but this is the regression guard should that ever
+// stop being true (e.g. a richer error envelope added later).
+func TestGetHandler_ErrorPathsNeverLeakCanSubmit(t *testing.T) {
+	t.Run("not_found_404", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return Invoice{}, ErrNotFound }
+		rec, _ := doInvoiceGet(t, get, &id, uuid.NewString())
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "can_submit") {
+			t.Errorf("body = %s, a 404 must never carry can_submit in any form", rec.Body.String())
+		}
+	})
+	t.Run("no_identity_401", func(t *testing.T) {
+		get := func(ctx context.Context, gotID string) (Invoice, error) {
+			t.Fatal("get must not run without an identity")
+			return Invoice{}, nil
+		}
+		rec, _ := doInvoiceGet(t, get, nil, uuid.NewString())
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "can_submit") {
+			t.Errorf("body = %s, a 401 must never carry can_submit in any form", rec.Body.String())
+		}
+	})
+}
+
+// TestGetHandler_CanSubmitFalseForZeroStatus: a zero-value Status (empty
+// string) is outside the 7-member universe -- unreachable through the
+// invoices.status CHECK constraint on a real row, but reachable through any
+// get closure (a legacy/partial row read via a future direct-SQL path, or a
+// bug elsewhere in the store layer). Mirrors
+// TestCanSubmit_UnknownStatusIsFalseAndNeverPanics one level up, ON THE
+// WIRE, which that unit test does not exercise.
+func TestGetHandler_CanSubmitFalseForZeroStatus(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID} // Status left at its zero value ""
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"can_submit":false`) {
+		t.Errorf("body = %s, want the literal \"can_submit\":false for a zero-value Status", rec.Body.String())
+	}
+}
+
+// TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence: extends
+// TestGetHandler_RealStore_ValidatedCanSubmit's single draft->validated flip
+// with a THIRD leg on the SAME row, draft->validated->queued, confirming
+// can_submit flips true->false again once the row moves past validated --
+// not just that it can turn true once.
+func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INVED-02-01-qa-sequence tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-02-01-qa-sequence entity")
+	store := NewStore(app)
+
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-QA-SEQ")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	get := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+		r.SetPathValue("id", invoiceID)
+		r = r.WithContext(c)
+		rec := httptest.NewRecorder()
+		GetHandler(store.Get, nil).ServeHTTP(rec, r)
+		return rec
+	}
+
+	if !strings.Contains(get().Body.String(), `"can_submit":false`) {
+		t.Fatalf("draft: want can_submit:false")
+	}
+
+	if _, err := store.Transition(c, invoiceID, StatusValidated); err != nil {
+		t.Fatalf("Transition(draft->validated): %v", err)
+	}
+	if !strings.Contains(get().Body.String(), `"can_submit":true`) {
+		t.Fatalf("validated: want can_submit:true")
+	}
+
+	if _, err := store.Transition(c, invoiceID, StatusQueued); err != nil {
+		t.Fatalf("Transition(validated->queued): %v", err)
+	}
+	queuedRec := get()
+	if !strings.Contains(queuedRec.Body.String(), `"can_submit":false`) {
+		t.Errorf("queued: body = %s, want can_submit:false once the row moves past validated", queuedRec.Body.String())
+	}
+}
+
+// TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked: tenant B's invoice
+// is seeded and promoted all the way to validated (can_submit:true for
+// tenant B), then tenant A requests the SAME id through the real
+// Store.Get/GetHandler pair. RLS must still resolve this to ErrNotFound/404
+// -- can_submit must never be observable, true or false, for an invoice
+// outside the caller's tenant.
+func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INVED-02-01-qa-cross tenant A")
+	tenantB := seedTenant(t, super, "INVED-02-01-qa-cross tenant B")
+	entityB := seedEntity(t, super, tenantB, "INVED-02-01-qa-cross B entity")
+	store := NewStore(app)
+
+	invoiceID := seedInvoice(t, super, tenantB, entityB, "INVED-02-01-QA-CROSS-B")
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	if _, err := store.Transition(cB, invoiceID, StatusValidated); err != nil {
+		t.Fatalf("Transition(tenant B draft->validated): %v", err)
+	}
+
+	identityA := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA}
+	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+	r.SetPathValue("id", invoiceID)
+	r = r.WithContext(auth.WithIdentity(ctx, identityA))
+	rec := httptest.NewRecorder()
+	GetHandler(store.Get, nil).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "can_submit") {
+		t.Errorf("body = %s, tenant B's can_submit:true must never leak to tenant A, in any form", rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// INVED-02-05 -- RED specs (Mode A) for submit_blocked_reason, the mirror of
+// revalidate_blocked_reason for the disabled Submit button. Neither
+// submitBlockedReason's real gate nor the SubmitBlockedReason wire value
+// exists yet (the stub always returns nil), so each assertion below fails
+// on a wrong/missing value, never a compile error.
+//
+//	G1  TestGetHandler_SubmitBlockedReasonAllStatuses
+//	G2  TestGetHandler_SubmitBlockedReasonExactCopy
+//	G3  TestGetHandler_SubmitBlockedReasonDraftAndRejectedDiffer
+//	G4  TestGetHandler_SubmitBlockedReasonNullWhenSubmittable        (guard, already green)
+//	G5  TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded
+// ---------------------------------------------------------------------------
+
+// exactSubmitBlockedReasonDraft / exactSubmitBlockedReasonRejected are the
+// test-local copies of the exact strings GetHandler must emit under
+// submit_blocked_reason on draft/rejected -- hardcoded here, NEVER imported
+// from production, so these pin the copy non-tautologically.
+const exactSubmitBlockedReasonDraft = "Only validated invoices can be submitted — re-validate this invoice first."
+const exactSubmitBlockedReasonRejected = "Only validated invoices can be submitted — edit this invoice and re-validate it first."
+
+// TestGetHandler_SubmitBlockedReasonAllStatuses (G1): table over all 7
+// statuses; expected raw JSON is hard-coded per status, never produced by
+// calling submitBlockedReason itself, so this cannot degrade into a
+// tautology.
+func TestGetHandler_SubmitBlockedReasonAllStatuses(t *testing.T) {
+	want := map[Status]string{
+		StatusDraft:     `"` + exactSubmitBlockedReasonDraft + `"`,
+		StatusValidated: "null",
+		StatusQueued:    "null",
+		StatusSubmitted: "null",
+		StatusAccepted:  "null",
+		StatusRejected:  `"` + exactSubmitBlockedReasonRejected + `"`,
+		StatusFailed:    "null",
+	}
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, s := range allStatuses {
+		invoiceID := uuid.NewString()
+		want2 := Invoice{ID: invoiceID, Status: s}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want2, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body=%s)", s, rec.Code, rec.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("%s: decode raw body %q: %v", s, rec.Body.String(), err)
+		}
+		if got := string(raw["submit_blocked_reason"]); got != want[s] {
+			t.Errorf("%s: submit_blocked_reason raw = %q, want %q (body=%s)", s, got, want[s], rec.Body.String())
+		}
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonExactCopy (G2): pins the exact
+// byte-for-byte copy GetHandler renders under submit_blocked_reason on
+// draft/rejected, against the test-local literals above.
+func TestGetHandler_SubmitBlockedReasonExactCopy(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	reasonFor := func(t *testing.T, status Status) *string {
+		t.Helper()
+		invoiceID := uuid.NewString()
+		want := Invoice{ID: invoiceID, Status: status}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %q: http status = %d, want 200 (body=%s)", status, rec.Code, rec.Body.String())
+		}
+		var raw struct {
+			SubmitBlockedReason *string `json:"submit_blocked_reason"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+		}
+		return raw.SubmitBlockedReason
+	}
+
+	draftReason := reasonFor(t, StatusDraft)
+	if draftReason == nil {
+		t.Fatalf("draft: submit_blocked_reason = nil, want %q", exactSubmitBlockedReasonDraft)
+	} else if *draftReason != exactSubmitBlockedReasonDraft {
+		t.Errorf("draft: submit_blocked_reason = %q, want %q", *draftReason, exactSubmitBlockedReasonDraft)
+	}
+
+	rejectedReason := reasonFor(t, StatusRejected)
+	if rejectedReason == nil {
+		t.Fatalf("rejected: submit_blocked_reason = nil, want %q", exactSubmitBlockedReasonRejected)
+	} else if *rejectedReason != exactSubmitBlockedReasonRejected {
+		t.Errorf("rejected: submit_blocked_reason = %q, want %q", *rejectedReason, exactSubmitBlockedReasonRejected)
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonDraftAndRejectedDiffer (G3): draft and
+// rejected must carry DIFFERENT copy -- kills a collapse into one shared
+// const (unlike revalidate_blocked_reason's single status-independent
+// string, D1). Compares strings, never dereferences either *string
+// directly, so with the RED stub (both nil) this fails on the intended
+// "want two distinct non-null reasons" assertion, never a nil-pointer panic.
+func TestGetHandler_SubmitBlockedReasonDraftAndRejectedDiffer(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	reasonFor := func(t *testing.T, status Status) *string {
+		t.Helper()
+		invoiceID := uuid.NewString()
+		want := Invoice{ID: invoiceID, Status: status}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %q: http status = %d, want 200 (body=%s)", status, rec.Code, rec.Body.String())
+		}
+		var raw struct {
+			SubmitBlockedReason *string `json:"submit_blocked_reason"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+		}
+		return raw.SubmitBlockedReason
+	}
+
+	draftReason := reasonFor(t, StatusDraft)
+	rejectedReason := reasonFor(t, StatusRejected)
+
+	draftStr, rejectedStr := "<nil>", "<nil>"
+	if draftReason != nil {
+		draftStr = *draftReason
+	}
+	if rejectedReason != nil {
+		rejectedStr = *rejectedReason
+	}
+	if draftReason == nil || rejectedReason == nil || draftStr == rejectedStr {
+		t.Errorf("draft submit_blocked_reason = %q, rejected = %q, want two distinct non-null reasons", draftStr, rejectedStr)
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonNullWhenSubmittable (G4): a validated
+// invoice (canEdit && canSubmit both true) must render an explicit
+// "submit_blocked_reason":null -- present, not omitted. Guard, already
+// green at RED: the stub always returns nil.
+func TestGetHandler_SubmitBlockedReasonNullWhenSubmittable(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"submit_blocked_reason":null`) {
+		t.Errorf("body = %s, want the literal \"submit_blocked_reason\":null on a validated invoice", rec.Body.String())
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded (G5): perturbs
+// legalTransitions at runtime (same technique as
+// TestGetHandler_ActionFlagsAreDerivedNotHardcoded) so canEdit(failed) flips
+// true; submit_blocked_reason on failed must become non-null via the
+// default arm -- the one spec that separates "derived from canEdit/
+// canSubmit" from a hardcoded {draft,rejected} switch.
+func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
+	orig := legalTransitions
+	t.Cleanup(func() { legalTransitions = orig })
+	legalTransitions = edgeTableWith(orig, StatusFailed, StatusDraft)
+
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusFailed}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"submit_blocked_reason":null`) {
+		t.Errorf("body = %s, want a non-null submit_blocked_reason for failed once failed->draft is a legal edge -- must call canEdit(inv.Status), not restate a hardcoded {draft,rejected} switch", body)
+	}
+}
+
+// QA adversarial: a zero-value/unrecognized Status must not panic
+// submitBlockedReason, and must agree with canEdit/canSubmit's own false/false
+// verdict on it -- nil, matching every other non-editable status.
+func TestSubmitBlockedReason_UnknownStatusNoPanic(t *testing.T) {
+	for _, s := range []Status{"", "bogus-status"} {
+		if got := submitBlockedReason(s); got != nil {
+			t.Errorf("submitBlockedReason(%q) = %q, want nil", s, *got)
+		}
 	}
 }
 

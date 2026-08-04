@@ -349,12 +349,15 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
 // struct and none tagged omitempty -- present, explicit, on every status. Required (not
 // optional): a fail-open `?` would let a consumer read `undefined` as "the server didn't
 // say", exactly what [gates-on-the-wire] exists to prevent.
+// CanSubmit/SubmitBlockedReason (handlers.go:232-233): same convention, one call site later.
 export interface GetInvoiceResult extends Invoice {
   rule_set_version: number | null
   qr_png_base64: string | null
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
+  can_submit: boolean
+  submit_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

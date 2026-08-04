@@ -22,7 +22,7 @@
 // what nests them again before 04 evaluates, so a flat createInvoice + POST
 // .../validate round-trips the identical verdict fixtures.ts's BAD_INVOICE_KEYS
 // pins for the nested path.
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type Request } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
@@ -671,10 +671,11 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
 // M5-09-08 (task-256): the M5 milestone gate itself -- both demonstrations Core AC #5
 // requires, entirely from the browser, extending this capability flow rather than adding
 // a dated spec ([capability-not-date], docs/e2e-convention.md; Stage-1 correction C12).
-// The detail surface carries NO submit control in any status ([detail-submit-single]
-// dropped) -- every submit below goes through the list's batch-select-and-submit path
+// Both submits below still route through the list's batch-select-and-submit path
 // (invoice-select + batch-submit, M5-09-06), reused for BOTH the first submit and the
-// resubmit leg.
+// resubmit leg -- these two tests exercise the register's own path specifically, not
+// because the detail page lacks a Submit control (it has one; see "detail surface: submit
+// one invoice from its own page").
 //
 // Row 1-3 of the story's Test Specs table ("batch-select and submit", "badge advances",
 // "shows a real IRN and rendered QR") are folded into ONE test below (Stage-1 correction
@@ -803,9 +804,8 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   await page.getByTestId('revalidate').click()
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
-  // Resubmit leg: back to the list -- the detail surface carries no submit control in any
-  // status, so the ONLY way to resubmit is the same batch-select-and-submit path the
-  // first submit used (AC-3).
+  // Resubmit leg: back to the list -- this test still resubmits through the register's
+  // batch-select-and-submit path (AC-3), not the detail page's own Submit control.
   await page.getByRole('button', { name: '← All invoices' }).click()
   await expect(row).toBeVisible()
   await row.getByTestId('invoice-select').check()
@@ -1047,18 +1047,120 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   // rejection_reasons is [] (API-transitioned straight to failed, never rejected by the
   // APP) -- the card must say so honestly, not render a silent gap.
   await expect(page.getByTestId('failed-dead-end')).toContainText(/no reason recorded/i)
-  // "no submit control at all": `can_edit` is false for a failed invoice
-  // ([gates-on-the-wire], store.go's canEdit/canTransition), so the actions bar (Edit AND
-  // Re-validate together) renders nothing at all -- `edit-invoice` itself would be vacuous
-  // here (the form only mounts once Edit is clicked, and there is no Edit to click), so
-  // `invoice-actions`/`edit-toggle` are the real guard ([actions-visibility]). No button
-  // anywhere on this page matches /submit/i either (InvoicesList, the only surface with a
-  // Submit button, is fully unmounted while on the detail view -- App.tsx's view switch is
-  // exclusive, never both mounted at once).
+  // `can_edit` is false for a failed invoice ([gates-on-the-wire], store.go's
+  // canEdit/canTransition), so the whole actions bar (Edit, Re-validate, and Submit
+  // together) renders nothing -- `edit-invoice` would be vacuous here (Edit is never
+  // clicked), so `invoice-actions`/`edit-toggle` are the real guard ([actions-visibility]).
+  // No button matches /submit/i either: the detail page's own Submit is gated by that same
+  // `can_edit` check, and the register's Submit button is unmounted while on the detail
+  // view -- App.tsx's view switch is exclusive, never both mounted at once.
   await expect(page.getByTestId('revalidate')).toHaveCount(0)
   await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
   await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The founder-reversed visibility model: Submit always renders inside the actions bar now,
+// disabled+reasoned when `can_submit` is false, rather than hidden. This test proves that on
+// a draft first, then drives a real submit-and-verdict journey entirely from the detail
+// page's own Submit control -- no batch-select, no navigation away.
+test('detail surface: submit one invoice from its own page -- cancel sends nothing, confirm sends one, and the verdict lands without leaving', async ({
+  page,
+}) => {
+  // Cold-fleet headroom (this file's own Day-60 precedent) plus the pending-trigger's
+  // >=10s hold before the poll worker resolves it to accepted.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `INVED02 submit ${Date.now()}`, tin: freshTin() })
+
+  // Never validated, so can_submit stays false for the disabled-state leg below.
+  const draftNumber = `INV-INVED02-DRAFT-${Date.now()}`
+  await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(draftNumber) })
+
+  // PENDING trigger (mockPendingPolls=2 x mockPollAfterSeconds=5s, mock_adapter.go): holds
+  // `submitted` for >=10s, the window the history-row-growth assertion below needs to be
+  // non-vacuous -- the same fixture choice as the reject/resubmit test's own resubmit leg.
+  const invoiceNumber = `INV-INVED02-SUBMIT-${Date.now()}`
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_PENDING),
+  })
+  await validateInvoice(token, inv.id)
+
+  // Request counter, not just the DOM: the only reliable proof Cancel sends nothing, and
+  // that Confirm sends exactly one POST carrying exactly this invoice's id ([no-bulk-on-detail]).
+  const submitPosts: Request[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices/submissions')) submitPosts.push(r)
+  })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  // Disabled-with-reason leg, on the draft fixture: Submit is visible but unclickable, and
+  // the backend's own sentence is on screen ([revalidate-visibility] convention, extended to
+  // Submit).
+  await openInvoiceRow(page, draftNumber)
+  await expect(page.getByTestId('detail-submit')).toBeVisible()
+  await expect(page.getByTestId('detail-submit')).toBeDisabled()
+  await expect(page.getByTestId('submit-blocked-reason')).toContainText(
+    'Only validated invoices can be submitted — re-validate this invoice first.',
+  )
+
+  await page.getByRole('button', { name: '← All invoices' }).click()
+  await openInvoiceRow(page, invoiceNumber)
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
+
+  const submitBtn = page.getByTestId('detail-submit')
+  await expect(submitBtn).toBeVisible()
+  await expect(submitBtn).toBeEnabled()
+
+  await submitBtn.click()
+  const prompt = page.getByTestId('detail-submit-confirm-prompt')
+  await expect(prompt).toContainText('Send this invoice for transmission?')
+  await expect(prompt).toContainText('Nothing here can pull it back.')
+
+  // Cancel is the identity transition ([no-bulk-on-detail], same reducer as the bulk bar) --
+  // no arm survives, so no request fires.
+  await page.getByTestId('detail-submit-cancel').click()
+  expect(submitPosts, 'Cancel must send no submission POST').toHaveLength(0)
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+  await expect(submitBtn).toBeVisible()
+
+  // Re-arm and confirm: exactly one POST, carrying exactly this one invoice id.
+  await submitBtn.click()
+  await expect(prompt).toBeVisible()
+  await page.getByTestId('detail-submit-confirm').click()
+  await expect.poll(() => submitPosts.length).toBe(1)
+  const submittedIds = (submitPosts[0].postDataJSON() as { invoice_ids: string[] }).invoice_ids
+  expect(submittedIds, '[no-bulk-on-detail]: exactly one id, this invoice only').toHaveLength(1)
+  expect(submittedIds[0]).toBe(inv.id)
+
+  // No navigation anywhere below -- the verdict lands on this same mounted view.
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
+
+  const badge = page.getByTestId('invoice-status-badge')
+  const historyRows = page.getByTestId('status-history-row')
+  await expect(badge).toContainText('SUBMITTED')
+  const beforeAcceptRows = await historyRows.count()
+
+  // Pending-convergence precedent (this file's reject/resubmit test): the ONLY assertion
+  // needing a timeout above the config's 15s default.
+  await expect(badge).toContainText('ACCEPTED', { timeout: 45_000 })
+  await expect(page.getByTestId('invoices-list')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  // Can ONLY have arrived via the poll tick's own shouldRefreshHistory -> history.run(),
+  // never a user action (none happened between the two badge assertions above).
+  await expect(historyRows).toHaveCount(beforeAcceptRows + 1)
+
+  await assertFiscalRecord(page, invoiceNumber)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

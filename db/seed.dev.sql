@@ -201,61 +201,61 @@ WITH invoice_seed (
     -- Adeyemi & Sons Trading Ltd (10012345-0001) -- [default-entity-needs-data]: mostly
     -- healthy, one flagged invoice and one that never got a verdict, spanning draft ->
     -- accepted.
-    ('10012345-0001', 'DEMO-2026-1001', 'accepted',  '2026-06-02', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 500000.00, 37500.00, 537500.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1002', 'accepted',  '2026-06-05', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            220000.00, 16500.00, 236500.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1003', 'validated', '2026-06-10', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 180000.00, 13500.00, 193500.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1004', 'failed',    '2026-06-14', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20033344-0003', 'Kano Agro Distributors',         95000.00,  7125.00,  102125.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-06-18', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            60000.00,  4500.00,  64500.00,  false, '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 75000.00,  5600.00,  80600.00,  true,
+    ('10012345-0001', 'DEMO-2026-1001', 'accepted',  '2026-06-02', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 500000.00, 37500.00, 537500.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1002', 'accepted',  '2026-06-05', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 220000.00, 16500.00, 236500.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1003', 'validated', '2026-06-10', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',            180000.00, 13500.00, 193500.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1004', 'failed',    '2026-06-14', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                   95000.00,  7125.00,  102125.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-06-18', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',        60000.00,  4500.00,  64500.00,  false, '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 75000.00,  5600.00,  80600.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
     -- Reserved trigger buyer TINs, left `validated` so a demo can submit them and watch the
     -- live outcome. No seeded job or evidence: they have never been submitted.
-    ('10012345-0001', 'DEMO-2026-1007', 'validated', '2026-06-26', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0001', 'Sandbox APP (submit: accepted)',         120000.00, 9000.00,  129000.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1008', 'validated', '2026-06-27', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0002', 'Sandbox APP (submit: rejected)',          96000.00, 7200.00,  103200.00, true,  '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1009', 'validated', '2026-06-28', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0003', 'Sandbox APP (submit: deferred verdict)', 144000.00, 10800.00, 154800.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1007', 'validated', '2026-06-26', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0001', 'Sandbox APP (always accepts)',           120000.00, 9000.00,  129000.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1008', 'validated', '2026-06-27', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0002', 'Sandbox APP (always rejects)',            96000.00, 7200.00,  103200.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1009', 'validated', '2026-06-28', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0003', 'Sandbox APP (defers, then accepts)',     144000.00, 10800.00, 154800.00, true,  '[]', '[]'),
 
     -- Chukwu Global Ventures Ltd (10023456-0002) -- the late-lifecycle failures, plus one
     -- blocked draft.
-    ('10023456-0002', 'DEMO-2026-2001', 'accepted',  '2026-06-03', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    310000.00, 23250.00, 333250.00, true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2002', 'failed',    '2026-06-09', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 128000.00, 9600.00,  137600.00, true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2003', 'failed',    '2026-06-16', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors',    84000.00,  6300.00,  90300.00,  true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2004', 'failed',    '2026-06-21', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 45000.00,  3375.00,  48375.00,  true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2005', 'draft',     '2026-06-24', '10023456-0002', 'Chukwu Global Ventures Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 66000.00,  4800.00,  70800.00,  true,
+    ('10023456-0002', 'DEMO-2026-2001', 'accepted',  '2026-06-03', '10023456-0002', 'Chukwu Global Ventures Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)',    310000.00, 23250.00, 333250.00, true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2002', 'failed',    '2026-06-09', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                     128000.00, 9600.00,  137600.00, true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2003', 'failed',    '2026-06-16', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                     84000.00,  6300.00,  90300.00,  true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2004', 'failed',    '2026-06-21', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                     45000.00,  3375.00,  48375.00,  true, '[]', '[]'),
+    ('10023456-0002', 'DEMO-2026-2005', 'draft',     '2026-06-24', '10023456-0002', 'Chukwu Global Ventures Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 66000.00,  4800.00,  70800.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
 
     -- Okonkwo Textiles Nigeria Ltd (10034567-0003) -- one authority rejection.
-    ('10034567-0003', 'DEMO-2026-3001', 'accepted',  '2026-06-04', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 265000.00, 19875.00, 284875.00, true,  '[]', '[]'),
-    ('10034567-0003', 'DEMO-2026-3002', 'accepted',  '2026-06-08', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20022233-0002', 'Lagos Textiles Mart',            142000.00, 10650.00, 152650.00, true,  '[]', '[]'),
-    ('10034567-0003', 'DEMO-2026-3003', 'rejected',  '2026-06-13', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd',      88000.00,  6600.00,  94600.00,  true,
+    ('10034567-0003', 'DEMO-2026-3001', 'accepted',  '2026-06-04', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 265000.00, 19875.00, 284875.00, true,  '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3002', 'accepted',  '2026-06-08', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 142000.00, 10650.00, 152650.00, true,  '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3003', 'rejected',  '2026-06-13', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20077788-0007', 'Enugu Metal Works Ltd (rejected by the authority)',          88000.00,  6600.00,  94600.00,  true,
       '[]', '[{"code":"NGE-4102","message":"Customer tax identifier is not registered with the tax authority.","path":"buyer.tin"}]'),
-    ('10034567-0003', 'DEMO-2026-3004', 'validated', '2026-06-19', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20033344-0003', 'Kano Agro Distributors',         51000.00,  3825.00,  54825.00,  true,  '[]', '[]'),
-    ('10034567-0003', 'DEMO-2026-3005', 'draft',     '2026-06-24', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 39000.00,  2925.00,  41925.00,  false, '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3004', 'validated', '2026-06-19', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',           51000.00,  3825.00,  54825.00,  true,  '[]', '[]'),
+    ('10034567-0003', 'DEMO-2026-3005', 'draft',     '2026-06-24', '10034567-0003', 'Okonkwo Textiles Nigeria Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',       39000.00,  2925.00,  41925.00,  false, '[]', '[]'),
 
     -- Balogun Agro-Allied Ltd (10045678-0004) -- one line-items/subtotal mismatch.
-    ('10045678-0004', 'DEMO-2026-4001', 'accepted',  '2026-06-06', '10045678-0004', 'Balogun Agro-Allied Ltd', '20022233-0002', 'Lagos Textiles Mart',       198000.00, 14850.00, 212850.00, true,  '[]', '[]'),
-    ('10045678-0004', 'DEMO-2026-4002', 'draft',     '2026-06-11', '10045678-0004', 'Balogun Agro-Allied Ltd', '20033344-0003', 'Kano Agro Distributors',    100000.00, 7500.00,  107500.00, true,
+    ('10045678-0004', 'DEMO-2026-4001', 'accepted',  '2026-06-06', '10045678-0004', 'Balogun Agro-Allied Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 198000.00, 14850.00, 212850.00, true,  '[]', '[]'),
+    ('10045678-0004', 'DEMO-2026-4002', 'draft',     '2026-06-11', '10045678-0004', 'Balogun Agro-Allied Ltd', '20066677-0006', 'Abuja Office Interiors Ltd (lines do not sum to subtotal)', 100000.00, 7500.00,  107500.00, true,
       '[{"rule_key":"line-items-sum-subtotal","severity":"error","message":"Line item amounts must sum to the invoice subtotal."}]', '[]'),
-    ('10045678-0004', 'DEMO-2026-4003', 'validated', '2026-06-17', '10045678-0004', 'Balogun Agro-Allied Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd', 62000.00,  4650.00,  66650.00,  true,  '[]', '[]'),
-    ('10045678-0004', 'DEMO-2026-4004', 'draft',     '2026-06-22', '10045678-0004', 'Balogun Agro-Allied Ltd', '20022233-0002', 'Lagos Textiles Mart',       40000.00,  3000.00,  43000.00,  false, '[]', '[]'),
+    ('10045678-0004', 'DEMO-2026-4003', 'validated', '2026-06-17', '10045678-0004', 'Balogun Agro-Allied Ltd', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',          62000.00,  4650.00,  66650.00,  true,  '[]', '[]'),
+    ('10045678-0004', 'DEMO-2026-4004', 'draft',     '2026-06-22', '10045678-0004', 'Balogun Agro-Allied Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',      40000.00,  3000.00,  43000.00,  false, '[]', '[]'),
 
     -- Emeka Pharmaceuticals Ltd (10056789-0005) -- clean validation record; its one
     -- needs_attention row is a transport failure, not a rule violation.
-    ('10056789-0005', 'DEMO-2026-5001', 'accepted',  '2026-06-07', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 145000.00, 10875.00, 155875.00, true, '[]', '[]'),
-    ('10056789-0005', 'DEMO-2026-5002', 'accepted',  '2026-06-12', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd',      210000.00, 15750.00, 225750.00, true, '[]', '[]'),
-    ('10056789-0005', 'DEMO-2026-5003', 'validated', '2026-06-19', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors',         76000.00,  5700.00,  81700.00,  true, '[]', '[]'),
-    ('10056789-0005', 'DEMO-2026-5004', 'failed',    '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 33000.00,  2475.00,  35475.00,  true, '[]', '[]'),
-    ('10056789-0005', 'DEMO-2026-5005', 'draft',     '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors',         48000.00,  3600.00,  51600.00,  false, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5001', 'accepted',  '2026-06-07', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 145000.00, 10875.00, 155875.00, true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5002', 'accepted',  '2026-06-12', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)', 210000.00, 15750.00, 225750.00, true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5003', 'validated', '2026-06-19', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',          76000.00,  5700.00,  81700.00,  true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5004', 'failed',    '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                 33000.00,  2475.00,  35475.00,  true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5005', 'draft',     '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',      48000.00,  3600.00,  51600.00,  false, '[]', '[]'),
 
     -- Aliyu Logistics Services Ltd (10067890-0006) -- the problem client: rejected +
     -- two malformed-TIN blocked drafts (needs_attention:3, the highest of the six).
-    ('10067890-0006', 'DEMO-2026-6001', 'rejected', '2026-06-08', '10067890-0006', 'Aliyu Logistics Services Ltd', '20022233-0002', 'Lagos Textiles Mart', 72000.00, 5400.00, 77400.00, true,
+    ('10067890-0006', 'DEMO-2026-6001', 'rejected', '2026-06-08', '10067890-0006', 'Aliyu Logistics Services Ltd', '20077788-0007', 'Enugu Metal Works Ltd (rejected by the authority)', 72000.00, 5400.00, 77400.00, true,
       '[]', '[{"code":"NGE-4102","message":"Customer tax identifier is not registered with the tax authority.","path":"buyer.tin"}]'),
     -- Supplier TIN mistyped on THIS invoice only (the entity's own TIN stays correct in
     -- business_entities above -- store-invalid-faithfully, invoices carry no CHECK on
     -- this column, migrations/20260714103137_invoices.sql's header).
-    ('10067890-0006', 'DEMO-2026-6002', 'draft', '2026-06-15', 'BADTIN', 'Aliyu Logistics Services Ltd', '20022233-0002', 'Lagos Textiles Mart', 54000.00, 4050.00, 58050.00, true,
+    ('10067890-0006', 'DEMO-2026-6002', 'draft', '2026-06-15', 'BADTIN', 'Aliyu Logistics Services Ltd', '20088899-0008', 'Jos Highland Farms Ltd (supplier TIN malformed)', 54000.00, 4050.00, 58050.00, true,
       '[{"rule_key":"supplier-tin-format","severity":"error","message":"Supplier TIN must be in the format NNNNNNNN-NNNN (8 digits, hyphen, 4 digits).","path":"supplier.tin"}]', '[]'),
-    ('10067890-0006', 'DEMO-2026-6003', 'draft', '2026-06-23', '10067890-0006', 'Aliyu Logistics Services Ltd', '12345678', 'Lagos Textiles Mart', 47000.00, 3525.00, 50525.00, true,
+    ('10067890-0006', 'DEMO-2026-6003', 'draft', '2026-06-23', '10067890-0006', 'Aliyu Logistics Services Ltd', '12345678', 'Calabar Marine Services Ltd (buyer TIN malformed)', 47000.00, 3525.00, 50525.00, true,
       '[{"rule_key":"buyer-tin-format","severity":"error","message":"Buyer TIN, when present, must be in the format NNNNNNNN-NNNN.","path":"buyer.tin"}]', '[]')
 )
 INSERT INTO invoices (
@@ -340,23 +340,23 @@ WITH inhouse_invoice_seed (
     subtotal, vat, total, validated, violations, rejection_reasons
 ) AS (
   VALUES
-    ('DEMO-2026-7001', 'accepted',  '2026-06-03', '99999999-0001', 'Sandbox APP (accepted)',         400000.00, 30000.00, 430000.00, true, '[]', '[]'),
-    ('DEMO-2026-7002', 'rejected',  '2026-06-05', '99999999-0002', 'Sandbox APP (rejected)',         180000.00, 13500.00, 193500.00, true,
+    ('DEMO-2026-7001', 'accepted',  '2026-06-03', '99999999-0001', 'Sandbox APP (always accepts)',                400000.00, 30000.00, 430000.00, true, '[]', '[]'),
+    ('DEMO-2026-7002', 'rejected',  '2026-06-05', '99999999-0002', 'Sandbox APP (always rejects)',                180000.00, 13500.00, 193500.00, true,
       '[]', '[{"code":"NGE-4102","message":"Customer tax identifier is not registered with the tax authority.","path":"buyer.tin"}]'),
-    ('DEMO-2026-7003', 'accepted',  '2026-06-09', '99999999-0003', 'Sandbox APP (deferred verdict)', 260000.00, 19500.00, 279500.00, true, '[]', '[]'),
-    ('DEMO-2026-7004', 'failed',    '2026-06-12', '99999999-0004', 'Sandbox APP (unavailable)',      145000.00, 10875.00, 155875.00, true, '[]', '[]'),
-    ('DEMO-2026-7006', 'failed',    '2026-06-16', '99999999-0006', 'Sandbox APP (timeout)',           92000.00,  6900.00,  98900.00, true, '[]', '[]'),
+    ('DEMO-2026-7003', 'accepted',  '2026-06-09', '99999999-0003', 'Sandbox APP (defers, then accepts)',          260000.00, 19500.00, 279500.00, true, '[]', '[]'),
+    ('DEMO-2026-7004', 'failed',    '2026-06-12', '99999999-0004', 'Sandbox APP (unavailable, never verdicts)',   145000.00, 10875.00, 155875.00, true, '[]', '[]'),
+    ('DEMO-2026-7006', 'failed',    '2026-06-16', '99999999-0006', 'Sandbox APP (times out, never verdicts)',      92000.00,  6900.00,  98900.00, true, '[]', '[]'),
 
-    ('DEMO-2026-8001', 'accepted',  '2026-06-04', '20011122-0001', 'Zenith Freight & Logistics Ltd', 320000.00, 24000.00, 344000.00, true, '[]', '[]'),
-    ('DEMO-2026-8002', 'accepted',  '2026-06-11', '20033344-0003', 'Kano Agro Distributors',         215000.00, 16125.00, 231125.00, true, '[]', '[]'),
-    ('DEMO-2026-8003', 'validated', '2026-06-18', '20044455-0004', 'Ibadan Consumer Goods Ltd',       88000.00,  6600.00,  94600.00, true, '[]', '[]'),
-    ('DEMO-2026-8004', 'draft',     '2026-06-22', '20022233-0002', 'Lagos Textiles Mart',             64000.00,  4800.00,  68800.00, false, '[]', '[]'),
-    ('DEMO-2026-8005', 'draft',     '2026-06-25', '20011122-0001', 'Zenith Freight & Logistics Ltd',  56000.00,  4100.00,  60100.00, true,
+    ('DEMO-2026-8001', 'accepted',  '2026-06-04', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)',    320000.00, 24000.00, 344000.00, true, '[]', '[]'),
+    ('DEMO-2026-8002', 'accepted',  '2026-06-11', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)',    215000.00, 16125.00, 231125.00, true, '[]', '[]'),
+    ('DEMO-2026-8003', 'validated', '2026-06-18', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',               88000.00,  6600.00,  94600.00, true, '[]', '[]'),
+    ('DEMO-2026-8004', 'draft',     '2026-06-22', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',           64000.00,  4800.00,  68800.00, false, '[]', '[]'),
+    ('DEMO-2026-8005', 'draft',     '2026-06-25', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)',  56000.00,  4100.00,  60100.00, true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
 
-    ('DEMO-2026-9001', 'validated', '2026-06-26', '99999999-0001', 'Sandbox APP (submit: accepted)',         240000.00, 18000.00, 258000.00, true, '[]', '[]'),
-    ('DEMO-2026-9002', 'validated', '2026-06-27', '99999999-0002', 'Sandbox APP (submit: rejected)',         168000.00, 12600.00, 180600.00, true, '[]', '[]'),
-    ('DEMO-2026-9003', 'validated', '2026-06-28', '99999999-0003', 'Sandbox APP (submit: deferred verdict)', 196000.00, 14700.00, 210700.00, true, '[]', '[]')
+    ('DEMO-2026-9001', 'validated', '2026-06-26', '99999999-0001', 'Sandbox APP (always accepts)',       240000.00, 18000.00, 258000.00, true, '[]', '[]'),
+    ('DEMO-2026-9002', 'validated', '2026-06-27', '99999999-0002', 'Sandbox APP (always rejects)',       168000.00, 12600.00, 180600.00, true, '[]', '[]'),
+    ('DEMO-2026-9003', 'validated', '2026-06-28', '99999999-0003', 'Sandbox APP (defers, then accepts)', 196000.00, 14700.00, 210700.00, true, '[]', '[]')
 )
 INSERT INTO invoices (
     tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,

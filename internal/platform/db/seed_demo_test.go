@@ -2558,9 +2558,9 @@ var nonConvergentTriggerTINs = []string{"99999999-0004", "99999999-0006", "99999
 // TIN. AC-3 makes buyer_name a per-TIN canonical name, so a twin shares its terminal row's
 // counterparty -- status, not the name, is what distinguishes the two.
 var terminalTwinBuyerName = map[string]string{
-	"99999999-0001": "Sandbox APP (accepted)",
-	"99999999-0002": "Sandbox APP (rejected)",
-	"99999999-0003": "Sandbox APP (deferred verdict)",
+	"99999999-0001": "Sandbox APP (always accepts)",
+	"99999999-0002": "Sandbox APP (always rejects)",
+	"99999999-0003": "Sandbox APP (defers, then accepts)",
 }
 
 // submittableTwinRow is one seeded trigger twin plus everything a claimed-outcome check needs.

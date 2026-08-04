@@ -3876,3 +3876,48 @@ func TestSeedIssueDatesArePastRelativeToCreatedAt(t *testing.T) {
 		t.Fatalf("checked %d rows, want %d", checked, wantChecked)
 	}
 }
+
+// TestSeedIssueDatesAreWithinDeclared2026H1Window: the span/distinctness checks above tolerate
+// a stray out-of-range date (a 2025/2027 typo, or a month past June) as long as the month-count
+// and distinctness they check still hold -- this pins the literal year/month bound AC-1/AC-5
+// assume.
+func TestSeedIssueDatesAreWithinDeclared2026H1Window(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, issue_date FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query issue_date: %v", err)
+	}
+	defer rows.Close()
+
+	var checked int
+	for rows.Next() {
+		var invoiceNumber string
+		var issueDate time.Time
+		if err := rows.Scan(&invoiceNumber, &issueDate); err != nil {
+			t.Fatalf("scan issue_date row: %v", err)
+		}
+		checked++
+		if issueDate.Year() != 2026 || issueDate.Month() < time.January || issueDate.Month() > time.June {
+			t.Errorf("%s: issue_date = %v, want within 2026-01 .. 2026-06", invoiceNumber, issueDate)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate issue_date rows: %v", err)
+	}
+	wantChecked := demoInvoiceTotalCount + len(wantInHouseInvoiceOrder)
+	if checked != wantChecked {
+		t.Fatalf("checked %d rows, want %d", checked, wantChecked)
+	}
+}

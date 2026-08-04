@@ -231,6 +231,12 @@ jobs:
         # stale/incomplete go:embed; this can. DATABASE_MIGRATION_URL is already in
         # this job's env, so the test runs here (it self-skips everywhere else).
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestMigrateUpFromEmbedded ./internal/platform/db/...
+      - name: Demo-portfolio repair migration suite (as migrator, no pre-set tenant) + per-test visibility & skip gate
+        # Executes the repair migration's own Up/Down body as invoice_migrator with no
+        # app.current_tenant pre-set — the body's own set_config calls are what is under
+        # test. Placed after the step above because that one ends with DownTo(0) +
+        # MigrateUp, which wipes anything seeded before it.
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestDemoRepairMigration ./internal/platform/db/...
       - name: Bootstrap-SQL pgx-caller suite (fail-closed GUCs, idempotency, rotation) + per-test visibility & skip gate
         # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its three
         # role passwords from session GUCs instead of psql-only \set/:'var', so a pgx

@@ -194,11 +194,24 @@ func tenantAdmin(ctx context.Context, pool *pgxpool.Pool, tenantID string) (stri
 func pendingRows(ctx context.Context, pool *pgxpool.Pool) ([]lineRow, error) {
 	var out []lineRow
 	err := db.WithinRequestTenantTx(ctx, pool, func(tx pgx.Tx) error {
+		// EVERY content column is coalesced, not just the two that looked
+		// obviously optional. invoices and line_items store invalid data
+		// faithfully -- "MBS-content: NULLABLE, no CHECK (store-invalid)" in
+		// both migrations -- so issue_date, currency, the three money columns and
+		// all three line-item columns are nullable in practice, and production
+		// residue carries NULLs the seeded fixtures never do. An uncoalesced
+		// column aborts the whole tenant on the row scan
+		// (TestRLS_DemoDocsHandlesInvoicesWithNullContentColumns).
+		//
+		// '' is also the honest CSV rendering of an absent value: the file an
+		// import would have produced has an empty cell there, not the string
+		// "NULL" and not a dropped column.
 		rows, err := tx.Query(ctx,
-			`SELECT e.name, i.id::text, i.invoice_number, to_char(i.issue_date, 'YYYY-MM-DD'),
-			        coalesce(i.buyer_tin, ''), coalesce(i.buyer_name, ''), i.currency,
-			        i.subtotal::text, i.vat::text, i.total::text,
-			        li.description, li.quantity::text, li.unit_price::text
+			`SELECT coalesce(e.name, ''), i.id::text, i.invoice_number,
+			        coalesce(to_char(i.issue_date, 'YYYY-MM-DD'), ''),
+			        coalesce(i.buyer_tin, ''), coalesce(i.buyer_name, ''), coalesce(i.currency, ''),
+			        coalesce(i.subtotal::text, ''), coalesce(i.vat::text, ''), coalesce(i.total::text, ''),
+			        coalesce(li.description, ''), coalesce(li.quantity::text, ''), coalesce(li.unit_price::text, '')
 			   FROM invoices i
 			   JOIN business_entities e ON e.id = i.entity_id
 			   JOIN line_items li ON li.invoice_id = i.id

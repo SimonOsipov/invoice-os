@@ -225,6 +225,68 @@ func TestRLS_DemoDocsSeedsOneDocumentPerEntity(t *testing.T) {
 	}
 }
 
+// invoices and line_items store invalid data faithfully -- every content column
+// is nullable by design ("MBS-content: NULLABLE, no CHECK") -- and production
+// residue carries NULLs that no seeded fixture does. Before the coalesce, the
+// row scan failed on the first such column and took the ENTIRE tenant down:
+// observed on production as `cannot scan NULL into *string` (col: currency),
+// which left one of the two demo tenants with no documents at all.
+func TestRLS_DemoDocsHandlesInvoicesWithNullContentColumns(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID, _ := newTenant(t, super, "demodocs null columns")
+	entity := newEntity(t, super, tenantID, "Null Content Ltd")
+
+	// Only the NOT NULL columns are supplied; every MBS-content column and every
+	// line-item content column is left NULL.
+	var inv string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3) RETURNING id`,
+		tenantID, entity, "DEMO-T-NULL-0001").Scan(&inv); err != nil {
+		t.Fatalf("seed null invoice: %v", err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no) VALUES ($1, $2, 1)`,
+		tenantID, inv); err != nil {
+		t.Fatalf("seed null line_item: %v", err)
+	}
+
+	var bodies [][]byte
+	res, err := seedTenant(context.Background(), app, stubStore(t, super, &bodies), tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant on all-NULL content: %v", err)
+	}
+	if res.InvoicesLinked != 1 {
+		t.Errorf("InvoicesLinked = %d, want 1", res.InvoicesLinked)
+	}
+	if doc, rows := sourceOf(t, super, inv); doc == nil || len(rows) != 1 || rows[0] != 2 {
+		t.Errorf("source_document_id=%v source_rows=%v, want a document and [2]", doc, rows)
+	}
+
+	// The NULLs must render as empty CELLS, not as a short row: a dropped column
+	// would silently shift every later value in the previewer.
+	if len(bodies) != 1 {
+		t.Fatalf("stored %d bodies, want 1", len(bodies))
+	}
+	records, err := csv.NewReader(strings.NewReader(string(bodies[0]))).ReadAll()
+	if err != nil {
+		t.Fatalf("stored file is not valid CSV: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2 (header + 1 row)", len(records))
+	}
+	if len(records[1]) != 11 {
+		t.Errorf("data row has %d fields, want 11 -- NULLs must be empty cells, not dropped columns", len(records[1]))
+	}
+	if records[1][0] != "DEMO-T-NULL-0001" {
+		t.Errorf("invoice number = %q, want DEMO-T-NULL-0001", records[1][0])
+	}
+	for i, cell := range records[1][1:] {
+		if cell != "" {
+			t.Errorf("field %d = %q, want empty (every content column was NULL)", i+1, cell)
+		}
+	}
+}
+
 // A row in an import file IS a line item, so an invoice with none was never in
 // a file and must keep reading "no source document".
 func TestRLS_DemoDocsLeavesInvoicesWithoutLineItemsAlone(t *testing.T) {

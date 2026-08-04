@@ -457,6 +457,8 @@ func TestRLS_DemoDocsLeavesTheSeededNoSourceInvoiceUnlinked(t *testing.T) {
 
 	// dbTestPools already required DATABASE_SUPERUSER_URL non-empty (or skipped above).
 	superDSN := os.Getenv("DATABASE_SUPERUSER_URL")
+	// db.Seed re-anchors created_at and re-enables every rule -- anything
+	// ordered after this path in the suite sees that reset state.
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("Seed (establish the real demo fixtures): %v", err)
 	}

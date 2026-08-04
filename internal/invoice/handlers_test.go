@@ -3750,8 +3750,8 @@ func TestGetHandler_RevalidateBlockedReasonExactCopy(t *testing.T) {
 
 // TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys (T10; STRENGTHENED by
 // QA/Mode B, task-266 Part B #1): every pre-existing getResponse key must
-// keep its name/position (AC #5), and the three new action-flag keys must be
-// purely ADDITIVE -- exactly len(preExisting)+3 top-level keys total,
+// keep its name/position (AC #5), and the four new action-flag keys must be
+// purely ADDITIVE -- exactly len(preExisting)+4 top-level keys total,
 // modeled on TestValidateHandler_TopLevelKeysNotNested's exact-key-set
 // technique.
 //
@@ -3770,7 +3770,7 @@ func TestGetHandler_RevalidateBlockedReasonExactCopy(t *testing.T) {
 // permanently undetected.
 //
 // Strengthened two ways, both applied via a 2-case table:
-//  1. VALUE assertions on all three new keys, not just presence -- also
+//  1. VALUE assertions on all four new keys, not just presence -- also
 //     catches a value-computation bug (e.g. a status switch that always
 //     emits can_edit:true) that presence-only checks cannot see.
 //  2. A SECOND case at a status where both booleans are FALSE (queued), so
@@ -3801,7 +3801,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"rule_set_version", "qr_png_base64",
 	}
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason"}
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit"}
 
 	tests := []struct {
 		name              string
@@ -3809,9 +3809,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		wantCanEdit       string
 		wantCanRevalidate string
 		wantReasonNull    bool
+		wantCanSubmit     string
 	}{
-		{"validated_true_can_edit", StatusValidated, "true", "false", false},
-		{"queued_false_both_flags", StatusQueued, "false", "false", true},
+		{"validated_true_can_edit", StatusValidated, "true", "false", false, "true"},
+		{"queued_false_both_flags", StatusQueued, "false", "false", true, "false"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3844,7 +3845,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 
 			for _, k := range preExisting {
 				if _, ok := raw[k]; !ok {
-					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the three new action-flag keys must be purely additive", k, rec.Body.String())
+					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the four new action-flag keys must be purely additive", k, rec.Body.String())
 				}
 			}
 			for _, k := range newKeys {
@@ -3871,6 +3872,9 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 				}
 			} else if reasonRaw == "" || reasonRaw == "null" {
 				t.Errorf("%s: revalidate_blocked_reason raw = %q, want a non-null quoted string (body=%s)", tt.status, reasonRaw, rec.Body.String())
+			}
+			if got := string(raw["can_submit"]); got != tt.wantCanSubmit {
+				t.Errorf("%s: can_submit raw = %q, want %q (body=%s)", tt.status, got, tt.wantCanSubmit, rec.Body.String())
 			}
 		})
 	}
@@ -3940,10 +3944,11 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// here in wire order too.
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"line_items",
-		// getResponse's own fields, in declaration order -- the three
-		// action-flag keys MUST be last (AC #5's additive/position clause).
+		// getResponse's own fields, in declaration order -- the action-flag
+		// keys MUST be last (AC #5's additive/position clause), can_submit
+		// (INVED-02-01) appended after revalidate_blocked_reason.
 		"rule_set_version", "qr_png_base64",
-		"can_edit", "can_revalidate", "revalidate_blocked_reason",
+		"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -3983,6 +3988,58 @@ func topLevelKeyOrder(t *testing.T, body []byte) []string {
 	return keys
 }
 
+// TestGetHandler_CanSubmitAllStatuses (INVED-02-01): table over all 7
+// statuses; expected values are a hard-coded truth table, never canSubmit(...)
+// itself, so this cannot degrade into a tautology.
+func TestGetHandler_CanSubmitAllStatuses(t *testing.T) {
+	want := map[Status]string{
+		StatusDraft:     "false",
+		StatusValidated: "true",
+		StatusQueued:    "false",
+		StatusSubmitted: "false",
+		StatusAccepted:  "false",
+		StatusRejected:  "false",
+		StatusFailed:    "false",
+	}
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, s := range allStatuses {
+		invoiceID := uuid.NewString()
+		want2 := Invoice{ID: invoiceID, Status: s}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want2, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body=%s)", s, rec.Code, rec.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("%s: decode raw body %q: %v", s, rec.Body.String(), err)
+		}
+		if got := string(raw["can_submit"]); got != want[s] {
+			t.Errorf("%s: can_submit raw = %q, want %q (body=%s)", s, got, want[s], rec.Body.String())
+		}
+	}
+}
+
+// TestGetHandler_CanSubmitFalseNotOmitted: on accepted, the raw body must
+// contain the literal "can_submit":false -- no omitempty, same reason as its
+// three siblings (a missing key would be indistinguishable from an older
+// server that has never heard of can_submit).
+func TestGetHandler_CanSubmitFalseNotOmitted(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusAccepted}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"can_submit":false`) {
+		t.Errorf("body = %s, want the literal \"can_submit\":false for an accepted invoice", rec.Body.String())
+	}
+}
+
 // TestGetHandler_ActionFlagsAreDerivedNotHardcoded (task-266 Part C mutation
 // finding): perturbs legalTransitions at runtime -- same technique as
 // TestCanEdit_TracksLegalTransitions (transition_test.go) -- and confirms
@@ -4016,7 +4073,7 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
-// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all three
+// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all four
 // action-flag keys, mirroring TestListHandler_NoRuleSetVersionKey -- they
 // live only on GetHandler's getResponse wrapper, never on the domain
 // Invoice struct List marshals directly. ALREADY GREEN at RED (neither key
@@ -4033,7 +4090,7 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`} {
+	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
 		}
@@ -4076,6 +4133,54 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 	}
 	if !strings.Contains(body, `"revalidate_blocked_reason":null`) {
 		t.Errorf("body = %s, want the literal \"revalidate_blocked_reason\":null for a freshly seeded draft row", body)
+	}
+}
+
+// TestGetHandler_RealStore_ValidatedCanSubmit (INVED-02-01): wires the REAL
+// Store.Get/Transition into the REAL GetHandler against a freshly seeded
+// row -- pins the can_submit contract end to end, DB row through to wire
+// byte, mirroring TestGetHandler_RealStore_DraftActionFlags. A seeded draft
+// row reads can_submit:false; after Store.Transition promotes it to
+// validated, the SAME row reads can_submit:true.
+func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INVED-02-01-e2e-get tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-02-01-e2e-get entity")
+	store := NewStore(app)
+
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-E2E-GET")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	get := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+		r.SetPathValue("id", invoiceID)
+		r = r.WithContext(c)
+		rec := httptest.NewRecorder()
+		GetHandler(store.Get, nil).ServeHTTP(rec, r)
+		return rec
+	}
+
+	draftRec := get()
+	if draftRec.Code != http.StatusOK {
+		t.Fatalf("draft: status = %d, want 200 (body=%s)", draftRec.Code, draftRec.Body.String())
+	}
+	if !strings.Contains(draftRec.Body.String(), `"can_submit":false`) {
+		t.Errorf("draft: body = %s, want the literal \"can_submit\":false for a freshly seeded draft row", draftRec.Body.String())
+	}
+
+	if _, err := store.Transition(c, invoiceID, StatusValidated); err != nil {
+		t.Fatalf("Transition(draft->validated): %v", err)
+	}
+
+	validatedRec := get()
+	if validatedRec.Code != http.StatusOK {
+		t.Fatalf("validated: status = %d, want 200 (body=%s)", validatedRec.Code, validatedRec.Body.String())
+	}
+	if !strings.Contains(validatedRec.Body.String(), `"can_submit":true`) {
+		t.Errorf("validated: body = %s, want the literal \"can_submit\":true after Transition to validated", validatedRec.Body.String())
 	}
 }
 

@@ -229,6 +229,8 @@ type getResponse struct {
 	CanEdit                 bool    `json:"can_edit"`
 	CanRevalidate           bool    `json:"can_revalidate"`
 	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
+	// CanSubmit stub: left unset (marshals false) pending implementation.
+	CanSubmit bool `json:"can_submit"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled

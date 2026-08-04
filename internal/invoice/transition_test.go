@@ -960,6 +960,69 @@ func TestCanEdit_EmptyEdgeTableYieldsOnlyDraft(t *testing.T) {
 	}
 }
 
+// --- INVED-02-01: canSubmit derived-availability literal --------------------
+
+// TestCanSubmit_AllStatuses: canSubmit yields exactly {validated} -- the
+// endpoint's own submittability contract (Core AC 5).
+func TestCanSubmit_AllStatuses(t *testing.T) {
+	want := map[Status]bool{
+		StatusDraft:     false,
+		StatusValidated: true,
+		StatusQueued:    false,
+		StatusSubmitted: false,
+		StatusAccepted:  false,
+		StatusRejected:  false,
+		StatusFailed:    false,
+	}
+	for _, s := range allStatuses {
+		if got := canSubmit(s); got != want[s] {
+			t.Errorf("canSubmit(%s) = %v, want %v", s, got, want[s])
+		}
+	}
+}
+
+// TestCanSubmit_AgreesWithTheEnqueueEdge: tripwire mirroring
+// TestCanRevalidate_AgreesWithThePromotionEdge. canSubmit stays a hand-written
+// s == StatusValidated literal on purpose (Submitter.BatchSubmit hardwires
+// its FROM state to validated, so submittability is the endpoint's OWN
+// contract, not an edge-table property) -- but if anyone ever adds an
+// inbound edge to queued from a status other than validated, this test goes
+// red and forces a human decision on whether canSubmit should widen too.
+func TestCanSubmit_AgreesWithTheEnqueueEdge(t *testing.T) {
+	for _, s := range allStatuses {
+		want := canTransition(s, StatusQueued)
+		if got := canSubmit(s); got != want {
+			t.Errorf("canSubmit(%s) = %v, canTransition(%s, queued) = %v -- want equal; an inbound edge to queued was added -- decide whether canSubmit widens; canSubmit is deliberately a literal, see its doc", s, got, s, want)
+		}
+	}
+}
+
+// TestCanSubmit_ImpliesCanEdit: canSubmit(s) must imply canEdit(s) --
+// protects the SPA actions bar's nesting invariant (INVED-02-03), which
+// keeps its gate at can_edit && !editing rather than widening to
+// (can_edit || can_submit).
+func TestCanSubmit_ImpliesCanEdit(t *testing.T) {
+	for _, s := range allStatuses {
+		if canSubmit(s) && !canEdit(s) {
+			t.Errorf("canSubmit(%s) = true but canEdit(%s) = false -- breaks the SPA actions-bar nesting invariant INVED-02-03 relies on (can_submit must imply can_edit)", s, s)
+		}
+	}
+}
+
+// TestCanSubmit_UnknownStatusIsFalseAndNeverPanics mirrors
+// TestCanEdit_CanRevalidate_UnknownStatusNeverPanicsAndIsFalse: a Status
+// value outside the 7-member universe must not panic canSubmit, and must
+// read as not-submittable.
+func TestCanSubmit_UnknownStatusIsFalseAndNeverPanics(t *testing.T) {
+	const bogus Status = "not-a-real-status"
+	if canSubmit(bogus) {
+		t.Error("canSubmit(bogus) = true, want false for a status outside the 7-member universe")
+	}
+	if canSubmit(Status("")) {
+		t.Error("canSubmit(\"\") = true, want false")
+	}
+}
+
 // --- M5-09-02 (task-255): the clear moves into transitionTx -----------------
 
 // TestStoreTransition_AcceptedViaHandlerPathClearsRejectionReasons

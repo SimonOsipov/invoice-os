@@ -227,6 +227,7 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
+  can_submit: boolean
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -509,6 +510,7 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     can_edit: res.can_edit === true,
     can_revalidate: res.can_revalidate === true,
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
+    can_submit: false, // stub: always denies, RED oracle for can_submit true pass-through
   }
 }
 
@@ -868,6 +870,33 @@ const SKIP_REASON_LABELS: Record<string, string> = {
 
 export function skipReasonLabel(reason: string): string {
   return SKIP_REASON_LABELS[reason] ?? reason
+}
+
+// stub: placeholder copy, executor supplies the founder-pinned sentence
+export const DETAIL_SUBMIT_COPY = {
+  submit: 'TODO',
+  prompt: 'TODO',
+  detail: 'TODO',
+  confirm: 'TODO',
+  cancel: 'TODO',
+  sending: 'TODO',
+  unresolved: 'TODO',
+  notQueued: 'TODO',
+} as const
+
+export type SingleSubmitOutcome =
+  | { kind: 'queued' }
+  | { kind: 'skipped'; message: string }
+  | { kind: 'unresolved'; message: string }
+
+// stub: ignores inputs, always unresolved
+export function singleSubmitOutcome(
+  invoiceId: string,
+  items: BatchSubmitResultItem[] | undefined,
+): SingleSubmitOutcome {
+  void invoiceId
+  void items
+  return { kind: 'unresolved', message: '' }
 }
 
 // Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`

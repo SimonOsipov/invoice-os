@@ -51,6 +51,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     can_edit: false,
     can_revalidate: false,
     revalidate_blocked_reason: null,
+    can_submit: false,
     ...over,
   }
 }

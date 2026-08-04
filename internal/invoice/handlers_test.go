@@ -4526,6 +4526,17 @@ func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
+// QA adversarial: a zero-value/unrecognized Status must not panic
+// submitBlockedReason, and must agree with canEdit/canSubmit's own false/false
+// verdict on it -- nil, matching every other non-editable status.
+func TestSubmitBlockedReason_UnknownStatusNoPanic(t *testing.T) {
+	for _, s := range []Status{"", "bogus-status"} {
+		if got := submitBlockedReason(s); got != nil {
+			t.Errorf("submitBlockedReason(%q) = %q, want nil", s, *got)
+		}
+	}
+}
+
 // TestEditHandler_RealStore_LineItemsThreeStates (T-E2E-PATCH): wires the
 // REAL Store.Edit into the REAL EditHandler against real seeded, lined
 // invoices (seedLinedInvoiceAtStatus, edit_test.go) -- the DB-e2e

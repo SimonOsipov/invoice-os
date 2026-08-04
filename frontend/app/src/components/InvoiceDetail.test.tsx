@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import { DETAIL_SUBMIT_COPY, skipReasonLabel, type InvoiceDetailRecord, type StatusChange } from '../lib/invoices'
+import { DETAIL_SUBMIT_COPY, LIVE_POLL_MS, skipReasonLabel, type InvoiceDetailRecord, type StatusChange } from '../lib/invoices'
 import type { PlatformCtx } from '../types'
 import { InvoiceDetail } from './InvoiceDetail'
 
@@ -560,4 +560,127 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     // guards against a copy-paste id collision between the two reason elements.
     expect(describedBy).not.toBe('revalidate-blocked-reason-text')
   })
+
+  // QA adversarial (mutation survivor): removing `filter: 'none'` from the disabled
+  // spread passes every other spec -- .v2-btn-primary:hover sets filter:brightness(1.22)
+  // unguarded, so a disabled Submit would still brighten under the cursor without this.
+  it('the disabled Submit neutralises filter, guarding .v2-btn-primary:hover from brightening it', async () => {
+    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-submit')
+
+    expect(btn.style.filter).toBe('none')
+  })
+
+  // QA adversarial (mutation survivor): widening the bar's gate to `can_edit ||
+  // can_submit` passes every other spec, because can_submit:true implies can_edit:true on
+  // every REAL wire shape (TestCanSubmit_ImpliesCanEdit) -- the Go tripwire proves the
+  // implication, not that the SPA didn't also widen. Synthetic/contradictory fixture
+  // isolates the SPA's own gate.
+  it('the actions bar stays gated on can_edit alone -- a wire with can_submit:true but can_edit:false renders no bar at all', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: true, submit_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+  })
+
+  // Follow-up flagged in the executor's own Implementation Notes (structural deviation
+  // that moved the skip/error banners outside the `can_edit` gate): the banner surviving
+  // a can_edit:false refetch must not drag actionable controls out with it.
+  it('a duplicate_request skip banner surviving a can_edit:false refetch renders no actionable buttons alongside it', async () => {
+    const trueState = detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false })
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }), [], {
+      detailSequence: [trueState],
+      submitResponses: [
+        {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ results: [{ invoice_id: ID, enqueued: false, status: 'queued', reason: 'duplicate_request' }] }),
+        },
+      ],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+
+    await screen.findByTestId('detail-submit-skipped')
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('edit-toggle')).toBeNull()
+    expect(screen.queryByTestId('revalidate')).toBeNull()
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+  })
+
+  // Layer 3 (the visible reason text) is the whole justification for rendering disabled
+  // rather than hidden -- a disabled button is out of the tab order, so the reason must
+  // stay reachable even though the button itself is not.
+  it('the disabled Submit refuses focus, and Enter/Space never arm the confirmation', async () => {
+    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-submit')
+
+    btn.focus()
+    expect(document.activeElement).not.toBe(btn)
+
+    for (const key of ['Enter', ' ']) {
+      fireEvent.keyDown(btn, { key })
+      fireEvent.keyUp(btn, { key })
+    }
+    expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
+    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(reason)
+  })
+
+  // A contradictory wire (can_submit:true with a non-null submit_blocked_reason -- never
+  // produced by the real backend, G1/G2/G4 pin the two mutually exclusive) must not
+  // confuse the button's own enabled state, which reads can_submit alone.
+  it('a contradictory wire (can_submit:true with a non-null submit_blocked_reason) still enables Submit', async () => {
+    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true, submit_blocked_reason: reason }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('detail-submit')
+
+    expect((btn as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // Arm, then let a poll tick (synthetic can_edit:true override on 'queued' so
+  // shouldPollInvoice stays active while the bar still renders) overwrite the overlay's
+  // can_submit to false before Confirm is clicked. The poll never touches submitPhase, so
+  // the armed UI survives untouched -- handleSubmit's own `!inv.can_submit` guard, re-read
+  // fresh on the render that owns the click, is what must stop the request. Real wait, not
+  // fake timers -- matches InvoicesList.test.tsx's AC-6 poll-test convention (fake-timer/
+  // act() interaction pitfalls).
+  it(
+    "an armed confirm honours a poll tick that flips can_submit false before Confirm is clicked",
+    async () => {
+      const initial = detailRecord({ id: ID, status: 'queued', can_edit: true, can_submit: true, submit_blocked_reason: null })
+      const afterPoll = detailRecord({ id: ID, status: 'queued', can_edit: true, can_submit: false, submit_blocked_reason: 'Only validated invoices can be submitted.' })
+      const { submitCalls, fetchMock } = mockDetailFetch(initial, [], { detailSequence: [afterPoll] })
+
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      fireEvent.click(await screen.findByTestId('detail-submit'))
+      await screen.findByTestId('detail-submit-confirm-prompt')
+
+      const detailGetCalls = () =>
+        fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
+          const method = init?.method ?? 'GET'
+          const u = String(url)
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+        })
+      // 1 initial mount fetch + 1 poll tick fetch.
+      await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
+
+      fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+
+      expect(submitCalls).toHaveLength(0)
+    },
+    LIVE_POLL_MS + 5000,
+  )
 })

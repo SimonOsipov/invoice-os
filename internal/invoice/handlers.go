@@ -230,7 +230,7 @@ type getResponse struct {
 	CanRevalidate           bool    `json:"can_revalidate"`
 	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
 	CanSubmit               bool    `json:"can_submit"`
-	SubmitBlockedReason     *string `json:"submit_blocked_reason"` // stub: always nil until GREEN
+	SubmitBlockedReason     *string `json:"submit_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -240,9 +240,27 @@ type getResponse struct {
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
 
-// submitBlockedReason stub for Mode A RED -- always nil; GREEN fills in the
-// canEdit && !canSubmit gate and the draft/rejected copy.
-func submitBlockedReason(s Status) *string { return nil }
+// submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
+// but the copy FORKS by status: draft points at a live, enabled Re-validate,
+// rejected points at a disabled one, so one shared sentence would lie on
+// whichever status it doesn't describe. The blocked SET stays derived, not a
+// hardcoded switch -- the default arm must return a real string (never nil)
+// so a future legalTransitions edge that widens canEdit still gets a reason.
+func submitBlockedReason(s Status) *string {
+	if !canEdit(s) || canSubmit(s) {
+		return nil
+	}
+	var reason string
+	switch s {
+	case StatusDraft:
+		reason = "Only validated invoices can be submitted — re-validate this invoice first."
+	case StatusRejected:
+		reason = "Only validated invoices can be submitted — edit this invoice and re-validate it first."
+	default:
+		reason = "Only validated invoices can be submitted."
+	}
+	return &reason
+}
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
@@ -294,12 +312,13 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 		// revalidate_blocked_reason != null IFF a disabled Re-validate button is
 		// rendered ([actions-visibility]: the action bar renders iff can_edit).
 		resp := getResponse{
-			Invoice:        inv,
-			RuleSetVersion: inv.RuleSetVersion,
-			QRPNGBase64:    qrPNGBase64,
-			CanEdit:        canEdit(inv.Status),
-			CanRevalidate:  canRevalidate(inv.Status),
-			CanSubmit:      canSubmit(inv.Status),
+			Invoice:             inv,
+			RuleSetVersion:      inv.RuleSetVersion,
+			QRPNGBase64:         qrPNGBase64,
+			CanEdit:             canEdit(inv.Status),
+			CanRevalidate:       canRevalidate(inv.Status),
+			CanSubmit:           canSubmit(inv.Status),
+			SubmitBlockedReason: submitBlockedReason(inv.Status),
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local

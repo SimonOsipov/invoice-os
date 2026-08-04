@@ -151,6 +151,10 @@ function rowsFromInvoice(inv: InvoiceRecord): LineRowState[] {
 // (it returns a single element), so this id cannot collide with itself in one document.
 const REVALIDATE_REASON_ID = 'revalidate-blocked-reason-text'
 
+// Same rationale as REVALIDATE_REASON_ID above; a distinct id so the two disabled buttons'
+// aria-describedby targets never collide on a rejected invoice, where both render together.
+const SUBMIT_REASON_ID = 'submit-blocked-reason-text'
+
 // PATCH /v1/invoices/{id} treats an absent key as "leave this field alone" (the Go
 // handler decodes into *string/*time.Time pointers, nil when the key is missing) and a
 // present key — including "" — as "set it". Sending all 9 fields on every submit would
@@ -532,16 +536,29 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </button>
                     {/* Inline arm -> confirm, not a modal ([no-modal], ReviewInvoicesTab.tsx file
                         header) -- the second stage renders below, in this same actions column.
-                        Gated on `inv.can_submit` alone, off the wire ([gates-on-the-wire]), same
-                        as Edit/Re-validate above; never re-derived from `status`. */}
-                    {inv.can_submit &&
-                      (submitPhase === 'idle' ? (
+                        Always rendered, disabled-with-reason rather than hidden when
+                        `!inv.can_submit` ([revalidate-visibility], same convention as Re-validate
+                        above) -- the same four layers, plus `filter: 'none'`: Submit is
+                        `.v2-btn-primary`, whose unguarded `:hover` (app-layer.css:213) also sets
+                        `filter: brightness(1.22)`, which the ghost recipe above never had to
+                        neutralise. A disabled button emits no click, so the arm/confirm flow
+                        below is unreachable while disabled; `handleSubmit`'s own `!inv.can_submit`
+                        guard is the second line of defence. */}
+                    {submitPhase === 'idle' ? (
                         <button
                           type="button"
                           data-testid="detail-submit"
                           onClick={() => toSubmitPhase({ type: 'arm' })}
+                          disabled={!inv.can_submit}
+                          title={inv.submit_blocked_reason ?? undefined}
+                          aria-describedby={inv.submit_blocked_reason != null ? SUBMIT_REASON_ID : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
-                          style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                          style={{
+                            height: 32,
+                            padding: '0 14px',
+                            fontSize: 13,
+                            ...(!inv.can_submit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                          }}
                         >
                           {DETAIL_SUBMIT_COPY.submit}
                         </button>
@@ -578,7 +595,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             {submitPhase === 'submitting' ? DETAIL_SUBMIT_COPY.sending : DETAIL_SUBMIT_COPY.confirm}
                           </button>
                         </>
-                      ))}
+                      )}
                   </div>
                   {/* The backend's copy, verbatim ([revalidate-reason-from-backend]). The wire
                       guarantees it is non-null exactly when can_edit && !can_revalidate
@@ -587,6 +604,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   {inv.revalidate_blocked_reason != null && (
                     <div id={REVALIDATE_REASON_ID} data-testid="revalidate-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {inv.revalidate_blocked_reason}
+                    </div>
+                  )}
+                  {/* Same convention, for Submit ([gates-on-the-wire]); non-null exactly when
+                      can_edit && !can_submit. */}
+                  {inv.submit_blocked_reason != null && (
+                    <div id={SUBMIT_REASON_ID} data-testid="submit-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {inv.submit_blocked_reason}
                     </div>
                   )}
                   {/* Genuine-failure surface, moved here from the deleted fused card. Style

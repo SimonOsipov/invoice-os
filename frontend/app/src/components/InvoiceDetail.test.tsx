@@ -357,7 +357,9 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     const rows = await screen.findAllByTestId('rejection-reason-row')
     expect(rows.some((r) => r.textContent?.includes('NGE-4102'))).toBe(true)
     expect(screen.getByTestId('invoice-detail')).toBeTruthy()
-    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    // Post-INVED-02-05: a rejected, editable invoice renders Submit disabled, not hidden
+    // (AC #6) -- this incidentally checks that, not the rejection-reasons assertions above.
+    expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('[never-report-success-on-a-skip]: a duplicate_request skip is never reported as sent', async () => {

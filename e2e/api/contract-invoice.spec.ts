@@ -553,6 +553,12 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(body.can_edit, 'a demoted draft should still be editable').toBe(true)
       expect(body.can_revalidate, 'a demoted draft should be re-validatable').toBe(true)
       expect(body.revalidate_blocked_reason, 'the reason must be exactly null, not merely falsy').toBeNull()
+      // can_submit is independent of can_revalidate ([gates-on-the-wire]): both are false
+      // on a draft, but for different rules (validated-only vs draft-only), and can_edit
+      // stays true throughout -- proven here on the same body.
+      expect(body.can_submit, 'a demoted draft cannot be submitted').toBe(false)
+      expect(typeof body.submit_blocked_reason, 'the submit-blocked reason should be a string').toBe('string')
+      expect((body.submit_blocked_reason as string).length, 'the submit-blocked reason should be non-empty').toBeGreaterThan(0)
     })
 
     test('GET on an untouched validated invoice -> can_edit:true, can_revalidate:false, and a non-empty reason', async () => {
@@ -567,6 +573,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(body.can_revalidate, 'a validated invoice should not be re-validatable until edited').toBe(false)
       expect(typeof body.revalidate_blocked_reason, 'the reason should be a string').toBe('string')
       expect((body.revalidate_blocked_reason as string).length, 'the reason should be non-empty').toBeGreaterThan(0)
+      expect(body.can_submit, 'a validated invoice should be submittable').toBe(true)
+      expect(body.submit_blocked_reason, 'a submittable invoice carries no blocked reason').toBeNull()
     })
 
     test('POST /invoices/submissions on a line-mutated (demoted) invoice skips it as not_validated', async () => {

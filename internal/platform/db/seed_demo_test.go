@@ -3921,3 +3921,241 @@ func TestSeedIssueDatesAreWithinDeclared2026H1Window(t *testing.T) {
 		t.Fatalf("checked %d rows, want %d", checked, wantChecked)
 	}
 }
+
+// demoTrimmedActiveTINs / demoTrimmedArchivedTINs are the 10 TINs a future
+// trim of the demo firm's business_entities block keeps. Sourced from
+// curatedDemoEntities by TIN rather than retyped, so a name/sector edit
+// there can't silently drift out of sync with this list.
+var (
+	demoTrimmedActiveTINs = []string{
+		"10012345-0001", "10023456-0002", "10034567-0003", "10045678-0004",
+		"10056789-0005", "10067890-0006", "10078901-0007", "10089012-0008",
+	}
+	demoTrimmedArchivedTINs = []string{"10223456-0022", "10234567-0023"}
+	demoHistoryBearingTINs  = demoTrimmedActiveTINs[:6]
+)
+
+// demoEntitiesByTINs looks up each tin in curatedDemoEntities, preserving
+// input order.
+func demoEntitiesByTINs(t *testing.T, tins []string) []entityRow {
+	t.Helper()
+	out := make([]entityRow, 0, len(tins))
+	for _, tin := range tins {
+		found := false
+		for _, r := range curatedDemoEntities {
+			if r.tin == tin {
+				out = append(out, r)
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no curatedDemoEntities row for tin %q", tin)
+		}
+	}
+	return out
+}
+
+// TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived pins the target
+// shape the demo firm's business_entities block converges to: 10 rows, 8
+// active (6 history-bearing + Ifeoma + Bello), 2 archived (Olumide,
+// Halima). Independent of curatedDemoEntities, which still lists all 27.
+// FAILS today — the seed still upserts 27 rows.
+func TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	if len(got) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 10", len(got))
+	}
+
+	var active, archived int
+	for _, r := range got {
+		switch r.status {
+		case "active":
+			active++
+		case "archived":
+			archived++
+		}
+	}
+	if active != 8 {
+		t.Errorf("count(active) = %d, want 8", active)
+	}
+	if archived != 2 {
+		t.Errorf("count(archived) = %d, want 2", archived)
+	}
+
+	want := sortedEntityRows(append(
+		demoEntitiesByTINs(t, demoTrimmedActiveTINs),
+		demoEntitiesByTINs(t, demoTrimmedArchivedTINs)...,
+	))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("business_entities for the demo tenant after Seed does not match the trimmed 10-row target\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestSeedHistoryBearingEntitiesSurviveWithInvoices: the six invoice-history
+// entities must survive any future trim and keep their invoices — the
+// seed's invoice CTE JOINs business_entities, so a dropped or mistyped TIN
+// would silently zero out that entity's rows rather than fail loudly.
+// Green today: nothing has been removed yet, so this only pins that a trim
+// must not touch these six.
+func TestSeedHistoryBearingEntitiesSurviveWithInvoices(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT e.tin, e.status, count(i.id)
+		   FROM business_entities e
+		   LEFT JOIN invoices i ON i.entity_id = e.id
+		  WHERE e.tenant_id = $1 AND e.tin = ANY($2)
+		  GROUP BY e.tin, e.status`,
+		demoTenantID, demoHistoryBearingTINs,
+	)
+	if err != nil {
+		t.Fatalf("query history-bearing entities: %v", err)
+	}
+	defer rows.Close()
+
+	seen := make(map[string]int, len(demoHistoryBearingTINs))
+	for rows.Next() {
+		var tin, status string
+		var n int
+		if err := rows.Scan(&tin, &status, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		seen[tin] = n
+		if status != "active" {
+			t.Errorf("%s: status = %q, want active", tin, status)
+		}
+		if n == 0 {
+			t.Errorf("%s: count(invoices) = 0, want > 0 — this entity is supposed to carry the demo's invoice history", tin)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	for _, tin := range demoHistoryBearingTINs {
+		if _, ok := seen[tin]; !ok {
+			t.Errorf("%s: not found in business_entities for the demo tenant, want present", tin)
+		}
+	}
+}
+
+// TestSeedDemoPortfolioHasAnEmptyActiveAndAnArchivedClient: the empty-state
+// and the archived filter both need live data behind them — at least one
+// active entity with zero invoices, at least one archived entity. Green
+// today: the current portfolio already has both; this must keep holding
+// after any trim.
+func TestSeedDemoPortfolioHasAnEmptyActiveAndAnArchivedClient(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	activeEmpty := mustCount(t, pool,
+		`SELECT count(*) FROM business_entities e
+		  WHERE e.tenant_id = $1 AND e.status = 'active'
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.entity_id = e.id)`,
+		demoTenantID,
+	)
+	if activeEmpty == 0 {
+		t.Error("count(active entities with zero invoices) = 0, want >= 1 — the \"no invoices yet\" empty state has nothing to render otherwise")
+	}
+
+	archived := mustCount(t, pool,
+		`SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND status = 'archived'`,
+		demoTenantID,
+	)
+	if archived == 0 {
+		t.Error("count(archived entities) = 0, want >= 1 — the archived filter has nothing to render otherwise")
+	}
+}
+
+// TestSeedLeavesNoDanglingEntityReferences: no invoice / line_item /
+// invoice_status_history / submission_job / app_exchange row may reference
+// a missing entity. Green-by-design: every path is FK-enforced
+// (invoices.entity_id ... ON DELETE RESTRICT; the rest chain through
+// invoice_id). Kept explicit rather than left implicit across five
+// migration files.
+func TestSeedLeavesNoDanglingEntityReferences(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	orphanInvoices := mustCount(t, pool,
+		`SELECT count(*) FROM invoices i
+		  WHERE i.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM business_entities e WHERE e.id = i.entity_id)`,
+		demoTenantID,
+	)
+	if orphanInvoices != 0 {
+		t.Errorf("count(invoices referencing a missing entity) = %d, want 0", orphanInvoices)
+	}
+
+	orphanLineItems := mustCount(t, pool,
+		`SELECT count(*) FROM line_items li
+		  WHERE li.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = li.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanLineItems != 0 {
+		t.Errorf("count(line_items referencing a missing invoice) = %d, want 0", orphanLineItems)
+	}
+
+	orphanHistory := mustCount(t, pool,
+		`SELECT count(*) FROM invoice_status_history h
+		  WHERE h.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = h.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanHistory != 0 {
+		t.Errorf("count(invoice_status_history referencing a missing invoice) = %d, want 0", orphanHistory)
+	}
+
+	orphanJobs := mustCount(t, pool,
+		`SELECT count(*) FROM submission_jobs j
+		  WHERE j.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = j.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanJobs != 0 {
+		t.Errorf("count(submission_jobs referencing a missing invoice) = %d, want 0", orphanJobs)
+	}
+
+	orphanExchange := mustCount(t, pool,
+		`SELECT count(*) FROM app_exchange x
+		  WHERE x.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = x.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanExchange != 0 {
+		t.Errorf("count(app_exchange referencing a missing invoice) = %d, want 0", orphanExchange)
+	}
+}

@@ -154,6 +154,8 @@ var preFixOrphans = []string{
 	"TestDemoRepairMigrationStatementsAreTenantScoped",
 	"TestDemoRepairMigrationRunsInATransaction",
 	"TestDemoRepairMigrationDownRunsCleanOnAnEmptyDatabase",
+	"TestDemoRepairMigrationDownRestoresTheWithdrawnRowsVerbatim",
+	"TestDemoRepairMigrationAppliesThroughGoose",
 }
 
 func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {

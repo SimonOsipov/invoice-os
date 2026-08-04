@@ -24,17 +24,20 @@ package db_test
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"io/fs"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
@@ -723,6 +726,149 @@ func TestDemoRepairMigrationRunsInATransaction(t *testing.T) {
 	for _, section := range []string{"Up", "Down"} {
 		if len(countVerbs(demoRepairStatements(t, section))) == 0 {
 			t.Errorf("%s %s: no DML statements", name, section)
+		}
+	}
+}
+
+// A Down that re-inserts the right NUMBER of rows but the wrong ones is a broken
+// inverse, and the count assertion below cannot see it. withdrawnDemoEntities is
+// transcribed from db/seed.dev.sql as it stood before the trim, so comparing
+// against it is comparing against the seed the Down claims to restore.
+func TestDemoRepairMigrationDownRestoresTheWithdrawnRowsVerbatim(t *testing.T) {
+	superDSN, _ := requireProvisionDSNs(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	ensureTenant(t, pool, demoTenantID, "Okafor & Partners", "firm")
+
+	// ON CONFLICT DO NOTHING means a row already present wins, so a stale one
+	// would be read back instead of the Down's own — say so rather than fail
+	// with a confusing value mismatch.
+	if n := mustCount(t, pool,
+		`SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND tin = ANY($2)`,
+		demoTenantID, withdrawnDemoTINs()); n != 0 {
+		t.Fatalf("precondition: %d of the 17 withdrawn clients are already present, so ON CONFLICT DO NOTHING would mask what the Down inserts", n)
+	}
+
+	// Read back inside the migrator's own transaction: the Down's set_config is
+	// what makes these rows selectable at all, and rolling back leaves nothing.
+	tx := migratorTx(t, ctx)
+	execStatements(t, ctx, tx, demoRepairStatements(t, "Down"))
+
+	got := map[string]entityRow{}
+	rows, err := tx.Query(ctx,
+		`SELECT name, tin, sector, status FROM business_entities WHERE tenant_id = $1 AND tin = ANY($2)`,
+		demoTenantID, withdrawnDemoTINs())
+	if err != nil {
+		t.Fatalf("read back the re-inserted rows: %v", err)
+	}
+	for rows.Next() {
+		var r entityRow
+		if err := rows.Scan(&r.name, &r.tin, &r.sector, &r.status); err != nil {
+			t.Fatalf("scan re-inserted row: %v", err)
+		}
+		got[r.tin] = r
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate re-inserted rows: %v", err)
+	}
+	rows.Close()
+
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("roll back the Down body: %v", err)
+	}
+
+	for _, want := range withdrawnDemoEntities {
+		switch have, ok := got[want.tin]; {
+		case !ok:
+			t.Errorf("Down did not re-insert %s (%s)", want.tin, want.name)
+		case have != want:
+			t.Errorf("Down re-inserted %s with the wrong values\ngot:  %+v\nwant: %+v", want.tin, have, want)
+		}
+	}
+	if len(got) != len(withdrawnDemoEntities) {
+		t.Errorf("Down re-inserted %d rows, want %d", len(got), len(withdrawnDemoEntities))
+	}
+}
+
+// demoRepairMigrationVersion is the migration's goose version id, taken from the
+// filename rather than hardcoded.
+func demoRepairMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	name, _ := demoRepairMigrationFile(t)
+	v, err := strconv.ParseInt(strings.SplitN(name, "_", 2)[0], 10, 64)
+	if err != nil {
+		t.Fatalf("parse goose version out of %q: %v", name, err)
+	}
+	return v
+}
+
+// Everything else here executes the migration's statements directly, which means
+// nothing observes goose PARSING the file. `-- +goose NO TRANSACTION` is only
+// caught by a string scan, and a string scan cannot tell that the marker's effect
+// is "mutates nothing while recording MIGRATE OK" — the exact silent no-op this
+// migration exists to avoid.
+//
+// So: clear this one migration's goose_db_version row and let provider.Up
+// re-apply it the way a deploy does. Deleting the row rather than DownTo() keeps
+// the blast radius to this migration alone — DownTo would also roll back any
+// migration added after it.
+func TestDemoRepairMigrationAppliesThroughGoose(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	seedLegacyDemoPortfolio(t, pool)
+
+	firmEntity := entityIDByTIN(t, pool, demoTenantID, "10012345-0001")
+	firmDoc := seedRepairDocument(t, pool, demoTenantID)
+	firmInvoice := seedRepairInvoice(t, pool, demoTenantID, firmEntity, "DEMO-2026-GOOSE-"+randomSuffix(t))
+	linkInvoiceToDocument(t, pool, firmInvoice, firmDoc)
+
+	inHouseEntity := entityIDByTIN(t, pool, honeywellTenantID, curatedHoneywellEntity.tin)
+	inHouseDoc := seedRepairDocument(t, pool, honeywellTenantID)
+	inHouseInvoice := seedRepairInvoice(t, pool, honeywellTenantID, inHouseEntity, "DEMO-2026-GOOSE-IH-"+randomSuffix(t))
+	linkInvoiceToDocument(t, pool, inHouseInvoice, inHouseDoc)
+
+	sqlDB, err := sql.Open("pgx", migDSN)
+	if err != nil {
+		t.Fatalf("open migrator connection: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("build migration provider: %v", err)
+	}
+
+	version := demoRepairMigrationVersion(t)
+	if _, err := pool.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id = $1`, version); err != nil {
+		t.Fatalf("mark migration %d unapplied: %v", version, err)
+	}
+	// Leave goose's ledger consistent even if the Up below fails.
+	t.Cleanup(func() {
+		if _, err := provider.Up(context.Background()); err != nil {
+			t.Errorf("restore goose state after the test: %v", err)
+		}
+	})
+
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("re-apply the repair migration through goose: %v", err)
+	}
+
+	if n := mustCount(t, pool,
+		`SELECT count(*) FROM goose_db_version WHERE version_id = $1 AND is_applied`, version); n != 1 {
+		t.Errorf("goose recorded %d applied rows for version %d, want 1", n, version)
+	}
+	if got := fetchDemoBusinessEntities(t, pool, demoTenantID); !reflect.DeepEqual(got, sortedEntityRows(curatedDemoEntities)) {
+		t.Errorf("through goose the firm holds %d entities, want the curated 10 — a migration that records MIGRATE OK while mutating nothing looks exactly like this\ngot: %+v", len(got), got)
+	}
+	for _, tc := range []struct {
+		label   string
+		invoice string
+	}{
+		{"firm tenant", firmInvoice},
+		{"in-house tenant", inHouseInvoice},
+	} {
+		if link := fetchDocumentLink(t, pool, tc.invoice); link.documentID != "" || link.sourceRows != nil {
+			t.Errorf("%s: through goose the demo invoice is still linked (%+v), want both columns NULL", tc.label, link)
 		}
 	}
 }

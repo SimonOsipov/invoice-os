@@ -3801,7 +3801,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"rule_set_version", "qr_png_base64",
 	}
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit"}
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -3845,7 +3845,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 
 			for _, k := range preExisting {
 				if _, ok := raw[k]; !ok {
-					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the four new action-flag keys must be purely additive", k, rec.Body.String())
+					t.Errorf("raw JSON keys missing pre-existing key %q (body=%s) -- the five new action-flag keys must be purely additive", k, rec.Body.String())
 				}
 			}
 			for _, k := range newKeys {
@@ -3945,10 +3945,11 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		"line_items",
 		// getResponse's own fields, in declaration order -- the action-flag
-		// keys MUST be last (AC #5's additive/position clause), can_submit
-		// (INVED-02-01) appended after revalidate_blocked_reason.
+		// keys MUST be last (AC #5's additive/position clause): can_submit
+		// appended after revalidate_blocked_reason, submit_blocked_reason
+		// appended last of all.
 		"rule_set_version", "qr_png_base64",
-		"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit",
+		"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -4073,7 +4074,7 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
-// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all four
+// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all five
 // action-flag keys, mirroring TestListHandler_NoRuleSetVersionKey -- they
 // live only on GetHandler's getResponse wrapper, never on the domain
 // Invoice struct List marshals directly. ALREADY GREEN at RED (neither key
@@ -4090,7 +4091,7 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`} {
+	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
 		}
@@ -4341,6 +4342,187 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "can_submit") {
 		t.Errorf("body = %s, tenant B's can_submit:true must never leak to tenant A, in any form", rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// INVED-02-05 -- RED specs (Mode A) for submit_blocked_reason, the mirror of
+// revalidate_blocked_reason for the disabled Submit button. Neither
+// submitBlockedReason's real gate nor the SubmitBlockedReason wire value
+// exists yet (the stub always returns nil), so each assertion below fails
+// on a wrong/missing value, never a compile error.
+//
+//	G1  TestGetHandler_SubmitBlockedReasonAllStatuses
+//	G2  TestGetHandler_SubmitBlockedReasonExactCopy
+//	G3  TestGetHandler_SubmitBlockedReasonDraftAndRejectedDiffer
+//	G4  TestGetHandler_SubmitBlockedReasonNullWhenSubmittable        (guard, already green)
+//	G5  TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded
+// ---------------------------------------------------------------------------
+
+// exactSubmitBlockedReasonDraft / exactSubmitBlockedReasonRejected are the
+// test-local copies of the exact strings GetHandler must emit under
+// submit_blocked_reason on draft/rejected -- hardcoded here, NEVER imported
+// from production, so these pin the copy non-tautologically.
+const exactSubmitBlockedReasonDraft = "Only validated invoices can be submitted — re-validate this invoice first."
+const exactSubmitBlockedReasonRejected = "Only validated invoices can be submitted — edit this invoice and re-validate it first."
+
+// TestGetHandler_SubmitBlockedReasonAllStatuses (G1): table over all 7
+// statuses; expected raw JSON is hard-coded per status, never produced by
+// calling submitBlockedReason itself, so this cannot degrade into a
+// tautology.
+func TestGetHandler_SubmitBlockedReasonAllStatuses(t *testing.T) {
+	want := map[Status]string{
+		StatusDraft:     `"` + exactSubmitBlockedReasonDraft + `"`,
+		StatusValidated: "null",
+		StatusQueued:    "null",
+		StatusSubmitted: "null",
+		StatusAccepted:  "null",
+		StatusRejected:  `"` + exactSubmitBlockedReasonRejected + `"`,
+		StatusFailed:    "null",
+	}
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, s := range allStatuses {
+		invoiceID := uuid.NewString()
+		want2 := Invoice{ID: invoiceID, Status: s}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want2, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body=%s)", s, rec.Code, rec.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("%s: decode raw body %q: %v", s, rec.Body.String(), err)
+		}
+		if got := string(raw["submit_blocked_reason"]); got != want[s] {
+			t.Errorf("%s: submit_blocked_reason raw = %q, want %q (body=%s)", s, got, want[s], rec.Body.String())
+		}
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonExactCopy (G2): pins the exact
+// byte-for-byte copy GetHandler renders under submit_blocked_reason on
+// draft/rejected, against the test-local literals above.
+func TestGetHandler_SubmitBlockedReasonExactCopy(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	reasonFor := func(t *testing.T, status Status) *string {
+		t.Helper()
+		invoiceID := uuid.NewString()
+		want := Invoice{ID: invoiceID, Status: status}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %q: http status = %d, want 200 (body=%s)", status, rec.Code, rec.Body.String())
+		}
+		var raw struct {
+			SubmitBlockedReason *string `json:"submit_blocked_reason"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+		}
+		return raw.SubmitBlockedReason
+	}
+
+	draftReason := reasonFor(t, StatusDraft)
+	if draftReason == nil {
+		t.Fatalf("draft: submit_blocked_reason = nil, want %q", exactSubmitBlockedReasonDraft)
+	} else if *draftReason != exactSubmitBlockedReasonDraft {
+		t.Errorf("draft: submit_blocked_reason = %q, want %q", *draftReason, exactSubmitBlockedReasonDraft)
+	}
+
+	rejectedReason := reasonFor(t, StatusRejected)
+	if rejectedReason == nil {
+		t.Fatalf("rejected: submit_blocked_reason = nil, want %q", exactSubmitBlockedReasonRejected)
+	} else if *rejectedReason != exactSubmitBlockedReasonRejected {
+		t.Errorf("rejected: submit_blocked_reason = %q, want %q", *rejectedReason, exactSubmitBlockedReasonRejected)
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonDraftAndRejectedDiffer (G3): draft and
+// rejected must carry DIFFERENT copy -- kills a collapse into one shared
+// const (unlike revalidate_blocked_reason's single status-independent
+// string, D1). Compares strings, never dereferences either *string
+// directly, so with the RED stub (both nil) this fails on the intended
+// "want two distinct non-null reasons" assertion, never a nil-pointer panic.
+func TestGetHandler_SubmitBlockedReasonDraftAndRejectedDiffer(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	reasonFor := func(t *testing.T, status Status) *string {
+		t.Helper()
+		invoiceID := uuid.NewString()
+		want := Invoice{ID: invoiceID, Status: status}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %q: http status = %d, want 200 (body=%s)", status, rec.Code, rec.Body.String())
+		}
+		var raw struct {
+			SubmitBlockedReason *string `json:"submit_blocked_reason"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+		}
+		return raw.SubmitBlockedReason
+	}
+
+	draftReason := reasonFor(t, StatusDraft)
+	rejectedReason := reasonFor(t, StatusRejected)
+
+	draftStr, rejectedStr := "<nil>", "<nil>"
+	if draftReason != nil {
+		draftStr = *draftReason
+	}
+	if rejectedReason != nil {
+		rejectedStr = *rejectedReason
+	}
+	if draftReason == nil || rejectedReason == nil || draftStr == rejectedStr {
+		t.Errorf("draft submit_blocked_reason = %q, rejected = %q, want two distinct non-null reasons", draftStr, rejectedStr)
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonNullWhenSubmittable (G4): a validated
+// invoice (canEdit && canSubmit both true) must render an explicit
+// "submit_blocked_reason":null -- present, not omitted. Guard, already
+// green at RED: the stub always returns nil.
+func TestGetHandler_SubmitBlockedReasonNullWhenSubmittable(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"submit_blocked_reason":null`) {
+		t.Errorf("body = %s, want the literal \"submit_blocked_reason\":null on a validated invoice", rec.Body.String())
+	}
+}
+
+// TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded (G5): perturbs
+// legalTransitions at runtime (same technique as
+// TestGetHandler_ActionFlagsAreDerivedNotHardcoded) so canEdit(failed) flips
+// true; submit_blocked_reason on failed must become non-null via the
+// default arm -- the one spec that separates "derived from canEdit/
+// canSubmit" from a hardcoded {draft,rejected} switch.
+func TestGetHandler_SubmitBlockedReasonIsDerivedNotHardcoded(t *testing.T) {
+	orig := legalTransitions
+	t.Cleanup(func() { legalTransitions = orig })
+	legalTransitions = edgeTableWith(orig, StatusFailed, StatusDraft)
+
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusFailed}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"submit_blocked_reason":null`) {
+		t.Errorf("body = %s, want a non-null submit_blocked_reason for failed once failed->draft is a legal edge -- must call canEdit(inv.Status), not restate a hardcoded {draft,rejected} switch", body)
 	}
 }
 

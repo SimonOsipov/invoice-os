@@ -49,6 +49,7 @@ function detailRecord(): InvoiceDetailRecord {
     can_revalidate: false,
     revalidate_blocked_reason: null,
     can_submit: true,
+    submit_blocked_reason: null,
   }
 }
 

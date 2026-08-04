@@ -52,6 +52,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     can_revalidate: false,
     revalidate_blocked_reason: null,
     can_submit: false,
+    submit_blocked_reason: null,
     ...over,
   }
 }
@@ -198,27 +199,31 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(within(bar).getByTestId('revalidate')).toBeTruthy()
   })
 
-  // Vacuous-today: `detail-submit` is queried absent, which is trivially true before the
-  // control exists at all -- edit-toggle's presence is the only non-vacuous part of this
-  // spec until the control ships. Becomes a real gate spec once detail-submit renders.
-  it('AC2/F-255#1: never renders Submit when can_submit is false, even on an editable invoice', async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false }))
+  // INVERTS the pre-INVED-02-05 "never renders Submit when can_submit is false" spec --
+  // founder decision reversed hidden -> disabled-with-reason, mirroring Re-validate.
+  it("AC2/F-255#1: renders Submit DISABLED with the wire's reason when can_submit is false", async () => {
+    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    await screen.findByTestId('edit-toggle') // non-vacuity: the actions bar did render
-    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    const btn = await screen.findByTestId('detail-submit')
+    expect((btn as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(reason)
   })
 
-  // THE MUTATION ORACLE -- do not soften or drop. Every other spec in this file stays
-  // green if the component re-derives `status === 'validated'` instead of reading
-  // `inv.can_submit`; only this one catches that mutation.
-  it("F-255#1: renders Submit off the wire flag, not the status -- can_submit:true on a non-validated status still renders it", async () => {
-    mockDetailFetch(detailRecord({ id: ID, status: 'rejected', can_edit: true, can_submit: true }))
+  // THE MUTATION ORACLE -- do not soften or drop. Presence stopped being discriminating
+  // once Submit always renders; this now rides on the `disabled` property and the
+  // absence of reason text. A component that re-derives `status === 'validated'` yields
+  // disabled=true here; one that derives the reason client-side renders text here.
+  it('F-255#1: renders Submit off the wire flag, not the status -- can_submit:true on a rejected invoice renders it enabled', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'rejected', can_edit: true, can_submit: true, submit_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect(await screen.findByTestId('detail-submit')).toBeTruthy()
+    const btn = await screen.findByTestId('detail-submit')
+    expect((btn as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
   })
 
   it('AC2/F-255#2: clicking Submit arms a confirmation and sends nothing', async () => {
@@ -478,5 +483,79 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     fireEvent.click(screen.getByTestId('revalidate'))
     await screen.findByText('INV-STALE-2-REVALIDATED')
     expect(screen.queryByTestId('detail-submit-error')).toBeNull()
+  })
+
+  it('clicking the disabled Submit sends nothing and does not arm', async () => {
+    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    const { submitCalls } = mockDetailFetch(
+      detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+
+    expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
+    expect(screen.queryByTestId('detail-submit-confirm')).toBeNull()
+    expect(submitCalls).toHaveLength(0)
+  })
+
+  it('the blocked reason renders verbatim from the wire, not from a client status map', async () => {
+    const sentinel = 'Sentinel reason ZZQ-7.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: sentinel }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('submit-blocked-reason')
+    expect(reasonEl.textContent).toBe(sentinel)
+  })
+
+  it('when the wire says submittable, Submit is enabled and no reason text renders', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true, submit_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const btn = await screen.findByTestId('detail-submit')
+    expect((btn as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
+  })
+
+  it('a rejected invoice renders both blocked reasons side by side', async () => {
+    const revalidateReason = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
+    const submitReason = 'Only validated invoices can be submitted — edit this invoice and re-validate it first.'
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'rejected',
+        can_edit: true,
+        can_revalidate: false,
+        can_submit: false,
+        revalidate_blocked_reason: revalidateReason,
+        submit_blocked_reason: submitReason,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const revalidateEl = await screen.findByTestId('revalidate-blocked-reason')
+    const submitEl = await screen.findByTestId('submit-blocked-reason')
+    expect(revalidateEl.textContent).toBe(revalidateReason)
+    expect(submitEl.textContent).toBe(submitReason)
+    expect(revalidateEl.textContent).not.toBe(submitEl.textContent)
+  })
+
+  it('the disabled Submit points aria-describedby at its own reason element and mirrors it in title', async () => {
+    const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const btn = await screen.findByTestId('detail-submit')
+    const reasonEl = await screen.findByTestId('submit-blocked-reason')
+    const describedBy = btn.getAttribute('aria-describedby')
+    expect(describedBy).toBe(reasonEl.id)
+    expect(btn.getAttribute('title')).toBe(reason)
+    // 'revalidate-blocked-reason-text' mirrors REVALIDATE_REASON_ID (InvoiceDetail.tsx) --
+    // guards against a copy-paste id collision between the two reason elements.
+    expect(describedBy).not.toBe('revalidate-blocked-reason-text')
   })
 })

@@ -228,6 +228,7 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
   can_submit: boolean
+  submit_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -511,6 +512,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     can_revalidate: res.can_revalidate === true,
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
     can_submit: res.can_submit === true,
+    // stub for Mode A RED -- unconditional null, wrong for the pass-through case
+    submit_blocked_reason: null,
   }
 }
 

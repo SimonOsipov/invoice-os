@@ -566,6 +566,7 @@ describe('getInvoice', () => {
       can_revalidate: false,
       revalidate_blocked_reason: null,
       can_submit: false,
+      submit_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -588,6 +589,7 @@ describe('getInvoice', () => {
       can_revalidate: true,
       revalidate_blocked_reason: null,
       can_submit: false,
+      submit_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -608,6 +610,7 @@ describe('getInvoice', () => {
       can_revalidate: false,
       revalidate_blocked_reason: 'Validated invoices cannot be re-validated.',
       can_submit: true,
+      submit_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -649,6 +652,7 @@ describe('getInvoice', () => {
       can_revalidate: false,
       revalidate_blocked_reason: null,
       can_submit: true,
+      submit_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -657,6 +661,28 @@ describe('getInvoice', () => {
     const result = await getInvoice(af, base, 'inv-1')
 
     expect(result.can_submit).toBe(false)
+  })
+
+  it('getInvoice: submit_blocked_reason passes through byte-identically', async () => {
+    const reasonText = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    const wire = { ...draftInvoice, can_edit: true, can_submit: false, submit_blocked_reason: reasonText }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(reasonText)
+  })
+
+  it('getInvoice: a wire missing submit_blocked_reason normalizes to null', async () => {
+    const wire = { ...draftInvoice, can_edit: true, can_submit: false }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBeNull()
+    expect(result.submit_blocked_reason).not.toBeUndefined()
   })
 })
 

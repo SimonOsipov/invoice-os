@@ -230,6 +230,7 @@ type getResponse struct {
 	CanRevalidate           bool    `json:"can_revalidate"`
 	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
 	CanSubmit               bool    `json:"can_submit"`
+	SubmitBlockedReason     *string `json:"submit_blocked_reason"` // stub: always nil until GREEN
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -238,6 +239,10 @@ type getResponse struct {
 // list, reopening Core AC 4. Separator is an em dash (U+2014) with single
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
+
+// submitBlockedReason stub for Mode A RED -- always nil; GREEN fills in the
+// canEdit && !canSubmit gate and the draft/rejected copy.
+func submitBlockedReason(s Status) *string { return nil }
 
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both

@@ -14,14 +14,12 @@ import (
 	"testing"
 )
 
-// targetPackageArg is the only package this file's coverage check governs
-// (BUG-02-02 scope fence) — a repo-wide check would false-positive on
-// deliberately split suites elsewhere.
+// targetPackageArg is the only package this file's coverage check governs —
+// a repo-wide check would false-positive on deliberately split suites elsewhere.
 const targetPackageArg = "./internal/platform/db/..."
 
-// unreachable returns names no filter selects, mirroring `go test -run`'s
-// unanchored-regexp semantics. An empty-string filter reaches everything.
-// TestMain never accepts -run, so it is never reported.
+// unreachable mirrors `go test -run`'s unanchored-regexp semantics (empty
+// filter reaches everything); TestMain never accepts -run so it's skipped.
 func unreachable(filters, names []string) []string {
 	var out []string
 	for _, name := range names {
@@ -165,9 +163,8 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 			"TestRLS",
 		}
 
-		// This coverage check's own function postdates the frozen pre-fix filters,
-		// so it isn't part of the historical 61-name snapshot; exclude it here only
-		// (the live check above already requires and gets its real coverage).
+		// This test postdates the frozen pre-fix filters, so it can't be part of
+		// what they orphaned; the live check above already covers it separately.
 		var historical []string
 		for _, n := range names {
 			if n != "TestCIRunFiltersReachEveryTestInThePackage" {

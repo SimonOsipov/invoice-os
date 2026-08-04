@@ -347,9 +347,8 @@ jobs:
         # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/demodocs/...
       - name: Demo-seed suite + CI -run filter coverage (as superuser) + per-test visibility & skip gate
-        # The 47 TestSeed* functions self-seed (db.Seed is the system under test), so this
-        # needs only a bootstrapped+migrated DB. Last in the job: db.Seed re-anchors
-        # created_at and re-enables every rule, so nothing may run after it.
+        # The 47 TestSeed* functions self-seed (db.Seed is the system under test); must run
+        # last in the job since db.Seed re-anchors created_at and re-enables every rule.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestSeed|TestCIRunFilters' ./internal/platform/db/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end

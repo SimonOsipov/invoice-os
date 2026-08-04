@@ -492,7 +492,7 @@ export async function violationSummary(
   return res.rules
 }
 
-// The two action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The three action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
@@ -510,7 +510,7 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     can_edit: res.can_edit === true,
     can_revalidate: res.can_revalidate === true,
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
-    can_submit: false, // stub: always denies, RED oracle for can_submit true pass-through
+    can_submit: res.can_submit === true,
   }
 }
 
@@ -872,16 +872,16 @@ export function skipReasonLabel(reason: string): string {
   return SKIP_REASON_LABELS[reason] ?? reason
 }
 
-// stub: placeholder copy, executor supplies the founder-pinned sentence
+// Founder-pinned, verbatim (Core AC #2) -- do not paraphrase or re-tone.
 export const DETAIL_SUBMIT_COPY = {
-  submit: 'TODO',
-  prompt: 'TODO',
-  detail: 'TODO',
-  confirm: 'TODO',
-  cancel: 'TODO',
-  sending: 'TODO',
-  unresolved: 'TODO',
-  notQueued: 'TODO',
+  submit: 'Submit',
+  prompt: 'Send this invoice for transmission?',
+  detail: 'Nothing here can pull it back.',
+  confirm: 'Yes, send it now',
+  cancel: 'Cancel',
+  sending: 'Sending…',
+  unresolved: 'The server did not confirm this invoice was sent. Reload to check its status.',
+  notQueued: 'Not queued',
 } as const
 
 export type SingleSubmitOutcome =
@@ -889,14 +889,20 @@ export type SingleSubmitOutcome =
   | { kind: 'skipped'; message: string }
   | { kind: 'unresolved'; message: string }
 
-// stub: ignores inputs, always unresolved
+// `enqueued === true` strictly, never truthiness or the item's own `status` --
+// duplicate_request reports status:'queued' while nothing was enqueued, which is
+// exactly the trap the "duplicate_request is skipped" test below closes.
 export function singleSubmitOutcome(
   invoiceId: string,
   items: BatchSubmitResultItem[] | undefined,
 ): SingleSubmitOutcome {
-  void invoiceId
-  void items
-  return { kind: 'unresolved', message: '' }
+  const item = items?.find((i) => i.invoice_id === invoiceId)
+  if (item === undefined) return { kind: 'unresolved', message: DETAIL_SUBMIT_COPY.unresolved }
+  if (item.enqueued === true) return { kind: 'queued' }
+  return {
+    kind: 'skipped',
+    message: item.reason != null ? skipReasonLabel(item.reason) : DETAIL_SUBMIT_COPY.notQueued,
+  }
 }
 
 // Selection helpers for the batch-submit list surface (M5-09-06). Only `validated`

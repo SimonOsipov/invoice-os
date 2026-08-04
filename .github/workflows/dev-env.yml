@@ -539,6 +539,8 @@ jobs:
       # measured 2026-07-19 in ghcr.io/railwayapp/cli:4.66.0, RAILWAY_TOKEN='' alongside a
       # valid RAILWAY_API_TOKEN still fails "Unauthorized", and a ternary cannot omit an
       # env key. Hence two steps rather than one.
+      - name: Stamp the build sha into the upload
+        run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
       - name: railway up gateway (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
@@ -574,22 +576,38 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
-      - name: Wait for gateway /healthz 200
+      - name: Wait for gateway /healthz 200 on the commit under test
+        env:
+          EXPECTED_BUILD: ${{ github.sha }}
         run: |
-          echo "Waiting for $GATEWAY_URL/healthz ..."
+          echo "Waiting for $GATEWAY_URL/healthz to report build $EXPECTED_BUILD ..."
           ok=0
+          seen=""
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
           # exception the old 360s window assumed. Widen further if the
           # first green cold run needs it.
+          #
+          # A 200 alone is NOT enough. `railway up --ci` returns after the build
+          # and the OLD container keeps answering 200 for the whole rolling
+          # deploy, so waiting on the status code alone let the schema barrier
+          # pass against the PREVIOUS commit's gateway — and, because the
+          # gateway is what runs the destructive PR-environment reset at boot,
+          # that reset then landed after the downstream services had already
+          # started. Measured 2026-08-03. The build field closes it.
           for _ in $(seq 1 180); do
-            code=$(curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' "$GATEWAY_URL/healthz" 2>/dev/null || echo 000)
-            if [ "$code" = "200" ]; then echo "  gateway healthy (schema migrated)"; ok=1; break; fi
+            body=$(curl -fsS --connect-timeout 5 --max-time 10 "$GATEWAY_URL/healthz" 2>/dev/null || echo '')
+            seen=$(printf '%s' "$body" | jq -r '.build // empty' 2>/dev/null || echo '')
+            if [ -n "$seen" ] && [ "$seen" = "$EXPECTED_BUILD" ]; then
+              echo "  gateway healthy on $seen (schema migrated, reset+seed complete)"
+              ok=1
+              break
+            fi
             sleep 5
           done
           if [ "$ok" != "1" ]; then
-            echo "::error::$GATEWAY_URL/healthz did not return 200 within 900s. This is now the ONLY Postgres liveness proof: most likely cause is Postgres reaching deployment SUCCESS with NO VOLUME attached — it keeps raw TCP open but never speaks the wire protocol, so the gateway's boot-time migration never completes. Verify reconcile-fork actually created the volume before assuming a generic gateway problem."
+            echo "::error::$GATEWAY_URL/healthz did not report build $EXPECTED_BUILD within 900s (last seen: '${seen:-none}'). An empty build means the gateway predates the /healthz build field or the stamp step did not run; a DIFFERENT build means the new container never replaced the old one. If /healthz never answered at all, this is also the ONLY Postgres liveness proof: most likely cause is Postgres reaching deployment SUCCESS with NO VOLUME attached — it keeps raw TCP open but never speaks the wire protocol, so the gateway's boot-time migration never completes. Verify reconcile-fork actually created the volume before assuming a generic gateway problem."
             exit 1
           fi
 
@@ -612,6 +630,8 @@ jobs:
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
       # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
       # fails too, so the PR path needs the key genuinely absent.
+      - name: Stamp the build sha into the upload
+        run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
       - name: railway up ${{ matrix.service }} (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
@@ -647,6 +667,8 @@ jobs:
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
       # measurement: an account token in RAILWAY_TOKEN fails, and an empty RAILWAY_TOKEN
       # fails too, so the PR path needs the key genuinely absent.
+      - name: Stamp the build sha into the upload
+        run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
       - name: railway up ${{ matrix.service }} (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
@@ -674,15 +696,29 @@ jobs:
     env:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
     steps:
-      - name: Poll gateway /healthz/fleet until all up
+      - name: Poll gateway /healthz/fleet until all up on the commit under test
+        env:
+          EXPECTED_BUILD: ${{ github.sha }}
         run: |
-          echo "Polling $GATEWAY_URL/healthz/fleet ..."
+          echo "Polling $GATEWAY_URL/healthz/fleet for build $EXPECTED_BUILD ..."
           code=000
+          stale="(never polled)"
           # 600s (120 x 5s): every environment is now a cold build (M4-23 per-PR
           # environments, Decision [gate-windows-provisional]) — widened from 200s.
+          #
+          # up/down is not the whole question. Each service reports the commit it
+          # was built from (scripts/ci/stamp-build-sha.sh -> platform.BuildSHA ->
+          # /healthz -> this roll-up), and a rolling deploy keeps the PREVIOUS
+          # container answering "up" throughout — so this waits for the fleet to
+          # be both healthy AND the fleet under test. Without it the E2E suite
+          # verifies whichever commit happens to be serving, which is how a
+          # boot-time step could appear never to have run at all.
           for _ in $(seq 1 120); do
             code=$(curl -sS --connect-timeout 5 --max-time 10 -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
-            if [ "$code" = "200" ]; then break; fi
+            if [ "$code" = "200" ]; then
+              stale=$(jq -r --arg b "$EXPECTED_BUILD" '[.services[] | select(.build != $b) | "\(.name)=\(.build // "none")"] | join(", ")' /tmp/fleet.json 2>/dev/null || echo 'unparseable')
+              if [ -z "$stale" ]; then break; fi
+            fi
             sleep 5
           done
           echo "--- fleet health (HTTP $code) ---"
@@ -692,7 +728,11 @@ jobs:
             jq -r '.services[] | select(.status != "up") | "  DOWN: \(.name) — \(.error // "unhealthy")"' /tmp/fleet.json 2>/dev/null || true
             exit 1
           fi
-          echo "All 8 backends green."
+          if [ -n "$stale" ]; then
+            echo "::error::fleet is healthy but not on $EXPECTED_BUILD after 600s — still serving: $stale. A 'none' build means that service predates the /healthz build field or its stamp step did not run; any other value means its new container never replaced the old one. Running E2E here would verify the wrong commit."
+            exit 1
+          fi
+          echo "All 8 backends green on $EXPECTED_BUILD."
 
   # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login
@@ -731,21 +771,33 @@ jobs:
           cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile
-      - name: Wait for SPA /health
+      - name: Wait for SPA /health on the commit under test
+        env:
+          EXPECTED_BUILD: ${{ github.sha }}
         run: |
+          # /health is answered by Caddy from memory before the filesystem, so it
+          # can never carry a build; /build.txt is the stamped file baked into the
+          # image. Both are needed: /health proves it is serving, /build.txt proves
+          # WHICH commit, and a rolling deploy keeps the previous image answering
+          # 200 on /health throughout.
           for url in "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"; do
-            echo "Waiting for $url/health ..."
+            echo "Waiting for $url on build $EXPECTED_BUILD ..."
             ok=0
+            seen=""
             # 600s (120 x 5s): every environment is now a cold build (M4-23
             # per-PR environments, Decision [gate-windows-provisional]) —
             # widened from 200s.
             for _ in $(seq 1 120); do
               code=$(curl -fsS -o /dev/null -w '%{http_code}' "$url/health" 2>/dev/null || echo 000)
-              if [ "$code" = "200" ]; then echo "  healthy"; ok=1; break; fi
+              if [ "$code" = "200" ]; then
+                seen=$(curl -fsS --max-time 10 "$url/build.txt" 2>/dev/null | tr -d '[:space:]' || echo '')
+                if [ "$seen" = "$EXPECTED_BUILD" ]; then echo "  healthy on $seen"; ok=1; break; fi
+              fi
               sleep 5
             done
             if [ "$ok" != "1" ]; then
-              echo "::error::$url did not serve /health 200 within 600s"; exit 1
+              echo "::error::$url did not serve build $EXPECTED_BUILD within 600s (last seen: '${seen:-none}'). 'none' means /build.txt is absent -- the image predates the stamped Dockerfile layer or the stamp step did not run; any other value means the new image never replaced the old one. Running E2E here would drive the wrong frontend."
+              exit 1
             fi
           done
       - name: Install Chromium

@@ -2,13 +2,17 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 // Fleet-health probe bounds. A dead or slow backend must never hang the endpoint: each
@@ -17,6 +21,9 @@ import (
 const (
 	probeTimeout        = 3 * time.Second
 	maxProbeConcurrency = 8
+	// A /healthz body is a two-key object; the cap only stops a malfunctioning
+	// upstream from streaming into the gateway.
+	maxHealthzBody = 4 << 10
 )
 
 // Per-service and roll-up status literals (kept as constants so the payload contract — a
@@ -35,6 +42,12 @@ type ServiceHealth struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`          // statusUp | statusDown
 	Error  string `json:"error,omitempty"` // set only when Status == statusDown
+	// Build is the commit the service reported on /healthz. Empty when the
+	// probe failed or the service is older than platform.BuildSHA. Deliberately
+	// NOT part of the up/down verdict: a fleet running the wrong commit is
+	// healthy, just not the one under test, and conflating the two would make
+	// /healthz/fleet lie in the other direction. The deploy gate compares it.
+	Build string `json:"build,omitempty"`
 }
 
 // FleetHealth is the GET /healthz/fleet body: an overall roll-up plus per-service detail.
@@ -84,7 +97,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, log *slog.Logger) http.Ha
 
 		// The gateway is up by definition here; the context probes follow in name order.
 		services := make([]ServiceHealth, 0, len(names)+1)
-		services = append(services, ServiceHealth{Name: "gateway", Status: statusUp})
+		services = append(services, ServiceHealth{Name: "gateway", Status: statusUp, Build: platform.BuildSHA})
 		services = append(services, probed...)
 
 		allUp := true
@@ -127,5 +140,12 @@ func probeService(ctx context.Context, client *http.Client, name string, base *u
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ServiceHealth{Name: name, Status: statusDown, Error: fmt.Sprintf("healthz returned %d", resp.StatusCode)}
 	}
-	return ServiceHealth{Name: name, Status: statusUp}
+	// A body that will not decode leaves Build empty rather than failing the
+	// probe: 2xx already settled up/down, and the deploy gate reports a missing
+	// build as a mismatch on its own terms.
+	var payload struct {
+		Build string `json:"build"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, maxHealthzBody)).Decode(&payload)
+	return ServiceHealth{Name: name, Status: statusUp, Build: payload.Build}
 }

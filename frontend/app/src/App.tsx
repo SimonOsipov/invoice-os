@@ -1092,6 +1092,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
 
   const ctx: PlatformCtx = {
     authedFetch,
+    // Reuses importAuth's accessor rather than a second closure, so the two byte-level
+    // transports can never drift on which session they read.
+    getToken: importAuth.getToken,
     user,
     clients,
     active,

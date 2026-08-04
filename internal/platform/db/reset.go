@@ -175,6 +175,24 @@ func ResetEnabled(environment, flag string) bool {
 //	                          business outliving the fork, and a leftover
 //	                          river_leader row would otherwise contest
 //	                          leadership against the fresh fork's own worker.
+//	documents                 source-document pointers (DOC-01). Added late:
+//	                          the table postdates this list, and its absence
+//	                          was a live bug, not a judgement call. A surviving
+//	                          row whose audit_log trail was truncated beside it
+//	                          loses its uploader forever -- the previewer reads
+//	                          "Uploaded by" from the document.created audit row
+//	                          alone, so it rendered "Not recorded" for a
+//	                          document that HAD a recorded uploader. Worse, the
+//	                          (tenant_id, content_hash) dedupe then resolves a
+//	                          re-upload of identical bytes to the surviving row
+//	                          and logs document.reused, so the attribution can
+//	                          never be re-established. Truncated in the same
+//	                          statement as its RESTRICT dependents
+//	                          (invoices.source_document_id,
+//	                          import_batches.document_id), which is what makes
+//	                          it legal. Object-storage bytes are NOT deleted:
+//	                          they are content-hash keyed and simply re-PUT on
+//	                          the next upload of the same file.
 //
 // Deliberately EXCLUDED, with reasons (do not add on a whim):
 //
@@ -203,6 +221,7 @@ func ResetEnabled(environment, flag string) bool {
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
+	documents,
 	river_job, river_leader, river_queue, river_notification
 RESTART IDENTITY`
 

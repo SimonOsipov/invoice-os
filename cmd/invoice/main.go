@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/demodocs"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -71,6 +72,7 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/invoices", invoice.CreateHandler(store.Create, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invoices/{id}/source-document", invoice.SourceDocumentHandler(store.SourceDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, app.Logger))
 	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
 	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the
@@ -118,11 +120,24 @@ func main() {
 	// manual validate endpoint and the importer's batch pre-check
 	// ([import-validates]/[dry-run-evaluates]).
 	// /v1/imports/preview sits on the same mux and middleware chain and is the
-	// ONLY route by which a source document reaches storage ([upload-once]): it
+	// only ROUTE by which a source document reaches storage ([upload-once]): it
 	// writes the uploaded bytes to object storage and a row to documents, then
 	// previews them. POST /v1/imports takes the id it returns instead of a
-	// second copy of the file.
+	// second copy of the file. (demodocs.Seed below also stores, but off the
+	// mux entirely and only for the seed tenants.)
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
+
+	// Give the SQL-seeded demo invoices the file they would have been imported
+	// from -- db/seed.dev.sql runs in the gateway and cannot reach object
+	// storage, so without this every demo invoice reads "no source document".
+	// Runs before app.Run, so a green /healthz means the documents exist; the
+	// gateway's own /healthz gates the SQL seed that this reads, and dev-env.yml
+	// waits for it before deploying this service. Non-fatal: demo evidence is
+	// not worth refusing to serve over.
+	if res, err := demodocs.Seed(context.Background(), pool, docSvc.Store, app.Logger); err != nil {
+		app.Logger.Error("invoice: demo source documents", "error", err,
+			"documents", res.DocumentsStored, "invoices", res.InvoicesLinked)
+	}
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, app.Logger))
@@ -141,6 +156,12 @@ func main() {
 	// proxied through the service after an RLS-scoped row lookup rather than handed
 	// out as a presigned URL, so every read is authorised and audited.
 	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.Open, app.Logger))
+	// GET /v1/documents/{id}/sheet -- the same bytes decoded through importer.Decode
+	// for the previewer, so the evidence surface cannot disagree with the invoice it
+	// is evidence for. Lives in importer because Decode does and the reverse import
+	// edge is a cycle (TestDocument_ImportsNoRepoPackage). Go 1.22's {id} wildcard
+	// matches one segment, so /sheet cannot be swallowed by the download route above.
+	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this

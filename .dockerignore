@@ -19,6 +19,11 @@ backlog
 # Go backend + DB/migration tooling (not part of the frontend image)
 cmd
 internal
+# ...except the stamped commit, which every SPA image serves at /build.txt so the
+# deploy gate can tell the build under test from the one still being replaced. It
+# lives under internal/ because go:embed cannot reach outside its own package
+# directory, and one source of truth beats two files kept in sync by hand.
+!internal/platform/buildsha.txt
 migrations
 db
 Makefile

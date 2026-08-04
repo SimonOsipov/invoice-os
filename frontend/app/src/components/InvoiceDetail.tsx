@@ -9,7 +9,7 @@
 // — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
 // rejection cards below (M5-09-05) render only server-sourced data.
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -41,7 +41,10 @@ import {
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
+import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
+import { SourceDocumentCard } from './SourceDocumentCard'
+import { SourceDocumentModal } from './SourceDocumentModal'
 import { ViolationsTable } from './ViolationsTable'
 import type { PlatformCtx } from '../types'
 
@@ -187,6 +190,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     () => (base ? getInvoiceHistory(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
+  // The source-document record, shared by the right-rail card and the previewer modal —
+  // one fetch, two readers. `immediate: shouldFetchInvoices(base)` is not stylistic: the
+  // topology specs gate on an unfiltered console collector, and Chromium logs a failed
+  // request as a console error. Safe as specified — the endpoint returns 200 with
+  // `document: null` for a manually created invoice.
+  const source = useAsync<SourceDocumentResponse>(
+    () => (base ? getSourceDocument(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
+  )
+  const [previewOpen, setPreviewOpen] = useState(false)
+  // Stable — `useDismiss` re-registers its listeners on every identity change.
+  const closePreview = useCallback(() => setPreviewOpen(false), [])
+  const openPreview = useCallback(() => setPreviewOpen(true), [])
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) -- HOISTED above the status
   // ladder below: hooks can't be called from inside a conditional branch, and `inv` (the
@@ -635,6 +651,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 button, so Edit and Re-validate could never be gated apart. Both now live
                 in the page-header actions bar above, independently gated. */}
 
+            {/* Directly above `Status history`, because that is where the evidence sits.
+                NOT titled "Audit trail" (the design's name for the same card):
+                import-wizard.spec.ts:537 asserts that string has zero matches here. */}
+            <SourceDocumentCard meta={source} onOpen={openPreview} />
+
             {/* M5-09-07 residual (Stage-1 finding H, AC-2 scoped to the invoice body/badge
                 above, not this card): on the one poll tick where shouldRefreshHistory
                 fires, history.run() dispatches useAsync's 'start' action and this card
@@ -673,6 +694,20 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             </div>
           </div>
         </div>
+
+        {/* Rendered inline, never portalled: `--bg-*`/`--fg-*` are declared on `.asc-app`
+            (app-layer.css:25-27), and this tree is inside it. Modal open state is local
+            to this component -- nothing about it belongs on PlatformCtx. */}
+        {previewOpen && (
+          <SourceDocumentModal
+            ctx={ctx}
+            meta={source}
+            invoiceNumber={inv.invoice_number}
+            invoiceCreatedAt={inv.created_at}
+            createdBy={history.data?.[0]?.actor ?? null}
+            onClose={closePreview}
+          />
+        )}
       </>
     )
   }

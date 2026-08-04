@@ -25,7 +25,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login, createEntity, createInvoice, validateInvoice, transitionInvoice, PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { buildMixedCsv } from '../importFixtures'
+import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // collectErrors()/signInFirm(): the same console/pageerror + firm-persona
@@ -56,13 +56,17 @@ async function signInFirm(page: Page): Promise<void> {
 // goToInvoices()/openInvoiceRow(): the two navigation seams every scenario
 // below shares. The sidebar's "Invoices" nav button (glyphs.tsx's
 // NAV_INVOICES) is matched with a case-sensitive /Invoices/ so the header's
-// lowercase "New invoice" CTA can never collide. A row click routes through
-// InvoicesList's onClick -> ctx.openImportedInvoice(id) -> the SAME live-detail
-// seam an imported invoice uses ([reuse-imported-seam], InvoicesList.tsx) --
-// clicking ANY real invoice's row opens LiveInvoiceDetail, not the mock
-// placeholder, so this needs no import-flow detour at all.
+// lowercase "New invoice" CTA can never collide, and is scoped to the sidebar
+// <nav> (personaSession.ts:69's own selector) so CreateFlow.tsx's review-step
+// `← Invoices` exit cannot either -- a caller arriving straight off an import
+// has both on screen. Substring, not exact: the nav button's accessible name
+// absorbs its needs_attention badge (Sidebar.tsx's invoicesItem). A row click
+// routes through InvoicesList's onClick -> ctx.openImportedInvoice(id) -> the
+// SAME live-detail seam an imported invoice uses ([reuse-imported-seam],
+// InvoicesList.tsx) -- clicking ANY real invoice's row opens LiveInvoiceDetail,
+// not the mock placeholder, so this needs no import-flow detour at all.
 async function goToInvoices(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /Invoices/ }).click()
+  await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
 }
 
@@ -1361,6 +1365,208 @@ test('reports-whole-set: top customers ranks over the whole set', async ({ page 
   const names = card.locator('span:not(.money):not(.card-title)')
   await expect(names).not.toHaveCount(0)
   await expect(names.first(), 'the anchor buyer must head the list once the whole set feeds the aggregation').toHaveText(anchorName)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// DOC-02-09: the source-document previewer, reached only from invoice detail (fence 4 --
+// no other entry point). Folds the story's Test Specs rows 10+11 into ONE test() (Stage-1
+// correction C1, the same fold this file already did once for M5-09-08 -- row 11 has no
+// fixture of its own and this file's tests each get a fresh page/error collector).
+// buildMixedCsv is deterministic (importFixtures.ts): header + STRUCT(2) + STRUCT(3) +
+// VIOLATE(4) + CLEAN(5), rows_total 4 -- INV-UI-MIX-VIOLATE's source_rows is [4], so the
+// card renders the SINGULAR "Row 4 of this file became this invoice." (lib/sourceDocument.ts).
+test("invoice detail: the source-document card states the real range, and the modal opens on the whole file with this invoice's row marked", async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-02 preview ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  // import-wizard.spec.ts's own proven E2E-04 recipe, reused verbatim (this file's own
+  // Day-60 test above drives the identical steps).
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'doc02-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await goToInvoices(page)
+  await openInvoiceRow(page, 'INV-UI-MIX-VIOLATE')
+
+  await expect(page.getByTestId('source-document-card')).toBeVisible()
+  // Literal, not a `/Rows? \d+/` shape regex -- a shape regex passes for a WRONG row number
+  // too, the DOC-01 empty-id failure class this assertion exists to prevent (Stage-1
+  // correction C2).
+  await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
+
+  await page.getByTestId('view-source-document').click()
+  const modal = page.getByTestId('source-document-modal')
+  await expect(modal).toBeVisible()
+  // Middle dot (U+00B7) escaped, not typed literally -- this file's own precedent (:469)
+  // treats a non-ASCII assertion literal as a CI-shell encoding hazard.
+  await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file \u00b7 4 rows$/)
+  await expect(page.getByTestId('sheet-scope-invoice')).toBeVisible()
+  await expect(page.getByTestId('sheet-row-marked')).toHaveCount(1)
+  await expect(page.getByTestId('sheet-status')).toHaveText(/SHOWING ALL 4 ROWS/)
+  await expect(page.getByTestId('source-document-rail')).toBeVisible()
+  // A SHA-256 hex digest chunked 16 chars/line is always exactly 4 lines (64 / 16).
+  await expect(page.getByTestId('hash-line')).toHaveCount(4)
+
+  await page.getByTestId('source-modal-close').click()
+  await expect(modal).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The sheet's windowing is unit-tested as a pure function (lib/sourceDocument.test.ts
+// pins sheetWindow at 1,479 and 100,000 rows), but the 4-row fixture above never
+// scrolls, so no browser had ever rendered this component past one screen. The design
+// brief's own warning is the failure this covers: without the clamp the measured
+// viewport reads the full content height (~44,000px), every row renders, and the tab
+// hangs. buildPerfCsv is import-wizard.spec.ts's proven 500-invoice/1500-row fixture.
+test('invoice detail: a 1,500-row source file renders through the window, not all at once', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-02 window ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'doc02-window.csv', mimeType: 'text/csv', buffer: Buffer.from(buildPerfCsv(), 'utf8') })
+
+  const previewResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 120_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await previewResp
+
+  // buildPerfCsv shares buildMixedCsv's PERF_HEADER, so the same two hand-maps apply.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 120_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await importResp
+
+  await goToInvoices(page)
+  // Any of the 500 will do -- they all share the one file -- and openInvoiceRow does
+  // not paginate, so naming a specific number would depend on the list's sort order.
+  await page
+    .getByTestId('invoices-list')
+    .getByText(/^INV-UI-\d{5}$/)
+    .first()
+    .click()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+  await page.getByTestId('view-source-document').click()
+  const modal = page.getByTestId('source-document-modal')
+  await expect(modal).toBeVisible()
+
+  // fmtPlain is toLocaleString('en-NG'), so four digits carry a thousands comma.
+  await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file · 1,500 rows$/)
+  await expect(page.getByTestId('sheet-status')).toHaveText(/SHOWING ALL 1,500 ROWS/)
+
+  // The window, not the file. An unclamped viewport measure renders all 1,500.
+  const rendered = await page.getByTestId('sheet-row-number').count()
+  expect(rendered, 'no rows rendered at all').toBeGreaterThan(0)
+  expect(rendered, `${rendered} of 1,500 rows are in the DOM; the window is not bounding the render`).toBeLessThan(200)
+
+  // Spacers are what keep the scrollbar honest while only a window exists.
+  await expect(page.getByTestId('sheet-spacer-top')).toHaveCount(1)
+  await expect(page.getByTestId('sheet-spacer-bottom')).toHaveCount(1)
+  await expect(page.getByTestId('sheet-marker-track')).toBeVisible()
+  await expect(page.getByTestId('marker-viewport')).toBeVisible()
+  await expect(page.getByTestId('marker-invoice-block')).not.toHaveCount(0)
+
+  // Scrolling must move the window. The modal opens auto-scrolled to THIS invoice's
+  // rows, and which invoice the list surfaced first is not fixed, so both ends are
+  // driven explicitly rather than measured from wherever entry happened to land.
+  const firstRowNumber = async () => Number((await page.getByTestId('sheet-row-number').first().innerText()).trim())
+  const scrollTo = async (top: number) =>
+    page.getByTestId('sheet-scroll').evaluate((el, t) => {
+      el.scrollTop = t
+    }, top)
+
+  await scrollTo(0)
+  await expect
+    .poll(firstRowNumber, { message: 'scrolling to the top did not show the first data row', timeout: 15_000 })
+    .toBe(2)
+
+  await scrollTo(30 * 1200)
+  await expect
+    .poll(firstRowNumber, { message: 'the window did not move after scrolling', timeout: 15_000 })
+    .toBeGreaterThan(1000)
+
+  const afterScroll = await page.getByTestId('sheet-row-number').count()
+  expect(afterScroll, 'the window grew unbounded while scrolling').toBeLessThan(200)
+
+  // No truncation notice: 1,500 is well inside the 5,000-row server cap, so a visible
+  // one would mean the cap is being applied at the wrong threshold.
+  await expect(page.getByTestId('sheet-truncation')).toHaveCount(0)
+
+  await page.getByTestId('source-modal-close').click()
+  await expect(modal).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('invoice detail: a manually created invoice shows the no-source state', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `DOC-02 no-source ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-DOC02-NOSRC-${freshTin()}`
+  await createInvoice(token, { entity_id: entity.id, invoice_number: invoiceNumber })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  await expect(page.getByTestId('source-document-card')).toContainText('No source document')
+  await expect(page.getByTestId('view-source-document')).toHaveCount(0)
+  const whyButton = page.getByTestId('why-no-source-document')
+  await expect(whyButton).toHaveText('Why there is no file')
+
+  await whyButton.click()
+  await expect(page.getByTestId('source-document-modal')).toBeVisible()
+  await expect(page.getByTestId('source-document-no-source')).toContainText('There is no source document')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

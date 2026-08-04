@@ -31,3 +31,8 @@ RUN pnpm --filter @invoice-os/landing build
 FROM caddy:2-alpine AS serve
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/landing/dist /srv
+# The commit under test, stamped by scripts/ci/stamp-build-sha.sh before `railway up`
+# and served at /build.txt. Caddy answers /health from memory before touching the
+# filesystem, so it can never carry a build; the deploy gate reads this instead and
+# blocks until the SPA under test is the one actually being served.
+COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt

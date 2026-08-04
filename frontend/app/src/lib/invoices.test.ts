@@ -993,6 +993,91 @@ describe('singleSubmitOutcome', () => {
   })
 })
 
+describe('singleSubmitOutcome: adversarial coverage', () => {
+  it('picks the item naming this invoice, ignoring an enqueued item for another invoice', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'other-1', enqueued: true, status: 'queued' },
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+      { invoice_id: 'other-2', enqueued: false, status: 'validated', reason: 'not_validated' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('not_validated') })
+  })
+
+  it('a malformed response repeating this invoice id resolves the first match (skip then enqueue)', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+      { invoice_id: 'inv-1', enqueued: true, status: 'queued' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('not_validated') })
+  })
+
+  it('a malformed response repeating this invoice id resolves the first match (enqueue then skip)', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: true, status: 'queued' },
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'not_validated' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({ kind: 'queued' })
+  })
+
+  it('an empty results array is unresolved, distinct from an undefined results array', () => {
+    const result = singleSubmitOutcome('inv-1', [])
+
+    expect(result.kind).toBe('unresolved')
+    if (result.kind === 'unresolved') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.unresolved)
+    }
+  })
+
+  it('enqueued: null is not queued', () => {
+    const items = [
+      { invoice_id: 'inv-1', enqueued: null, status: 'validated' },
+    ] as unknown as BatchSubmitResultItem[]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.notQueued)
+      expect(result.message).not.toBe('undefined')
+    }
+  })
+
+  it('a matching item with enqueued absent entirely is not queued', () => {
+    const items = [{ invoice_id: 'inv-1', status: 'validated' }] as unknown as BatchSubmitResultItem[]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe(DETAIL_SUBMIT_COPY.notQueued)
+    }
+  })
+
+  it('an unknown reason code surfaces the reason itself, never undefined or the neutral label', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'app_unreachable' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result.kind).toBe('skipped')
+    if (result.kind === 'skipped') {
+      expect(result.message).toBe('app_unreachable')
+      expect(result.message).not.toBe('undefined')
+      expect(result.message).not.toBe(DETAIL_SUBMIT_COPY.notQueued)
+    }
+  })
+})
+
 describe('DETAIL_SUBMIT_COPY', () => {
   it('DETAIL_SUBMIT_COPY matches the acceptance criterion verbatim', () => {
     expect(`${DETAIL_SUBMIT_COPY.prompt} ${DETAIL_SUBMIT_COPY.detail}`).toBe(

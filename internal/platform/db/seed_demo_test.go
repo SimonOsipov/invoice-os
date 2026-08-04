@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"io/fs"
+	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -132,9 +133,10 @@ func resetDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool) {
 }
 
 // fetchDemoBusinessEntities returns tenantID's business_entities rows as
-// (name, tin, sector, status), ordered by name. sector is coalesced to ''
-// like tin — a junk/probe row inserted without one (several tests below)
-// has sector NULL, and entityRow has no room for a NULL.
+// (name, tin, sector, status), ordered by name. sector is coalesced to the
+// empty string in the query below, same as tin — a junk/probe row inserted
+// without one (several tests below) has sector NULL, and entityRow has no
+// room for a NULL.
 func fetchDemoBusinessEntities(t *testing.T, pool *pgxpool.Pool, tenantID string) []entityRow {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
@@ -809,10 +811,10 @@ func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
 // duplicated here.
 
 // task-322: irn/csid/qr_payload on the demo tenant's seeded `accepted` invoices
-// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 30
+// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 31
 // DEMO-2026-* invoices, 8 of them accepted.
 const (
-	demoInvoiceTotalCount    = 30
+	demoInvoiceTotalCount    = 31
 	demoAcceptedInvoiceCount = 8
 
 	// demoIRNServiceID / demoIRNDateLayout mirror mock_script.go's mockServiceID /
@@ -2098,7 +2100,7 @@ func fetchDemoInvoiceOrder(t *testing.T, pool *pgxpool.Pool, tenantID string) []
 // order" C2's detector checks the observed created_at DESC, id DESC sequence against.
 var wantFirmInvoiceOrder = []string{
 	"DEMO-2026-1009", "DEMO-2026-1008", "DEMO-2026-1007",
-	"DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
+	"DEMO-2026-5005", "DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
 	"DEMO-2026-2004", "DEMO-2026-1006", "DEMO-2026-5003", "DEMO-2026-3004", "DEMO-2026-1005",
 	"DEMO-2026-4003", "DEMO-2026-2003", "DEMO-2026-6002", "DEMO-2026-1004", "DEMO-2026-3003",
 	"DEMO-2026-5002", "DEMO-2026-4002", "DEMO-2026-1003", "DEMO-2026-2002", "DEMO-2026-6001",
@@ -2900,14 +2902,184 @@ func TestSeedDemoInvoiceNumbersAreDisjointAcrossTenants(t *testing.T) {
 
 	// A number that exists in only one tenant still fans out if the join reaches nothing --
 	// a typo'd line_item_seed number renders a hollow detail screen and trips no other test.
-	orphans := mustCount(t, pool,
-		`SELECT count(*) FROM invoices i
-		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
-		    AND NOT EXISTS (SELECT 1 FROM line_items l WHERE l.invoice_id = i.id)`,
-		demoTenants)
-	if orphans != 0 {
-		t.Errorf("count(seeded DEMO-2026-* invoices with zero line items) = %d, want 0", orphans)
+	// Exactly one member is allowed on purpose (the no-source demo invoice); a second
+	// member here means a typo'd line_item_seed number, not a feature.
+	zeroLineItem := zeroLineItemDemoInvoices(t, pool)
+	wantZeroLineItem := []string{"DEMO-2026-5005"}
+	if !reflect.DeepEqual(zeroLineItem, wantZeroLineItem) {
+		t.Errorf("zero-line-item DEMO-2026-* invoices = %v, want exactly %v", zeroLineItem, wantZeroLineItem)
 	}
+}
+
+// zeroLineItemDemoInvoices returns every seeded DEMO-2026-* invoice number, across both
+// demo tenants, that has zero line_items -- the set demodocs.Seed's INNER JOIN
+// line_items can never reach.
+func zeroLineItemDemoInvoices(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT invoice_number FROM invoices i
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		    AND NOT EXISTS (SELECT 1 FROM line_items l WHERE l.invoice_id = i.id)
+		  ORDER BY i.invoice_number`,
+		[]string{demoTenantID, honeywellTenantID})
+	if err != nil {
+		t.Fatalf("query zero-line-item DEMO-2026-* invoices: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var number string
+		if err := rows.Scan(&number); err != nil {
+			t.Fatalf("scan zero-line-item row: %v", err)
+		}
+		out = append(out, number)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate zero-line-item rows: %v", err)
+	}
+	return out
+}
+
+// demodocsSeedCommentPath is internal/demodocs/demodocs.go, read straight off disk --
+// it is not go:embed'd, and the doc comment BUG-02-03 pins lives only there.
+const demodocsSeedCommentPath = "../../demodocs/demodocs.go"
+
+// demodocsNumberPattern matches one DEMO-2026-#### invoice number.
+var demodocsNumberPattern = regexp.MustCompile(`DEMO-2026-\d{4}`)
+
+// extractDemodocsSeedComment returns the single DEMO-2026-#### number demodocs.go's Seed
+// doc comment cites, failing if the comment cites zero or more than one.
+func extractDemodocsSeedComment(t *testing.T) string {
+	t.Helper()
+	src, err := os.ReadFile(demodocsSeedCommentPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", demodocsSeedCommentPath, err)
+	}
+	start := strings.Index(string(src), "// Seed attaches")
+	end := strings.Index(string(src), "func Seed(")
+	if start < 0 || end < 0 || end < start {
+		t.Fatalf("could not locate Seed's doc comment in %s", demodocsSeedCommentPath)
+	}
+	matches := demodocsNumberPattern.FindAllString(string(src)[start:end], -1)
+	if len(matches) != 1 {
+		t.Fatalf("Seed doc comment cites %d DEMO-2026-#### numbers (%v), want exactly 1", len(matches), matches)
+	}
+	return matches[0]
+}
+
+// isZeroLineItemDemoInvoice reports whether number is a seeded DEMO-2026-* invoice, in
+// either demo tenant, with zero line_items.
+func isZeroLineItemDemoInvoice(t *testing.T, pool *pgxpool.Pool, number string) bool {
+	t.Helper()
+	return mustCount(t, pool,
+		`SELECT count(*) FROM invoices i
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number = $2
+		    AND NOT EXISTS (SELECT 1 FROM line_items l WHERE l.invoice_id = i.id)`,
+		[]string{demoTenantID, honeywellTenantID}, number) == 1
+}
+
+// TestSeedSeedsALineItemFreeDemoInvoice: BUG-02-03. The seed must carry exactly one
+// DEMO-2026-* invoice with no line items -- an invoice a real import could never have
+// produced -- so the source-document previewer's empty state is reachable from demo data.
+func TestSeedSeedsALineItemFreeDemoInvoice(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	zeroLineItem := zeroLineItemDemoInvoices(t, pool)
+	if len(zeroLineItem) != 1 || zeroLineItem[0] != "DEMO-2026-5005" {
+		t.Errorf("zero-line-item DEMO-2026-* invoices = %v, want exactly [DEMO-2026-5005]", zeroLineItem)
+	}
+
+	t.Run("honest_shape", func(t *testing.T) {
+		var status string
+		var ruleSetVersionID, irn, csid, qrPayload *string
+		var violations, rejectionReasons string
+		var vatOK, totalOK bool
+		err := pool.QueryRow(ctx,
+			`SELECT status, rule_set_version_id, irn, csid, qr_payload,
+			        violations::text, rejection_reasons::text,
+			        vat = round(subtotal * 0.075, 2), total = subtotal + vat
+			   FROM invoices WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-5005'`,
+			demoTenantID,
+		).Scan(&status, &ruleSetVersionID, &irn, &csid, &qrPayload,
+			&violations, &rejectionReasons, &vatOK, &totalOK)
+		if err != nil {
+			t.Fatalf("read DEMO-2026-5005 (want it seeded per BUG-02-03): %v", err)
+		}
+		if status != "draft" {
+			t.Errorf("status = %q, want draft", status)
+		}
+		if ruleSetVersionID != nil {
+			t.Errorf("rule_set_version_id = %v, want NULL (validated=false)", *ruleSetVersionID)
+		}
+		if irn != nil || csid != nil || qrPayload != nil {
+			t.Errorf("irn/csid/qr_payload = %v/%v/%v, want all NULL", irn, csid, qrPayload)
+		}
+		if violations != "[]" {
+			t.Errorf("violations = %s, want []", violations)
+		}
+		if rejectionReasons != "[]" {
+			t.Errorf("rejection_reasons = %s, want []", rejectionReasons)
+		}
+		if !vatOK {
+			t.Error("vat != round(subtotal * 0.075, 2)")
+		}
+		if !totalOK {
+			t.Error("total != subtotal + vat")
+		}
+	})
+
+	t.Run("ordinary_buyer_tin", func(t *testing.T) {
+		var buyerTIN string
+		if err := pool.QueryRow(ctx,
+			`SELECT coalesce(buyer_tin, '') FROM invoices WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-5005'`,
+			demoTenantID,
+		).Scan(&buyerTIN); err != nil {
+			t.Fatalf("read DEMO-2026-5005 buyer_tin (want it seeded per BUG-02-03): %v", err)
+		}
+		reserved := map[string]bool{
+			"99999999-0001": true, "99999999-0002": true, "99999999-0003": true, "99999999-0004": true,
+			"99999999-0005": true, "99999999-0006": true, "99999999-0007": true,
+		}
+		if reserved[buyerTIN] {
+			t.Errorf("buyer_tin = %s, want an ordinary TIN -- not one of the reserved triggers (99999999-0001..0007)", buyerTIN)
+		}
+	})
+}
+
+// TestSeedNoSourceDemoInvoiceMatchesDemodocsComment: BUG-02-03. demodocs.go's Seed doc
+// comment names its own "no source document" example -- this is the check whose absence
+// let that comment cite a phantom invoice number for as long as it did.
+func TestSeedNoSourceDemoInvoiceMatchesDemodocsComment(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	number := extractDemodocsSeedComment(t)
+	if !isZeroLineItemDemoInvoice(t, pool, number) {
+		t.Errorf("demodocs.go's Seed comment cites %s, but it is not the seeded zero-line-item demo invoice", number)
+	}
+
+	t.Run("fails_on_a_phantom", func(t *testing.T) {
+		const phantom = "DEMO-2026-7005" // the seed's real 7000-block gap; never seeded
+		if isZeroLineItemDemoInvoice(t, pool, phantom) {
+			t.Fatalf("%s reports present -- it must never be seeded, or this detector is vacuous", phantom)
+		}
+		if number == phantom {
+			t.Errorf("demodocs.go's Seed comment still names the phantom %s", phantom)
+		}
+	})
 }
 
 // TestSeedTwinLineItemsReconcileWithSubtotal: the twins are seeded `validated` with

@@ -11,6 +11,7 @@
 //     (two clients on one queue each get a distinct job).
 //  3. Idempotent handler — queue.OncePerJob: a handler that commits its effect then crashes
 //     before River acks it re-applies the effect ZERO extra times on retry.
+//
 // Leg 3 is the one M2-08 lacked; without it a committed-then-crashed worker double-applies
 // (rawWorker below demonstrates the hazard; idempotentWorker proves the fix closes it).
 //

@@ -503,9 +503,9 @@ func TestMarkAcceptedTx_BlankIRNRaises23514AndWritesNothing(t *testing.T) {
 }
 
 // TestMarkAcceptedTx_BlankCSIDAndQRBecomeNull (task-239 AC#4): unlike IRN,
-// csid/qr_payload bind via NULLIF($n, '') -- a blank string means "the
-// authority returned none" (result.go's own doc on submission.Accepted) and
-// must land as SQL NULL, not the empty string.
+// csid/qr_payload bind via a NULLIF(arg, empty string) guard -- a blank
+// string means "the authority returned none" (result.go's own doc on
+// submission.Accepted) and must land as SQL NULL, not the empty string.
 func TestMarkAcceptedTx_BlankCSIDAndQRBecomeNull(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

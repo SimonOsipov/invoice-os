@@ -69,7 +69,9 @@ jobs:
   go:
     name: Go
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    # db/** (e.g. db/embed.go) is a real .go file path but lives only in the
+    # migrations filter, not go — cover both so a db/-only PR still hits this job.
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     # No Postgres here on purpose: every DB-backed suite (RLS, queue) is env-gated and
     # SKIPS without its per-role DATABASE_* URLs, so each runs in its own bootstrap+migrate
@@ -83,6 +85,18 @@ jobs:
           go-version-file: go.mod
           # No dependencies / go.sum yet — nothing to cache. Enable in M2.
           cache: false
+      - name: Format (gofmt agreement + no smart-quoted SQL literals)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: not formatted:"; echo "$unformatted"; gofmt -d $unformatted; exit 1
+          fi
+          # U+201C/U+201D in Go source is always gofmt eating a '' SQL empty string (bf1856b).
+          # LC_ALL=C.UTF-8 pins UTF-8 decoding so the bracket expression can't byte-split
+          # under a byte-oriented locale and false-positive on an em-dash.
+          if LC_ALL=C.UTF-8 grep -rn $'[“”]' --include='*.go' . ; then
+            echo "::error::smart quote in Go source — a '' SQL literal was reformatted away"; exit 1
+          fi
       - name: Build
         run: go build ./...
       # vet/test error on an empty module ("no packages"), so gate them on
@@ -225,7 +239,7 @@ jobs:
         # re-assertion, fail-closed on a missing/empty password GUC, idempotency,
         # deterministic password rotation, and schema-grant shape. Needs only
         # DATABASE_SUPERUSER_URL, already in this job's env; self-skips everywhere else.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run TestBootstrapSQL ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestBootstrap|TestMakefileDevDB' ./internal/platform/db/...
       - name: Gateway boot-path provisioning suite (bootstrap->migrate->reset->seed) + per-test visibility & skip gate
         # M4-21-04 (task-128, AC-6): proves db.Provision — the entry point
         # cmd/gateway/main.go calls at boot — composes bootstrap (gated) -> migrate
@@ -239,7 +253,7 @@ jobs:
         # DATABASE_SUPERUSER_URL/DATABASE_MIGRATION_URL/DATABASE_URL, all already in
         # this job's env; the gate turns a silently-skipped test (e.g. a future PR
         # that drops DATABASE_URL again) into a failed step instead of a quiet pass.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestSuperuserDSNNotRetainedForRequestPath' ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestSuperuserDSNNotRetainedForRequestPath|TestGatewayMain' ./internal/platform/db/...
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real
@@ -346,6 +360,10 @@ jobs:
         # that keeps it off non-demo data wherever it runs. Needs DATABASE_URL (app) +
         # DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/demodocs/...
+      - name: Demo-seed suite + CI -run filter coverage (as superuser) + per-test visibility & skip gate
+        # The 47 TestSeed* functions self-seed (db.Seed is the system under test); must run
+        # last in the job since db.Seed re-anchors created_at and re-enables every rule.
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestSeed|TestCIRunFilters' ./internal/platform/db/...
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

@@ -35,8 +35,8 @@ package invoice
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -207,7 +207,7 @@ func TestValidatorClient_503MapsToDistinguishableNoActiveRuleSet(t *testing.T) {
 		t.Errorf("err = %v, want a DISTINGUISHABLE ErrNoActiveRuleSet [AC#4, Stage-1 F3]", err)
 	}
 	if errors.Is(err, ErrUpstream) {
-		t.Errorf("a 503 (no active rule-set) must be distinguishable from a generic upstream failure -- "+
+		t.Errorf("a 503 (no active rule-set) must be distinguishable from a generic upstream failure -- " +
 			"got ErrUpstream instead of ErrNoActiveRuleSet")
 	}
 }
@@ -318,7 +318,7 @@ func TestValidatorClient_NullViolationsMapsToEmptySlice(t *testing.T) {
 		t.Fatalf("ByRef missing key %q", "inv-1")
 	}
 	if got == nil {
-		t.Errorf("ByRef[inv-1] is nil, want []Violation{} -- a nil Go slice encodes as SQL NULL downstream into "+
+		t.Errorf("ByRef[inv-1] is nil, want []Violation{} -- a nil Go slice encodes as SQL NULL downstream into " +
 			"invoices.violations jsonb NOT NULL [violations-write]")
 	}
 	if len(got) != 0 {
@@ -445,7 +445,7 @@ func TestValidatorClient_MissingRefInResponseMapsToErrUpstream(t *testing.T) {
 	}
 	if err == nil {
 		if _, ok := result.ByRef["inv-2"]; !ok {
-			t.Errorf("ByRef has no entry for inv-2 (omitted by 04) -- an absent key is indistinguishable from a "+
+			t.Errorf("ByRef has no entry for inv-2 (omitted by 04) -- an absent key is indistinguishable from a " +
 				"CLEAN verdict to any caller ranging over the refs it sent [Stage-1 F5]")
 		}
 	}

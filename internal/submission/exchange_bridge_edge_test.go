@@ -30,7 +30,7 @@ func TestExchangeFor_InternallyInconsistentEvidencePassesThroughUnjudged(t *test
 	a := exBridgeAdapter{name: "ref", version: "v9"}
 	status := 200
 	ev := submission.Evidence{
-		ReachedWire: false, // claims nothing reached the wire...
+		ReachedWire: false,   // claims nothing reached the wire...
 		HTTPStatus:  &status, // ...yet carries a response status anyway.
 	}
 

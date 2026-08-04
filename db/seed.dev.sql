@@ -181,7 +181,7 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- DEMO-2026-1007..1009 carry the mock adapter's reserved trigger buyer TINs and stay
 -- `validated`, so a demo can submit them live rather than only see the aftermath.
 --
--- 30 invoices across 6 entities (Adeyemi/Chukwu/Okonkwo/Balogun/Emeka/Aliyu), comfortably
+-- 31 invoices across 6 entities (Adeyemi/Chukwu/Okonkwo/Balogun/Emeka/Aliyu), comfortably
 -- under listInvoices' server-side default page size of 50 (internal/invoice/handlers.go,
 -- [D8]) -- ReportsView sums over that one page, tenant-wide, so this stays well clear of
 -- the point where its KPIs would silently go partial as other specs' own fixtures
@@ -244,6 +244,7 @@ WITH invoice_seed (
     ('10056789-0005', 'DEMO-2026-5002', 'accepted',  '2026-06-12', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd',      210000.00, 15750.00, 225750.00, true, '[]', '[]'),
     ('10056789-0005', 'DEMO-2026-5003', 'validated', '2026-06-19', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors',         76000.00,  5700.00,  81700.00,  true, '[]', '[]'),
     ('10056789-0005', 'DEMO-2026-5004', 'failed',    '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 33000.00,  2475.00,  35475.00,  true, '[]', '[]'),
+    ('10056789-0005', 'DEMO-2026-5005', 'draft',     '2026-06-25', '10056789-0005', 'Emeka Pharmaceuticals Ltd', '20033344-0003', 'Kano Agro Distributors',         48000.00,  3600.00,  51600.00,  false, '[]', '[]'),
 
     -- Aliyu Logistics Services Ltd (10067890-0006) -- the problem client: rejected +
     -- two malformed-TIN blocked drafts (needs_attention:3, the highest of the six).

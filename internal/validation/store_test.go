@@ -450,9 +450,9 @@ func TestStore_ToggleUnknownKey(t *testing.T) {
 // UPDATE and its audit.Record call share one transaction. Mechanism: call
 // ToggleRule under an identity whose Subject is "" -- WithinRequestTenantTx
 // only requires a valid TenantID uuid to proceed (Subject is not validated
-// there), so the tx opens and the UPDATE runs, but audit.Record's
-// `INSERT INTO audit_log (actor, ...) VALUES (”, ...)` then violates
-// audit_log's `audit_actor_length` CHECK (char_length(actor) > 0) --
+// there), so the tx opens and the UPDATE runs, but audit.Record's INSERT
+// binds actor as an empty string, which then violates audit_log's
+// `audit_actor_length` CHECK (char_length(actor) > 0) --
 // migrations/20260708062657_audit_log.sql:56 -- and errors. Because
 // ToggleRule must run both statements inside ONE db.WithinRequestTenantTx
 // closure (same shape as portfolio.Store.Create/Update/SetStatus), that

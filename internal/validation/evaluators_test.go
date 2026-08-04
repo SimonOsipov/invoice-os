@@ -1193,7 +1193,7 @@ func TestDate_CustomFormat(t *testing.T) {
 	t.Run("within bound passes", func(t *testing.T) {
 		e := dateEval{}
 		r := Rule{Key: "DATE-CUSTOM", Type: TypeDate, Target: "d",
-			Params: json.RawMessage(`{"format":"02/01/2006","not_after":"31/12/2026"}`),
+			Params:   json.RawMessage(`{"format":"02/01/2006","not_after":"31/12/2026"}`),
 			Severity: "error", Message: "d out of range"}
 		v, err := mustEval(t, e, payload, r)
 		if err != nil {
@@ -1207,7 +1207,7 @@ func TestDate_CustomFormat(t *testing.T) {
 	t.Run("outside bound violates", func(t *testing.T) {
 		e := dateEval{}
 		r := Rule{Key: "DATE-CUSTOM", Type: TypeDate, Target: "d",
-			Params: json.RawMessage(`{"format":"02/01/2006","not_after":"01/01/2026"}`),
+			Params:   json.RawMessage(`{"format":"02/01/2006","not_after":"01/01/2026"}`),
 			Severity: "error", Message: "d out of range"}
 		v, err := mustEval(t, e, payload, r)
 		if err != nil {

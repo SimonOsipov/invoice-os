@@ -72,12 +72,12 @@ func pgCode(err error) string {
 // ErrValidation, mirroring internal/invoice.Store.Create's entity_id
 // handling — a bogus entity_id must never 500.
 //
-// filename is wrapped in nullif($3, '') so an unusable/empty name (already
-// coerced to "" by sanitizeFilename before it ever reaches here) persists as
-// SQL NULL, never the empty string (AC #4) -- '' would make an unrecorded
-// source indistinguishable from a file genuinely named nothing. documentID
-// gets the same treatment for a different reason: '' is not a uuid at all
-// (22P02), and a caller with no source document must stay writable.
+// filename and documentID each go through a nullif(arg, empty string) guard
+// in the INSERT below, so a blank value persists as SQL NULL, never the
+// empty string (AC #4) -- an unrecorded source would otherwise be
+// indistinguishable from a file genuinely named nothing. A non-empty but
+// invalid documentID hits the 22P02 path above; a blank one is nullified
+// before the cast, so a caller with no source document stays writable.
 func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID string) (string, error) {
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {

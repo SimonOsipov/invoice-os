@@ -2901,8 +2901,8 @@ func TestSeedDemoInvoiceNumbersAreDisjointAcrossTenants(t *testing.T) {
 
 	// A number that exists in only one tenant still fans out if the join reaches nothing --
 	// a typo'd line_item_seed number renders a hollow detail screen and trips no other test.
-	// Exactly one member is allowed on purpose (BUG-02-03's own no-source demo invoice); a
-	// second member here means a typo, not a feature.
+	// Exactly one member is allowed on purpose (the no-source demo invoice); a second
+	// member here means a typo'd line_item_seed number, not a feature.
 	zeroLineItem := zeroLineItemDemoInvoices(t, pool)
 	wantZeroLineItem := []string{"DEMO-2026-5005"}
 	if !reflect.DeepEqual(zeroLineItem, wantZeroLineItem) {

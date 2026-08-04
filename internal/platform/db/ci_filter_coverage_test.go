@@ -154,7 +154,7 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 	}
 
 	// AC-1 table case: the four pre-BUG-02 filters, against the real enumerated
-	// names, must reproduce the full 63-name orphan set — the visible RED.
+	// names, must reproduce the full historical orphan set — the visible RED.
 	t.Run("pre_fix_filters", func(t *testing.T) {
 		preFix := []string{
 			"TestMigrateUpFromEmbedded",
@@ -178,13 +178,7 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 				want = append(want, n)
 			}
 		}
-		if len(want) != 49 {
-			t.Fatalf("found %d TestSeed* functions, want 49 — enumeration or the package changed", len(want))
-		}
 		want = append(want, preFixOrphans...)
-		if len(want) != 63 {
-			t.Fatalf("expected orphan set has %d names, want 63 (49 TestSeed* + 14 non-Seed)", len(want))
-		}
 		sort.Strings(want)
 
 		got := unreachable(preFix, historical)

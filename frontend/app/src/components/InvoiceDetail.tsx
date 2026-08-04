@@ -18,6 +18,7 @@ import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
   computedLineSum,
+  DETAIL_SUBMIT_COPY,
   diffLineItems,
   editInvoice,
   EDIT_FIELD_KEYS,
@@ -25,6 +26,7 @@ import {
   getInvoiceHistory,
   invoiceStatusStyle,
   LIVE_POLL_MS,
+  newIdempotencyKey,
   reasonFieldFlags,
   rejectionProvenance,
   revalidateInvoice,
@@ -33,6 +35,8 @@ import {
   shouldRefreshHistory,
   shouldShowFiscalRecord,
   shouldShowRejectionCard,
+  singleSubmitOutcome,
+  submitInvoices,
   verdictStatus,
   type EditFieldKey,
   type InvoiceDetailRecord,
@@ -41,6 +45,7 @@ import {
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
+import { bulkPhaseReducer, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { SourceDocumentCard } from './SourceDocumentCard'
@@ -288,6 +293,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [revalidating, setRevalidating] = useState(false)
   const [revalidateError, setRevalidateError] = useState<string | null>(null)
 
+  // Single-invoice submit machine, reusing the bulk-submit reducer verbatim
+  // ([no-bulk-on-detail]) -- always [invoiceId], never a selection.
+  const [submitPhase, setSubmitPhase] = useState<BulkPhase>('idle')
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitSkipped, setSubmitSkipped] = useState<string | null>(null)
+  const submitInFlight = useRef(false)
+
   // Inline edit mode ([edit-ux]/[edit-mode-in-body], INVED-01-07). The ONLY new state this
   // component gains: the editor itself is a child mounted only while true, seeding its own
   // field/row state once at mount, so Cancel is just setEditing(false) -> unmount -> state
@@ -343,6 +355,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       // scheduling again, but not from resolving later and clobbering this fresh result
       // with the stale record it fetched (QA finding, [poll-overlay-not-rerun]).
       gen.current++
+      // A skip/error banner from a submit attempt describes the PRE-edit record --
+      // it must not survive onto the one this save just produced.
+      setSubmitPhase('idle')
+      setSubmitSkipped(null)
+      setSubmitError(null)
       setLive(null)
       detail.run()
       history.run()
@@ -362,6 +379,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
         gen.current++ // see handleSaved above -- invalidate any already-in-flight tick too
+        // See handleSaved above -- a stale submit banner must not survive a re-validate either.
+        setSubmitPhase('idle')
+        setSubmitSkipped(null)
+        setSubmitError(null)
         setLive(null) // see handleSaved above -- clear the overlay before the real refresh
         detail.run()
         history.run()
@@ -369,6 +390,47 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         setRevalidateError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         setRevalidating(false)
+      }
+    }
+
+    // Same reducer as ReviewInvoicesTab's bulk bar ([no-bulk-on-detail]) -- identity IS
+    // "do nothing", so an unarmed confirm or a second confirm mid-flight fires no request.
+    const toSubmitPhase = (action: Parameters<typeof bulkPhaseReducer>[1]): boolean => {
+      const next = bulkPhaseReducer(submitPhase, action)
+      if (next === submitPhase) return false
+      setSubmitPhase(next)
+      return true
+    }
+
+    const handleSubmit = async () => {
+      if (!inv.can_submit) return
+      if (!toSubmitPhase({ type: 'confirm' })) return // no arm => no request
+      if (submitInFlight.current) return
+      submitInFlight.current = true
+      setSubmitError(null)
+      setSubmitSkipped(null)
+      try {
+        // Minted HERE, not at arm time, so every confirmed click gets a fresh key
+        // ([fresh-key-per-confirm]) -- a retry after a failed attempt must not replay
+        // the dead one and get silently deduped by the server.
+        const items = await submitInvoices(ctx.authedFetch, base, [invoiceId], newIdempotencyKey())
+        const outcome = singleSubmitOutcome(invoiceId, items)
+        if (outcome.kind !== 'queued') {
+          if (outcome.kind === 'skipped') setSubmitSkipped(outcome.message)
+          else setSubmitError(outcome.message)
+        }
+        gen.current++
+        setLive(null)
+        detail.run()
+        history.run()
+      } catch (err) {
+        setSubmitError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        // Functional setter: this runs after an await, so the closure's `submitPhase` is
+        // stale -- and `cancel` is a no-op from 'submitting', so only `settled` can unstick
+        // the bar on the error leg.
+        setSubmitPhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
+        submitInFlight.current = false
       }
     }
 
@@ -406,74 +468,155 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               and adding it would erase AC #7's intent that NEITHER action renders past the
               editable states. Widening the gate is a deliberate human decision, guarded on
               the backend by TestCanRevalidate_AgreesWithThePromotionEdge; it must not be
-              pre-empted here by a defensive `||`. */}
-          {inv.can_edit && !editing && (
-            <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  data-testid="edit-toggle"
-                  onClick={() => setEditing(true)}
-                  className="v2-btn v2-btn-primary pf-btn"
-                  style={{ height: 32, padding: '0 14px', fontSize: 13 }}
-                >
-                  Edit
-                </button>
-                {/* Disabled-with-reason rather than hidden ([revalidate-visibility]) --
-                    hiding it makes the edit -> demote -> re-validate loop undiscoverable.
-                    FOUR layers, all load-bearing, because a disabled button gets NO styling
-                    for free in this codebase: packages/design-tokens/*.css contains zero
-                    `:disabled` rules, and `.v2-btn-ghost` (app-layer.css:214) sets
-                    background/color explicitly with a :hover rule (:215) that is NOT guarded
-                    by `:not(:disabled)`.
-                    (1) the real HTML `disabled` attribute -- genuinely unclickable;
-                    (2) the inline background/color/cursor swap below, which both mutes the
-                        button and, being inline, outranks that unguarded :hover rule so a
-                        disabled button stops reacting to the pointer. Treatment copied from
-                        CreateUpload.tsx:154-156/:217-219, the repo's shipped PERSISTENT
-                        disabled gating; deliberately NOT InvoicesList.tsx:347's `opacity`,
-                        which is a sub-second in-flight state and provably does not suppress
-                        the hover swap (Surface Conflicts -- one precedent picked, not blended);
-                    (3) the visible sibling text below, carrying the backend's reason
-                        verbatim -- the only layer a keyboard/screen-reader user and a
-                        Playwright text assertion can both reach, since a disabled button is
-                        out of the tab order;
-                    (4) title + aria-describedby, as ADDITIONS to (3), never the sole carrier. */}
-                <button
-                  type="button"
-                  data-testid="revalidate"
-                  onClick={handleRevalidate}
-                  disabled={revalidateDisabled}
-                  title={inv.revalidate_blocked_reason ?? undefined}
-                  aria-describedby={inv.revalidate_blocked_reason != null ? REVALIDATE_REASON_ID : undefined}
-                  className="v2-btn v2-btn-ghost pf-btn"
-                  style={{
-                    height: 32,
-                    padding: '0 14px',
-                    fontSize: 13,
-                    // Spread ONLY when disabled: an inline `background` on the enabled
-                    // button would also kill its legitimate :hover affordance.
-                    ...(revalidateDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
-                  }}
-                >
-                  {revalidating ? 'Revalidating…' : 'Re-validate'}
-                </button>
-              </div>
-              {/* The backend's copy, verbatim ([revalidate-reason-from-backend]). The wire
-                  guarantees it is non-null exactly when can_edit && !can_revalidate
-                  (lib/invoices.ts:186-196); if it is somehow null we render NOTHING rather
-                  than invent a fallback string the SPA has no authority to author. */}
-              {inv.revalidate_blocked_reason != null && (
-                <div id={REVALIDATE_REASON_ID} data-testid="revalidate-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                  {inv.revalidate_blocked_reason}
+              pre-empted here by a defensive `||`. Submit nests inside this same gate too,
+              independently controlled by `inv.can_submit` -- see TestCanSubmit_ImpliesCanEdit. */}
+          {/* Outer column wraps the can_edit-gated bar AND the submit skip/error banners
+              together, so both stay in one right-aligned flex item ([D-actions-column]).
+              The banners live OUTSIDE the `invoice-actions` gate on purpose: a submit that
+              lands can flip can_edit to false on refetch (e.g. a duplicate_request skip on
+              an invoice a PRIOR request already queued), and the banner describing that
+              outcome must still render -- [never-report-success-on-a-skip] is not allowed
+              to depend on the record still being editable afterward. */}
+          {((inv.can_edit && !editing) || submitSkipped != null || submitError != null) && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
+              {inv.can_edit && !editing && (
+                <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      data-testid="edit-toggle"
+                      onClick={() => setEditing(true)}
+                      className="v2-btn v2-btn-primary pf-btn"
+                      style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                    >
+                      Edit
+                    </button>
+                    {/* Disabled-with-reason rather than hidden ([revalidate-visibility]) --
+                        hiding it makes the edit -> demote -> re-validate loop undiscoverable.
+                        FOUR layers, all load-bearing, because a disabled button gets NO styling
+                        for free in this codebase: packages/design-tokens/*.css contains zero
+                        `:disabled` rules, and `.v2-btn-ghost` (app-layer.css:214) sets
+                        background/color explicitly with a :hover rule (:215) that is NOT guarded
+                        by `:not(:disabled)`.
+                        (1) the real HTML `disabled` attribute -- genuinely unclickable;
+                        (2) the inline background/color/cursor swap below, which both mutes the
+                            button and, being inline, outranks that unguarded :hover rule so a
+                            disabled button stops reacting to the pointer. Treatment copied from
+                            CreateUpload.tsx:154-156/:217-219, the repo's shipped PERSISTENT
+                            disabled gating; deliberately NOT InvoicesList.tsx:347's `opacity`,
+                            which is a sub-second in-flight state and provably does not suppress
+                            the hover swap (Surface Conflicts -- one precedent picked, not blended);
+                        (3) the visible sibling text below, carrying the backend's reason
+                            verbatim -- the only layer a keyboard/screen-reader user and a
+                            Playwright text assertion can both reach, since a disabled button is
+                            out of the tab order;
+                        (4) title + aria-describedby, as ADDITIONS to (3), never the sole carrier. */}
+                    <button
+                      type="button"
+                      data-testid="revalidate"
+                      onClick={handleRevalidate}
+                      disabled={revalidateDisabled}
+                      title={inv.revalidate_blocked_reason ?? undefined}
+                      aria-describedby={inv.revalidate_blocked_reason != null ? REVALIDATE_REASON_ID : undefined}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        fontSize: 13,
+                        // Spread ONLY when disabled: an inline `background` on the enabled
+                        // button would also kill its legitimate :hover affordance.
+                        ...(revalidateDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                      }}
+                    >
+                      {revalidating ? 'Revalidating…' : 'Re-validate'}
+                    </button>
+                    {/* Inline arm -> confirm, not a modal ([no-modal], ReviewInvoicesTab.tsx file
+                        header) -- the second stage renders below, in this same actions column.
+                        Gated on `inv.can_submit` alone, off the wire ([gates-on-the-wire]), same
+                        as Edit/Re-validate above; never re-derived from `status`. */}
+                    {inv.can_submit &&
+                      (submitPhase === 'idle' ? (
+                        <button
+                          type="button"
+                          data-testid="detail-submit"
+                          onClick={() => toSubmitPhase({ type: 'arm' })}
+                          className="v2-btn v2-btn-primary pf-btn"
+                          style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                        >
+                          {DETAIL_SUBMIT_COPY.submit}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            data-testid="detail-submit-cancel"
+                            onClick={() => toSubmitPhase({ type: 'cancel' })}
+                            disabled={submitPhase === 'submitting'}
+                            className="v2-btn v2-btn-ghost pf-btn"
+                            style={{
+                              height: 32,
+                              padding: '0 14px',
+                              fontSize: 13,
+                              ...(submitPhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                            }}
+                          >
+                            {DETAIL_SUBMIT_COPY.cancel}
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="detail-submit-confirm"
+                            onClick={() => void handleSubmit()}
+                            disabled={submitPhase === 'submitting'}
+                            className="v2-btn v2-btn-primary pf-btn"
+                            style={{
+                              height: 32,
+                              padding: '0 14px',
+                              fontSize: 13,
+                              ...(submitPhase === 'submitting' ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                            }}
+                          >
+                            {submitPhase === 'submitting' ? DETAIL_SUBMIT_COPY.sending : DETAIL_SUBMIT_COPY.confirm}
+                          </button>
+                        </>
+                      ))}
+                  </div>
+                  {/* The backend's copy, verbatim ([revalidate-reason-from-backend]). The wire
+                      guarantees it is non-null exactly when can_edit && !can_revalidate
+                      (lib/invoices.ts:186-196); if it is somehow null we render NOTHING rather
+                      than invent a fallback string the SPA has no authority to author. */}
+                  {inv.revalidate_blocked_reason != null && (
+                    <div id={REVALIDATE_REASON_ID} data-testid="revalidate-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {inv.revalidate_blocked_reason}
+                    </div>
+                  )}
+                  {/* Genuine-failure surface, moved here from the deleted fused card. Style
+                      unchanged; only the card-relative `margin` is dropped, since the column's
+                      own `gap: 8` now does that spacing. */}
+                  {revalidateError && (
+                    <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
+                      {revalidateError}
+                    </div>
+                  )}
+                  {/* Founder-pinned copy, verbatim (DETAIL_SUBMIT_COPY) -- two sentences as two
+                      lines, matching ReviewInvoicesTab's bulk-bar confirm stage. */}
+                  {submitPhase !== 'idle' && (
+                    <div data-testid="detail-submit-confirm-prompt" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      <div>{DETAIL_SUBMIT_COPY.prompt}</div>
+                      <div>{DETAIL_SUBMIT_COPY.detail}</div>
+                    </div>
+                  )}
                 </div>
               )}
-              {/* Genuine-failure surface, moved here from the deleted fused card. Style
-                  unchanged; only the card-relative `margin` is dropped, since the column's
-                  own `gap: 8` now does that spacing. */}
-              {revalidateError && (
-                <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
-                  {revalidateError}
+              {/* A skip is not a failure -- amber, like the stale-verdict banner, never red.
+                  Outside the `invoice-actions` gate above -- see the wrapper's own comment. */}
+              {submitSkipped != null && (
+                <div data-testid="detail-submit-skipped" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12, color: 'var(--status-amber-text)', textAlign: 'left' }}>
+                  {submitSkipped}
+                </div>
+              )}
+              {submitError != null && (
+                <div data-testid="detail-submit-error" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)', textAlign: 'left' }}>
+                  {submitError}
                 </div>
               )}
             </div>

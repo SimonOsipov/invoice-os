@@ -206,7 +206,7 @@ WITH invoice_seed (
     ('10012345-0001', 'DEMO-2026-1003', 'validated', '2026-06-10', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',            180000.00, 13500.00, 193500.00, true,  '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1004', 'failed',    '2026-06-14', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                   95000.00,  7125.00,  102125.00, true,  '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-06-18', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',        60000.00,  4500.00,  64500.00,  false, '[]', '[]'),
-    ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 75000.00,  5600.00,  80600.00,  true,
+    ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 75000.00,  7500.00,  82500.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
     -- Reserved trigger buyer TINs, left `validated` so a demo can submit them and watch the
     -- live outcome. No seeded job or evidence: they have never been submitted.
@@ -220,7 +220,7 @@ WITH invoice_seed (
     ('10023456-0002', 'DEMO-2026-2002', 'failed',    '2026-06-09', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                     128000.00, 9600.00,  137600.00, true, '[]', '[]'),
     ('10023456-0002', 'DEMO-2026-2003', 'failed',    '2026-06-16', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                     84000.00,  6300.00,  90300.00,  true, '[]', '[]'),
     ('10023456-0002', 'DEMO-2026-2004', 'failed',    '2026-06-21', '10023456-0002', 'Chukwu Global Ventures Ltd', '20033344-0003', 'Kano Agro Distributors (sent, no verdict)',                     45000.00,  3375.00,  48375.00,  true, '[]', '[]'),
-    ('10023456-0002', 'DEMO-2026-2005', 'draft',     '2026-06-24', '10023456-0002', 'Chukwu Global Ventures Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 66000.00,  4800.00,  70800.00,  true,
+    ('10023456-0002', 'DEMO-2026-2005', 'draft',     '2026-06-24', '10023456-0002', 'Chukwu Global Ventures Ltd', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)', 66000.00,  6600.00,  72600.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
 
     -- Okonkwo Textiles Nigeria Ltd (10034567-0003) -- one authority rejection.
@@ -351,7 +351,7 @@ WITH inhouse_invoice_seed (
     ('DEMO-2026-8002', 'accepted',  '2026-06-11', '20011122-0001', 'Zenith Freight & Logistics Ltd (accepted by the authority)',    215000.00, 16125.00, 231125.00, true, '[]', '[]'),
     ('DEMO-2026-8003', 'validated', '2026-06-18', '20022233-0002', 'Lagos Textiles Mart (validated, ready to submit)',               88000.00,  6600.00,  94600.00, true, '[]', '[]'),
     ('DEMO-2026-8004', 'draft',     '2026-06-22', '20044455-0004', 'Ibadan Consumer Goods Ltd (draft, not yet validated)',           64000.00,  4800.00,  68800.00, false, '[]', '[]'),
-    ('DEMO-2026-8005', 'draft',     '2026-06-25', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)',  56000.00,  4100.00,  60100.00, true,
+    ('DEMO-2026-8005', 'draft',     '2026-06-25', '20055566-0005', 'Port Harcourt Marine Supplies Ltd (VAT off the standard rate)',  56000.00,  5600.00,  61600.00, true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
 
     ('DEMO-2026-9001', 'validated', '2026-06-26', '99999999-0001', 'Sandbox APP (always accepts)',       240000.00, 18000.00, 258000.00, true, '[]', '[]'),

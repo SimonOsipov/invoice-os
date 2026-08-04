@@ -12,14 +12,17 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -417,6 +420,81 @@ func TestRLS_DemoDocsSkipsTenantWithoutAnAdmin(t *testing.T) {
 	if doc, _ := sourceOf(t, super, inv); doc != nil {
 		t.Error("an invoice was linked for a tenant with no admin")
 	}
+}
+
+// demoFirmTenantID mirrors internal/platform/db/seed_demo_test.go's own demoTenantID
+// constant (db/seed.dev.sql, the firm tenant) -- duplicated because that constant lives
+// in an unexported _test.go symbol this package cannot import.
+const demoFirmTenantID = "11111111-1111-1111-1111-111111111111"
+
+// sourceOfInvoiceNumber is sourceOf keyed by a real seeded invoice_number rather than an
+// id this file minted. found=false (not a Fatal) on a missing row -- BUG-02-03's row
+// does not exist until the seed lands, and a caller must be able to report that
+// mismatch as its own failure and keep going rather than aborting the whole test.
+func sourceOfInvoiceNumber(t *testing.T, super *pgxpool.Pool, tenantID, invoiceNumber string) (docID *string, rows []int, found bool) {
+	t.Helper()
+	err := super.QueryRow(context.Background(),
+		`SELECT source_document_id::text, source_rows FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`,
+		tenantID, invoiceNumber,
+	).Scan(&docID, &rows)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, false
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", invoiceNumber, err)
+	}
+	return docID, rows, true
+}
+
+// TestRLS_DemoDocsLeavesTheSeededNoSourceInvoiceUnlinked: BUG-02-03's own no-line-item
+// demo invoice must stay structurally invisible to Seed's INNER JOIN line_items, unlike
+// every other seeded invoice. Self-seeds via db.Seed: internal/platform/db's own
+// reset/seed test helpers (resetBothDemoTenants, requireSuperuserDSN) are unexported
+// _test.go symbols and unreachable from this package.
+func TestRLS_DemoDocsLeavesTheSeededNoSourceInvoiceUnlinked(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	// dbTestPools already required DATABASE_SUPERUSER_URL non-empty (or skipped above).
+	superDSN := os.Getenv("DATABASE_SUPERUSER_URL")
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed (establish the real demo fixtures): %v", err)
+	}
+
+	var bodies [][]byte
+	store := stubStore(t, super, &bodies)
+	if _, err := Seed(ctx, app, store, nil); err != nil {
+		t.Fatalf("demodocs.Seed: %v", err)
+	}
+
+	if doc, rows, found := sourceOfInvoiceNumber(t, super, demoFirmTenantID, "DEMO-2026-5005"); !found {
+		t.Error("DEMO-2026-5005 does not exist (want it seeded per BUG-02-03)")
+	} else if doc != nil || rows != nil {
+		t.Errorf("DEMO-2026-5005 source_document_id=%v source_rows=%v, want both NULL -- it has no line items", doc, rows)
+	}
+
+	linkedDoc, linkedRows, linkedFound := sourceOfInvoiceNumber(t, super, demoFirmTenantID, "DEMO-2026-5004")
+	if !linkedFound {
+		t.Fatal("DEMO-2026-5004 (contrast target, same entity) does not exist -- precondition of the seed itself")
+	}
+	if linkedDoc == nil {
+		t.Error("DEMO-2026-5004 has no source document, want it linked")
+	}
+	if len(linkedRows) == 0 {
+		t.Error("DEMO-2026-5004 source_rows is empty, want a non-empty sheet-row list")
+	}
+
+	t.Run("second_run_still_null", func(t *testing.T) {
+		if _, err := Seed(ctx, app, store, nil); err != nil {
+			t.Fatalf("second demodocs.Seed: %v", err)
+		}
+		doc, rows, found := sourceOfInvoiceNumber(t, super, demoFirmTenantID, "DEMO-2026-5005")
+		if !found {
+			t.Error("DEMO-2026-5005 does not exist (want it seeded per BUG-02-03)")
+		} else if doc != nil || rows != nil {
+			t.Errorf("DEMO-2026-5005 after a second Seed run: source_document_id=%v source_rows=%v, want both NULL", doc, rows)
+		}
+	})
 }
 
 // The allowlist is the safety boundary. Seed against a live throwaway tenant

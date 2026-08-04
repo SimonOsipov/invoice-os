@@ -4184,6 +4184,166 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 	}
 }
 
+// --- QA Mode B (INVED-02-01) adversarial coverage --------------------------
+
+// TestGetHandler_CanSubmitKeyAppearsExactlyOnce: guards the embed boundary --
+// getResponse embeds Invoice, so a future field added to Invoice tagged
+// json:"can_submit" would either shadow (if depths differ) or, per
+// encoding/json's ambiguous-field rule, silently DROP both same-depth
+// entries. Counting occurrences (not just presence) catches either failure
+// mode; presence-only tests above cannot.
+func TestGetHandler_CanSubmitKeyAppearsExactlyOnce(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusValidated}
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if got := strings.Count(rec.Body.String(), `"can_submit":`); got != 1 {
+		t.Errorf("body has %d occurrences of \"can_submit\": key, want exactly 1 (body=%s)", got, rec.Body.String())
+	}
+}
+
+// TestGetHandler_ErrorPathsNeverLeakCanSubmit: the 404 and 401 exit paths run
+// through writeError, a {"error":"..."} map literal -- structurally unable
+// to carry can_submit -- but this is the regression guard should that ever
+// stop being true (e.g. a richer error envelope added later).
+func TestGetHandler_ErrorPathsNeverLeakCanSubmit(t *testing.T) {
+	t.Run("not_found_404", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return Invoice{}, ErrNotFound }
+		rec, _ := doInvoiceGet(t, get, &id, uuid.NewString())
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "can_submit") {
+			t.Errorf("body = %s, a 404 must never carry can_submit in any form", rec.Body.String())
+		}
+	})
+	t.Run("no_identity_401", func(t *testing.T) {
+		get := func(ctx context.Context, gotID string) (Invoice, error) {
+			t.Fatal("get must not run without an identity")
+			return Invoice{}, nil
+		}
+		rec, _ := doInvoiceGet(t, get, nil, uuid.NewString())
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "can_submit") {
+			t.Errorf("body = %s, a 401 must never carry can_submit in any form", rec.Body.String())
+		}
+	})
+}
+
+// TestGetHandler_CanSubmitFalseForZeroStatus: a zero-value Status (empty
+// string) is outside the 7-member universe -- unreachable through the
+// invoices.status CHECK constraint on a real row, but reachable through any
+// get closure (a legacy/partial row read via a future direct-SQL path, or a
+// bug elsewhere in the store layer). Mirrors
+// TestCanSubmit_UnknownStatusIsFalseAndNeverPanics one level up, ON THE
+// WIRE, which that unit test does not exercise.
+func TestGetHandler_CanSubmitFalseForZeroStatus(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID} // Status left at its zero value ""
+	get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"can_submit":false`) {
+		t.Errorf("body = %s, want the literal \"can_submit\":false for a zero-value Status", rec.Body.String())
+	}
+}
+
+// TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence: extends
+// TestGetHandler_RealStore_ValidatedCanSubmit's single draft->validated flip
+// with a THIRD leg on the SAME row, draft->validated->queued, confirming
+// can_submit flips true->false again once the row moves past validated --
+// not just that it can turn true once.
+func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INVED-02-01-qa-sequence tenant")
+	entityID := seedEntity(t, super, tenantID, "INVED-02-01-qa-sequence entity")
+	store := NewStore(app)
+
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-QA-SEQ")
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	c := auth.WithIdentity(ctx, identity)
+
+	get := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+		r.SetPathValue("id", invoiceID)
+		r = r.WithContext(c)
+		rec := httptest.NewRecorder()
+		GetHandler(store.Get, nil).ServeHTTP(rec, r)
+		return rec
+	}
+
+	if !strings.Contains(get().Body.String(), `"can_submit":false`) {
+		t.Fatalf("draft: want can_submit:false")
+	}
+
+	if _, err := store.Transition(c, invoiceID, StatusValidated); err != nil {
+		t.Fatalf("Transition(draft->validated): %v", err)
+	}
+	if !strings.Contains(get().Body.String(), `"can_submit":true`) {
+		t.Fatalf("validated: want can_submit:true")
+	}
+
+	if _, err := store.Transition(c, invoiceID, StatusQueued); err != nil {
+		t.Fatalf("Transition(validated->queued): %v", err)
+	}
+	queuedRec := get()
+	if !strings.Contains(queuedRec.Body.String(), `"can_submit":false`) {
+		t.Errorf("queued: body = %s, want can_submit:false once the row moves past validated", queuedRec.Body.String())
+	}
+}
+
+// TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked: tenant B's invoice
+// is seeded and promoted all the way to validated (can_submit:true for
+// tenant B), then tenant A requests the SAME id through the real
+// Store.Get/GetHandler pair. RLS must still resolve this to ErrNotFound/404
+// -- can_submit must never be observable, true or false, for an invoice
+// outside the caller's tenant.
+func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "INVED-02-01-qa-cross tenant A")
+	tenantB := seedTenant(t, super, "INVED-02-01-qa-cross tenant B")
+	entityB := seedEntity(t, super, tenantB, "INVED-02-01-qa-cross B entity")
+	store := NewStore(app)
+
+	invoiceID := seedInvoice(t, super, tenantB, entityB, "INVED-02-01-QA-CROSS-B")
+	cB := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantB})
+	if _, err := store.Transition(cB, invoiceID, StatusValidated); err != nil {
+		t.Fatalf("Transition(tenant B draft->validated): %v", err)
+	}
+
+	identityA := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA}
+	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
+	r.SetPathValue("id", invoiceID)
+	r = r.WithContext(auth.WithIdentity(ctx, identityA))
+	rec := httptest.NewRecorder()
+	GetHandler(store.Get, nil).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "can_submit") {
+		t.Errorf("body = %s, tenant B's can_submit:true must never leak to tenant A, in any form", rec.Body.String())
+	}
+}
+
 // TestEditHandler_RealStore_LineItemsThreeStates (T-E2E-PATCH): wires the
 // REAL Store.Edit into the REAL EditHandler against real seeded, lined
 // invoices (seedLinedInvoiceAtStatus, edit_test.go) -- the DB-e2e

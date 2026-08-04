@@ -1148,17 +1148,21 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
 
   const badge = page.getByTestId('invoice-status-badge')
   const historyRows = page.getByTestId('status-history-row')
+
+  // 1: Created·draft, 2: draft->validated, 3: validated->queued, 4: queued->submitted --
+  // deterministic given this exact fixture lifecycle.
   await expect(badge).toContainText('SUBMITTED')
-  const beforeAcceptRows = await historyRows.count()
+  await expect(historyRows).toHaveCount(4)
 
   // Pending-convergence precedent (this file's reject/resubmit test): the ONLY assertion
   // needing a timeout above the config's 15s default.
   await expect(badge).toContainText('ACCEPTED', { timeout: 45_000 })
   await expect(page.getByTestId('invoices-list')).toHaveCount(0)
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  // Can ONLY have arrived via the poll tick's own shouldRefreshHistory -> history.run(),
-  // never a user action (none happened between the two badge assertions above).
-  await expect(historyRows).toHaveCount(beforeAcceptRows + 1)
+  // 5: submitted->accepted -- can ONLY have arrived via the poll tick's own
+  // shouldRefreshHistory -> history.run(), never a user action (none happened between the
+  // two badge assertions above).
+  await expect(historyRows).toHaveCount(5)
 
   await assertFiscalRecord(page, invoiceNumber)
 

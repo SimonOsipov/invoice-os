@@ -3677,3 +3677,89 @@ func TestSeedEveryLineTotalIsQuantityTimesUnitPrice(t *testing.T) {
 		t.Fatal("zero demo line items found -- query or seed drifted")
 	}
 }
+
+// TestSeedVATViolationRowsStayAdditionConsistent: QA gap-fill. The three vat-standard-rate
+// rows are excluded from TestSeedCleanDemoInvoicesReconcile (they carry a violation) and
+// TestSeedVATViolationIsVisiblyWrong only checks the rate, not the sum -- so nothing
+// currently catches an edit that fixes vat but leaves total stale, which would silently
+// swap what the row demonstrates (a rate violation) for a broken-addition one.
+func TestSeedVATViolationRowsStayAdditionConsistent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, subtotal::text, vat::text, total::text,
+		        total = subtotal + vat
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		    AND coalesce(violations->0->>'rule_key', '') = 'vat-standard-rate'
+		  ORDER BY invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query vat-standard-rate invoices: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var number, subtotal, vat, total string
+		var ok bool
+		if err := rows.Scan(&number, &subtotal, &vat, &total, &ok); err != nil {
+			t.Fatalf("scan vat-standard-rate row: %v", err)
+		}
+		checked++
+		if !ok {
+			t.Errorf("%s: total = %s, want subtotal %s + vat %s", number, total, subtotal, vat)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate vat-standard-rate rows: %v", err)
+	}
+	if checked != 3 {
+		t.Fatalf("checked %d vat-standard-rate rows, want 3", checked)
+	}
+}
+
+// TestSeedLineItemMismatchRowHasStandardVAT: QA gap-fill for AC-2 ("every other demo
+// invoice satisfies vat=round(subtotal*0.075,2) and total=subtotal+vat"). DEMO-2026-4002 is
+// excluded from TestSeedCleanDemoInvoicesReconcile (its own violations isn't '[]') and it
+// isn't a vat-standard-rate row either, so no existing test checks its VAT arithmetic --
+// only its deliberate line-sum mismatch. It must demonstrate exactly one thing
+// (line-items-sum-subtotal), not silently also drift off the standard VAT rate.
+func TestSeedLineItemMismatchRowHasStandardVAT(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var subtotal, vat, total string
+	var vatOK, totalOK bool
+	err := pool.QueryRow(ctx,
+		`SELECT subtotal::text, vat::text, total::text,
+		        vat = round(subtotal * 0.075, 2),
+		        total = subtotal + vat
+		   FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-4002'`,
+		demoTenantID,
+	).Scan(&subtotal, &vat, &total, &vatOK, &totalOK)
+	if err != nil {
+		t.Fatalf("query DEMO-2026-4002: %v", err)
+	}
+	if !vatOK {
+		t.Errorf("DEMO-2026-4002: vat = %s, want 7.5%% of subtotal %s", vat, subtotal)
+	}
+	if !totalOK {
+		t.Errorf("DEMO-2026-4002: total = %s, want subtotal %s + vat %s", total, subtotal, vat)
+	}
+}

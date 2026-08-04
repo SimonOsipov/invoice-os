@@ -178,7 +178,10 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- "buyer.tin") -- a real authority-level rejection, not a validation failure, so their
 -- own `violations` stay `[]`.
 --
--- 27 invoices across 6 entities (Adeyemi/Chukwu/Okonkwo/Balogun/Emeka/Aliyu), comfortably
+-- DEMO-2026-1007..1009 carry the mock adapter's reserved trigger buyer TINs and stay
+-- `validated`, so a demo can submit them live rather than only see the aftermath.
+--
+-- 30 invoices across 6 entities (Adeyemi/Chukwu/Okonkwo/Balogun/Emeka/Aliyu), comfortably
 -- under listInvoices' server-side default page size of 50 (internal/invoice/handlers.go,
 -- [D8]) -- ReportsView sums over that one page, tenant-wide, so this stays well clear of
 -- the point where its KPIs would silently go partial as other specs' own fixtures
@@ -205,6 +208,11 @@ WITH invoice_seed (
     ('10012345-0001', 'DEMO-2026-1005', 'draft',     '2026-06-18', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20022233-0002', 'Lagos Textiles Mart',            60000.00,  4500.00,  64500.00,  false, '[]', '[]'),
     ('10012345-0001', 'DEMO-2026-1006', 'draft',     '2026-06-20', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '20011122-0001', 'Zenith Freight & Logistics Ltd', 75000.00,  5600.00,  80600.00,  true,
       '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
+    -- Reserved trigger buyer TINs, left `validated` so a demo can submit them and watch the
+    -- live outcome. No seeded job or evidence: they have never been submitted.
+    ('10012345-0001', 'DEMO-2026-1007', 'validated', '2026-06-26', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0001', 'Sandbox APP (submit: accepted)',         120000.00, 9000.00,  129000.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1008', 'validated', '2026-06-27', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0002', 'Sandbox APP (submit: rejected)',          96000.00, 7200.00,  103200.00, true,  '[]', '[]'),
+    ('10012345-0001', 'DEMO-2026-1009', 'validated', '2026-06-28', '10012345-0001', 'Adeyemi & Sons Trading Ltd', '99999999-0003', 'Sandbox APP (submit: deferred verdict)', 144000.00, 10800.00, 154800.00, true,  '[]', '[]'),
 
     -- Chukwu Global Ventures Ltd (10023456-0002) -- the late-lifecycle failures, plus one
     -- blocked draft.
@@ -324,6 +332,8 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
 -- either as `accepted` would claim an outcome this sandbox cannot produce. -0005 is skipped --
 -- it accepts exactly like -0001 and would add a row but no new outcome. DEMO-2026-80## are
 -- ordinary counterparty invoices, so the portfolio is not made up entirely of triggers.
+-- DEMO-2026-90## are submittable twins of the accept/reject/deferred triggers, left
+-- `validated` with no seeded job or evidence: they have never been submitted.
 WITH inhouse_invoice_seed (
     invoice_number, status, issue_date, buyer_tin, buyer_name,
     subtotal, vat, total, validated, violations, rejection_reasons
@@ -341,7 +351,11 @@ WITH inhouse_invoice_seed (
     ('DEMO-2026-8003', 'validated', '2026-06-18', '20044455-0004', 'Ibadan Consumer Goods Ltd',       88000.00,  6600.00,  94600.00, true, '[]', '[]'),
     ('DEMO-2026-8004', 'draft',     '2026-06-22', '20022233-0002', 'Lagos Textiles Mart',             64000.00,  4800.00,  68800.00, false, '[]', '[]'),
     ('DEMO-2026-8005', 'draft',     '2026-06-25', '20011122-0001', 'Zenith Freight & Logistics Ltd',  56000.00,  4100.00,  60100.00, true,
-      '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]')
+      '[{"rule_key":"vat-standard-rate","severity":"error","message":"VAT must equal 7.5% of the subtotal."}]', '[]'),
+
+    ('DEMO-2026-9001', 'validated', '2026-06-26', '99999999-0001', 'Sandbox APP (submit: accepted)',         240000.00, 18000.00, 258000.00, true, '[]', '[]'),
+    ('DEMO-2026-9002', 'validated', '2026-06-27', '99999999-0002', 'Sandbox APP (submit: rejected)',         168000.00, 12600.00, 180600.00, true, '[]', '[]'),
+    ('DEMO-2026-9003', 'validated', '2026-06-28', '99999999-0003', 'Sandbox APP (submit: deferred verdict)', 196000.00, 14700.00, 210700.00, true, '[]', '[]')
 )
 INSERT INTO invoices (
     tenant_id, entity_id, invoice_number, status, issue_date, supplier_tin, supplier_name,
@@ -406,6 +420,9 @@ WITH line_item_seed (invoice_number, line_no, description, quantity, unit_price,
     ('DEMO-2026-1004', 1, 'Agro-chemical supply batch',                1,  95000.00,  95000.00),
     ('DEMO-2026-1005', 1, 'Textile finishing service',                 3,  20000.00,  60000.00),
     ('DEMO-2026-1006', 1, 'Warehouse rental - June',                   1,  75000.00,  75000.00),
+    ('DEMO-2026-1007', 1, 'Office furniture consignment',              3,  40000.00,  120000.00),
+    ('DEMO-2026-1008', 1, 'Packaging materials - bulk',                2,  48000.00,  96000.00),
+    ('DEMO-2026-1009', 1, 'Warehouse racking system',                  4,  36000.00,  144000.00),
 
     ('DEMO-2026-2001', 1, 'Generator maintenance contract - Q2',       1,  200000.00, 200000.00),
     ('DEMO-2026-2001', 2, 'Replacement parts - filters & belts',       2,  55000.00,  110000.00),
@@ -437,7 +454,7 @@ WITH line_item_seed (invoice_number, line_no, description, quantity, unit_price,
     ('DEMO-2026-6002', 1, 'Container handling fee',                    1,  54000.00,  54000.00),
     ('DEMO-2026-6003', 1, 'Warehousing - monthly',                     1,  47000.00,  47000.00),
 
-    -- Honeywell (in-house). The 1xxx-6xxx and 7xxx/8xxx number ranges are disjoint by
+    -- Honeywell (in-house). The 1xxx-6xxx and 7xxx/8xxx/9xxx number ranges are disjoint by
     -- construction, which is what keeps the invoice_number join below unambiguous once it
     -- spans two tenants.
     ('DEMO-2026-7001', 1, 'Industrial gas cylinder supply',            2,  200000.00, 400000.00),
@@ -452,7 +469,10 @@ WITH line_item_seed (invoice_number, line_no, description, quantity, unit_price,
     ('DEMO-2026-8002', 1, 'Grain dryer components',                    5,  43000.00,  215000.00),
     ('DEMO-2026-8003', 1, 'Conveyor belt replacement',                 1,  88000.00,  88000.00),
     ('DEMO-2026-8004', 1, 'Textile machinery parts',                   4,  16000.00,  64000.00),
-    ('DEMO-2026-8005', 1, 'Quarterly service contract',                1,  56000.00,  56000.00)
+    ('DEMO-2026-8005', 1, 'Quarterly service contract',                1,  56000.00,  56000.00),
+    ('DEMO-2026-9001', 1, 'Process valve assembly',                    2,  120000.00, 240000.00),
+    ('DEMO-2026-9002', 1, 'Conveyor motor unit',                       1,  168000.00, 168000.00),
+    ('DEMO-2026-9003', 1, 'Heat exchanger overhaul',                   4,  49000.00,  196000.00)
 )
 INSERT INTO line_items (tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
 SELECT i.tenant_id, i.id, li.line_no, li.description,

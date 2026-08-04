@@ -229,8 +229,7 @@ type getResponse struct {
 	CanEdit                 bool    `json:"can_edit"`
 	CanRevalidate           bool    `json:"can_revalidate"`
 	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
-	// CanSubmit stub: left unset (marshals false) pending implementation.
-	CanSubmit bool `json:"can_submit"`
+	CanSubmit               bool    `json:"can_submit"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -295,6 +294,7 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			QRPNGBase64:    qrPNGBase64,
 			CanEdit:        canEdit(inv.Status),
 			CanRevalidate:  canRevalidate(inv.Status),
+			CanSubmit:      canSubmit(inv.Status),
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local

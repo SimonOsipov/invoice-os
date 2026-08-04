@@ -3416,3 +3416,48 @@ func TestSeedOneScenarioPerCounterpartyExcludesReservedTINs(t *testing.T) {
 		t.Fatal("no reserved buyer_tin maps to more than one scenario key -- TestSeedOneScenarioPerCounterparty's buyer_tin NOT LIKE '99999999-%' exclusion excludes nothing, i.e. it is vacuous")
 	}
 }
+
+// TestSeedPreservesDeliberatelyMalformedTINs: DEMO-2026-6002's supplier_tin and
+// DEMO-2026-6003's buyer_tin are malformed ON PURPOSE -- the bad value IS the
+// supplier-tin-format / buyer-tin-format violation each row demonstrates. A relabel that
+// "cleans up" either value would delete the violation it exists to show.
+func TestSeedPreservesDeliberatelyMalformedTINs(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var supplierTIN, ruleKey6002 string
+	if err := pool.QueryRow(ctx,
+		`SELECT supplier_tin, coalesce(violations->0->>'rule_key', '') FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-6002'`,
+		demoTenantID,
+	).Scan(&supplierTIN, &ruleKey6002); err != nil {
+		t.Fatalf("read DEMO-2026-6002: %v", err)
+	}
+	if supplierTIN != "BADTIN" {
+		t.Errorf("DEMO-2026-6002 supplier_tin = %q, want the malformed %q -- the value IS the violation", supplierTIN, "BADTIN")
+	}
+	if ruleKey6002 != "supplier-tin-format" {
+		t.Errorf("DEMO-2026-6002 violations[0].rule_key = %q, want %q", ruleKey6002, "supplier-tin-format")
+	}
+
+	var buyerTIN, ruleKey6003 string
+	if err := pool.QueryRow(ctx,
+		`SELECT coalesce(buyer_tin, ''), coalesce(violations->0->>'rule_key', '') FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-6003'`,
+		demoTenantID,
+	).Scan(&buyerTIN, &ruleKey6003); err != nil {
+		t.Fatalf("read DEMO-2026-6003: %v", err)
+	}
+	if buyerTIN != "12345678" {
+		t.Errorf("DEMO-2026-6003 buyer_tin = %q, want the malformed %q -- the value IS the violation", buyerTIN, "12345678")
+	}
+	if ruleKey6003 != "buyer-tin-format" {
+		t.Errorf("DEMO-2026-6003 violations[0].rule_key = %q, want %q", ruleKey6003, "buyer-tin-format")
+	}
+}

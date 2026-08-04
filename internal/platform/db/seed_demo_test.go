@@ -810,10 +810,10 @@ func TestSeedSameTINUnderDifferentTenantIsSafe(t *testing.T) {
 // duplicated here.
 
 // task-322: irn/csid/qr_payload on the demo tenant's seeded `accepted` invoices
-// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 30
+// (Core AC-5). Ground truth verified against db/seed.dev.sql's invoice_seed CTE: 31
 // DEMO-2026-* invoices, 8 of them accepted.
 const (
-	demoInvoiceTotalCount    = 30
+	demoInvoiceTotalCount    = 31
 	demoAcceptedInvoiceCount = 8
 
 	// demoIRNServiceID / demoIRNDateLayout mirror mock_script.go's mockServiceID /
@@ -2099,7 +2099,7 @@ func fetchDemoInvoiceOrder(t *testing.T, pool *pgxpool.Pool, tenantID string) []
 // order" C2's detector checks the observed created_at DESC, id DESC sequence against.
 var wantFirmInvoiceOrder = []string{
 	"DEMO-2026-1009", "DEMO-2026-1008", "DEMO-2026-1007",
-	"DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
+	"DEMO-2026-5005", "DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
 	"DEMO-2026-2004", "DEMO-2026-1006", "DEMO-2026-5003", "DEMO-2026-3004", "DEMO-2026-1005",
 	"DEMO-2026-4003", "DEMO-2026-2003", "DEMO-2026-6002", "DEMO-2026-1004", "DEMO-2026-3003",
 	"DEMO-2026-5002", "DEMO-2026-4002", "DEMO-2026-1003", "DEMO-2026-2002", "DEMO-2026-6001",

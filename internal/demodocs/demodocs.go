@@ -89,7 +89,7 @@ type lineRow struct {
 // no document yet. Invoices with no line items are left alone on purpose: a row
 // in an import file IS a line item, so an invoice without one was never in a
 // file. That keeps the "no source document" state represented in demo data
-// (DEMO-2026-7005 is the seed's own example).
+// (DEMO-2026-5005 is the seed's own example).
 //
 // Idempotent twice over — the WHERE source_document_id IS NULL filter empties
 // on a second run, and identical bytes resolve to the existing documents row

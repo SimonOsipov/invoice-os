@@ -1,5 +1,5 @@
 // [M4-22-03] Suite for the demo-curation + rule-re-enable half of db.Seed
-// (task-162): the boot-time UPSERT of 27 curated business_entities rows into
+// (task-162): the boot-time UPSERT of 10 curated business_entities rows into
 // the demo tenant, plus the global rule re-enable, per binding decision
 // [demo-seed-shape]. Also covers task-322: irn/csid/qr_payload on the demo
 // tenant's seeded invoices (bottom of file).
@@ -56,8 +56,8 @@ type entityRow struct {
 	status string
 }
 
-// curatedDemoEntities is the 27 curated business_entities rows (21 active,
-// 6 archived) db/seed.dev.sql's UPSERT converges the demo tenant to. sector
+// curatedDemoEntities is the 10 curated business_entities rows (8 active,
+// 2 archived) db/seed.dev.sql's UPSERT converges the demo tenant to. sector
 // values are copied verbatim from that file — a mismatch here means either
 // this literal or the seed itself drifted. Comparisons below sort both sides
 // first, so this literal's declaration order isn't a hidden assumption.
@@ -70,25 +70,8 @@ var curatedDemoEntities = []entityRow{
 	{name: "Aliyu Logistics Services Ltd", tin: "10067890-0006", sector: "Logistics", status: "active"},
 	{name: "Ifeoma Fashion House Ltd", tin: "10078901-0007", sector: "Fashion", status: "active"},
 	{name: "Bello Construction Nigeria Ltd", tin: "10089012-0008", sector: "Construction", status: "active"},
-	{name: "Nwosu Foods & Beverages Ltd", tin: "10090123-0009", sector: "Food & Beverage", status: "active"},
-	{name: "Yakubu Motors Ltd", tin: "10101234-0010", sector: "Automotive", status: "active"},
-	{name: "Chidinma Cosmetics Ltd", tin: "10112345-0011", sector: "Cosmetics", status: "active"},
-	{name: "Obiora Steel Works Ltd", tin: "10123456-0012", sector: "Manufacturing", status: "active"},
-	{name: "Funmilayo Catering Services Ltd", tin: "10134567-0013", sector: "Catering", status: "active"},
-	{name: "Danjuma Petroleum Ltd", tin: "10145678-0014", sector: "Oil & Gas", status: "active"},
-	{name: "Ngozi Interiors Ltd", tin: "10156789-0015", sector: "Interior Design", status: "active"},
-	{name: "Uche Digital Solutions Ltd", tin: "10167890-0016", sector: "Technology", status: "active"},
-	{name: "Ibrahim Farms Ltd", tin: "10178901-0017", sector: "Agriculture", status: "active"},
-	{name: "Amara Publishing Ltd", tin: "10189012-0018", sector: "Publishing", status: "active"},
-	{name: "Tunde Electricals Ltd", tin: "10190123-0019", sector: "Electricals", status: "active"},
-	{name: "Kemi Beauty Concepts Ltd", tin: "10201234-0020", sector: "Beauty & Personal Care", status: "active"},
-	{name: "Segun Haulage Ltd", tin: "10212345-0021", sector: "Logistics", status: "active"},
 	{name: "Olumide Printing Press Ltd", tin: "10223456-0022", sector: "Printing", status: "archived"},
 	{name: "Halima Boutique Ltd", tin: "10234567-0023", sector: "Retail", status: "archived"},
-	{name: "Chinwe Poultry Farms Ltd", tin: "10245678-0024", sector: "Agriculture", status: "archived"},
-	{name: "Musa Hardware Stores Ltd", tin: "10256789-0025", sector: "Retail", status: "archived"},
-	{name: "Bisi Event Planners Ltd", tin: "10267890-0026", sector: "Events", status: "archived"},
-	{name: "Ekene Auto Parts Ltd", tin: "10278901-0027", sector: "Automotive", status: "archived"},
 }
 
 // resetDemoBusinessEntities clears the demo tenant's business_entities rows
@@ -98,7 +81,7 @@ var curatedDemoEntities = []entityRow{
 // (migrations/20260714103137_invoices.sql: "an invoice is a durable legal/
 // fiscal record ... must not be silently destroyed by a business_entities
 // hard delete") -- db/seed.dev.sql now also seeds invoices against 6 of the
-// 27 curated entities (persona-handoff-fix step 4, [demo-invoice-seed]), so
+// 10 curated entities (persona-handoff-fix step 4, [demo-invoice-seed]), so
 // deleting business_entities first would hit that RESTRICT (23001). Invoices
 // are cleared FIRST -- line_items and invoice_status_history cascade off
 // invoice_id (ON DELETE CASCADE on both) -- so the entities delete below
@@ -173,7 +156,7 @@ func sortedEntityRows(rows []entityRow) []entityRow {
 
 // TestSeedCreatesCuratedDemoEntities: Test Spec row 1 (task-162 AC-1). After
 // Seed runs against an empty demo-tenant portfolio, the demo tenant has
-// exactly the 27 curated rows (21 active / 6 archived).
+// exactly the 10 curated rows (8 active / 2 archived).
 func TestSeedCreatesCuratedDemoEntities(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -200,16 +183,16 @@ func TestSeedCreatesCuratedDemoEntities(t *testing.T) {
 			archived++
 		}
 	}
-	if active != 21 {
-		t.Errorf("count(active) = %d, want 21", active)
+	if active != 8 {
+		t.Errorf("count(active) = %d, want 8", active)
 	}
-	if archived != 6 {
-		t.Errorf("count(archived) = %d, want 6", archived)
+	if archived != 2 {
+		t.Errorf("count(archived) = %d, want 2", archived)
 	}
 }
 
 // TestSeedDemoEntitiesIsIdempotent: Test Spec row 2 (task-162 AC-2). Running
-// Seed twice leaves exactly 27 rows, no duplicate TIN, and byte-identical
+// Seed twice leaves exactly 10 rows, no duplicate TIN, and byte-identical
 // results across both runs.
 func TestSeedDemoEntitiesIsIdempotent(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -222,16 +205,16 @@ func TestSeedDemoEntitiesIsIdempotent(t *testing.T) {
 		t.Fatalf("first Seed: %v", err)
 	}
 	first := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(first) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after the FIRST Seed = %d, want 27", len(first))
+	if len(first) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after the FIRST Seed = %d, want 10", len(first))
 	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("second Seed (idempotency): %v", err)
 	}
 	second := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(second) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after the SECOND Seed = %d, want 27 (no duplication)", len(second))
+	if len(second) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after the SECOND Seed = %d, want 10 (no duplication)", len(second))
 	}
 
 	tins := make(map[string]int, len(second))
@@ -517,7 +500,7 @@ func TestSeedRepairsMutatedHoneywellEntity(t *testing.T) {
 // table too, which is exactly the kind of write this test exists to rule
 // OUT for a tenant Seed has no business touching. Tenant A has no
 // business_entities curation anywhere in seed.dev.sql (only the demo/firm
-// tenant's 27-row block and Honeywell's own 1-row block name a tenant_id),
+// tenant's 10-row block and Honeywell's own 1-row block name a tenant_id),
 // so it is still the neutral bystander the original test wanted — this is a
 // swap of WHICH tenant stands in for "other", not a weakening of the claim.
 const foreignTenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -525,7 +508,7 @@ const foreignTenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 // TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) —
 // regression guard for the dropped cross-tenant DELETE ([demo-seed-shape]).
 // Seeds a foreign-tenant probe row, runs Seed, and asserts the probe is
-// untouched while the demo tenant reaches its 27 curated rows (the paired
+// untouched while the demo tenant reaches its 10 curated rows (the paired
 // assertion, so this isn't a vacuous "touches nothing" pass).
 func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -573,8 +556,8 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 
 	// Meaningful only if Seed actually wrote its own tenant's rows first.
 	demoAfter := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(demoAfter) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 27", len(demoAfter))
+	if len(demoAfter) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 10", len(demoAfter))
 	}
 
 	after := fetchDemoBusinessEntities(t, pool, foreignTenantID)
@@ -676,7 +659,7 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 		t.Fatalf("first Seed (establish curated baseline): %v", err)
 	}
 
-	const deletedTIN = "10278901-0027" // curated row #27: Ekene Auto Parts Ltd, archived
+	const deletedTIN = "10234567-0023" // curated row #10: Halima Boutique Ltd, archived
 	res, err := pool.Exec(ctx,
 		`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
 		demoTenantID, deletedTIN,
@@ -689,8 +672,8 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 	}
 
 	afterDelete := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(afterDelete) != 26 {
-		t.Fatalf("precondition: count(business_entities) after deleting one curated row = %d, want 26", len(afterDelete))
+	if len(afterDelete) != 9 {
+		t.Fatalf("precondition: count(business_entities) after deleting one curated row = %d, want 9", len(afterDelete))
 	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
@@ -706,7 +689,7 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 
 // TestSeedLeavesJunkRowsInPlace: pins the actual behavior of the dropped
 // DELETE ([demo-seed-shape]) — a non-curated row (e.g. an E2E leftover)
-// survives Seed untouched, since seed.dev.sql only upserts the 27 curated
+// survives Seed untouched, since seed.dev.sql only upserts the 10 curated
 // TINs.
 func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -729,8 +712,8 @@ func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
 	}
 
 	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(got) != 28 {
-		t.Fatalf("count(business_entities) for the demo tenant after Seed with one pre-existing junk row = %d, want 28 (27 curated + 1 surviving junk row — [demo-seed-shape] deliberately drops the DELETE, so junk is NOT cleaned by the boot-time seed)", len(got))
+	if len(got) != 11 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed with one pre-existing junk row = %d, want 11 (10 curated + 1 surviving junk row — [demo-seed-shape] deliberately drops the DELETE, so junk is NOT cleaned by the boot-time seed)", len(got))
 	}
 
 	var found bool
@@ -3959,8 +3942,7 @@ func demoEntitiesByTINs(t *testing.T, tins []string) []entityRow {
 // TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived pins the target
 // shape the demo firm's business_entities block converges to: 10 rows, 8
 // active (6 history-bearing + Ifeoma + Bello), 2 archived (Olumide,
-// Halima). Independent of curatedDemoEntities, which still lists all 27.
-// FAILS today — the seed still upserts 27 rows.
+// Halima) — matching curatedDemoEntities post-trim.
 func TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)

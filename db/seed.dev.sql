@@ -49,8 +49,8 @@ ON CONFLICT (tenant_id, user_id) DO NOTHING;
 -- of a sealed rule set stays immutable.
 UPDATE rules SET enabled = true WHERE enabled = false;
 
--- The 27 curated business_entities rows for the demo tenant (Okafor &
--- Partners, 21 active + 6 archived, [demo-seed-shape]). DO UPDATE, not DO
+-- The 10 curated business_entities rows for the demo tenant (Okafor &
+-- Partners, 8 active + 2 archived, [demo-seed-shape]). DO UPDATE, not DO
 -- NOTHING, so a re-run REPAIRS a row a prior demo hand-edited back to its
 -- curated name/sector/status. Conflict target is the partial unique index
 -- business_entities_tenant_tin_uq -- every row below has a distinct,
@@ -76,25 +76,8 @@ INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
   ('11111111-1111-1111-1111-111111111111', 'Aliyu Logistics Services Ltd',     '10067890-0006', 'Logistics',                'active'),
   ('11111111-1111-1111-1111-111111111111', 'Ifeoma Fashion House Ltd',         '10078901-0007', 'Fashion',                  'active'),
   ('11111111-1111-1111-1111-111111111111', 'Bello Construction Nigeria Ltd',   '10089012-0008', 'Construction',             'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Nwosu Foods & Beverages Ltd',      '10090123-0009', 'Food & Beverage',          'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Yakubu Motors Ltd',                '10101234-0010', 'Automotive',               'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Chidinma Cosmetics Ltd',           '10112345-0011', 'Cosmetics',                'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Obiora Steel Works Ltd',           '10123456-0012', 'Manufacturing',            'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Funmilayo Catering Services Ltd',  '10134567-0013', 'Catering',                 'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Danjuma Petroleum Ltd',            '10145678-0014', 'Oil & Gas',                'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ngozi Interiors Ltd',              '10156789-0015', 'Interior Design',          'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Uche Digital Solutions Ltd',       '10167890-0016', 'Technology',               'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Ibrahim Farms Ltd',                '10178901-0017', 'Agriculture',              'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Amara Publishing Ltd',             '10189012-0018', 'Publishing',               'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Tunde Electricals Ltd',            '10190123-0019', 'Electricals',              'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Kemi Beauty Concepts Ltd',         '10201234-0020', 'Beauty & Personal Care',   'active'),
-  ('11111111-1111-1111-1111-111111111111', 'Segun Haulage Ltd',                '10212345-0021', 'Logistics',                'active'),
   ('11111111-1111-1111-1111-111111111111', 'Olumide Printing Press Ltd',       '10223456-0022', 'Printing',                 'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'Retail',                   'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Chinwe Poultry Farms Ltd',         '10245678-0024', 'Agriculture',              'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Musa Hardware Stores Ltd',         '10256789-0025', 'Retail',                   'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Bisi Event Planners Ltd',          '10267890-0026', 'Events',                   'archived'),
-  ('11111111-1111-1111-1111-111111111111', 'Ekene Auto Parts Ltd',             '10278901-0027', 'Automotive',               'archived')
+  ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'Retail',                   'archived')
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
     DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
 
@@ -119,17 +102,17 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- bypasses portfolio.ValidateTIN, so no Luhn check digit is needed here, and this
 -- is deliberately NOT the 10-digit JTB shape MBSSupplierTIN leaves alone
 -- (internal/invoice/supplier_tin.go) -- it is the same MBS wire spelling the firm
--- block's 27 rows above already use, so supplier-tin-format never fires against it.
+-- block's 10 rows above already use, so supplier-tin-format never fires against it.
 INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
   ('22222222-2222-2222-2222-222222222222', 'Honeywell Group', '20665510-0001', 'Manufacturing', 'active')
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
     DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
 
 -- persona-handoff-fix step 4 ([demo-invoice-seed]): a curated invoice history for 6 of
--- the 27 business_entities above, so the entity-scoped surfaces persona-handoff-fix
+-- the 10 business_entities above, so the entity-scoped surfaces persona-handoff-fix
 -- steps 1-3 shipped (workspace switcher, Overview, Invoices, Customers, Reports --
 -- 13e55b6/3f60a3b/63b2fbe) have something real to scope TO. Before this block every one
--- of the 27 entities had zero invoices, so selecting ANY of them rendered an honest but
+-- of the 10 entities had zero invoices, so selecting ANY of them rendered an honest but
 -- useless empty state -- the dev/PR environments' only invoice rows were incidental
 -- residue from whichever e2e spec happened to create some as a side effect of its own
 -- assertions.
@@ -185,7 +168,7 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- under listInvoices' server-side default page size of 50 (internal/invoice/handlers.go,
 -- [D8]) -- ReportsView sums over that one page, tenant-wide, so this stays well clear of
 -- the point where its KPIs would silently go partial as other specs' own fixtures
--- accumulate alongside it. The other 21 entities (15 active + 6 archived) are LEFT EMPTY
+-- accumulate alongside it. The other 4 entities (2 active + 2 archived) are LEFT EMPTY
 -- on purpose, so "no invoices yet" stays a reachable, honest state on this fleet, not
 -- just a code path nothing ever exercises.
 --

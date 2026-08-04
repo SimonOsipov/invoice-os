@@ -108,14 +108,9 @@ INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
     DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
 
--- persona-handoff-fix step 4 ([demo-invoice-seed]): a curated invoice history for 6 of
--- the 10 business_entities above, so the entity-scoped surfaces persona-handoff-fix
--- steps 1-3 shipped (workspace switcher, Overview, Invoices, Customers, Reports --
--- 13e55b6/3f60a3b/63b2fbe) have something real to scope TO. Before this block every one
--- of the 10 entities had zero invoices, so selecting ANY of them rendered an honest but
--- useless empty state -- the dev/PR environments' only invoice rows were incidental
--- residue from whichever e2e spec happened to create some as a side effect of its own
--- assertions.
+-- persona-handoff-fix step 4 ([demo-invoice-seed]): curated invoice history for 6 of the
+-- 10 business_entities above, so entity-scoped surfaces (workspace switcher, Overview,
+-- Invoices, Customers, Reports) have something real to scope to.
 --
 -- [default-entity-needs-data]: "Adeyemi & Sons Trading Ltd" (10012345-0001) is not just
 -- one of the six -- it is the alphabetically-first row business_entities returns
@@ -163,6 +158,9 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 --
 -- DEMO-2026-1007..1009 carry the mock adapter's reserved trigger buyer TINs and stay
 -- `validated`, so a demo can submit them live rather than only see the aftermath.
+--
+-- Each buyer_tin below resolves to exactly one buyer_name (roster, not a real customer
+-- list) -- TestSeedOneBuyerNamePerBuyerTIN enforces it.
 --
 -- 31 invoices across 6 entities (Adeyemi/Chukwu/Okonkwo/Balogun/Emeka/Aliyu), comfortably
 -- under listInvoices' server-side default page size of 50 (internal/invoice/handlers.go,

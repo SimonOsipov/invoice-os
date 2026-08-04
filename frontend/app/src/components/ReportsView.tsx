@@ -128,7 +128,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
           TAX REPORTING
         </div>
         <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Reports &amp; analytics</h1>
-        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · tax summary, period to date · June 2026</p>
+        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{active.name} · tax summary, period to date</p>
       </div>
 
       {state === 'loading' && <Loading label="Loading reports…" />}

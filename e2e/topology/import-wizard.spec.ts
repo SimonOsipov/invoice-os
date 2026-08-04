@@ -23,14 +23,15 @@
 // reusing a seeded one: no-duplicate-invoice-number is scoped per entity, so a shared
 // target would make a retry (or the second test) collide on fixed invoice numbers.
 //
-// NOTE (merged from main, M4-22-03): db/seed.dev.sql now seeds 27 curated
+// NOTE (merged from main, M4-22-03): db/seed.dev.sql now seeds 10 curated
 // business_entities into THIS persona's tenant (1111...), where it previously seeded
 // zero. Harmless here and deliberately not compensated for: selectEntity() (the
 // workspace-switcher helper, [import-upload-unify] -- CreateUpload's own in-page
 // entity <select> is gone) matches our own uniquely-named entity by label,
-// freshTin()'s pid-seeded range cannot collide with the curated
-// 10012345-0001..10278901-0027 literals, and listEntities requests ?limit=200
-// (frontend/app/src/lib/portfolio.ts:73) against 27+1 rows, so our entity cannot
+// freshTin()'s pid-seeded range cannot collide with the 10 curated TIN literals
+// (non-contiguous: active 10012345-0001..10089012-0008 plus archived
+// 10223456-0022/10234567-0023), and listEntities requests ?limit=200
+// (frontend/app/src/lib/portfolio.ts:73) against 10+1 rows, so our entity cannot
 // fall off the switcher's page.
 //
 // URLs are gateway-prefixed: the SPA calls POST {base}/api/invoice/v1/imports and

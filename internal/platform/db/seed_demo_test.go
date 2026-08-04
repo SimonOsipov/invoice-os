@@ -2554,8 +2554,9 @@ var submittableTriggerTINs = []string{"99999999-0001", "99999999-0002", "9999999
 // script), so a submittable row carrying one strands at `failed` after eight attempts.
 var nonConvergentTriggerTINs = []string{"99999999-0004", "99999999-0006", "99999999-0007"}
 
-// terminalTwinBuyerName is the DEMO-01 terminal row that already holds each trigger. A twin
-// reusing its buyer name makes the two indistinguishable on the register.
+// terminalTwinBuyerName is the DEMO-01 terminal row's buyer_name for each reserved trigger
+// TIN. AC-3 makes buyer_name a per-TIN canonical name, so a twin shares its terminal row's
+// counterparty -- status, not the name, is what distinguishes the two.
 var terminalTwinBuyerName = map[string]string{
 	"99999999-0001": "Sandbox APP (accepted)",
 	"99999999-0002": "Sandbox APP (rejected)",
@@ -2655,9 +2656,9 @@ func TestSeedSeedsSubmittableTriggerTwinsInBothTenants(t *testing.T) {
 			if r.buyerName == "" {
 				t.Errorf("%s tenant: %s (buyer_tin=%s) has an empty buyer_name", tc.name, r.invoiceNumber, r.buyerTIN)
 			}
-			if terminal, ok := terminalTwinBuyerName[r.buyerTIN]; ok && r.buyerName == terminal {
-				t.Errorf("%s tenant: %s buyer_name = %q, want a name distinct from the terminal row already holding %s",
-					tc.name, r.invoiceNumber, r.buyerName, r.buyerTIN)
+			if terminal, ok := terminalTwinBuyerName[r.buyerTIN]; ok && r.buyerName != terminal {
+				t.Errorf("%s tenant: %s buyer_name = %q, want it to equal %q -- a twin shares its terminal row's counterparty, status is what distinguishes them",
+					tc.name, r.invoiceNumber, r.buyerName, terminal)
 			}
 			if r.irn != nil || r.csid != nil || r.qrPayload != nil {
 				t.Errorf("%s tenant: %s carries irn/csid/qr_payload, want all three NULL -- a non-NULL irn is the \"already cleared\" sentinel and makes the twin unsubmittable",
@@ -3143,5 +3144,275 @@ func TestSeedTwinLineItemsReconcileWithSubtotal(t *testing.T) {
 	}
 	if checked != 6 {
 		t.Fatalf("checked %d twins, want 6 -- twinInvoiceNumbers drifted from the seed", checked)
+	}
+}
+
+// labelledBuyerNamePattern matches "<name> (<parenthetical>)" -- AC-1 requires every seeded
+// DEMO-2026-* buyer_name to state, in that parenthetical, the outcome or violation its row
+// demonstrates.
+var labelledBuyerNamePattern = regexp.MustCompile(`^.+ \(.+\)$`)
+
+// TestSeedEveryDemoInvoiceCarriesALabelledCounterparty: Test Spec row "every invoice
+// carries a labelled counterparty" (AC-1). All 44 seeded DEMO-2026-* rows, across both
+// tenants, must carry a non-empty buyer_name matching labelledBuyerNamePattern.
+func TestSeedEveryDemoInvoiceCarriesALabelledCounterparty(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, coalesce(buyer_name, '')
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query DEMO-2026-* buyer_names: %v", err)
+	}
+	defer rows.Close()
+
+	var checked int
+	for rows.Next() {
+		var number, name string
+		if err := rows.Scan(&number, &name); err != nil {
+			t.Fatalf("scan buyer_name row: %v", err)
+		}
+		checked++
+		if name == "" {
+			t.Errorf("%s: buyer_name is empty, want a name that states the scenario this row demonstrates", number)
+			continue
+		}
+		if !labelledBuyerNamePattern.MatchString(name) {
+			t.Errorf("%s: buyer_name = %q, does not match %s -- every seeded counterparty name must state the outcome or violation the row demonstrates",
+				number, name, labelledBuyerNamePattern.String())
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate buyer_name rows: %v", err)
+	}
+	if checked != 44 {
+		t.Fatalf("checked %d DEMO-2026-* invoices, want exactly 44", checked)
+	}
+}
+
+// TestSeedOneBuyerNamePerBuyerTIN: Test Spec row "one buyer name per buyer TIN" (AC-3).
+// Every seeded buyer_tin, reserved TINs included, resolves to exactly one buyer_name
+// across the whole seed -- a TIN carrying two names is the same counterparty telling two
+// different stories depending on which invoice a demo happens to open.
+func TestSeedOneBuyerNamePerBuyerTIN(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT buyer_tin, array_agg(DISTINCT buyer_name ORDER BY buyer_name)
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		  GROUP BY buyer_tin
+		 HAVING count(DISTINCT buyer_name) > 1
+		  ORDER BY buyer_tin`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query buyer_tin -> buyer_name fan-out: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tin string
+		var names []string
+		if err := rows.Scan(&tin, &names); err != nil {
+			t.Fatalf("scan buyer_tin fan-out row: %v", err)
+		}
+		t.Errorf("buyer_tin=%s carries %d distinct buyer_names %v, want exactly 1 -- the same counterparty must not read as two different companies depending on which invoice is open",
+			tin, len(names), names)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate buyer_tin fan-out rows: %v", err)
+	}
+}
+
+// scenarioRow is one seeded DEMO-2026-* invoice's buyer_tin plus the components the
+// scenario-key derivation below groups on.
+type scenarioRow struct {
+	invoiceNumber string
+	buyerTIN      string
+	status        string
+	ruleKey       string
+	rejected      bool
+	unvalidated   bool
+	supplierOK    bool
+}
+
+// supplierTINShapePattern is the well-formed supplier_tin shape (NNNNNNNN-NNNN).
+// DEMO-2026-6002 is the one seeded row that deliberately fails it (its buyer_tin, not
+// supplier_tin, is what changes under the roster) -- that mismatch is part of what keeps
+// its scenario key distinct from every other draft row.
+var supplierTINShapePattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{4}$`)
+
+// scenarioKey is the Test Spec's composite key: (status, violations->0->>'rule_key',
+// rejection_reasons <> '[]', rule_set_version_id IS NULL, supplier_tin shape). Two rows
+// with the same key demonstrate the same scenario.
+func (r scenarioRow) scenarioKey() string {
+	return strings.Join([]string{
+		r.status, r.ruleKey,
+		strconv.FormatBool(r.rejected),
+		strconv.FormatBool(r.unvalidated),
+		strconv.FormatBool(r.supplierOK),
+	}, "|")
+}
+
+// fetchScenarioRows returns every seeded DEMO-2026-* invoice across both tenants with its
+// scenario-key components. excludeReserved true drops buyer_tin LIKE '99999999-%' -- the
+// reserved trigger TINs legitimately carry both a terminal row and a validated twin that
+// differ only on status, so the bijectivity check in TestSeedOneScenarioPerCounterparty
+// only holds with them excluded.
+func fetchScenarioRows(t *testing.T, pool *pgxpool.Pool, excludeReserved bool) []scenarioRow {
+	t.Helper()
+	sql := `SELECT invoice_number, buyer_tin, status,
+	               coalesce(violations->0->>'rule_key', ''),
+	               (rejection_reasons <> '[]'::jsonb),
+	               (rule_set_version_id IS NULL),
+	               supplier_tin
+	          FROM invoices
+	         WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`
+	if excludeReserved {
+		sql += ` AND buyer_tin NOT LIKE '99999999-%'`
+	}
+	rows, err := pool.Query(context.Background(), sql, []string{demoTenantID, honeywellTenantID})
+	if err != nil {
+		t.Fatalf("query scenario rows (excludeReserved=%t): %v", excludeReserved, err)
+	}
+	defer rows.Close()
+
+	var got []scenarioRow
+	for rows.Next() {
+		var r scenarioRow
+		var supplierTIN string
+		if err := rows.Scan(&r.invoiceNumber, &r.buyerTIN, &r.status, &r.ruleKey,
+			&r.rejected, &r.unvalidated, &supplierTIN); err != nil {
+			t.Fatalf("scan scenario row: %v", err)
+		}
+		r.supplierOK = supplierTINShapePattern.MatchString(supplierTIN)
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate scenario rows: %v", err)
+	}
+	return got
+}
+
+// sortedStringSet returns a string set's keys, sorted, so a failure message reads the
+// same on every run (map iteration order is otherwise random).
+func sortedStringSet(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestSeedOneScenarioPerCounterparty: Test Spec row "one scenario per counterparty"
+// (AC-3), scoped to buyer_tin NOT LIKE '99999999-%'. Each of the nine ordinary scenarios
+// must map to exactly one buyer_tin, and each ordinary buyer_tin to exactly one scenario --
+// reserved trigger TINs are excluded because they legitimately carry both a terminal and a
+// twin row that differ on status (see TestSeedOneScenarioPerCounterpartyExcludesReservedTINs
+// below, which proves that exclusion is load-bearing).
+func TestSeedOneScenarioPerCounterparty(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows := fetchScenarioRows(t, pool, true)
+	if len(rows) == 0 {
+		t.Fatal("zero non-reserved DEMO-2026-* invoices -- the exclusion filter or the LIKE pattern is wrong")
+	}
+
+	tinToKeys := map[string]map[string]bool{}
+	keyToTINs := map[string]map[string]bool{}
+	for _, r := range rows {
+		key := r.scenarioKey()
+		if tinToKeys[r.buyerTIN] == nil {
+			tinToKeys[r.buyerTIN] = map[string]bool{}
+		}
+		tinToKeys[r.buyerTIN][key] = true
+		if keyToTINs[key] == nil {
+			keyToTINs[key] = map[string]bool{}
+		}
+		keyToTINs[key][r.buyerTIN] = true
+	}
+
+	for tin, keys := range tinToKeys {
+		if len(keys) > 1 {
+			t.Errorf("buyer_tin=%s maps to %d distinct scenario keys %v, want exactly 1 -- one counterparty must demonstrate exactly one scenario",
+				tin, len(keys), sortedStringSet(keys))
+		}
+	}
+	for key, tins := range keyToTINs {
+		if len(tins) > 1 {
+			t.Errorf("scenario key %q maps to %d distinct buyer_tins %v, want exactly 1 -- two counterparties are demonstrating the same scenario",
+				key, len(tins), sortedStringSet(tins))
+		}
+	}
+}
+
+// TestSeedOneScenarioPerCounterpartyExcludesReservedTINs: the same derivation as
+// TestSeedOneScenarioPerCounterparty, but WITHOUT excluding buyer_tin LIKE '99999999-%'.
+// Reserved TINs legitimately carry two scenario keys (a terminal row and a validated twin
+// that differ only on status), so proves the exclusion above is load-bearing -- if it ever
+// decayed into a no-op filter, TestSeedOneScenarioPerCounterparty would start failing on a
+// reserved TIN for a reason that has nothing to do with AC-3.
+func TestSeedOneScenarioPerCounterpartyExcludesReservedTINs(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows := fetchScenarioRows(t, pool, false)
+
+	reservedKeys := map[string]map[string]bool{}
+	for _, r := range rows {
+		if !strings.HasPrefix(r.buyerTIN, "99999999-") {
+			continue
+		}
+		if reservedKeys[r.buyerTIN] == nil {
+			reservedKeys[r.buyerTIN] = map[string]bool{}
+		}
+		reservedKeys[r.buyerTIN][r.scenarioKey()] = true
+	}
+	if len(reservedKeys) == 0 {
+		t.Fatal("zero reserved-TIN DEMO-2026-* invoices found -- fetchScenarioRows(excludeReserved=false) or the reserved TIN prefix is wrong")
+	}
+
+	multi := 0
+	for tin, keys := range reservedKeys {
+		if len(keys) > 1 {
+			multi++
+			t.Logf("buyer_tin=%s maps to %d scenario keys %v (expected -- terminal row + twin)", tin, len(keys), sortedStringSet(keys))
+		}
+	}
+	if multi == 0 {
+		t.Fatal("no reserved buyer_tin maps to more than one scenario key -- TestSeedOneScenarioPerCounterparty's buyer_tin NOT LIKE '99999999-%' exclusion excludes nothing, i.e. it is vacuous")
 	}
 }

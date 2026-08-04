@@ -2773,3 +2773,203 @@ func TestSeedSubmittableTwinsLeadTheRegisterFirstPage(t *testing.T) {
 		}
 	}
 }
+
+// twinInvoiceNumbers is each demo tenant's three submittable trigger twins.
+var twinInvoiceNumbers = map[string][]string{
+	demoTenantID:      {"DEMO-2026-1007", "DEMO-2026-1008", "DEMO-2026-1009"},
+	honeywellTenantID: {"DEMO-2026-9001", "DEMO-2026-9002", "DEMO-2026-9003"},
+}
+
+// TestSeedRearmsAFiredTwinOnReseed: a twin is the one seeded row a demo actually submits, so
+// re-seeding has to land it back on exactly `validated` with no fiscal residue. "Terminal" is
+// too weak a target here -- the SPA only offers Submit on `validated`, so a twin left at
+// `accepted` (or stranded at `queued`) is unusable for the next demo. Covers both states a
+// live submit leaves behind: mid-flight, and cleared with a real IRN.
+func TestSeedRearmsAFiredTwinOnReseed(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish baseline): %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		tenantID string
+		number   string
+		fire     string
+	}{
+		{"in-flight twin", demoTenantID, "DEMO-2026-1007",
+			`UPDATE invoices SET status = 'queued' WHERE tenant_id = $1 AND invoice_number = $2`},
+		{"cleared twin", honeywellTenantID, "DEMO-2026-9001",
+			`UPDATE invoices SET status = 'accepted', irn = 'LIVE-IRN', csid = 'LIVE-CSID', qr_payload = 'LIVE-QR'
+			  WHERE tenant_id = $1 AND invoice_number = $2`},
+	}
+
+	for _, tc := range cases {
+		ct, err := pool.Exec(ctx, tc.fire, tc.tenantID, tc.number)
+		if err != nil {
+			t.Fatalf("%s: fire %s (precondition): %v", tc.name, tc.number, err)
+		}
+		if ct.RowsAffected() != 1 {
+			t.Fatalf("%s: firing %s updated %d rows, want 1 -- the twin is missing", tc.name, tc.number, ct.RowsAffected())
+		}
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (re-arm): %v", err)
+	}
+
+	for _, tc := range cases {
+		var status string
+		var irn, csid, qr *string
+		if err := pool.QueryRow(ctx,
+			`SELECT status, irn, csid, qr_payload FROM invoices
+			  WHERE tenant_id = $1 AND invoice_number = $2`,
+			tc.tenantID, tc.number,
+		).Scan(&status, &irn, &csid, &qr); err != nil {
+			t.Fatalf("%s: read %s back after re-seed: %v", tc.name, tc.number, err)
+		}
+		if status != "validated" {
+			t.Errorf("%s: %s status after re-seed = %q, want validated -- Submit is offered on validated only, so the twin is not re-armed",
+				tc.name, tc.number, status)
+		}
+		if irn != nil || csid != nil || qr != nil {
+			t.Errorf("%s: %s kept a fiscal identifier through re-seed (irn=%v csid=%v qr=%v), want all three NULL -- a surviving irn is the \"already cleared\" sentinel",
+				tc.name, tc.number, derefOrNil(irn), derefOrNil(csid), derefOrNil(qr))
+		}
+	}
+}
+
+// derefOrNil renders a *string for a failure message without panicking on NULL.
+func derefOrNil(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+// TestSeedDemoInvoiceNumbersAreDisjointAcrossTenants: line_item_seed's INSERT joins invoices
+// on invoice_number ALONE across both demo tenants (db/seed.dev.sql), so one number reused in
+// the other tenant attaches a single seeded line item to two invoices across a tenant
+// boundary. Nothing else in the suite pins that precondition.
+func TestSeedDemoInvoiceNumbersAreDisjointAcrossTenants(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	demoTenants := []string{demoTenantID, honeywellTenantID}
+	total := mustCount(t, pool,
+		`SELECT count(*) FROM invoices WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`,
+		demoTenants)
+	if total == 0 {
+		t.Fatal("precondition: zero DEMO-2026-* invoices across both tenants after Seed")
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, count(DISTINCT tenant_id)
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		  GROUP BY invoice_number
+		 HAVING count(DISTINCT tenant_id) > 1
+		  ORDER BY invoice_number`,
+		demoTenants)
+	if err != nil {
+		t.Fatalf("query cross-tenant invoice_number collisions: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var number string
+		var tenants int
+		if err := rows.Scan(&number, &tenants); err != nil {
+			t.Fatalf("scan collision row: %v", err)
+		}
+		t.Errorf("invoice_number %s is seeded in %d demo tenants, want 1 -- line_item_seed joins on invoice_number alone, so its line item now attaches to both",
+			number, tenants)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate collision rows: %v", err)
+	}
+
+	// A number that exists in only one tenant still fans out if the join reaches nothing --
+	// a typo'd line_item_seed number renders a hollow detail screen and trips no other test.
+	orphans := mustCount(t, pool,
+		`SELECT count(*) FROM invoices i
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		    AND NOT EXISTS (SELECT 1 FROM line_items l WHERE l.invoice_id = i.id)`,
+		demoTenants)
+	if orphans != 0 {
+		t.Errorf("count(seeded DEMO-2026-* invoices with zero line items) = %d, want 0", orphans)
+	}
+}
+
+// TestSeedTwinLineItemsReconcileWithSubtotal: the twins are seeded `validated` with
+// violations [], so their own arithmetic has to hold -- a twin whose line items miss the
+// subtotal, or whose VAT is off the standard rate, fires line-items-sum-subtotal or
+// vat-standard-rate the moment a demo re-validates it, and the clean claim was a lie.
+// Every comparison is evaluated as numeric in SQL: exact decimal, no float rounding.
+func TestSeedTwinLineItemsReconcileWithSubtotal(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	checked := 0
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		for _, number := range twinInvoiceNumbers[tenantID] {
+			var lines int
+			var subtotal, vat, total, lineSum, qtyPrice string
+			var lineSumOK, qtyPriceOK, vatOK, totalOK bool
+			err := pool.QueryRow(ctx,
+				`SELECT count(l.id),
+				        i.subtotal::text, i.vat::text, i.total::text,
+				        coalesce(sum(l.line_total), 0)::text,
+				        coalesce(sum(l.quantity * l.unit_price), 0)::text,
+				        coalesce(sum(l.line_total), 0) = i.subtotal,
+				        coalesce(sum(l.quantity * l.unit_price), 0) = i.subtotal,
+				        i.vat = round(i.subtotal * 0.075, 2),
+				        i.total = i.subtotal + i.vat
+				   FROM invoices i
+				   LEFT JOIN line_items l ON l.invoice_id = i.id
+				  WHERE i.tenant_id = $1 AND i.invoice_number = $2
+				  GROUP BY i.id, i.subtotal, i.vat, i.total`,
+				tenantID, number,
+			).Scan(&lines, &subtotal, &vat, &total, &lineSum, &qtyPrice,
+				&lineSumOK, &qtyPriceOK, &vatOK, &totalOK)
+			if err != nil {
+				t.Fatalf("%s: read twin arithmetic: %v", number, err)
+			}
+			checked++
+
+			if lines != 1 {
+				t.Errorf("%s has %d line items, want 1 -- more means line_item_seed fanned out across the tenant boundary, fewer means its join reached nothing", number, lines)
+			}
+			if !qtyPriceOK {
+				t.Errorf("%s: sum(quantity * unit_price) = %s, want subtotal %s", number, qtyPrice, subtotal)
+			}
+			if !lineSumOK {
+				t.Errorf("%s: sum(line_total) = %s, want subtotal %s -- fires line-items-sum-subtotal on a row claiming violations []", number, lineSum, subtotal)
+			}
+			if !vatOK {
+				t.Errorf("%s: vat = %s, want 7.5%% of subtotal %s -- fires vat-standard-rate", number, vat, subtotal)
+			}
+			if !totalOK {
+				t.Errorf("%s: total = %s, want subtotal %s + vat %s", number, total, subtotal, vat)
+			}
+		}
+	}
+	if checked != 6 {
+		t.Fatalf("checked %d twins, want 6 -- twinInvoiceNumbers drifted from the seed", checked)
+	}
+}

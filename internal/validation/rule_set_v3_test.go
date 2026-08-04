@@ -45,9 +45,9 @@ var v3TargetOverrides = map[string]string{
 
 // ruleRow is one rules row's content columns, keyed by `key` by ruleRowsByKey below.
 type ruleRow struct {
-	Type     string
-	Target   string
-	Params   string // raw JSON text -- compared as text, since both sides always come
+	Type   string
+	Target string
+	Params string // raw JSON text -- compared as text, since both sides always come
 	// from the same jsonb column shape (byte-identity, not semantic JSON equality, is
 	// exactly what [v2-copy-not-redeclare] promises).
 	Severity string

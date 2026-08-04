@@ -994,8 +994,13 @@ func TestStoreList_TenantScopedAndPaginated(t *testing.T) {
 // the other. This already holds today (Store.List applies none of the 5 new
 // filters yet) and must keep holding once they're wired -- it discriminates
 // a wrong implementation where an EMPTY ImportBatchID leaks into the SQL as
-// `import_batch_id = ''` or `import_batch_id IS NULL` (which would silently
-// narrow the zero-filter case instead of leaving it unfiltered).
+// either of:
+//
+//	import_batch_id = ''
+//	import_batch_id IS NULL
+//
+// (which would silently narrow the zero-filter case instead of leaving it
+// unfiltered).
 func TestStoreList_ZeroFilterQueryUnchanged(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

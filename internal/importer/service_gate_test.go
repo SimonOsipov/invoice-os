@@ -212,8 +212,8 @@ func impvCleanFileFixture() [][]string {
 // numbers).
 func impvConflictMixFixture() [][]string {
 	return [][]string{
-		mkRow("IMPV4-CONFLICT", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
-		mkRow("IMPV4-CONFLICT", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "10.00", "1.00", "99.00", "Item2", "1", "10.00"), // sheet 3 -- total disagrees -> conflict
+		mkRow("IMPV4-CONFLICT", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"),    // sheet 2
+		mkRow("IMPV4-CONFLICT", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "10.00", "1.00", "99.00", "Item2", "1", "10.00"),    // sheet 3 -- total disagrees -> conflict
 		mkRow("IMPV4-VATWRONG", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "250.00", "1.00", "268.75", "Item1", "2", "100.00"), // sheet 4
 		mkRow("IMPV4-VATWRONG", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "250.00", "1.00", "268.75", "Item2", "1", "50.00"),  // sheet 5
 		mkRow("IMPV4-CLEAN", "2026-07-02", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50", "Item1", "1", "100.00"),    // sheet 6
@@ -878,4 +878,3 @@ func TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate(t *testing.T
 		})
 	}
 }
-

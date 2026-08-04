@@ -610,16 +610,19 @@ func TestBootstrapSQLPasswordSpecialCharactersRoundTrip(t *testing.T) {
 }
 
 // TestBootstrapSQLWhitespaceOnlyGUCIsAcceptedNotRejected documents ACTUAL behavior
-// (not asserted by any Test Spec row): db/bootstrap.sql's fail-closed check is
-// `coalesce(current_setting(name, true), ”) = ”`, which does NOT trim whitespace.
-// A GUC explicitly set to a whitespace-only string is therefore NOT considered
-// missing/empty — it is silently accepted as a valid password, unlike an actual
-// empty string (covered by TestBootstrapSQLFailsClosedOnMissingPassword). This is a
-// real, mutation-confirmed gap in the fail-closed check's coverage (a whitespace GUC
+// (not asserted by any Test Spec row): db/bootstrap.sql's fail-closed check is:
+//
+//	coalesce(current_setting(name, true), '') = ''
+//
+// which does NOT trim whitespace. A GUC explicitly set to a whitespace-only
+// string is therefore NOT considered missing/empty — it is silently accepted
+// as a valid password, unlike an actual empty string (covered by
+// TestBootstrapSQLFailsClosedOnMissingPassword). This is a real, mutation-
+// confirmed gap in the fail-closed check's coverage (a whitespace GUC
 // from a misconfigured env/CI substitution — e.g. `MIGRATOR_PASSWORD=" "` — would
 // silently produce a valid-but-useless password instead of the loud failure AC-3
 // intends for a blank one); flagged to the executor/architect as a candidate for a
-// stricter `btrim(...) = ”` check, not fixed here since it's a production-code
+// stricter `btrim(...)` check against the empty string, not fixed here since it's a production-code
 // change outside QA's remit.
 func TestBootstrapSQLWhitespaceOnlyGUCIsAcceptedNotRejected(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)

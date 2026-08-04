@@ -69,7 +69,9 @@ jobs:
   go:
     name: Go
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    # db/** (e.g. db/embed.go) is a real .go file path but lives only in the
+    # migrations filter, not go — cover both so a db/-only PR still hits this job.
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     # No Postgres here on purpose: every DB-backed suite (RLS, queue) is env-gated and
     # SKIPS without its per-role DATABASE_* URLs, so each runs in its own bootstrap+migrate
@@ -83,6 +85,16 @@ jobs:
           go-version-file: go.mod
           # No dependencies / go.sum yet — nothing to cache. Enable in M2.
           cache: false
+      - name: Format (gofmt agreement + no smart-quoted SQL literals)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: not formatted:"; echo "$unformatted"; gofmt -d $unformatted; exit 1
+          fi
+          # U+201C/U+201D in Go source is always gofmt eating a '' SQL empty string (bf1856b).
+          if grep -rn $'[“”]' --include='*.go' . ; then
+            echo "::error::smart quote in Go source — a '' SQL literal was reformatted away"; exit 1
+          fi
       - name: Build
         run: go build ./...
       # vet/test error on an empty module ("no packages"), so gate them on

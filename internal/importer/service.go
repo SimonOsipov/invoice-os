@@ -207,8 +207,8 @@ func normalizeNumeric(s string) string {
 // first if field is one of the 5 numeric fields. Returns nil when the field
 // is not mapped at all (colIndex has no entry) or, for a numeric field, when
 // the normalized value is blank (an empty numeric cell means "no value", not
-// a literal ” that would fail Postgres's ::numeric cast) — a non-numeric
-// field's blank cell is still returned as a pointer to "" (store-invalid-
+// a literal empty string that would fail Postgres's ::numeric cast) — a
+// non-numeric field's blank cell is still returned as a pointer to "" (store-invalid-
 // faithfully; a blank string is valid TEXT content).
 func fieldValue(row []string, colIndex map[string]int, field string) *string {
 	idx, ok := colIndex[field]

@@ -99,9 +99,9 @@ func TestServiceImport_StoreDuplicateReportedAsFirstClassViolation(t *testing.T)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
 
 	rows := [][]string{
-		mkRow("INV-DUP2", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem1", "1", "150.00"),      // sheet 2
-		mkRow("INV-DUP2", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem2", "1", "150.00"),      // sheet 3
-		mkRow("INV-CLEAN2B", "2026-01-12", "TIN-F", "Clean2 Co", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"),   // sheet 4
+		mkRow("INV-DUP2", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem1", "1", "150.00"),    // sheet 2
+		mkRow("INV-DUP2", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem2", "1", "150.00"),    // sheet 3
+		mkRow("INV-CLEAN2B", "2026-01-12", "TIN-F", "Clean2 Co", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"), // sheet 4
 	}
 
 	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
@@ -145,8 +145,8 @@ func TestServiceImport_StoreDuplicateReportedAsFirstClassViolation(t *testing.T)
 // runs each get an untouched copy.
 func dup03Fixture() [][]string {
 	return [][]string{
-		mkRow("INV-DUP3", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem1", "1", "150.00"), // sheet 2
-		mkRow("INV-DUP3", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem2", "1", "150.00"), // sheet 3
+		mkRow("INV-DUP3", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem1", "1", "150.00"),   // sheet 2
+		mkRow("INV-DUP3", "2026-01-10", "TIN-E", "Dup Co", "NGN", "150.00", "15.00", "165.00", "DupItem2", "1", "150.00"),   // sheet 3
 		mkRow("INV-CLEAN3B", "2026-01-12", "TIN-F", "Clean Co", "NGN", "80.00", "8.00", "88.00", "CleanItem", "1", "80.00"), // sheet 4
 	}
 }

@@ -36,6 +36,9 @@ import {
   DETAIL_SUBMIT_COPY,
   diffLineItems,
   editInvoice,
+  FAILURE_EXPLANATION_FALLBACK,
+  FAILURE_KINDS,
+  failureExplanation,
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
@@ -3116,6 +3119,104 @@ describe('fetchAllInvoices partial failure (QA adversarial)', () => {
       process.off('unhandledRejection', onUnhandled)
     }
     expect(unhandled).toEqual([])
+  })
+})
+
+// RED specs (BUG-06-05, task-387) -- pin failureExplanation()'s copy mapping before the
+// executor implements it. Every spec below currently fails on the import of
+// FAILURE_EXPLANATION_FALLBACK/FAILURE_KINDS/failureExplanation (none exist yet in
+// invoices.ts), matching this file's own RED convention (see file header).
+describe('failureExplanation', () => {
+  it('FK-1: each of the three kinds returns its own headline and detail', () => {
+    const results = FAILURE_KINDS.map((k) => failureExplanation(k))
+    const headlines = results.map((r) => r.headline)
+    const details = results.map((r) => r.detail)
+
+    expect(new Set(headlines).size).toBe(headlines.length)
+    expect(new Set(details).size).toBe(details.length)
+    for (const r of results) {
+      expect(r.headline.trim().length).toBeGreaterThan(0)
+      expect(r.detail.trim().length).toBeGreaterThan(0)
+    }
+  })
+
+  it('FK-2: no kind silently degrades to the fallback', () => {
+    for (const k of FAILURE_KINDS) {
+      const r = failureExplanation(k)
+      expect(r, `kind=${k}`).not.toEqual(FAILURE_EXPLANATION_FALLBACK)
+      expect(r.headline.trim().length, `kind=${k} headline`).toBeGreaterThan(0)
+      expect(r.detail.trim().length, `kind=${k} detail`).toBeGreaterThan(0)
+      expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
+    }
+  })
+
+  it('FK-3: every branch returns a non-empty nextStep', () => {
+    const inputs: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of inputs) {
+      const r = failureExplanation(kind)
+      expect(r.nextStep.trim().length, `kind=${String(kind)}`).toBeGreaterThan(0)
+    }
+  })
+
+  it('FK-4: null degrades to the recorded-reason fallback', () => {
+    let r: ReturnType<typeof failureExplanation> | undefined
+    expect(() => {
+      r = failureExplanation(null)
+    }).not.toThrow()
+    expect(r!.headline).toBeDefined()
+    expect(r!.detail).toBeDefined()
+    expect(r!.nextStep).toBeDefined()
+    expect(r!.detail).toMatch(/not recorded/i)
+  })
+
+  it('FK-5: an unrecognised kind takes the same branch as null', () => {
+    expect(failureExplanation('app_rejected')).toEqual(failureExplanation(null))
+  })
+
+  it('FK-6: no branch offers a retry, re-validate or edit', () => {
+    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of all) {
+      const r = failureExplanation(kind)
+      const joined = `${r.headline} ${r.detail} ${r.nextStep}`
+      expect(joined, `kind=${String(kind)}`).not.toMatch(/\bedit|re-?validate|re-?submit|send it again|try again|retry/i)
+    }
+  })
+
+  it('FK-7: no branch claims anyone has been notified', () => {
+    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of all) {
+      const r = failureExplanation(kind)
+      const joined = `${r.headline} ${r.detail} ${r.nextStep}`
+      expect(joined, `kind=${String(kind)}`).not.toMatch(/notified|alerted|our team|we've been|looking into|monitor/i)
+    }
+  })
+
+  it('FK-8: acknowledged_no_verdict warns that entering it again could file it twice', () => {
+    const r = failureExplanation('acknowledged_no_verdict')
+    expect(r.detail).toMatch(/twice|double/i)
+  })
+
+  it('FK-9: nothing from the wire is interpolated', () => {
+    const hostile = 'https://app.internal:8443/x?token=sk_live_abc'
+    expect(failureExplanation(hostile)).toEqual(failureExplanation(null))
+  })
+
+  it('FK-10: no branch uses internal vocabulary', () => {
+    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of all) {
+      const r = failureExplanation(kind)
+      const joined = `${r.headline} ${r.detail} ${r.nextStep}`
+      expect(joined, `kind=${String(kind)}`).not.toMatch(
+        /payload|transform|adapter|dead[- ]letter|worker|poll|\bjob\b|wire|attempt|enqueue|idempoten/i,
+      )
+    }
+  })
+
+  it('FK-11: FAILURE_KINDS matches the Go vocabulary', () => {
+    // Independently transcribed from internal/submission/failure.go:11-14, not read
+    // from FAILURE_KINDS itself.
+    const expected = ['payload_not_built', 'never_acknowledged', 'acknowledged_no_verdict']
+    expect([...FAILURE_KINDS].sort()).toEqual(expected.sort())
   })
 })
 

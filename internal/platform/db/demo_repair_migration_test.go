@@ -833,7 +833,10 @@ func TestDemoRepairMigrationAppliesThroughGoose(t *testing.T) {
 		t.Fatalf("open migrator connection: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	// AllowOutofOrder: this test deletes a mid-history ledger row on purpose, so a
+	// newer migration already applied on top of it must not trip goose's missing-
+	// migration guard (that guard is real and stays on for prod's own provider).
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS, goose.WithAllowOutofOrder(true))
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}

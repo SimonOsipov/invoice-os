@@ -3205,5 +3205,16 @@ describe('diffEditInput: issue_date adversarial coverage (task-391, BUG-03-02)',
 
     expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: 'garbage-paste' })
   })
+
+  it('a garbage stored issue_date with trailing whitespace round-trips untouched to an empty patch', () => {
+    // toDateInputValue passes non-date input through unchanged, so the form seeds with the
+    // trailing space intact; form.issue_date is then trimmed before compare but the original
+    // side wasn't -- an untouched save must still no-op (CodeRabbit, PR #138).
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: 'garbage-stored ' }
+    const form = formFromInvoice(inv)
+
+    expect(form.issue_date).toBe('garbage-stored ')
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
 })
 

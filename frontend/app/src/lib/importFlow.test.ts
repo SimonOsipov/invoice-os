@@ -18,7 +18,7 @@
 //   FLOW-08  previewColumns: duplicate headers kept as distinct entries             (AC2)
 //   FLOW-09  isMappableColumn: '' blocked, whitespace-only header stays mappable    (AC2)
 //   FLOW-10  columnLetter: A..Z, AA, AB, ... past column 26                         (AC2)
-//   FLOW-11  wizardHeader document set: form -> WIZARD_STEPS (Enter · Review) at 0    (AC6)
+//   FLOW-11  wizardHeader document set: form -> WIZARD_STEPS (Enter) at 0             (AC6)
 //   FLOW-12  wizardHeader import set: upload/mapping/review — one path per CreateStep (AC2,6)
 //   FLOW-14  wizardHeader totality: every CreateStep literal, never undefined/NaN     (AC6)
 //

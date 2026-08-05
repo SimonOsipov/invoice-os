@@ -94,4 +94,26 @@ describe('ViolationsTable', () => {
     expect(within(firstRow).getAllByRole('cell')[3].textContent).toBe('$.total')
     expect(within(secondRow).getAllByRole('cell')[3].textContent).toBe('—')
   })
+
+  // CodeRabbit (PR #138): browsers don't universally make an overflowing container
+  // focusable, so a keyboard-only user couldn't reach Path/Rule-set version at the
+  // detail-rail width (Core AC #1's "reachable" includes by keyboard).
+  it('the scroll wrapper is keyboard-focusable with an accessible name', () => {
+    render(<ViolationsTable violations={[violation()]} ruleSetVersion={3} />)
+
+    const scrollEl = screen.getByTestId('violations-scroll')
+    expect(scrollEl.tabIndex).toBe(0)
+    expect(scrollEl.getAttribute('aria-label')).toBeTruthy()
+  })
+
+  // role="region" + aria-label registers as a landmark, which ValidationView.tsx's
+  // full-width (never-overflowing) mount would also pick up -- AC-5 bars any playground
+  // presentation change, and a spurious landmark is one screen readers surface. "group"
+  // supports an author-supplied name without landmark status.
+  it('the scroll wrapper uses a non-landmark role, so the playground gets no spurious landmark', () => {
+    render(<ViolationsTable violations={[violation()]} ruleSetVersion={3} />)
+
+    const scrollEl = screen.getByTestId('violations-scroll')
+    expect(scrollEl.getAttribute('role')).not.toBe('region')
+  })
 })

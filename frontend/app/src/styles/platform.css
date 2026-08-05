@@ -111,6 +111,15 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--ring);
 }
+/* Keyboard-focus ring for the violations table's horizontal scroll wrapper (CodeRabbit,
+   PR #138) -- outline:none removes the UA default so only this box-shadow shows, and
+   only while focused; the unfocused (static) look is untouched either way. */
+.pf-scroll-x {
+  outline: none;
+}
+.pf-scroll-x:focus {
+  box-shadow: 0 0 0 2px var(--ring);
+}
 /* The invite modal's email chip box is a bordered <div> wrapping a bare <input>,
    so app-layer.css:236's `.asc-app input:focus` rang the INNER input — a second
    rounded rectangle 9px inside the box. Moved onto the box, which makes it ring

@@ -38,7 +38,14 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
   }
 
   return (
-    <div data-testid="violations-scroll" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
+    <div
+      data-testid="violations-scroll"
+      className="pf-scroll-x"
+      tabIndex={0}
+      role="group"
+      aria-label="Violations table, scroll horizontally for more columns"
+      style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}
+    >
       <table style={{ width: '100%', minWidth: TABLE_MIN_WIDTH, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ background: 'var(--bg-1)' }}>

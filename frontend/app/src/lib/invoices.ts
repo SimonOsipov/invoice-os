@@ -890,7 +890,7 @@ export function diffEditInput(original: InvoiceRecord, form: EditFormState): Inv
   for (const key of EDIT_FIELD_KEYS) {
     if (key === 'issue_date') {
       const value = form.issue_date.trim()
-      if (value === toDateInputValue(original.issue_date)) continue
+      if (value === toDateInputValue(original.issue_date).trim()) continue
       if (!value) continue
       patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
       continue

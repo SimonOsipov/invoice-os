@@ -17,7 +17,7 @@ import { ReviewBatch } from './ReviewBatch'
 import { ImportProgress } from './ImportProgress'
 import type { PlatformCtx } from '../types'
 
-// The wizard serves TWO paths with different step lists — the 2-step Enter/Review typed
+// The wizard serves TWO paths with different step lists — the 1-step Enter typed
 // path and the 3-step Import/Map/Review import — so the header is resolved by wizardHeader
 // (lib/importFlow.ts) rather than a flat Record<CreateStep, number>, which has no concept
 // of which path the user is on. STAGE_OF moved there with it: one table, one owner, no

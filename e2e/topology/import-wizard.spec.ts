@@ -562,7 +562,7 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
 //
 // E2E-08 is deliberately NOT replaced -- its subject (the sample-PDF parse -> form ->
 // validate -> results run) is deleted by an earlier subtask, so nothing is left to guard.
-test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-step import path on entry and the 2-step typed path once manual entry is chosen', async ({
+test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-step import path on entry and the 1-step typed path once manual entry is chosen', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -590,7 +590,7 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
   // WIZARD_STEPS (Enter) at STAGE_OF.form === 0, and the import-only
   // 'Import'/'Map'/'Review' labels must disappear.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
-  await expect(page.getByText('Enter', { exact: true }), '2-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
+  await expect(page.getByText('Enter', { exact: true }), '1-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
   await expect(page.getByText('Review', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Import', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Map', { exact: true })).toHaveCount(0)

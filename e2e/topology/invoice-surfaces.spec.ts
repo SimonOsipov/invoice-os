@@ -445,6 +445,19 @@ test('detail surface: violations render against the rule-set version, the fix lo
     'scrolled fully right, Rule-set version must not overflow the scroll container',
   ).toBeLessThanOrEqual(containerBox.x + containerBox.width + 1)
 
+  // CodeRabbit (PR #138): overflow alone doesn't make a container reachable -- browsers
+  // don't focus an overflowing div by default. Prove a keyboard user (not just script) can
+  // reach the far column: focus the wrapper directly (skips a brittle full-page Tab-order
+  // walk) and let the UA's native scrollable-region key handling do the rest.
+  await scrollBox.evaluate((el) => {
+    el.scrollLeft = 0
+  })
+  await scrollBox.focus()
+  await expect(scrollBox, 'wrapper must be keyboard-focusable, not just scriptable').toBeFocused()
+  await page.keyboard.press('End')
+  const scrollLeftAfterKey = await scrollBox.evaluate((el) => el.scrollLeft)
+  expect(scrollLeftAfterKey, 'End on the focused wrapper must scroll it -- this is what keyboard reachability means').toBeGreaterThan(0)
+
   // AC-4: Message (td index 1: Severity=0, Message=1, Rule key=2, Path=3, Rule-set
   // version=4 -- same ordinal convention as the Path check above) must not be crushed.
   const messageBox = (await violationsTable.locator('tbody tr').first().locator('td').nth(1).boundingBox())!

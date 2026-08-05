@@ -10,6 +10,7 @@ import { createAuthedFetch } from '../lib/authedFetch'
 import {
   DETAIL_SUBMIT_COPY,
   FAILURE_EXPLANATION_FALLBACK,
+  FAILURE_KINDS,
   LIVE_POLL_MS,
   failureExplanation,
   skipReasonLabel,
@@ -201,6 +202,47 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
     expect(screen.queryByTestId('failure-headline')).toBeNull()
     expect(screen.queryByTestId('failure-detail')).toBeNull()
     expect(screen.queryByTestId('failure-next-step')).toBeNull()
+  })
+
+  // QA Mode B adversarial (task-388): table-driven over all four rendered states -- the
+  // three recorded kinds plus null -- so no state can silently lose a line the way the
+  // old AC-3/AC-4 tests only ever exercised null and one kind.
+  it.each([
+    ...FAILURE_KINDS.map((k) => [k, failureExplanation(k)] as const),
+    [null, FAILURE_EXPLANATION_FALLBACK] as const,
+  ])('failure_kind=%s renders that exact headline/detail/nextStep, nothing else', async (kind, expected) => {
+    mockDetailFetch(detailRecord({ failure_kind: kind, rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('failed-dead-end')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(expected.headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(expected.detail)
+    expect(screen.getByTestId('failure-next-step').textContent).toBe(expected.nextStep)
+  })
+
+  // Forward-compatibility (AC-7's implication): a kind the SPA has never heard of --
+  // e.g. a future backend value -- must still land on the fallback, not a blank card.
+  it('an unrecognised failure_kind renders the fallback explanation, not a blank card', async () => {
+    mockDetailFetch(detailRecord({ failure_kind: 'something_new', rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('failed-dead-end')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.detail)
+    expect(screen.getByTestId('failure-next-step').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.nextStep)
+  })
+
+  // [actions-bar-gate-stands], pinned structurally rather than by inspection: the panel
+  // is diagnosis only, so no clickable control may ever appear inside it.
+  it('the failed-dead-end card renders no button or link -- diagnosis only, never a recovery control', async () => {
+    mockDetailFetch(detailRecord({ failure_kind: 'acknowledged_no_verdict', rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    expect(card.querySelectorAll('button, a').length).toBe(0)
   })
 })
 

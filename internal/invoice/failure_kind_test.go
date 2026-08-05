@@ -10,9 +10,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -684,5 +686,72 @@ func TestMarkFailedTx_CrossTenantIDReturnsErrNotFoundAndLeavesKindUntouched(t *t
 	}
 	if !failureKindIsNull(t, super, invID) {
 		t.Error("failure_kind IS NULL = false after cross-tenant-invisible MarkFailedTx, want true")
+	}
+}
+
+// --- BUG-06-04 (task-386) -- Mode A RED spec for the wire: the one test in
+// this subtask that exercises the REAL invoiceColumns/scanInvoice SQL
+// projection rather than a hand-built Invoice{} literal through an injected
+// fake (see handlers_test.go for the marshal-shape tests). Written before
+// Invoice.FailureKind exists -- a compile error until Stage 3 lands it.
+
+// TestFailureKind_ProjectionRoundTripsThroughStoreGet (AC-3): guards
+// invoiceColumns/scanInvoice's positional scan for the newly-appended
+// failure_kind column, mirroring TestKeptAsIs_ProjectionRoundTrips
+// (kept_as_is_test.go) exactly for the same reason -- a swap between two
+// adjacent *string columns silently scans one's value into the other's
+// field.
+//
+// failure_kind, kept_as_is_by and kept_as_is_reason are three ADJACENT
+// *string columns at the tail of both lists, so all three get distinct,
+// unmistakable values here: a positional reorder of any pair (e.g.
+// invoiceColumns appending failure_kind correctly but scanInvoice's
+// Scan(...) targets landing in the wrong order) puts a value in the wrong
+// field and fails that field's own equality check, even though every column
+// still scans into SOME *string field without error.
+//
+// Seeded at StatusDraft, not StatusFailed: invoices_kept_as_is_draft_only
+// (20260731100000_invoices_kept_as_is.sql) requires kept_as_is_at IS NULL
+// whenever status != 'draft', and invoices_kept_as_is_complete requires
+// kept_as_is_at/by/reason all-null or all-non-null together -- so
+// kept_as_is_by/reason can only be non-null (needed to give them their own
+// distinct values) on a draft row. failure_kind carries no
+// status-correlating CHECK (20260805075045_invoices_failure_kind.sql), so
+// this is schema-legal.
+func TestFailureKind_ProjectionRoundTripsThroughStoreGet(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "FK-PROJ tenant")
+	entityID := seedEntity(t, super, tenantID, "FK-PROJ entity")
+	invID := seedInvoice(t, super, tenantID, entityID, "FK-PROJ-001")
+
+	const (
+		wantFailureKind    = "acknowledged_no_verdict"
+		wantKeptAsIsBy     = "FK-SWAP-actor-marker"
+		wantKeptAsIsReason = "FK-SWAP-reason-marker: buyer confirmed intentional"
+	)
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = $1, kept_as_is_reason = $2, failure_kind = $3 WHERE id = $4`,
+		wantKeptAsIsBy, wantKeptAsIsReason, wantFailureKind, invID,
+	); err != nil {
+		t.Fatalf("force-seed kept_as_is_*/failure_kind: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	got, err := store.Get(c, invID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if got.FailureKind == nil || *got.FailureKind != wantFailureKind {
+		t.Errorf("Get.FailureKind = %v, want a pointer to %q", got.FailureKind, wantFailureKind)
+	}
+	if got.KeptAsIsBy == nil || *got.KeptAsIsBy != wantKeptAsIsBy {
+		t.Errorf("Get.KeptAsIsBy = %v, want a pointer to %q", got.KeptAsIsBy, wantKeptAsIsBy)
+	}
+	if got.KeptAsIsReason == nil || *got.KeptAsIsReason != wantKeptAsIsReason {
+		t.Errorf("Get.KeptAsIsReason = %v, want a pointer to %q", got.KeptAsIsReason, wantKeptAsIsReason)
 	}
 }

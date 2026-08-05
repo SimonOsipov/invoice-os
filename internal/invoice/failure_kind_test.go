@@ -5,12 +5,14 @@ package invoice
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // failureKindOf reads the column directly via the superuser pool: it is NOT
@@ -282,5 +284,225 @@ func TestFailureKind_TenantScoped(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("cross-tenant read/write: %v", err)
+	}
+}
+
+// --- BUG-06-02 (task-384) -- Mode A RED specs for the submission->invoice
+// seam: MarkFailedTx/Store.MarkFailed gain a trailing submission.FailureKind
+// arg, written in the SAME tx as the status write via markTerminalTx's
+// outcome callback. Written BEFORE submission.FailureKind or the widened
+// signatures exist -- every reference to submission.FailureKind* below and
+// every 5-arg MarkFailedTx call is a compile error until the executor lands
+// it (Stage 3), not a runtime assertion failure. See task-384's Test Specs
+// table for the AC mapping.
+
+// TestMarkFailedTx_StampsKindInSameTx (AC-1): a queued invoice ->
+// MarkFailedTx(..., FailurePayloadNotBuilt) inside one WithinTenantTx ->
+// after commit, status='failed' AND failure_kind='payload_not_built'.
+func TestMarkFailedTx_StampsKindInSameTx(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 stamps-kind tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 stamps-kind entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-STAMP", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailurePayloadNotBuilt)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkFailedTx(queued->failed, FailurePayloadNotBuilt): %v, want nil", err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusFailed {
+		t.Errorf("invoice status = %q, want %q", status, StatusFailed)
+	}
+	got := failureKindOf(t, super, invID)
+	if got == nil || *got != string(submission.FailurePayloadNotBuilt) {
+		t.Errorf("failure_kind = %v, want %q", got, submission.FailurePayloadNotBuilt)
+	}
+}
+
+// TestMarkFailedTx_KindRollsBackWithAnIllegalTransition (AC-1, the
+// Constraint's real content): a draft invoice has no legal edge to failed ->
+// MarkFailedTx(..., FailureNeverAcknowledged) -> ErrIllegalTransition, and
+// the kind write rolls back with it -- failure_kind is still NULL, because
+// the outcome callback and transitionTx share the same tx (markTerminalTx).
+func TestMarkFailedTx_KindRollsBackWithAnIllegalTransition(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 rollback-illegal tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 rollback-illegal entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-ILLEGAL", StatusDraft)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailureNeverAcknowledged)
+		return err
+	})
+	if !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("MarkFailedTx(draft->failed): err = %v, want ErrIllegalTransition", err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("status after illegal MarkFailedTx = %q, want unchanged %q", status, StatusDraft)
+	}
+	if !failureKindIsNull(t, super, invID) {
+		t.Error("failure_kind IS NULL = false after the aborted illegal transition, want true (kind write must roll back together with the refused transition)")
+	}
+}
+
+// TestMarkFailedTx_ReplayDoesNotRewriteStoredKind (AC-1): an invoice already
+// failed with failure_kind='never_acknowledged' -> MarkFailedTx(...,
+// FailureAcknowledgedNoVerdict) -> returns nil (idempotent no-op), the
+// stored kind is untouched, and no new invoice_status_history row lands --
+// the outcome callback only runs AFTER markTerminalTx's idempotent
+// short-circuit.
+func TestMarkFailedTx_ReplayDoesNotRewriteStoredKind(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 replay tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 replay entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-REPLAY", StatusFailed)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET failure_kind = $1 WHERE id = $2`, string(submission.FailureNeverAcknowledged), invID,
+	); err != nil {
+		t.Fatalf("seed failure_kind: %v", err)
+	}
+
+	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailureAcknowledgedNoVerdict)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkFailedTx (already failed, idempotent replay): %v, want nil", err)
+	}
+
+	got := failureKindOf(t, super, invID)
+	if got == nil || *got != string(submission.FailureNeverAcknowledged) {
+		t.Errorf("failure_kind after replay = %v, want unchanged %q (idempotent no-op must not rewrite the stored kind)", got, submission.FailureNeverAcknowledged)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != beforeHistory {
+		t.Errorf("history rows after idempotent replay = %d, want unchanged %d", n, beforeHistory)
+	}
+}
+
+// TestMarkFailedTx_EveryKindConstantRoundTrips (AC-2): each of the three
+// FailureKind constants round-trips through a fresh queued invoice, guarding
+// against Go-const <-> DB-CHECK drift.
+func TestMarkFailedTx_EveryKindConstantRoundTrips(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 roundtrip tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 roundtrip entity")
+
+	for _, kind := range []submission.FailureKind{
+		submission.FailurePayloadNotBuilt,
+		submission.FailureNeverAcknowledged,
+		submission.FailureAcknowledgedNoVerdict,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-RT-"+string(kind), StatusQueued)
+
+			err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+				_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, kind)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("MarkFailedTx(queued->failed, %q): %v, want nil", kind, err)
+			}
+
+			got := failureKindOf(t, super, invID)
+			if got == nil || *got != string(kind) {
+				t.Errorf("failure_kind = %v, want %q", got, kind)
+			}
+		})
+	}
+}
+
+// TestMarkFailedTx_BlankKindRefused (AC-6, [no second encoding of
+// "unknown"]): the kind binds RAW, no NULLIF -- a blank kind must hit the
+// invoices.failure_kind CHECK (23514), not silently land as SQL NULL.
+func TestMarkFailedTx_BlankKindRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 blank-kind tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 blank-kind entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-BLANK", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailureKind(""))
+		return err
+	})
+	if err == nil {
+		t.Fatal("MarkFailedTx with a blank kind succeeded, want a CHECK violation (SQLSTATE 23514 -- bound raw, no NULLIF)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("MarkFailedTx with a blank kind: pgCode = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusQueued {
+		t.Errorf("invoice status after refused blank-kind write = %q, want unchanged %q", status, StatusQueued)
+	}
+	if !failureKindIsNull(t, super, invID) {
+		t.Error("failure_kind IS NULL = false after the refused write, want true (commits nothing)")
+	}
+}
+
+// TestStoreMarkFailed_ForwardsKindThroughThePort (AC-1): *Store used as
+// submission.InvoicePort -- MarkFailed(..., FailureAcknowledgedNoVerdict) ->
+// stored failure_kind='acknowledged_no_verdict', proving the port forward
+// (submission_port.go) carries the kind through, not just MarkFailedTx
+// directly.
+func TestStoreMarkFailed_ForwardsKindThroughThePort(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-06-02 port-forward tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 port-forward entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-PORT", StatusQueued)
+
+	var port submission.InvoicePort = NewStore(app)
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		return port.MarkFailed(ctx, tx, invID, tenantID, submission.FailureAcknowledgedNoVerdict)
+	})
+	if err != nil {
+		t.Fatalf("port.MarkFailed(invID, tenantID, FailureAcknowledgedNoVerdict): %v, want nil", err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusFailed {
+		t.Errorf("invoice status after port.MarkFailed = %q, want %q", status, StatusFailed)
+	}
+	got := failureKindOf(t, super, invID)
+	if got == nil || *got != string(submission.FailureAcknowledgedNoVerdict) {
+		t.Errorf("failure_kind = %v, want %q", got, submission.FailureAcknowledgedNoVerdict)
 	}
 }

@@ -244,9 +244,15 @@ async function assertFiscalRecord(page: Page, invoiceNumber: string): Promise<vo
   const cardBox = await card.boundingBox()
   expect(cardBox, 'fiscal-record-card must be visible').toBeTruthy()
   for (const testId of ['fiscal-irn', 'fiscal-csid']) {
-    const box = await page.getByTestId(testId).boundingBox()
+    const el = page.getByTestId(testId)
+    const box = await el.boundingBox()
     expect(box, `${testId} must be visible`).toBeTruthy()
     expect(box!.x + box!.width, `${testId} must not overflow fiscal-record-card`).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 2)
+    // boundingBox is blind to this: a stretched flex child's box stays fixed
+    // regardless of content, so unbroken text just overflows it invisibly.
+    // scrollWidth vs clientWidth measures the element's own content instead.
+    const overflow = await el.evaluate((node) => node.scrollWidth - node.clientWidth)
+    expect(overflow, `${testId} text must not overflow its own box (word-break)`).toBeLessThanOrEqual(1)
   }
 }
 

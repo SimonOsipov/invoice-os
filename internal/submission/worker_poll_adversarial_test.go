@@ -480,6 +480,62 @@ func TestPollWorker_DeadLetterWhenInvoiceAlreadyFailedIsIdempotent(t *testing.T)
 	}
 }
 
+// TestPollWorker_ReplayedDeadLetterKeepsFirstKind (BUG-06-03, task-385): a River redelivery
+// of the SAME already-dead-lettered poll job (identical job.ID/Attempt/MaxAttempts) must not
+// rewrite the stored failure_kind or add a second history row. tx1's own state != "pending"
+// gate (worker.go:427-430) is what stops the second delivery -- the job is already
+// dead_lettered, not pending -- so it never even reaches adapter.Poll a second time; this is
+// a different guard from queue.OncePerJob (case 3/10 above), which never gets a chance to
+// fire here because tx1 returns first.
+func TestPollWorker_ReplayedDeadLetterKeepsFirstKind(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (replay check)")},
+			evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	// SAME job.ID/Attempt/MaxAttempts reused for both calls below -- a redelivery of "the
+	// same" River job.
+	job := newPollJob(10, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1})
+
+	if err := pw.Work(ctx, job); err == nil {
+		t.Error("first delivery: PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error")
+	}
+	firstKind := wiRead(t, f, tenantID, invoiceID).failureKind
+	if firstKind == nil {
+		t.Fatal("failure_kind after first dead-letter is nil, want a value")
+	}
+	preHistory := len(wiHistory(t, f, tenantID, invoiceID))
+
+	if err := pw.Work(ctx, job); err != nil {
+		t.Errorf("replay delivery: PollWorker.Work returned %v, want nil (superseded no-op via tx1)", err)
+	}
+
+	got := wiRead(t, f, tenantID, invoiceID).failureKind
+	if got == nil || *got != *firstKind {
+		t.Errorf("failure_kind after replay = %q, want unchanged %q", strOrNil(got), *firstKind)
+	}
+	if gotHist := len(wiHistory(t, f, tenantID, invoiceID)); gotHist != preHistory {
+		t.Errorf("invoice_status_history rows after replay = %d, want unchanged %d", gotHist, preHistory)
+	}
+}
+
 // --- 6: a poll Accepted routes the verdict and writes the 08 audit event ------------------
 // (repurposed by M5-05-05, task-241, register #18 -- see this file's own header) ------------
 

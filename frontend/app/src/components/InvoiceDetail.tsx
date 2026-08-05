@@ -80,7 +80,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
   }
 
   return (
-    <div style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
+    <div style={{ padding: '24px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>
@@ -863,8 +863,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     )
   }
 
+  // margin auto, not just maxWidth: a capped block with no auto margin pins left and leaves
+  // the whole remainder dead (32% of a 1920 window). E2E-10 measures the gutters.
   return (
-    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
+    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px', maxWidth: 1080, margin: '0 auto' }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>

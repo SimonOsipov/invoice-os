@@ -37,6 +37,9 @@ import {
   diffEditInput,
   diffLineItems,
   editInvoice,
+  FAILURE_EXPLANATION_FALLBACK,
+  FAILURE_KINDS,
+  failureExplanation,
   formFromInvoice,
   gateByActiveEntity,
   getInvoice,
@@ -148,6 +151,7 @@ const draftInvoice: InvoiceRecord = {
   kept_as_is_at: null,
   kept_as_is_by: null,
   kept_as_is_reason: null,
+  failure_kind: null,
   rule_set_version: null,
 }
 
@@ -480,6 +484,23 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     const [emptyArrayUrl] = emptyArrayMock.mock.calls[0] as [string, RequestInit]
     expect(emptyArrayUrl).not.toContain('import_batch_id')
   })
+
+  it('LIST-FK-1 (BUG-06-04 QA gap-fill): failure_kind surfaces per row from a real multi-row wire payload, no cross-row bleed', async () => {
+    const rowWithKind = { ...draftInvoice, id: 'inv-a', status: 'failed', failure_kind: 'payload_not_built' }
+    const rowWithoutKind = { ...draftInvoice, id: 'inv-b', status: 'failed', failure_kind: null }
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ invoices: [rowWithKind, rowWithoutKind], pagination: { limit: 50, offset: 0, total: 2 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listInvoices(af, base, {})
+
+    expect(result.invoices[0].failure_kind).toBe('payload_not_built')
+    expect(result.invoices[1].failure_kind).toBeNull()
+  })
 })
 
 describe('violationSummary (AC-2, Stage 2.5)', () => {
@@ -687,6 +708,26 @@ describe('getInvoice', () => {
 
     expect(result.submit_blocked_reason).toBeNull()
     expect(result.submit_blocked_reason).not.toBeUndefined()
+  })
+
+  it('getInvoice: failure_kind (BUG-06-04 QA gap-fill) surfaces a stored kind from the real wire payload, not just a compiled fixture', async () => {
+    const wire = { ...draftInvoice, status: 'failed', failure_kind: 'acknowledged_no_verdict' }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.failure_kind).toBe('acknowledged_no_verdict')
+  })
+
+  it('getInvoice: a non-failed invoice carries failure_kind:null, never a stale leftover value', async () => {
+    const wire = { ...draftInvoice, status: 'validated', failure_kind: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.failure_kind).toBeNull()
   })
 })
 
@@ -1689,6 +1730,8 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       'kept_as_is_at',
       'kept_as_is_by',
       'kept_as_is_reason',
+      // BUG-06-04 (task-386): +1 -- failure_kind joins Invoice the same way.
+      'failure_kind',
       'rule_set_version',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
@@ -3111,6 +3154,132 @@ describe('fetchAllInvoices partial failure (QA adversarial)', () => {
       process.off('unhandledRejection', onUnhandled)
     }
     expect(unhandled).toEqual([])
+  })
+})
+
+// RED specs (BUG-06-05, task-387) -- pin failureExplanation()'s copy mapping before the
+// executor implements it. Every spec below currently fails on the import of
+// FAILURE_EXPLANATION_FALLBACK/FAILURE_KINDS/failureExplanation (none exist yet in
+// invoices.ts), matching this file's own RED convention (see file header).
+describe('failureExplanation', () => {
+  it('FK-1: each of the three kinds returns its own headline and detail', () => {
+    const results = FAILURE_KINDS.map((k) => failureExplanation(k))
+    const headlines = results.map((r) => r.headline)
+    const details = results.map((r) => r.detail)
+
+    expect(new Set(headlines).size).toBe(headlines.length)
+    expect(new Set(details).size).toBe(details.length)
+    for (const r of results) {
+      expect(r.headline.trim().length).toBeGreaterThan(0)
+      expect(r.detail.trim().length).toBeGreaterThan(0)
+    }
+  })
+
+  it('FK-2: no kind silently degrades to the fallback', () => {
+    for (const k of FAILURE_KINDS) {
+      const r = failureExplanation(k)
+      expect(r, `kind=${k}`).not.toEqual(FAILURE_EXPLANATION_FALLBACK)
+      expect(r.headline.trim().length, `kind=${k} headline`).toBeGreaterThan(0)
+      expect(r.detail.trim().length, `kind=${k} detail`).toBeGreaterThan(0)
+      expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
+    }
+  })
+
+  it('FK-3: every branch returns a non-empty nextStep', () => {
+    const inputs: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of inputs) {
+      const r = failureExplanation(kind)
+      expect(r.nextStep.trim().length, `kind=${String(kind)}`).toBeGreaterThan(0)
+    }
+  })
+
+  it('FK-4: null degrades to the recorded-reason fallback', () => {
+    let r: ReturnType<typeof failureExplanation> | undefined
+    expect(() => {
+      r = failureExplanation(null)
+    }).not.toThrow()
+    expect(r!.headline).toBeDefined()
+    expect(r!.detail).toBeDefined()
+    expect(r!.nextStep).toBeDefined()
+    expect(r!.detail).toMatch(/not recorded/i)
+  })
+
+  it('FK-5: an unrecognised kind takes the same branch as null', () => {
+    expect(failureExplanation('app_rejected')).toEqual(failureExplanation(null))
+  })
+
+  it('FK-6: no branch offers a retry, re-validate or edit', () => {
+    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of all) {
+      const r = failureExplanation(kind)
+      const joined = `${r.headline} ${r.detail} ${r.nextStep}`
+      expect(joined, `kind=${String(kind)}`).not.toMatch(
+        /\bedit|re-?validate|re-?submit|send it again|try again|retry|enter it again|enter this invoice again/i,
+      )
+    }
+  })
+
+  it('FK-7: no branch claims anyone has been notified', () => {
+    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of all) {
+      const r = failureExplanation(kind)
+      const joined = `${r.headline} ${r.detail} ${r.nextStep}`
+      expect(joined, `kind=${String(kind)}`).not.toMatch(/notified|alerted|our team|we've been|looking into|monitor/i)
+    }
+  })
+
+  it('FK-8: acknowledged_no_verdict warns that entering it again could file it twice', () => {
+    const r = failureExplanation('acknowledged_no_verdict')
+    expect(r.detail).toMatch(/twice|double/i)
+  })
+
+  it('FK-9: nothing from the wire is interpolated', () => {
+    const hostile = 'https://app.internal:8443/x?token=sk_live_abc'
+    expect(failureExplanation(hostile)).toEqual(failureExplanation(null))
+  })
+
+  it('FK-10: no branch uses internal vocabulary', () => {
+    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+    for (const kind of all) {
+      const r = failureExplanation(kind)
+      const joined = `${r.headline} ${r.detail} ${r.nextStep}`
+      expect(joined, `kind=${String(kind)}`).not.toMatch(
+        /payload|transform|adapter|dead[- ]letter|worker|poll|\bjob\b|wire|attempt|enqueue|idempoten/i,
+      )
+    }
+  })
+
+  it('FK-11: FAILURE_KINDS matches the Go vocabulary', () => {
+    // Independently transcribed from internal/submission/failure.go:11-14, not read
+    // from FAILURE_KINDS itself.
+    const expected = ['payload_not_built', 'never_acknowledged', 'acknowledged_no_verdict']
+    expect([...FAILURE_KINDS].sort()).toEqual(expected.sort())
+  })
+
+  // QA gap-fill (task-387): FK-1 only pins headline/detail distinctness -- an operator
+  // scanning just the action line needs the three nextSteps to differ too.
+  it('FK-12: the three kinds nextSteps are mutually distinct', () => {
+    const steps = FAILURE_KINDS.map((k) => failureExplanation(k).nextStep)
+    expect(new Set(steps).size).toBe(steps.length)
+  })
+
+  it('FK-13: failureExplanation is total and pure over FAILURE_KINDS -- no kind falls through, repeat calls agree', () => {
+    for (const k of FAILURE_KINDS) {
+      const r = failureExplanation(k)
+      expect(r, `kind=${k}`).toBeDefined()
+      expect(typeof r.headline, `kind=${k} headline`).toBe('string')
+      expect(typeof r.detail, `kind=${k} detail`).toBe('string')
+      expect(typeof r.nextStep, `kind=${k} nextStep`).toBe('string')
+      expect(failureExplanation(k), `kind=${k} repeat call`).toEqual(r)
+    }
+  })
+
+  it('FK-14: unusual inputs (empty, whitespace-only, wrong case, very long) all take the fallback branch unchanged', () => {
+    const veryLong = 'x'.repeat(10_000)
+    const inputs = ['', '  ', 'PAYLOAD_NOT_BUILT', veryLong]
+    for (const input of inputs) {
+      expect(failureExplanation(input), `input=${JSON.stringify(input.slice(0, 24))}…`).toEqual(FAILURE_EXPLANATION_FALLBACK)
+    }
   })
 })
 

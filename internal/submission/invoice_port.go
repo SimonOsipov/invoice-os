@@ -35,9 +35,11 @@ type InvoicePort interface {
 	// Idempotent: a redundant call on an already-submitted invoice returns nil.
 	MarkSubmitted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error
 
-	// MarkFailed transitions invoiceID -> failed as SystemActor(tenantID).
-	// Idempotent: a redundant call on an already-failed invoice returns nil.
-	MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error
+	// MarkFailed transitions invoiceID -> failed as SystemActor(tenantID),
+	// writing kind as failure_kind in the SAME tx as the transition.
+	// Idempotent: a redundant call on an already-failed invoice returns nil
+	// and does not rewrite the stored kind.
+	MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, kind FailureKind) error
 
 	// MarkAccepted transitions invoiceID -> accepted as SystemActor(tenantID),
 	// writing out.IRN/CSID/QRPayload in the SAME tx as the transition.

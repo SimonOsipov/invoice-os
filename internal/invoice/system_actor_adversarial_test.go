@@ -39,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // SA-ADV-1: MarkFailedTx on a draft invoice -- draft has no legal edge to
@@ -57,7 +58,7 @@ func TestMarkFailedTx_IllegalFromDraftReturnsErrIllegalTransition(t *testing.T) 
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID)
 
 	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID)
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailurePayloadNotBuilt)
 		return err
 	})
 	if !errors.Is(err, ErrIllegalTransition) {
@@ -141,7 +142,7 @@ func TestMarkFailedTx_MalformedIDReturnsErrValidation(t *testing.T) {
 	tenantID := seedTenant(t, super, "SA-ADV-3 tenant")
 
 	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		_, err := store.MarkFailedTx(ctx, tx, "not-a-uuid", tenantID)
+		_, err := store.MarkFailedTx(ctx, tx, "not-a-uuid", tenantID, submission.FailurePayloadNotBuilt)
 		return err
 	})
 	if !errors.Is(err, ErrValidation) {
@@ -174,7 +175,7 @@ func TestMarkFailedTx_NewAndPreexistingEdgesBothSucceed(t *testing.T) {
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-				_, err := store.MarkFailedTx(ctx, tx, tc.id, tenantID)
+				_, err := store.MarkFailedTx(ctx, tx, tc.id, tenantID, submission.FailurePayloadNotBuilt)
 				return err
 			})
 			if err != nil {

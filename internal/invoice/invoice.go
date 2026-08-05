@@ -113,6 +113,12 @@ type Invoice struct {
 	KeptAsIsBy     *string    `json:"kept_as_is_by"`
 	KeptAsIsReason *string    `json:"kept_as_is_reason"`
 
+	// FailureKind (BUG-06-01) is the reason a submission landed in
+	// status='failed' -- one of submission.FailureKind's three constants, or
+	// nil for a pre-migration/legacy failed row. No omitempty, same
+	// explicit-null rationale as KeptAsIsReason above.
+	FailureKind *string `json:"failure_kind"`
+
 	LineItems []LineItem `json:"line_items,omitempty"`
 
 	// RuleSetVersion is the human-facing integer resolved from

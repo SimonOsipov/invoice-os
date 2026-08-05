@@ -2277,6 +2277,9 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		// Invoice as direct top-level siblings too, same no-omitempty
 		// flattened-embed shape as every field above.
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
+		// BUG-06-04 (task-386): +1 -- failure_kind joins Invoice as a direct
+		// top-level sibling too, same no-omitempty shape.
+		"failure_kind",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -3799,6 +3802,8 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		// above -- "pre-existing" here means "already on Invoice", which this
 		// story makes true.
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
+		// BUG-06-04 (task-386): failure_kind joins Invoice the same way.
+		"failure_kind",
 		"rule_set_version", "qr_png_base64",
 	}
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason"}
@@ -3943,6 +3948,9 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// between RejectionReasons and LineItems on Invoice, so they land
 		// here in wire order too.
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
+		// BUG-06-04 (task-386): failure_kind is declared right after
+		// KeptAsIsReason and before LineItems, so it lands here too.
+		"failure_kind",
 		"line_items",
 		// getResponse's own fields, in declaration order -- the action-flag
 		// keys MUST be last (AC #5's additive/position clause): can_submit
@@ -3987,6 +3995,112 @@ func topLevelKeyOrder(t *testing.T, body []byte) []string {
 		}
 	}
 	return keys
+}
+
+// TestGetHandler_FailureKindMarshalsNull (BUG-06-04, task-386, AC-1/AC-7): a
+// failed invoice with no stored kind (legacy pre-migration row, or one that
+// failed through POST /transitions per story BUG-06 S0 F1) must still carry
+// an explicit "failure_kind":null -- never an absent key. Raw-byte technique
+// mirrors TestGetHandler_QRPNGBase64MarshalsNull.
+func TestGetHandler_FailureKindMarshalsNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusFailed, FailureKind: nil}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"failure_kind":null`) {
+		t.Errorf("body = %s, want the literal \"failure_kind\":null (explicit null, not omitted, not an "+
+			"empty string) when the failed invoice has no stored kind", body)
+	}
+}
+
+// TestGetHandler_FailureKindRendersStoredValue (BUG-06-04, task-386, AC-1): a
+// failed invoice with a stored kind must surface it verbatim on GET detail.
+func TestGetHandler_FailureKindRendersStoredValue(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	kind := "acknowledged_no_verdict"
+	want := Invoice{ID: invoiceID, Status: StatusFailed, FailureKind: &kind}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"failure_kind":"acknowledged_no_verdict"`) {
+		t.Errorf("body = %s, want the literal \"failure_kind\":%q", body, kind)
+	}
+}
+
+// TestGetHandler_FailureResponseCarriesNoJobDetail (BUG-06-04, task-386,
+// AC-6): a failed invoice's job row may hold last_error/attempts/state
+// (submission_jobs columns, 20260722085427_submission_jobs.sql), but none of
+// that job detail may leak onto the tenant wire. This is a TYPE-SHAPE proof
+// (Invoice has no field sourced from submission_jobs at all, so the fake
+// get closure below cannot even construct a leak) reinforced by a permanent
+// raw-byte regression gate -- no real submission_jobs row is read or needed.
+func TestGetHandler_FailureResponseCarriesNoJobDetail(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	kind := "never_acknowledged"
+	want := Invoice{ID: invoiceID, Status: StatusFailed, FailureKind: &kind}
+	get := func(ctx context.Context, gotID string) (Invoice, error) {
+		return want, nil
+	}
+	rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, jobKey := range []string{
+		`"last_error"`, `"attempts"`, `"state"`, `"next_poll_at"`,
+		`"river_job_id"`, `"adapter"`, `"adapter_version"`, `"idempotency_key"`,
+	} {
+		if strings.Contains(body, jobKey) {
+			t.Errorf("body = %s, must NOT contain job-side key %s -- submission_jobs detail never reaches the "+
+				"tenant wire (AC-6)", body, jobKey)
+		}
+	}
+}
+
+// TestListHandler_FailureKindOnListRows (BUG-06-04, task-386, AC-1): the
+// list wire shares invoiceColumns/scanInvoice with Get, so a stored kind and
+// an absent kind must both surface correctly per row -- a stored value
+// verbatim, and an explicit null (never a dropped key) for the row with none.
+func TestListHandler_FailureKindOnListRows(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	withKindID := uuid.NewString()
+	noKindID := uuid.NewString()
+	kind := "payload_not_built"
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{
+			{ID: withKindID, Status: StatusFailed, FailureKind: &kind},
+			{ID: noKindID, Status: StatusFailed, FailureKind: nil},
+		}, 2, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"failure_kind":"payload_not_built"`) {
+		t.Errorf("body = %s, want row %q to carry \"failure_kind\":%q", body, withKindID, kind)
+	}
+	if !strings.Contains(body, `"failure_kind":null`) {
+		t.Errorf("body = %s, want row %q to carry an explicit \"failure_kind\":null, not a dropped key", body, noKindID)
+	}
 }
 
 // TestGetHandler_CanSubmitAllStatuses (INVED-02-01): table over all 7

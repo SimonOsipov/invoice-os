@@ -480,6 +480,62 @@ func TestPollWorker_DeadLetterWhenInvoiceAlreadyFailedIsIdempotent(t *testing.T)
 	}
 }
 
+// TestPollWorker_ReplayedDeadLetterKeepsFirstKind (BUG-06-03, task-385): a River redelivery
+// of the SAME already-dead-lettered poll job (identical job.ID/Attempt/MaxAttempts) must not
+// rewrite the stored failure_kind or add a second history row. tx1's own state != "pending"
+// gate (worker.go:427-430) is what stops the second delivery -- the job is already
+// dead_lettered, not pending -- so it never even reaches adapter.Poll a second time; this is
+// a different guard from queue.OncePerJob (case 3/10 above), which never gets a chance to
+// fire here because tx1 returns first.
+func TestPollWorker_ReplayedDeadLetterKeepsFirstKind(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (replay check)")},
+			evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	// SAME job.ID/Attempt/MaxAttempts reused for both calls below -- a redelivery of "the
+	// same" River job.
+	job := newPollJob(10, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1})
+
+	if err := pw.Work(ctx, job); err == nil {
+		t.Error("first delivery: PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error")
+	}
+	firstKind := wiRead(t, f, tenantID, invoiceID).failureKind
+	if firstKind == nil {
+		t.Fatal("failure_kind after first dead-letter is nil, want a value")
+	}
+	preHistory := len(wiHistory(t, f, tenantID, invoiceID))
+
+	if err := pw.Work(ctx, job); err != nil {
+		t.Errorf("replay delivery: PollWorker.Work returned %v, want nil (superseded no-op via tx1)", err)
+	}
+
+	got := wiRead(t, f, tenantID, invoiceID).failureKind
+	if got == nil || *got != *firstKind {
+		t.Errorf("failure_kind after replay = %q, want unchanged %q", strOrNil(got), *firstKind)
+	}
+	if gotHist := len(wiHistory(t, f, tenantID, invoiceID)); gotHist != preHistory {
+		t.Errorf("invoice_status_history rows after replay = %d, want unchanged %d", gotHist, preHistory)
+	}
+}
+
 // --- 6: a poll Accepted routes the verdict and writes the 08 audit event ------------------
 // (repurposed by M5-05-05, task-241, register #18 -- see this file's own header) ------------
 
@@ -940,6 +996,73 @@ func TestRLS_PollWorkerAuditRowNotVisibleToAnotherTenant(t *testing.T) {
 	if n := auditCount(t, f, tenantB, "submission.accepted"); n != 0 {
 		t.Errorf("tenant B's view of submission.accepted audit rows = %d, want 0 -- "+
 			"RLS must hide tenant A's poll-verdict row from tenant B", n)
+	}
+}
+
+// TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant: QA adversarial addition
+// (task-385). No existing case exercised RLS isolation specifically on the poll dead-letter
+// path (worker.go:518) -- the existing poll RLS cases (this file's #13, poll_ref_db_test.go)
+// cover the audit row and poll_ref, not invoices.status/failure_kind after a dead-letter.
+// Mirrors poll_ref_db_test.go's TestRLS_PollRefNotVisibleAcrossTenants pattern: tenant B's
+// scoped SELECT of tenant A's invoice must return zero rows, never the dead-lettered status
+// or the unsanitised failure_kind value.
+func TestRLS_PollWorkerDeadLetterFailureKindNotVisibleToAnotherTenant(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantA, invoiceA, cleanupA := seedQueuedInvoice(t, f)
+	defer cleanupA()
+	tenantB := seedTenant(t, f)
+	defer cleanupTenant(t, f, tenantB)
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceA
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantA, InvoiceID: invoiceA, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantA, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (RLS check)")},
+			evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	job := newPollJob(10, 8, 8, submission.PollArgs{TenantID: tenantA, InvoiceID: invoiceA, SubmissionJobID: wj.id, Sequence: 1})
+	if err := pw.Work(ctx, job); err == nil {
+		t.Fatal("PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error")
+	}
+
+	// Precondition: tenant A's own view sees the stamped kind.
+	inv := wiRead(t, f, tenantA, invoiceA)
+	if inv.failureKind == nil || *inv.failureKind != string(submission.FailureAcknowledgedNoVerdict) {
+		t.Fatalf("tenant A's own failure_kind = %v, want %q -- precondition for the isolation check below",
+			strOrNil(inv.failureKind), submission.FailureAcknowledgedNoVerdict)
+	}
+
+	// Tenant B's scoped SELECT of tenant A's invoice id must return zero rows -- never the
+	// dead-lettered status or failure_kind.
+	err := db.WithinTenantTx(ctx, f.app, tenantB, func(tx pgx.Tx) error {
+		var leakedStatus string
+		var leakedKind *string
+		scanErr := tx.QueryRow(ctx,
+			`SELECT status, failure_kind FROM invoices WHERE id = $1`, invoiceA).
+			Scan(&leakedStatus, &leakedKind)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return nil
+		}
+		if scanErr != nil {
+			return scanErr
+		}
+		t.Errorf("tenant A's invoice (status=%q failure_kind=%v) was visible under tenant B's RLS "+
+			"context -- want zero rows, not the value or an error", leakedStatus, strOrNil(leakedKind))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read tenant A's invoice under tenant B's tenant context: %v", err)
 	}
 }
 

@@ -9,7 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_PERSONAS } from '../auth'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { fmtDateTime } from '../lib/format'
-import { DETAIL_SUBMIT_COPY, LIVE_POLL_MS, skipReasonLabel, type InvoiceDetailRecord, type StatusChange } from '../lib/invoices'
+import {
+  DETAIL_SUBMIT_COPY,
+  FAILURE_EXPLANATION_FALLBACK,
+  FAILURE_KINDS,
+  LIVE_POLL_MS,
+  failureExplanation,
+  skipReasonLabel,
+  type InvoiceDetailRecord,
+  type StatusChange,
+} from '../lib/invoices'
 import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoiceDetail } from './InvoiceDetail'
@@ -46,6 +55,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     kept_as_is_at: null,
     kept_as_is_by: null,
     kept_as_is_reason: null,
+    failure_kind: null,
     line_items: [],
     // null (never validated) sidesteps ViolationsTable entirely -- irrelevant to this
     // story's honest-line assertion, which only depends on status/rejection_reasons.
@@ -149,38 +159,93 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('InvoiceDetail failed-dead-end card (task-332, BUG-01-06, [failed-no-reason-lands-on-the-detail])', () => {
-  it('AC-3: a failed invoice with no recorded reason renders an explicit "no reason recorded" line', async () => {
-    mockDetailFetch(detailRecord({ rejection_reasons: [] }))
-
-    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
-
-    const card = await screen.findByTestId('failed-dead-end')
-    expect(card.textContent?.toLowerCase()).toContain('no reason recorded')
-  })
-
-  it('AC-4: a failed invoice WITH reasons still renders the rejection card, and gets no "no reason" line', async () => {
-    mockDetailFetch(detailRecord({ rejection_reasons: [{ code: 'invalid_tin', message: 'bad tin' }] }))
+describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-reason-lands-on-the-detail])', () => {
+  it('AC-7: a failed invoice with failure_kind null renders the fallback explanation, not the deleted "no reason recorded" line', async () => {
+    mockDetailFetch(detailRecord({ failure_kind: null, rejection_reasons: [] }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const card = await screen.findByTestId('failed-dead-end')
     expect(card.textContent?.toLowerCase()).not.toContain('no reason recorded')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.detail)
+    expect(screen.getByTestId('failure-next-step').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.nextStep)
+  })
+
+  // The trap: a fixture with a real failure_kind AND historical rejection reasons must
+  // render the REAL kind's copy, not the fallback -- "recorded" appears only in the
+  // fallback strings, so its absence proves the real kind rendered.
+  it('AC-4: a failed invoice with a recorded kind AND historical rejection reasons renders the real explanation, not the fallback, alongside the rejection card', async () => {
+    mockDetailFetch(detailRecord({
+      failure_kind: 'never_acknowledged',
+      rejection_reasons: [{ code: 'invalid_tin', message: 'bad tin' }],
+    }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    expect(card.textContent?.toLowerCase()).not.toContain('recorded')
+    const expected = failureExplanation('never_acknowledged')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(expected.headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(expected.detail)
+    expect(screen.getByTestId('failure-next-step').textContent).toBe(expected.nextStep)
     expect(await screen.findByTestId('rejection-reasons')).toBeDefined()
   })
 
-  // QA Mode B adversarial (task-332, BUG-01-06, point e): the honest line is nested
+  // QA Mode B adversarial (task-332, BUG-01-06, point e): the explanation is nested
   // inside the `status === 'failed'` gate (failed-dead-end itself), so a non-failed
-  // invoice must never render either the card or the line -- even with rejection_reasons
-  // empty, the shape that triggers the line on a FAILED invoice.
-  it('a non-failed invoice (rejected, empty rejection_reasons) never renders failed-dead-end or the "no reason" line', async () => {
+  // invoice must never render the card or any of its three testid blocks.
+  it('a non-failed invoice (rejected, empty rejection_reasons) never renders failed-dead-end or any failure-explanation element', async () => {
     mockDetailFetch(detailRecord({ status: 'rejected', rejection_reasons: [] }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
     expect(screen.queryByTestId('failed-dead-end')).toBeNull()
-    expect(screen.queryByText(/no reason recorded/i)).toBeNull()
+    expect(screen.queryByTestId('failure-headline')).toBeNull()
+    expect(screen.queryByTestId('failure-detail')).toBeNull()
+    expect(screen.queryByTestId('failure-next-step')).toBeNull()
+  })
+
+  // QA Mode B adversarial (task-388): table-driven over all four rendered states -- the
+  // three recorded kinds plus null -- so no state can silently lose a line the way the
+  // old AC-3/AC-4 tests only ever exercised null and one kind.
+  it.each([
+    ...FAILURE_KINDS.map((k) => [k, failureExplanation(k)] as const),
+    [null, FAILURE_EXPLANATION_FALLBACK] as const,
+  ])('failure_kind=%s renders that exact headline/detail/nextStep, nothing else', async (kind, expected) => {
+    mockDetailFetch(detailRecord({ failure_kind: kind, rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('failed-dead-end')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(expected.headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(expected.detail)
+    expect(screen.getByTestId('failure-next-step').textContent).toBe(expected.nextStep)
+  })
+
+  // Forward-compatibility (AC-7's implication): a kind the SPA has never heard of --
+  // e.g. a future backend value -- must still land on the fallback, not a blank card.
+  it('an unrecognised failure_kind renders the fallback explanation, not a blank card', async () => {
+    mockDetailFetch(detailRecord({ failure_kind: 'something_new', rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('failed-dead-end')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.detail)
+    expect(screen.getByTestId('failure-next-step').textContent).toBe(FAILURE_EXPLANATION_FALLBACK.nextStep)
+  })
+
+  // [actions-bar-gate-stands], pinned structurally rather than by inspection: the panel
+  // is diagnosis only, so no clickable control may ever appear inside it.
+  it('the failed-dead-end card renders no button or link -- diagnosis only, never a recovery control', async () => {
+    mockDetailFetch(detailRecord({ failure_kind: 'acknowledged_no_verdict', rejection_reasons: [] }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    expect(card.querySelectorAll('button, a').length).toBe(0)
   })
 })
 

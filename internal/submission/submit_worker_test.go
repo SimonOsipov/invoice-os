@@ -65,6 +65,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -312,11 +313,22 @@ func wjCount(t *testing.T, f *effectsFixture, tenantID, idemKey string) int {
 	return n
 }
 
-// wiRow is the invoices columns these specs care about.
+// wiRow is the invoices columns these specs care about. failureKind (BUG-06-03, task-385)
+// is nullable -- NULL for every invoice that never failed.
 type wiRow struct {
 	status           string
 	irn              *string
 	rejectionReasons string // raw jsonb text
+	failureKind      *string
+}
+
+// strOrNil renders a nullable text column for a test failure message -- %v on a non-nil
+// *string prints its address, not its value, which is useless in a diff.
+func strOrNil(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
 }
 
 func wiRead(t *testing.T, f *effectsFixture, tenantID, invoiceID string) wiRow {
@@ -324,8 +336,8 @@ func wiRead(t *testing.T, f *effectsFixture, tenantID, invoiceID string) wiRow {
 	var got wiRow
 	err := db.WithinTenantTx(context.Background(), f.app, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(context.Background(),
-			`SELECT status, irn, rejection_reasons::text FROM invoices WHERE id = $1`, invoiceID).
-			Scan(&got.status, &got.irn, &got.rejectionReasons)
+			`SELECT status, irn, rejection_reasons::text, failure_kind FROM invoices WHERE id = $1`, invoiceID).
+			Scan(&got.status, &got.irn, &got.rejectionReasons, &got.failureKind)
 	})
 	if err != nil {
 		t.Fatalf("read invoices row (tenant=%s invoice=%s): %v", tenantID, invoiceID, err)
@@ -605,11 +617,17 @@ func (testInvoicePort) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceI
 }
 
 func (testInvoicePort) MarkSubmitted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "submitted")
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "submitted", nil)
 }
 
-func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "failed")
+// MarkFailed (BUG-06-02, task-384) writes failure_kind via tipMarkTerminal's
+// outcome callback, mirroring the real Store.MarkFailedTx, so BUG-06-03's
+// tests can assert on the stored kind.
+func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, kind submission.FailureKind) error {
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "failed", func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE invoices SET failure_kind = $1 WHERE id = $2`, string(kind), invoiceID)
+		return err
+	})
 }
 
 // MarkAccepted/MarkRejected mirror MarkSubmitted/MarkFailed above -- added by
@@ -621,11 +639,11 @@ func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, ten
 // TestSubmitWorker_AcceptedRoutesVerdictAndAudits and
 // TestSubmitWorker_RejectedMovesInvoiceToRejected below.
 func (testInvoicePort) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "accepted")
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "accepted", nil)
 }
 
 func (testInvoicePort) MarkRejected(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, verdict submission.Rejected) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "rejected")
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "rejected", nil)
 }
 
 var _ submission.InvoicePort = testInvoicePort{}
@@ -646,11 +664,12 @@ var tipLegalTransitions = map[string]map[string]bool{
 	"submitted": {"failed": true, "accepted": true, "rejected": true},
 }
 
-// tipMarkTerminal is MarkSubmitted/MarkFailed's shared tail: lock+read the current status,
-// short-circuit as an idempotent no-op when already at target, otherwise require the
-// (current, target) pair to be one of tipLegalTransitions' edges and write the transition +
-// one history row with actor 'system'.
-func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target string) error {
+// tipMarkTerminal is MarkSubmitted/MarkFailed/MarkAccepted/MarkRejected's shared tail:
+// lock+read the current status, short-circuit as an idempotent no-op when already at
+// target, otherwise require the (current, target) pair to be one of tipLegalTransitions'
+// edges, run the optional outcome callback, and write the transition + one history row
+// with actor 'system' -- mirroring invoice.Store.markTerminalTx's own shape (actor.go).
+func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target string, outcome func(context.Context, pgx.Tx) error) error {
 	var current string
 	if err := tx.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID).Scan(&current); err != nil {
 		return err
@@ -660,6 +679,11 @@ func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target
 	}
 	if !tipLegalTransitions[current][target] {
 		return fmt.Errorf("testInvoicePort: illegal transition %s -> %s", current, target)
+	}
+	if outcome != nil {
+		if err := outcome(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE invoices SET status = $1 WHERE id = $2`, target, invoiceID); err != nil {
 		return err
@@ -1413,5 +1437,225 @@ func TestSubmitWorker_AdapterNotCalledUnderTransaction(t *testing.T) {
 		t.Errorf("independent probe read submission_jobs.state = %q at the moment Submit "+
 			"fired, want \"submitting\" -- tx1's write must already be committed and visible "+
 			"before the adapter call, per the tx1 -> (no tx) -> tx2 sequence", probedState)
+	}
+}
+
+// --- BUG-06-03 (task-385): per-site failure kinds ---------------------------------------
+//
+// Three MarkFailed call sites (worker.go:220, :309, :518) currently ALL pass the same
+// placeholder FailurePayloadNotBuilt. These specs pin each site to its own distinct,
+// provable kind -- see task-385's Implementation Plan for the site-by-site justification.
+
+// TestSubmitWorker_TransformFailureStampsPayloadNotBuilt: worker.go:220 is the one site
+// whose kind does NOT change (a transform failure genuinely never built a wire). Pins the
+// invariant so a future edit accidentally moving this site off payload_not_built is caught.
+func TestSubmitWorker_TransformFailureStampsPayloadNotBuilt(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter() // empty queue: Submit must never fire
+	adapter.transformErr = errors.New("wsub: cannot build wire from this invoice (BUG-06-03)")
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err == nil {
+		t.Fatal("Work on a transform failure returned nil, want river.JobCancel so no retry occurs")
+	}
+
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.status != "failed" {
+		t.Errorf("invoice status = %q, want \"failed\"", inv.status)
+	}
+	if inv.failureKind == nil || *inv.failureKind != string(submission.FailurePayloadNotBuilt) {
+		t.Errorf("failure_kind = %q, want %q", strOrNil(inv.failureKind), submission.FailurePayloadNotBuilt)
+	}
+}
+
+// TestSubmitWorker_TransformFailureRecordsLastError: the transform-failure hole
+// ([transform-failure]) -- markJobTransformFailed currently discards transformErr entirely,
+// so submission_jobs.last_error stays NULL. attempts must stay 0 (the retry budget is
+// untouched -- a transform failure never reached the wire).
+func TestSubmitWorker_TransformFailureRecordsLastError(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter()
+	transformErr := errors.New("wsub: cannot build wire from this invoice (BUG-06-03 last_error)")
+	adapter.transformErr = transformErr
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+
+	if err := w.Work(ctx, job); err == nil {
+		t.Fatal("Work on a transform failure returned nil, want river.JobCancel so no retry occurs")
+	}
+
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "failed" {
+		t.Errorf("job state = %q, want \"failed\"", wj.state)
+	}
+	if wj.attempts != 0 {
+		t.Errorf("job attempts = %d, want unchanged 0 -- a transform failure must not consume the retry budget", wj.attempts)
+	}
+	if wj.lastError == nil || *wj.lastError != transformErr.Error() {
+		t.Errorf("job last_error = %v, want %q -- markJobTransformFailed must record the "+
+			"transform error text, not discard it", wj.lastError, transformErr.Error())
+	}
+}
+
+// TestSubmitWorker_DeadLetterStampsNeverAcknowledged: worker.go:309, the submit dead-letter
+// site. Retryable covers 5xx/timeout/unparseable body too (result.go:39-44), so this site
+// can only prove "never acknowledged", never "never delivered".
+func TestSubmitWorker_DeadLetterStampsNeverAcknowledged(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: errors.New("wsub: upstream 503, final attempt (BUG-06-03)")},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+	job := newSubmitJob(1, 8, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey}) // final attempt
+
+	if err := w.Work(ctx, job); err == nil {
+		t.Error("Work on a Retryable final attempt returned nil, want a non-nil error so River discards the job")
+	}
+
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.failureKind == nil || *inv.failureKind != string(submission.FailureNeverAcknowledged) {
+		t.Errorf("failure_kind = %q, want %q", strOrNil(inv.failureKind), submission.FailureNeverAcknowledged)
+	}
+}
+
+// TestFailureKindsDifferAcrossTheThreeSites drives all three MarkFailed call sites
+// (transform failure, submit dead-letter, submit-to-Pending-then-poll-dead-letter) and
+// asserts the three recorded kinds are pairwise distinct. THIS is the test that would still
+// pass if all three sites were hardcoded to the same placeholder -- guarded against below by
+// checking it is red today for exactly that reason, not by construction.
+func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+
+	// Path 1: transform failure (worker.go:220).
+	tenantID1, invoiceID1, cleanup1 := seedQueuedInvoice(t, f)
+	defer cleanup1()
+	idemKey1 := "req-" + uuid.NewString() + ":" + invoiceID1
+	adapter1 := newScriptedAdapter()
+	adapter1.transformErr = errors.New("wsub: transform failure (distinctness check)")
+	w1 := newTestWorker(f.app, adapter1)
+	if err := w1.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID1, InvoiceID: invoiceID1, IdempotencyKey: idemKey1})); err == nil {
+		t.Fatal("transform-failure path: Work returned nil, want river.JobCancel")
+	}
+	kind1 := wiRead(t, f, tenantID1, invoiceID1).failureKind
+
+	// Path 2: submit dead-letter (worker.go:309).
+	tenantID2, invoiceID2, cleanup2 := seedQueuedInvoice(t, f)
+	defer cleanup2()
+	idemKey2 := "req-" + uuid.NewString() + ":" + invoiceID2
+	adapter2 := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: errors.New("wsub: submit dead-letter (distinctness check)")},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w2 := newTestWorker(f.app, adapter2)
+	if err := w2.Work(ctx, newSubmitJob(1, 8, 8, submission.SubmitArgs{TenantID: tenantID2, InvoiceID: invoiceID2, IdempotencyKey: idemKey2})); err == nil {
+		t.Fatal("submit dead-letter path: Work returned nil, want a non-nil error")
+	}
+	kind2 := wiRead(t, f, tenantID2, invoiceID2).failureKind
+
+	// Path 3: submit to Pending, then poll dead-letter (worker.go:518).
+	tenantID3, invoiceID3, cleanup3 := seedQueuedInvoice(t, f)
+	defer cleanup3()
+	future := time.Now().Add(time.Hour)
+	idemKey3 := "req-" + uuid.NewString() + ":" + invoiceID3
+	adapter3 := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw3 := newTestWorker(f.app, adapter3)
+	if err := sw3.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID3, InvoiceID: invoiceID3, IdempotencyKey: idemKey3})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj3 := wjRequire(t, f, tenantID3, idemKey3)
+	adapter3.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll dead-letter (distinctness check)")},
+			evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw3 := newTestPollWorker(f.app, adapter3)
+	job3 := newPollJob(10, 8, 8, submission.PollArgs{TenantID: tenantID3, InvoiceID: invoiceID3, SubmissionJobID: wj3.id, Sequence: 1})
+	if err := pw3.Work(ctx, job3); err == nil {
+		t.Fatal("poll dead-letter path: Work returned nil, want a non-nil error")
+	}
+	kind3 := wiRead(t, f, tenantID3, invoiceID3).failureKind
+
+	if kind1 == nil || kind2 == nil || kind3 == nil {
+		t.Fatalf("failure_kind not recorded on one or more paths: transform=%q submit-dead-letter=%q poll-dead-letter=%q",
+			strOrNil(kind1), strOrNil(kind2), strOrNil(kind3))
+	}
+	if *kind1 == *kind2 || *kind1 == *kind3 || *kind2 == *kind3 {
+		t.Errorf("failure_kind not distinct across the three sites: transform=%q submit-dead-letter=%q "+
+			"poll-dead-letter=%q -- the operator's 'is it safe to resend' question depends on these "+
+			"being provably different", *kind1, *kind2, *kind3)
+	}
+}
+
+// TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError: QA adversarial
+// addition (task-385). Transform reruns on EVERY attempt (worker.go:220's own comment), so a
+// job that survives a mid-budget Retryable (attempt 1, last_error = the Retryable's text) and
+// THEN fails at Transform on attempt 2 must overwrite last_error with attempt 2's text, not
+// leave attempt 1's stale value sitting under state='failed'. markJobTransformFailed's
+// unconditional SET makes this true today; this pins it as a regression guard.
+func TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	retryErr := errors.New("wsub: upstream 503, mid-budget (attempt 1, stale)")
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: retryErr},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+
+	// Attempt 1 of 8: mid-budget Retryable. Same river job.ID (1) reused on attempt 2 below --
+	// a retry of "the same" job, not a different one.
+	job1 := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(ctx, job1); err == nil {
+		t.Fatal("attempt 1: Work on a mid-budget Retryable returned nil, want the original error")
+	}
+	wj1 := wjRequire(t, f, tenantID, idemKey)
+	if wj1.lastError == nil || *wj1.lastError != retryErr.Error() {
+		t.Fatalf("attempt 1: job last_error = %v, want %q -- precondition for this test", wj1.lastError, retryErr.Error())
+	}
+
+	// Attempt 2: Transform fails this time. adapter.transformErr short-circuits before Submit
+	// is ever reached, so the still-queued Retryable outcome in submitQueue is never consumed.
+	transformErr := errors.New("wsub: cannot build wire from this invoice (attempt 2, current)")
+	adapter.transformErr = transformErr
+	job2 := newSubmitJob(1, 2, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(ctx, job2); err == nil {
+		t.Fatal("attempt 2: Work on a transform failure returned nil, want river.JobCancel")
+	}
+
+	wj2 := wjRequire(t, f, tenantID, idemKey)
+	if wj2.state != "failed" {
+		t.Errorf("attempt 2: job state = %q, want \"failed\"", wj2.state)
+	}
+	if wj2.attempts != 1 {
+		t.Errorf("attempt 2: job attempts = %d, want unchanged 1 (whatever attempt 1's mid-budget "+
+			"retry left it at) -- a transform failure must not touch the retry budget", wj2.attempts)
+	}
+	if wj2.lastError == nil || *wj2.lastError != transformErr.Error() {
+		t.Errorf("attempt 2: job last_error = %v, want %q (the CURRENT attempt's error), "+
+			"not attempt 1's stale %q", strOrNil(wj2.lastError), transformErr.Error(), retryErr.Error())
 	}
 }

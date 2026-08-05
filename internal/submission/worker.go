@@ -213,10 +213,13 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				if err := RecordExchange(ctx, tx, ex); err != nil {
 					return err
 				}
-				if err := markJobTransformFailed(ctx, tx, jobID); err != nil {
+				if err := markJobTransformFailed(ctx, tx, jobID, transformErr.Error()); err != nil {
 					return err
 				}
-				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+				// Submit was never called from this branch -- nothing reached the wire.
+				// Reflects this attempt only: Transform reruns every attempt, so a prior
+				// attempt's Retryable (wire contact, in app_exchange) isn't consulted here.
+				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailurePayloadNotBuilt)
 			})
 			return err
 		})
@@ -304,7 +307,9 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					if err := markJobDeadLettered(ctx, tx, jobID, newAttempts, r.Err.Error()); err != nil {
 						return err
 					}
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+					// Retry budget exhausted on Retryable: an ack was never observed, but a 5xx
+					// means bytes may have reached the wire -- non-delivery isn't provable here.
+					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailureNeverAcknowledged)
 				})
 				if err != nil {
 					return err
@@ -512,7 +517,9 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					if err := markJobDeadLettered(ctx, tx, args.SubmissionJobID, newAttempts, r.Err.Error()); err != nil {
 						return err
 					}
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+					// Only reachable once Pending fired at least once, so the APP DID ack the
+					// submission -- it just never returned a verdict within the poll budget.
+					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailureAcknowledgedNoVerdict)
 				})
 				if err != nil {
 					return err

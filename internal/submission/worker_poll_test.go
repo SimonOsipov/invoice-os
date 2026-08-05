@@ -513,6 +513,44 @@ func TestPollWorker_DeadLetterOnFinalAttemptViaExistingEdge(t *testing.T) {
 	}
 }
 
+// TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict (BUG-06-03, task-385): worker.go:518,
+// the poll dead-letter site. Reaching here proves Pending{Ref} fired at least once -- the
+// APP took custody of the submission -- but no verdict was ever polled out of it.
+func TestPollWorker_DeadLetterStampsAcknowledgedNoVerdict(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	future := time.Now().Add(time.Hour)
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: future},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	sw := newTestWorker(f.app, adapter)
+	if err := sw.Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+
+	adapter.pollQueue = []scriptedOutcome{
+		{result: submission.Retryable{Err: errors.New("wsub: poll upstream 503, final attempt (BUG-06-03)")},
+			evidence: submission.Evidence{ReachedWire: true}},
+	}
+	pw := newTestPollWorker(f.app, adapter)
+	job := newPollJob(10, 8, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1}) // final attempt
+
+	if err := pw.Work(ctx, job); err == nil {
+		t.Error("PollWorker.Work on a final-attempt Retryable returned nil, want a non-nil error so River discards the job")
+	}
+
+	inv := wiRead(t, f, tenantID, invoiceID)
+	if inv.failureKind == nil || *inv.failureKind != string(submission.FailureAcknowledgedNoVerdict) {
+		t.Errorf("failure_kind = %q, want %q", strOrNil(inv.failureKind), submission.FailureAcknowledgedNoVerdict)
+	}
+}
+
 // TestPollWorker_RetryableMidBudgetLeavesJobPendingAndAttemptsAdvance: a poll job's Retryable
 // with budget remaining (job.Attempt < job.MaxAttempts) leaves the job state "pending" and the
 // invoice untouched, but still advances submission_jobs.attempts and records last_error --

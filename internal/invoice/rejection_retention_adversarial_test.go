@@ -310,10 +310,9 @@ func TestConcurrency_EditRacesMarkAcceptedTxLeavesNoReasonsOnAccepted(t *testing
 // `failed` invoice carries the retained reasons byte-identical to what
 // MarkRejectedTx originally wrote -- matching the story's own per-status
 // truth table row ("failed | possibly populated from earlier cycle"), not
-// contradicting it. MarkFailedTx passes a nil outcome callback
-// (markTerminalTx, actor.go) -- it writes no outcome columns at all, so
-// nothing on this path could touch rejection_reasons either way; this pins
-// that fact against a future change that might add one.
+// contradicting it. MarkFailedTx's outcome callback (BUG-06-02, task-384)
+// writes failure_kind only -- rejection_reasons is untouched by this path
+// either way, so this still pins that fact.
 func TestOutcomeLoop_RejectEditValidateQueueFailRetainsReasons(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -366,7 +365,7 @@ func TestOutcomeLoop_RejectEditValidateQueueFailRetainsReasons(t *testing.T) {
 	}
 
 	err = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID)
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailurePayloadNotBuilt)
 		return err
 	})
 	if err != nil {

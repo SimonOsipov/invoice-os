@@ -1115,10 +1115,14 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   await expect(page.getByTestId('failed-dead-end')).toBeVisible()
   await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
-  // [failed-no-reason-lands-on-the-detail] (task-332, BUG-01-06): this invoice's
-  // rejection_reasons is [] (API-transitioned straight to failed, never rejected by the
-  // APP) -- the card must say so honestly, not render a silent gap.
-  await expect(page.getByTestId('failed-dead-end')).toContainText(/no reason recorded/i)
+  // [failed-no-reason-lands-on-the-detail] (task-332, BUG-01-06 / BUG-06-06): this
+  // invoice is API-transitioned straight to failed, so failure_kind is null -- the panel
+  // renders the fallback explanation, not a silent gap. BUG-06-07 (task-389) gates exactly
+  // one recorded kind end-to-end below (acknowledged_no_verdict, off seeded DEMO-2026-1004)
+  // -- e2e cannot import the SPA's copy constants (incompatible tsconfigs), so the other
+  // two kinds and the legacy-NULL case are proven by the Go/SPA unit suites plus the seed
+  // and the Phase 3.5 deploy-gate checklist, not by a browser assertion here.
+  await expect(page.getByTestId('failure-detail')).toContainText('was not recorded')
   // `can_edit` is false for a failed invoice ([gates-on-the-wire], store.go's
   // canEdit/canTransition), so the whole actions bar (Edit, Re-validate, and Submit
   // together) renders nothing -- `edit-invoice` would be vacuous here (Edit is never
@@ -1130,6 +1134,37 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
   await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// BUG-06-07 (task-389): the test above proves the panel renders for failure_kind IS NULL
+// (absence of a value). Nothing proved a NON-null kind survives DB -> invoiceColumns/
+// scanInvoice -> the Invoice struct -> the SPA's InvoiceRecord type -> failureExplanation()
+// together, on a real deployed environment -- four links never exercised as one. This reads
+// a seeded row (DEMO-2026-1004, db/seed.dev.sql), not an API-created fixture: it's the one
+// way to prove a kind stamped by real code (BUG-06-02/03) round-trips the whole stack, since
+// this suite's own fixtures reach `failed` only through POST /transitions, which is always
+// null (see the test above). 'acknowledged_no_verdict' is the kind gated here -- it carries
+// the operationally critical double-filing warning ("twice"), the single word BUG-06-05's
+// own vitest suite (invoices.test.ts) also anchors on, so this assertion and that unit test
+// move together instead of drifting apart. The other two kinds (payload_not_built,
+// never_acknowledged) and the legacy-NULL case are proven by the Go/SPA unit suites plus the
+// seed + the Phase 3.5 deploy-gate checklist -- not a second/third/fourth copy of this test,
+// which docs/e2e-convention.md names as the failure mode to avoid.
+test('submission surface: a failed invoice with a recorded kind explains itself', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  await signInFirm(page)
+  // shortName() (frontend/app/src/lib/clients.ts) strips a trailing " Ltd"/"Limited"/"Plc"
+  // before the switcher renders it -- selectEntity() matches on that rendered text, so the
+  // literal business_entities.name ('Adeyemi & Sons Trading Ltd') would time out.
+  await selectEntity(page, 'Adeyemi & Sons Trading')
+  await goToInvoices(page)
+  await openInvoiceRow(page, 'DEMO-2026-1004')
+
+  await expect(page.getByTestId('failed-dead-end')).toBeVisible()
+  await expect(page.getByTestId('failure-detail')).toContainText(/twice/i)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

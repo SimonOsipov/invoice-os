@@ -102,7 +102,7 @@ func TestInvoicePort_MarkFailedBindsInvoiceIDAndTenantIDCorrectly(t *testing.T) 
 	var port submission.InvoicePort = NewStore(app)
 
 	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		return port.MarkFailed(ctx, tx, invoiceID, tenantID)
+		return port.MarkFailed(ctx, tx, invoiceID, tenantID, submission.FailurePayloadNotBuilt)
 	})
 	if err != nil {
 		t.Fatalf("port.MarkFailed(invoiceID, tenantID): %v (want nil -- a transposed forward would 404 here)", err)

@@ -542,23 +542,23 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
 
 // E2E-10 (FLOW-07, [wizard-steps-split], INVCR-01-04/task-280): the header path
 // resolver, re-anchored again. `Build`/`Validate`/`Approve`/`Report` are retired by
-// this subtask -- the typed path is now the 2-item `Enter · Review` strip and the
-// import path is `Import · Map · Review`, sharing the `Review` label between them.
+// this subtask -- the typed path is now the 1-item `Enter` strip and the
+// import path is `Import · Map · Review`, sharing no label between them anymore.
 // The sample-PDF click that used to flip the strip is deleted with the mock, so
 // manual entry ('Skip — enter manually' -> skipUpload -> createStep 'form') is still
 // the only way to reach a DOCUMENT_ONLY_STEP. No SANDBOX toggle: with the document
 // card gone, LIVE and SANDBOX render an identical first step.
 //
-// A label-presence check alone cannot prove STAGE_OF.form === 0: with a 2-item
-// strip, stageIndex 0 and stageIndex 2 (the retired 5-item index) render the SAME
-// two labels -- only the highlight differs. So this also asserts computed `color`,
-// token-agnostic (`--fg-1` vs `--fg-3`, verified genuinely distinct:
-// oklch(16% .03 210) vs oklch(45% .02 210)) rather than a class or token name.
-// Verified no exact-text collision for Import/Map/Review/Enter anywhere else on this
+// [closes-d-04a-typed-review-residual]: the stageIndex-0-vs-2 ambiguity a 2-item
+// strip used to have (index 0 and the retired index 2 rendering the same two
+// labels) is structurally gone at one item -- a label-presence check alone now
+// proves STAGE_OF.form === 0, so leg 2's color comparison is retired, not replaced.
+// Verified no exact-text collision for Import/Map/Enter anywhere else on this
 // screen: CreateUpload's card title is 'Import invoices · X', CreateMapping's are
 // 'Map fields to columns · X' / 'Import N rows' / 'Map invoice number to continue' --
 // none is an exact match for the bare word -- and ConnectorDetail.tsx's own 'Review'
-// is a different, unmounted view.
+// is a different, unmounted view (Review itself stays checked by leg 1's own
+// assertions above, on the import path).
 //
 // E2E-08 is deliberately NOT replaced -- its subject (the sample-PDF parse -> form ->
 // validate -> results run) is deleted by an earlier subtask, so nothing is left to guard.
@@ -587,20 +587,17 @@ test('E2E-10 (FLOW-07, [wizard-steps-split]): the wizard header resolves the 3-s
   expect(await colorOf('Map')).toBe(await colorOf('Review'))
 
   // Leg 2 -- 'form' IS in DOCUMENT_ONLY_STEPS, so wizardHeader must return
-  // WIZARD_STEPS (Enter/Review) at STAGE_OF.form === 0, and the import-only
-  // 'Import'/'Map' labels must disappear.
+  // WIZARD_STEPS (Enter) at STAGE_OF.form === 0, and the import-only
+  // 'Import'/'Map'/'Review' labels must disappear.
   await page.getByRole('button', { name: 'Skip — enter manually' }).click()
   await expect(page.getByText('Enter', { exact: true }), '2-step WIZARD_STEPS strip expected on manual entry').toBeVisible()
-  await expect(page.getByText('Review', { exact: true })).toBeVisible()
+  await expect(page.getByText('Review', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Import', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Map', { exact: true })).toHaveCount(0)
 
-  // The label pair alone is indistinguishable from a regressed stageIndex 2: with
-  // only two entries (indices 0/1), index 2 matches neither, so BOTH labels would
-  // fall to the same muted --fg-3 and this comparison would be equal -- only the
-  // correct stageIndex 0 lights Enter and leaves Review muted, producing a genuine
-  // color inequality.
-  expect(await colorOf('Enter'), 'STAGE_OF.form must be 0').not.toBe(await colorOf('Review'))
+  // [e2e-10-colour-proof-is-obsolete-not-dropped]: the color comparison this used to
+  // do (Enter lit vs Review muted) is obsolete now that Review isn't rendered at all
+  // on the typed path -- the toHaveCount(0) above already proves it structurally.
 
   // Not just the strip: the Enter step's BODY rendered underneath it. A resolver
   // that returned the right labels over a blank step router would otherwise pass.

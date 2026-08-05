@@ -87,7 +87,7 @@ function activityFeed(rnd: () => number, def: ConnectorDef): SyncEvent[] {
       kind === 'transmitted'
         ? 'Submitted · simulated IRN assigned'
         : kind === 'validated'
-          ? 'Passed 16-check MBS rule pack'
+          ? 'Passed 19-check MBS rule pack'
           : kind === 'held'
             ? 'Held — ' + HELD_REASONS[pick(rnd, 0, HELD_REASONS.length - 1)]
             : 'Pulled ' + pick(rnd, 8, 46) + ' documents from ' + def.name

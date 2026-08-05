@@ -69,7 +69,10 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
                   <span style={{ width: 22, height: 22, borderRadius: 99, display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, background: a ? 'var(--action)' : done ? 'var(--action-tint)' : 'var(--bg-2)', color: a ? 'var(--text-on-dark)' : done ? 'var(--action)' : 'var(--fg-3)', border: `1px solid ${a || done ? 'var(--action)' : 'var(--line-2)'}` }}>{n}</span>
                   <span style={{ fontSize: 13, fontWeight: 500, color: a ? 'var(--fg-1)' : 'var(--fg-3)' }}>{label}</span>
                 </div>
-                <span style={{ width: 36, height: 1, background: 'var(--line-2)', margin: '0 14px' }} />
+                {/* [connector-omitted-not-transparent]: no trailing separator; prototype's sepBg is dynamic and its source is unavailable */}
+                {idx < steps.length - 1 && (
+                  <span style={{ width: 36, height: 1, background: 'var(--line-2)', margin: '0 14px' }} />
+                )}
               </div>
             )
           })}

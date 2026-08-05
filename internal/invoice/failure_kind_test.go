@@ -755,3 +755,67 @@ func TestFailureKind_ProjectionRoundTripsThroughStoreGet(t *testing.T) {
 		t.Errorf("Get.KeptAsIsReason = %v, want a pointer to %q", got.KeptAsIsReason, wantKeptAsIsReason)
 	}
 }
+
+// --- QA gap-fill (task-386 verification): TestFailureKind_ProjectionRoundTripsThroughStoreGet
+// above proves the real invoiceColumns/scanInvoice projection for Store.Get on a
+// single row. Store.List runs scanInvoice again for EACH row inside its own loop
+// (store.go) -- a distinct code path a single-row Get test cannot exercise. This
+// closes that gap with a mixed-row List over the REAL production write path
+// (MarkFailedTx), not a raw UPDATE, so it also proves failure_kind survives past the
+// one seam that actually writes it in production.
+
+// TestFailureKind_ListProjectionMixedRowsNoCrossBleed (AC-3, adversarial): two
+// invoices in the same tenant -- one driven through MarkFailedTx (queued->failed)
+// so it carries a stamped kind, the other left completely untouched (still draft,
+// never failed) so its failure_kind must still read NULL. A real store.List(...)
+// call must report the stamped kind on the failed row and an explicit nil -- never
+// the other row's value, and never a stale leftover -- on the untouched row.
+func TestFailureKind_ListProjectionMixedRowsNoCrossBleed(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "FK-LIST-BLEED tenant")
+	entityID := seedEntity(t, super, tenantID, "FK-LIST-BLEED entity")
+
+	failedID := seedInvoiceAtStatus(t, super, tenantID, entityID, "FK-LIST-BLEED-FAILED", StatusQueued)
+	untouchedID := seedInvoice(t, super, tenantID, entityID, "FK-LIST-BLEED-UNTOUCHED")
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, failedID, tenantID, submission.FailureAcknowledgedNoVerdict)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("MarkFailedTx(queued->failed): %v, want nil", err)
+	}
+
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+	items, total, err := store.List(c, ListFilter{Limit: 50, Offset: 0})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("List total = %d, want 2", total)
+	}
+
+	byID := map[string]Invoice{}
+	for _, inv := range items {
+		byID[inv.ID] = inv
+	}
+	failedRow, ok := byID[failedID]
+	if !ok {
+		t.Fatalf("List did not return the failed invoice %q (items=%+v)", failedID, items)
+	}
+	untouchedRow, ok := byID[untouchedID]
+	if !ok {
+		t.Fatalf("List did not return the untouched invoice %q (items=%+v)", untouchedID, items)
+	}
+
+	if failedRow.FailureKind == nil || *failedRow.FailureKind != string(submission.FailureAcknowledgedNoVerdict) {
+		t.Errorf("failed row FailureKind = %v, want a pointer to %q", failedRow.FailureKind, submission.FailureAcknowledgedNoVerdict)
+	}
+	if untouchedRow.FailureKind != nil {
+		t.Errorf("untouched row FailureKind = %q, want nil (never failed -- must not inherit the other row's "+
+			"stamped kind or carry any stale value)", *untouchedRow.FailureKind)
+	}
+}

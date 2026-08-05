@@ -477,6 +477,23 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     const [emptyArrayUrl] = emptyArrayMock.mock.calls[0] as [string, RequestInit]
     expect(emptyArrayUrl).not.toContain('import_batch_id')
   })
+
+  it('LIST-FK-1 (BUG-06-04 QA gap-fill): failure_kind surfaces per row from a real multi-row wire payload, no cross-row bleed', async () => {
+    const rowWithKind = { ...draftInvoice, id: 'inv-a', status: 'failed', failure_kind: 'payload_not_built' }
+    const rowWithoutKind = { ...draftInvoice, id: 'inv-b', status: 'failed', failure_kind: null }
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ invoices: [rowWithKind, rowWithoutKind], pagination: { limit: 50, offset: 0, total: 2 } }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await listInvoices(af, base, {})
+
+    expect(result.invoices[0].failure_kind).toBe('payload_not_built')
+    expect(result.invoices[1].failure_kind).toBeNull()
+  })
 })
 
 describe('violationSummary (AC-2, Stage 2.5)', () => {
@@ -684,6 +701,26 @@ describe('getInvoice', () => {
 
     expect(result.submit_blocked_reason).toBeNull()
     expect(result.submit_blocked_reason).not.toBeUndefined()
+  })
+
+  it('getInvoice: failure_kind (BUG-06-04 QA gap-fill) surfaces a stored kind from the real wire payload, not just a compiled fixture', async () => {
+    const wire = { ...draftInvoice, status: 'failed', failure_kind: 'acknowledged_no_verdict' }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.failure_kind).toBe('acknowledged_no_verdict')
+  })
+
+  it('getInvoice: a non-failed invoice carries failure_kind:null, never a stale leftover value', async () => {
+    const wire = { ...draftInvoice, status: 'validated', failure_kind: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.failure_kind).toBeNull()
   })
 })
 

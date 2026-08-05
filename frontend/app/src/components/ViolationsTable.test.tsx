@@ -4,7 +4,7 @@
 // jsdom always reports scrollWidth === clientWidth === 0 -- real overflow geometry is
 // proven only by e2e (invoice-surfaces.spec.ts / validation.spec.ts), never here.
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { Violation } from '../lib/validationApi'
@@ -57,5 +57,41 @@ describe('ViolationsTable', () => {
 
     const headers = screen.getAllByRole('columnheader').map((th) => th.textContent)
     expect(headers).toEqual(['Severity', 'Message', 'Rule key', 'Path', 'Rule-set version'])
+  })
+
+  // QA adversarial: the two style tests above key off table.parentElement, which stays
+  // correct even if overflowX landed on the wrong div. Pin the testid itself to that same
+  // element so a future refactor can't move data-testid="violations-scroll" onto a decoy
+  // ancestor (e.g. the InvoiceDetail.tsx "violations-table" wrapper, which has no overflow
+  // property of its own) without failing here.
+  it('the violations-scroll testid is on the element that actually gets overflowX, not a decoy ancestor', () => {
+    render(<ViolationsTable violations={[violation()]} ruleSetVersion={3} />)
+
+    const scrollEl = screen.getByTestId('violations-scroll')
+    const table = screen.getByRole('table')
+    expect(scrollEl).toBe(table.parentElement)
+    expect(scrollEl.style.overflowX).toBe('auto')
+  })
+
+  // QA adversarial: every prior case used exactly one violation. Multiple rows and an
+  // absent path (v.path ?? '—') had zero coverage before this file existed.
+  it('renders one row per violation in order, with a long message intact and a missing path falling back to the placeholder', () => {
+    const longMessage = 'Total does not equal subtotal plus VAT. '.repeat(20).trim()
+    render(
+      <ViolationsTable
+        violations={[
+          violation({ rule_key: 'total.arithmetic', path: '$.total', message: longMessage }),
+          violation({ rule_key: 'vat-standard-rate', path: undefined, message: 'second violation' }),
+        ]}
+        ruleSetVersion={3}
+      />,
+    )
+
+    const table = screen.getByRole('table')
+    const [firstRow, secondRow] = within(table).getAllByRole('row').slice(1)
+
+    expect(within(firstRow).getByText(longMessage)).toBeDefined()
+    expect(within(firstRow).getAllByRole('cell')[3].textContent).toBe('$.total')
+    expect(within(secondRow).getAllByRole('cell')[3].textContent).toBe('—')
   })
 })

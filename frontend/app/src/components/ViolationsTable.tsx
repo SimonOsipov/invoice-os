@@ -11,6 +11,9 @@
 
 import { severityStyle, type Violation } from '../lib/validationApi'
 
+// Five headers ~529px of padding+content; smaller leaves Message crushed.
+export const TABLE_MIN_WIDTH = 720
+
 export interface ViolationsTableProps {
   violations: Violation[]
   ruleSetVersion: number
@@ -35,8 +38,15 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
   }
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <div
+      data-testid="violations-scroll"
+      className="pf-scroll-x"
+      tabIndex={0}
+      role="group"
+      aria-label="Violations table, scroll horizontally for more columns"
+      style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}
+    >
+      <table style={{ width: '100%', minWidth: TABLE_MIN_WIDTH, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ background: 'var(--bg-1)' }}>
             <th style={{ textAlign: 'left', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>Severity</th>

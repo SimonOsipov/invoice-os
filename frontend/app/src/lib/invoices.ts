@@ -115,6 +115,7 @@ import type { AuthedFetch } from './portfolio'
 import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
+import { toDateInputValue } from './format'
 
 export type InvoiceStatus =
   | 'draft'
@@ -867,6 +868,44 @@ export function computedLineSum(lines: ReadonlyArray<Pick<InvoiceLineItem, 'quan
   return renderScaled(sum)
 }
 
+// The edit form's own field-value state, one string per EDIT_FIELD_KEYS entry (moved from
+// InvoiceDetail.tsx, task-391, BUG-03-02).
+export type EditFormState = Record<EditFieldKey, string>
+
+export function formFromInvoice(inv: InvoiceRecord): EditFormState {
+  return {
+    issue_date: toDateInputValue(inv.issue_date),
+    supplier_tin: inv.supplier_tin ?? '',
+    supplier_name: inv.supplier_name ?? '',
+    buyer_tin: inv.buyer_tin ?? '',
+    buyer_name: inv.buyer_name ?? '',
+    currency: inv.currency ?? '',
+    subtotal: inv.subtotal ?? '',
+    vat: inv.vat ?? '',
+    total: inv.total ?? '',
+  }
+}
+
+// diffEditInput only sends changed fields -- PATCHing all 9 on every submit would silently
+// blank out the ones the user didn't touch. issue_date is special-cased: Go's *time.Time
+// decode rejects a bare date, so a bare YYYY-MM-DD is normalised to midnight UTC, and a
+// cleared date is dropped since PATCH cannot represent an explicit clear.
+export function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
+  const patch: InvoiceEditInput = {}
+  for (const key of EDIT_FIELD_KEYS) {
+    if (key === 'issue_date') {
+      const value = form.issue_date.trim()
+      if (value === toDateInputValue(original.issue_date).trim()) continue
+      if (!value) continue
+      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
+      continue
+    }
+    if (form[key] === (original[key] ?? '')) continue
+    patch[key] = form[key]
+  }
+  return patch
+}
+
 // not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason
 // values (batchSubmitReasonNotValidated/batchSubmitReasonDuplicate, handlers.go) --
 // anything else passes through verbatim rather than being swallowed, so an unknown
@@ -1037,6 +1076,16 @@ export function shouldShowRejectionCard(inv: Pick<InvoiceRecord, 'status' | 'rej
 // are carried over from before the rejected->draft demotion (M5-09-02).
 export function rejectionProvenance(status: InvoiceStatus): 'current' | 'historical' {
   return status === 'rejected' ? 'current' : 'historical'
+}
+
+// Compliance-panel kept-as-is banner visibility + payload (task-392, BUG-03-03). `by`/
+// `reason` are `?? null`, never a fabricated fallback string -- the server's absence of a
+// value stays absent.
+export function keptAsIs(
+  inv: Pick<InvoiceDetailRecord, 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
+): { at: string; by: string | null; reason: string | null } | null {
+  if (inv.kept_as_is_at == null) return null
+  return { at: inv.kept_as_is_at, by: inv.kept_as_is_by ?? null, reason: inv.kept_as_is_reason ?? null }
 }
 
 // Fiscal-record card visibility (task-251 AC #1): only an accepted invoice that

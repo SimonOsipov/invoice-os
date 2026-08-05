@@ -40,6 +40,14 @@ import type { PlatformCtx } from '../types'
 // Tags the envelope with the entity it was fetched for, so `fresh` can gate stale renders.
 type FetchedAllInvoices = AllInvoices & { fetchedEntityId: string | undefined }
 
+// `aria-describedby` target for the disabled export buttons' shared reason text. A module
+// const rather than useId(), same rationale as InvoiceDetail.tsx's REVALIDATE_REASON_ID:
+// only one ReportsView renders at a time.
+export const EXPORTS_BLOCKED_REASON_ID = 'exports-blocked-reason-text'
+
+// Pinned copy, verbatim -- no delivery promise, no ETA.
+export const EXPORTS_BLOCKED_REASON = 'Not built yet — none of these four exports produces a file.'
+
 export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
   const base = gatewayBase()
@@ -272,14 +280,26 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
               </span>
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {/* Unconditional disabled -- unlike Re-validate/Submit, there is no wire field
+                  or state to gate on: these four exports are permanently unbuilt. */}
               {EXPORTS_LIST.map((e) => (
-                <button key={e.name} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38 }}>
+                <button
+                  key={e.name}
+                  disabled
+                  title={EXPORTS_BLOCKED_REASON}
+                  aria-describedby={EXPORTS_BLOCKED_REASON_ID}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  style={{ height: 38, background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' }}
+                >
                   <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> {e.name}{' '}
                   <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', marginLeft: 2 }}>
                     {e.fmt}
                   </span>
                 </button>
               ))}
+            </div>
+            <div id={EXPORTS_BLOCKED_REASON_ID} data-testid="exports-blocked-reason" style={{ marginTop: 10, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+              {EXPORTS_BLOCKED_REASON}
             </div>
           </div>
         </>

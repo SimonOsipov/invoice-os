@@ -14,18 +14,21 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { closeGlyph, plusGlyph } from '../glyphs'
+import { actorLabel } from '../lib/actor'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
   computedLineSum,
   DETAIL_SUBMIT_COPY,
+  diffEditInput,
   diffLineItems,
   editInvoice,
-  EDIT_FIELD_KEYS,
   failureExplanation,
+  formFromInvoice,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
+  keptAsIs,
   LIVE_POLL_MS,
   newIdempotencyKey,
   reasonFieldFlags,
@@ -40,13 +43,13 @@ import {
   submitInvoices,
   verdictStatus,
   type EditFieldKey,
+  type EditFormState,
   type InvoiceDetailRecord,
-  type InvoiceEditInput,
   type InvoiceRecord,
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
-import { bulkPhaseReducer, type BulkPhase } from '../lib/reviewBatch'
+import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { SourceDocumentCard } from './SourceDocumentCard'
@@ -77,7 +80,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
   }
 
   return (
-    <div style={{ padding: '24px 36px 56px' }}>
+    <div style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>
@@ -93,22 +96,6 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // calling useAsync/useState after that return would break the rules of hooks. Mirrors
 // ClientsView/ValidationView: gatewayBase() + useAsync + a Loading/ErrorState/ready
 // ladder, zero network when no gateway is configured.
-type EditFormState = Record<EditFieldKey, string>
-
-function formFromInvoice(inv: InvoiceRecord): EditFormState {
-  return {
-    issue_date: inv.issue_date ?? '',
-    supplier_tin: inv.supplier_tin ?? '',
-    supplier_name: inv.supplier_name ?? '',
-    buyer_tin: inv.buyer_tin ?? '',
-    buyer_name: inv.buyer_name ?? '',
-    currency: inv.currency ?? '',
-    subtotal: inv.subtotal ?? '',
-    vat: inv.vat ?? '',
-    total: inv.total ?? '',
-  }
-}
-
 // One editable line row (INVED-01-07). LineItemEditInput-shaped but with '' where the wire
 // carries null, because a controlled React input holds '' and never null. Deliberately no
 // `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
@@ -155,38 +142,6 @@ const REVALIDATE_REASON_ID = 'revalidate-blocked-reason-text'
 // Same rationale as REVALIDATE_REASON_ID above; a distinct id so the two disabled buttons'
 // aria-describedby targets never collide on a rejected invoice, where both render together.
 const SUBMIT_REASON_ID = 'submit-blocked-reason-text'
-
-// PATCH /v1/invoices/{id} treats an absent key as "leave this field alone" (the Go
-// handler decodes into *string/*time.Time pointers, nil when the key is missing) and a
-// present key — including "" — as "set it". Sending all 9 fields on every submit would
-// silently blank out the 8 the user didn't touch; diffing against the invoice this form
-// was seeded from keeps the PATCH to only what actually changed (mirrors
-// EntityFormModal's toEntityUpdateInput diff-then-skip-if-empty convention).
-//
-// issue_date is special-cased: editReq.IssueDate decodes into a *time.Time
-// (handlers.go:71/invoice.go:89), which json.Unmarshal only accepts as a full RFC3339
-// string — a bare "YYYY-MM-DD" (the field's own placeholder) or "" fails to decode and
-// 400s BEFORE Store.Edit ever runs (verified against Go's actual time.Time
-// UnmarshalJSON). Normalize a bare date to midnight UTC so the field the placeholder
-// invites the user to type actually round-trips. A cleared ("") date is skipped rather
-// than sent: json "null" and an absent key both decode to a nil pointer ("leave
-// unchanged", [D9]), so an explicit clear-to-blank cannot be represented over this PATCH
-// at all — sending "" would just surface a confusing decode-failure for an operation the
-// backend has no way to honor.
-function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
-  const patch: InvoiceEditInput = {}
-  for (const key of EDIT_FIELD_KEYS) {
-    if (form[key] === (original[key] ?? '')) continue
-    if (key === 'issue_date') {
-      const value = form.issue_date.trim()
-      if (!value) continue
-      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
-      continue
-    }
-    patch[key] = form[key]
-  }
-  return patch
-}
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
@@ -336,6 +291,31 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const total = inv.total != null ? Number(inv.total) : null
     const verdict = verdictStatus(staleSinceEdit, inv)
     const failure = failureExplanation(inv.failure_kind)
+    // A live rejection leads the rail, matching failed-dead-end's position; a demoted/
+    // historical one stays below Compliance so it doesn't overstate a resolved event.
+    const rejectionLeadsRail = rejectionProvenance(inv.status) === 'current'
+    const rejectionCard = shouldShowRejectionCard(inv) ? (
+      <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <span className="card-title">
+            {rejectionProvenance(inv.status) === 'current' ? 'This invoice was rejected' : 'Last APP rejection'}
+          </span>
+        </div>
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {inv.rejection_reasons.map((reason, i) => (
+            <div
+              key={i}
+              data-testid="rejection-reason-row"
+              style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+            >
+              <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null
+    const kept = keptAsIs(inv)
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
@@ -736,19 +716,21 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
+            {rejectionLeadsRail && rejectionCard}
+
             {shouldShowFiscalRecord(inv) && (
-              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              <div data-testid="fiscal-record-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="card-title">Fiscal record</span>
                 </div>
                 <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div>
                     <div className="label" style={{ marginBottom: 3 }}>IRN</div>
-                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5 }}>{inv.irn}</div>
+                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.irn}</div>
                   </div>
                   <div>
                     <div className="label" style={{ marginBottom: 3 }}>CSID</div>
-                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5 }}>{inv.csid ?? '—'}</div>
+                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.csid ?? '—'}</div>
                   </div>
                   {inv.qr_png_base64 != null && (
                     // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
@@ -774,6 +756,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <span className="card-title">Compliance</span>
               </div>
               <div style={{ padding: 16 }}>
+                {/* The persisted reason, verbatim (BUG-03-03) -- amber, matching
+                    ReviewRow.tsx's own kept-as-is banner rather than inventing a second
+                    tone for the same fact. */}
+                {kept && (
+                  <div
+                    data-testid="detail-kept-banner"
+                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+                  >
+                    <div>{ROW_EXPANSION_COPY.keptPrefix}{kept.reason}</div>
+                    <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(kept.by).text} · {fmtDateTime(kept.at)}</div>
+                  </div>
+                )}
                 {verdict === 'stale' && (
                   <div
                     data-testid="stale-verdict"
@@ -797,27 +791,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             </div>
 
-            {shouldShowRejectionCard(inv) && (
-              <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span className="card-title">
-                    {rejectionProvenance(inv.status) === 'current' ? 'This invoice was rejected' : 'Last APP rejection'}
-                  </span>
-                </div>
-                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {inv.rejection_reasons.map((reason, i) => (
-                    <div
-                      key={i}
-                      data-testid="rejection-reason-row"
-                      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
-                    >
-                      <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
-                      <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {!rejectionLeadsRail && rejectionCard}
 
             {/* INVED-01-07 deleted the fused "Fix & re-validate" card that used to sit
                 here -- one card that welded an always-mounted edit form to a Re-validate
@@ -859,7 +833,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <div style={{ fontSize: 13, fontWeight: 500 }}>
                           {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
                         </div>
-                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{h.actor} · {fmtDateTime(h.changed_at)}</div>
+                        <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
+                          <span className={actorLabel(h.actor).mono ? 'mono' : undefined}>{actorLabel(h.actor).text}</span>
+                          {' · '}
+                          <span className="mono">{fmtDateTime(h.changed_at)}</span>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -886,7 +864,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   }
 
   return (
-    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px' }}>
+    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>

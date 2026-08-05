@@ -331,6 +331,19 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
     }
   })
 
+  // QA adversarial (mutation survivor): the disabled-attribute test above passes even if
+  // the inline mute is stripped entirely -- AC #1 also requires background/color/cursor,
+  // and nothing else in this file checks them.
+  it('all four export buttons carry the inline mute style (AC #1)', async () => {
+    await renderReady()
+    for (const { name } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
+      expect(btn.style.background, `${name} button background`).toBe('var(--bg-3)')
+      expect(btn.style.color, `${name} button color`).toBe('var(--fg-4)')
+      expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
+    }
+  })
+
   it('exactly one reason element renders, carrying the pinned copy verbatim (AC #2)', async () => {
     await renderReady()
     const reasons = screen.queryAllByTestId('exports-blocked-reason')

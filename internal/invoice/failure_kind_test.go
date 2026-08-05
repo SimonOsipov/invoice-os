@@ -6,6 +6,8 @@ package invoice
 import (
 	"context"
 	"errors"
+	"regexp"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -504,5 +506,183 @@ func TestStoreMarkFailed_ForwardsKindThroughThePort(t *testing.T) {
 	got := failureKindOf(t, super, invID)
 	if got == nil || *got != string(submission.FailureAcknowledgedNoVerdict) {
 		t.Errorf("failure_kind = %v, want %q", got, submission.FailureAcknowledgedNoVerdict)
+	}
+}
+
+// --- QA gap-fill (task-384 verification): adversarial coverage the RED specs
+// didn't cover -- a Go-legal-but-undeclared kind, concurrent MarkFailedTx on
+// the same row, and a drift guard tying Valid()/the three constants to the
+// DB CHECK's actual IN-list.
+
+// TestMarkFailedTx_UnknownKindValidGoRefusedByDB (AC-6, adversarial):
+// FailureKind is a bare string type -- Go's type system does not restrict it
+// to the three declared constants. A constructible-but-undeclared value must
+// still be refused by the DB CHECK (23514): Valid() and the type system are
+// advisory, the CHECK is the real boundary.
+func TestMarkFailedTx_UnknownKindValidGoRefusedByDB(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 unknown-kind tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 unknown-kind entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-UNKNOWN", StatusQueued)
+
+	unknown := submission.FailureKind("app_rejected") // compiles fine; never a declared constant
+	if unknown.Valid() {
+		t.Fatalf("submission.FailureKind(%q).Valid() = true, want false (test premise broken)", unknown)
+	}
+
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, unknown)
+		return err
+	})
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("MarkFailedTx(%q): pgCode = %q, want 23514: %v", unknown, code, err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusQueued {
+		t.Errorf("status after refused unknown-kind write = %q, want unchanged %q", status, StatusQueued)
+	}
+	if !failureKindIsNull(t, super, invID) {
+		t.Error("failure_kind IS NULL = false after refused write, want true")
+	}
+}
+
+// TestMarkFailedTx_ConcurrentCallsOnSameInvoiceIdempotentlyConverge
+// (adversarial, Core AC under real concurrency, not just sequential replay):
+// N goroutines call MarkFailedTx on the SAME queued invoice at once.
+// markTerminalTx's leading `SELECT ... FOR UPDATE` serializes them: exactly
+// one goroutine finds the row still queued and runs the outcome write +
+// transitionTx; every other goroutine's SELECT blocks until the winner
+// commits, then observes status already 'failed' and takes the idempotent
+// short-circuit -- no error, no second history row, no torn write.
+func TestMarkFailedTx_ConcurrentCallsOnSameInvoiceIdempotentlyConverge(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-06-02 concurrent tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-06-02 concurrent entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "BUG-06-02-CONCURRENT", StatusQueued)
+
+	const n = 5
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+				_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailureNeverAcknowledged)
+				return err
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: MarkFailedTx err = %v, want nil", i, err)
+		}
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusFailed {
+		t.Errorf("status = %q, want %q", status, StatusFailed)
+	}
+	got := failureKindOf(t, super, invID)
+	if got == nil || *got != string(submission.FailureNeverAcknowledged) {
+		t.Errorf("failure_kind = %v, want %q", got, submission.FailureNeverAcknowledged)
+	}
+	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); hn != 1 {
+		t.Errorf("invoice_status_history rows = %d, want exactly 1 (only the winner transitions)", hn)
+	}
+}
+
+// TestFailureKindCheck_MatchesGoConstantsExactly (adversarial, drift guard):
+// introspects invoices_failure_kind_check's actual IN-list from Postgres
+// (pg_get_constraintdef) and compares it set-wise against the three
+// submission.FailureKind constants. Catches a future engineer adding a Go
+// constant with no matching migration, or a migration with no matching
+// constant -- a mismatch either way is silent until this test runs it down.
+func TestFailureKindCheck_MatchesGoConstantsExactly(t *testing.T) {
+	super, _ := dbTestPools(t)
+
+	var def string
+	if err := super.QueryRow(context.Background(),
+		`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		 WHERE conrelid = 'invoices'::regclass AND contype = 'c' AND conname = 'invoices_failure_kind_check'`,
+	).Scan(&def); err != nil {
+		t.Fatalf("read invoices_failure_kind_check definition: %v", err)
+	}
+
+	dbValues := map[string]bool{}
+	for _, m := range regexp.MustCompile(`'([^']*)'::text`).FindAllStringSubmatch(def, -1) {
+		dbValues[m[1]] = true
+	}
+
+	goValues := map[string]bool{
+		string(submission.FailurePayloadNotBuilt):       true,
+		string(submission.FailureNeverAcknowledged):     true,
+		string(submission.FailureAcknowledgedNoVerdict): true,
+	}
+
+	if len(dbValues) != len(goValues) {
+		t.Fatalf("CHECK IN-list has %d values %v, Go constants have %d %v -- drift", len(dbValues), dbValues, len(goValues), goValues)
+	}
+	for v := range goValues {
+		if !dbValues[v] {
+			t.Errorf("Go constant %q has no matching value in the DB CHECK IN-list %v", v, dbValues)
+		}
+	}
+	for v := range dbValues {
+		if !goValues[v] {
+			t.Errorf("DB CHECK IN-list value %q has no matching Go constant", v)
+		}
+	}
+}
+
+// TestMarkFailedTx_CrossTenantIDReturnsErrNotFoundAndLeavesKindUntouched
+// (adversarial): the row-invisible cross-tenant case MarkAcceptedTx
+// (TestRLS_MarkAcceptedTxCrossTenantIsNotFound) and MarkSubmittedTx
+// (TestMarkSubmittedTx_CrossTenantIDReturnsErrNotFound) both already cover,
+// but MarkFailedTx itself did not: tx GUC AND actor are tenant B end to end,
+// the invoice belongs to tenant A -- RLS 0-rows the initial FOR UPDATE read,
+// so this is ErrNotFound, not 42501, and failure_kind stays NULL.
+func TestMarkFailedTx_CrossTenantIDReturnsErrNotFoundAndLeavesKindUntouched(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantA := seedTenant(t, super, "BUG-06-02 cross-tenant tenant A")
+	tenantB := seedTenant(t, super, "BUG-06-02 cross-tenant tenant B")
+	entityA := seedEntity(t, super, tenantA, "BUG-06-02 cross-tenant entity")
+	invID := seedInvoiceAtStatus(t, super, tenantA, entityA, "BUG-06-02-XTENANT", StatusQueued)
+
+	err := db.WithinTenantTx(ctx, app, tenantB, func(tx pgx.Tx) error {
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantB, submission.FailureNeverAcknowledged)
+		return err
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("MarkFailedTx (tenant B tx, tenant A's invoice): err = %v, want ErrNotFound", err)
+	}
+
+	var status string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM invoices WHERE id = $1`, invID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusQueued {
+		t.Errorf("status after cross-tenant-invisible MarkFailedTx = %q, want unchanged %q", status, StatusQueued)
+	}
+	if !failureKindIsNull(t, super, invID) {
+		t.Error("failure_kind IS NULL = false after cross-tenant-invisible MarkFailedTx, want true")
 	}
 }

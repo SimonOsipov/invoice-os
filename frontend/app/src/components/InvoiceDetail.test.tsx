@@ -262,6 +262,58 @@ describe('InvoiceDetail terminal rail order', () => {
     await screen.findByText('INV-FAILED-1')
     expect(screen.queryByTestId('rejection-reasons')).toBeNull()
   })
+
+  // rejected->draft retains rejection_reasons ([reason-lifecycle], only `accepted`
+  // clears them), so draft->validated->queued->failed is a real path to a failed
+  // invoice with stale reasons still attached -- both cards render, failed leading.
+  it('a failed invoice carrying stale rejection_reasons renders both cards, failed leading', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const failedCard = await screen.findByTestId('failed-dead-end')
+    const table = await screen.findByTestId('violations-table')
+    const rejectionCards = screen.getAllByTestId('rejection-reasons')
+    expect(rejectionCards).toHaveLength(1)
+    const rejectionCard = rejectionCards[0]
+
+    expect(failedCard.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(table.compareDocumentPosition(rejectionCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(rejectionCard).getByText('Last APP rejection')).toBeTruthy()
+  })
+
+  it('a rejected invoice with an empty rejection_reasons array renders no rejection card at all', async () => {
+    mockDetailFetch(detailRecord({ status: 'rejected', rejection_reasons: [], rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('violations-table')
+    expect(screen.queryByTestId('rejection-reasons')).toBeNull()
+  })
+
+  it('AC-2 extended: the live rejection card also precedes source-document-card and status-history', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'rejected',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('rejection-reasons')
+    const doc = await screen.findByTestId('source-document-card')
+    const history = screen.getByTestId('status-history')
+    expect(card.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(card.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })
 
 // RED specs: none of `detail-submit`/`-cancel`/`-confirm`/`-confirm-prompt`/`-skipped`/

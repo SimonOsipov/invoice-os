@@ -40,6 +40,14 @@ import type { PlatformCtx } from '../types'
 // Tags the envelope with the entity it was fetched for, so `fresh` can gate stale renders.
 type FetchedAllInvoices = AllInvoices & { fetchedEntityId: string | undefined }
 
+// `aria-describedby` target for the disabled export buttons' shared reason text. A module
+// const rather than useId(), same rationale as InvoiceDetail.tsx's REVALIDATE_REASON_ID:
+// only one ReportsView renders at a time.
+export const EXPORTS_BLOCKED_REASON_ID = 'exports-blocked-reason-text'
+
+// Pinned copy, verbatim -- no delivery promise, no ETA.
+export const EXPORTS_BLOCKED_REASON = 'Not built yet — none of these four exports produces a file.'
+
 export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const { active } = ctx
   const base = gatewayBase()

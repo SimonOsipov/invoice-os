@@ -893,7 +893,7 @@ export interface FailureExplanation {
 
 // Must never promise notification (M5-08 is unbuilt) or offer recovery (`failed` is
 // terminal) -- both are invisible from the code, so they earn this one comment.
-const FAILURE_EXPLANATIONS: Record<FailureKind, FailureExplanation> = {
+const FAILURE_EXPLANATIONS = {
   payload_not_built: {
     headline: 'We could not prepare this invoice for filing.',
     detail:
@@ -905,22 +905,24 @@ const FAILURE_EXPLANATIONS: Record<FailureKind, FailureExplanation> = {
     headline: 'We never got confirmation that this invoice was received for filing.',
     detail:
       'We tried repeatedly for about an hour and never got an answer back. We cannot tell from here whether it arrived, so we cannot say whether it was filed or not.',
-    nextStep: 'Ask ASComply support to confirm the status of this invoice with NRS before you enter it again.',
+    nextStep:
+      'Ask ASComply support to confirm the status of this invoice with NRS before you raise another invoice for the same transaction.',
   },
   acknowledged_no_verdict: {
     headline: 'This invoice was received for filing, but no result ever came back.',
     detail:
-      'We know it arrived. We never learned whether it was accepted or rejected, so it may already have been filed — entering it again could file the same invoice twice.',
-    nextStep: 'Do not enter this invoice again. Ask ASComply support to confirm with NRS whether it has already been filed.',
+      'We know it arrived. We never learned whether it was accepted or rejected, so it may already have been filed — raising another invoice for the same transaction could file it twice.',
+    nextStep:
+      'Do not raise another invoice for the same transaction yet. Ask ASComply support to confirm with NRS whether this one has already been filed.',
   },
-}
+} as const satisfies Record<FailureKind, FailureExplanation>
 
-export const FAILURE_EXPLANATION_FALLBACK: FailureExplanation = {
+export const FAILURE_EXPLANATION_FALLBACK = {
   headline: 'We do not have a recorded reason for this failure.',
   detail:
     'The reason was not recorded for this invoice, so we cannot tell you from this screen what went wrong — or whether it was filed.',
-  nextStep: 'Ask ASComply support to check what happened to this invoice before you enter it again.',
-}
+  nextStep: 'Ask ASComply support to check what happened to this invoice before you raise another one for the same transaction.',
+} as const satisfies FailureExplanation
 
 export function failureExplanation(kind: string | null): FailureExplanation {
   if (kind === null) return FAILURE_EXPLANATION_FALLBACK

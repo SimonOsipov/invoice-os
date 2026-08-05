@@ -3178,7 +3178,9 @@ describe('failureExplanation', () => {
     for (const kind of all) {
       const r = failureExplanation(kind)
       const joined = `${r.headline} ${r.detail} ${r.nextStep}`
-      expect(joined, `kind=${String(kind)}`).not.toMatch(/\bedit|re-?validate|re-?submit|send it again|try again|retry/i)
+      expect(joined, `kind=${String(kind)}`).not.toMatch(
+        /\bedit|re-?validate|re-?submit|send it again|try again|retry|enter it again|enter this invoice again/i,
+      )
     }
   })
 

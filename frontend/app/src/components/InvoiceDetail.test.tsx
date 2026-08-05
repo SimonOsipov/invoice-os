@@ -6,8 +6,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { APP_PERSONAS } from '../auth'
 import { createAuthedFetch } from '../lib/authedFetch'
+import { fmtDateTime } from '../lib/format'
 import { DETAIL_SUBMIT_COPY, LIVE_POLL_MS, skipReasonLabel, type InvoiceDetailRecord, type StatusChange } from '../lib/invoices'
+import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoiceDetail } from './InvoiceDetail'
 
@@ -683,4 +686,88 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     },
     LIVE_POLL_MS + 5000,
   )
+})
+
+// RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture carries the literal
+// actor 'system', which renders fine today and hides the raw-UUID defect -- these pass a
+// real StatusChange[] through mockDetailFetch instead of relying on the [] default.
+describe('InvoiceDetail status history: actor resolution ([actor-label-shared])', () => {
+  it('AC2: the status history renders a person, not a subject uuid', async () => {
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject },
+    ]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('status-history-row')
+    expect(document.body.textContent).toContain(`${APP_PERSONAS.firm.name} · ${APP_PERSONAS.firm.org}`)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.subject)
+  })
+
+  it('AC2: an unknown subject still renders raw, in mono', async () => {
+    const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
+    const history: StatusChange[] = [{ from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown }]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const row = await screen.findByTestId('status-history-row')
+    // Exact match: today the actor and timestamp share one text node ('uuid · date'), so
+    // this element-boundary lookup fails until the actor gets its own span.
+    const actorEl = within(row).getByText(unknown)
+    expect(actorEl.className.split(' ')).toContain('mono')
+  })
+})
+
+// RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture nulls kept_as_is_*, so
+// these override the three fields explicitly rather than relying on detailRecord()'s
+// (unchanged) un-kept defaults.
+describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
+  it('AC4: a kept invoice shows the decision on its own page', async () => {
+    const kept = detailRecord({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent?.startsWith(ROW_EXPANSION_COPY.keptPrefix)).toBe(true)
+    expect(banner.textContent).toContain('Buyer confirmed the discrepancy is intentional.')
+    expect(banner.textContent).toContain(`${APP_PERSONAS.firm.name} · ${APP_PERSONAS.firm.org}`)
+    expect(banner.textContent).toContain(fmtDateTime('2026-07-31T00:00:00Z'))
+  })
+
+  it('AC5: an un-kept invoice renders no kept banner', async () => {
+    mockDetailFetch(detailRecord())
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
+    expect(screen.queryAllByTestId('detail-kept-banner')).toHaveLength(0)
+  })
+
+  // Trap: detailRecord()'s default rule_set_version is null, which renders `not-validated`
+  // instead of `violations-table` -- overridden here to a real number so this targets the
+  // element it means to, not a missing one.
+  it('AC4: the kept banner leads the Compliance panel, above violations-table', async () => {
+    const kept = detailRecord({
+      status: 'validated',
+      rule_set_version: 3,
+      violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    const table = screen.getByTestId('violations-table')
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })

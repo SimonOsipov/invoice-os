@@ -46,6 +46,7 @@ import {
   isInFlight,
   isRowSelectable,
   keepInvoiceAsIs,
+  keptAsIs,
   LIVE_POLL_MS,
   listInvoices,
   mbsPathToEditField,
@@ -758,6 +759,37 @@ describe('keepInvoiceAsIs (INVCR-01-15, D6, task-291)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(409)
+  })
+})
+
+// RED specs (task-392, BUG-03-03, Mode A) -- keptAsIs is a throwing stub today, so every
+// case below fails on the throw, not on a missing import.
+describe('keptAsIs (task-392, BUG-03-03)', () => {
+  it("returns null on an un-kept invoice (kept_as_is_at/_by/_reason all null, matching detailRecord()'s defaults)", () => {
+    expect(keptAsIs({ kept_as_is_at: null, kept_as_is_by: null, kept_as_is_reason: null })).toBeNull()
+  })
+
+  it('surfaces the persisted at/by/reason verbatim', () => {
+    const result = keptAsIs({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: 'c0000000-0000-0000-0000-000000000001',
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+
+    expect(result).toEqual({
+      at: '2026-07-31T00:00:00Z',
+      by: 'c0000000-0000-0000-0000-000000000001',
+      reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+  })
+
+  // No fabricated reason: `by`/`reason` null pass through as null, never a placeholder
+  // string, even though `at` alone means "kept" -- the all-or-nothing CHECK constraint is
+  // server-side only, this helper must not paper over a row that somehow violates it.
+  it('never fabricates a reason when at is set but by/reason are null', () => {
+    const result = keptAsIs({ kept_as_is_at: '2026-07-31T00:00:00Z', kept_as_is_by: null, kept_as_is_reason: null })
+
+    expect(result).toEqual({ at: '2026-07-31T00:00:00Z', by: null, reason: null })
   })
 })
 

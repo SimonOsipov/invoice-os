@@ -3218,5 +3218,31 @@ describe('failureExplanation', () => {
     const expected = ['payload_not_built', 'never_acknowledged', 'acknowledged_no_verdict']
     expect([...FAILURE_KINDS].sort()).toEqual(expected.sort())
   })
+
+  // QA gap-fill (task-387): FK-1 only pins headline/detail distinctness -- an operator
+  // scanning just the action line needs the three nextSteps to differ too.
+  it('FK-12: the three kinds nextSteps are mutually distinct', () => {
+    const steps = FAILURE_KINDS.map((k) => failureExplanation(k).nextStep)
+    expect(new Set(steps).size).toBe(steps.length)
+  })
+
+  it('FK-13: failureExplanation is total and pure over FAILURE_KINDS -- no kind falls through, repeat calls agree', () => {
+    for (const k of FAILURE_KINDS) {
+      const r = failureExplanation(k)
+      expect(r, `kind=${k}`).toBeDefined()
+      expect(typeof r.headline, `kind=${k} headline`).toBe('string')
+      expect(typeof r.detail, `kind=${k} detail`).toBe('string')
+      expect(typeof r.nextStep, `kind=${k} nextStep`).toBe('string')
+      expect(failureExplanation(k), `kind=${k} repeat call`).toEqual(r)
+    }
+  })
+
+  it('FK-14: unusual inputs (empty, whitespace-only, wrong case, very long) all take the fallback branch unchanged', () => {
+    const veryLong = 'x'.repeat(10_000)
+    const inputs = ['', '  ', 'PAYLOAD_NOT_BUILT', veryLong]
+    for (const input of inputs) {
+      expect(failureExplanation(input), `input=${JSON.stringify(input.slice(0, 24))}…`).toEqual(FAILURE_EXPLANATION_FALLBACK)
+    }
+  })
 })
 

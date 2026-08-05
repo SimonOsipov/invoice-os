@@ -289,6 +289,30 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const vat = inv.vat != null ? Number(inv.vat) : null
     const total = inv.total != null ? Number(inv.total) : null
     const verdict = verdictStatus(staleSinceEdit, inv)
+    // A live rejection leads the rail, matching failed-dead-end's position; a demoted/
+    // historical one stays below Compliance so it doesn't overstate a resolved event.
+    const rejectionLeadsRail = rejectionProvenance(inv.status) === 'current'
+    const rejectionCard = shouldShowRejectionCard(inv) ? (
+      <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+          <span className="card-title">
+            {rejectionProvenance(inv.status) === 'current' ? 'This invoice was rejected' : 'Last APP rejection'}
+          </span>
+        </div>
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {inv.rejection_reasons.map((reason, i) => (
+            <div
+              key={i}
+              data-testid="rejection-reason-row"
+              style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
+            >
+              <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null
     const kept = keptAsIs(inv)
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
@@ -686,6 +710,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             )}
 
+            {rejectionLeadsRail && rejectionCard}
+
             {shouldShowFiscalRecord(inv) && (
               <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
@@ -759,27 +785,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               </div>
             </div>
 
-            {shouldShowRejectionCard(inv) && (
-              <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-                <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-                  <span className="card-title">
-                    {rejectionProvenance(inv.status) === 'current' ? 'This invoice was rejected' : 'Last APP rejection'}
-                  </span>
-                </div>
-                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {inv.rejection_reasons.map((reason, i) => (
-                    <div
-                      key={i}
-                      data-testid="rejection-reason-row"
-                      style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)' }}
-                    >
-                      <div className="mono" style={{ fontSize: 11, fontWeight: 600, color: 'var(--status-red-text)' }}>{reason.code}</div>
-                      <div style={{ fontSize: 12.5, color: 'var(--fg-2)', marginTop: 3 }}>{reason.message}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {!rejectionLeadsRail && rejectionCard}
 
             {/* INVED-01-07 deleted the fused "Fix & re-validate" card that used to sit
                 here -- one card that welded an always-mounted edit form to a Re-validate

@@ -184,14 +184,14 @@ describe('InvoiceDetail failed-dead-end card (task-332, BUG-01-06, [failed-no-re
   })
 })
 
-// RED specs (task-393, BUG-03-04, Mode A): only Test B is red today -- the rejection
-// card always renders below Compliance regardless of status. A, C, D, E characterise
-// properties already true today; this story gives them their first oracle.
+// RED specs (Mode A): only Test B is red today -- the rejection card always renders
+// below Compliance regardless of status. A, C, D, E characterise properties already
+// true today; this story gives them their first oracle.
 //
 // FIXTURE GOTCHA: detailRecord()'s default rule_set_version is null, which renders
 // `not-validated` instead of `violations-table` -- every positional test below overrides
 // it to a real number so violations-table exists to compare against.
-describe('InvoiceDetail terminal rail order (task-393, BUG-03-04)', () => {
+describe('InvoiceDetail terminal rail order', () => {
   it('AC-1: on a failed invoice, failed-dead-end precedes violations-table', async () => {
     mockDetailFetch(detailRecord({ status: 'failed', rule_set_version: 3 }))
 

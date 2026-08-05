@@ -862,6 +862,43 @@ export function computedLineSum(lines: ReadonlyArray<Pick<InvoiceLineItem, 'quan
   return renderScaled(sum)
 }
 
+// The edit form's own field-value state, one string per EDIT_FIELD_KEYS entry (moved from
+// InvoiceDetail.tsx, task-391, BUG-03-02).
+export type EditFormState = Record<EditFieldKey, string>
+
+export function formFromInvoice(inv: InvoiceRecord): EditFormState {
+  return {
+    issue_date: inv.issue_date ?? '',
+    supplier_tin: inv.supplier_tin ?? '',
+    supplier_name: inv.supplier_name ?? '',
+    buyer_tin: inv.buyer_tin ?? '',
+    buyer_name: inv.buyer_name ?? '',
+    currency: inv.currency ?? '',
+    subtotal: inv.subtotal ?? '',
+    vat: inv.vat ?? '',
+    total: inv.total ?? '',
+  }
+}
+
+// diffEditInput only sends changed fields -- PATCHing all 9 on every submit would silently
+// blank out the ones the user didn't touch. issue_date is special-cased: Go's *time.Time
+// decode rejects a bare date, so a bare YYYY-MM-DD is normalised to midnight UTC, and a
+// cleared date is dropped since PATCH cannot represent an explicit clear.
+export function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
+  const patch: InvoiceEditInput = {}
+  for (const key of EDIT_FIELD_KEYS) {
+    if (form[key] === (original[key] ?? '')) continue
+    if (key === 'issue_date') {
+      const value = form.issue_date.trim()
+      if (!value) continue
+      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
+      continue
+    }
+    patch[key] = form[key]
+  }
+  return patch
+}
+
 // not_validated/duplicate_request are the two reachable BatchSubmitResultItem.reason
 // values (batchSubmitReasonNotValidated/batchSubmitReasonDuplicate, handlers.go) --
 // anything else passes through verbatim rather than being swallowed, so an unknown

@@ -19,9 +19,10 @@ import { detailTarget } from '../lib/importReport'
 import {
   computedLineSum,
   DETAIL_SUBMIT_COPY,
+  diffEditInput,
   diffLineItems,
   editInvoice,
-  EDIT_FIELD_KEYS,
+  formFromInvoice,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
@@ -39,8 +40,8 @@ import {
   submitInvoices,
   verdictStatus,
   type EditFieldKey,
+  type EditFormState,
   type InvoiceDetailRecord,
-  type InvoiceEditInput,
   type InvoiceRecord,
   type InvoiceStatus,
   type StatusChange,
@@ -92,22 +93,6 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // calling useAsync/useState after that return would break the rules of hooks. Mirrors
 // ClientsView/ValidationView: gatewayBase() + useAsync + a Loading/ErrorState/ready
 // ladder, zero network when no gateway is configured.
-type EditFormState = Record<EditFieldKey, string>
-
-function formFromInvoice(inv: InvoiceRecord): EditFormState {
-  return {
-    issue_date: inv.issue_date ?? '',
-    supplier_tin: inv.supplier_tin ?? '',
-    supplier_name: inv.supplier_name ?? '',
-    buyer_tin: inv.buyer_tin ?? '',
-    buyer_name: inv.buyer_name ?? '',
-    currency: inv.currency ?? '',
-    subtotal: inv.subtotal ?? '',
-    vat: inv.vat ?? '',
-    total: inv.total ?? '',
-  }
-}
-
 // One editable line row (INVED-01-07). LineItemEditInput-shaped but with '' where the wire
 // carries null, because a controlled React input holds '' and never null. Deliberately no
 // `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
@@ -154,38 +139,6 @@ const REVALIDATE_REASON_ID = 'revalidate-blocked-reason-text'
 // Same rationale as REVALIDATE_REASON_ID above; a distinct id so the two disabled buttons'
 // aria-describedby targets never collide on a rejected invoice, where both render together.
 const SUBMIT_REASON_ID = 'submit-blocked-reason-text'
-
-// PATCH /v1/invoices/{id} treats an absent key as "leave this field alone" (the Go
-// handler decodes into *string/*time.Time pointers, nil when the key is missing) and a
-// present key — including "" — as "set it". Sending all 9 fields on every submit would
-// silently blank out the 8 the user didn't touch; diffing against the invoice this form
-// was seeded from keeps the PATCH to only what actually changed (mirrors
-// EntityFormModal's toEntityUpdateInput diff-then-skip-if-empty convention).
-//
-// issue_date is special-cased: editReq.IssueDate decodes into a *time.Time
-// (handlers.go:71/invoice.go:89), which json.Unmarshal only accepts as a full RFC3339
-// string — a bare "YYYY-MM-DD" (the field's own placeholder) or "" fails to decode and
-// 400s BEFORE Store.Edit ever runs (verified against Go's actual time.Time
-// UnmarshalJSON). Normalize a bare date to midnight UTC so the field the placeholder
-// invites the user to type actually round-trips. A cleared ("") date is skipped rather
-// than sent: json "null" and an absent key both decode to a nil pointer ("leave
-// unchanged", [D9]), so an explicit clear-to-blank cannot be represented over this PATCH
-// at all — sending "" would just surface a confusing decode-failure for an operation the
-// backend has no way to honor.
-function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
-  const patch: InvoiceEditInput = {}
-  for (const key of EDIT_FIELD_KEYS) {
-    if (form[key] === (original[key] ?? '')) continue
-    if (key === 'issue_date') {
-      const value = form.issue_date.trim()
-      if (!value) continue
-      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
-      continue
-    }
-    patch[key] = form[key]
-  }
-  return patch
-}
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()

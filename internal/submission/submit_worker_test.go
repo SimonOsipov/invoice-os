@@ -1605,3 +1605,57 @@ func TestFailureKindsDifferAcrossTheThreeSites(t *testing.T) {
 			"being provably different", *kind1, *kind2, *kind3)
 	}
 }
+
+// TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError: QA adversarial
+// addition (task-385). Transform reruns on EVERY attempt (worker.go:220's own comment), so a
+// job that survives a mid-budget Retryable (attempt 1, last_error = the Retryable's text) and
+// THEN fails at Transform on attempt 2 must overwrite last_error with attempt 2's text, not
+// leave attempt 1's stale value sitting under state='failed'. markJobTransformFailed's
+// unconditional SET makes this true today; this pins it as a regression guard.
+func TestSubmitWorker_TransformFailureAfterRetryStoresCurrentAttemptError(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	retryErr := errors.New("wsub: upstream 503, mid-budget (attempt 1, stale)")
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Retryable{Err: retryErr},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	w := newTestWorker(f.app, adapter)
+
+	// Attempt 1 of 8: mid-budget Retryable. Same river job.ID (1) reused on attempt 2 below --
+	// a retry of "the same" job, not a different one.
+	job1 := newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(ctx, job1); err == nil {
+		t.Fatal("attempt 1: Work on a mid-budget Retryable returned nil, want the original error")
+	}
+	wj1 := wjRequire(t, f, tenantID, idemKey)
+	if wj1.lastError == nil || *wj1.lastError != retryErr.Error() {
+		t.Fatalf("attempt 1: job last_error = %v, want %q -- precondition for this test", wj1.lastError, retryErr.Error())
+	}
+
+	// Attempt 2: Transform fails this time. adapter.transformErr short-circuits before Submit
+	// is ever reached, so the still-queued Retryable outcome in submitQueue is never consumed.
+	transformErr := errors.New("wsub: cannot build wire from this invoice (attempt 2, current)")
+	adapter.transformErr = transformErr
+	job2 := newSubmitJob(1, 2, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})
+	if err := w.Work(ctx, job2); err == nil {
+		t.Fatal("attempt 2: Work on a transform failure returned nil, want river.JobCancel")
+	}
+
+	wj2 := wjRequire(t, f, tenantID, idemKey)
+	if wj2.state != "failed" {
+		t.Errorf("attempt 2: job state = %q, want \"failed\"", wj2.state)
+	}
+	if wj2.attempts != 1 {
+		t.Errorf("attempt 2: job attempts = %d, want unchanged 1 (whatever attempt 1's mid-budget "+
+			"retry left it at) -- a transform failure must not touch the retry budget", wj2.attempts)
+	}
+	if wj2.lastError == nil || *wj2.lastError != transformErr.Error() {
+		t.Errorf("attempt 2: job last_error = %v, want %q (the CURRENT attempt's error), "+
+			"not attempt 1's stale %q", strOrNil(wj2.lastError), transformErr.Error(), retryErr.Error())
+	}
+}

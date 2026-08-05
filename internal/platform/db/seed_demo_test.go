@@ -1,5 +1,5 @@
 // [M4-22-03] Suite for the demo-curation + rule-re-enable half of db.Seed
-// (task-162): the boot-time UPSERT of 27 curated business_entities rows into
+// (task-162): the boot-time UPSERT of 10 curated business_entities rows into
 // the demo tenant, plus the global rule re-enable, per binding decision
 // [demo-seed-shape]. Also covers task-322: irn/csid/qr_payload on the demo
 // tenant's seeded invoices (bottom of file).
@@ -56,8 +56,8 @@ type entityRow struct {
 	status string
 }
 
-// curatedDemoEntities is the 27 curated business_entities rows (21 active,
-// 6 archived) db/seed.dev.sql's UPSERT converges the demo tenant to. sector
+// curatedDemoEntities is the 10 curated business_entities rows (8 active,
+// 2 archived) db/seed.dev.sql's UPSERT converges the demo tenant to. sector
 // values are copied verbatim from that file — a mismatch here means either
 // this literal or the seed itself drifted. Comparisons below sort both sides
 // first, so this literal's declaration order isn't a hidden assumption.
@@ -70,25 +70,8 @@ var curatedDemoEntities = []entityRow{
 	{name: "Aliyu Logistics Services Ltd", tin: "10067890-0006", sector: "Logistics", status: "active"},
 	{name: "Ifeoma Fashion House Ltd", tin: "10078901-0007", sector: "Fashion", status: "active"},
 	{name: "Bello Construction Nigeria Ltd", tin: "10089012-0008", sector: "Construction", status: "active"},
-	{name: "Nwosu Foods & Beverages Ltd", tin: "10090123-0009", sector: "Food & Beverage", status: "active"},
-	{name: "Yakubu Motors Ltd", tin: "10101234-0010", sector: "Automotive", status: "active"},
-	{name: "Chidinma Cosmetics Ltd", tin: "10112345-0011", sector: "Cosmetics", status: "active"},
-	{name: "Obiora Steel Works Ltd", tin: "10123456-0012", sector: "Manufacturing", status: "active"},
-	{name: "Funmilayo Catering Services Ltd", tin: "10134567-0013", sector: "Catering", status: "active"},
-	{name: "Danjuma Petroleum Ltd", tin: "10145678-0014", sector: "Oil & Gas", status: "active"},
-	{name: "Ngozi Interiors Ltd", tin: "10156789-0015", sector: "Interior Design", status: "active"},
-	{name: "Uche Digital Solutions Ltd", tin: "10167890-0016", sector: "Technology", status: "active"},
-	{name: "Ibrahim Farms Ltd", tin: "10178901-0017", sector: "Agriculture", status: "active"},
-	{name: "Amara Publishing Ltd", tin: "10189012-0018", sector: "Publishing", status: "active"},
-	{name: "Tunde Electricals Ltd", tin: "10190123-0019", sector: "Electricals", status: "active"},
-	{name: "Kemi Beauty Concepts Ltd", tin: "10201234-0020", sector: "Beauty & Personal Care", status: "active"},
-	{name: "Segun Haulage Ltd", tin: "10212345-0021", sector: "Logistics", status: "active"},
 	{name: "Olumide Printing Press Ltd", tin: "10223456-0022", sector: "Printing", status: "archived"},
 	{name: "Halima Boutique Ltd", tin: "10234567-0023", sector: "Retail", status: "archived"},
-	{name: "Chinwe Poultry Farms Ltd", tin: "10245678-0024", sector: "Agriculture", status: "archived"},
-	{name: "Musa Hardware Stores Ltd", tin: "10256789-0025", sector: "Retail", status: "archived"},
-	{name: "Bisi Event Planners Ltd", tin: "10267890-0026", sector: "Events", status: "archived"},
-	{name: "Ekene Auto Parts Ltd", tin: "10278901-0027", sector: "Automotive", status: "archived"},
 }
 
 // resetDemoBusinessEntities clears the demo tenant's business_entities rows
@@ -98,7 +81,7 @@ var curatedDemoEntities = []entityRow{
 // (migrations/20260714103137_invoices.sql: "an invoice is a durable legal/
 // fiscal record ... must not be silently destroyed by a business_entities
 // hard delete") -- db/seed.dev.sql now also seeds invoices against 6 of the
-// 27 curated entities (persona-handoff-fix step 4, [demo-invoice-seed]), so
+// 10 curated entities (persona-handoff-fix step 4, [demo-invoice-seed]), so
 // deleting business_entities first would hit that RESTRICT (23001). Invoices
 // are cleared FIRST -- line_items and invoice_status_history cascade off
 // invoice_id (ON DELETE CASCADE on both) -- so the entities delete below
@@ -173,7 +156,7 @@ func sortedEntityRows(rows []entityRow) []entityRow {
 
 // TestSeedCreatesCuratedDemoEntities: Test Spec row 1 (task-162 AC-1). After
 // Seed runs against an empty demo-tenant portfolio, the demo tenant has
-// exactly the 27 curated rows (21 active / 6 archived).
+// exactly the 10 curated rows (8 active / 2 archived).
 func TestSeedCreatesCuratedDemoEntities(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -200,16 +183,16 @@ func TestSeedCreatesCuratedDemoEntities(t *testing.T) {
 			archived++
 		}
 	}
-	if active != 21 {
-		t.Errorf("count(active) = %d, want 21", active)
+	if active != 8 {
+		t.Errorf("count(active) = %d, want 8", active)
 	}
-	if archived != 6 {
-		t.Errorf("count(archived) = %d, want 6", archived)
+	if archived != 2 {
+		t.Errorf("count(archived) = %d, want 2", archived)
 	}
 }
 
 // TestSeedDemoEntitiesIsIdempotent: Test Spec row 2 (task-162 AC-2). Running
-// Seed twice leaves exactly 27 rows, no duplicate TIN, and byte-identical
+// Seed twice leaves exactly 10 rows, no duplicate TIN, and byte-identical
 // results across both runs.
 func TestSeedDemoEntitiesIsIdempotent(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -222,16 +205,16 @@ func TestSeedDemoEntitiesIsIdempotent(t *testing.T) {
 		t.Fatalf("first Seed: %v", err)
 	}
 	first := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(first) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after the FIRST Seed = %d, want 27", len(first))
+	if len(first) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after the FIRST Seed = %d, want 10", len(first))
 	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("second Seed (idempotency): %v", err)
 	}
 	second := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(second) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after the SECOND Seed = %d, want 27 (no duplication)", len(second))
+	if len(second) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after the SECOND Seed = %d, want 10 (no duplication)", len(second))
 	}
 
 	tins := make(map[string]int, len(second))
@@ -517,7 +500,7 @@ func TestSeedRepairsMutatedHoneywellEntity(t *testing.T) {
 // table too, which is exactly the kind of write this test exists to rule
 // OUT for a tenant Seed has no business touching. Tenant A has no
 // business_entities curation anywhere in seed.dev.sql (only the demo/firm
-// tenant's 27-row block and Honeywell's own 1-row block name a tenant_id),
+// tenant's 10-row block and Honeywell's own 1-row block name a tenant_id),
 // so it is still the neutral bystander the original test wanted — this is a
 // swap of WHICH tenant stands in for "other", not a weakening of the claim.
 const foreignTenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -525,7 +508,7 @@ const foreignTenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 // TestSeedDoesNotTouchOtherTenants: Test Spec row 4 (task-162 AC-4) —
 // regression guard for the dropped cross-tenant DELETE ([demo-seed-shape]).
 // Seeds a foreign-tenant probe row, runs Seed, and asserts the probe is
-// untouched while the demo tenant reaches its 27 curated rows (the paired
+// untouched while the demo tenant reaches its 10 curated rows (the paired
 // assertion, so this isn't a vacuous "touches nothing" pass).
 func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -573,8 +556,8 @@ func TestSeedDoesNotTouchOtherTenants(t *testing.T) {
 
 	// Meaningful only if Seed actually wrote its own tenant's rows first.
 	demoAfter := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(demoAfter) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 27", len(demoAfter))
+	if len(demoAfter) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 10", len(demoAfter))
 	}
 
 	after := fetchDemoBusinessEntities(t, pool, foreignTenantID)
@@ -676,7 +659,7 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 		t.Fatalf("first Seed (establish curated baseline): %v", err)
 	}
 
-	const deletedTIN = "10278901-0027" // curated row #27: Ekene Auto Parts Ltd, archived
+	const deletedTIN = "10234567-0023" // curated row #10: Halima Boutique Ltd, archived
 	res, err := pool.Exec(ctx,
 		`DELETE FROM business_entities WHERE tenant_id = $1 AND tin = $2`,
 		demoTenantID, deletedTIN,
@@ -689,8 +672,8 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 	}
 
 	afterDelete := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(afterDelete) != 26 {
-		t.Fatalf("precondition: count(business_entities) after deleting one curated row = %d, want 26", len(afterDelete))
+	if len(afterDelete) != 9 {
+		t.Fatalf("precondition: count(business_entities) after deleting one curated row = %d, want 9", len(afterDelete))
 	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
@@ -706,7 +689,7 @@ func TestSeedRecreatesDeletedDemoEntity(t *testing.T) {
 
 // TestSeedLeavesJunkRowsInPlace: pins the actual behavior of the dropped
 // DELETE ([demo-seed-shape]) — a non-curated row (e.g. an E2E leftover)
-// survives Seed untouched, since seed.dev.sql only upserts the 27 curated
+// survives Seed untouched, since seed.dev.sql only upserts the 10 curated
 // TINs.
 func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -729,8 +712,8 @@ func TestSeedLeavesJunkRowsInPlace(t *testing.T) {
 	}
 
 	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(got) != 28 {
-		t.Fatalf("count(business_entities) for the demo tenant after Seed with one pre-existing junk row = %d, want 28 (27 curated + 1 surviving junk row — [demo-seed-shape] deliberately drops the DELETE, so junk is NOT cleaned by the boot-time seed)", len(got))
+	if len(got) != 11 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed with one pre-existing junk row = %d, want 11 (10 curated + 1 surviving junk row — [demo-seed-shape] deliberately drops the DELETE, so junk is NOT cleaned by the boot-time seed)", len(got))
 	}
 
 	var found bool
@@ -2100,18 +2083,18 @@ func fetchDemoInvoiceOrder(t *testing.T, pool *pgxpool.Pool, tenantID string) []
 // order" C2's detector checks the observed created_at DESC, id DESC sequence against.
 var wantFirmInvoiceOrder = []string{
 	"DEMO-2026-1009", "DEMO-2026-1008", "DEMO-2026-1007",
-	"DEMO-2026-5005", "DEMO-2026-5004", "DEMO-2026-3005", "DEMO-2026-2005", "DEMO-2026-6003", "DEMO-2026-4004",
-	"DEMO-2026-2004", "DEMO-2026-1006", "DEMO-2026-5003", "DEMO-2026-3004", "DEMO-2026-1005",
-	"DEMO-2026-4003", "DEMO-2026-2003", "DEMO-2026-6002", "DEMO-2026-1004", "DEMO-2026-3003",
-	"DEMO-2026-5002", "DEMO-2026-4002", "DEMO-2026-1003", "DEMO-2026-2002", "DEMO-2026-6001",
-	"DEMO-2026-3002", "DEMO-2026-5001", "DEMO-2026-4001", "DEMO-2026-1002", "DEMO-2026-3001",
-	"DEMO-2026-2001", "DEMO-2026-1001",
+	"DEMO-2026-6003", "DEMO-2026-6002", "DEMO-2026-6001",
+	"DEMO-2026-5005", "DEMO-2026-5004", "DEMO-2026-5003", "DEMO-2026-5002", "DEMO-2026-5001",
+	"DEMO-2026-4004", "DEMO-2026-4003", "DEMO-2026-4002", "DEMO-2026-4001",
+	"DEMO-2026-3005", "DEMO-2026-3004", "DEMO-2026-3003", "DEMO-2026-3002", "DEMO-2026-3001",
+	"DEMO-2026-2005", "DEMO-2026-2004", "DEMO-2026-2003", "DEMO-2026-2002", "DEMO-2026-2001",
+	"DEMO-2026-1006", "DEMO-2026-1005", "DEMO-2026-1004", "DEMO-2026-1003", "DEMO-2026-1002", "DEMO-2026-1001",
 }
 
 var wantInHouseInvoiceOrder = []string{
 	"DEMO-2026-9003", "DEMO-2026-9002", "DEMO-2026-9001",
-	"DEMO-2026-8005", "DEMO-2026-8004", "DEMO-2026-8003", "DEMO-2026-7006", "DEMO-2026-7004",
-	"DEMO-2026-8002", "DEMO-2026-7003", "DEMO-2026-7002", "DEMO-2026-8001", "DEMO-2026-7001",
+	"DEMO-2026-8005", "DEMO-2026-8004", "DEMO-2026-8003", "DEMO-2026-8002",
+	"DEMO-2026-8001", "DEMO-2026-7006", "DEMO-2026-7004", "DEMO-2026-7003", "DEMO-2026-7002", "DEMO-2026-7001",
 }
 
 // reanchorOffsetUnit: the declared per-row spacing (C3/C5). clock_timestamp() would also
@@ -2554,12 +2537,13 @@ var submittableTriggerTINs = []string{"99999999-0001", "99999999-0002", "9999999
 // script), so a submittable row carrying one strands at `failed` after eight attempts.
 var nonConvergentTriggerTINs = []string{"99999999-0004", "99999999-0006", "99999999-0007"}
 
-// terminalTwinBuyerName is the DEMO-01 terminal row that already holds each trigger. A twin
-// reusing its buyer name makes the two indistinguishable on the register.
+// terminalTwinBuyerName is the DEMO-01 terminal row's buyer_name for each reserved trigger
+// TIN. AC-3 makes buyer_name a per-TIN canonical name, so a twin shares its terminal row's
+// counterparty -- status, not the name, is what distinguishes the two.
 var terminalTwinBuyerName = map[string]string{
-	"99999999-0001": "Sandbox APP (accepted)",
-	"99999999-0002": "Sandbox APP (rejected)",
-	"99999999-0003": "Sandbox APP (deferred verdict)",
+	"99999999-0001": "Sandbox APP (always accepts)",
+	"99999999-0002": "Sandbox APP (always rejects)",
+	"99999999-0003": "Sandbox APP (defers, then accepts)",
 }
 
 // submittableTwinRow is one seeded trigger twin plus everything a claimed-outcome check needs.
@@ -2655,9 +2639,9 @@ func TestSeedSeedsSubmittableTriggerTwinsInBothTenants(t *testing.T) {
 			if r.buyerName == "" {
 				t.Errorf("%s tenant: %s (buyer_tin=%s) has an empty buyer_name", tc.name, r.invoiceNumber, r.buyerTIN)
 			}
-			if terminal, ok := terminalTwinBuyerName[r.buyerTIN]; ok && r.buyerName == terminal {
-				t.Errorf("%s tenant: %s buyer_name = %q, want a name distinct from the terminal row already holding %s",
-					tc.name, r.invoiceNumber, r.buyerName, r.buyerTIN)
+			if terminal, ok := terminalTwinBuyerName[r.buyerTIN]; ok && r.buyerName != terminal {
+				t.Errorf("%s tenant: %s buyer_name = %q, want it to equal %q -- a twin shares its terminal row's counterparty, status is what distinguishes them",
+					tc.name, r.invoiceNumber, r.buyerName, terminal)
 			}
 			if r.irn != nil || r.csid != nil || r.qrPayload != nil {
 				t.Errorf("%s tenant: %s carries irn/csid/qr_payload, want all three NULL -- a non-NULL irn is the \"already cleared\" sentinel and makes the twin unsubmittable",
@@ -3143,5 +3127,1077 @@ func TestSeedTwinLineItemsReconcileWithSubtotal(t *testing.T) {
 	}
 	if checked != 6 {
 		t.Fatalf("checked %d twins, want 6 -- twinInvoiceNumbers drifted from the seed", checked)
+	}
+}
+
+// labelledBuyerNamePattern matches "<name> (<parenthetical>)" -- AC-1 requires every seeded
+// DEMO-2026-* buyer_name to state, in that parenthetical, the outcome or violation its row
+// demonstrates.
+var labelledBuyerNamePattern = regexp.MustCompile(`^.+ \(.+\)$`)
+
+// TestSeedEveryDemoInvoiceCarriesALabelledCounterparty: Test Spec row "every invoice
+// carries a labelled counterparty" (AC-1). All 44 seeded DEMO-2026-* rows, across both
+// tenants, must carry a non-empty buyer_name matching labelledBuyerNamePattern.
+func TestSeedEveryDemoInvoiceCarriesALabelledCounterparty(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, coalesce(buyer_name, '')
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query DEMO-2026-* buyer_names: %v", err)
+	}
+	defer rows.Close()
+
+	var checked int
+	for rows.Next() {
+		var number, name string
+		if err := rows.Scan(&number, &name); err != nil {
+			t.Fatalf("scan buyer_name row: %v", err)
+		}
+		checked++
+		if name == "" {
+			t.Errorf("%s: buyer_name is empty, want a name that states the scenario this row demonstrates", number)
+			continue
+		}
+		if !labelledBuyerNamePattern.MatchString(name) {
+			t.Errorf("%s: buyer_name = %q, does not match %s -- every seeded counterparty name must state the outcome or violation the row demonstrates",
+				number, name, labelledBuyerNamePattern.String())
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate buyer_name rows: %v", err)
+	}
+	if checked != 44 {
+		t.Fatalf("checked %d DEMO-2026-* invoices, want exactly 44", checked)
+	}
+}
+
+// TestSeedOneBuyerNamePerBuyerTIN: Test Spec row "one buyer name per buyer TIN" (AC-3).
+// Every seeded buyer_tin, reserved TINs included, resolves to exactly one buyer_name
+// across the whole seed -- a TIN carrying two names is the same counterparty telling two
+// different stories depending on which invoice a demo happens to open.
+func TestSeedOneBuyerNamePerBuyerTIN(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT buyer_tin, array_agg(DISTINCT buyer_name ORDER BY buyer_name)
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		  GROUP BY buyer_tin
+		 HAVING count(DISTINCT buyer_name) > 1
+		  ORDER BY buyer_tin`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query buyer_tin -> buyer_name fan-out: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tin string
+		var names []string
+		if err := rows.Scan(&tin, &names); err != nil {
+			t.Fatalf("scan buyer_tin fan-out row: %v", err)
+		}
+		t.Errorf("buyer_tin=%s carries %d distinct buyer_names %v, want exactly 1 -- the same counterparty must not read as two different companies depending on which invoice is open",
+			tin, len(names), names)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate buyer_tin fan-out rows: %v", err)
+	}
+}
+
+// scenarioRow is one seeded DEMO-2026-* invoice's buyer_tin plus the components the
+// scenario-key derivation below groups on.
+type scenarioRow struct {
+	invoiceNumber string
+	buyerTIN      string
+	status        string
+	ruleKey       string
+	rejected      bool
+	unvalidated   bool
+	supplierOK    bool
+}
+
+// supplierTINShapePattern is the well-formed supplier_tin shape (NNNNNNNN-NNNN).
+// DEMO-2026-6002 is the one seeded row that deliberately fails it (its buyer_tin, not
+// supplier_tin, is what changes under the roster) -- that mismatch is part of what keeps
+// its scenario key distinct from every other draft row.
+var supplierTINShapePattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{4}$`)
+
+// scenarioKey is the Test Spec's composite key: (status, violations->0->>'rule_key',
+// rejection_reasons <> '[]', rule_set_version_id IS NULL, supplier_tin shape). Two rows
+// with the same key demonstrate the same scenario.
+func (r scenarioRow) scenarioKey() string {
+	return strings.Join([]string{
+		r.status, r.ruleKey,
+		strconv.FormatBool(r.rejected),
+		strconv.FormatBool(r.unvalidated),
+		strconv.FormatBool(r.supplierOK),
+	}, "|")
+}
+
+// fetchScenarioRows returns every seeded DEMO-2026-* invoice across both tenants with its
+// scenario-key components. excludeReserved true drops buyer_tin LIKE '99999999-%' -- the
+// reserved trigger TINs legitimately carry both a terminal row and a validated twin that
+// differ only on status, so the bijectivity check in TestSeedOneScenarioPerCounterparty
+// only holds with them excluded.
+func fetchScenarioRows(t *testing.T, pool *pgxpool.Pool, excludeReserved bool) []scenarioRow {
+	t.Helper()
+	sql := `SELECT invoice_number, buyer_tin, status,
+	               coalesce(violations->0->>'rule_key', ''),
+	               (rejection_reasons <> '[]'::jsonb),
+	               (rule_set_version_id IS NULL),
+	               supplier_tin
+	          FROM invoices
+	         WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`
+	if excludeReserved {
+		sql += ` AND buyer_tin NOT LIKE '99999999-%'`
+	}
+	rows, err := pool.Query(context.Background(), sql, []string{demoTenantID, honeywellTenantID})
+	if err != nil {
+		t.Fatalf("query scenario rows (excludeReserved=%t): %v", excludeReserved, err)
+	}
+	defer rows.Close()
+
+	var got []scenarioRow
+	for rows.Next() {
+		var r scenarioRow
+		var supplierTIN string
+		if err := rows.Scan(&r.invoiceNumber, &r.buyerTIN, &r.status, &r.ruleKey,
+			&r.rejected, &r.unvalidated, &supplierTIN); err != nil {
+			t.Fatalf("scan scenario row: %v", err)
+		}
+		r.supplierOK = supplierTINShapePattern.MatchString(supplierTIN)
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate scenario rows: %v", err)
+	}
+	return got
+}
+
+// sortedStringSet returns a string set's keys, sorted, so a failure message reads the
+// same on every run (map iteration order is otherwise random).
+func sortedStringSet(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestSeedOneScenarioPerCounterparty: Test Spec row "one scenario per counterparty"
+// (AC-3), scoped to buyer_tin NOT LIKE '99999999-%'. Each of the nine ordinary scenarios
+// must map to exactly one buyer_tin, and each ordinary buyer_tin to exactly one scenario --
+// reserved trigger TINs are excluded because they legitimately carry both a terminal and a
+// twin row that differ on status (see TestSeedOneScenarioPerCounterpartyExcludesReservedTINs
+// below, which proves that exclusion is load-bearing).
+func TestSeedOneScenarioPerCounterparty(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows := fetchScenarioRows(t, pool, true)
+	if len(rows) == 0 {
+		t.Fatal("zero non-reserved DEMO-2026-* invoices -- the exclusion filter or the LIKE pattern is wrong")
+	}
+
+	tinToKeys := map[string]map[string]bool{}
+	keyToTINs := map[string]map[string]bool{}
+	for _, r := range rows {
+		key := r.scenarioKey()
+		if tinToKeys[r.buyerTIN] == nil {
+			tinToKeys[r.buyerTIN] = map[string]bool{}
+		}
+		tinToKeys[r.buyerTIN][key] = true
+		if keyToTINs[key] == nil {
+			keyToTINs[key] = map[string]bool{}
+		}
+		keyToTINs[key][r.buyerTIN] = true
+	}
+
+	for tin, keys := range tinToKeys {
+		if len(keys) > 1 {
+			t.Errorf("buyer_tin=%s maps to %d distinct scenario keys %v, want exactly 1 -- one counterparty must demonstrate exactly one scenario",
+				tin, len(keys), sortedStringSet(keys))
+		}
+	}
+	for key, tins := range keyToTINs {
+		if len(tins) > 1 {
+			t.Errorf("scenario key %q maps to %d distinct buyer_tins %v, want exactly 1 -- two counterparties are demonstrating the same scenario",
+				key, len(tins), sortedStringSet(tins))
+		}
+	}
+}
+
+// TestSeedOneScenarioPerCounterpartyExcludesReservedTINs: the same derivation as
+// TestSeedOneScenarioPerCounterparty, but WITHOUT excluding buyer_tin LIKE '99999999-%'.
+// Reserved TINs legitimately carry two scenario keys (a terminal row and a validated twin
+// that differ only on status), so proves the exclusion above is load-bearing -- if it ever
+// decayed into a no-op filter, TestSeedOneScenarioPerCounterparty would start failing on a
+// reserved TIN for a reason that has nothing to do with AC-3.
+func TestSeedOneScenarioPerCounterpartyExcludesReservedTINs(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows := fetchScenarioRows(t, pool, false)
+
+	reservedKeys := map[string]map[string]bool{}
+	for _, r := range rows {
+		if !strings.HasPrefix(r.buyerTIN, "99999999-") {
+			continue
+		}
+		if reservedKeys[r.buyerTIN] == nil {
+			reservedKeys[r.buyerTIN] = map[string]bool{}
+		}
+		reservedKeys[r.buyerTIN][r.scenarioKey()] = true
+	}
+	if len(reservedKeys) == 0 {
+		t.Fatal("zero reserved-TIN DEMO-2026-* invoices found -- fetchScenarioRows(excludeReserved=false) or the reserved TIN prefix is wrong")
+	}
+
+	multi := 0
+	for tin, keys := range reservedKeys {
+		if len(keys) > 1 {
+			multi++
+			t.Logf("buyer_tin=%s maps to %d scenario keys %v (expected -- terminal row + twin)", tin, len(keys), sortedStringSet(keys))
+		}
+	}
+	if multi == 0 {
+		t.Fatal("no reserved buyer_tin maps to more than one scenario key -- TestSeedOneScenarioPerCounterparty's buyer_tin NOT LIKE '99999999-%' exclusion excludes nothing, i.e. it is vacuous")
+	}
+}
+
+// TestSeedPreservesDeliberatelyMalformedTINs: DEMO-2026-6002's supplier_tin and
+// DEMO-2026-6003's buyer_tin are malformed ON PURPOSE -- the bad value IS the
+// supplier-tin-format / buyer-tin-format violation each row demonstrates. A relabel that
+// "cleans up" either value would delete the violation it exists to show.
+func TestSeedPreservesDeliberatelyMalformedTINs(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var supplierTIN, ruleKey6002 string
+	if err := pool.QueryRow(ctx,
+		`SELECT supplier_tin, coalesce(violations->0->>'rule_key', '') FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-6002'`,
+		demoTenantID,
+	).Scan(&supplierTIN, &ruleKey6002); err != nil {
+		t.Fatalf("read DEMO-2026-6002: %v", err)
+	}
+	if supplierTIN != "BADTIN" {
+		t.Errorf("DEMO-2026-6002 supplier_tin = %q, want the malformed %q -- the value IS the violation", supplierTIN, "BADTIN")
+	}
+	if ruleKey6002 != "supplier-tin-format" {
+		t.Errorf("DEMO-2026-6002 violations[0].rule_key = %q, want %q", ruleKey6002, "supplier-tin-format")
+	}
+
+	var buyerTIN, ruleKey6003 string
+	if err := pool.QueryRow(ctx,
+		`SELECT coalesce(buyer_tin, ''), coalesce(violations->0->>'rule_key', '') FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-6003'`,
+		demoTenantID,
+	).Scan(&buyerTIN, &ruleKey6003); err != nil {
+		t.Fatalf("read DEMO-2026-6003: %v", err)
+	}
+	if buyerTIN != "12345678" {
+		t.Errorf("DEMO-2026-6003 buyer_tin = %q, want the malformed %q -- the value IS the violation", buyerTIN, "12345678")
+	}
+	if ruleKey6003 != "buyer-tin-format" {
+		t.Errorf("DEMO-2026-6003 violations[0].rule_key = %q, want %q", ruleKey6003, "buyer-tin-format")
+	}
+}
+
+// TestSeedCleanDemoInvoicesReconcile: every seeded demo invoice carrying no violations, and
+// at least one line item, satisfies the whole-portfolio arithmetic -- vat is 7.5% of
+// subtotal, total is subtotal+vat, and the line items sum to the subtotal. INNER JOIN
+// line_items, not LEFT JOIN + coalesce(sum(...),0): an invoice with a non-zero subtotal and
+// zero line items by design has no line_items row to join to, so it is excluded here rather
+// than wrongly forced through a sum(line_total)=subtotal check it was never meant to satisfy.
+func TestSeedCleanDemoInvoicesReconcile(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT i.invoice_number,
+		        i.subtotal::text, i.vat::text, i.total::text, sum(l.line_total)::text,
+		        i.vat = round(i.subtotal * 0.075, 2),
+		        i.total = i.subtotal + i.vat,
+		        sum(l.line_total) = i.subtotal
+		   FROM invoices i
+		   INNER JOIN line_items l ON l.invoice_id = i.id
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%' AND i.violations::text = '[]'
+		  GROUP BY i.id, i.subtotal, i.vat, i.total
+		  ORDER BY i.invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query clean demo invoices: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var number, subtotal, vat, total, lineSum string
+		var vatOK, totalOK, lineSumOK bool
+		if err := rows.Scan(&number, &subtotal, &vat, &total, &lineSum, &vatOK, &totalOK, &lineSumOK); err != nil {
+			t.Fatalf("scan clean invoice row: %v", err)
+		}
+		checked++
+		if !vatOK {
+			t.Errorf("%s: vat = %s, want 7.5%% of subtotal %s", number, vat, subtotal)
+		}
+		if !totalOK {
+			t.Errorf("%s: total = %s, want subtotal %s + vat %s", number, total, subtotal, vat)
+		}
+		if !lineSumOK {
+			t.Errorf("%s: sum(line_total) = %s, want subtotal %s", number, lineSum, subtotal)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate clean invoice rows: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("zero clean (violations=[]) demo invoices with line items found -- query or seed drifted")
+	}
+}
+
+// TestSeedVATViolationIsVisiblyWrong: every seeded demo invoice flagged with the
+// vat-standard-rate violation must be wrong by a round fraction a reader can check by eye --
+// vat exactly a tenth of the subtotal -- not merely some other number that isn't 7.5%.
+func TestSeedVATViolationIsVisiblyWrong(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, subtotal::text, vat::text,
+		        vat = round(subtotal / 10, 2),
+		        vat = round(subtotal * 0.075, 2)
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		    AND coalesce(violations->0->>'rule_key', '') = 'vat-standard-rate'
+		  ORDER BY invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query vat-standard-rate invoices: %v", err)
+	}
+	defer rows.Close()
+
+	var numbers []string
+	for rows.Next() {
+		var number, subtotal, vat string
+		var tenthOK, standardOK bool
+		if err := rows.Scan(&number, &subtotal, &vat, &tenthOK, &standardOK); err != nil {
+			t.Fatalf("scan vat-standard-rate row: %v", err)
+		}
+		numbers = append(numbers, number)
+		if !tenthOK {
+			t.Errorf("%s: vat = %s, want exactly a tenth of subtotal %s", number, vat, subtotal)
+		}
+		if standardOK {
+			t.Errorf("%s: vat = %s equals the standard 7.5%% rate on subtotal %s -- the violation is invisible", number, vat, subtotal)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate vat-standard-rate rows: %v", err)
+	}
+
+	want := []string{"DEMO-2026-1006", "DEMO-2026-2005", "DEMO-2026-8005"}
+	if !reflect.DeepEqual(numbers, want) {
+		t.Fatalf("vat-standard-rate demo invoices = %v, want exactly %v", numbers, want)
+	}
+}
+
+// TestSeedSubtotalMismatchIsExactlyOneInvoice: DEMO-2026-4002 stays the single deliberate
+// line-items-sum-subtotal example, with a shortfall a reader can check by eye. INNER JOIN,
+// not LEFT JOIN + coalesce: a zero-line-item invoice with a non-zero subtotal by design has
+// no line_items row to join to, so it can never surface here as a second, spurious mismatch.
+func TestSeedSubtotalMismatchIsExactlyOneInvoice(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT i.invoice_number, i.subtotal::text, sum(l.line_total)::text,
+		        mod(i.subtotal - sum(l.line_total), 1000::numeric) = 0
+		   FROM invoices i
+		   INNER JOIN line_items l ON l.invoice_id = i.id
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  GROUP BY i.id, i.subtotal
+		 HAVING sum(l.line_total) <> i.subtotal
+		  ORDER BY i.invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query subtotal-mismatch invoices: %v", err)
+	}
+	defer rows.Close()
+
+	var numbers []string
+	for rows.Next() {
+		var number, subtotal, lineSum string
+		var wholeThousand bool
+		if err := rows.Scan(&number, &subtotal, &lineSum, &wholeThousand); err != nil {
+			t.Fatalf("scan subtotal-mismatch row: %v", err)
+		}
+		numbers = append(numbers, number)
+		if !wholeThousand {
+			t.Errorf("%s: subtotal %s minus sum(line_total) %s is not a whole number of thousands", number, subtotal, lineSum)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate subtotal-mismatch rows: %v", err)
+	}
+
+	want := []string{"DEMO-2026-4002"}
+	if !reflect.DeepEqual(numbers, want) {
+		t.Fatalf("subtotal-mismatch demo invoices = %v, want exactly %v", numbers, want)
+	}
+}
+
+// TestSeedEveryLineTotalIsQuantityTimesUnitPrice: every seeded demo line item's stated total
+// is its own quantity times unit price, independent of whether that line's invoice reconciles
+// to its subtotal -- DEMO-2026-4002 fails that check on purpose, but its one line item must
+// still pass this one.
+func TestSeedEveryLineTotalIsQuantityTimesUnitPrice(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT i.invoice_number, l.line_no,
+		        l.quantity::text, l.unit_price::text, l.line_total::text,
+		        l.line_total = l.quantity * l.unit_price
+		   FROM line_items l
+		   JOIN invoices i ON i.id = l.invoice_id
+		  WHERE i.tenant_id = ANY($1) AND i.invoice_number LIKE 'DEMO-2026-%'
+		  ORDER BY i.invoice_number, l.line_no`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query demo line items: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var number string
+		var lineNo int
+		var quantity, unitPrice, lineTotal string
+		var ok bool
+		if err := rows.Scan(&number, &lineNo, &quantity, &unitPrice, &lineTotal, &ok); err != nil {
+			t.Fatalf("scan demo line item row: %v", err)
+		}
+		checked++
+		if !ok {
+			t.Errorf("%s line %d: line_total = %s, want quantity %s * unit_price %s", number, lineNo, lineTotal, quantity, unitPrice)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate demo line item rows: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("zero demo line items found -- query or seed drifted")
+	}
+}
+
+// TestSeedVATViolationRowsStayAdditionConsistent: QA gap-fill. The three vat-standard-rate
+// rows are excluded from TestSeedCleanDemoInvoicesReconcile (they carry a violation) and
+// TestSeedVATViolationIsVisiblyWrong only checks the rate, not the sum -- so nothing
+// currently catches an edit that fixes vat but leaves total stale, which would silently
+// swap what the row demonstrates (a rate violation) for a broken-addition one.
+func TestSeedVATViolationRowsStayAdditionConsistent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, subtotal::text, vat::text, total::text,
+		        total = subtotal + vat
+		   FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'
+		    AND coalesce(violations->0->>'rule_key', '') = 'vat-standard-rate'
+		  ORDER BY invoice_number`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query vat-standard-rate invoices: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var number, subtotal, vat, total string
+		var ok bool
+		if err := rows.Scan(&number, &subtotal, &vat, &total, &ok); err != nil {
+			t.Fatalf("scan vat-standard-rate row: %v", err)
+		}
+		checked++
+		if !ok {
+			t.Errorf("%s: total = %s, want subtotal %s + vat %s", number, total, subtotal, vat)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate vat-standard-rate rows: %v", err)
+	}
+	if checked != 3 {
+		t.Fatalf("checked %d vat-standard-rate rows, want 3", checked)
+	}
+}
+
+// TestSeedLineItemMismatchRowHasStandardVAT: QA gap-fill for AC-2 ("every other demo
+// invoice satisfies vat=round(subtotal*0.075,2) and total=subtotal+vat"). DEMO-2026-4002 is
+// excluded from TestSeedCleanDemoInvoicesReconcile (its own violations isn't '[]') and it
+// isn't a vat-standard-rate row either, so no existing test checks its VAT arithmetic --
+// only its deliberate line-sum mismatch. It must demonstrate exactly one thing
+// (line-items-sum-subtotal), not silently also drift off the standard VAT rate.
+func TestSeedLineItemMismatchRowHasStandardVAT(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var subtotal, vat, total string
+	var vatOK, totalOK bool
+	err := pool.QueryRow(ctx,
+		`SELECT subtotal::text, vat::text, total::text,
+		        vat = round(subtotal * 0.075, 2),
+		        total = subtotal + vat
+		   FROM invoices
+		  WHERE tenant_id = $1 AND invoice_number = 'DEMO-2026-4002'`,
+		demoTenantID,
+	).Scan(&subtotal, &vat, &total, &vatOK, &totalOK)
+	if err != nil {
+		t.Fatalf("query DEMO-2026-4002: %v", err)
+	}
+	if !vatOK {
+		t.Errorf("DEMO-2026-4002: vat = %s, want 7.5%% of subtotal %s", vat, subtotal)
+	}
+	if !totalOK {
+		t.Errorf("DEMO-2026-4002: total = %s, want subtotal %s + vat %s", total, subtotal, vat)
+	}
+}
+
+// issueDateMonthSpan is the minimum count of distinct calendar months a tenant's seeded
+// issue_dates must cover -- a single-month cluster reads as "this month only", never a
+// working book over time.
+const issueDateMonthSpan = 5
+
+// TestSeedIssueDatesSpanMultipleMonths: pins the SHAPE of the spread, not a hardcoded date
+// list -- each tenant's DEMO-2026-* issue_dates must land in at least issueDateMonthSpan
+// distinct calendar months, leaving the executor free to choose which dates.
+func TestSeedIssueDatesSpanMultipleMonths(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		n := mustCount(t, pool,
+			`SELECT count(DISTINCT date_trunc('month', issue_date)) FROM invoices
+			  WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+			tenantID,
+		)
+		if n < issueDateMonthSpan {
+			t.Errorf("tenant %s: count(DISTINCT month(issue_date)) = %d, want >= %d", tenantID, n, issueDateMonthSpan)
+		}
+	}
+}
+
+// TestSeedIssueDatesAreDistinctWithinTenant: count(DISTINCT issue_date) must equal the
+// tenant's own DEMO-2026-* invoice count -- any shared date means two rows still cluster on
+// the same day.
+func TestSeedIssueDatesAreDistinctWithinTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tc := range []struct {
+		tenantID string
+		want     int
+	}{
+		{demoTenantID, demoInvoiceTotalCount},
+		{honeywellTenantID, len(wantInHouseInvoiceOrder)},
+	} {
+		total := mustCount(t, pool,
+			`SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+			tc.tenantID,
+		)
+		if total != tc.want {
+			t.Fatalf("tenant %s: count(DEMO-2026-* invoices) = %d, want %d", tc.tenantID, total, tc.want)
+		}
+		distinct := mustCount(t, pool,
+			`SELECT count(DISTINCT issue_date) FROM invoices WHERE tenant_id = $1 AND invoice_number LIKE 'DEMO-2026-%'`,
+			tc.tenantID,
+		)
+		if distinct != tc.want {
+			t.Errorf("tenant %s: count(DISTINCT issue_date) = %d, want %d -- two invoices still share a date", tc.tenantID, distinct, tc.want)
+		}
+	}
+}
+
+// TestSeedIssueDatesArePastRelativeToCreatedAt: created_at is derived as now() minus a small
+// per-row offset (db/seed.dev.sql's row_number()-based anchor), so it sits at ~seed-run time.
+// Every committed 2026 H1 date already precedes any real seed run, so this is GREEN BY DESIGN
+// today -- it exists as a regression guard against a future-dated issue_date (or an anchor
+// that stops trailing the dates it anchors), a property no other test in this file checks.
+func TestSeedIssueDatesArePastRelativeToCreatedAt(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT tenant_id, invoice_number, issue_date, created_at FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query issue_date/created_at: %v", err)
+	}
+	defer rows.Close()
+
+	var checked int
+	for rows.Next() {
+		var tenantID, invoiceNumber string
+		var issueDate, createdAt time.Time
+		if err := rows.Scan(&tenantID, &invoiceNumber, &issueDate, &createdAt); err != nil {
+			t.Fatalf("scan issue_date/created_at row: %v", err)
+		}
+		checked++
+		if !issueDate.Before(createdAt) {
+			t.Errorf("tenant %s: %s issue_date = %v, want strictly before its own created_at anchor %v", tenantID, invoiceNumber, issueDate, createdAt)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate issue_date/created_at rows: %v", err)
+	}
+	wantChecked := demoInvoiceTotalCount + len(wantInHouseInvoiceOrder)
+	if checked != wantChecked {
+		t.Fatalf("checked %d rows, want %d", checked, wantChecked)
+	}
+}
+
+// TestSeedIssueDatesAreWithinDeclared2026H1Window: the span/distinctness checks above tolerate
+// a stray out-of-range date (a 2025/2027 typo, or a month past June) as long as the month-count
+// and distinctness they check still hold -- this pins the literal year/month bound AC-1/AC-5
+// assume.
+func TestSeedIssueDatesAreWithinDeclared2026H1Window(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetBothDemoTenants(t, pool)
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT invoice_number, issue_date FROM invoices
+		  WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`,
+		[]string{demoTenantID, honeywellTenantID},
+	)
+	if err != nil {
+		t.Fatalf("query issue_date: %v", err)
+	}
+	defer rows.Close()
+
+	var checked int
+	for rows.Next() {
+		var invoiceNumber string
+		var issueDate time.Time
+		if err := rows.Scan(&invoiceNumber, &issueDate); err != nil {
+			t.Fatalf("scan issue_date row: %v", err)
+		}
+		checked++
+		if issueDate.Year() != 2026 || issueDate.Month() < time.January || issueDate.Month() > time.June {
+			t.Errorf("%s: issue_date = %v, want within 2026-01 .. 2026-06", invoiceNumber, issueDate)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate issue_date rows: %v", err)
+	}
+	wantChecked := demoInvoiceTotalCount + len(wantInHouseInvoiceOrder)
+	if checked != wantChecked {
+		t.Fatalf("checked %d rows, want %d", checked, wantChecked)
+	}
+}
+
+// demoTrimmedActiveTINs / demoTrimmedArchivedTINs are the 10 TINs the demo
+// firm's trimmed business_entities block keeps. Sourced from
+// curatedDemoEntities by TIN rather than retyped, so a name/sector edit
+// there can't silently drift out of sync with this list.
+var (
+	demoTrimmedActiveTINs = []string{
+		"10012345-0001", "10023456-0002", "10034567-0003", "10045678-0004",
+		"10056789-0005", "10067890-0006", "10078901-0007", "10089012-0008",
+	}
+	demoTrimmedArchivedTINs = []string{"10223456-0022", "10234567-0023"}
+	demoHistoryBearingTINs  = demoTrimmedActiveTINs[:6]
+)
+
+// demoEntitiesByTINs looks up each tin in curatedDemoEntities, preserving
+// input order.
+func demoEntitiesByTINs(t *testing.T, tins []string) []entityRow {
+	t.Helper()
+	out := make([]entityRow, 0, len(tins))
+	for _, tin := range tins {
+		found := false
+		for _, r := range curatedDemoEntities {
+			if r.tin == tin {
+				out = append(out, r)
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no curatedDemoEntities row for tin %q", tin)
+		}
+	}
+	return out
+}
+
+// TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived pins the target
+// shape the demo firm's business_entities block converges to: 10 rows, 8
+// active (6 history-bearing + Ifeoma + Bello), 2 archived (Olumide,
+// Halima) — matching curatedDemoEntities post-trim.
+func TestSeedDemoFirmEntitiesTrimToTenEightActiveTwoArchived(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	if len(got) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after Seed = %d, want 10", len(got))
+	}
+
+	var active, archived int
+	for _, r := range got {
+		switch r.status {
+		case "active":
+			active++
+		case "archived":
+			archived++
+		}
+	}
+	if active != 8 {
+		t.Errorf("count(active) = %d, want 8", active)
+	}
+	if archived != 2 {
+		t.Errorf("count(archived) = %d, want 2", archived)
+	}
+
+	want := sortedEntityRows(append(
+		demoEntitiesByTINs(t, demoTrimmedActiveTINs),
+		demoEntitiesByTINs(t, demoTrimmedArchivedTINs)...,
+	))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("business_entities for the demo tenant after Seed does not match the trimmed 10-row target\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestSeedHistoryBearingEntitiesSurviveWithInvoices: the six invoice-history
+// entities must survive the trim and keep their invoices — the seed's
+// invoice CTE JOINs business_entities, so a dropped or mistyped TIN would
+// silently zero out that entity's rows rather than fail loudly.
+func TestSeedHistoryBearingEntitiesSurviveWithInvoices(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT e.tin, e.status, count(i.id)
+		   FROM business_entities e
+		   LEFT JOIN invoices i ON i.entity_id = e.id
+		  WHERE e.tenant_id = $1 AND e.tin = ANY($2)
+		  GROUP BY e.tin, e.status`,
+		demoTenantID, demoHistoryBearingTINs,
+	)
+	if err != nil {
+		t.Fatalf("query history-bearing entities: %v", err)
+	}
+	defer rows.Close()
+
+	seen := make(map[string]int, len(demoHistoryBearingTINs))
+	for rows.Next() {
+		var tin, status string
+		var n int
+		if err := rows.Scan(&tin, &status, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		seen[tin] = n
+		if status != "active" {
+			t.Errorf("%s: status = %q, want active", tin, status)
+		}
+		if n == 0 {
+			t.Errorf("%s: count(invoices) = 0, want > 0 — this entity is supposed to carry the demo's invoice history", tin)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	for _, tin := range demoHistoryBearingTINs {
+		if _, ok := seen[tin]; !ok {
+			t.Errorf("%s: not found in business_entities for the demo tenant, want present", tin)
+		}
+	}
+}
+
+// TestSeedDemoPortfolioHasAnEmptyActiveAndAnArchivedClient: the empty-state
+// and the archived filter both need live data behind them — at least one
+// active entity with zero invoices, at least one archived entity.
+func TestSeedDemoPortfolioHasAnEmptyActiveAndAnArchivedClient(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	activeEmpty := mustCount(t, pool,
+		`SELECT count(*) FROM business_entities e
+		  WHERE e.tenant_id = $1 AND e.status = 'active'
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.entity_id = e.id)`,
+		demoTenantID,
+	)
+	if activeEmpty == 0 {
+		t.Error("count(active entities with zero invoices) = 0, want >= 1 — the \"no invoices yet\" empty state has nothing to render otherwise")
+	}
+
+	archived := mustCount(t, pool,
+		`SELECT count(*) FROM business_entities WHERE tenant_id = $1 AND status = 'archived'`,
+		demoTenantID,
+	)
+	if archived == 0 {
+		t.Error("count(archived entities) = 0, want >= 1 — the archived filter has nothing to render otherwise")
+	}
+}
+
+// TestSeedLeavesNoDanglingEntityReferences: no invoice / line_item /
+// invoice_status_history / submission_job / app_exchange row may reference
+// a missing entity. Green-by-design: every path is FK-enforced
+// (invoices.entity_id ... ON DELETE RESTRICT; the rest chain through
+// invoice_id). Kept explicit rather than left implicit across five
+// migration files.
+func TestSeedLeavesNoDanglingEntityReferences(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	orphanInvoices := mustCount(t, pool,
+		`SELECT count(*) FROM invoices i
+		  WHERE i.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM business_entities e WHERE e.id = i.entity_id)`,
+		demoTenantID,
+	)
+	if orphanInvoices != 0 {
+		t.Errorf("count(invoices referencing a missing entity) = %d, want 0", orphanInvoices)
+	}
+
+	orphanLineItems := mustCount(t, pool,
+		`SELECT count(*) FROM line_items li
+		  WHERE li.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = li.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanLineItems != 0 {
+		t.Errorf("count(line_items referencing a missing invoice) = %d, want 0", orphanLineItems)
+	}
+
+	orphanHistory := mustCount(t, pool,
+		`SELECT count(*) FROM invoice_status_history h
+		  WHERE h.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = h.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanHistory != 0 {
+		t.Errorf("count(invoice_status_history referencing a missing invoice) = %d, want 0", orphanHistory)
+	}
+
+	orphanJobs := mustCount(t, pool,
+		`SELECT count(*) FROM submission_jobs j
+		  WHERE j.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = j.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanJobs != 0 {
+		t.Errorf("count(submission_jobs referencing a missing invoice) = %d, want 0", orphanJobs)
+	}
+
+	orphanExchange := mustCount(t, pool,
+		`SELECT count(*) FROM app_exchange x
+		  WHERE x.tenant_id = $1
+		    AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = x.invoice_id)`,
+		demoTenantID,
+	)
+	if orphanExchange != 0 {
+		t.Errorf("count(app_exchange referencing a missing invoice) = %d, want 0", orphanExchange)
+	}
+}
+
+// TestSeedDefaultClientIsAlphabeticallyFirst: task-380 AC-4 -- the trim must
+// not disturb which entity sorts first (frontend's clients[0]).
+func TestSeedDefaultClientIsAlphabeticallyFirst(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	var name string
+	err := pool.QueryRow(ctx,
+		`SELECT name FROM business_entities WHERE tenant_id = $1 ORDER BY name ASC, id ASC LIMIT 1`,
+		demoTenantID,
+	).Scan(&name)
+	if err != nil {
+		t.Fatalf("query first entity by name: %v", err)
+	}
+	if name != "Adeyemi & Sons Trading Ltd" {
+		t.Errorf("first entity by name ASC = %q, want %q", name, "Adeyemi & Sons Trading Ltd")
+	}
+}
+
+// demoWithdrawnTINs are the 17 TINs the trim (0d90831) dropped from the
+// firm's business_entities block. Sourced from db/seed.dev.sql as it stood
+// at 0d90831~1.
+var demoWithdrawnTINs = []string{
+	"10090123-0009", "10101234-0010", "10112345-0011", "10123456-0012",
+	"10134567-0013", "10145678-0014", "10156789-0015", "10167890-0016",
+	"10178901-0017", "10189012-0018", "10190123-0019", "10201234-0020",
+	"10212345-0021", "10245678-0024", "10256789-0025", "10267890-0026",
+	"10278901-0027",
+}
+
+// TestSeedNeverReintroducesAWithdrawnTIN: guards against a future edit to
+// db/seed.dev.sql quietly re-adding one of the 17 rows the trim withdrew --
+// checks the seeded DB state directly, not just the curatedDemoEntities
+// literal, so it catches drift in the SQL file itself.
+func TestSeedNeverReintroducesAWithdrawnTIN(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	resetDemoBusinessEntities(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	got := fetchDemoBusinessEntities(t, pool, demoTenantID)
+	withdrawn := make(map[string]bool, len(demoWithdrawnTINs))
+	for _, tin := range demoWithdrawnTINs {
+		withdrawn[tin] = true
+	}
+	for _, r := range got {
+		if withdrawn[r.tin] {
+			t.Errorf("withdrawn TIN %s (%s) reappeared in business_entities for the demo tenant", r.tin, r.name)
+		}
 	}
 }

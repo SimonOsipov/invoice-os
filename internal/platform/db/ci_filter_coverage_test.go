@@ -125,8 +125,10 @@ func enumerateTestFuncs(t *testing.T) []string {
 	return names
 }
 
-// preFixOrphans transcribes the 14 non-TestSeed orphans from BUG-02-02's task
-// description (verified unreachable under the four pre-BUG-02 filters).
+// preFixOrphans transcribes the non-TestSeed orphans that the four frozen
+// pre-BUG-02 filters leave unreachable: BUG-02-02's original 14, plus the
+// TestDemoRepairMigration* suite, which postdates them and matches none of them.
+// The live check above is what proves the suite is reachable today.
 var preFixOrphans = []string{
 	"TestBootstrapBoundedAgainstBlackHoleHost",
 	"TestBootstrapEnabledAllowlist",
@@ -142,6 +144,18 @@ var preFixOrphans = []string{
 	"TestBootstrapRespectsContextDeadlineUnderAdvisoryLockContention",
 	"TestBootstrapRetriesThenFailsOnUnreachableDB",
 	"TestBootstrapThenMigrateSucceedsAsMigrator",
+	"TestDemoRepairMigrationMutatesRowsWithoutPreSetTenantContext",
+	"TestDemoRepairMigrationLeavesExactlyTheTenCuratedClients",
+	"TestDemoRepairMigrationSkipsAReferencedClient",
+	"TestDemoRepairMigrationSkipsAClientWithAnImportBatch",
+	"TestDemoRepairMigrationUnlinksStaleDemoSourceDocumentsInBothTenants",
+	"TestDemoRepairMigrationLeavesNonDemoTenantsUntouched",
+	"TestDemoRepairMigrationIsIdempotent",
+	"TestDemoRepairMigrationStatementsAreTenantScoped",
+	"TestDemoRepairMigrationRunsInATransaction",
+	"TestDemoRepairMigrationDownRunsCleanOnAnEmptyDatabase",
+	"TestDemoRepairMigrationDownRestoresTheWithdrawnRowsVerbatim",
+	"TestDemoRepairMigrationAppliesThroughGoose",
 }
 
 func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {

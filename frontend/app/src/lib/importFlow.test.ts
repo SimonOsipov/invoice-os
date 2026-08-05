@@ -726,7 +726,7 @@ describe('hasImportableExtension — adversarial edge cases (QA)', () => {
 // This is the ONLY node-testable proof left, at the deployed-e2e layer, that the amber
 // panel keeps firing for a zero-entity FIRM once [inhouse-can-start] stops being the sole
 // browser test exercising it (AC-6/AC-7/AC-8) — every persona this suite's fixtures can
-// sign in as now legitimately has at least one entity (firm's 27 curated rows, in-house's
+// sign in as now legitimately has at least one entity (firm's 10 curated rows, in-house's
 // one seeded row, db/seed.dev.sql), so a genuinely-zero-entity workspace is no longer
 // reachable through any browser spec's fixtures. The predicate itself stays generic and
 // unit-tested here instead.

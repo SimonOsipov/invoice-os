@@ -126,7 +126,7 @@ behind — measured directly against `pr-110`: 90 `business_entities` (69 of the
 residue) and ~3,090 `invoices`. `Provision` now runs `internal/platform/db.Reset`
 immediately after `MigrateUp` and before `Seed`, TRUNCATEing the tenant-DATA tables (see
 `reset.go`'s own table-by-table inclusion/exclusion comments) back to empty so `Seed`
-converges the PR environment to EXACTLY the curated 27-entity demo portfolio + its fixture
+converges the PR environment to EXACTLY the curated 10-entity demo portfolio + its fixture
 invoices, every time. This is gated independently of (and more narrowly than) the seed
 gate above: `ResetEnabled` requires `GATEWAY_DB_RESET=true` (a separate durable Railway
 variable from `GATEWAY_DB_BOOTSTRAP`, forked from `development` the same way

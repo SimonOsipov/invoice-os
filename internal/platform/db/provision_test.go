@@ -368,8 +368,8 @@ func TestProvisionFromEmptyDatabase(t *testing.T) {
 	assertDemoReady := func(step string) {
 		t.Helper()
 		entities := fetchDemoBusinessEntities(t, pool, demoTenantID)
-		if len(entities) != 27 {
-			t.Fatalf("%s: count(business_entities) for the demo tenant = %d, want 27", step, len(entities))
+		if len(entities) != 10 {
+			t.Fatalf("%s: count(business_entities) for the demo tenant = %d, want 10", step, len(entities))
 		}
 		var active, archived int
 		for _, r := range entities {
@@ -380,11 +380,11 @@ func TestProvisionFromEmptyDatabase(t *testing.T) {
 				archived++
 			}
 		}
-		if active != 21 {
-			t.Errorf("%s: count(active business_entities) = %d, want 21", step, active)
+		if active != 8 {
+			t.Errorf("%s: count(active business_entities) = %d, want 8", step, active)
 		}
-		if archived != 6 {
-			t.Errorf("%s: count(archived business_entities) = %d, want 6", step, archived)
+		if archived != 2 {
+			t.Errorf("%s: count(archived business_entities) = %d, want 2", step, archived)
 		}
 		if disabled := mustCount(t, pool, `SELECT count(*) FROM rules WHERE enabled = false`); disabled != 0 {
 			t.Errorf("%s: count(rules WHERE enabled=false) = %d, want 0", step, disabled)

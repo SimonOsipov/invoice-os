@@ -3,7 +3,7 @@
 // goes through the typed wrappers (createEntity, createInvoice, validateInvoice) +
 // freshTin() (M3-14's isolation convention), exactly like contract-portfolio.spec.ts.
 //
-// The deployed seed (db/seed.dev.sql) now curates 27 business_entities, 6 of them with
+// The deployed seed (db/seed.dev.sql) now curates 10 business_entities, 6 of them with
 // their own seeded invoices too (persona-handoff-fix step 4, [demo-invoice-seed]) -- so
 // top_violations/needs_attention are NOT empty on a fresh DB. Every assertion below is
 // still scoped to entities THIS FILE creates (Decision [e2e-relative-assertions]): no

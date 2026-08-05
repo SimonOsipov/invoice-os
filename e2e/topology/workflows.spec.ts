@@ -154,13 +154,13 @@ test('firm Workflows (mock policy fixtures): the policy list renders, and the po
   await expect(options.first()).toBeVisible()
   expect(
     await options.count(),
-    'the firm seed must offer >=2 ACTIVE clients to switch between (db/seed.dev.sql seeds 21)',
+    'the firm seed must offer >=2 ACTIVE clients to switch between (db/seed.dev.sql seeds 8 active clients)',
   ).toBeGreaterThanOrEqual(2)
 
   // Index 1, never a name: signing in leaves the switcher on clients[0] (App.tsx:158-161,
   // portfolio ORDER BY name ASC), so index 1 is always a different client -- and the top of
   // the list is the only region guaranteed inside the dropdown, which is position:absolute in
-  // a height:100vh; overflow:hidden shell with no max-height (Sidebar.tsx:158). With 21 active
+  // a height:100vh; overflow:hidden shell with no max-height (Sidebar.tsx:158). With 8 active
   // clients, a name-based pick (selectEntity) is precisely what that clipping trap breaks.
   // Reading the target's name is not selecting by it: the click below is still positional.
   const target = options.nth(1)

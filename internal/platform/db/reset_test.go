@@ -420,7 +420,7 @@ func TestResetIsIdempotent(t *testing.T) {
 
 // TestProvisionResetWipesResidueThenReseedsCuratedDemo: the story-level claim
 // (measured directly against the live pr-110 environment) — a PR fork that
-// has accumulated E2E test residue converges to EXACTLY the curated 27-entity
+// has accumulated E2E test residue converges to EXACTLY the curated 10-entity
 // demo portfolio + its fixture invoices after one Provision call, not the
 // residue plus the curated set. Uses the REAL field shape cmd/gateway/main.go
 // constructs: Environment stays "development" (ENVIRONMENT forks verbatim —
@@ -437,7 +437,7 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	})
 
 	// Simulate the measured pr-110 problem: residue business_entities/invoices
-	// under the demo tenant that are NOT part of the curated 27.
+	// under the demo tenant that are NOT part of the curated 10.
 	residueTIN := "88888888-" + uuid.NewString()[:4]
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO business_entities (tenant_id, name, tin) VALUES ($1, $2, $3)`,
@@ -463,8 +463,8 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	}
 
 	entities := fetchDemoBusinessEntities(t, pool, demoTenantID)
-	if len(entities) != 27 {
-		t.Fatalf("count(business_entities) for the demo tenant after Provision = %d, want exactly 27 (residue must be gone, curated set restored)", len(entities))
+	if len(entities) != 10 {
+		t.Fatalf("count(business_entities) for the demo tenant after Provision = %d, want exactly 10 (residue must be gone, curated set restored)", len(entities))
 	}
 	got := sortedEntityRows(entities)
 	want := sortedEntityRows(curatedDemoEntities)

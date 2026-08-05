@@ -797,10 +797,23 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   await openInvoiceRow(page, invoiceNumber)
   await assertFiscalRecord(page, invoiceNumber)
 
+  // The detail page fills its column at a wide viewport. BUG-03-05's `maxWidth: 1080`
+  // stranded 588px here (32% of the window) and its own check -- `width <= 1082` -- was
+  // SATISFIED by that, so it measured the symptom, not the defect. This measures the
+  // leftover band instead, which is zero only when nothing caps the container. Compared
+  // against the scroll container, not the window: the 252px sidebar sits outside it.
   await page.setViewportSize({ width: 1920, height: 1080 })
   const detailBox = await page.getByTestId('invoice-detail').boundingBox()
   expect(detailBox, 'invoice-detail must be visible').toBeTruthy()
-  expect(detailBox!.width, 'invoice detail must respect the 1080px cap at a wide viewport').toBeLessThanOrEqual(1082)
+
+  const mainBox = (await page.locator('main.pf-main .pf-scroll').boundingBox())!
+  const strandedBand = mainBox.x + mainBox.width - (detailBox!.x + detailBox!.width)
+  // 24px absorbs a scrollbar gutter (up to 10px on WebKit); the defect it guards against
+  // strands 588px at this viewport, so the two cases are nowhere near each other.
+  expect(
+    strandedBand,
+    `invoice detail must fill its column, not strand a band: ${Math.round(strandedBand)}px unused of ${Math.round(mainBox.width)}px`,
+  ).toBeLessThanOrEqual(24)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

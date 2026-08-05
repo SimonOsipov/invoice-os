@@ -80,7 +80,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
   }
 
   return (
-    <div style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
+    <div style={{ padding: '24px 36px 56px' }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>
@@ -863,8 +863,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     )
   }
 
+  // No width cap: this page fills its column like every other screen in the app. BUG-03-05's
+  // 1080 cap is deliberately reverted -- it stranded a third of a 1920 window. E2E-10 pins it.
   return (
-    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
+    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px' }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>

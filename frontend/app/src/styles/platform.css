@@ -217,6 +217,24 @@ pre.pf-json {
   }
 }
 
+/* Invoice detail runs 75/25, document to evidence rail, instead of letting the inline
+   `340px` strand at 15% of a 2560 window while the document column stretches.
+
+   The 220px floor is not cosmetic: at 1180 a bare percentage resolves to 171-214px and the
+   rail's own card content overflows it by 6px at the low end (measured on pr-139). 220px
+   clears that, and 25% has already overtaken it by ~1210, so the ratio is exact everywhere
+   it is legible.
+
+   Bounded BELOW at 1180, the breakpoint the dashboard already stacks at. Between 861 and
+   1179 the document column is independently too tight -- LINE_EDIT_GRID needs ~372px before
+   Description gets any width and only has 200px at an 880 viewport -- and that is a
+   pre-existing problem this rule deliberately neither fixes nor touches. */
+@media (min-width: 1180px) {
+  .pf-detail-grid {
+    grid-template-columns: 1fr minmax(220px, 25%) !important;
+  }
+}
+
 @media (max-width: 860px) {
   .pf-shell {
     flex-direction: column !important;

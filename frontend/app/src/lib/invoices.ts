@@ -1024,11 +1024,14 @@ export function rejectionProvenance(status: InvoiceStatus): 'current' | 'histori
   return status === 'rejected' ? 'current' : 'historical'
 }
 
-// RED stub (task-392, BUG-03-03, Mode A) -- keptAsIs is implemented in the GREEN pass.
+// Compliance-panel kept-as-is banner visibility + payload (task-392, BUG-03-03). `by`/
+// `reason` are `?? null`, never a fabricated fallback string -- the server's absence of a
+// value stays absent.
 export function keptAsIs(
-  _inv: Pick<InvoiceDetailRecord, 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
+  inv: Pick<InvoiceDetailRecord, 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
 ): { at: string; by: string | null; reason: string | null } | null {
-  throw new Error('not implemented')
+  if (inv.kept_as_is_at == null) return null
+  return { at: inv.kept_as_is_at, by: inv.kept_as_is_by ?? null, reason: inv.kept_as_is_reason ?? null }
 }
 
 // Fiscal-record card visibility (task-251 AC #1): only an accepted invoice that

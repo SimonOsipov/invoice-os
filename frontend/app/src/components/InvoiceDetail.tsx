@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { closeGlyph, plusGlyph } from '../glyphs'
+import { actorLabel } from '../lib/actor'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
@@ -26,6 +27,7 @@ import {
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
+  keptAsIs,
   LIVE_POLL_MS,
   newIdempotencyKey,
   reasonFieldFlags,
@@ -46,7 +48,7 @@ import {
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
-import { bulkPhaseReducer, type BulkPhase } from '../lib/reviewBatch'
+import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { SourceDocumentCard } from './SourceDocumentCard'
@@ -287,6 +289,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const vat = inv.vat != null ? Number(inv.vat) : null
     const total = inv.total != null ? Number(inv.total) : null
     const verdict = verdictStatus(staleSinceEdit, inv)
+    const kept = keptAsIs(inv)
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
@@ -721,6 +724,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <span className="card-title">Compliance</span>
               </div>
               <div style={{ padding: 16 }}>
+                {/* The persisted reason, verbatim (BUG-03-03) -- amber, matching
+                    ReviewRow.tsx's own kept-as-is banner rather than inventing a second
+                    tone for the same fact. */}
+                {kept && (
+                  <div
+                    data-testid="detail-kept-banner"
+                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+                  >
+                    <div>{ROW_EXPANSION_COPY.keptPrefix}{kept.reason}</div>
+                    <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(kept.by).text} · {fmtDateTime(kept.at)}</div>
+                  </div>
+                )}
                 {verdict === 'stale' && (
                   <div
                     data-testid="stale-verdict"
@@ -806,7 +821,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <div style={{ fontSize: 13, fontWeight: 500 }}>
                           {h.from_status === null ? `Created · ${h.to_status}` : `${h.from_status} → ${h.to_status}`}
                         </div>
-                        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>{h.actor} · {fmtDateTime(h.changed_at)}</div>
+                        <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
+                          <span className={actorLabel(h.actor).mono ? 'mono' : undefined}>{actorLabel(h.actor).text}</span>
+                          {' · '}
+                          <span className="mono">{fmtDateTime(h.changed_at)}</span>
+                        </div>
                       </div>
                     </div>
                   ))}

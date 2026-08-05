@@ -5,23 +5,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { APP_PERSONAS } from '../auth'
 import { copyGlyph, shieldGlyph } from '../glyphs'
+import { actorLabel } from '../lib/actor'
 import { fmtDateTime, fmtPlain } from '../lib/format'
 import { formatBytes, type SourceDocumentRecord } from '../lib/sourceDocument'
 import type { PlatformCtx } from '../types'
-
-/**
- * `uploaded_by` is a GoTrue subject uuid and this system has no users table, so a name is
- * only producible where the subject matches a known persona. Everything else renders the
- * raw subject, in mono, rather than a fabricated identity.
- */
-export function uploaderLabel(subject: string | null): { text: string; mono: boolean } {
-  if (subject === null) return { text: 'Not recorded', mono: false }
-  const persona = Object.values(APP_PERSONAS).find((p) => p.subject === subject)
-  if (persona) return { text: `${persona.name} · ${persona.org}`, mono: false }
-  return { text: subject, mono: true }
-}
 
 const COPIED_MS = 1800
 
@@ -80,7 +68,7 @@ export function SourceDocumentRail({
   }
 
   const hashLines = record.content_hash.match(/.{1,16}/g) ?? []
-  const uploader = uploaderLabel(record.uploaded_by)
+  const uploader = actorLabel(record.uploaded_by)
 
   function copyHash() {
     // Optional-chained: a jsdom/insecure context has no clipboard, and a rejected write

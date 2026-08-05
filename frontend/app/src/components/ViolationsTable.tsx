@@ -11,6 +11,9 @@
 
 import { severityStyle, type Violation } from '../lib/validationApi'
 
+// Five headers ~529px of padding+content; smaller leaves Message crushed.
+export const TABLE_MIN_WIDTH = 720
+
 export interface ViolationsTableProps {
   violations: Violation[]
   ruleSetVersion: number

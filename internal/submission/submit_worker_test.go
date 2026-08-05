@@ -605,11 +605,17 @@ func (testInvoicePort) HasFiscalOutcome(ctx context.Context, tx pgx.Tx, invoiceI
 }
 
 func (testInvoicePort) MarkSubmitted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "submitted")
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "submitted", nil)
 }
 
-func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "failed")
+// MarkFailed (BUG-06-02, task-384) writes failure_kind via tipMarkTerminal's
+// outcome callback, mirroring the real Store.MarkFailedTx, so BUG-06-03's
+// tests can assert on the stored kind.
+func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, kind submission.FailureKind) error {
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "failed", func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE invoices SET failure_kind = $1 WHERE id = $2`, string(kind), invoiceID)
+		return err
+	})
 }
 
 // MarkAccepted/MarkRejected mirror MarkSubmitted/MarkFailed above -- added by
@@ -621,11 +627,11 @@ func (testInvoicePort) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, ten
 // TestSubmitWorker_AcceptedRoutesVerdictAndAudits and
 // TestSubmitWorker_RejectedMovesInvoiceToRejected below.
 func (testInvoicePort) MarkAccepted(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, out submission.Accepted) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "accepted")
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "accepted", nil)
 }
 
 func (testInvoicePort) MarkRejected(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, verdict submission.Rejected) error {
-	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "rejected")
+	return tipMarkTerminal(ctx, tx, invoiceID, tenantID, "rejected", nil)
 }
 
 var _ submission.InvoicePort = testInvoicePort{}
@@ -646,11 +652,12 @@ var tipLegalTransitions = map[string]map[string]bool{
 	"submitted": {"failed": true, "accepted": true, "rejected": true},
 }
 
-// tipMarkTerminal is MarkSubmitted/MarkFailed's shared tail: lock+read the current status,
-// short-circuit as an idempotent no-op when already at target, otherwise require the
-// (current, target) pair to be one of tipLegalTransitions' edges and write the transition +
-// one history row with actor 'system'.
-func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target string) error {
+// tipMarkTerminal is MarkSubmitted/MarkFailed/MarkAccepted/MarkRejected's shared tail:
+// lock+read the current status, short-circuit as an idempotent no-op when already at
+// target, otherwise require the (current, target) pair to be one of tipLegalTransitions'
+// edges, run the optional outcome callback, and write the transition + one history row
+// with actor 'system' -- mirroring invoice.Store.markTerminalTx's own shape (actor.go).
+func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target string, outcome func(context.Context, pgx.Tx) error) error {
 	var current string
 	if err := tx.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID).Scan(&current); err != nil {
 		return err
@@ -660,6 +667,11 @@ func tipMarkTerminal(ctx context.Context, tx pgx.Tx, invoiceID, tenantID, target
 	}
 	if !tipLegalTransitions[current][target] {
 		return fmt.Errorf("testInvoicePort: illegal transition %s -> %s", current, target)
+	}
+	if outcome != nil {
+		if err := outcome(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE invoices SET status = $1 WHERE id = $2`, target, invoiceID); err != nil {
 		return err

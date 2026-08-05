@@ -54,10 +54,15 @@ func (s *Store) MarkSubmittedTx(ctx context.Context, tx pgx.Tx, id, tenantID str
 	return s.markTerminalTx(ctx, tx, id, tenantID, StatusSubmitted, nil)
 }
 
-// MarkFailedTx is MarkSubmittedTx's sibling for the queued->failed
-// dead-letter edge.
-func (s *Store) MarkFailedTx(ctx context.Context, tx pgx.Tx, id, tenantID string) (Invoice, error) {
-	return s.markTerminalTx(ctx, tx, id, tenantID, StatusFailed, nil)
+// MarkFailedTx is MarkAcceptedTx/MarkRejectedTx's sibling for the
+// queued->failed dead-letter edge: kind is written as failure_kind via
+// markTerminalTx's outcome callback, in the SAME tx as the transition, bound
+// RAW (no NULLIF -- a blank kind must hit the CHECK, not silently NULL).
+func (s *Store) MarkFailedTx(ctx context.Context, tx pgx.Tx, id, tenantID string, kind submission.FailureKind) (Invoice, error) {
+	return s.markTerminalTx(ctx, tx, id, tenantID, StatusFailed, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE invoices SET failure_kind = $1 WHERE id = $2`, string(kind), id)
+		return err
+	})
 }
 
 // markTerminalTx is the shared tail of all four Mark*Tx siblings
@@ -85,9 +90,10 @@ func (s *Store) MarkFailedTx(ctx context.Context, tx pgx.Tx, id, tenantID string
 // transitionTx, so a replayed call never rewrites a stored outcome and an
 // outcome write followed by an illegal transitionTx call rolls back the
 // whole attempt together (the caller's db.WithinTenantTx aborts on any
-// non-nil error). MarkSubmittedTx/MarkFailedTx pass nil -- they write no
-// outcome columns, so this step is skipped entirely for them, unchanged
-// behaviour from before this parameter existed. This callback is the only
+// non-nil error). MarkSubmittedTx passes nil -- it writes no outcome
+// columns, so this step is skipped entirely for it, unchanged behaviour
+// from before this parameter existed. MarkFailedTx (BUG-06-02, task-384)
+// passes a closure writing failure_kind, the same routing. This callback is the only
 // addition; the lock+read, the idempotent short-circuit, and the single
 // transitionTx call all stay solely inside this function, unchanged in
 // count and order -- nothing outside markTerminalTx calls transitionTx.

@@ -72,7 +72,7 @@ func TestMarkFailedTx_NoIdentityInContextSucceeds(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T02-3", StatusQueued)
 
 	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID)
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailurePayloadNotBuilt)
 		return err
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func TestMarkFailedTx_RecordsSystemActorInHistoryAndAudit(t *testing.T) {
 	beforeAudit := auditCount(t, app, tenantID, "invoice.transitioned")
 
 	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID)
+		_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailurePayloadNotBuilt)
 		return err
 	})
 	if err != nil {
@@ -146,7 +146,7 @@ func TestMarkFailedTx_HistoryTenantScopedByRLS(t *testing.T) {
 		invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T02-5a", StatusQueued)
 
 		err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
-			_, err := store.MarkFailedTx(ctx, tx, invID, tenantID)
+			_, err := store.MarkFailedTx(ctx, tx, invID, tenantID, submission.FailurePayloadNotBuilt)
 			return err
 		})
 		if err != nil {
@@ -179,7 +179,7 @@ func TestMarkFailedTx_HistoryTenantScopedByRLS(t *testing.T) {
 		// tenantA), so this exercises the actor/GUC mismatch specifically, not
 		// a "can't find the row" case.
 		err := db.WithinTenantTx(ctx, app, tenantA, func(tx pgx.Tx) error {
-			_, err := store.MarkFailedTx(ctx, tx, invID, tenantB)
+			_, err := store.MarkFailedTx(ctx, tx, invID, tenantB, submission.FailurePayloadNotBuilt)
 			return err
 		})
 		if err == nil {

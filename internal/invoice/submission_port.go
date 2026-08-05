@@ -54,8 +54,8 @@ func (s *Store) MarkSubmitted(ctx context.Context, tx pgx.Tx, invoiceID, tenantI
 
 // MarkFailed is MarkSubmitted's sibling, a thin forward onto MarkFailedTx
 // (actor.go).
-func (s *Store) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string) error {
-	_, err := s.MarkFailedTx(ctx, tx, invoiceID, tenantID)
+func (s *Store) MarkFailed(ctx context.Context, tx pgx.Tx, invoiceID, tenantID string, kind submission.FailureKind) error {
+	_, err := s.MarkFailedTx(ctx, tx, invoiceID, tenantID, kind)
 	return err
 }
 

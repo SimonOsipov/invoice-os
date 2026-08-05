@@ -216,7 +216,8 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 				if err := markJobTransformFailed(ctx, tx, jobID); err != nil {
 					return err
 				}
-				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+				// placeholder kind -- BUG-06-03 assigns the correct value per site (§3)
+				return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailurePayloadNotBuilt)
 			})
 			return err
 		})
@@ -304,7 +305,8 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 					if err := markJobDeadLettered(ctx, tx, jobID, newAttempts, r.Err.Error()); err != nil {
 						return err
 					}
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+					// placeholder kind -- BUG-06-03 assigns the correct value per site (§3)
+					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailurePayloadNotBuilt)
 				})
 				if err != nil {
 					return err
@@ -512,7 +514,8 @@ func (w *PollWorker) Work(ctx context.Context, job *river.Job[PollArgs]) error {
 					if err := markJobDeadLettered(ctx, tx, args.SubmissionJobID, newAttempts, r.Err.Error()); err != nil {
 						return err
 					}
-					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID)
+					// placeholder kind -- BUG-06-03 assigns the correct value per site (§3)
+					return w.InvoicePort.MarkFailed(ctx, tx, args.InvoiceID, args.TenantID, FailurePayloadNotBuilt)
 				})
 				if err != nil {
 					return err

@@ -454,9 +454,16 @@ test('detail surface: violations render against the rule-set version, the fix lo
   })
   await scrollBox.focus()
   await expect(scrollBox, 'wrapper must be keyboard-focusable, not just scriptable').toBeFocused()
-  await page.keyboard.press('End')
-  const scrollLeftAfterKey = await scrollBox.evaluate((el) => el.scrollLeft)
-  expect(scrollLeftAfterKey, 'End on the focused wrapper must scroll it -- this is what keyboard reachability means').toBeGreaterThan(0)
+  // End targets scrollTop, not scrollLeft -- this wrapper overflows only horizontally
+  // (measured live on PR #138: End left scrollLeft at 0), so ArrowRight is the key that
+  // actually proves reachability here. Loop rather than assert an exact pixel increment,
+  // since the UA's per-press scroll step isn't a value this test should pin.
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press('ArrowRight')
+  }
+  await expect(scrollBox, 'ArrowRight must not move focus off the wrapper').toBeFocused()
+  const scrollLeftAfterKeys = await scrollBox.evaluate((el) => el.scrollLeft)
+  expect(scrollLeftAfterKeys, 'ArrowRight on the focused wrapper must scroll it -- this is what keyboard reachability means').toBeGreaterThan(0)
 
   // AC-4: Message (td index 1: Severity=0, Message=1, Rule key=2, Path=3, Rule-set
   // version=4 -- same ordinal convention as the Path check above) must not be crushed.

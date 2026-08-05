@@ -3138,3 +3138,40 @@ describe('diffEditInput: composition with formFromInvoice', () => {
   })
 })
 
+// QA Mode B (task-391, BUG-03-02): adversarial coverage on top of the composition tests
+// above, which are untouched. draftInvoice's own issue_date is already midnight, so none
+// of those exercise a seed the input's truncation actually loses precision on.
+describe('diffEditInput: issue_date adversarial coverage (task-391, BUG-03-02)', () => {
+  it('an untouched save on a non-midnight timestamp produces an empty patch -- the lost time is never rewritten to midnight', () => {
+    // Reverting the hoist (issue_date branch back below the generic skip, comparing
+    // against the raw original) makes this produce { issue_date: '...T00:00:00Z' } instead
+    // -- verified by replaying the pre-fix (058479c) branch order against this fixture.
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: '2026-07-01T14:30:00Z' }
+    const form = formFromInvoice(inv)
+
+    expect(form.issue_date).toBe('2026-07-01')
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
+
+  it('changing VAT alone on a non-midnight-time invoice patches VAT alone -- issue_date is neither sent nor collapsed to midnight', () => {
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: '2026-07-01T14:30:00Z' }
+    const form: EditFormState = { ...formFromInvoice(inv), vat: '999.00' }
+
+    expect(diffEditInput(inv, form)).toEqual({ vat: '999.00' })
+  })
+
+  it('an already-garbage stored issue_date round-trips untouched to an empty patch', () => {
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: 'garbage-stored' }
+    const form = formFromInvoice(inv)
+
+    expect(form.issue_date).toBe('garbage-stored')
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
+
+  it('a garbage value pasted over a real date is sent verbatim, never blanked', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: 'garbage-paste' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: 'garbage-paste' })
+  })
+})
+

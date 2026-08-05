@@ -80,10 +80,11 @@ func markJobAlreadyCleared(ctx context.Context, tx pgx.Tx, jobID string) error {
 }
 
 // markJobTransformFailed is the transform-error branch's write (T05-7): state='failed',
-// attempts left UNCHANGED -- a transform failure never reaches the wire either, so it must
-// not consume the retry budget ([transform-failure]).
-func markJobTransformFailed(ctx context.Context, tx pgx.Tx, jobID string) error {
-	return execJobUpdate(ctx, tx, `UPDATE submission_jobs SET state = 'failed' WHERE id = $1`, jobID)
+// last_error recorded, attempts left UNCHANGED -- a transform failure never reaches the wire
+// either, so it must not consume the retry budget ([transform-failure]).
+func markJobTransformFailed(ctx context.Context, tx pgx.Tx, jobID, lastErr string) error {
+	return execJobUpdate(ctx, tx,
+		`UPDATE submission_jobs SET state = 'failed', last_error = $2 WHERE id = $1`, jobID, lastErr)
 }
 
 // markJobAccepted is tx2's Accepted write: state='accepted', attempts advanced to the

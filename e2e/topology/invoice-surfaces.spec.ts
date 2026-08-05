@@ -797,26 +797,22 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   await openInvoiceRow(page, invoiceNumber)
   await assertFiscalRecord(page, invoiceNumber)
 
-  // The cap AND its placement. Asserting width <= 1082 alone passes on a container that
-  // pins left and leaves a third of the window dead -- that shipped (PR #138) and is what
-  // the gutter comparison below is here to catch. Measured against the scroll container,
-  // not the window, because the 252px sidebar is outside it.
+  // The detail page fills its column at a wide viewport. BUG-03-05's `maxWidth: 1080`
+  // stranded 588px here (32% of the window) and its own check -- `width <= 1082` -- was
+  // SATISFIED by that, so it measured the symptom, not the defect. This measures the
+  // leftover band instead, which is zero only when nothing caps the container. Compared
+  // against the scroll container, not the window: the 252px sidebar sits outside it.
   await page.setViewportSize({ width: 1920, height: 1080 })
   const detailBox = await page.getByTestId('invoice-detail').boundingBox()
   expect(detailBox, 'invoice-detail must be visible').toBeTruthy()
-  expect(detailBox!.width, 'invoice detail must respect the 1080px cap at a wide viewport').toBeLessThanOrEqual(1082)
 
-  // 24px, not an exact match: a scrollbar gutter skews the two sides by up to 10px on
-  // WebKit while the box is genuinely centred. The defect this guards against strands the
-  // ENTIRE remainder on one side -- 588px here, 144px at the 1440 where the cap first
-  // engages -- so 24px separates the two cases with room to spare.
   const mainBox = (await page.locator('main.pf-main .pf-scroll').boundingBox())!
-  const leftGutter = detailBox!.x - mainBox.x
-  const rightGutter = mainBox.x + mainBox.width - (detailBox!.x + detailBox!.width)
-  expect(rightGutter, 'capped detail must not strand its leftover width on one side').toBeGreaterThan(0)
+  const strandedBand = mainBox.x + mainBox.width - (detailBox!.x + detailBox!.width)
+  // 24px absorbs a scrollbar gutter (up to 10px on WebKit); the defect it guards against
+  // strands 588px at this viewport, so the two cases are nowhere near each other.
   expect(
-    Math.abs(leftGutter - rightGutter),
-    `capped detail must be centred: left gutter ${Math.round(leftGutter)}px vs right ${Math.round(rightGutter)}px`,
+    strandedBand,
+    `invoice detail must fill its column, not strand a band: ${Math.round(strandedBand)}px unused of ${Math.round(mainBox.width)}px`,
   ).toBeLessThanOrEqual(24)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

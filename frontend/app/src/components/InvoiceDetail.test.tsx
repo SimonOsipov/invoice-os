@@ -770,4 +770,72 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
     const table = screen.getByTestId('violations-table')
     expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
+
+  // QA adversarial: the AC4 test above only checks banner-vs-violations-table. A kept
+  // invoice is DB-constrained to status='draft' (invoices_kept_as_is_draft_only), which is
+  // exactly the demotedSinceValidation shape (draft + rule_set_version_id set + no error
+  // violations) that also renders stale-verdict -- a state the earlier test's
+  // status:'validated' fixture could never reach for real.
+  it('AC4: the kept banner also leads stale-verdict, for a demoted draft kept as-is', async () => {
+    const kept = detailRecord({
+      status: 'draft',
+      rule_set_version_id: 'rsv-1',
+      rule_set_version: 3,
+      violations: [],
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    const stale = screen.getByTestId('stale-verdict')
+    const table = screen.getByTestId('violations-table')
+    expect(banner.compareDocumentPosition(stale) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // QA adversarial: kept_as_is_by is a raw GoTrue subject on the wire same as h.actor --
+  // an unrecognised one must still surface (raw), not go blank or silently drop to a
+  // placeholder, mirroring AC2's guarantee for the status-history line.
+  it('an unrecognised kept_as_is_by renders raw on the banner, not blank', async () => {
+    const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
+    const kept = detailRecord({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: unknown,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent).toContain(unknown)
+    expect(banner.textContent).not.toContain('Not recorded')
+  })
+
+  // QA adversarial: kept_as_is_by/_reason null while _at is set violates the all-or-
+  // nothing CHECK constraint server-side, so this row should never arrive over the wire --
+  // but keptAsIs() (lib/invoices.ts) doesn't re-enforce that, so the render path is what
+  // actually decides what a malformed row shows. It must not fabricate a reason nor print
+  // a stray "null" (JSX drops a null child silently; a template literal would not have).
+  it('a null reason/actor renders no fabricated text and no stray "null" (defensive -- CHECK constraint should make this unreachable)', async () => {
+    const kept = detailRecord({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: null,
+      kept_as_is_reason: null,
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent).not.toMatch(/null/i)
+    // Reason line: prefix only, nothing after it -- not disastrous, but worth knowing.
+    expect(banner.children[0].textContent).toBe(ROW_EXPANSION_COPY.keptPrefix)
+    // Actor falls back to actorLabel(null) === 'Not recorded', not blank.
+    expect(banner.children[1].textContent).toContain('Not recorded')
+  })
 })

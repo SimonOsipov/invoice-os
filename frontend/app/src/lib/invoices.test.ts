@@ -34,8 +34,10 @@ import {
   computedLineSum,
   createInvoice,
   DETAIL_SUBMIT_COPY,
+  diffEditInput,
   diffLineItems,
   editInvoice,
+  formFromInvoice,
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
@@ -44,6 +46,7 @@ import {
   isInFlight,
   isRowSelectable,
   keepInvoiceAsIs,
+  keptAsIs,
   LIVE_POLL_MS,
   listInvoices,
   mbsPathToEditField,
@@ -68,6 +71,7 @@ import {
   violationSummary,
   type BatchSubmitResultItem,
   type EditFieldKey,
+  type EditFormState,
   type InvoiceCreateInput,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
@@ -755,6 +759,37 @@ describe('keepInvoiceAsIs (INVCR-01-15, D6, task-291)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(409)
+  })
+})
+
+// RED specs (task-392, BUG-03-03, Mode A) -- keptAsIs is a throwing stub today, so every
+// case below fails on the throw, not on a missing import.
+describe('keptAsIs (task-392, BUG-03-03)', () => {
+  it("returns null on an un-kept invoice (kept_as_is_at/_by/_reason all null, matching detailRecord()'s defaults)", () => {
+    expect(keptAsIs({ kept_as_is_at: null, kept_as_is_by: null, kept_as_is_reason: null })).toBeNull()
+  })
+
+  it('surfaces the persisted at/by/reason verbatim', () => {
+    const result = keptAsIs({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: 'c0000000-0000-0000-0000-000000000001',
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+
+    expect(result).toEqual({
+      at: '2026-07-31T00:00:00Z',
+      by: 'c0000000-0000-0000-0000-000000000001',
+      reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+  })
+
+  // No fabricated reason: `by`/`reason` null pass through as null, never a placeholder
+  // string, even though `at` alone means "kept" -- the all-or-nothing CHECK constraint is
+  // server-side only, this helper must not paper over a row that somehow violates it.
+  it('never fabricates a reason when at is set but by/reason are null', () => {
+    const result = keptAsIs({ kept_as_is_at: '2026-07-31T00:00:00Z', kept_as_is_by: null, kept_as_is_reason: null })
+
+    expect(result).toEqual({ at: '2026-07-31T00:00:00Z', by: null, reason: null })
   })
 })
 
@@ -3076,6 +3111,110 @@ describe('fetchAllInvoices partial failure (QA adversarial)', () => {
       process.off('unhandledRejection', onUnhandled)
     }
     expect(unhandled).toEqual([])
+  })
+})
+
+// RED spec (task-391, BUG-03-02, Mode A) -- formFromInvoice still seeds the raw RFC3339
+// value today, so this fails on the actual seed, not an import/compile error.
+describe('formFromInvoice: issue_date seed format', () => {
+  it("seeds issue_date in the input's stated format (YYYY-MM-DD), not the raw RFC3339 timestamp", () => {
+    const form = formFromInvoice(draftInvoice)
+
+    expect(form.issue_date).toBe('2026-07-01')
+  })
+})
+
+// Composition tests for diffEditInput(original, form). These are GREEN today: the
+// current (unfixed) code seeds and compares the SAME raw representation on both sides of
+// the generic skip, so it round-trips correctly by coincidence. Their job is to catch the
+// trap if formFromInvoice's seed is normalized without moving/re-targeting diffEditInput's
+// issue_date comparison in lockstep -- they must stay green after that fix too.
+describe('diffEditInput: composition with formFromInvoice', () => {
+  it('an untouched form produces an empty patch', () => {
+    const form = formFromInvoice(draftInvoice)
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({})
+  })
+
+  it('an untouched form with a null issue_date produces an empty patch', () => {
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: null }
+    const form = formFromInvoice(inv)
+
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
+
+  it('a changed date is sent as midnight UTC', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: '2026-02-05' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: '2026-02-05T00:00:00Z' })
+  })
+
+  it('a cleared date is dropped, never sent as an empty string', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: '' }
+
+    const patch = diffEditInput(draftInvoice, form)
+
+    expect('issue_date' in patch).toBe(false)
+  })
+
+  it('a full RFC3339 timestamp typed by hand passes through unchanged', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: '2026-02-05T09:30:00Z' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: '2026-02-05T09:30:00Z' })
+  })
+
+  it('changing VAT alone patches VAT alone, never issue_date -- fails in the half-fixed intermediate state', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), vat: '999.00' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ vat: '999.00' })
+  })
+})
+
+// QA Mode B (task-391, BUG-03-02): adversarial coverage on top of the composition tests
+// above, which are untouched. draftInvoice's own issue_date is already midnight, so none
+// of those exercise a seed the input's truncation actually loses precision on.
+describe('diffEditInput: issue_date adversarial coverage (task-391, BUG-03-02)', () => {
+  it('an untouched save on a non-midnight timestamp produces an empty patch -- the lost time is never rewritten to midnight', () => {
+    // Reverting the hoist (issue_date branch back below the generic skip, comparing
+    // against the raw original) makes this produce { issue_date: '...T00:00:00Z' } instead
+    // -- verified by replaying the pre-fix (058479c) branch order against this fixture.
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: '2026-07-01T14:30:00Z' }
+    const form = formFromInvoice(inv)
+
+    expect(form.issue_date).toBe('2026-07-01')
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
+
+  it('changing VAT alone on a non-midnight-time invoice patches VAT alone -- issue_date is neither sent nor collapsed to midnight', () => {
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: '2026-07-01T14:30:00Z' }
+    const form: EditFormState = { ...formFromInvoice(inv), vat: '999.00' }
+
+    expect(diffEditInput(inv, form)).toEqual({ vat: '999.00' })
+  })
+
+  it('an already-garbage stored issue_date round-trips untouched to an empty patch', () => {
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: 'garbage-stored' }
+    const form = formFromInvoice(inv)
+
+    expect(form.issue_date).toBe('garbage-stored')
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
+
+  it('a garbage value pasted over a real date is sent verbatim, never blanked', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: 'garbage-paste' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: 'garbage-paste' })
+  })
+
+  it('a garbage stored issue_date with trailing whitespace round-trips untouched to an empty patch', () => {
+    // toDateInputValue passes non-date input through unchanged, so the form seeds with the
+    // trailing space intact; form.issue_date is then trimmed before compare but the original
+    // side wasn't -- an untouched save must still no-op (CodeRabbit, PR #138).
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: 'garbage-stored ' }
+    const form = formFromInvoice(inv)
+
+    expect(form.issue_date).toBe('garbage-stored ')
+    expect(diffEditInput(inv, form)).toEqual({})
   })
 })
 

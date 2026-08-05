@@ -18,7 +18,7 @@
 //   FLOW-08  previewColumns: duplicate headers kept as distinct entries             (AC2)
 //   FLOW-09  isMappableColumn: '' blocked, whitespace-only header stays mappable    (AC2)
 //   FLOW-10  columnLetter: A..Z, AA, AB, ... past column 26                         (AC2)
-//   FLOW-11  wizardHeader document set: form -> WIZARD_STEPS (Enter · Review) at 0    (AC6)
+//   FLOW-11  wizardHeader document set: form -> WIZARD_STEPS (Enter) at 0             (AC6)
 //   FLOW-12  wizardHeader import set: upload/mapping/review — one path per CreateStep (AC2,6)
 //   FLOW-14  wizardHeader totality: every CreateStep literal, never undefined/NaN     (AC6)
 //
@@ -202,12 +202,11 @@ describe('columnLetter (FLOW-10)', () => {
 })
 
 describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
-  // Down to ONE document step since INVCR-01-03 deleted the mock validate/approve tail,
-  // and INVCR-01-04 replaced the strip with the two-stage Enter · Review model — so that
-  // one step is now the FIRST entry of a 2-item WIZARD_STEPS, not the third of five.
+  // [closes-d-04a-typed-review-residual]: WIZARD_STEPS is down to the single 'Enter'
+  // step; the phantom 'Review' entry D-04a flagged (not fixed) is retired.
   it('routes the single-document steps to WIZARD_STEPS at their existing stage index', () => {
     expect(wizardHeader('form')).toEqual({ steps: WIZARD_STEPS, stageIndex: 0 })
-    expect(WIZARD_STEPS.length).toBe(2)
+    expect(WIZARD_STEPS.length).toBe(1)
   })
 
   // FLOW-12 absorbs FLOW-13's one surviving assertion (bare 'upload' -> IMPORT_STEPS@0)
@@ -230,11 +229,12 @@ describe('wizardHeader (FLOW-11, FLOW-12, FLOW-14)', () => {
   // real 2. 'review' was cast per this file's own QA-WH-FALLBACK precedent
   // below until the union widened; the cast is gone now that it is a real
   // CreateStep member.
+  // [closes-d-04a-typed-review-residual]: 'form' row reflects WIZARD_STEPS at 1 item.
   it('is total over every CreateStep literal — stageIndex is always a valid index', () => {
     const ALL: Array<[CreateStep, number, number]> = [
       ['upload', 3, 0],
       ['mapping', 3, 1],
-      ['form', 2, 0],
+      ['form', 1, 0],
       ['review', 3, 2],
     ]
     ALL.forEach(([step, len, idx]) => {
@@ -288,15 +288,10 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
     ])
   })
 
-  // AC-1. Falsification: an impl that keeps the 5-entry Build/Validate/
-  // Approve strip, or collapses to a single 'Enter' item (D-04a rejects both
-  // — [three-stages] keeps 2 items on the typed path). RED before the
-  // rename: WIZARD_STEPS had 5 entries, not the 2 above.
-  it('STEPS-2: typed strip is Enter · Review', () => {
-    expect(WIZARD_STEPS).toEqual([
-      ['1', 'Enter'],
-      ['2', 'Review'],
-    ])
+  // [closes-d-04a-typed-review-residual]: WIZARD_STEPS collapses to the single 'Enter'
+  // entry; D-04a's phantom 'Review' step is retired, not reasserted.
+  it('STEPS-2: typed strip is Enter', () => {
+    expect(WIZARD_STEPS).toEqual([['1', 'Enter']])
   })
 
   // AC-2. STAGE_OF must stay a TOTAL Record<CreateStep, number>, not become
@@ -336,13 +331,15 @@ describe('INVCR-01-04 three-stage model — report -> review (RED, task-280)', (
   // rename: all four retired labels were present (Build/Validate/Approve in
   // WIZARD_STEPS, Report in IMPORT_STEPS) and 'Review' appeared zero times,
   // not twice.
+  // [closes-d-04a-typed-review-residual]: WIZARD_STEPS no longer carries a 'Review'
+  // label, so only IMPORT_STEPS' own entry remains.
   it('STEPS-6: no removed stage name survives in either table', () => {
     const labels = [...IMPORT_STEPS, ...WIZARD_STEPS].map(([, label]) => label)
     expect(labels).not.toContain('Build')
     expect(labels).not.toContain('Validate')
     expect(labels).not.toContain('Approve')
     expect(labels).not.toContain('Report')
-    expect(labels.filter((l) => l === 'Review')).toHaveLength(2)
+    expect(labels.filter((l) => l === 'Review')).toHaveLength(1)
   })
 
   // AC-6. The ONLY runtime proof that App.tsx's setCreateStep(...) call in
@@ -399,15 +396,19 @@ describe('STAGE_OF / IMPORT_STAGE_OF structural invariants (QA, task-280)', () =
   // so IMPORT_STEPS' length must always equal the highest reachable index + 1, derived
   // structurally rather than re-pinning the literal STEPS-1 already checks — this still
   // catches a phantom trailing IMPORT_STEPS entry even if STEPS-1's literal is edited to
-  // match it. (WIZARD_STEPS is deliberately EXCLUDED from this shape of check: its
-  // second entry, 'Review', is reached one navigation later on the real invoice detail
-  // page, not through wizardHeader's stageIndex at all — plan §1's "Recorded residual,
-  // flagged not fixed" — so applying this same ceiling to WIZARD_STEPS would incorrectly
-  // fail on working, intended behaviour.)
+  // match it. (D-04a case (b), "Recorded residual, flagged not fixed": closed, not
+  // reversed. The WIZARD_STEPS exemption above is retired now that it's 1 item — see
+  // QA-NO-PHANTOM-TYPED-STEP below.)
   it('QA-NO-PHANTOM-IMPORT-STEP: IMPORT_STEPS carries no entry past IMPORT_STAGE_OF’s reachable ceiling', () => {
     const reachableIndices = Object.values(IMPORT_STAGE_OF) as number[]
     const maxReachable = Math.max(...reachableIndices)
     expect(IMPORT_STEPS.length).toBe(maxReachable + 1)
+  })
+
+  // [closes-d-04a-typed-review-residual]: same ceiling shape, now valid for WIZARD_STEPS
+  // too — its lone reachable index is STAGE_OF.form.
+  it('QA-NO-PHANTOM-TYPED-STEP: WIZARD_STEPS carries no entry past STAGE_OF.form’s reachable ceiling', () => {
+    expect(WIZARD_STEPS.length).toBe(STAGE_OF.form + 1)
   })
 })
 

@@ -6,8 +6,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { APP_PERSONAS } from '../auth'
 import { createAuthedFetch } from '../lib/authedFetch'
+import { fmtDateTime } from '../lib/format'
 import { DETAIL_SUBMIT_COPY, LIVE_POLL_MS, skipReasonLabel, type InvoiceDetailRecord, type StatusChange } from '../lib/invoices'
+import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoiceDetail } from './InvoiceDetail'
 
@@ -178,6 +181,138 @@ describe('InvoiceDetail failed-dead-end card (task-332, BUG-01-06, [failed-no-re
     await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
     expect(screen.queryByTestId('failed-dead-end')).toBeNull()
     expect(screen.queryByText(/no reason recorded/i)).toBeNull()
+  })
+})
+
+// RED specs (Mode A): only Test B is red today -- the rejection card always renders
+// below Compliance regardless of status. A, C, D, E characterise properties already
+// true today; this story gives them their first oracle.
+//
+// FIXTURE GOTCHA: detailRecord()'s default rule_set_version is null, which renders
+// `not-validated` instead of `violations-table` -- every positional test below overrides
+// it to a real number so violations-table exists to compare against.
+describe('InvoiceDetail terminal rail order', () => {
+  it('AC-1: on a failed invoice, failed-dead-end precedes violations-table', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    const table = await screen.findByTestId('violations-table')
+    expect(card.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('AC-2: on a rejected invoice, rejection-reasons precedes violations-table', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'rejected',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('rejection-reasons')
+    const table = await screen.findByTestId('violations-table')
+    expect(card.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('AC-3: a historical rejection (demoted draft) titles "Last APP rejection" and stays below violations-table', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('rejection-reasons')
+    expect(within(card).getByText('Last APP rejection')).toBeTruthy()
+    const table = screen.getByTestId('violations-table')
+    expect(table.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('AC-4: the rejection card renders at most once per page', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'rejected',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('rejection-reasons')
+    expect(screen.getAllByTestId('rejection-reasons')).toHaveLength(1)
+  })
+
+  it('AC-4: the accepted-invoice backstop still fully suppresses the rejection card', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'accepted',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.queryByTestId('rejection-reasons')).toBeNull()
+  })
+
+  // rejected->draft retains rejection_reasons ([reason-lifecycle], only `accepted`
+  // clears them), so draft->validated->queued->failed is a real path to a failed
+  // invoice with stale reasons still attached -- both cards render, failed leading.
+  it('a failed invoice carrying stale rejection_reasons renders both cards, failed leading', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const failedCard = await screen.findByTestId('failed-dead-end')
+    const table = await screen.findByTestId('violations-table')
+    const rejectionCards = screen.getAllByTestId('rejection-reasons')
+    expect(rejectionCards).toHaveLength(1)
+    const rejectionCard = rejectionCards[0]
+
+    expect(failedCard.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(table.compareDocumentPosition(rejectionCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(rejectionCard).getByText('Last APP rejection')).toBeTruthy()
+  })
+
+  it('a rejected invoice with an empty rejection_reasons array renders no rejection card at all', async () => {
+    mockDetailFetch(detailRecord({ status: 'rejected', rejection_reasons: [], rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('violations-table')
+    expect(screen.queryByTestId('rejection-reasons')).toBeNull()
+  })
+
+  it('AC-2 extended: the live rejection card also precedes source-document-card and status-history', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'rejected',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('rejection-reasons')
+    const doc = await screen.findByTestId('source-document-card')
+    const history = screen.getByTestId('status-history')
+    expect(card.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(card.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 
@@ -683,4 +818,156 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     },
     LIVE_POLL_MS + 5000,
   )
+})
+
+// RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture carries the literal
+// actor 'system', which renders fine today and hides the raw-UUID defect -- these pass a
+// real StatusChange[] through mockDetailFetch instead of relying on the [] default.
+describe('InvoiceDetail status history: actor resolution ([actor-label-shared])', () => {
+  it('AC2: the status history renders a person, not a subject uuid', async () => {
+    const history: StatusChange[] = [
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject },
+    ]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('status-history-row')
+    expect(document.body.textContent).toContain(`${APP_PERSONAS.firm.name} · ${APP_PERSONAS.firm.org}`)
+    expect(document.body.textContent).not.toContain(APP_PERSONAS.firm.subject)
+  })
+
+  it('AC2: an unknown subject still renders raw, in mono', async () => {
+    const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
+    const history: StatusChange[] = [{ from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown }]
+    mockDetailFetch(detailRecord(), history)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const row = await screen.findByTestId('status-history-row')
+    // Exact match: today the actor and timestamp share one text node ('uuid · date'), so
+    // this element-boundary lookup fails until the actor gets its own span.
+    const actorEl = within(row).getByText(unknown)
+    expect(actorEl.className.split(' ')).toContain('mono')
+  })
+})
+
+// RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture nulls kept_as_is_*, so
+// these override the three fields explicitly rather than relying on detailRecord()'s
+// (unchanged) un-kept defaults.
+describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
+  it('AC4: a kept invoice shows the decision on its own page', async () => {
+    const kept = detailRecord({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent?.startsWith(ROW_EXPANSION_COPY.keptPrefix)).toBe(true)
+    expect(banner.textContent).toContain('Buyer confirmed the discrepancy is intentional.')
+    expect(banner.textContent).toContain(`${APP_PERSONAS.firm.name} · ${APP_PERSONAS.firm.org}`)
+    expect(banner.textContent).toContain(fmtDateTime('2026-07-31T00:00:00Z'))
+  })
+
+  it('AC5: an un-kept invoice renders no kept banner', async () => {
+    mockDetailFetch(detailRecord())
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
+    expect(screen.queryAllByTestId('detail-kept-banner')).toHaveLength(0)
+  })
+
+  // Trap: detailRecord()'s default rule_set_version is null, which renders `not-validated`
+  // instead of `violations-table` -- overridden here to a real number so this targets the
+  // element it means to, not a missing one.
+  it('AC4: the kept banner leads the Compliance panel, above violations-table', async () => {
+    const kept = detailRecord({
+      status: 'validated',
+      rule_set_version: 3,
+      violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    const table = screen.getByTestId('violations-table')
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // QA adversarial: the AC4 test above only checks banner-vs-violations-table. A kept
+  // invoice is DB-constrained to status='draft' (invoices_kept_as_is_draft_only), which is
+  // exactly the demotedSinceValidation shape (draft + rule_set_version_id set + no error
+  // violations) that also renders stale-verdict -- a state the earlier test's
+  // status:'validated' fixture could never reach for real.
+  it('AC4: the kept banner also leads stale-verdict, for a demoted draft kept as-is', async () => {
+    const kept = detailRecord({
+      status: 'draft',
+      rule_set_version_id: 'rsv-1',
+      rule_set_version: 3,
+      violations: [],
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    const stale = screen.getByTestId('stale-verdict')
+    const table = screen.getByTestId('violations-table')
+    expect(banner.compareDocumentPosition(stale) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // QA adversarial: kept_as_is_by is a raw GoTrue subject on the wire same as h.actor --
+  // an unrecognised one must still surface (raw), not go blank or silently drop to a
+  // placeholder, mirroring AC2's guarantee for the status-history line.
+  it('an unrecognised kept_as_is_by renders raw on the banner, not blank', async () => {
+    const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
+    const kept = detailRecord({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: unknown,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent).toContain(unknown)
+    expect(banner.textContent).not.toContain('Not recorded')
+  })
+
+  // QA adversarial: kept_as_is_by/_reason null while _at is set violates the all-or-
+  // nothing CHECK constraint server-side, so this row should never arrive over the wire --
+  // but keptAsIs() (lib/invoices.ts) doesn't re-enforce that, so the render path is what
+  // actually decides what a malformed row shows. It must not fabricate a reason nor print
+  // a stray "null" (JSX drops a null child silently; a template literal would not have).
+  it('a null reason/actor renders no fabricated text and no stray "null" (defensive -- CHECK constraint should make this unreachable)', async () => {
+    const kept = detailRecord({
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: null,
+      kept_as_is_reason: null,
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent).not.toMatch(/null/i)
+    // Reason line: prefix only, nothing after it -- not disastrous, but worth knowing.
+    expect(banner.children[0].textContent).toBe(ROW_EXPANSION_COPY.keptPrefix)
+    // Actor falls back to actorLabel(null) === 'Not recorded', not blank.
+    expect(banner.children[1].textContent).toContain('Not recorded')
+  })
 })

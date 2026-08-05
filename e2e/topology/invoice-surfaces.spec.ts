@@ -228,10 +228,32 @@ async function assertFiscalRecord(page: Page, invoiceNumber: string): Promise<vo
   expect(irnText, 'the IRN must not equal the bare invoice number').not.toBe(invoiceNumber)
   expect(irnText, 'IRN shape <sanitised id>-FBMOCK01-YYYYMMDD (mock_script.go mockIdentifiersFor)').toMatch(/-FBMOCK01-\d{8}$/)
 
+  const csid = page.getByTestId('fiscal-csid')
+  await expect(csid).toBeVisible()
+  const csidText = (await csid.textContent())?.trim() ?? ''
+  expect(csidText.length, 'fiscal-csid must be non-empty').toBeGreaterThan(0)
+
   const qr = page.getByTestId('fiscal-qr')
   await expect(qr).toBeVisible()
   await expect(qr).toHaveAttribute('src', /^data:image\/png;base64,/)
   await expect.poll(() => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+
+  // CSID is an unbroken base64 string with no natural wrap points -- the real regression
+  // oracle for BUG-03-05's word-break fix. IRN's mock suffix already gives hyphen breaks.
+  const card = page.getByTestId('fiscal-record-card')
+  const cardBox = await card.boundingBox()
+  expect(cardBox, 'fiscal-record-card must be visible').toBeTruthy()
+  for (const testId of ['fiscal-irn', 'fiscal-csid']) {
+    const el = page.getByTestId(testId)
+    const box = await el.boundingBox()
+    expect(box, `${testId} must be visible`).toBeTruthy()
+    expect(box!.x + box!.width, `${testId} must not overflow fiscal-record-card`).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 2)
+    // boundingBox is blind to this: a stretched flex child's box stays fixed
+    // regardless of content, so unbroken text just overflows it invisibly.
+    // scrollWidth vs clientWidth measures the element's own content instead.
+    const overflow = await el.evaluate((node) => node.scrollWidth - node.clientWidth)
+    expect(overflow, `${testId} text must not overflow its own box (word-break)`).toBeLessThanOrEqual(1)
+  }
 }
 
 test('list surface: real rows render with real status badges, and Needs attention re-fetches server-side', async ({ page }) => {
@@ -403,6 +425,51 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // the em-dash placeholder a blank target would leave.
   const vatRow = violationsTable.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
   await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
+
+  // BUG-03-01: at the rail's width the table overflows its wrapper -- the fix makes that
+  // wrapper scroll instead of clip, so every column (not just the first three) stays
+  // reachable. scrollLeft = scrollWidth drives it fully right; the last header's bounding
+  // box must then sit inside the scroll container's, proving it scrolled INTO view rather
+  // than merely being present in the (clipped) DOM.
+  const scrollBox = page.getByTestId('violations-scroll')
+  const overflow = await scrollBox.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(overflow.scrollWidth, 'the table must overflow its narrow rail wrapper').toBeGreaterThan(overflow.clientWidth)
+  await scrollBox.evaluate((el) => {
+    el.scrollLeft = el.scrollWidth
+  })
+  const containerBox = (await scrollBox.boundingBox())!
+  const lastHeaderBox = (await violationsTable.getByRole('columnheader', { name: 'Rule-set version' }).boundingBox())!
+  expect(lastHeaderBox.x, 'scrolled fully right, Rule-set version must be inside the scroll container').toBeGreaterThanOrEqual(containerBox.x)
+  expect(
+    lastHeaderBox.x + lastHeaderBox.width,
+    'scrolled fully right, Rule-set version must not overflow the scroll container',
+  ).toBeLessThanOrEqual(containerBox.x + containerBox.width + 1)
+
+  // CodeRabbit (PR #138): overflow alone doesn't make a container reachable -- browsers
+  // don't focus an overflowing div by default. Prove a keyboard user (not just script) can
+  // reach the far column: focus the wrapper directly (skips a brittle full-page Tab-order
+  // walk) and let the UA's native scrollable-region key handling do the rest.
+  await scrollBox.evaluate((el) => {
+    el.scrollLeft = 0
+  })
+  await scrollBox.focus()
+  await expect(scrollBox, 'wrapper must be keyboard-focusable, not just scriptable').toBeFocused()
+  // End targets scrollTop, not scrollLeft -- this wrapper overflows only horizontally
+  // (measured live on PR #138: End left scrollLeft at 0), so ArrowRight is the key that
+  // actually proves reachability here. Loop rather than assert an exact pixel increment,
+  // since the UA's per-press scroll step isn't a value this test should pin.
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press('ArrowRight')
+  }
+  await expect(scrollBox, 'ArrowRight must not move focus off the wrapper').toBeFocused()
+  const scrollLeftAfterKeys = await scrollBox.evaluate((el) => el.scrollLeft)
+  expect(scrollLeftAfterKeys, 'ArrowRight on the focused wrapper must scroll it -- this is what keyboard reachability means').toBeGreaterThan(0)
+
+  // AC-4: Message (td index 1: Severity=0, Message=1, Rule key=2, Path=3, Rule-set
+  // version=4 -- same ordinal convention as the Path check above) must not be crushed.
+  const messageBox = (await violationsTable.locator('tbody tr').first().locator('td').nth(1).boundingBox())!
+  expect(messageBox.width, 'Message must not be crushed at the rail width').toBeGreaterThanOrEqual(160)
+
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expect(page.getByTestId('status-history-row')).toHaveCount(1)
 
@@ -729,6 +796,11 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   // click it uses is unambiguous here).
   await openInvoiceRow(page, invoiceNumber)
   await assertFiscalRecord(page, invoiceNumber)
+
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  const detailBox = await page.getByTestId('invoice-detail').boundingBox()
+  expect(detailBox, 'invoice-detail must be visible').toBeTruthy()
+  expect(detailBox!.width, 'invoice detail must respect the 1080px cap at a wide viewport').toBeLessThanOrEqual(1082)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

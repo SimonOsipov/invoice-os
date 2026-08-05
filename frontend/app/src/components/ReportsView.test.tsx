@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -15,7 +15,7 @@ import { AGGREGATE_MAX_PAGES, AGGREGATE_PAGE_SIZE } from '../lib/invoices'
 import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
 import type { Rollup } from '../lib/dashboard'
 import type { PlatformCtx } from '../types'
-import { ReportsView } from './ReportsView'
+import { EXPORTS_BLOCKED_REASON, EXPORTS_BLOCKED_REASON_ID, ReportsView } from './ReportsView'
 
 interface MockResponse {
   ok: boolean
@@ -302,5 +302,86 @@ describe('ReportsView: `fresh` gates every list-half render branch (task-335, [r
 
   it('the populated/truncation branch requires `fresh` alongside `list.data != null`', () => {
     expect(src()).toMatch(/state === 'ready' && list\.data != null && fresh && rows\.length > 0 && \(/)
+  })
+})
+
+// Pinned literal, not EXPORTS_LIST -- these tests must catch an unpinned rename, not just
+// echo whatever data.tsx currently says.
+const EXPORT_BUTTONS: { name: string; fmt: string }[] = [
+  { name: 'VAT return', fmt: 'CSV' },
+  { name: 'Audit log', fmt: 'PDF' },
+  { name: 'Invoice register', fmt: 'XLSX' },
+  { name: 'WHT schedule', fmt: 'CSV' },
+]
+
+describe('ReportsView: export buttons are disabled-with-reason', () => {
+  // The export card only renders on the populated branch (`fresh && rows.length > 0`).
+  async function renderReady() {
+    const rows = [row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })]
+    mockFetch([listResponse(rows, { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
+    render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Ready Buyer')
+  }
+
+  it('all four export buttons carry the disabled attribute (AC #1)', async () => {
+    await renderReady()
+    for (const { name } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
+      expect(btn.disabled, `${name} button must be disabled`).toBe(true)
+    }
+  })
+
+  // QA adversarial (mutation survivor): the disabled-attribute test above passes even if
+  // the inline mute is stripped entirely -- AC #1 also requires background/color/cursor,
+  // and nothing else in this file checks them.
+  it('all four export buttons carry the inline mute style (AC #1)', async () => {
+    await renderReady()
+    for (const { name } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
+      expect(btn.style.background, `${name} button background`).toBe('var(--bg-3)')
+      expect(btn.style.color, `${name} button color`).toBe('var(--fg-4)')
+      expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
+    }
+  })
+
+  it('exactly one reason element renders, carrying the pinned copy verbatim (AC #2)', async () => {
+    await renderReady()
+    const reasons = screen.queryAllByTestId('exports-blocked-reason')
+    expect(reasons).toHaveLength(1)
+    expect(reasons[0].id).toBe(EXPORTS_BLOCKED_REASON_ID)
+    expect(reasons[0].textContent).toBe(EXPORTS_BLOCKED_REASON)
+  })
+
+  it("every button's aria-describedby and title resolve to the one reason element (AC #2)", async () => {
+    await renderReady()
+    const reasonEl = screen.getByTestId('exports-blocked-reason')
+    for (const { name } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) })
+      expect(btn.getAttribute('aria-describedby'), `${name} button`).toBe(reasonEl.id)
+      expect(btn.getAttribute('title'), `${name} button`).toBe(EXPORTS_BLOCKED_REASON)
+    }
+  })
+
+  it('a disabled export button refuses focus and emits no click (AC #3)', async () => {
+    await renderReady()
+    for (const { name } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) })
+      btn.focus()
+      expect(document.activeElement, `${name} button must refuse focus while disabled`).not.toBe(btn)
+      fireEvent.click(btn)
+      expect(document.activeElement, `${name} button must not gain focus from a click while disabled`).not.toBe(btn)
+    }
+  })
+
+  it('the four export names and format chips are unchanged (AC #4)', async () => {
+    await renderReady()
+    for (const { name, fmt } of EXPORT_BUTTONS) {
+      const btn = screen.getByRole('button', { name: new RegExp(name) })
+      expect(btn.textContent, `${name} button must still show its ${fmt} chip`).toContain(fmt)
+    }
+  })
+
+  it('the pinned reason copy contains no promissory language (AC #6)', () => {
+    expect(EXPORTS_BLOCKED_REASON).not.toMatch(/coming soon|will be|shortly|roadmap/i)
   })
 })

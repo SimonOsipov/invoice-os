@@ -152,7 +152,6 @@ export const CFG: ClientCfg[] = [
 
 export const WIZARD_STEPS: [string, string][] = [
   ['1', 'Enter'],
-  ['2', 'Review'],
 ]
 
 // Canonical invoice fields the Map step targets (Platform.dc.html ~L1115).
@@ -305,6 +304,6 @@ export const EXPORTS_LIST: { name: string; fmt: string }[] = [
 export const ONBOARD_STEPS: { n: string; title: string; body: string; done: boolean }[] = [
   { n: '1', title: 'Company profile set', body: 'Tax details & numbering', done: true },
   { n: '2', title: 'Import or create invoices', body: 'CSV / XLSX or API', done: false },
-  { n: '3', title: 'Run first validation', body: '16-check MBS rule pack', done: false },
+  { n: '3', title: 'Run first validation', body: '19-check MBS rule pack', done: false },
   { n: '4', title: 'Activate transmission', body: 'NRS adapter on accreditation', done: false },
 ]

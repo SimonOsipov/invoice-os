@@ -10,6 +10,7 @@ import type { CSSProperties } from 'react'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
 
 import { refreshGlyph, warnTriGlyph } from '../glyphs'
+import { actorLabel } from '../lib/actor'
 import { fmtDate, fmtDateTime } from '../lib/format'
 import {
   classifyDocument,
@@ -18,7 +19,6 @@ import {
   type SourceDocumentRecord,
   type SourceDocumentResponse,
 } from '../lib/sourceDocument'
-import { uploaderLabel } from './SourceDocumentRail'
 
 /** The `useAsync` result the card and the modal share — one record fetch, two readers. */
 export type SourceDocumentAsync = {
@@ -93,7 +93,7 @@ export function NoSourceCanvas({
   createdBy: string | null
 }) {
   // A raw uuid never appears mid-prose: the clause renders only for a resolved persona.
-  const creator = uploaderLabel(createdBy)
+  const creator = actorLabel(createdBy)
   const by = !creator.mono && creator.text !== 'Not recorded' ? ` by ${creator.text}` : ''
   return (
     <div data-testid="source-document-no-source" style={CANVAS}>

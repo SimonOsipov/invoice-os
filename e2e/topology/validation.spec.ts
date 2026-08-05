@@ -63,6 +63,13 @@ test('deployed app: validation playground round-trips the live engine', async ({
     await expect(table).toContainText(key)
   }
 
+  // BUG-03-01 / [playground-safety-is-structural]: ViolationsTable mounts unconstrained
+  // here, so the rail's scroll fix must be a structural non-issue on this surface --
+  // minWidth only binds below the rail's declared width, not at this ~1280px viewport.
+  const scrollBox = page.getByTestId('violations-scroll')
+  const overflow = await scrollBox.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(overflow.scrollWidth, 'the playground must not scroll at >=1280px').toBe(overflow.clientWidth)
+
   // Rule-set version column, scoped to the first violation row rather than a loose
   // "contains '1'" check (which would also match row indices, TINs, etc. elsewhere in
   // the table).

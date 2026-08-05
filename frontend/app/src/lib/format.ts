@@ -24,6 +24,11 @@ export function fmtDate(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-NG')
 }
 
+// RED stub (task-391, BUG-03-02) -- implemented in Phase C.
+export function toDateInputValue(_iso: string | null | undefined): string {
+  throw new Error('not implemented')
+}
+
 // Date + HH:MM:SS via toLocaleString('en-NG') (the same idiom fmt/fmtPlain already use),
 // mirroring fmtDate's null/empty/NaN guard exactly (M5-09-03, task-253).
 export function fmtDateTime(iso: string | null | undefined): string {

@@ -34,8 +34,10 @@ import {
   computedLineSum,
   createInvoice,
   DETAIL_SUBMIT_COPY,
+  diffEditInput,
   diffLineItems,
   editInvoice,
+  formFromInvoice,
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
@@ -68,6 +70,7 @@ import {
   violationSummary,
   type BatchSubmitResultItem,
   type EditFieldKey,
+  type EditFormState,
   type InvoiceCreateInput,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
@@ -3076,6 +3079,62 @@ describe('fetchAllInvoices partial failure (QA adversarial)', () => {
       process.off('unhandledRejection', onUnhandled)
     }
     expect(unhandled).toEqual([])
+  })
+})
+
+// RED spec (task-391, BUG-03-02, Mode A) -- formFromInvoice still seeds the raw RFC3339
+// value today, so this fails on the actual seed, not an import/compile error.
+describe('formFromInvoice: issue_date seed format', () => {
+  it("seeds issue_date in the input's stated format (YYYY-MM-DD), not the raw RFC3339 timestamp", () => {
+    const form = formFromInvoice(draftInvoice)
+
+    expect(form.issue_date).toBe('2026-07-01')
+  })
+})
+
+// Composition tests for diffEditInput(original, form). These are GREEN today: the
+// current (unfixed) code seeds and compares the SAME raw representation on both sides of
+// the generic skip, so it round-trips correctly by coincidence. Their job is to catch the
+// trap if formFromInvoice's seed is normalized without moving/re-targeting diffEditInput's
+// issue_date comparison in lockstep -- they must stay green after that fix too.
+describe('diffEditInput: composition with formFromInvoice', () => {
+  it('an untouched form produces an empty patch', () => {
+    const form = formFromInvoice(draftInvoice)
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({})
+  })
+
+  it('an untouched form with a null issue_date produces an empty patch', () => {
+    const inv: InvoiceRecord = { ...draftInvoice, issue_date: null }
+    const form = formFromInvoice(inv)
+
+    expect(diffEditInput(inv, form)).toEqual({})
+  })
+
+  it('a changed date is sent as midnight UTC', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: '2026-02-05' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: '2026-02-05T00:00:00Z' })
+  })
+
+  it('a cleared date is dropped, never sent as an empty string', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: '' }
+
+    const patch = diffEditInput(draftInvoice, form)
+
+    expect('issue_date' in patch).toBe(false)
+  })
+
+  it('a full RFC3339 timestamp typed by hand passes through unchanged', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), issue_date: '2026-02-05T09:30:00Z' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ issue_date: '2026-02-05T09:30:00Z' })
+  })
+
+  it('changing VAT alone patches VAT alone, never issue_date -- fails in the half-fixed intermediate state', () => {
+    const form: EditFormState = { ...formFromInvoice(draftInvoice), vat: '999.00' }
+
+    expect(diffEditInput(draftInvoice, form)).toEqual({ vat: '999.00' })
   })
 })
 

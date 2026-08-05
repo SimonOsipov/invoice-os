@@ -880,6 +880,53 @@ export function skipReasonLabel(reason: string): string {
   return SKIP_REASON_LABELS[reason] ?? reason
 }
 
+// Mirrors internal/submission/failure.go:11-14 (FK-11 pins this exact set).
+export const FAILURE_KINDS = ['payload_not_built', 'never_acknowledged', 'acknowledged_no_verdict'] as const
+
+export type FailureKind = (typeof FAILURE_KINDS)[number]
+
+export interface FailureExplanation {
+  headline: string
+  detail: string
+  nextStep: string
+}
+
+// Must never promise notification (M5-08 is unbuilt) or offer recovery (`failed` is
+// terminal) -- both are invisible from the code, so they earn this one comment.
+const FAILURE_EXPLANATIONS: Record<FailureKind, FailureExplanation> = {
+  payload_not_built: {
+    headline: 'We could not prepare this invoice for filing.',
+    detail:
+      'The submission stopped before anything left our system, so this invoice has not been filed. The fault is on our side, not in the invoice — nothing you change here will fix it.',
+    nextStep:
+      'Report this invoice to ASComply support. Nothing reaches us automatically, so it will not be looked at until you do.',
+  },
+  never_acknowledged: {
+    headline: 'We never got confirmation that this invoice was received for filing.',
+    detail:
+      'We tried repeatedly for about an hour and never got an answer back. We cannot tell from here whether it arrived, so we cannot say whether it was filed or not.',
+    nextStep: 'Ask ASComply support to confirm the status of this invoice with NRS before you enter it again.',
+  },
+  acknowledged_no_verdict: {
+    headline: 'This invoice was received for filing, but no result ever came back.',
+    detail:
+      'We know it arrived. We never learned whether it was accepted or rejected, so it may already have been filed — entering it again could file the same invoice twice.',
+    nextStep: 'Do not enter this invoice again. Ask ASComply support to confirm with NRS whether it has already been filed.',
+  },
+}
+
+export const FAILURE_EXPLANATION_FALLBACK: FailureExplanation = {
+  headline: 'We do not have a recorded reason for this failure.',
+  detail:
+    'The reason was not recorded for this invoice, so we cannot tell you from this screen what went wrong — or whether it was filed.',
+  nextStep: 'Ask ASComply support to check what happened to this invoice before you enter it again.',
+}
+
+export function failureExplanation(kind: string | null): FailureExplanation {
+  if (kind === null) return FAILURE_EXPLANATION_FALLBACK
+  return FAILURE_EXPLANATIONS[kind as FailureKind] ?? FAILURE_EXPLANATION_FALLBACK
+}
+
 // Founder-pinned, verbatim (Core AC #2) -- do not paraphrase or re-tone.
 export const DETAIL_SUBMIT_COPY = {
   submit: 'Submit',

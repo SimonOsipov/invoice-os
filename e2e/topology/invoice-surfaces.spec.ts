@@ -1043,10 +1043,11 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   await expect(page.getByTestId('failed-dead-end')).toBeVisible()
   await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
-  // [failed-no-reason-lands-on-the-detail] (task-332, BUG-01-06): this invoice's
-  // rejection_reasons is [] (API-transitioned straight to failed, never rejected by the
-  // APP) -- the card must say so honestly, not render a silent gap.
-  await expect(page.getByTestId('failed-dead-end')).toContainText(/no reason recorded/i)
+  // [failed-no-reason-lands-on-the-detail] (task-332, BUG-01-06 / BUG-06-06): this
+  // invoice is API-transitioned straight to failed, so failure_kind is null -- the panel
+  // renders the fallback explanation, not a silent gap. BUG-06-07 extends this suite to
+  // cover the three recorded kinds.
+  await expect(page.getByTestId('failure-detail')).toContainText('was not recorded')
   // `can_edit` is false for a failed invoice ([gates-on-the-wire], store.go's
   // canEdit/canTransition), so the whole actions bar (Edit, Re-validate, and Submit
   // together) renders nothing -- `edit-invoice` would be vacuous here (Edit is never

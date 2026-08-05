@@ -22,6 +22,7 @@ import {
   diffLineItems,
   editInvoice,
   EDIT_FIELD_KEYS,
+  failureExplanation,
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
@@ -334,6 +335,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const vat = inv.vat != null ? Number(inv.vat) : null
     const total = inv.total != null ? Number(inv.total) : null
     const verdict = verdictStatus(staleSinceEdit, inv)
+    const failure = failureExplanation(inv.failure_kind)
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
@@ -718,14 +720,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="card-title">Submission failed</span>
                 </div>
-                <div style={{ padding: 16, fontSize: 12.5, color: 'var(--fg-2)' }}>
-                  This submission failed and is terminal — it cannot be re-driven from this screen.
-                  {inv.rejection_reasons.length === 0 && (
-                    <>
-                      <br />
-                      No reason recorded for this failure.
-                    </>
-                  )}
+                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
+                    This submission failed and is terminal — it cannot be re-driven from this screen.
+                  </div>
+                  <div data-testid="failure-headline" style={{ fontSize: 13, fontWeight: 600 }}>{failure.headline}</div>
+                  <div data-testid="failure-detail" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{failure.detail}</div>
+                  <div
+                    data-testid="failure-next-step"
+                    style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
+                  >
+                    {failure.nextStep}
+                  </div>
                 </div>
               </div>
             )}

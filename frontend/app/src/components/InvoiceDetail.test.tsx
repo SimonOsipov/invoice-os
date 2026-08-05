@@ -184,6 +184,86 @@ describe('InvoiceDetail failed-dead-end card (task-332, BUG-01-06, [failed-no-re
   })
 })
 
+// RED specs (task-393, BUG-03-04, Mode A): only Test B is red today -- the rejection
+// card always renders below Compliance regardless of status. A, C, D, E characterise
+// properties already true today; this story gives them their first oracle.
+//
+// FIXTURE GOTCHA: detailRecord()'s default rule_set_version is null, which renders
+// `not-validated` instead of `violations-table` -- every positional test below overrides
+// it to a real number so violations-table exists to compare against.
+describe('InvoiceDetail terminal rail order (task-393, BUG-03-04)', () => {
+  it('AC-1: on a failed invoice, failed-dead-end precedes violations-table', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', rule_set_version: 3 }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    const table = await screen.findByTestId('violations-table')
+    expect(card.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('AC-2: on a rejected invoice, rejection-reasons precedes violations-table', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'rejected',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('rejection-reasons')
+    const table = await screen.findByTestId('violations-table')
+    expect(card.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('AC-3: a historical rejection (demoted draft) titles "Last APP rejection" and stays below violations-table', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+        rule_set_version: 3,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('rejection-reasons')
+    expect(within(card).getByText('Last APP rejection')).toBeTruthy()
+    const table = screen.getByTestId('violations-table')
+    expect(table.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('AC-4: the rejection card renders at most once per page', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'rejected',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('rejection-reasons')
+    expect(screen.getAllByTestId('rejection-reasons')).toHaveLength(1)
+  })
+
+  it('AC-4: the accepted-invoice backstop still fully suppresses the rejection card', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'accepted',
+        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1')
+    expect(screen.queryByTestId('rejection-reasons')).toBeNull()
+  })
+})
+
 // RED specs: none of `detail-submit`/`-cancel`/`-confirm`/`-confirm-prompt`/`-skipped`/
 // `-error` exist in InvoiceDetail.tsx yet -- every spec here fails on a missing element,
 // not a harness/import/type error.

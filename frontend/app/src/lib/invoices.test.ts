@@ -144,6 +144,7 @@ const draftInvoice: InvoiceRecord = {
   kept_as_is_at: null,
   kept_as_is_by: null,
   kept_as_is_reason: null,
+  failure_kind: null,
   rule_set_version: null,
 }
 
@@ -1654,6 +1655,8 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       'kept_as_is_at',
       'kept_as_is_by',
       'kept_as_is_reason',
+      // BUG-06-04 (task-386): +1 -- failure_kind joins Invoice the same way.
+      'failure_kind',
       'rule_set_version',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).

@@ -192,6 +192,11 @@ export interface InvoiceRecord {
   kept_as_is_at: string | null
   kept_as_is_by: string | null
   kept_as_is_reason: string | null
+  // failure_kind (BUG-06-01/04) -- the reason a submission landed in
+  // status='failed' (invoice.go), no omitempty, required (not `?`): the
+  // server always says explicitly, so a missing fixture should be a loud
+  // typecheck error, not a silent `undefined`.
+  failure_kind: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
 }

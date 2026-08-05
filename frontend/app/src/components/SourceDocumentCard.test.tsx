@@ -42,6 +42,7 @@ function detailRecord(): InvoiceDetailRecord {
     kept_as_is_at: null,
     kept_as_is_by: null,
     kept_as_is_reason: null,
+    failure_kind: null,
     line_items: [],
     rule_set_version: null,
     qr_png_base64: null,

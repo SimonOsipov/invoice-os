@@ -34,6 +34,7 @@ function invoiceRecord(overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
     kept_as_is_at: null,
     kept_as_is_by: null,
     kept_as_is_reason: null,
+    failure_kind: null,
     rule_set_version: null,
     line_items: [{ id: 'li-1', line_no: 1, description: 'Logistics consulting', quantity: '2', unit_price: '500.00', line_total: '1000.00', line_tax: '75.00' }],
     ...overrides,

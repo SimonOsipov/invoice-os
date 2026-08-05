@@ -43,6 +43,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     kept_as_is_at: null,
     kept_as_is_by: null,
     kept_as_is_reason: null,
+    failure_kind: null,
     line_items: [],
     // null (never validated) sidesteps ViolationsTable entirely -- irrelevant to this
     // story's honest-line assertion, which only depends on status/rejection_reasons.

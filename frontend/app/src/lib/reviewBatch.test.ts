@@ -1026,6 +1026,7 @@ function mkRow(id: string, status: InvoiceStatus, overrides: Partial<InvoiceReco
     kept_as_is_at: null,
     kept_as_is_by: null,
     kept_as_is_reason: null,
+    failure_kind: null,
     rule_set_version: null,
     ...overrides,
   }

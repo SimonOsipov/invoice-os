@@ -49,7 +49,7 @@ const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, 
 	`currency, subtotal::text, vat::text, total::text, ` +
 	`violations, rule_set_version_id, created_at, ` +
 	`irn, csid, qr_payload, rejection_reasons, ` +
-	`kept_as_is_at, kept_as_is_by, kept_as_is_reason`
+	`kept_as_is_at, kept_as_is_by, kept_as_is_reason, failure_kind`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -58,7 +58,7 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.Currency, &inv.Subtotal, &inv.VAT, &inv.Total,
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
 		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
-		&inv.KeptAsIsAt, &inv.KeptAsIsBy, &inv.KeptAsIsReason,
+		&inv.KeptAsIsAt, &inv.KeptAsIsBy, &inv.KeptAsIsReason, &inv.FailureKind,
 	)
 }
 

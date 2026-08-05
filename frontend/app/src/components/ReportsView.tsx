@@ -280,14 +280,26 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
               </span>
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {/* Unconditional disabled -- unlike Re-validate/Submit, there is no wire field
+                  or state to gate on: these four exports are permanently unbuilt. */}
               {EXPORTS_LIST.map((e) => (
-                <button key={e.name} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 38 }}>
+                <button
+                  key={e.name}
+                  disabled
+                  title={EXPORTS_BLOCKED_REASON}
+                  aria-describedby={EXPORTS_BLOCKED_REASON_ID}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  style={{ height: 38, background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' }}
+                >
                   <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> {e.name}{' '}
                   <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', marginLeft: 2 }}>
                     {e.fmt}
                   </span>
                 </button>
               ))}
+            </div>
+            <div id={EXPORTS_BLOCKED_REASON_ID} data-testid="exports-blocked-reason" style={{ marginTop: 10, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+              {EXPORTS_BLOCKED_REASON}
             </div>
           </div>
         </>

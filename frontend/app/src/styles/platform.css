@@ -217,17 +217,20 @@ pre.pf-json {
   }
 }
 
-/* Rebalances invoice detail toward the evidence rail: 391px (the inline 340 + 15%) until
-   30% of the grid is worth more, which holds the split near 70/30 instead of letting the
-   fixed rail strand at 15% of a 2560 window while the document column stretches.
+/* Invoice detail runs 80/20, document to evidence rail, instead of letting the inline
+   `340px` strand at 15% of a 2560 window while the document column stretches.
 
-   Bounded BELOW at 1180 deliberately. LINE_EDIT_GRID needs ~372px in the document column
-   before Description gets anything, and that column is ALREADY short of it between 861 and
-   1179 (200px at an 880 viewport, measured on pr-139) -- raising the rail's floor there
-   would take it to 149px. Below 1180 the inline `1fr 340px` therefore stands unchanged. */
+   The 220px floor is not cosmetic: at 1180 a bare 20% resolves to 171px and the rail's own
+   card content overflows it by 6px (measured on pr-139). 220px clears that, and 20% has
+   already overtaken it by 1440, so the ratio is exact everywhere it is legible.
+
+   Bounded BELOW at 1180, the breakpoint the dashboard already stacks at. Between 861 and
+   1179 the document column is independently too tight -- LINE_EDIT_GRID needs ~372px before
+   Description gets any width and only has 200px at an 880 viewport -- and that is a
+   pre-existing problem this rule deliberately neither fixes nor touches. */
 @media (min-width: 1180px) {
   .pf-detail-grid {
-    grid-template-columns: 1fr minmax(391px, 30%) !important;
+    grid-template-columns: 1fr minmax(220px, 20%) !important;
   }
 }
 

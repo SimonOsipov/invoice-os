@@ -228,10 +228,26 @@ async function assertFiscalRecord(page: Page, invoiceNumber: string): Promise<vo
   expect(irnText, 'the IRN must not equal the bare invoice number').not.toBe(invoiceNumber)
   expect(irnText, 'IRN shape <sanitised id>-FBMOCK01-YYYYMMDD (mock_script.go mockIdentifiersFor)').toMatch(/-FBMOCK01-\d{8}$/)
 
+  const csid = page.getByTestId('fiscal-csid')
+  await expect(csid).toBeVisible()
+  const csidText = (await csid.textContent())?.trim() ?? ''
+  expect(csidText.length, 'fiscal-csid must be non-empty').toBeGreaterThan(0)
+
   const qr = page.getByTestId('fiscal-qr')
   await expect(qr).toBeVisible()
   await expect(qr).toHaveAttribute('src', /^data:image\/png;base64,/)
   await expect.poll(() => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+
+  // CSID is an unbroken base64 string with no natural wrap points -- the real regression
+  // oracle for BUG-03-05's word-break fix. IRN's mock suffix already gives hyphen breaks.
+  const card = page.getByTestId('fiscal-record-card')
+  const cardBox = await card.boundingBox()
+  expect(cardBox, 'fiscal-record-card must be visible').toBeTruthy()
+  for (const testId of ['fiscal-irn', 'fiscal-csid']) {
+    const box = await page.getByTestId(testId).boundingBox()
+    expect(box, `${testId} must be visible`).toBeTruthy()
+    expect(box!.x + box!.width, `${testId} must not overflow fiscal-record-card`).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 2)
+  }
 }
 
 test('list surface: real rows render with real status badges, and Needs attention re-fetches server-side', async ({ page }) => {
@@ -754,6 +770,11 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   // click it uses is unambiguous here).
   await openInvoiceRow(page, invoiceNumber)
   await assertFiscalRecord(page, invoiceNumber)
+
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  const detailBox = await page.getByTestId('invoice-detail').boundingBox()
+  expect(detailBox, 'invoice-detail must be visible').toBeTruthy()
+  expect(detailBox!.width, 'invoice detail must respect the 1080px cap at a wide viewport').toBeLessThanOrEqual(1082)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

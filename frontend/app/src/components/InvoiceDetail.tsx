@@ -79,7 +79,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
   }
 
   return (
-    <div style={{ padding: '24px 36px 56px' }}>
+    <div style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>
@@ -713,18 +713,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             {rejectionLeadsRail && rejectionCard}
 
             {shouldShowFiscalRecord(inv) && (
-              <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              <div data-testid="fiscal-record-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                 <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
                   <span className="card-title">Fiscal record</span>
                 </div>
                 <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div>
                     <div className="label" style={{ marginBottom: 3 }}>IRN</div>
-                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5 }}>{inv.irn}</div>
+                    <div data-testid="fiscal-irn" className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.irn}</div>
                   </div>
                   <div>
                     <div className="label" style={{ marginBottom: 3 }}>CSID</div>
-                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5 }}>{inv.csid ?? '—'}</div>
+                    <div data-testid="fiscal-csid" className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all', lineHeight: 1.4 }}>{inv.csid ?? '—'}</div>
                   </div>
                   {inv.qr_png_base64 != null && (
                     // Literal #fff, not var(--bg-2): a QR plate must keep scanner contrast
@@ -858,7 +858,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   }
 
   return (
-    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px' }}>
+    <div data-testid="invoice-detail" style={{ padding: '24px 36px 56px', maxWidth: 1080 }}>
       <button onClick={() => ctx.nav('invoices')} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 32, padding: '0 12px', fontSize: 13, marginBottom: 18 }}>
         ← All invoices
       </button>

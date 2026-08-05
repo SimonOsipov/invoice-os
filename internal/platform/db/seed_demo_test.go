@@ -3236,6 +3236,7 @@ type scenarioRow struct {
 	rejected      bool
 	unvalidated   bool
 	supplierOK    bool
+	failureKind   string
 }
 
 // supplierTINShapePattern is the well-formed supplier_tin shape (NNNNNNNN-NNNN).
@@ -3245,14 +3246,17 @@ type scenarioRow struct {
 var supplierTINShapePattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{4}$`)
 
 // scenarioKey is the Test Spec's composite key: (status, violations->0->>'rule_key',
-// rejection_reasons <> '[]', rule_set_version_id IS NULL, supplier_tin shape). Two rows
-// with the same key demonstrate the same scenario.
+// rejection_reasons <> '[]', rule_set_version_id IS NULL, supplier_tin shape,
+// failure_kind). failure_kind joined BUG-06-07 (task-389): `failed` used to be one
+// undifferentiated scenario, but the column now splits it into acknowledged_no_verdict /
+// payload_not_built / never_acknowledged / NULL (legacy) -- each is its own counterparty.
 func (r scenarioRow) scenarioKey() string {
 	return strings.Join([]string{
 		r.status, r.ruleKey,
 		strconv.FormatBool(r.rejected),
 		strconv.FormatBool(r.unvalidated),
 		strconv.FormatBool(r.supplierOK),
+		r.failureKind,
 	}, "|")
 }
 
@@ -3267,7 +3271,8 @@ func fetchScenarioRows(t *testing.T, pool *pgxpool.Pool, excludeReserved bool) [
 	               coalesce(violations->0->>'rule_key', ''),
 	               (rejection_reasons <> '[]'::jsonb),
 	               (rule_set_version_id IS NULL),
-	               supplier_tin
+	               supplier_tin,
+	               coalesce(failure_kind, '')
 	          FROM invoices
 	         WHERE tenant_id = ANY($1) AND invoice_number LIKE 'DEMO-2026-%'`
 	if excludeReserved {
@@ -3284,7 +3289,7 @@ func fetchScenarioRows(t *testing.T, pool *pgxpool.Pool, excludeReserved bool) [
 		var r scenarioRow
 		var supplierTIN string
 		if err := rows.Scan(&r.invoiceNumber, &r.buyerTIN, &r.status, &r.ruleKey,
-			&r.rejected, &r.unvalidated, &supplierTIN); err != nil {
+			&r.rejected, &r.unvalidated, &supplierTIN, &r.failureKind); err != nil {
 			t.Fatalf("scan scenario row: %v", err)
 		}
 		r.supplierOK = supplierTINShapePattern.MatchString(supplierTIN)

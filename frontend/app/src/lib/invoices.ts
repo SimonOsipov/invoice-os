@@ -115,6 +115,7 @@ import type { AuthedFetch } from './portfolio'
 import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
+import { toDateInputValue } from './format'
 
 export type InvoiceStatus =
   | 'draft'
@@ -868,7 +869,7 @@ export type EditFormState = Record<EditFieldKey, string>
 
 export function formFromInvoice(inv: InvoiceRecord): EditFormState {
   return {
-    issue_date: inv.issue_date ?? '',
+    issue_date: toDateInputValue(inv.issue_date),
     supplier_tin: inv.supplier_tin ?? '',
     supplier_name: inv.supplier_name ?? '',
     buyer_tin: inv.buyer_tin ?? '',
@@ -887,13 +888,14 @@ export function formFromInvoice(inv: InvoiceRecord): EditFormState {
 export function diffEditInput(original: InvoiceRecord, form: EditFormState): InvoiceEditInput {
   const patch: InvoiceEditInput = {}
   for (const key of EDIT_FIELD_KEYS) {
-    if (form[key] === (original[key] ?? '')) continue
     if (key === 'issue_date') {
       const value = form.issue_date.trim()
+      if (value === toDateInputValue(original.issue_date)) continue
       if (!value) continue
       patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
       continue
     }
+    if (form[key] === (original[key] ?? '')) continue
     patch[key] = form[key]
   }
   return patch

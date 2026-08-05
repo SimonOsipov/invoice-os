@@ -24,9 +24,13 @@ export function fmtDate(iso: string | null | undefined): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-NG')
 }
 
-// RED stub (task-391, BUG-03-02) -- implemented in Phase C.
-export function toDateInputValue(_iso: string | null | undefined): string {
-  throw new Error('not implemented')
+// Prefix match, not full match: source is RFC3339 with trailing time. No Date
+// construction -- new Date(iso).toLocaleDateString() shifts a day in negative
+// UTC offsets (task-391, BUG-03-02).
+export function toDateInputValue(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const match = /^\d{4}-\d{2}-\d{2}/.exec(iso)
+  return match ? match[0] : iso
 }
 
 // Date + HH:MM:SS via toLocaleString('en-NG') (the same idiom fmt/fmtPlain already use),

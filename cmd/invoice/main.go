@@ -88,6 +88,11 @@ func main() {
 	// (INVCR-01-15, task-291): never touches status or legalTransitions.
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/keep-as-is", invoice.KeepAsIsHandler(store.KeepAsIs, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/invoices/{id}/keep-as-is", invoice.UnkeepAsIsHandler(store.UnkeepAsIs, app.Logger))
+	// POST/DELETE /v1/invoices/{id}/resolved-outside -- approver-only mark
+	// that a failed invoice was resolved outside the system; never touches
+	// status or legalTransitions, same as keep-as-is above.
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/resolved-outside", invoice.ResolveOutsideHandler(store.ResolveOutside, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/invoices/{id}/resolved-outside", invoice.UnresolveOutsideHandler(store.UnresolveOutside, app.Logger))
 
 	// POST /v1/invoices/{id}/validate -- THE validate gate ([gate-endpoint],
 	// M4-04): the ONLY route by which an invoice reaches validated, and the

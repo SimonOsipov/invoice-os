@@ -528,6 +528,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     submit_blocked_reason: res.submit_blocked_reason ?? null,
     can_view_ubl: res.can_view_ubl === true,
     ubl_blocked_reason: res.ubl_blocked_reason ?? null,
+    can_resolve_outside: res.can_resolve_outside === true,
+    resolve_outside_blocked_reason: res.resolve_outside_blocked_reason ?? null,
   }
 }
 
@@ -606,23 +608,27 @@ export async function keepInvoiceAsIs(
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/keep-as-is`, { method: 'POST', body: { reason } })
 }
 
-// RED stub -- implemented in the GREEN pass.
+// POST/DELETE /v1/invoices/{id}/resolved-outside -- the `failed`-status sibling of
+// keep-as-is. `reason` is sent as received, same thin-wrapper contract as
+// keepInvoiceAsIs; the caller gates on canResolveOutside before this is reached.
 export async function resolveInvoiceOutside(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
-  _reason: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  reason: string,
 ): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/resolved-outside`, {
+    method: 'POST',
+    body: { reason },
+  })
 }
 
-// RED stub -- implemented in the GREEN pass.
 export async function unresolveInvoiceOutside(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _id: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
 ): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/resolved-outside`, { method: 'DELETE' })
 }
 
 // POST /v1/invoices/submissions -- the batch-submit trigger ([trigger-surface] /
@@ -1003,19 +1009,26 @@ export function failureExplanation(kind: string | null): FailureExplanation {
   return FAILURE_EXPLANATIONS[kind as FailureKind] ?? FAILURE_EXPLANATION_FALLBACK
 }
 
-// Placeholder -- filled in by the UI subtask's GREEN pass.
-export const RESOLVE_OUTSIDE_COPY = {} as const
+// Static copy for the resolve-outside action's UI, same shape as DETAIL_SUBMIT_COPY;
+// tone matches keep-as-is's ROW_EXPANSION_COPY.
+export const RESOLVE_OUTSIDE_COPY = {
+  label: 'Resolved outside the system',
+  reasonPlaceholder: 'How was this invoice resolved outside ASComply? (required)',
+  resolvedPrefix: 'Resolved outside the system — ',
+  undoLabel: 'Undo',
+} as const
 
-// RED stub -- implemented in the GREEN pass.
-export function canResolveOutside(_reason: string): boolean {
-  return false
+export function canResolveOutside(reason: string): boolean {
+  return reason.trim() !== ''
 }
 
-// RED stub -- implemented in the GREEN pass.
+// `failed` is the only status this action applies to -- a `draft` row with the
+// same kept_as_is_* triple is a keep-as-is, not a resolve-outside.
 export function resolvedOutside(
-  _inv: Pick<InvoiceRecord, 'status' | 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
+  inv: Pick<InvoiceRecord, 'status' | 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
 ): { at: string; by: string | null; reason: string | null } | null {
-  return null
+  if (inv.status !== 'failed' || inv.kept_as_is_at == null) return null
+  return { at: inv.kept_as_is_at, by: inv.kept_as_is_by ?? null, reason: inv.kept_as_is_reason ?? null }
 }
 
 // Founder-pinned, verbatim (Core AC #2) -- do not paraphrase or re-tone.

@@ -36,7 +36,8 @@ export function gatewayBase(): string | null {
   return v || null
 }
 
-// Resolves parsed JSON on 2xx; REJECTS with ApiError on network / non-2xx / malformed-body.
+// Resolves parsed JSON — or the raw body under responseType:'text' — on 2xx; REJECTS with
+// ApiError on network / non-2xx / malformed-body.
 export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
   const headers = new Headers()
   if (opts?.token) {
@@ -75,8 +76,10 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     throw new ApiError('http', msg, res.status, responseBody)
   }
 
+  // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T4 if
+  // it is moved out.
   try {
-    return (await res.json()) as T
+    return (opts?.responseType === 'text' ? await res.text() : await res.json()) as T
   } catch {
     throw new ApiError('malformed', 'malformed response body', res.status)
   }

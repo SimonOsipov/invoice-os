@@ -927,7 +927,7 @@ func TestRLS_InvoicesImportBatchDeleteOnlyNullsImportBatchID(t *testing.T) {
 	}
 }
 
-// --- BUG-07-01: widened keep-as-is status fence (failed joins draft) -------
+// --- widened keep-as-is status fence (failed joins draft) ------------------
 
 // T1-1: a `failed` invoice accepts the keep-as-is triple in one UPDATE, and the row
 // reads all three values back — the widened fence must allow `failed` exactly like
@@ -1136,5 +1136,128 @@ func TestRLS_KeptAsIsExactlyOneStatusFence(t *testing.T) {
 	}
 	if has("invoices_kept_as_is_draft_only") {
 		t.Errorf("kept_as_is CHECK constraints = %v, want invoices_kept_as_is_draft_only absent (renamed to invoices_kept_as_is_status)", names)
+	}
+}
+
+// (QA-added, RLS on the newly-widened path): `failed` is markable for the first time --
+// confirm the tenant_isolation policy still scopes that write per-tenant, not just the
+// pre-existing draft path. Tenant B's UPDATE against tenant A's failed invoice must
+// affect zero rows (RLS filters it out silently, same shape as INV-RLS-03), and the
+// triple must still read back all-NULL.
+func TestRLS_KeptAsIsCrossTenantMarkOnFailedAffectsZeroRows(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "KAI-XT A Corp")
+	defer cleanupEntityA()
+
+	var id string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, 'KAI-XT-A', 'failed') RETURNING id`,
+			h.tenantA, entityA,
+		).Scan(&id)
+	})
+	if err != nil {
+		t.Fatalf("insert tenant A's failed invoice: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id)
+	}()
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx,
+			`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'attacker@example.com', kept_as_is_reason = 'stolen' WHERE id = $1`,
+			id,
+		)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() != 0 {
+			t.Errorf("cross-tenant keep-as-is UPDATE on a failed invoice affected %d rows, want 0", ct.RowsAffected())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant keep-as-is UPDATE (expected 0 rows, no error): %v", err)
+	}
+
+	var keptAt, keptBy, keptReason *string
+	if err := h.super.QueryRow(ctx,
+		`SELECT kept_as_is_at::text, kept_as_is_by, kept_as_is_reason FROM invoices WHERE id = $1`, id,
+	).Scan(&keptAt, &keptBy, &keptReason); err != nil {
+		t.Fatalf("read back kept-as-is triple: %v", err)
+	}
+	if keptAt != nil || keptBy != nil || keptReason != nil {
+		t.Errorf("tenant A's failed invoice kept-as-is triple after a refused cross-tenant write = (%v,%v,%v), want all NULL", keptAt, keptBy, keptReason)
+	}
+}
+
+// (QA-added, the boundary between the two CHECKs): each arm pinned to the constraint
+// actually doing the work, not just a bare SQLSTATE -- guards against a future migration
+// that merges or reorders invoices_kept_as_is_status/_complete and silently swaps which
+// one is enforcing what.
+func TestRLS_KeptAsIsStatusCompleteBoundary(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "KAI-BOUND A Corp")
+	defer cleanupEntityA()
+
+	cases := []struct {
+		name           string
+		status         string
+		partial        bool
+		wantConstraint string // empty means the write must succeed
+	}{
+		{"failed_complete_allowed", "failed", false, ""},
+		{"validated_complete_refused_by_status", "validated", false, "invoices_kept_as_is_status"},
+		{"failed_partial_refused_by_complete", "failed", true, "invoices_kept_as_is_complete"},
+	}
+
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var id string
+			err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx,
+					`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, $3, $4) RETURNING id`,
+					h.tenantA, entityA, fmt.Sprintf("KAI-BOUND-%d", i), c.status,
+				).Scan(&id)
+			})
+			if err != nil {
+				t.Fatalf("insert %s invoice: %v", c.status, err)
+			}
+			defer func() {
+				_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id)
+			}()
+
+			err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				var e error
+				if c.partial {
+					_, e = tx.Exec(ctx, `UPDATE invoices SET kept_as_is_at = now() WHERE id = $1`, id)
+				} else {
+					_, e = tx.Exec(ctx,
+						`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'reviewer@example.com', kept_as_is_reason = 'kept' WHERE id = $1`,
+						id)
+				}
+				return e
+			})
+
+			if c.wantConstraint == "" {
+				if err != nil {
+					t.Fatalf("%s: want success, got: %v", c.name, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("%s: succeeded, want a 23514 (%s) violation", c.name, c.wantConstraint)
+			}
+			if code := pgCode(err); code != "23514" {
+				t.Fatalf("%s: SQLSTATE = %q, want 23514 (check_violation): %v", c.name, code, err)
+			}
+			if !strings.Contains(err.Error(), c.wantConstraint) {
+				t.Errorf("%s: error = %v, want it to name %s", c.name, err, c.wantConstraint)
+			}
+		})
 	}
 }

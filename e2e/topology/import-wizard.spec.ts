@@ -365,9 +365,20 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // Positive companion for the tile above: the channel's zero-state copy, which proves
   // the tile is rendering the AT-ZERO branch rather than an amber tile that happens to
   // read 0 -- the channel must stay visible (dashed, greyed) rather than disappear.
-  await expect(page.getByText('Every row in the file became part of an invoice.', { exact: true })).toBeVisible()
-  // The second tab is OMITTED from the DOM at zero unreadable rows, never merely hidden.
+  // task-408/409: the old caption ('...became part of an invoice.') overclaimed for the
+  // all-duplicate shape -- replaced with a readability-only claim, true here too.
+  await expect(page.getByText('Every row in the file could be read.', { exact: true })).toBeVisible()
+  // Newly-owned assertion (task-408): the structural channel's own at-zero paragraph,
+  // asserted nowhere in the repo before this.
+  await expect(
+    page.getByText('This channel stays visible even at zero, so its absence is a fact and not an omission.', { exact: true }),
+  ).toBeVisible()
+  // BUG-08-02's second channel, also at zero on this clean run -- BUG08-E2E-6 (task-408).
+  await expect(page.getByText('0 already imported', { exact: true })).toBeVisible()
+  await expect(page.getByText('Nothing in this file was already in your ledger.', { exact: true })).toBeVisible()
+  // Both non-default tabs are OMITTED from the DOM at zero, never merely hidden.
   await expect(page.getByRole('button', { name: /^Unreadable rows \(/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Already imported \(/ })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -460,6 +471,13 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   // all read the same expansion count, so a disagreement between them is falsifiable.
   await expect(page.getByText(/^[1-9]\d* unreadable rows$/)).toBeVisible()
 
+  // Newly-owned assertion (task-408): the crossed booleans, direction 1 -- unreadable
+  // rows non-zero WHILE already-imported sits at zero on this first import, proving the
+  // two not-imported channels are independent rather than one boolean driving both tiles.
+  await expect(page.getByText('0 already imported', { exact: true })).toBeVisible()
+  await expect(page.getByText('Nothing in this file was already in your ledger.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Already imported \(/ })).toHaveCount(0)
+
   // The clean invoice is a provable SUBSET witness, RE-HOMED (INVCR-01-09) rather than
   // rescoped. Asserted HERE, deliberately after the click above and never before it: the
   // claim is now "a readable invoice never enters the STRUCTURAL channel", i.e. it is
@@ -536,6 +554,197 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   await expect(page.getByRole('heading', { level: 1 })).not.toHaveText('INV-UI-MIX-VIOLATE')
   await expect(page.getByTestId('status-history')).toBeVisible()
   await expect(page.getByText('Audit trail', { exact: true })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// BUG08-E2E-1/2/3/4/5/7 (task-408, FINAL subtask of BUG-08; folds task-409's caption fix
+// as its deployed oracle): re-importing the SAME mixed fixture into the SAME entity
+// forces the review screen to populate BOTH not-imported channels at once -- the shape
+// neither E2E-04 (unreadable > 0 alone) nor BULK-E2E-03 (already-imported > 0 alone) can
+// produce by itself. Verified against internal/importer/service.go's classify loop
+// (headerConflictField checked BEFORE the against-store `existing[num]` lookup,
+// :643-681): run 2 re-quarantines INV-UI-MIX-STRUCT structurally (unreadable) and
+// rejects INV-UI-MIX-VIOLATE/CLEAN as store-duplicates (already-imported) -- rows_total
+// 4, rows_valid 0, status 'completed'. No new fixture -- buildMixedCsv() imported twice
+// is enough.
+//
+// ONE entity for both runs -- no-duplicate-invoice-number is scoped per entity, so a
+// second entity would never collide and run 2 would just store two more invoices
+// instead of colliding with run 1's.
+//
+// All labelled blocks below share ONE run-2 screen, this file's own idiom for a
+// multi-assertion test (E2E-01/02/03/06/07, E2E-04/09) rather than six tests each
+// re-running the wizard twice. The click-through (BUG08-E2E-3) is deliberately LAST: it
+// navigates the SPA to `view:'detail'` with no URL to come back to (there is no
+// invoice-detail route in this app -- ReviewAlreadyImportedTab.tsx:38-39), so every
+// review-screen assertion runs before it, never after.
+test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine parse failures from already-imported rows', async ({
+  page,
+}) => {
+  // The config default is 60s and this drives the full wizard TWICE.
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG08-05 UI Mixed ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  // Run 1: stores INV-UI-MIX-VIOLATE and INV-UI-MIX-CLEAN, quarantines
+  // INV-UI-MIX-STRUCT structurally -- E2E-04 already proves this split in detail; this
+  // run exists only to seed the store for run 2's collisions.
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'ui-mixed.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const preview1 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await preview1
+
+  // subtotal has no ALIAS entry (lib/mapping.ts) so it must be click-mapped by hand,
+  // same as E2E-04 -- see buildMixedCsv's own doc comment for why this is load-bearing.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const import1 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await import1
+  // Count-agnostic arrival, E2E-04's own idiom (:441) -- run 1 only needs to have
+  // settled, its own content is not re-asserted here.
+  await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
+
+  await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
+
+  // Run 2: the identical bytes, into the SAME entity. resetImport() (App.tsx, wired
+  // through openCreate(), the "New invoice" handler) wipes files/mapping/run state, so
+  // this is a genuinely fresh wizard pass, not a resubmission of run 1's in-memory state.
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"][accept=".csv,.xlsx"]')
+    .setInputFiles({ name: 'ui-mixed-2.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const preview2 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await preview2
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const import2 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await import2
+
+  // Arrival signal for run 2 -- MUST be count-agnostic. Run 2 creates zero new
+  // invoices, so the heading reads '0 invoices imported'; the positive-count wait every
+  // sibling test in this file uses (`getByRole('heading', {name:'<N> invoices imported'})`
+  // with N>=1) would hang for the full timeout here.
+  await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
+
+  const structuralMsg = 'rows disagree on issue_date'
+  const unreadableTab = page.getByRole('button', { name: 'Unreadable rows (2)' })
+  const alreadyImportedTabBtn = page.getByRole('button', { name: 'Already imported (2)' })
+
+  // BUG08-E2E-1 (AC-6): both not-imported channels populated at once -- both tab
+  // buttons present, with the run-2 counts the classify loop above predicts.
+  await expect(unreadableTab, 'INV-UI-MIX-STRUCT must re-quarantine structurally on the re-import').toBeVisible()
+  await expect(alreadyImportedTabBtn, 'INV-UI-MIX-VIOLATE/CLEAN must reject as store-duplicates').toBeVisible()
+
+  await unreadableTab.click()
+  // AC-6 spec #2: the unreadable tab shows ONLY the structural message, shipped wording
+  // unchanged -- STRUCT's two rows (sheet rows 2 and 3) both disagree on issue_date,
+  // same strict-mode-safe double match as E2E-04's leg 2.
+  await expect(page.getByText(structuralMsg)).toHaveCount(2)
+
+  const alreadyImportedTab = page.getByTestId('review-already-imported-tab')
+  await alreadyImportedTabBtn.click()
+  await expect(alreadyImportedTab).toBeVisible()
+  // Only one tab body mounts at a time -- the structural message has no home here.
+  await expect(page.getByText(structuralMsg)).toHaveCount(0)
+
+  // AC-3 spec #3 (CORRECTED round 4, C2): the tab renders File / Row / View invoice and
+  // NEVER an invoice number (ReviewAlreadyImportedTab.tsx:52-56) -- assert the SHEET
+  // rows instead. Row order is deterministic (service.go's `order` is row-scan order):
+  // VIOLATE (sheet row 4) first, then CLEAN (sheet row 5).
+  await expect(alreadyImportedTab.getByText('4', { exact: true })).toBeVisible()
+  await expect(alreadyImportedTab.getByText('5', { exact: true })).toBeVisible()
+  const viewInvoiceBtns = alreadyImportedTab.getByRole('button', { name: 'View invoice' })
+  await expect(viewInvoiceBtns).toHaveCount(2)
+  await expect(viewInvoiceBtns.nth(0)).toBeEnabled()
+  await expect(viewInvoiceBtns.nth(1)).toBeEnabled()
+
+  // BUG08-E2E-2 (AC-2, CORRECTED round 4 C1): scoped to the TAB BODY, not the page --
+  // the always-rendered header card on this very run-2 screen legitimately carries
+  // 'No invoice exists for them.' and '...no rule was ever run. Nothing was stored.' A
+  // page-wide check for these phrases fails on a CORRECT build. Mirrors
+  // ReviewAlreadyImportedTab.test.tsx:63's own scoped, case-sensitive phrase list.
+  const tabText = await alreadyImportedTab.innerText()
+  for (const phrase of ['could not read', 'no rule was ever run', 'correct the rows', 'unreadable']) {
+    expect(tabText, `already-imported tab body must not contain "${phrase}"`).not.toContain(phrase)
+  }
+
+  // BUG08-E2E-4 (AC-4): the header and the channel tiles reconcile -- summed off the
+  // rendered numbers, not four independent literals, so a miscounted channel fails.
+  // Tab-independent: the tiles/header render above the tab switch (§7.1).
+  const bodyText = (await page.locator('body').textContent()) ?? ''
+  const rowsRead = Number(/(\d+) ROWS READ/.exec(bodyText)?.[1])
+  const builtFrom = Number(/Built from (\d+) rows/.exec(bodyText)?.[1])
+  const alreadyImportedCount = Number(/(\d+) already imported/.exec(bodyText)?.[1])
+  const unreadableCount = Number(/(\d+) unreadable rows/.exec(bodyText)?.[1])
+  for (const n of [rowsRead, builtFrom, alreadyImportedCount, unreadableCount]) {
+    expect(
+      Number.isNaN(n),
+      `expected all four numbers to parse off the page, got: rowsRead=${rowsRead} builtFrom=${builtFrom} alreadyImported=${alreadyImportedCount} unreadable=${unreadableCount}`,
+    ).toBe(false)
+  }
+  expect([rowsRead, builtFrom, alreadyImportedCount, unreadableCount], 'built + already-imported + unreadable must equal rows read (0 + 2 + 2 = 4)').toEqual([
+    4, 0, 2, 2,
+  ])
+
+  // BUG08-E2E-5 (AC-3): the non-zero already-imported caption, exact string, wired to a
+  // real count. The noun-swap discrimination this literal string cannot reach on its own
+  // (buildMixedCsv gives VIOLATE/CLEAN one row each, so rows and invoices are both 2)
+  // belongs to BUG08-BATCH-8 (reviewBatch.test.ts), mutation-verified there.
+  await expect(page.getByText('2 invoices already in your ledger. Nothing to fix.', { exact: true })).toBeVisible()
+
+  // BUG08-E2E-7 (AC-6, AC-3): the unreadable tile's shipped non-zero caption survives
+  // verbatim and is NOW TRUE alongside a non-zero already-imported tile -- proving the
+  // sentence describes only the structural rows ([structural-untouched]). Plus the
+  // newly-owned structural paragraph, asserted nowhere in the repo before this.
+  await expect(page.getByText('No invoice exists for them.', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('A structural failure, not a compliance one: no rule was ever run. Nothing was stored.', { exact: true }),
+  ).toBeVisible()
+
+  // BUG08-E2E-3 (AC-5), LAST: the first row's View invoice fires the wire call and lands
+  // on the invoice it collided with -- one of run 1's two stored invoice numbers, never
+  // INV-UI-MIX-STRUCT (never stored at all). The id is UUID-shaped on the WIRE -- the
+  // SPA has no invoice-detail URL, so the response path is the only observable.
+  const invoiceGet = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/api\/invoice\/v1\/invoices\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+  )
+  await viewInvoiceBtns.nth(0).click()
+  await invoiceGet
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^INV-UI-MIX-(VIOLATE|CLEAN)$/)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1492,6 +1701,19 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel]): a cross-file duplicate
     page.getByTestId('review-files-strip-row').filter({ hasText: 'partial-dupe.csv' }),
     'the reason survives the reload -- it was never sourced from `run`',
   ).toContainText('An invoice with this number already exists for this entity.')
+
+  // Newly-owned assertion (task-408): the crossed booleans, direction 2 -- run-wide
+  // unreadable sits at zero WHILE already-imported is non-zero (partial-dupe.csv's one
+  // collision). This is the ONLY shipped e2e rendering the exact shape task-409's
+  // caption bug lived in, so it doubles as the deployed oracle for the at-zero caption
+  // fix: 'Every row in the file could be read.' must be TRUE here, not just present.
+  // Deliberately NOT asserting '1 invoices already in your ledger.' -- a pre-existing
+  // singular/plural wart (flagged, not fixed here); BUG08-E2E-5 pins the N=2 form.
+  await expect(page.getByText('0 unreadable rows', { exact: true })).toBeVisible()
+  await expect(page.getByText('Every row in the file could be read.', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 already imported', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Already imported \(\d+\)$/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Unreadable rows \(/ })).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

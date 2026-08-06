@@ -39,6 +39,7 @@ package importer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -58,7 +59,8 @@ import (
 // against the scaffold: the stub returns the bare shape, so RuleKey/
 // Severity are both "".
 func TestStoreDuplicateRowError_ReturnsRuleShapedViolation(t *testing.T) {
-	got := storeDuplicateRowError([]int{1, 0})
+	const wantInvoiceID = "11111111-1111-1111-1111-111111111111"
+	got := storeDuplicateRowError([]int{1, 0}, wantInvoiceID)
 
 	wantRows := []int{2, 3}
 	if !intSliceEqual(got.Rows, wantRows) {
@@ -75,6 +77,9 @@ func TestStoreDuplicateRowError_ReturnsRuleShapedViolation(t *testing.T) {
 	}
 	if got.Message == "" {
 		t.Errorf("Message is empty, want a non-empty human-readable message (e.g. %q)", msgDuplicateInvoiceNumber)
+	}
+	if got.InvoiceID != wantInvoiceID {
+		t.Errorf("InvoiceID = %q, want %q", got.InvoiceID, wantInvoiceID)
 	}
 }
 
@@ -506,5 +511,159 @@ func TestServiceImport_DuplicateNeverMixesWithContentViolation(t *testing.T) {
 	}
 	if got := countInvoicesByNumber(t, super, entityID, "INV-DUP7-CONTENT"); got != 1 {
 		t.Errorf("INV-DUP7-CONTENT rows = %d, want 1 (committed, even though it carries a rule violation)", got)
+	}
+}
+
+// --- task-404 (BUG-08-01) --------------------------------------------------
+
+// TestImport_StoreDuplicate_CarriesCollidingInvoiceID: a pre-seeded
+// INV-DUP-1 re-imported must carry the STORED invoice's own id on the
+// errors[] entry, alongside the unchanged RuleKey/Severity/Message -- so the
+// browser can link straight to the invoice it collided with. RED against the
+// commit-1 scaffold: the upfront precheck passes "" for now, so InvoiceID is
+// empty, not the seeded id.
+func TestImport_StoreDuplicate_CarriesCollidingInvoiceID(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-08-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-08-01 entity")
+	wantID := seedInvoice(t, super, tenantID, entityID, "INV-DUP-1")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-DUP-1", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
+	}
+
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1: %+v", len(res.Errors), res.Errors)
+	}
+	re := res.Errors[0]
+	if re.RuleKey != ruleKeyDuplicateInvoiceNumber {
+		t.Errorf("RuleKey = %q, want %q", re.RuleKey, ruleKeyDuplicateInvoiceNumber)
+	}
+	if re.Severity != "error" {
+		t.Errorf("Severity = %q, want %q", re.Severity, "error")
+	}
+	if re.Message == "" {
+		t.Error("Message is empty, want a non-empty human-readable message")
+	}
+	if re.InvoiceID != wantID {
+		t.Errorf("InvoiceID = %q, want %q (the stored invoice this row collided with)", re.InvoiceID, wantID)
+	}
+}
+
+// TestImport_RacingInsertBackstop_OmitsInvoiceID: reproduces DUP-04's race
+// mechanism (concurrent imports of the same never-before-seen number, so
+// exactly one wins and the rest hit the racing-INSERT backstop) -- the
+// backstop-emitted entry carries RuleKey but its invoice_id key is ABSENT:
+// the colliding row belongs to a concurrent, possibly-not-yet-visible tx, so
+// there is no id to resolve. Already GREEN in commit 1 -- the backstop call
+// site has always passed "" -- this is a regression guard, not a RED spec.
+func TestImport_RacingInsertBackstop_OmitsInvoiceID(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-08-01 race tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-08-01 race entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	const racers = 4
+	results := make([]BatchResult, racers)
+	errs := make([]error, racers)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(racers)
+	for i := 0; i < racers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			raceRow := [][]string{
+				mkRow("INV-BUG08-RACE", "2026-01-10", "TIN-RACE", "Racer", "NGN", "100.00", "0.00", "100.00", fmt.Sprintf("RaceItem%d", i), "1", "100.00"),
+			}
+			results[i], errs[i] = svc.Import(c, entityID, "", "", stdMapping, stdHeader, raceRow, false)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Import[%d] unexpected top-level error: %v", i, err)
+		}
+	}
+
+	losers := 0
+	for i := 0; i < racers; i++ {
+		r := results[i]
+		if r.ReadyInvoices == 1 {
+			continue // the winner -- not under test here
+		}
+		losers++
+		if len(r.Errors) != 1 {
+			t.Fatalf("racer[%d] (loser) len(Errors) = %d, want 1: %+v", i, len(r.Errors), r.Errors)
+		}
+		re := r.Errors[0]
+		if re.RuleKey != ruleKeyDuplicateInvoiceNumber {
+			t.Errorf("racer[%d] (loser) RuleKey = %q, want %q", i, re.RuleKey, ruleKeyDuplicateInvoiceNumber)
+		}
+		b, err := json.Marshal(re)
+		if err != nil {
+			t.Fatalf("racer[%d]: marshal: %v", i, err)
+		}
+		var generic map[string]json.RawMessage
+		if err := json.Unmarshal(b, &generic); err != nil {
+			t.Fatalf("racer[%d]: unmarshal into generic map: %v", i, err)
+		}
+		if _, ok := generic["invoice_id"]; ok {
+			t.Errorf("racer[%d] (loser): %s carries key %q, want ABSENT -- the racing tx's row may not even be visible yet", i, string(b), "invoice_id")
+		}
+	}
+	if losers != racers-1 {
+		t.Fatalf("losers = %d, want %d", losers, racers-1)
+	}
+}
+
+// TestImport_StoreDuplicate_CountersUnchanged (AC-3): two pre-seeded
+// numbers, each in a multi-row group -- rows_total/rows_valid/rows_invalid/
+// ready_invoices/quarantined_invoices must be exactly the pre-change values
+// this story does not touch. A regression guard, not an InvoiceID assertion.
+func TestImport_StoreDuplicate_CountersUnchanged(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-08-01 counters tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-08-01 counters entity")
+	seedInvoice(t, super, tenantID, entityID, "INV-CTR-A")
+	seedInvoice(t, super, tenantID, entityID, "INV-CTR-B")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-CTR-A", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "ItemA1", "1", "10.00"), // sheet 2
+		mkRow("INV-CTR-A", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "ItemA2", "1", "10.00"), // sheet 3
+		mkRow("INV-CTR-B", "2026-01-11", "T2", "B2", "NGN", "20.00", "2.00", "22.00", "ItemB", "1", "20.00"),  // sheet 4
+	}
+
+	const wantTotal, wantValid, wantInvalid, wantReady, wantQuarantined = 3, 0, 3, 0, 2
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.RowsTotal != wantTotal || res.RowsValid != wantValid || res.RowsInvalid != wantInvalid {
+		t.Errorf("counts = (total=%d valid=%d invalid=%d), want (%d,%d,%d)", res.RowsTotal, res.RowsValid, res.RowsInvalid, wantTotal, wantValid, wantInvalid)
+	}
+	if res.ReadyInvoices != wantReady || res.QuarantinedInvoices != wantQuarantined {
+		t.Errorf("(ReadyInvoices=%d QuarantinedInvoices=%d), want (%d,%d)", res.ReadyInvoices, res.QuarantinedInvoices, wantReady, wantQuarantined)
 	}
 }

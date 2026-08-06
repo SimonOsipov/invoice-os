@@ -8,12 +8,12 @@
 // internal/invoice/validator.go's Violation (:77-82) — field names copied verbatim,
 // no camelCasing.
 //
-// Two channels stay distinct (story Core AC3; D1 in task-171's Implementation Plan):
-// `errors` (RowError[]) is STRUCTURAL — "couldn't read this row" — and MAY itself carry
-// a rule_key/severity (a store-level duplicate is still structural: the row never
-// reached rule evaluation, so it never appears in invoice_violations too).
-// `invoice_violations` (InvoiceViolations[]) is CONTENT — "read fine, but a rule
-// failed". The two channels NEVER MIX.
+// Two wire channels stay distinct (story Core AC3; D1 in task-171's Implementation Plan):
+// `errors` (RowError[]) is "the row never reached rule evaluation" — covers both
+// unreadable rows and store-level duplicates (rule_key/invoice_id may be set; the
+// browser routes those to their own already-imported tab, see reviewBatch.ts's
+// isAlreadyImported). `invoice_violations` (InvoiceViolations[]) is CONTENT — "read
+// fine, but a rule failed". The two wire channels NEVER MIX.
 //
 // Why normalizeReport exists (D1 — do not delete as defensive noise). The PREVIEW
 // endpoint explicitly guards the nil-slice trap (handlers.go:320-334, PRV-08) so
@@ -83,8 +83,9 @@ export interface RowError {
   row?: number // iff an ungroupable single row
   rows?: number[] // iff a whole quarantined invoice group
   field?: string
-  rule_key?: string // may be set (store-duplicate) and is STILL structural
+  rule_key?: string // set on a store-level duplicate; UI splits those into their own channel, see reviewBatch.ts's isAlreadyImported
   severity?: string
+  invoice_id?: string // resolved id of the colliding invoice; absent when unresolved (racing-INSERT backstop)
   message: string // always
 }
 

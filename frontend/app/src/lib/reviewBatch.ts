@@ -137,7 +137,17 @@ export function verdictPill(input: VerdictInput): VerdictPill {
 
 export interface ChannelTiles {
   live: { cleanTotal: number; failingTotal: number }
-  frozen: { unreadable: number; ruleSetLabel: string }
+  frozen: {
+    unreadable: number
+    ruleSetLabel: string
+    // ROWS vs INVOICES: `alreadyImported` counts expanded rows, `alreadyImportedInvoices`
+    // counts already-imported errors[] ENTRIES -- one entry is one invoice, resolved id or
+    // not. NEVER `new Set(invoice_id).size`: the racing-INSERT backstop reports a collision
+    // with no invoice_id at all, and a Set buckets every such entry as one invoice.
+    alreadyImported: number
+    alreadyImportedInvoices: number
+    alreadyImportedAtZero: boolean
+  }
   atZero: boolean
 }
 
@@ -188,14 +198,23 @@ function filenameLabel(filename: string | null): string {
 // as a distinct dashed-and-greyed tile, so "no unreadable rows" is a thing to say, not a
 // thing to omit. Deliberately NOT coupled to the live totals: the channels are independent
 // and an empty batch is not the same fact as a batch with nothing unreadable in it.
+// `atZero` keeps meaning `unreadable === 0`; `alreadyImportedAtZero` is its own field so
+// the two frozen sub-channels can be at zero independently.
 export function channelTiles(
   batch: Pick<ImportBatch, 'errors' | 'rule_set_version'>,
   live: { cleanTotal: number; failingTotal: number },
 ): ChannelTiles {
   const unreadable = unreadableRows(batch.errors).length
+  const alreadyImported = alreadyImportedRows(batch.errors).length
   return {
     live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
-    frozen: { unreadable, ruleSetLabel: ruleSetLabel(batch.rule_set_version) },
+    frozen: {
+      unreadable,
+      ruleSetLabel: ruleSetLabel(batch.rule_set_version),
+      alreadyImported,
+      alreadyImportedInvoices: batch.errors.filter(isAlreadyImported).length,
+      alreadyImportedAtZero: alreadyImported === 0,
+    },
     atZero: unreadable === 0,
   }
 }
@@ -209,9 +228,16 @@ export function channelTilesAll(
   live: { cleanTotal: number; failingTotal: number },
 ): ChannelTiles {
   const unreadable = batches.reduce((sum, b) => sum + unreadableRows(b.errors).length, 0)
+  const alreadyImported = batches.reduce((sum, b) => sum + alreadyImportedRows(b.errors).length, 0)
   return {
     live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
-    frozen: { unreadable, ruleSetLabel: ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version))) },
+    frozen: {
+      unreadable,
+      ruleSetLabel: ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version))),
+      alreadyImported,
+      alreadyImportedInvoices: batches.reduce((sum, b) => sum + b.errors.filter(isAlreadyImported).length, 0),
+      alreadyImportedAtZero: alreadyImported === 0,
+    },
     atZero: unreadable === 0,
   }
 }
@@ -220,6 +246,15 @@ export interface UnreadableRow {
   row: number | null
   column: string
   message: string
+}
+
+// The ONE classifier splitting errors[] into its two channels, and the only reader of the
+// entry's rule key in this file (pinned by AIMP-11's source scan). An entry carrying a
+// rule key is the store's own already-imported verdict; every other entry is unreadable.
+// The verdict is never re-derived here -- not from the message text, not by re-checking
+// the collision -- because only the server can see already-stored invoices.
+export function isAlreadyImported(e: RowError): boolean {
+  return e.rule_key != null
 }
 
 // Row numbers come off the SHIPPED union reader rowErrorRows, never a local re-read of
@@ -232,13 +267,18 @@ export interface UnreadableRow {
 // "we cannot tell you which row" is still a report; saying nothing is not.
 //
 // `column` falls back to an em dash, never a fabricated column name (decision 20).
+//
+// Already-imported entries are filtered out HERE and nowhere else: channelTiles and
+// channelTilesAll both count off this expansion, so this one filter corrects both tiles.
 export function unreadableRows(errors: RowError[]): UnreadableRow[] {
-  return errors.flatMap((e): UnreadableRow[] => {
-    const column = e.field ?? '—'
-    const rows = rowErrorRows(e)
-    if (rows.length === 0) return [{ row: null, column, message: e.message }]
-    return rows.map((row) => ({ row, column, message: e.message }))
-  })
+  return errors
+    .filter((e) => !isAlreadyImported(e))
+    .flatMap((e): UnreadableRow[] => {
+      const column = e.field ?? '—'
+      const rows = rowErrorRows(e)
+      if (rows.length === 0) return [{ row: null, column, message: e.message }]
+      return rows.map((row) => ({ row, column, message: e.message }))
+    })
 }
 
 // Additive sibling of unreadableRows, attributing each entry to its owning file.
@@ -254,6 +294,39 @@ export interface UnreadableRowAll extends UnreadableRow {
 
 export function unreadableRowsAll(batches: Pick<ImportBatch, 'id' | 'filename' | 'errors'>[]): UnreadableRowAll[] {
   return batches.flatMap((b) => unreadableRows(b.errors).map((r) => ({ ...r, file: filenameLabel(b.filename) })))
+}
+
+// The store-duplicate half of RowError[] -- the sibling channel unreadableRows no longer
+// counts. Rows expand through the same shipped rowErrorRows union reader, so `rows:[5,6]`
+// is two entries pointing at ONE invoice, and an entry carrying neither row nor rows
+// becomes one `row: null` entry rather than being dropped -- unreadableRows' contract,
+// unchanged, over the other channel.
+export interface AlreadyImportedRow {
+  row: number | null
+  // null when the server could not resolve the colliding invoice (the racing-INSERT
+  // backstop reports the collision without an id) -- never '' and never undefined.
+  invoiceId: string | null
+}
+
+export function alreadyImportedRows(errors: RowError[]): AlreadyImportedRow[] {
+  return errors.filter(isAlreadyImported).flatMap((e): AlreadyImportedRow[] => {
+    const invoiceId = e.invoice_id ?? null
+    const rows = rowErrorRows(e)
+    if (rows.length === 0) return [{ row: null, invoiceId }]
+    return rows.map((row) => ({ row, invoiceId }))
+  })
+}
+
+// Additive sibling of alreadyImportedRows, attributing each row to its owning file
+// through the same filenameLabel fallback unreadableRowsAll uses.
+export interface AlreadyImportedRowAll extends AlreadyImportedRow {
+  file: string
+}
+
+export function alreadyImportedRowsAll(
+  batches: Pick<ImportBatch, 'id' | 'filename' | 'errors'>[],
+): AlreadyImportedRowAll[] {
+  return batches.flatMap((b) => alreadyImportedRows(b.errors).map((r) => ({ ...r, file: filenameLabel(b.filename) })))
 }
 
 export type ReviewPill = 'all' | 'needs-fix' | 'ready' | 'queued'
@@ -528,19 +601,23 @@ export function reviewHeaderAll(
 
 // --- Tabs (AC-4, §7.2) ---
 //
-// The second tab is OMITTED from the returned array entirely at zero unreadable rows,
-// not hidden with CSS -- the array's own length is the fact 09/10 render off.
-// `invoices` is the `all` query's pagination.total; `unreadable` is the caller's
-// channelTiles(...).frozen.unreadable (the expansion count) -- never `batch.rows_invalid`
-// -- one number feeding the tile, the tab and the footer.
+// Each optional tab is OMITTED from the returned array entirely at zero, not hidden with
+// CSS -- the array's own length is the fact 09/10 render off.
+// `invoices` is the `all` query's pagination.total; `unreadable` and `alreadyImported` are
+// the caller's channelTiles(...).frozen counts (the expansions) -- never
+// `batch.rows_invalid` -- one number feeding each tile, its tab and the footer.
 export interface ReviewTab {
-  id: 'invoices' | 'unreadable'
+  id: 'invoices' | 'unreadable' | 'already-imported'
   label: string
 }
 
-export function reviewTabs(counts: { invoices: number; unreadable: number }): ReviewTab[] {
+// `alreadyImported` is required, not optional: a caller that silently omitted it would
+// drop the tab for a run that has already-imported rows, and no spec could catch it.
+export function reviewTabs(counts: { invoices: number; unreadable: number; alreadyImported: number }): ReviewTab[] {
   const tabs: ReviewTab[] = [{ id: 'invoices', label: `Invoices (${counts.invoices})` }]
   if (counts.unreadable > 0) tabs.push({ id: 'unreadable', label: `Unreadable rows (${counts.unreadable})` })
+  if (counts.alreadyImported > 0)
+    tabs.push({ id: 'already-imported', label: `Already imported (${counts.alreadyImported})` })
   return tabs
 }
 
@@ -601,6 +678,20 @@ export function unreadableCsvAll(rows: UnreadableRowAll[]): string {
     [r.file, r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
   )
   return [UNREADABLE_CSV_HEADER_ALL, ...lines].join('\n')
+}
+
+// The already-imported channel's own download, DELIBERATELY a second file rather than
+// extra rows on the unreadable one: these rows were read fine, so filing them under
+// "Why it could not be read" would restate the bug in the export.
+export const ALREADY_IMPORTED_CSV_HEADER_ALL = 'File,Row,Invoice id'
+
+export function alreadyImportedCsvAll(rows: AlreadyImportedRowAll[]): string {
+  const lines = rows.map((r) =>
+    // An unattributed row and an unresolved invoice id are both EMPTY cells, never the
+    // string 'null' -- which reads as data in a spreadsheet.
+    [r.file, r.row == null ? '' : String(r.row), r.invoiceId ?? ''].map(csvCell).join(','),
+  )
+  return [ALREADY_IMPORTED_CSV_HEADER_ALL, ...lines].join('\n')
 }
 
 // --- Files strip (AC-8/9/10/11/12, BULK-01-06) ---

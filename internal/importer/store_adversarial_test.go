@@ -204,7 +204,7 @@ func TestStoreExistingNumbers_DuplicateAndSpecialCharacterInputsHandledSafely(t 
 
 	tenantID := seedTenant(t, super, "adversarial dup/special tenant")
 	entityID := seedEntity(t, super, tenantID, "adversarial dup/special entity")
-	seedInvoice(t, super, tenantID, entityID, "INV-A")
+	idA := seedInvoice(t, super, tenantID, entityID, "INV-A")
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
@@ -217,11 +217,11 @@ func TestStoreExistingNumbers_DuplicateAndSpecialCharacterInputsHandledSafely(t 
 	if len(got) != 1 {
 		t.Fatalf("ExistingNumbers len = %d, want 1 (duplicate INV-A collapses to one key, crafted string never stored): got %v", len(got), got)
 	}
-	if !got["INV-A"] {
-		t.Errorf(`ExistingNumbers[%q] = %v, want true`, "INV-A", got["INV-A"])
+	if id, ok := got["INV-A"]; !ok || id != idA {
+		t.Errorf("ExistingNumbers[%q] = (%q, ok=%v), want (%q, true)", "INV-A", id, ok, idA)
 	}
-	if got[crafted] {
-		t.Errorf("ExistingNumbers[crafted string] = true, want absent (never stored)")
+	if _, ok := got[crafted]; ok {
+		t.Errorf("ExistingNumbers[crafted string] present, want absent (never stored)")
 	}
 
 	var stillThere int

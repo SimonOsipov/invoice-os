@@ -253,8 +253,8 @@ func TestStoreExistingNumbers_ReturnsExactSubsetStoredForEntity(t *testing.T) {
 
 	tenantID := seedTenant(t, super, "IB-STORE-03 tenant")
 	entityID := seedEntity(t, super, tenantID, "IB-STORE-03 entity")
-	seedInvoice(t, super, tenantID, entityID, "INV-A")
-	seedInvoice(t, super, tenantID, entityID, "INV-B")
+	idA := seedInvoice(t, super, tenantID, entityID, "INV-A")
+	idB := seedInvoice(t, super, tenantID, entityID, "INV-B")
 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
@@ -264,17 +264,17 @@ func TestStoreExistingNumbers_ReturnsExactSubsetStoredForEntity(t *testing.T) {
 		t.Fatalf("ExistingNumbers: %v", err)
 	}
 
-	want := map[string]bool{"INV-A": true, "INV-B": true}
+	want := map[string]string{"INV-A": idA, "INV-B": idB}
 	if len(got) != len(want) {
 		t.Fatalf("ExistingNumbers len = %d, want %d: got %v", len(got), len(want), got)
 	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("ExistingNumbers[%q] = %v, want %v", k, got[k], v)
+	for k, wantID := range want {
+		if gotID, ok := got[k]; !ok || gotID != wantID {
+			t.Errorf("ExistingNumbers[%q] = (%q, ok=%v), want (%q, true)", k, gotID, ok, wantID)
 		}
 	}
-	if got["INV-C"] {
-		t.Errorf(`ExistingNumbers[%q] = true, want absent (never stored)`, "INV-C")
+	if _, ok := got["INV-C"]; ok {
+		t.Errorf(`ExistingNumbers[%q] present, want absent (never stored)`, "INV-C")
 	}
 }
 
@@ -294,7 +294,7 @@ func TestStoreExistingNumbers_TenantScoped(t *testing.T) {
 	entityA := seedEntity(t, super, tenantA, "IB-STORE-04 A entity")
 	entityB := seedEntity(t, super, tenantB, "IB-STORE-04 B entity")
 
-	seedInvoice(t, super, tenantA, entityA, "INV-A-OWN")
+	idAOwn := seedInvoice(t, super, tenantA, entityA, "INV-A-OWN")
 	seedInvoice(t, super, tenantB, entityB, "INV-A") // tenant B's own "INV-A"
 
 	store := NewStore(app)
@@ -304,11 +304,11 @@ func TestStoreExistingNumbers_TenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExistingNumbers: %v", err)
 	}
-	if !got["INV-A-OWN"] {
-		t.Errorf("ExistingNumbers[%q] = %v, want true (tenant A's own invoice)", "INV-A-OWN", got["INV-A-OWN"])
+	if id, ok := got["INV-A-OWN"]; !ok || id != idAOwn {
+		t.Errorf("ExistingNumbers[%q] = (%q, ok=%v), want (%q, true) (tenant A's own invoice)", "INV-A-OWN", id, ok, idAOwn)
 	}
-	if got["INV-A"] {
-		t.Errorf(`ExistingNumbers[%q] = true, want absent (belongs to tenant B, RLS-scoped out)`, "INV-A")
+	if _, ok := got["INV-A"]; ok {
+		t.Errorf(`ExistingNumbers[%q] present, want absent (belongs to tenant B, RLS-scoped out)`, "INV-A")
 	}
 	if len(got) != 1 {
 		t.Errorf("ExistingNumbers len = %d, want 1: got %v", len(got), got)

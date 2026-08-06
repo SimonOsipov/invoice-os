@@ -621,3 +621,45 @@ func TestGetBatch_DirectMalformedIDReturnsErrValidationNot500(t *testing.T) {
 		t.Errorf("GetBatch(\"not-a-uuid\") error = %v, want errors.Is(err, ErrValidation) -- a malformed id reaching the store directly must not surface as a raw/unmapped error (which a caller would 500 on)", err)
 	}
 }
+
+// TestImport_PersistedErrorsRoundTripInvoiceID (task-404, BUG-08-01): a
+// duplicate import's errors[] entry, once persisted via Finalize and read
+// back via GetBatch, still carries InvoiceID -- an additive jsonb field
+// needs no migration to round-trip. RED against the commit-1 scaffold: the
+// precheck passes "" for now, so the read-back InvoiceID is empty, not the
+// seeded id.
+func TestImport_PersistedErrorsRoundTripInvoiceID(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-08-01 roundtrip tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-08-01 roundtrip entity")
+	wantID := seedInvoice(t, super, tenantID, entityID, "INV-RT-DUP")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-RT-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
+	}
+
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.ID == "" {
+		t.Fatal("Import returned an empty batch id")
+	}
+
+	store := NewStore(app)
+	got, err := store.GetBatch(c, res.ID)
+	if err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if len(got.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1: %+v", len(got.Errors), got.Errors)
+	}
+	if got.Errors[0].InvoiceID != wantID {
+		t.Errorf("persisted InvoiceID = %q, want %q (round-tripped through jsonb)", got.Errors[0].InvoiceID, wantID)
+	}
+}

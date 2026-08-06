@@ -457,3 +457,93 @@ func TestServiceImport_NoStoreDuplicateNoRuleKeyEntriesEvenAlongsideStructuralQu
 		t.Errorf("INV-ADV6-CONFLICT rows = %d, want 0 (quarantined for header conflict, not duplicate)", got)
 	}
 }
+
+// --- task-404 (BUG-08-01) --------------------------------------------------
+
+// TestImport_StructuralError_OmitsInvoiceID: a group whose rows disagree on
+// issue_date is a purely structural quarantine -- it never reaches
+// storeDuplicateRowError at all, so its marshalled entry must carry NO
+// invoice_id key, the same shape of assertion as ADV-DUP-01's rule_key
+// absence.
+func TestImport_StructuralError_OmitsInvoiceID(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-08-01 structural tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-08-01 structural entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-STRUCT", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
+		mkRow("INV-STRUCT", "2026-01-11", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item2", "1", "10.00"), // sheet 3 -- issue_date differs
+	}
+
+	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1: %+v", len(res.Errors), res.Errors)
+	}
+	re := res.Errors[0]
+	if re.Field != "issue_date" {
+		t.Fatalf("Field = %q, want %q -- fixture assumption broken", re.Field, "issue_date")
+	}
+	b, err := json.Marshal(re)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var generic map[string]json.RawMessage
+	if err := json.Unmarshal(b, &generic); err != nil {
+		t.Fatalf("unmarshal into generic map: %v", err)
+	}
+	if _, ok := generic["invoice_id"]; ok {
+		t.Errorf("%s carries key %q, want ABSENT -- a structural quarantine never resolves an invoice_id", string(b), "invoice_id")
+	}
+}
+
+// TestImportHTTP_StoreDuplicate_WireCarriesInvoiceID: drives the REAL HTTP
+// handler with a pre-seeded duplicate -- the raw response body must
+// literally contain "invoice_id":"<the stored uuid>" alongside
+// "rule_key":"no-duplicate-invoice-number", proving the id reaches the wire,
+// not just the Go struct. RED against the commit-1 scaffold: the precheck
+// passes "" for now, so invoice_id is omitted entirely.
+func TestImportHTTP_StoreDuplicate_WireCarriesInvoiceID(t *testing.T) {
+	super, app := dbTestPools(t)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
+
+	tenantID := seedTenant(t, super, "BUG-08-01 HTTP tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-08-01 HTTP entity")
+	wantID := seedInvoice(t, super, tenantID, entityID, "INV-HTTP-DUP2")
+	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+
+	rows := [][]string{
+		mkRow("INV-HTTP-DUP2", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupItem", "1", "10.00"), // sheet 2
+	}
+
+	mappingJSON, err := json.Marshal(stdMapping)
+	if err != nil {
+		t.Fatalf("marshal mapping: %v", err)
+	}
+	body, contentType, open := dbStoredUpload(t, app, tenantID, entityID, string(mappingJSON), "data.csv", "", csvBody(t, stdHeader, rows))
+	rec, resp := doImportCreate(t, svc.Import, open, &id, "", contentType, body)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if resp.QuarantinedInvoices != 1 {
+		t.Fatalf("QuarantinedInvoices = %d, want 1", resp.QuarantinedInvoices)
+	}
+
+	raw := rec.Body.String()
+	for _, want := range []string{
+		`"rule_key":"no-duplicate-invoice-number"`,
+		fmt.Sprintf(`"invoice_id":"%s"`, wantID),
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("response body does not literally contain %s: %s", want, raw)
+		}
+	}
+}

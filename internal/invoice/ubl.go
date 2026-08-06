@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
@@ -28,6 +29,14 @@ func ublBlockedReason(missing []string) *string {
 	}
 	reason := ublBlockedPrefix + list + "."
 	return &reason
+}
+
+// ublGate is the SINGLE derivation behind both GET /{id}'s can_view_ubl/
+// ubl_blocked_reason and this route's 409 -- one return, so the two cannot
+// drift. ok == (reason == nil) by construction.
+func ublGate(c submission.Canonical) (bool, *string) {
+	reason := ublBlockedReason(ubl.Missing(c))
+	return reason == nil, reason
 }
 
 // UBLHandler returns GET /v1/invoices/{id}/ubl -- same identity-first-401 order
@@ -56,7 +65,7 @@ func UBLHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 		// Refuse BEFORE Render: ubl.ErrIncomplete is not an invoice sentinel, so
 		// routing it through statusForErr would hit the default arm and 500.
 		c := SubmissionCanonical(inv)
-		if reason := ublBlockedReason(ubl.Missing(c)); reason != nil {
+		if ok, reason := ublGate(c); !ok {
 			writeError(w, http.StatusConflict, *reason)
 			return
 		}

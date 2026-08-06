@@ -222,6 +222,10 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // which would make "the server says this invoice is not editable" impossible to
 // tell apart from "an older server that has never heard of this key". All three
 // are present on every status -- explicit null, never omitted.
+//
+// CanViewUBL/UBLBlockedReason (BUG-04-03) follow both rules above -- appended
+// last, no omitempty -- and come from ublGate (ubl.go), which derives them from
+// invoice CONTENT via ubl.Missing, never from status.
 type getResponse struct {
 	Invoice
 	RuleSetVersion          *int    `json:"rule_set_version"`
@@ -231,6 +235,8 @@ type getResponse struct {
 	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
 	CanSubmit               bool    `json:"can_submit"`
 	SubmitBlockedReason     *string `json:"submit_blocked_reason"`
+	CanViewUBL              bool    `json:"can_view_ubl"`
+	UBLBlockedReason        *string `json:"ubl_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -301,6 +307,11 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			}
 		}
 
+		// ublGate is ONE return, so ubl_blocked_reason != null IFF
+		// can_view_ubl == false, and both agree with GET /{id}/ubl's 409
+		// ([ubl-gate-is-content-not-status]).
+		canViewUBL, ublReason := ublGate(SubmissionCanonical(inv))
+
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
 		// a fourth hand-maintained status list and re-open Core AC 4.
@@ -319,6 +330,8 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 			CanRevalidate:       canRevalidate(inv.Status),
 			CanSubmit:           canSubmit(inv.Status),
 			SubmitBlockedReason: submitBlockedReason(inv.Status),
+			CanViewUBL:          canViewUBL,
+			UBLBlockedReason:    ublReason,
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local

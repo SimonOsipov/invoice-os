@@ -476,7 +476,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   below ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
                   completeness, not lifecycle, and a compliance user needs the document most on
                   queued/submitted/accepted/failed, where that bar is gone. Same four disabled
-                  layers as :480-499, minus `filter: 'none'` -- that neutralises
+                  layers as :523-542, minus `filter: 'none'` -- that neutralises
                   .v2-btn-primary's brightening :hover (app-layer.css:213); .v2-btn-ghost's
                   :hover (:215) sets no filter. Hidden while `editing`
                   ([ubl-hidden-while-editing]): the form is dirty and the server would render

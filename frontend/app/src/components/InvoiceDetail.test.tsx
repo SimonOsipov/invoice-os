@@ -1060,6 +1060,12 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
 // `xmlOpen`/`openXml`/`closeXml` and the local mount MUST land in one commit, because a
 // window where both App.tsx and LiveInvoiceDetail mount XmlModal double-mounts it and
 // every browser spec on this path is a console-error gate.
+// Local literal, not a runtime export: no status list exists to import (lib/invoices.ts
+// :120-128 is a type union, erased at runtime). QA hoisted it to module scope, unchanged,
+// so Q11 below can guard it against the union it mirrors -- task-401 §I-2 flagged it as
+// silently lagging.
+const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
 describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-outside-invoice-actions])', () => {
   const ID = 'inv-ubl-1'
   // The backend's own copy (internal/ubl/ubl.go:16 + :149) -- em dash U+2014, single
@@ -1086,10 +1092,6 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
     expect(btn.style.fontSize).toBe('13px')
     expect(btn.querySelector('svg'), 'the leading docGlyph2').toBeTruthy()
   })
-
-  // Local literal, not a runtime export: no status list exists to import (lib/invoices.ts
-  // :120-128 is a type union, erased at runtime). It lags silently if the union grows.
-  const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
 
   it.each(ALL_STATUSES)('T2/AC2: renders on a %s invoice even with can_edit false', async (status) => {
     mockDetailFetch(detailRecord({ id: ID, status, can_edit: false, can_submit: false }))
@@ -1296,8 +1298,13 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
   // MUTATION ORACLE for the invoiceNumber PROP. Between 05 and 06 the modal still makes
   // its own transitional getInvoice; this fixture answers that second GET with a
   // DIFFERENT invoice_number, so a subtitle sourced from the fetch instead of the prop
-  // shows INV-WRONG (or '—' before it resolves). Survives BUG-04-06 deleting that fetch:
-  // with no second GET, both assertions simply stay true.
+  // reads '—' before it resolves and INV-WRONG after.
+  //
+  // Scoped to the SUBTITLE, never the whole modal (QA, task-401 §F T16): the modal BODY
+  // is that transitional fetch rendered as UBL, so `<cbc:ID>INV-WRONG</cbc:ID>` sits in
+  // ubl-modal's textContent by design until 06 deletes the fetch -- and after 06 the body
+  // still renders whatever getInvoiceUbl is mocked with. Only the subtitle discriminates
+  // the prop from a refetch, which is the whole claim of this row.
   it('T16/AC6: the viewer is handed THIS invoice number, not a refetched one', async () => {
     const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, invoice_number: 'INV-PROP-1', ...editable }), [], {
       detailSequence: [detailRecord({ id: ID, invoice_number: 'INV-WRONG', ...editable })],
@@ -1305,18 +1312,21 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     fireEvent.click(await screen.findByTestId('view-ubl'))
+    // The only 'PEPPOL' in src/ (XmlModal.tsx:63). getByText matches direct text children,
+    // so no ancestor of the subtitle competes for it.
+    const subtitle = () => within(screen.getByTestId('ubl-modal')).getByText(/^PEPPOL BIS 3\.0 ·/).textContent
 
     // Synchronous read, deliberately un-awaited: the modal's own fetch cannot have
     // resolved yet, so a fetch-sourced subtitle reads '—' right here.
-    expect(screen.getByTestId('ubl-modal').textContent).toContain('INV-PROP-1')
+    expect(subtitle()).toBe('PEPPOL BIS 3.0 · INV-PROP-1')
 
     // Now let every pending promise settle and re-read: a fetch-sourced subtitle flips to
     // INV-WRONG at this point.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
-    expect(screen.getByTestId('ubl-modal').textContent).toContain('INV-PROP-1')
-    expect(screen.getByTestId('ubl-modal').textContent).not.toContain('INV-WRONG')
+    expect(subtitle()).toBe('PEPPOL BIS 3.0 · INV-PROP-1')
+    expect(subtitle()).not.toContain('INV-WRONG')
     expect(fetchMock).toHaveBeenCalled()
   })
 
@@ -1361,5 +1371,279 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
     expect(await screen.findByTestId('view-ubl')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^PDF$/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /transmit/i })).toBeNull()
+  })
+})
+
+// QA adversarial coverage (BUG-04-05, Mode B). Every row below is mutation-verified; the
+// mutant it exists to kill is named in its comment.
+describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-401)', () => {
+  const ID = 'inv-ubl-1'
+  const REASON = 'This invoice cannot be rendered as a UBL document — it is missing at least one line item.'
+  const editable = { status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: false, can_submit: true }
+
+  async function settle() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+
+  // KILLS: `invoiceId={'other'}`. No T-row pinned WHICH invoice the viewer addresses --
+  // T16 pins only the number, which is a prop. `invoiceId` is the sole document selector,
+  // and the ONLY one once BUG-04-06 swaps the transitional getInvoice for getInvoiceUbl.
+  it('Q1/AC6: every request the viewer issues addresses THIS invoice', async () => {
+    const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, ...editable }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('view-ubl')
+    await settle()
+
+    const before = fetchMock.mock.calls.length
+    fireEvent.click(btn)
+    await settle()
+
+    const opened = fetchMock.mock.calls.slice(before).map(([url]) => String(url))
+    expect(opened.length, 'the viewer issued a request -- otherwise this row is vacuous').toBeGreaterThan(0)
+    for (const url of opened) {
+      expect(url, `${url} must address ${ID}`).toContain(`/invoices/${ID}`)
+    }
+  })
+
+  // KILLS: dropping `onClick={onClose}` from the backdrop. 05 rewired BOTH of XmlModal's
+  // closers off `ctx.closeXml`; T18 covered only the button. The inner-click half guards
+  // the panel's stopPropagation, without which reading the document dismisses it.
+  it('Q2/AC6: the backdrop closes the viewer and a click inside the panel does not', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('view-ubl'))
+    const modal = screen.getByTestId('ubl-modal')
+
+    fireEvent.click(within(modal).getByText('UBL 2.1 document'))
+    expect(screen.queryAllByTestId('ubl-modal'), 'a click on the panel must not dismiss it').toHaveLength(1)
+
+    fireEvent.click(modal)
+    expect(screen.queryAllByTestId('ubl-modal')).toHaveLength(0)
+    expect(screen.getByTestId('invoice-detail')).toBeTruthy()
+  })
+
+  // KILLS: `setUblOpen((o) => !o)`. An open modal is position:fixed/inset:0, so a real
+  // browser cannot deliver the second click -- jsdom can, which is what makes this an
+  // oracle rather than a scenario.
+  it('Q3/AC6: repeated clicks mount exactly one viewer and never toggle it shut', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('view-ubl')
+
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    expect(screen.queryAllByTestId('ubl-modal')).toHaveLength(1)
+    fireEvent.click(btn)
+    expect(screen.queryAllByTestId('ubl-modal')).toHaveLength(1)
+  })
+
+  // KILLS: `aria-label="View"`. T1 asserts textContent, which an aria-label silently
+  // overrides for every assistive technology. The glyph is aria-hidden (icons.tsx:25), so
+  // the computed name is the label alone.
+  it('Q4/AC1: the control is a real button named exactly "View UBL/XML", and is keyboard-reachable', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('view-ubl')
+
+    const btn = screen.getByRole('button', { name: 'View UBL/XML' })
+    expect(btn).toBe(screen.getByTestId('view-ubl'))
+    // A real <button> is Enter/Space-activated by the platform. jsdom synthesises no click
+    // from keydown, so the element type IS the assertion -- a div[role=button] would need
+    // hand-rolled key handling this control does not have.
+    expect(btn.tagName).toBe('BUTTON')
+    btn.focus()
+    expect(document.activeElement, 'an enabled control must be in the tab order').toBe(btn)
+  })
+
+  // KILLS: `aria-hidden="true"` on the reason node. Once the button leaves the tab order
+  // (asserted here), layer 3 is the ONLY layer a screen-reader user can still reach --
+  // hiding it makes the refusal silent. Mirrors :835-837 for Submit.
+  it('Q5/AC4: a blocked control refuses focus and the keyboard, and its reason stays in the a11y tree', async () => {
+    mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: REASON }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = await screen.findByTestId('view-ubl')
+
+    btn.focus()
+    expect(document.activeElement, 'a disabled button is out of the tab order').not.toBe(btn)
+    for (const key of ['Enter', ' ']) {
+      fireEvent.keyDown(btn, { key })
+      fireEvent.keyUp(btn, { key })
+    }
+    expect(screen.queryAllByTestId('ubl-modal')).toHaveLength(0)
+
+    const reasonEl = screen.getByTestId('view-ubl-blocked-reason')
+    expect(reasonEl.getAttribute('aria-hidden')).toBeNull()
+    expect(reasonEl.hasAttribute('hidden')).toBe(false)
+    expect(screen.getByText(REASON)).toBe(reasonEl)
+  })
+
+  // The worst case the backend can actually build: all six Missing() gaps joined
+  // (internal/invoice/ubl_test.go:361) inside a maxWidth:320 column.
+  // KILLS: `whiteSpace: 'nowrap'` / `overflow: 'hidden'` on the reason node.
+  it('Q6/AC4: the longest reason the backend can produce renders whole, with nothing forcing it onto one line', async () => {
+    const longest =
+      'This invoice cannot be rendered as a UBL document — it is missing an invoice number, an issue date, a currency, a supplier name, a buyer name and at least one line item.'
+    mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: longest }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('view-ubl-blocked-reason')
+    expect(reasonEl.textContent, 'no client-side truncation or ellipsis').toBe(longest)
+    // jsdom does no layout, so this is the reachable half -- nothing in the inline style
+    // may stop the text wrapping inside the column's cap. The rendered result belongs to
+    // the visual gate (task-401 §G, RALPH 3.5).
+    const s = (reasonEl as HTMLElement).style
+    expect(s.whiteSpace).toBe('')
+    expect(s.overflow).toBe('')
+    expect(s.textOverflow).toBe('')
+    expect(reasonEl.parentElement?.style.maxWidth, 'still inside the 320 column').toBe('320px')
+  })
+
+  // KILLS: dangerouslySetInnerHTML. The reason is server-authored and rendered verbatim
+  // ([ubl-reason-copy-is-server-authored]); verbatim must mean as TEXT.
+  it('Q7/AC4: a reason carrying markup renders as text, never as HTML', async () => {
+    const nasty = 'Missing <script>alert(1)</script> & <b>a supplier name</b>'
+    mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: nasty }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('view-ubl-blocked-reason')
+    expect(reasonEl.textContent).toBe(nasty)
+    expect(reasonEl.querySelector('script'), 'never parsed as markup').toBeNull()
+    expect(reasonEl.querySelector('b')).toBeNull()
+    expect(reasonEl.childElementCount, 'one text node, no element children').toBe(0)
+    expect(screen.getByTestId('view-ubl').getAttribute('title')).toBe(nasty)
+  })
+
+  // KILLS: `disabled={!inv.can_view_ubl || inv.ubl_blocked_reason != null}`. Mirrors
+  // :856-859 for Submit. Never produced by the real backend --
+  // TestGetHandler_UBLGateIsStatusIndependent{,WhenBlocked} pin the two mutually exclusive
+  // -- but the enabled state must read can_view_ubl ALONE and never infer refusal from a
+  // reason string merely being present.
+  it('Q8/AC4: a contradictory wire (can_view_ubl true with a non-null reason) still enables the control', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable, can_view_ubl: true, ubl_blocked_reason: REASON }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const btn = (await screen.findByTestId('view-ubl')) as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    expect(btn.style.cursor, 'and it is not muted either').toBe('')
+    fireEvent.click(btn)
+    expect(screen.getByTestId('ubl-modal')).toBeTruthy()
+  })
+
+  // T7's sibling branch. The widened condition (:473) has TWO banner arms and T7 walks
+  // only `submitSkipped`; a guard keyed to that arm alone passes T7 and leaks the control
+  // into edit mode here.
+  it('Q9/AC2: stays hidden while editing with a live submit ERROR banner holding the column open', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }), [], {
+      submitResponses: [{ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+    await screen.findByTestId('detail-submit-error')
+    expect(screen.getByTestId('view-ubl'), 'anchor: present with the banner up and not editing').toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+
+    expect(screen.getByTestId('detail-submit-error'), 'the column is still mounted').toBeTruthy()
+    expect(screen.queryAllByTestId('view-ubl')).toHaveLength(0)
+  })
+
+  // The hazard the widened condition introduces (task-401 §B): an EMPTY maxWidth:320 flex
+  // item silently eating header space beside the title block. maxWidth:320 is unique to
+  // that column (InvoiceDetail.tsx:474).
+  // KILLS: widening the condition all the way to `true`.
+  const columns = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('div')).filter((d) => d.style.maxWidth === '320px')
+
+  it.each([
+    ['can_edit true, not editing', { ...editable }, false],
+    ['can_edit false, not editing', { status: 'queued' as InvoiceStatus, can_edit: false, can_submit: false }, false],
+    ['can_edit true, editing', { ...editable }, true],
+  ])('Q10/AC2: the header column is never rendered empty (%s)', async (_label, over, edit) => {
+    mockDetailFetch(detailRecord({ id: ID, ...over }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-detail')
+    if (edit) fireEvent.click(await screen.findByTestId('edit-toggle'))
+
+    expect(columns().length, 'exactly one column, or none at all').toBeLessThanOrEqual(1)
+    for (const col of columns()) {
+      expect(col.children.length, 'a rendered column always carries something').toBeGreaterThan(0)
+    }
+  })
+
+  it('Q10b/AC2: the column stays non-empty while editing with a banner holding it open', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }), [], {
+      submitResponses: [
+        {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ results: [{ invoice_id: ID, enqueued: false, status: 'validated', reason: 'not_validated' }] }),
+        },
+      ],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+    await screen.findByTestId('detail-submit-skipped')
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+
+    expect(columns()).toHaveLength(1)
+    expect(columns()[0].children.length).toBeGreaterThan(0)
+  })
+
+  // The `!editing` half of AC#3, which nothing covered: every pre-existing
+  // `invoice-actions` absence assertion (:794, :827, :1112) is about can_edit:false.
+  // It needs the banner, for the same reason T7 does and one step further -- once 05
+  // widened the outer column to `!editing || banner`, `editing` with NO banner drops the
+  // whole column, so the bar's own `!editing` is load-bearing in exactly one state.
+  // KILLS: `{inv.can_edit && (` on InvoiceDetail.tsx:511.
+  it('Q12/AC3: the actions bar stays gated on !editing even with a banner holding the column open', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }), [], {
+      submitResponses: [
+        {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ results: [{ invoice_id: ID, enqueued: false, status: 'validated', reason: 'not_validated' }] }),
+        },
+      ],
+    })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+    await screen.findByTestId('detail-submit-skipped')
+    expect(screen.getByTestId('invoice-actions'), 'anchor: the bar is up before editing').toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+
+    expect(screen.getByTestId('detail-submit-skipped'), 'the column is still mounted').toBeTruthy()
+    expect(screen.queryAllByTestId('invoice-actions')).toHaveLength(0)
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
+      expect(screen.queryAllByTestId(id), `${id} goes with the bar`).toHaveLength(0)
+    }
+  })
+
+  // Closes task-401 §I-2: T2's literal lags silently if the union grows. A source scan is
+  // the only oracle -- the union is erased at runtime. cwd, never import.meta.url (T17).
+  it('Q11/AC2: T2 loops the WHOLE InvoiceStatus union, not a literal that has drifted', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/lib/invoices.ts'), 'utf8')
+    const block = src.match(/export type InvoiceStatus =\n((?:\s*\|\s*'[a-z_]+'\n)+)/)
+    expect(block, 'the union no longer parses -- re-derive ALL_STATUSES by hand').toBeTruthy()
+    const declared = [...(block as RegExpMatchArray)[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
+    expect(declared.length, 'floor: the union really was parsed').toBeGreaterThan(1)
+    expect([...ALL_STATUSES].sort()).toEqual([...declared].sort())
   })
 })

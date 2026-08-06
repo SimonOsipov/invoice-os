@@ -672,10 +672,8 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			invalidRows += len(g.rowIdxs)
 			continue
 		}
-		if _, ok := existing[num]; ok {
-			// TODO: wire the resolved id through once routing lands --
-			// deliberately "" for now.
-			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs, ""))
+		if invoiceID, ok := existing[num]; ok {
+			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs, invoiceID))
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
 			continue

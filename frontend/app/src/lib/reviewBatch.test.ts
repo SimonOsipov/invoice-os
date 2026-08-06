@@ -265,7 +265,7 @@ describe('verdictPill: a kept row is KEPT · INVALID and does not stack (PILL-5)
 })
 
 // The kept mark means "kept as-is" only on a draft; on a failed invoice it means
-// resolved outside the system (BUG-07-01), which is not this badge's claim.
+// resolved outside the system, which is not this badge's claim.
 describe('verdictPill: the kept mark is a draft-only concept, not resolved-failed (PILL-9..PILL-11)', () => {
   it('PILL-9: a resolved failed row is not badged KEPT · INVALID', () => {
     const input: VerdictInput = { status: 'failed', violations: [], kept_as_is_at: '2026-08-06T00:00:00Z' }
@@ -311,6 +311,19 @@ describe('verdictPill: the kept mark is a draft-only concept, not resolved-faile
       const result = verdictPill({ status, violations: [], kept_as_is_at: '2026-08-06T00:00:00Z' })
       expect(result.badges.some((b) => b.kind === 'kept-invalid')).toBe(false)
     }
+  })
+
+  // No shipped rule is warning-severity today, so a `failed` row can't actually reach
+  // here -- verdictPill is pure, so the branch is still pinned in case that changes.
+  it('a resolved failed row with only advisory violations badges ADVISORY, never the mark', () => {
+    const violations: Violation[] = [{ rule_key: 'r1', severity: 'warning', message: 'w1' }]
+    const input: VerdictInput = { status: 'failed', violations, kept_as_is_at: '2026-08-06T00:00:00Z' }
+
+    const result = verdictPill(input)
+
+    expect(result.badges).toHaveLength(1)
+    expect(result.badges[0].kind).toBe('advisory')
+    expect(result.badges[0].count).toBe(1)
   })
 })
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// RED specs (BUG-07-06, Mode A). rowExpansionView (lib/reviewBatch.ts) sets keptReason
+// RED specs. rowExpansionView (lib/reviewBatch.ts) sets keptReason
 // from kept_as_is_at presence alone -- it structurally cannot gate on status (no status
 // in its input) -- so the CONSUMER (ReviewRow.tsx:464-472) must gate the banner render
 // itself. First test file for this component; mirrors InvoiceDetail.test.tsx's

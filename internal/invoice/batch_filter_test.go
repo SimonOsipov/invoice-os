@@ -459,8 +459,8 @@ func TestStoreList_KeptAsIsFilterMatchesColumn(t *testing.T) {
 	}
 }
 
-// TestStoreList_KeptAsIsExcludesResolvedFailed (T6-9/T6-10, BUG-07-06): a resolved
-// failed invoice (BUG-07-01's widened mark) no longer means "kept as-is" and must
+// TestStoreList_KeptAsIsExcludesResolvedFailed (T6-9/T6-10): a resolved
+// failed invoice (the widened mark) no longer means "kept as-is" and must
 // drop out of {KeptAsIs: true}, while a kept blocked draft -- the sibling test
 // above's own fixture -- still counts exactly as it does today.
 func TestStoreList_KeptAsIsExcludesResolvedFailed(t *testing.T) {

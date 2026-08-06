@@ -183,7 +183,7 @@ export const DOC_TYPE_DEFS: [string, string, string][] = [
 /* ------------------------------------------------------------------ */
 
 // The UBL 2.1 targets every connector maps onto, in the order the detail view lists
-// them. Paths are the real ones lib/xml.ts emits, minus the /Invoice root.
+// them. Paths are the real ones internal/ubl/ubl.go emits, minus the /Invoice root.
 const UBL_TARGETS: string[] = [
   'cbc:ID',
   'cbc:IssueDate',

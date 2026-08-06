@@ -31,7 +31,11 @@ interface MockResponse {
   ok: boolean
   status: number
   json: () => Promise<unknown>
+  // The UBL route is served as text (apiFetch responseType:'text'), never JSON.
+  text?: () => Promise<string>
 }
+
+const UBL_FIXTURE = '<?xml version="1.0" encoding="UTF-8"?>\n<Invoice/>\n'
 
 function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRecord {
   return {
@@ -140,6 +144,17 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     }
     if (method === 'PATCH') {
       return Promise.resolve(opts.editResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) })
+    }
+    // Dispatched BEFORE the detail-refetch counter, like /source-document below: without
+    // its own arm the viewer's GET falls through to the fallback, consuming a
+    // detailSequence slot and answering with a body that has no text().
+    if (url.endsWith('/ubl')) {
+      return Promise.resolve<MockResponse>({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new Error('the ubl route is text, not json')),
+        text: () => Promise.resolve(UBL_FIXTURE),
+      })
     }
     if (url.endsWith('/source-document')) {
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(detail) })
@@ -1302,9 +1317,12 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
   //
   // Scoped to the SUBTITLE, never the whole modal (QA, task-401 §F T16): the modal BODY
   // is that transitional fetch rendered as UBL, so `<cbc:ID>INV-WRONG</cbc:ID>` sits in
-  // ubl-modal's textContent by design until 06 deletes the fetch -- and after 06 the body
-  // still renders whatever getInvoiceUbl is mocked with. Only the subtitle discriminates
-  // the prop from a refetch, which is the whole claim of this row.
+  // ubl-modal's textContent by design until 06 deletes the fetch. Only the subtitle
+  // discriminates the prop from a refetch, which is the whole claim of this row.
+  //
+  // Post-06 the viewer issues only the /ubl GET, which the harness answers from its own
+  // arm -- INV-WRONG can then reach no part of the modal, and this row degrades from a
+  // mutation oracle to a plain prop assertion.
   it('T16/AC6: the viewer is handed THIS invoice number, not a refetched one', async () => {
     const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, invoice_number: 'INV-PROP-1', ...editable }), [], {
       detailSequence: [detailRecord({ id: ID, invoice_number: 'INV-WRONG', ...editable })],

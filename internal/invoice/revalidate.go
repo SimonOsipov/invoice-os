@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 )
@@ -76,4 +77,45 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 	}
 
 	return inv, nil
+}
+
+// ErrRevalidatePrivilegedRole refuses a SUPERUSER/BYPASSRLS connection: the
+// tenant_isolation policy would be inert and the pass could demote invoices
+// across tenants with no error to show for it (mirrors
+// importer.ErrBackfillPrivilegedRole, internal/importer/backfill.go:23).
+var ErrRevalidatePrivilegedRole = errors.New("invoice: refusing to revalidate over a SUPERUSER/BYPASSRLS role; run as invoice_app")
+
+// RevalidateResult is one tenant's re-validation run summary (task-412 /
+// BUG-05-03). Demoted is reported identically on both paths -- a dry run
+// writes nothing but still counts the yield a real run would produce.
+// Skipped counts a row that stopped being validated between the list read
+// and the write lock (DemoteRevalidatedTx's own no-op guard).
+type RevalidateResult struct {
+	Examined int
+	Demoted  int
+	Clean    int
+	Skipped  int
+	Notes    []string
+}
+
+// RevalidateActive re-evaluates every status='validated' invoice for
+// tenantID against the active rule set (via gate, over HTTP -- never
+// internal/validation in-process) and demotes any that now carry a blocking
+// violation back to draft via DemoteRevalidatedTx. See this package's
+// gate.go header for why every invoice evaluated here must be
+// Store.Get-hydrated, never Store.List-sourced.
+//
+// STAGE 2.5 (Mode A) STUB: not yet implemented (task-412). Every
+// TestRevalidateActive_*/TestRevalidateAllTenants_*/TestRevalidateVerify_*
+// spec in revalidate_test.go must fail on this sentinel error, never on a
+// compile error.
+func RevalidateActive(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	store *Store,
+	gate *Gate,
+	tenantID string,
+	dryRun bool,
+) (RevalidateResult, error) {
+	return RevalidateResult{}, errors.New("invoice: RevalidateActive not implemented")
 }

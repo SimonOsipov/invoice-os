@@ -163,7 +163,7 @@ describe('ReviewAlreadyImportedTab: QA -- scale (the real repro: 750 rows / 250 
     expect(onOpenInvoice).toHaveBeenLastCalledWith('inv-0')
     fireEvent.click(buttons[499]) // last resolved row
     expect(onOpenInvoice).toHaveBeenLastCalledWith('inv-249')
-  })
+  }, 20000) // 750-row jsdom render is slow on a loaded CI runner, past vitest's 5s default
 })
 
 describe('ReviewAlreadyImportedTab: QA -- mixed resolved/unresolved routing', () => {

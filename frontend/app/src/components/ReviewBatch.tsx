@@ -43,6 +43,7 @@ import { getImportBatch, type ImportBatch } from '../lib/importApi'
 import type { ImportRun } from '../lib/importRun'
 import { listInvoices, shouldFetchInvoices } from '../lib/invoices'
 import {
+  alreadyImportedRowsAll,
   channelTilesAll,
   filesStrip,
   reviewHeaderAll,
@@ -53,6 +54,7 @@ import {
   type FileStripRow,
   type ReviewTab,
 } from '../lib/reviewBatch'
+import { ReviewAlreadyImportedTab } from './ReviewAlreadyImportedTab'
 import { ReviewInvoicesTab } from './ReviewInvoicesTab'
 import { ReviewUnreadableTab } from './ReviewUnreadableTab'
 import type { PlatformCtx } from '../types'
@@ -222,6 +224,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   }
 
   const rows = unreadableRowsAll(batches)
+  const alreadyImportedRows = alreadyImportedRowsAll(batches)
   const tiles = channelTilesAll(batches, { cleanTotal, failingTotal })
   const header = reviewHeaderAll(batches, { allTotal })
   const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported })
@@ -371,6 +374,15 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
           rowsTotal={batches.reduce((sum, b) => sum + b.rows_total, 0)}
           batchIds={batchIds}
           onImportCorrected={ctx.restartImport}
+        />
+      )}
+
+      {activeTab === 'already-imported' && (
+        <ReviewAlreadyImportedTab
+          rows={alreadyImportedRows}
+          rowsTotal={batches.reduce((sum, b) => sum + b.rows_total, 0)}
+          batchIds={batchIds}
+          onOpenInvoice={ctx.openImportedInvoice}
         />
       )}
 

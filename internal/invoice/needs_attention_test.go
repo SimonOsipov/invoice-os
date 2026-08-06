@@ -36,7 +36,8 @@ import (
 
 // matchesNeedsAttentionPredicate reports whether inv satisfies the verbatim
 // dashboard predicate, evaluated in Go against the ALREADY-SCANNED row (not a
-// second SQL query) -- rejected/failed always match; a draft matches iff its
+// second SQL query) -- rejected always matches, failed matches unless
+// resolved (kept_as_is_at set); a draft matches iff its
 // violations contain a severity:"error" entry (hasBlockingViolation,
 // store.go -- the SAME predicate ApplyValidation's promotion gate uses,
 // [error semantics]); every other status (validated/queued/submitted/
@@ -44,8 +45,10 @@ import (
 func matchesNeedsAttentionPredicate(t *testing.T, inv Invoice) bool {
 	t.Helper()
 	switch inv.Status {
-	case StatusRejected, StatusFailed:
+	case StatusRejected:
 		return true
+	case StatusFailed:
+		return inv.KeptAsIsAt == nil
 	case StatusDraft:
 		var vs []Violation
 		if err := json.Unmarshal(inv.Violations, &vs); err != nil {

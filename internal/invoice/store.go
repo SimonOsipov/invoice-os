@@ -598,7 +598,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			conditions = append(conditions, fmt.Sprintf("entity_id = $%d", len(args)))
 		}
 		if f.NeedsAttention {
-			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
+			conditions = append(conditions, `(status = 'rejected' OR (status = 'failed' AND kept_as_is_at IS NULL) OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
 		}
 		if len(f.ImportBatchIDs) > 0 {
 			args = append(args, f.ImportBatchIDs)
@@ -612,9 +612,10 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			// AND kept_as_is_at IS NULL (INVCR-01-15, D6, [needs-fix-is-a-new-predicate]):
 			// a kept row still matches the base needs_fix shape (draft + a blocking
 			// violation) but has left the "needs a fix" working set by operator decision --
-			// this clause lands ONLY here, never on needs_attention's verbatim-pinned
-			// fragment above (which stays byte-identical to the dashboard rollup,
-			// TestStoreList_NeedsAttentionMatchesDashboardRollup).
+			// this clause lands ONLY here, never on needs_attention's fragment above
+			// (which stays behaviourally in lockstep with the dashboard rollup, pinned by
+			// TestStoreList_NeedsAttentionMatchesDashboardRollup -- not byte-identical,
+			// since that query aliases the table `i.` and this one doesn't).
 			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb AND kept_as_is_at IS NULL)`)
 		}
 		if f.KeptAsIs {

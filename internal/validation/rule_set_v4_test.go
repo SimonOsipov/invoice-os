@@ -260,3 +260,219 @@ func TestV4_MissingAndMalformedAreDifferentRules(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------
+// AC-3 adversarial -- blank detection at edges strings.TrimSpace does and doesn't cover.
+// ---------------------------------------------------------------------
+
+// TestV4_BuyerTinRequiredBlankEdgeCases (AC-3 adversarial): tab/newline-only and a
+// non-breaking-space-only TIN are blank per strings.TrimSpace (unicode.White_Space) and
+// fire buyer-tin-required, same as the plain-space case AC-3 already pins.
+func TestV4_BuyerTinRequiredBlankEdgeCases(t *testing.T) {
+	_, app := dbTestPools(t)
+	rs := loadRuleSetByVersion(t, app, 4)
+	engine := NewDefaultEngine()
+
+	cases := []struct {
+		name string
+		tin  string
+	}{
+		{"tab and newline only", "\t\n"},
+		{"non-breaking space only", "\u00A0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validInvoicePayload()
+			invoiceOf(p)["buyer"].(map[string]any)["tin"] = tc.tin
+
+			result, err := engine.Evaluate(p, rs)
+			if err != nil {
+				t.Fatalf("Evaluate: %v", err)
+			}
+			if !hasViolation(result, "buyer-tin-required") {
+				t.Errorf("buyer-tin-required did not fire for TIN=%q -- violations=%+v [AC-3]", tc.tin, result.Violations)
+			}
+		})
+	}
+}
+
+// TestV4_BuyerTinRequiredZeroWidthSpaceGap (AC-3 adversarial, KNOWN GAP): U+200B is not
+// unicode.White_Space, so strings.TrimSpace does not blank it -- requiredEval treats it
+// as present and buyer-tin-required does not fire. buyer-tin-format's regex still
+// rejects it, so the invoice is still blocked overall, just mislabeled "malformed"
+// rather than "missing". Pins the actual behavior rather than the assumed one.
+func TestV4_BuyerTinRequiredZeroWidthSpaceGap(t *testing.T) {
+	_, app := dbTestPools(t)
+	rs := loadRuleSetByVersion(t, app, 4)
+	engine := NewDefaultEngine()
+
+	p := validInvoicePayload()
+	invoiceOf(p)["buyer"].(map[string]any)["tin"] = "\u200B"
+
+	result, err := engine.Evaluate(p, rs)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if hasViolation(result, "buyer-tin-required") {
+		t.Error("buyer-tin-required fired for a zero-width-space TIN -- TrimSpace behavior changed, update this pin [AC-3 known gap]")
+	}
+	if !hasViolation(result, "buyer-tin-format") {
+		t.Error("buyer-tin-format did not fire for a zero-width-space TIN -- the invoice would pass validation entirely [AC-3 known gap]")
+	}
+}
+
+// ---------------------------------------------------------------------
+// AC-2 adversarial -- the SELECT-copy forces enabled=true, never inherits v3's runtime state.
+// ---------------------------------------------------------------------
+
+// TestV4_CopyForcesEnabledTrueRegardlessOfSourceState (AC-2 adversarial): the migration's
+// copy INSERT literal-inserts `true` for enabled rather than reading r.enabled. Disables a
+// real v3 rule's kill-switch (enabled-only UPDATE is allowed on a sealed row, TestRIL03),
+// then re-runs the migration's own copy INSERT verbatim against a throwaway draft version
+// -- the copied row must still land enabled=true. Always-rolled-back superuser tx.
+func TestV4_CopyForcesEnabledTrueRegardlessOfSourceState(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin superuser tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `UPDATE rules SET enabled = false
+		WHERE rule_set_version_id = (SELECT id FROM rule_set_versions WHERE version = 3)
+		  AND key = 'supplier-tin-required'`)
+	if err != nil {
+		t.Fatalf("disable v3's supplier-tin-required (simulated runtime kill-switch): %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("disabling v3 supplier-tin-required touched %d rows, want 1 [precondition]", tag.RowsAffected())
+	}
+
+	draft := nextVersion()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO rule_set_versions (version, is_active, sealed, notes) VALUES ($1, false, false, $2)`,
+		draft, fixtureNotes,
+	); err != nil {
+		t.Fatalf("insert throwaway draft version: %v", err)
+	}
+	// The migration's own copy INSERT, reproduced verbatim, retargeted from v4 to this
+	// throwaway draft (see migrations/20260806131239_rule_set_v4.sql).
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO rules
+		    (rule_set_version_id, key, type, target, params, severity, "when", message, scope, enabled)
+		SELECT nv.id, r.key, r.type, r.target, r.params, r.severity, r."when", r.message, r.scope, true
+		FROM rules r
+		JOIN rule_set_versions v3 ON v3.id = r.rule_set_version_id AND v3.version = 3
+		CROSS JOIN rule_set_versions nv
+		WHERE nv.version = $1`, draft); err != nil {
+		t.Fatalf("run the migration's copy INSERT against the draft: %v", err)
+	}
+
+	var copiedEnabled bool
+	if err := tx.QueryRow(ctx, `SELECT enabled FROM rules
+		WHERE rule_set_version_id = (SELECT id FROM rule_set_versions WHERE version = $1)
+		  AND key = 'supplier-tin-required'`, draft).Scan(&copiedEnabled); err != nil {
+		t.Fatalf("read copied supplier-tin-required.enabled: %v", err)
+	}
+	if !copiedEnabled {
+		t.Error("copied supplier-tin-required.enabled = false, want true (forced, not inherited from a disabled v3 source) [AC-2]")
+	}
+}
+
+// ---------------------------------------------------------------------
+// AC-6 -- the Down round-trips: restores v3 active, removes v4, re-enables both guards.
+// ---------------------------------------------------------------------
+
+// TestV4_DownRestoresV3Active (AC-6): mirrors TestRuleSetV3_DownRestoresV2Active's
+// pattern -- runs the v4 migration's Down inside a superuser tx that is ALWAYS rolled
+// back. v4 is the real active version right now, so no synthetic activation is needed;
+// the next publish that supersedes v4 should retrofit this test the same way the house
+// convention retrofit rule_set_v3_test.go.
+func TestV4_DownRestoresV3Active(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin superuser tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var v4Active, v4Sealed bool
+	if err := tx.QueryRow(ctx, `SELECT is_active, sealed FROM rule_set_versions WHERE version = 4`).Scan(&v4Active, &v4Sealed); err != nil {
+		t.Fatalf("read v4 is_active/sealed: %v -- expected the v4 migration's active+sealed row [AC-6 precondition]", err)
+	}
+	if !v4Active || !v4Sealed {
+		t.Fatalf("v4 is_active=%t sealed=%t before running the simulated Down, want both true [AC-6 precondition]", v4Active, v4Sealed)
+	}
+
+	// db/seed.dev.sql seeds demo invoices that stamp the active version via
+	// rule_set_version_id, whose FK carries no ON DELETE clause -- clear them so the
+	// Down's DELETE below doesn't 23503 (harmless: this tx is always rolled back).
+	for _, stmt := range []string{
+		`DELETE FROM app_exchange WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
+		`DELETE FROM submission_jobs WHERE invoice_id IN (SELECT id FROM invoices WHERE rule_set_version_id IS NOT NULL)`,
+		`DELETE FROM invoices WHERE rule_set_version_id IS NOT NULL`,
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("clear rule-set-stamped seed invoices before the simulated Down: %v", err)
+		}
+	}
+
+	// The migration's own Down, reproduced verbatim (migrations/20260806131239_rule_set_v4.sql).
+	if _, err := tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER rules_content_lock`); err != nil {
+		t.Fatalf("Down step: disable rules_content_lock: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER rule_set_versions_seal_guard`); err != nil {
+		t.Fatalf("Down step: disable rule_set_versions_seal_guard: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false, sealed = false WHERE version = 4`); err != nil {
+		t.Fatalf("Down step: unseal+deactivate v4: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 3`); err != nil {
+		t.Fatalf("Down step: reactivate v3: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE version = 4`); err != nil {
+		t.Fatalf("Down step: delete v4: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER rule_set_versions_seal_guard`); err != nil {
+		t.Fatalf("Down step: re-enable rule_set_versions_seal_guard: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE rules ENABLE TRIGGER rules_content_lock`); err != nil {
+		t.Fatalf("Down step: re-enable rules_content_lock: %v", err)
+	}
+
+	var v4Exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM rule_set_versions WHERE version = 4)`).Scan(&v4Exists); err != nil {
+		t.Fatalf("check v4 existence after Down: %v", err)
+	}
+	if v4Exists {
+		t.Error("rule_set_versions WHERE version=4 still exists after Down, want absent [AC-6]")
+	}
+
+	var v3Active bool
+	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE version = 3`).Scan(&v3Active); err != nil {
+		t.Fatalf("read v3.is_active after Down: %v", err)
+	}
+	if !v3Active {
+		t.Error("v3.is_active after Down = false, want true [AC-6]")
+	}
+
+	for _, tc := range []struct{ table, trigger string }{
+		{"rules", "rules_content_lock"},
+		{"rule_set_versions", "rule_set_versions_seal_guard"},
+	} {
+		var enabled string
+		if err := tx.QueryRow(ctx,
+			`SELECT tgenabled FROM pg_trigger WHERE tgname = $1 AND tgrelid = $2::regclass`,
+			tc.trigger, tc.table,
+		).Scan(&enabled); err != nil {
+			t.Fatalf("read pg_trigger.tgenabled for %s on %s: %v", tc.trigger, tc.table, err)
+		}
+		if enabled != "O" {
+			t.Errorf("pg_trigger.tgenabled for %s on %s = %q, want %q (re-enabled) [AC-6]", tc.trigger, tc.table, enabled, "O")
+		}
+	}
+}

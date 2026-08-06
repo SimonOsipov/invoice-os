@@ -38,7 +38,7 @@
 //                       `qr_png_base64` (M5-09-01/03) gets the same defensive
 //                       normalization once implemented -- the wire never actually omits
 //                       either key (getResponse, handlers.go:189-192, no omitempty).
-//                       The three action flags normalize FAIL-CLOSED (`=== true`), see
+//                       The four action flags normalize FAIL-CLOSED (`=== true`), see
 //                       getInvoice itself.
 // - getInvoiceHistory:  GET   `${base}/api/invoice/v1/invoices/{id}/history`, resolves
 //                       the bare StatusChange[] verbatim (HistoryHandler).
@@ -235,6 +235,8 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   revalidate_blocked_reason: string | null
   can_submit: boolean
   submit_blocked_reason: string | null
+  can_view_ubl: boolean
+  ubl_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -499,12 +501,12 @@ export async function violationSummary(
   return res.rules
 }
 
-// The three action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The four action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
 // defensive normalization on a permission-shaped flag only earns its keep fail-closed.
-// `revalidate_blocked_reason` and `submit_blocked_reason` both keep `?? null` (their
+// The three `*_blocked_reason` fields all keep `?? null` (their
 // declared type is nullable, so `??` is reachable and idiomatic) and are passed through
 // BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
 // ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here
@@ -520,7 +522,17 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
     can_submit: res.can_submit === true,
     submit_blocked_reason: res.submit_blocked_reason ?? null,
+    can_view_ubl: res.can_view_ubl === true,
+    ubl_blocked_reason: res.ubl_blocked_reason ?? null,
   }
+}
+
+// The document, verbatim. Through authedFetch (not a bare fetch) so the 401 -> sign-out
+// seam holds ([ubl-fetch-through-authedfetch]); U6 is the row that catches a regression.
+export async function getInvoiceUbl(authedFetch: AuthedFetch, base: string, id: string): Promise<string> {
+  return authedFetch<string>(`${base}/api/invoice/v1/invoices/${encodeURIComponent(id)}/ubl`, {
+    responseType: 'text',
+  })
 }
 
 export async function getInvoiceHistory(

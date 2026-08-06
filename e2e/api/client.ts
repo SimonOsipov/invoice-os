@@ -340,16 +340,18 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
 }
 
 // GetInvoiceResult is GetHandler's own response shape: Invoice plus getResponse's two
-// GET-only sibling keys (handlers.go's getResponse, handlers.go:189-192, no omitempty on
+// GET-only sibling keys (handlers.go's getResponse, handlers.go:229-240, no omitempty on
 // either). NOT added to Invoice itself -- rule_set_version is json:"-" on the shared Go
 // struct (invoice.go:117), so a list item never carries it structurally; only a GET
 // response does.
 // CanEdit/CanRevalidate/RevalidateBlockedReason (INVED-01-08, [gates-on-the-wire]):
-// getResponse's three additive sibling keys (handlers.go:214-221), declared LAST on the Go
+// getResponse's three additive sibling keys (handlers.go:233-235), declared LAST on the Go
 // struct and none tagged omitempty -- present, explicit, on every status. Required (not
 // optional): a fail-open `?` would let a consumer read `undefined` as "the server didn't
 // say", exactly what [gates-on-the-wire] exists to prevent.
-// CanSubmit/SubmitBlockedReason (handlers.go:232-233): same convention, one call site later.
+// CanSubmit/SubmitBlockedReason (handlers.go:236-237): same convention, one call site later.
+// CanViewUBL/UBLBlockedReason (handlers.go:238-239, BUG-04-03): same no-omitempty
+// convention; content-derived (ubl.Missing), never status-derived.
 export interface GetInvoiceResult extends Invoice {
   rule_set_version: number | null
   qr_png_base64: string | null
@@ -358,6 +360,8 @@ export interface GetInvoiceResult extends Invoice {
   revalidate_blocked_reason: string | null
   can_submit: boolean
   submit_blocked_reason: string | null
+  can_view_ubl: boolean
+  ubl_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

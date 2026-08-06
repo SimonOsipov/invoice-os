@@ -25,6 +25,9 @@ export interface ApiFetchOptions {
   body?: unknown // JSON-serialized + Content-Type: application/json when present
   token?: string | null // when truthy, injects Authorization: Bearer <token>
   signal?: AbortSignal
+  // 'text' resolves the raw body (the UBL route serves XML). Errors stay JSON on
+  // every path, so this is read only after the !res.ok check below.
+  responseType?: 'json' | 'text'
 }
 
 // Configured gateway base (trailing slashes stripped) or null when VITE_GATEWAY_URL is empty/unset.
@@ -33,7 +36,8 @@ export function gatewayBase(): string | null {
   return v || null
 }
 
-// Resolves parsed JSON on 2xx; REJECTS with ApiError on network / non-2xx / malformed-body.
+// Resolves parsed JSON — or the raw body under responseType:'text' — on 2xx; REJECTS with
+// ApiError on network / non-2xx / malformed-body.
 export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
   const headers = new Headers()
   if (opts?.token) {
@@ -72,8 +76,10 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     throw new ApiError('http', msg, res.status, responseBody)
   }
 
+  // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T10 if
+  // it is moved out.
   try {
-    return (await res.json()) as T
+    return (opts?.responseType === 'text' ? await res.text() : await res.json()) as T
   } catch {
     throw new ApiError('malformed', 'malformed response body', res.status)
   }

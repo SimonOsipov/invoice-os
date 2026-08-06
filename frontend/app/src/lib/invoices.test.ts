@@ -44,6 +44,7 @@ import {
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
+  getInvoiceUbl,
   invoiceStatusStyle,
   invoicesViewState,
   isInFlight,
@@ -100,6 +101,8 @@ interface MockResponse {
   status: number
   statusText?: string
   json: () => Promise<unknown>
+  // Optional so every existing {ok,status,json} call site keeps compiling.
+  text?: () => Promise<string>
 }
 
 function mockFetchOnce(response: MockResponse) {
@@ -118,6 +121,16 @@ async function captureRejection(thunk: () => unknown): Promise<unknown> {
     return err
   }
   throw new Error('expected the call to reject, but it resolved')
+}
+
+// Calls a (currently throwing) helper and swallows the failure, so assertions on the
+// fetch mock below still execute pre-implementation -- client.test.ts's tryCall.
+async function tryCall(thunk: () => unknown): Promise<void> {
+  try {
+    await thunk()
+  } catch {
+    // ignored — the resolve/reject contract is pinned by the rows beside this one.
+  }
 }
 
 afterEach(() => {
@@ -592,6 +605,8 @@ describe('getInvoice', () => {
       revalidate_blocked_reason: null,
       can_submit: false,
       submit_blocked_reason: null,
+      can_view_ubl: true,
+      ubl_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -615,6 +630,8 @@ describe('getInvoice', () => {
       revalidate_blocked_reason: null,
       can_submit: false,
       submit_blocked_reason: null,
+      can_view_ubl: true,
+      ubl_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -636,6 +653,8 @@ describe('getInvoice', () => {
       revalidate_blocked_reason: 'Validated invoices cannot be re-validated.',
       can_submit: true,
       submit_blocked_reason: null,
+      can_view_ubl: true,
+      ubl_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -678,6 +697,8 @@ describe('getInvoice', () => {
       revalidate_blocked_reason: null,
       can_submit: true,
       submit_blocked_reason: null,
+      can_view_ubl: true,
+      ubl_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -728,6 +749,285 @@ describe('getInvoice', () => {
     const result = await getInvoice(af, base, 'inv-1')
 
     expect(result.failure_kind).toBeNull()
+  })
+
+  // RED specs (task-400, BUG-04-04, Mode A) -- can_view_ubl / ubl_blocked_reason join the
+  // existing fail-closed normalization. getInvoice spreads the wire today, so G2/G3/G5
+  // (the coercion + missing-key rows) fail; G1/G4/G6 pin the passthrough the added lines
+  // must not break -- G6 is the oracle for `||` written where `??` belongs.
+  it('G1: can_view_ubl passes through when literally true', async () => {
+    const wire = { ...draftInvoice, can_view_ubl: true, ubl_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(true)
+    expect(result.ubl_blocked_reason).toBeNull()
+  })
+
+  it('G2: a stringly-typed can_view_ubl is denied', async () => {
+    // Unannotated literal (the can_submit idiom above): a non-boolean truthy the wire
+    // might carry. Mutation oracle for `=== true` over `?? false` / plain truthiness.
+    const wire = { ...draftInvoice, can_view_ubl: 'true', ubl_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(false)
+  })
+
+  it('G3: a wire missing can_view_ubl fails closed', async () => {
+    const wire: InvoiceDetailRecord = {
+      ...draftInvoice,
+      rule_set_version: 2,
+      qr_png_base64: null,
+      can_edit: true,
+      can_revalidate: true,
+      revalidate_blocked_reason: null,
+      can_submit: false,
+      submit_blocked_reason: null,
+      can_view_ubl: true,
+      ubl_blocked_reason: null,
+    }
+    const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(false)
+    expect(result.can_view_ubl).not.toBeUndefined()
+  })
+
+  it('G4: ubl_blocked_reason passes through byte-identically', async () => {
+    // internal/invoice/ubl.go's ublBlockedPrefix + "at least one line item." -- em dash
+    // U+2014. The SPA has no authority over this copy.
+    const reasonText = 'This invoice cannot be rendered as a UBL document — it is missing at least one line item.'
+    const wire = { ...draftInvoice, can_view_ubl: false, ubl_blocked_reason: reasonText }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.ubl_blocked_reason).toBe(reasonText)
+  })
+
+  it('G5: a missing ubl_blocked_reason normalizes to null', async () => {
+    const wire = { ...draftInvoice, can_view_ubl: true }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.ubl_blocked_reason).toBeNull()
+    expect(result.ubl_blocked_reason).not.toBeUndefined()
+  })
+
+  it('G6: an empty-string reason is preserved, not coerced', async () => {
+    // Unreachable from the real server (ublBlockedReason returns nil, never ""), and
+    // exactly the mutation oracle for `||` written in place of `??`.
+    const wire = { ...draftInvoice, can_view_ubl: false, ubl_blocked_reason: '' }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.ubl_blocked_reason).toBe('')
+  })
+
+  // QA pass (task-400, Mode B). G1-G6 pin each field alone; G7 pins the COMBINATION the
+  // server never emits but a dropped key makes representable -- blocked with no reason.
+  // The contract is that the two fields normalize INDEPENDENTLY: the record reads
+  // {false, null}, and no SPA-authored reason is invented to fill the gap.
+  it('G7: blocked with a missing reason stays blocked, and no reason is invented', async () => {
+    const wire = { ...draftInvoice, can_view_ubl: false }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(false)
+    expect(result.ubl_blocked_reason).toBeNull()
+  })
+
+  // The other half of the same combination: allowed WITH a reason. `can_view_ubl` must not
+  // be derived from the reason's presence (nor the reason cleared because the gate is open)
+  // -- each key is passed through as sent.
+  it('G8: an allowed gate carrying a reason keeps both values as sent', async () => {
+    const wire = { ...draftInvoice, can_view_ubl: true, ubl_blocked_reason: 'stale reason' }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(true)
+    expect(result.ubl_blocked_reason).toBe('stale reason')
+  })
+})
+
+// RED specs (task-400, BUG-04-04, Mode A) -- getInvoiceUbl is a throwing stub, so every
+// row below fails on the throw or on the assertion it guards, not on a missing import.
+describe('getInvoiceUbl (task-400, BUG-04-04)', () => {
+  const UBL_XML =
+    '<?xml version="1.0" encoding="UTF-8"?>\n<Invoice><cbc:ID>INV &amp; Co</cbc:ID><cbc:Note>Ångström</cbc:Note></Invoice>'
+  const REASON = 'This invoice cannot be rendered as a UBL document — it is missing at least one line item.'
+  const notJSON = () => Promise.reject(new SyntaxError('not JSON'))
+
+  it('U1: requests the ubl route with the id percent-encoded', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(UBL_XML), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await tryCall(() => getInvoiceUbl(af, base, 'a/b'))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/a%2Fb/ubl')
+  })
+
+  it('U2: resolves the server bytes unmodified', async () => {
+    mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(UBL_XML), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoiceUbl(af, base, 'inv-1')
+
+    expect(result).toBe(UBL_XML)
+  })
+
+  it('U3: sends the bearer token and takes the text path', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(UBL_XML), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await tryCall(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const headers = new Headers(init.headers)
+    expect(headers.get('Authorization')).toBe('Bearer tok')
+  })
+
+  it('U4: a 409 rejects with ApiError{status:409} carrying the reason byte-identically', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: () => Promise.resolve({ error: REASON }),
+      text: () => Promise.resolve(JSON.stringify({ error: REASON })),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.status).toBe(409)
+    expect(apiErr.message).toBe(REASON)
+  })
+
+  it('U5: a 404 is distinguishable from a 409 and carries no reason copy', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: () => Promise.resolve({ error: 'not found' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(404)
+    expect((err as ApiError).message).toBe('not found')
+  })
+
+  it('U6: keeps the 401 sign-out seam', async () => {
+    // The one row a bare-fetch implementation fails ([ubl-fetch-through-authedfetch]).
+    mockFetchOnce({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      json: () => Promise.resolve({ error: 'unauthorized' }),
+    })
+    const onUnauthorized = vi.fn()
+    const af = createAuthedFetch(() => 'tok', onUnauthorized)
+
+    const err = await captureRejection(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(401)
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+
+  it('U7: a 500 rejects and yields no document', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: () => Promise.resolve({ error: 'internal server error' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(500)
+  })
+
+  // QA pass (task-400, Mode B) -- U8-U11 project the client-layer text-path edges onto the
+  // helper the viewer actually calls.
+  it("U8: a 2xx whose body stream fails rejects with ApiError('malformed'), not a raw TypeError", async () => {
+    // json resolves, so a helper that never took the text path would return an object here
+    // instead of rejecting -- the row is red on a missing text branch too.
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      text: () => Promise.reject(new TypeError('stream aborted')),
+      json: () => Promise.resolve({ a: 1 }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('malformed')
+    expect((err as ApiError).status).toBe(200)
+  })
+
+  it('U9: an empty document resolves the empty string rather than null', async () => {
+    // Unreachable from ubl.go, but BUG-04-06's viewer must not be handed null for it.
+    mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(''), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoiceUbl(af, base, 'inv-1')
+
+    expect(result).toBe('')
+    expect(result).not.toBeNull()
+  })
+
+  it('U10: non-ASCII document bytes survive the helper verbatim', async () => {
+    // Naira sign, CJK and an explicitly DECOMPOSED e + U+0301 -- no normalize, no re-encode.
+    const doc = '<Invoice><cbc:Note>\u20a61,000 \u767c\u7968 e\u0301</cbc:Note></Invoice>'
+    mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(doc), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoiceUbl(af, base, 'inv-1')
+
+    expect(result).toBe(doc)
+    expect(doc.normalize('NFC')).not.toBe(doc)
+  })
+
+  it('U11: sends no request body and no Accept header', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(UBL_XML), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await getInvoiceUbl(af, base, 'inv-1')
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.method).toBe('GET')
+    expect(init.body).toBeUndefined()
+    expect(new Headers(init.headers).has('Accept')).toBe(false)
   })
 })
 

@@ -350,14 +350,13 @@ func TestServiceImport_MixedFileCountersAndRuleSetVersion(t *testing.T) {
 	// TRAP FOR THE NEXT PUBLISH: this package has no shared "sanctioned active version"
 	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
 	// literal (and handlers_gate_test.go's two matching ones) together on every future
-	// rule-set publish. Bumped 2->3 by rule-set v3 (INVCR-01-13/task-289); runIMPVCleanFile
-	// drives a REAL gate evaluation, so this literal is an independent oracle, not a
-	// wiring bug -- see IMPV-02's own test purpose above.
+	// rule-set publish. runIMPVCleanFile drives a REAL gate evaluation, so this literal
+	// is an independent oracle, not a wiring bug -- see IMPV-02's own test purpose above.
 	if res.RuleSetVersion == nil {
-		t.Fatal("RuleSetVersion = nil, want a pointer to 3 -- something WAS evaluated on this non-empty batch")
+		t.Fatal("RuleSetVersion = nil, want a pointer to 4 -- something WAS evaluated on this non-empty batch")
 	}
-	if *res.RuleSetVersion != 3 {
-		t.Errorf("*RuleSetVersion = %d, want 3", *res.RuleSetVersion)
+	if *res.RuleSetVersion != 4 {
+		t.Errorf("*RuleSetVersion = %d, want 4", *res.RuleSetVersion)
 	}
 	// Cheap invariant, no dedicated spec ID ([Stage-1 F7] folds it into
 	// IMPV-02): on the real path every ready invoice is either clean or

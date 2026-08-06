@@ -238,8 +238,7 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 			rs.Version, activeSeedVersion)
 	}
 	if len(rs.Rules) != 20 {
-		t.Fatalf("len(RuleSet.Rules) = %d, want 20 -- expected the migration-seeded active (v2) rule set "+
-			"(v1's 17 base rules + the 2 line-item rules, re-issued under v2 by the rule_set_v2 migration)", len(rs.Rules))
+		t.Fatalf("len(RuleSet.Rules) = %d, want 20 -- expected the migration-seeded active rule set", len(rs.Rules))
 	}
 
 	wantKeys := []string{

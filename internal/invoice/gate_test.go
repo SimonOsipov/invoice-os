@@ -454,8 +454,8 @@ func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
 	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
 	// literal (and payload_engine_test.go's identical one) together on every future
 	// rule-set publish, or this test goes red for the wrong reason.
-	if version != 3 {
-		t.Errorf("version = %d, want 3 -- the real seeded active version, threaded out of Gate.Validate's own "+
+	if version != 4 {
+		t.Errorf("version = %d, want 4 -- the real seeded active version, threaded out of Gate.Validate's own "+
 			"return value, not merely stamped into rule_set_version_id and discarded", version)
 	}
 	if got.RuleSetVersionID == nil {

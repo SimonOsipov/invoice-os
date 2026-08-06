@@ -118,13 +118,13 @@ func TestCreateHandler_RealResponseCarriesNewGateFields(t *testing.T) {
 	// TRAP FOR THE NEXT PUBLISH: this package has no shared "sanctioned active version"
 	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
 	// literal (and this file's other one, plus service_gate_test.go's) together on every
-	// future rule-set publish. Bumped 2->3 by rule-set v3 (INVCR-01-13/task-289); this
-	// test only proves handlers.go serializes whatever a REAL gate evaluation returns
-	// (see file header), so the literal is an independent oracle, not a wiring bug.
+	// future rule-set publish. This test only proves handlers.go serializes whatever a
+	// REAL gate evaluation returns (see file header), so the literal is an independent
+	// oracle, not a wiring bug.
 	if resp.RuleSetVersion == nil {
-		t.Error("RuleSetVersion = nil, want a pointer to 3 -- the batch WAS evaluated")
-	} else if *resp.RuleSetVersion != 3 {
-		t.Errorf("*RuleSetVersion = %d, want 3", *resp.RuleSetVersion)
+		t.Error("RuleSetVersion = nil, want a pointer to 4 -- the batch WAS evaluated")
+	} else if *resp.RuleSetVersion != 4 {
+		t.Errorf("*RuleSetVersion = %d, want 4", *resp.RuleSetVersion)
 	}
 	if resp.InvoicesWithViolations != 1 {
 		t.Errorf("InvoicesWithViolations = %d, want 1 (IMPV14-VATWRONG)", resp.InvoicesWithViolations)
@@ -164,11 +164,11 @@ func TestCreateHandler_DryRunResponseCarriesNewGateFieldsNoIDStatus(t *testing.T
 		t.Errorf("dry-run (ID=%q Status=%q), want both empty (M4-03 shape preserved)", resp.ID, resp.Status)
 	}
 	// TRAP FOR THE NEXT PUBLISH: see TestCreateHandler_RealResponseCarriesNewGateFields's
-	// matching note above. Bumped 2->3 by rule-set v3 (INVCR-01-13/task-289).
+	// matching note above.
 	if resp.RuleSetVersion == nil {
-		t.Error("RuleSetVersion = nil, want a pointer to 3 -- the batch WAS evaluated")
-	} else if *resp.RuleSetVersion != 3 {
-		t.Errorf("*RuleSetVersion = %d, want 3", *resp.RuleSetVersion)
+		t.Error("RuleSetVersion = nil, want a pointer to 4 -- the batch WAS evaluated")
+	} else if *resp.RuleSetVersion != 4 {
+		t.Errorf("*RuleSetVersion = %d, want 4", *resp.RuleSetVersion)
 	}
 	if resp.InvoicesWithViolations != 1 {
 		t.Errorf("InvoicesWithViolations = %d, want 1 (IMPV14-VATWRONG)", resp.InvoicesWithViolations)

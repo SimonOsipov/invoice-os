@@ -1376,24 +1376,38 @@ func canSubmit(s Status) bool { return s == StatusValidated }
 // is the GoTrue role, always "authenticated" (gateway.go:160-170).
 func isApprover(role string) bool { return role == "admin" || role == "reviewer" }
 
+// callerRoleTx is CallerRole's query run on an already-open tx -- the shape
+// ResolveOutside/UnresolveOutside inline as their own first step, so the
+// permission check shares one transaction with the row lock instead of
+// opening a second (nesting db.WithinRequestTenantTx's own pool.Begin from
+// inside a closure has no precedent in this codebase and risks pool
+// exhaustion). Fails closed like CallerRole: no row is ("", nil), never an error.
+func callerRoleTx(ctx context.Context, tx pgx.Tx, subject string) (string, error) {
+	var role string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM memberships WHERE user_id = $1`, subject,
+	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return role, nil
+}
+
 // CallerRole reads the caller's memberships.role, RLS-scoped like
-// tenancy.Store.Me (internal/tenancy/store.go), but deliberately fails closed
-// instead of erroring: no membership row returns ("", nil), never
-// ErrNoMembership, so a missing row is simply "not an approver" rather than a
-// failed request.
+// tenancy.Store.Me (internal/tenancy/store.go): a thin WithinRequestTenantTx
+// wrapper around callerRoleTx for callers that only need the role on its own
+// (BUG-07-04's GetHandler dependency).
 func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	var role string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		id, _ := auth.IdentityFromContext(ctx)
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
-		).Scan(&role); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				role = ""
-				return nil
-			}
+		r, err := callerRoleTx(ctx, tx, id.Subject)
+		if err != nil {
 			return err
 		}
+		role = r
 		return nil
 	})
 	if err != nil {
@@ -1874,23 +1888,23 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 // ResolveOutside marks a failed invoice resolved outside the system: an
 // approver-only (isApprover) stamp of kept_as_is_at/by/reason, auditing
 // "invoice.resolved_outside" in the same transaction as the write. The
-// permission check runs BEFORE the row lock (its own CallerRole transaction,
-// committed first), so a non-approver cannot probe id existence via a
+// permission check (callerRoleTx) runs BEFORE the row lock, inside the SAME
+// transaction, so a non-approver cannot probe id existence via a
 // 403-vs-404/409 distinction. Never calls transitionTx -- status is untouched.
 // Re-resolving an already-resolved invoice is legal and overwrites
 // at/by/reason, same as KeepAsIs.
 func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice, error) {
-	role, err := s.CallerRole(ctx)
-	if err != nil {
-		return Invoice{}, err
-	}
-	if !isApprover(role) {
-		return Invoice{}, ErrNotPermitted
-	}
-
 	var inv Invoice
-	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+
+		role, err := callerRoleTx(ctx, tx, callerID.Subject)
+		if err != nil {
+			return err
+		}
+		if !isApprover(role) {
+			return ErrNotPermitted
+		}
 
 		var locked Invoice
 		if err := scanInvoice(tx.QueryRow(ctx,
@@ -1929,22 +1943,22 @@ func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice,
 	return inv, nil
 }
 
-// UnresolveOutside is ResolveOutside's un-do: same permission-before-lock and
-// not-failed guards, then an idempotent no-op (no write, no audit) if the
+// UnresolveOutside is ResolveOutside's un-do: same in-tx permission-before-lock
+// and not-failed guards, then an idempotent no-op (no write, no audit) if the
 // invoice is not currently resolved, else clears the triple and audits
 // "invoice.unresolved_outside" in the same transaction.
 func (s *Store) UnresolveOutside(ctx context.Context, id string) (Invoice, error) {
-	role, err := s.CallerRole(ctx)
-	if err != nil {
-		return Invoice{}, err
-	}
-	if !isApprover(role) {
-		return Invoice{}, ErrNotPermitted
-	}
-
 	var inv Invoice
-	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+
+		role, err := callerRoleTx(ctx, tx, callerID.Subject)
+		if err != nil {
+			return err
+		}
+		if !isApprover(role) {
+			return ErrNotPermitted
+		}
 
 		var locked Invoice
 		if err := scanInvoice(tx.QueryRow(ctx,

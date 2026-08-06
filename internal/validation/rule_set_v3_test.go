@@ -303,8 +303,14 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
 		t.Fatalf("clear the active slot (simulated AC-3 precondition): %v", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 3`); err != nil {
+	// Rowcount-checked: a missing v3 row would otherwise let the whole Down sequence
+	// below pass trivially.
+	tag, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 3`)
+	if err != nil {
 		t.Fatalf("activate v3 (simulated AC-3 precondition): %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("activating v3 touched %d rows, want 1 [AC-3 precondition]", tag.RowsAffected())
 	}
 
 	var v3Active, v3Sealed bool

@@ -408,6 +408,37 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect('rule_set_version' in body, 'the validate response should carry rule_set_version').toBe(true)
     })
 
+    // BUG-05-05 (task-414): buyer_tin omitted entirely -- SQL NULL, not '' (handlers.go's
+    // *string stays untouched through to store.go's bind, [buyer-tin-null-not-empty]).
+    // Reuses cleanInvoiceFields minus buyer_tin so buyer-tin-required is the only rule
+    // this fixture can fire.
+    test('validate: an invoice with no buyer TIN stays draft and is not submittable', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-BUYERTIN-${freshTin()}`),
+        buyer_tin: undefined,
+      })
+      expect(created.buyer_tin, 'an omitted buyer_tin must stay null, not an empty string').toBeNull()
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/validate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(res.status, 'a blocking verdict is still a 200, never an HTTP error').toBe(200)
+      const body = res.body as Record<string, unknown>
+      expect(body.status, 'the missing buyer TIN should leave the invoice draft').toBe('draft')
+      const violations = body.violations as { rule_key: string; severity: string }[]
+      const buyerTinViolation = violations.find((v) => v.rule_key === 'buyer-tin-required')
+      expect(buyerTinViolation, 'buyer-tin-required should fire for an omitted buyer_tin').toBeTruthy()
+      expect(buyerTinViolation?.severity, 'buyer-tin-required is a blocking (error) rule').toBe('error')
+
+      const getRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const getBody = getRes.body as Record<string, unknown>
+      expect(getBody.can_submit, 'a draft blocked by buyer-tin-required cannot be submitted').toBe(false)
+      expect(typeof getBody.submit_blocked_reason, 'the submit-blocked reason should be a string').toBe('string')
+      expect((getBody.submit_blocked_reason as string).length, 'the submit-blocked reason should be non-empty').toBeGreaterThan(0)
+    })
+
     test('validate not-found (random UUID) -> 404 {error: string}', async () => {
       const res = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/validate`, {
         method: 'POST',

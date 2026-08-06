@@ -1796,3 +1796,51 @@ test('invoice detail: a manually created invoice shows the no-source state', asy
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// BUG-05-05 (task-414): the parent story's AC-5 -- register and detail must agree on
+// buyer_tin in every state, driving the SAME invoice through both surfaces per case
+// rather than asserting each surface independently (they could coincidentally match on
+// wrong values). 'malformed' is a present-but-invalid TIN and must render AS-IS, never
+// the missing copy -- isBuyerTinMissing (lib/invoices.ts) is presence-only, not format.
+test('buyer-tin: register and detail agree on missing, malformed, and well-formed TINs', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-05 buyer-tin ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const cases: { label: string; buyerTin: string | undefined; expectMissing: boolean }[] = [
+    { label: 'MISSING', buyerTin: undefined, expectMissing: true },
+    { label: 'MALFORMED', buyerTin: 'BADTIN', expectMissing: false },
+    { label: 'WELLFORMED', buyerTin: '87654321-0002', expectMissing: false },
+  ]
+
+  for (const c of cases) {
+    const invoiceNumber = `INV-BUG05-${c.label}-${Date.now()}`
+    await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber), buyer_tin: c.buyerTin })
+
+    await goToInvoices(page)
+    const row = invoiceRowByNumber(page, invoiceNumber)
+    await expect(row).toBeVisible()
+    const registerText = (await row.getByTestId('buyer-tin').textContent())?.trim()
+
+    await openInvoiceRow(page, invoiceNumber)
+    const detailText = (await page.getByTestId('buyer-tin').textContent())?.trim()
+
+    // The real cross-surface comparison: both must render the identical text for the
+    // SAME invoice, not two independent assertions that happen to coincide.
+    expect(detailText, `${c.label}: register="${registerText}" detail="${detailText}"`).toBe(registerText)
+
+    if (c.expectMissing) {
+      expect(registerText, `${c.label} must render the shared missing-TIN copy`).toBe('TIN MISSING')
+    } else {
+      expect(registerText, `${c.label} must not render the missing-TIN copy`).not.toBe('TIN MISSING')
+      expect(registerText, `${c.label} must render the exact stored value`).toBe(c.buyerTin)
+    }
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

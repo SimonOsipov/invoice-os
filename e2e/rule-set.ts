@@ -21,6 +21,9 @@
 //                                 ruleSetVersion at two call sites for every version this
 //                                 module has ever named, but was never added to this list
 //                                 until now [positional-pins-are-invisible]).
+//   - topology/persona-surfaces.spec.ts -- the in-house persona's validation-playground
+//                                 round trip's own ViolationsTable mount -- same risk,
+//                                 absent from this list until BUG-05-05.
 // All of the above are steps of the one gated `e2e` job in dev-env.yml, so a version
 // publish breaks them together -- and one constant fixes them together.
 //
@@ -48,11 +51,7 @@
 // surface which displays the version. Consumers get ADDED to the list above; they are not
 // discovered by search.
 //
-// Currently 3: INVCR-01-13 (D8) published v3 -- v2's same 19 rules, SELECT-copied
-// verbatim, with `target` filled in on the 4 keys that shipped blank
-// (vat-standard-rate/line-items-sum-subtotal/line-cost-non-negative/
-// no-duplicate-line-items) so the inline fix editor needs no client-side rule-key map.
-// Evaluation-neutral (same rule keys/severities/messages/verdicts as v2 -- only each
-// violation's `path` differs on those 4 keys); v2 is deactivated, not mutated -- see
-// migrations/20260731090000_rule_set_v3.sql and internal/validation/rule_set_v3_test.go.
-export const ACTIVE_RULE_SET_VERSION = 3
+// Currently 4: BUG-05 published v4 -- v3's 19 rules SELECT-copied verbatim, plus
+// buyer-tin-required (required/buyer.tin/error/document, mirroring supplier-tin-required).
+// See migrations/20260806131239_rule_set_v4.sql and internal/validation/rule_set_v4_test.go.
+export const ACTIVE_RULE_SET_VERSION = 4

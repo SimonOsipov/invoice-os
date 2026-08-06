@@ -633,9 +633,9 @@ describe('InvoicesList: violation disclosure chip (task-332, BUG-01-06)', () => 
   })
 })
 
-// RED specs (task-423, BUG-07-08, Mode A) -- no resolved marker exists yet, so AC-1
-// fails on the row's actual textContent, not an import/compile error.
-describe('InvoicesList: resolved-failed marker (task-423, BUG-07-08)', () => {
+// RED specs (Mode A) -- no resolved marker exists yet, so AC-1 fails on the row's
+// actual textContent, not an import/compile error.
+describe('InvoicesList: resolved-failed marker', () => {
   it('a resolved failed row is marked and still listed', async () => {
     const resolved = row({
       id: 'resolved-1',
@@ -702,5 +702,31 @@ describe('InvoicesList: resolved-failed marker (task-423, BUG-07-08)', () => {
     const rows = screen.getAllByTestId('invoice-row')
     expect(rows, 'the resolved mark must never hide, remove, or add a row').toHaveLength(3)
     expect(rows.map((r) => r.textContent?.includes('INV-A') ? 'A' : r.textContent?.includes('INV-B') ? 'B' : 'C')).toEqual(['A', 'B', 'C'])
+  })
+
+  // QA adversarial: resolvedOutside and hasBlockingViolation gate independently, so a
+  // resolved failed row can still carry a blocking violation -- both markers must stack
+  // without either swallowing the other. Uses .toContain, not a \b-anchored regex: the
+  // two chips are adjacent sibling spans with no text separator between them, so
+  // textContent reads "...1 ERRORRESOLVED" and a trailing \b on /1 ERROR\b/ never matches.
+  it('a resolved failed row with a blocking violation renders both markers', async () => {
+    const both = row({
+      id: 'both-1',
+      invoice_number: 'INV-BOTH',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually with FIRS',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([both], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BOTH')
+
+    const text = screen.getByTestId('invoice-row').textContent
+    expect(text, 'the ERROR chip must still render alongside the resolved mark').toContain('1 ERROR')
+    expect(screen.getByTestId('invoice-resolved-marker').textContent, 'the resolved marker itself must not fold into the ERROR count').toBe('RESOLVED')
+    expect(screen.getAllByTestId('invoice-resolved-marker'), 'exactly one resolved marker, not one per violation').toHaveLength(1)
   })
 })

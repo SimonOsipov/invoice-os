@@ -751,3 +751,79 @@ func TestStoreRollup_KeptBlockedDraftStillCounts(t *testing.T) {
 		t.Errorf("NeedsAttention = %d, want 1 (a kept blocked draft still counts, unchanged from today)", row.NeedsAttention)
 	}
 }
+
+// T3-8: source-text guard for the naive edit the story specifically warns
+// about -- "AND kept_as_is_at IS NULL" suffixed onto a blanket
+// status IN ('rejected', 'failed') instead of the tuple split. Given
+// invoices_kept_as_is_status (migrations/20260806184800_invoices_kept_as_is_failed.sql,
+// pinned by TestStoreRollup_RejectedCannotCarryTheMark), a rejected row can
+// NEVER carry the mark, so that naive form is BEHAVIOURALLY INDISTINGUISHABLE
+// from the tuple split today -- no DB-backed test can catch a regression to
+// it (verified: mutating store.go to the naive form left every test in this
+// package green). This source-text check is the only guard that can.
+func TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare(t *testing.T) {
+	src, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read store.go: %v", err)
+	}
+	end := bytes.Index(src, []byte(") AS needs_attention"))
+	if end < 0 {
+		t.Fatal(`store.go: no ") AS needs_attention" marker -- has the query been restructured?`)
+	}
+	start := bytes.LastIndex(src[:end], []byte("count(*) FILTER ("))
+	if start < 0 {
+		t.Fatal(`store.go: no "count(*) FILTER (" found before ") AS needs_attention"`)
+	}
+	block := string(src[start:end])
+
+	if !strings.Contains(block, "i.status = 'rejected'") {
+		t.Errorf("needs_attention FILTER clause lost its bare `i.status = 'rejected'` disjunct:\n%s", block)
+	}
+	if !strings.Contains(block, "i.status = 'failed' AND i.kept_as_is_at IS NULL") {
+		t.Errorf("needs_attention FILTER clause lost its `i.status = 'failed' AND i.kept_as_is_at IS NULL` disjunct:\n%s", block)
+	}
+	if strings.Contains(block, "IN (") {
+		t.Errorf("needs_attention FILTER clause contains an IN(...) -- the naive "+
+			"`status IN ('rejected', 'failed') AND kept_as_is_at IS NULL` form is a silent regression "+
+			"risk if invoices_kept_as_is_status is ever relaxed to allow rejected+mark; keep the tuple split:\n%s", block)
+	}
+}
+
+// T3-11: a resolved failed row in one client entity must not affect a
+// DIFFERENT client's needs_attention count within the same tenant -- proves
+// the exclusion applies inside the per-entity GROUP BY, not just in Totals.
+func TestStoreRollup_ResolvedFailedIsolatedPerClient(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T3-11 tenant")
+	entity1 := seedEntity(t, super, tenantID, "T3-11 entity 1")
+	entity2 := seedEntity(t, super, tenantID, "T3-11 entity 2")
+
+	seedResolvedFailed(t, super, tenantID, entity1, "T3-11-e1-resolved")
+	seedInvoiceAtStatus(t, super, tenantID, entity2, "T3-11-e2-unresolved", "failed")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(c)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2", len(got.Clients))
+	}
+	byEntity := map[string]Client{}
+	for _, cl := range got.Clients {
+		byEntity[cl.EntityID] = cl
+	}
+	if row := byEntity[entity1]; row.NeedsAttention != 0 {
+		t.Errorf("entity1 (resolved failed only) NeedsAttention = %d, want 0", row.NeedsAttention)
+	}
+	if row := byEntity[entity2]; row.NeedsAttention != 1 {
+		t.Errorf("entity2 (unresolved failed) NeedsAttention = %d, want 1", row.NeedsAttention)
+	}
+	if got.Totals.NeedsAttention != 1 {
+		t.Errorf("Totals.NeedsAttention = %d, want 1", got.Totals.NeedsAttention)
+	}
+}

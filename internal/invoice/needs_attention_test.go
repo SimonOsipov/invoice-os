@@ -24,8 +24,11 @@
 package invoice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -342,5 +345,119 @@ func TestNeedsAttention_ResolvedThenUnresolvedFlipsTheCount(t *testing.T) {
 	}
 	if unresolved.Totals.NeedsAttention != 1 {
 		t.Fatalf("Rollup (after UnresolveOutside).Totals.NeedsAttention = %d, want 1", unresolved.Totals.NeedsAttention)
+	}
+}
+
+// T3-8: source-text guard for the naive edit the story specifically warns
+// about -- "AND kept_as_is_at IS NULL" suffixed onto a blanket
+// status IN ('rejected', 'failed') instead of the tuple split. A rejected row
+// can never carry the mark (invoices_kept_as_is_status), so that naive form
+// is BEHAVIOURALLY INDISTINGUISHABLE from the tuple split today -- no
+// DB-backed test can catch a regression to it. Mirrors
+// internal/dashboard's TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare
+// for this package's own (unaliased) copy of the fragment.
+func TestStoreList_NeedsAttentionSQLRejectedArmIsBare(t *testing.T) {
+	src, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read store.go: %v", err)
+	}
+	marker := "if f.NeedsAttention {"
+	idx := bytes.Index(src, []byte(marker))
+	if idx < 0 {
+		t.Fatal(`store.go: no "if f.NeedsAttention {" marker -- has List been restructured?`)
+	}
+	rest := src[idx+len(marker):]
+	open := bytes.IndexByte(rest, '`')
+	if open < 0 {
+		t.Fatal("store.go: NeedsAttention condition is not a raw string literal")
+	}
+	rest = rest[open+1:]
+	closeIdx := bytes.IndexByte(rest, '`')
+	if closeIdx < 0 {
+		t.Fatal("store.go: unterminated NeedsAttention condition literal")
+	}
+	block := string(rest[:closeIdx])
+
+	if !strings.Contains(block, "status = 'rejected'") {
+		t.Errorf("NeedsAttention condition lost its bare `status = 'rejected'` disjunct:\n%s", block)
+	}
+	if !strings.Contains(block, "status = 'failed' AND kept_as_is_at IS NULL") {
+		t.Errorf("NeedsAttention condition lost its `status = 'failed' AND kept_as_is_at IS NULL` disjunct:\n%s", block)
+	}
+	if strings.Contains(block, "IN (") {
+		t.Errorf("NeedsAttention condition contains an IN(...) -- the naive "+
+			"`status IN ('rejected', 'failed') AND kept_as_is_at IS NULL` form is a silent regression "+
+			"risk if invoices_kept_as_is_status is ever relaxed to allow rejected+mark; keep the tuple split:\n%s", block)
+	}
+}
+
+// T3-9: resolving removes a failed invoice from the needs_attention NUMBER,
+// never from the VIEW (story Core AC #3) -- an unfiltered List must still
+// return it, status unchanged, mark visible.
+func TestStoreList_ResolvedFailedStillInUnfilteredList(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T3-9 tenant")
+	entityID := seedEntity(t, super, tenantID, "T3-9 entity")
+	resolvedID := seedResolvedFailed(t, super, tenantID, entityID, "T3-9-resolved", uuid.NewString(), "resolved outside")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{Limit: 100})
+	if err != nil {
+		t.Fatalf("List (unfiltered): %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("List (unfiltered).total = %d, want 1", total)
+	}
+	if len(items) != 1 || items[0].ID != resolvedID {
+		t.Fatalf("List (unfiltered) items = %+v, want exactly [%s]", items, resolvedID)
+	}
+	if items[0].Status != StatusFailed {
+		t.Errorf("resolved invoice Status = %q, want %q -- resolving must not change status", items[0].Status, StatusFailed)
+	}
+	if items[0].KeptAsIsAt == nil {
+		t.Errorf("resolved invoice KeptAsIsAt = nil, want set -- the mark must still be visible in the unfiltered view")
+	}
+}
+
+// T3-10: cross-tenant isolation specifically for the new kept_as_is_at
+// clause -- tenant A's own resolved failed row must not count for A, and
+// tenant B's unresolved failed row must not leak into A's page.
+func TestRLS_ListNeedsAttention_ResolvedFailedIsolatedPerTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "T3-10 tenant A")
+	tenantB := seedTenant(t, super, "T3-10 tenant B")
+	entityA := seedEntity(t, super, tenantA, "T3-10 entity A")
+	entityB := seedEntity(t, super, tenantB, "T3-10 entity B")
+
+	resolvedA := seedResolvedFailed(t, super, tenantA, entityA, "T3-10-A-resolved", uuid.NewString(), "resolved outside")
+	unresolvedA := seedInvoiceWithViolations(t, super, tenantA, entityA, "T3-10-A-unresolved", string(StatusFailed), `[]`)
+	unresolvedB := seedInvoiceWithViolations(t, super, tenantB, entityB, "T3-10-B-unresolved", string(StatusFailed), `[]`)
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantA})
+
+	items, total, err := store.List(cA, ListFilter{NeedsAttention: true, Limit: 100})
+	if err != nil {
+		t.Fatalf("List (as A, NeedsAttention: true): %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1 (only A's unresolved failed row; A's own resolved row and B's row must not count)", total)
+	}
+	for _, inv := range items {
+		if inv.ID == resolvedA {
+			t.Errorf("List (as A) returned A's own RESOLVED failed invoice %s, want excluded", resolvedA)
+		}
+		if inv.ID == unresolvedB {
+			t.Errorf("List (as A) leaked tenant B's invoice %s", unresolvedB)
+		}
+		if inv.ID != unresolvedA {
+			t.Errorf("List (as A) returned unexpected invoice %s, want only %s", inv.ID, unresolvedA)
+		}
 	}
 }

@@ -2044,6 +2044,40 @@ describe('ReviewBatch.tsx source: none of the three D2-forbidden lifecycle names
   })
 })
 
+// BUG08-BATCH-8 (task-407, AC-3) — a source scan, mirroring BATCH-7b/AIMP-11's own
+// by-path idiom, because no test in the suite owns the caption's noun binding: AIMP-5b
+// (reviewBatch.test.ts:743-757) calls channelTilesAll and never imports or renders this
+// component, so it proves the two counts are distinguishable but is blind to which one
+// the JSX actually interpolates. A swapped noun (caption reads the row count, tile value
+// reads the invoice count) leaves AIMP-5b green. Also pins the zero-state boolean
+// (`alreadyImportedAtZero`, not the sibling tile's `atZero`, which is the wrong
+// channel's boolean) and that the shipped unreadable-tile captions survive verbatim
+// ([structural-untouched]) while the executor edits the lines directly above them.
+describe('ReviewBatch.tsx source: the already-imported tile caption carries the INVOICE count, the tile value carries the ROW count (AC-3, BUG08-BATCH-8)', () => {
+  it('BUG08-BATCH-8: the already-imported tile caption carries the INVOICE count, the tile value carries the ROW count', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    // Sanity: the path resolved and read a real file, not an empty/missing one.
+    expect(source.length).toBeGreaterThan(1000)
+
+    // Noun binding: tile value is ROW-denominated, caption is INVOICE-denominated. The
+    // literal `}` immediately after the field name means these two patterns cannot
+    // cross-match each other's field (`alreadyImported` vs `alreadyImportedInvoices`).
+    expect(source).toMatch(/\$\{tiles\.frozen\.alreadyImported\} already imported/)
+    expect(source).toMatch(/\$\{tiles\.frozen\.alreadyImportedInvoices\} invoices already in your ledger\. Nothing to fix\./)
+
+    // At-zero caption text and the boolean it must switch on — NOT the sibling
+    // unreadable tile's `atZero` (that would mean copy-pasting the wrong ternary).
+    expect(source).toContain('Nothing in this file was already in your ledger.')
+    expect(source).toContain('alreadyImportedAtZero')
+
+    // [structural-untouched]: the shipped unreadable-tile captions, byte-unchanged.
+    expect(source).toContain('No invoice exists for them.')
+    expect(source).toContain('A structural failure, not a compliance one: no rule was ever run. Nothing was stored.')
+  })
+})
+
 // --- BULK-01-06 (task-311, Stage 2.5/Mode A) — RED specs for the run-widened review
 // derivations. Every function marked STUB in reviewBatch.ts throws `new Error('not
 // implemented')`, so specs against them fail on that throw — the correct RED reason.

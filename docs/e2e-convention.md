@@ -81,13 +81,15 @@ refusing to write it at all leaves a shipped screen untested. So: write it, and 
 
 Mock-only `app` surfaces follow the same rule. **Workflows, Reports and Settings** carry
 functional coverage as sidebar surfaces of the persona that owns them (see below). The
-company switcher, XML/UBL preview and onboarding dashboard are not nav surfaces and hold no
+company switcher and onboarding dashboard are not nav surfaces and hold no
 coverage cell — note that the switcher *is* **operated** by `workflows.spec.ts` and
 `persona-surfaces.spec.ts` as the mechanism for changing the active client, which is not the
 same as being covered by them. Submission/transmit is real (M5-09): it is covered via the
 invoices **list**'s batch-select-and-submit path (`invoice-surfaces.spec.ts`), and via that
 same file's "detail surface: submit one invoice from its own page" test, which covers a
-single invoice submitted straight from its own **detail** page.
+single invoice submitted straight from its own **detail** page. The XML/UBL viewer is real
+too (BUG-04): it stays a non-nav surface with no coverage cell, and is covered by that same
+file's two `View UBL/XML` tests plus `api/contract-ubl.spec.ts`.
 
 **What "smoke only" covered, and still does.** Render checks, plus client-side behaviour
 that has no other harness. That was always a floor rather than a licence for per-screen

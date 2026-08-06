@@ -134,7 +134,7 @@ afterEach(() => {
 
 describe('SourceDocumentCard on the invoice detail', () => {
   // The design says "directly above Audit trail"; no card by that name exists here, and
-  // import-wizard.spec.ts:537 asserts that string has zero matches on this screen.
+  // import-wizard.spec.ts:538 asserts that string has zero matches on this screen.
   it('the card precedes status-history in DOM order', async () => {
     mockFetch(withDocument())
     render(<InvoiceDetail ctx={detailCtx()} />)

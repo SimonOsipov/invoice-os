@@ -1148,6 +1148,15 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
 
+  // BUG-04-07 (story AC1): the UBL control sits OUTSIDE that bar
+  // ([ubl-button-outside-invoice-actions]) because can_view_ubl tracks CONTENT, not
+  // lifecycle -- and `failed` is exactly where a compliance user needs the document most.
+  // Free-riding on this fixture: cleanInvoiceFields is UBL-complete, and the line above
+  // already proves the bar is gone, so no standalone test could assert anything stronger.
+  await expect(page.getByTestId('view-ubl')).toBeVisible()
+  await expect(page.getByTestId('view-ubl')).toBeEnabled()
+  await expect(page.getByTestId('view-ubl-blocked-reason')).toHaveCount(0)
+
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -1652,8 +1661,8 @@ test("invoice detail: the source-document card states the real range, and the mo
   await page.getByTestId('view-source-document').click()
   const modal = page.getByTestId('source-document-modal')
   await expect(modal).toBeVisible()
-  // Middle dot (U+00B7) escaped, not typed literally -- this file's own precedent (:469)
-  // treats a non-ASCII assertion literal as a CI-shell encoding hazard.
+  // Middle dot (U+00B7) escaped, not typed literally -- this file's own precedent
+  // (:539-540) treats a non-ASCII assertion literal as a CI-shell encoding hazard.
   await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file \u00b7 4 rows$/)
   await expect(page.getByTestId('sheet-scope-invoice')).toBeVisible()
   await expect(page.getByTestId('sheet-row-marked')).toHaveCount(1)
@@ -1793,6 +1802,165 @@ test('invoice detail: a manually created invoice shows the no-source state', asy
   await whyButton.click()
   await expect(page.getByTestId('source-document-modal')).toBeVisible()
   await expect(page.getByTestId('source-document-no-source')).toContainText('There is no source document')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// BUG-04-07 (task-403): the UBL surface's two browser flows. Appended to this capability
+// flow rather than split into a ubl.spec.ts -- invoice detail IS this file's capability
+// (docs/e2e-convention.md). The endpoint's own headers, its 409/404 envelopes and its
+// cross-tenant parity are invisible from a browser and live in e2e/api/contract-ubl.spec.ts,
+// which is what keeps this layer thin.
+//
+// This import sits at the FOOT of the file, not the head: five files cite this spec by line
+// (personaSession.ts:77, persona-surfaces.spec.ts:109, workflows.spec.ts:39,
+// portfolio.spec.ts:71, rule_set_v3_test.go:386) and one inserted line at the top would
+// shift every one of them. ESM hoists import declarations, so the position is style only.
+import { readFileSync } from 'node:fs'
+
+test("invoice detail: View UBL/XML renders the server's own document, and Download saves exactly those bytes", async ({
+  page,
+}) => {
+  // Cold-fleet headroom, matching this file's own 90s precedent -- one sign-in, one detail
+  // round trip, one UBL fetch and one download.
+  test.setTimeout(90_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-04 ubl ${Date.now()}`, tin: freshTin() })
+  // [A-Za-z0-9-] only, so XmlModal's ublFilename sanitiser is the identity here. Its
+  // TRANSFORMATION is unit-covered (XmlModal.test.tsx); re-proving it in a browser would
+  // duplicate the base of the pyramid.
+  const invoiceNumber = `INV-BUG04-UBL-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  // AC1. cleanInvoiceFields carries an issue date, a currency, a buyer name and one line
+  // item, and supplier_name is entity-derived ([supplier-from-entity]) -- so ubl.Missing is
+  // empty, the control is live, and no reason renders beside it.
+  const viewUbl = page.getByTestId('view-ubl')
+  await expect(viewUbl).toBeVisible()
+  await expect(viewUbl).toBeEnabled()
+  await expect(viewUbl).toContainText('View UBL/XML')
+  await expect(page.getByTestId('view-ubl-blocked-reason')).toHaveCount(0)
+
+  // AC2. Armed BEFORE the click that causes it, and scoped to THIS invoice's id so nothing
+  // else on the page can satisfy the predicate.
+  const ublResponse = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}/ubl`),
+    { timeout: 30_000 },
+  )
+  await viewUbl.click()
+  const served = await ublResponse
+  expect(served.status(), 'the UBL route must answer 200 for a complete invoice').toBe(200)
+  // Task AC #3. The exact header string is pinned in e2e/api/contract-ubl.spec.ts, where the
+  // fetch seam is ours; here it only has to be XML.
+  expect(served.headers()['content-type'], 'the document must arrive as XML').toMatch(/^application\/xml/)
+  const servedXml = await served.text()
+  // Without this floor the two equalities below would both pass on a pair of empty strings.
+  expect(servedXml.length, 'the served document must be non-empty').toBeGreaterThan(0)
+  expect(servedXml, 'the served body must be the UBL render, not an error envelope').toContain(
+    `<cbc:ID>${invoiceNumber}</cbc:ID>`,
+  )
+
+  await expect(page.getByTestId('ubl-modal')).toBeVisible()
+  const pre = page.getByTestId('ubl-xml')
+  await expect(pre).toBeVisible()
+  // textContent + toBe, never toHaveText: toHaveText NORMALIZES WHITESPACE, which would erase
+  // the indentation this equality exists to pin. A client-assembled document fails here. Safe
+  // as a one-shot read -- the <pre> is committed in one render, so once it is visible its
+  // text is final.
+  expect(await pre.textContent(), 'the <pre> must be the server body verbatim').toBe(servedXml)
+
+  // AC6, ASCII substring only.
+  await expect(page.getByTestId('ubl-provenance')).toContainText(
+    'It is not a copy of what was transmitted to the access point.',
+  )
+
+  // AC3, and it must read the FILE. downloadUbl revokes the object URL synchronously one
+  // statement after a.click() (XmlModal.tsx:34-35); a premature revoke surfaces as a
+  // zero-byte or truncated saved file while the download event still fires, so an
+  // event-only or presence-only assertion would pass on that bug. jsdom has no download
+  // pipeline, so no unit row can observe it -- this is the only layer that can.
+  const downloadEvent = page.waitForEvent('download', { timeout: 15_000 })
+  await page.getByTestId('download-ubl').click()
+  const download = await downloadEvent
+  expect(await download.failure(), 'the download must complete').toBeNull()
+  expect(download.suggestedFilename()).toBe(`${invoiceNumber}.xml`)
+  const saved = readFileSync(await download.path(), 'utf8')
+  expect(saved.length, 'a revoked object URL saves an empty file').toBeGreaterThan(0)
+  expect(saved, 'the saved file must be the bytes the server served').toBe(servedXml)
+
+  // AC4 -- a deployed-bundle spot check, not the oracle: the retired copy's absence is
+  // proven by the BUG-04-06 source scan. Non-vacuous, the node exists and carries text.
+  // ASCII substring only; the retired sentence's own quotes are U+201C/U+201D.
+  await expect(page.getByTestId('ubl-modal')).not.toContainText('View XML')
+
+  // Never click the `ubl-modal` locator to dismiss -- it resolves the SCRIM, which carries
+  // onClick={onClose} (XmlModal.tsx:82), so it would pass for the wrong reason.
+  await page.getByTestId('ubl-modal-close').click()
+  await expect(page.getByTestId('ubl-modal')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("invoice detail: an incomplete invoice shows a disabled View UBL/XML carrying the server's own reason", async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG-04 ubl gap ${Date.now()}`, tin: freshTin() })
+
+  // ONE gap, deliberately. ubl.Missing (internal/ubl/ubl.go) reports in a fixed order and
+  // "at least one line item" is LAST, so a single-gap invoice's sentence is nearly all of the
+  // substring asserted below rather than a tail fragment -- and it is pure ASCII. The other
+  // two gaps this seam might reach are unreachable in practice: Store.Create rejects a blank
+  // invoice number pre-tx and overwrites supplier_name from the entity
+  // ([supplier-from-entity]).
+  const invoiceNumber = `INV-BUG04-GAP-${Date.now()}`
+  await createInvoice(token, {
+    entity_id: entity.id,
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    currency: 'NGN',
+    buyer_name: 'Buyer Ltd',
+  })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  // AC5. Visible first: a click target that does not exist would make everything below
+  // vacuous.
+  const viewUbl = page.getByTestId('view-ubl')
+  await expect(viewUbl).toBeVisible()
+  await expect(viewUbl).toBeDisabled()
+  // Substring only, never the em dash literal -- an encoding hazard through a CI shell
+  // (:539-540).
+  await expect(page.getByTestId('view-ubl-blocked-reason')).toContainText('at least one line item')
+
+  // Two independent oracles: nothing left the browser, and nothing mounted.
+  const noUbl = page.waitForRequest((r) => r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/ubl'), {
+    timeout: 2_000,
+  })
+  // force:true bypasses Playwright's actionability pre-checks, which would otherwise refuse a
+  // disabled element and TIME OUT rather than assert -- but the real HTML `disabled`
+  // attribute still suppresses the browser's click event, so React's onClick never runs.
+  // Never dispatchEvent('click'): it bypasses that suppression and proves the opposite
+  // guarantee (:556-561).
+  await viewUbl.click({ force: true })
+  await expect(noUbl).rejects.toThrow()
+  await expect(page.getByTestId('ubl-modal')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

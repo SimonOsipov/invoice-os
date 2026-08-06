@@ -506,7 +506,7 @@ export async function violationSummary(
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
 // defensive normalization on a permission-shaped flag only earns its keep fail-closed.
-// `revalidate_blocked_reason` and `submit_blocked_reason` both keep `?? null` (their
+// The three `*_blocked_reason` fields all keep `?? null` (their
 // declared type is nullable, so `??` is reachable and idiomatic) and are passed through
 // BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
 // ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here

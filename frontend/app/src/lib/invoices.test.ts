@@ -1258,6 +1258,70 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(409)
   })
+
+  it('RESOLVE-INV-8: unresolveInvoiceOutside on a non-2xx response rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: () => Promise.resolve({ error: 'invoice not found' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => unresolveInvoiceOutside(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(404)
+  })
+
+  it('RESOLVE-INV-9: resolvedOutside is null for every non-failed status, not just draft', () => {
+    const nonFailed: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected']
+
+    for (const status of nonFailed) {
+      expect(
+        resolvedOutside({
+          status,
+          kept_as_is_at: '2026-08-01T00:00:00Z',
+          kept_as_is_by: 'user-1',
+          kept_as_is_reason: 'Filed manually through the NRS portal.',
+        }),
+      ).toBeNull()
+    }
+  })
+
+  it('RESOLVE-INV-10: resolvedOutside accepts both a list-row (InvoiceRecord) and a detail-row (InvoiceDetailRecord) call shape', () => {
+    // A future list-marker caller passes a bare listInvoices() row; a future detail-banner
+    // caller passes a full getInvoice() row. Pick<InvoiceRecord, ...> must satisfy both --
+    // this pins that it does, not just that the narrow fields do.
+    const listRow: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually through the NRS portal.',
+    }
+    const detailRow: InvoiceDetailRecord = {
+      ...listRow,
+      rule_set_version: null,
+      qr_png_base64: null,
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
+      can_submit: false,
+      submit_blocked_reason: null,
+      can_view_ubl: false,
+      ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
+    }
+
+    const fromList = resolvedOutside(listRow)
+    const fromDetail = resolvedOutside(detailRow)
+
+    expect(fromList).toEqual({ at: '2026-08-01T00:00:00Z', by: 'user-1', reason: 'Filed manually through the NRS portal.' })
+    expect(fromDetail).toEqual(fromList)
+  })
 })
 
 // RED specs (task-392, BUG-03-03, Mode A) -- keptAsIs is a throwing stub today, so every

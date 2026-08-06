@@ -45,6 +45,15 @@ func SystemActor(tenantID string) Actor {
 	return Actor{TenantID: tenantID, Subject: "system"}
 }
 
+// RevalidateActor is DemoteRevalidatedTx's actor (revalidate.go): unlike
+// SystemActor, Subject is a FIXED literal no caller input can lengthen or
+// otherwise influence -- relevant to how DemoteRevalidatedTx's atomicity
+// spec forces its rollback (a phantom rule_set_version_id, not an oversized
+// actor).
+func RevalidateActor(tenantID string) Actor {
+	return Actor{TenantID: tenantID, Subject: "revalidate-rule-set"}
+}
+
 // MarkSubmittedTx marks id submitted as SystemActor(tenantID), tx-scoped:
 // the caller (the M5-04 worker, in a later subtask) already holds an open
 // pgx.Tx from its own db.WithinTenantTx, so this never opens one of its own

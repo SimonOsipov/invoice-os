@@ -1372,6 +1372,36 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // the endpoint's own contract, not an edge-table property.
 func canSubmit(s Status) bool { return s == StatusValidated }
 
+// isApprover takes the memberships.role, not auth.Identity.Role -- the latter
+// is the GoTrue role, always "authenticated" (gateway.go:160-170).
+func isApprover(role string) bool { return role == "admin" || role == "reviewer" }
+
+// CallerRole reads the caller's memberships.role, RLS-scoped like
+// tenancy.Store.Me (internal/tenancy/store.go), but deliberately fails closed
+// instead of erroring: no membership row returns ("", nil), never
+// ErrNoMembership, so a missing row is simply "not an approver" rather than a
+// failed request.
+func (s *Store) CallerRole(ctx context.Context) (string, error) {
+	var role string
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		id, _ := auth.IdentityFromContext(ctx)
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE user_id = $1`, id.Subject,
+		).Scan(&role); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				role = ""
+				return nil
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return role, nil
+}
+
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
 // (M4-04-05's extraction moved the SOLE-writer-of-invoices.status role down
@@ -1819,7 +1849,9 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 			return err
 		}
 
-		if locked.KeptAsIsAt == nil {
+		// A failed invoice's mark is ResolveOutside's, cleared only by
+		// UnresolveOutside -- UnkeepAsIs stays draft-only.
+		if locked.KeptAsIsAt == nil || locked.Status != StatusDraft {
 			inv = locked
 			return nil
 		}
@@ -1839,20 +1871,114 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 	return inv, nil
 }
 
-// isApprover is a stub -- always false until the real admin/reviewer check lands.
-func isApprover(role string) bool { return false }
-
-// CallerRole is a stub -- always ("", nil) until the real memberships lookup lands.
-func (s *Store) CallerRole(ctx context.Context) (string, error) {
-	return "", nil
-}
-
-// ResolveOutside is a stub -- always errors until the real permission-gated write lands.
+// ResolveOutside marks a failed invoice resolved outside the system: an
+// approver-only (isApprover) stamp of kept_as_is_at/by/reason, auditing
+// "invoice.resolved_outside" in the same transaction as the write. The
+// permission check runs BEFORE the row lock (its own CallerRole transaction,
+// committed first), so a non-approver cannot probe id existence via a
+// 403-vs-404/409 distinction. Never calls transitionTx -- status is untouched.
+// Re-resolving an already-resolved invoice is legal and overwrites
+// at/by/reason, same as KeepAsIs.
 func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice, error) {
-	return Invoice{}, errors.New("not implemented")
+	role, err := s.CallerRole(ctx)
+	if err != nil {
+		return Invoice{}, err
+	}
+	if !isApprover(role) {
+		return Invoice{}, ErrNotPermitted
+	}
+
+	var inv Invoice
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if locked.Status != StatusFailed {
+			return ErrNotResolvable
+		}
+
+		now := time.Now().UTC()
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = $1, kept_as_is_by = $2, kept_as_is_reason = $3
+			 WHERE id = $4 RETURNING `+invoiceColumns,
+			now, callerID.Subject, reason, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.resolved_outside", map[string]any{
+			"id":     id,
+			"reason": reason,
+		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
 }
 
-// UnresolveOutside is a stub -- always errors until the real permission-gated write lands.
+// UnresolveOutside is ResolveOutside's un-do: same permission-before-lock and
+// not-failed guards, then an idempotent no-op (no write, no audit) if the
+// invoice is not currently resolved, else clears the triple and audits
+// "invoice.unresolved_outside" in the same transaction.
 func (s *Store) UnresolveOutside(ctx context.Context, id string) (Invoice, error) {
-	return Invoice{}, errors.New("not implemented")
+	role, err := s.CallerRole(ctx)
+	if err != nil {
+		return Invoice{}, err
+	}
+	if !isApprover(role) {
+		return Invoice{}, ErrNotPermitted
+	}
+
+	var inv Invoice
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if locked.Status != StatusFailed {
+			return ErrNotResolvable
+		}
+
+		if locked.KeptAsIsAt == nil {
+			inv = locked
+			return nil
+		}
+
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+			 WHERE id = $1 RETURNING `+invoiceColumns, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unresolved_outside", map[string]any{"id": id})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
 }

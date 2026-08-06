@@ -1144,6 +1144,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice is not in a fixable state"
 	case errors.Is(err, ErrNotKeepable):
 		return http.StatusConflict, "invoice must be a draft with a blocking violation to be kept as-is"
+	case errors.Is(err, ErrNotPermitted):
+		return http.StatusForbidden, "approver rights are required to mark an invoice resolved outside the system"
+	case errors.Is(err, ErrNotResolvable):
+		return http.StatusConflict, "only a failed invoice can be marked resolved outside the system"
 	case errors.Is(err, ErrUpstream):
 		return http.StatusBadGateway, "validation service unavailable"
 	case errors.Is(err, ErrNoActiveRuleSet):

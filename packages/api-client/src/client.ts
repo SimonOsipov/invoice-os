@@ -76,7 +76,7 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     throw new ApiError('http', msg, res.status, responseBody)
   }
 
-  // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T4 if
+  // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T10 if
   // it is moved out.
   try {
     return (opts?.responseType === 'text' ? await res.text() : await res.json()) as T

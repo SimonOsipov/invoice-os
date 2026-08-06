@@ -836,6 +836,35 @@ describe('getInvoice', () => {
 
     expect(result.ubl_blocked_reason).toBe('')
   })
+
+  // QA pass (task-400, Mode B). G1-G6 pin each field alone; G7 pins the COMBINATION the
+  // server never emits but a dropped key makes representable -- blocked with no reason.
+  // The contract is that the two fields normalize INDEPENDENTLY: the record reads
+  // {false, null}, and no SPA-authored reason is invented to fill the gap.
+  it('G7: blocked with a missing reason stays blocked, and no reason is invented', async () => {
+    const wire = { ...draftInvoice, can_view_ubl: false }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(false)
+    expect(result.ubl_blocked_reason).toBeNull()
+  })
+
+  // The other half of the same combination: allowed WITH a reason. `can_view_ubl` must not
+  // be derived from the reason's presence (nor the reason cleared because the gate is open)
+  // -- each key is passed through as sent.
+  it('G8: an allowed gate carrying a reason keeps both values as sent', async () => {
+    const wire = { ...draftInvoice, can_view_ubl: true, ubl_blocked_reason: 'stale reason' }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.can_view_ubl).toBe(true)
+    expect(result.ubl_blocked_reason).toBe('stale reason')
+  })
 })
 
 // RED specs (task-400, BUG-04-04, Mode A) -- getInvoiceUbl is a throwing stub, so every
@@ -944,6 +973,61 @@ describe('getInvoiceUbl (task-400, BUG-04-04)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(500)
+  })
+
+  // QA pass (task-400, Mode B) -- U8-U11 project the client-layer text-path edges onto the
+  // helper the viewer actually calls.
+  it("U8: a 2xx whose body stream fails rejects with ApiError('malformed'), not a raw TypeError", async () => {
+    // json resolves, so a helper that never took the text path would return an object here
+    // instead of rejecting -- the row is red on a missing text branch too.
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      text: () => Promise.reject(new TypeError('stream aborted')),
+      json: () => Promise.resolve({ a: 1 }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => getInvoiceUbl(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('malformed')
+    expect((err as ApiError).status).toBe(200)
+  })
+
+  it('U9: an empty document resolves the empty string rather than null', async () => {
+    // Unreachable from ubl.go, but BUG-04-06's viewer must not be handed null for it.
+    mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(''), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoiceUbl(af, base, 'inv-1')
+
+    expect(result).toBe('')
+    expect(result).not.toBeNull()
+  })
+
+  it('U10: non-ASCII document bytes survive the helper verbatim', async () => {
+    // Naira sign, CJK and an explicitly DECOMPOSED e + U+0301 -- no normalize, no re-encode.
+    const doc = '<Invoice><cbc:Note>\u20a61,000 \u767c\u7968 e\u0301</cbc:Note></Invoice>'
+    mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(doc), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoiceUbl(af, base, 'inv-1')
+
+    expect(result).toBe(doc)
+    expect(doc.normalize('NFC')).not.toBe(doc)
+  })
+
+  it('U11: sends no request body and no Accept header', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, text: () => Promise.resolve(UBL_XML), json: notJSON })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await getInvoiceUbl(af, base, 'inv-1')
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.method).toBe('GET')
+    expect(init.body).toBeUndefined()
+    expect(new Headers(init.headers).has('Accept')).toBe(false)
   })
 })
 

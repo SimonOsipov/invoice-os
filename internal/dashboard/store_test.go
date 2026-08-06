@@ -40,9 +40,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -177,6 +179,22 @@ func seedInvoiceWithViolations(t *testing.T, super *pgxpool.Pool, tenantID, enti
 		status, violationsJSON, id,
 	); err != nil {
 		t.Fatalf("force-seed invoice status/violations: %v", err)
+	}
+	return id
+}
+
+// seedResolvedFailed seeds a `failed` invoice then force-writes the
+// kept_as_is triple directly as the superuser -- package-local per the
+// established per-package-duplication convention (mirrors
+// internal/invoice's own seedResolvedFailed).
+func seedResolvedFailed(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number string) string {
+	t.Helper()
+	id := seedInvoiceAtStatus(t, super, tenantID, entityID, number, "failed")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'qa-fixture', kept_as_is_reason = 'resolved outside' WHERE id = $1`,
+		id,
+	); err != nil {
+		t.Fatalf("seed resolved-outside triple: %v", err)
 	}
 	return id
 }
@@ -638,5 +656,98 @@ func TestStoreRollup_NoIdentityFailsClosed(t *testing.T) {
 	_, err := store.Rollup(context.Background())
 	if !errors.Is(err, db.ErrNoTenant) {
 		t.Fatalf("Rollup(no identity) err = %v, want db.ErrNoTenant", err)
+	}
+}
+
+// --- T3-1..T3-3: resolved-failed excluded from needs_attention -------------
+
+// T3-1: a resolved failed invoice (kept_as_is_at set) must not count toward
+// needs_attention; an unresolved failed invoice still counts, and both still
+// count toward Counts.Failed.
+func TestStoreRollup_ResolvedFailedIsNotNeedsAttention(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T3-1 tenant")
+	entityID := seedEntity(t, super, tenantID, "T3-1 entity")
+	seedResolvedFailed(t, super, tenantID, entityID, "T3-1-resolved")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "T3-1-unresolved", "failed")
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	row := got.Clients[0]
+	if row.Counts.Failed != 2 {
+		t.Errorf("Counts.Failed = %d, want 2 (both failed rows still count as failed)", row.Counts.Failed)
+	}
+	if row.NeedsAttention != 1 {
+		t.Errorf("NeedsAttention = %d, want 1 (the resolved failed invoice must not count)", row.NeedsAttention)
+	}
+}
+
+// T3-2 (reformulated -- the plan's "rejected invoice force-marked at the DB
+// level" is unwritable: invoices_kept_as_is_status binds every writer,
+// superuser included). Pins the invariant that makes the tuple split's
+// rejected arm safe as a bare status = 'rejected' with no defensive
+// kept_as_is_at IS NULL clause -- same shape as
+// TestKeptAsIs_NonDraftRejected (internal/invoice/kept_as_is_test.go).
+func TestStoreRollup_RejectedCannotCarryTheMark(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T3-2 tenant")
+	entityID := seedEntity(t, super, tenantID, "T3-2 entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T3-2", "rejected")
+
+	_, err := super.Exec(ctx,
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'x' WHERE id = $1`, invID)
+	if err == nil {
+		t.Fatal("UPDATE setting the kept_as_is triple on a rejected invoice succeeded, want a 23514 (invoices_kept_as_is_status) violation")
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("err = %v, want a 23514 (check_violation)", err)
+	}
+	if !strings.Contains(err.Error(), "invoices_kept_as_is_status") {
+		t.Errorf("error = %v, want it to name invoices_kept_as_is_status", err)
+	}
+}
+
+// T3-3: a blocked draft kept as-is must still count toward needs_attention --
+// the draft clause is byte-untouched by this predicate split (Out of Scope
+// #4), so a kept mark on a draft has no bearing on whether it counts.
+func TestStoreRollup_KeptBlockedDraftStillCounts(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T3-3 tenant")
+	entityID := seedEntity(t, super, tenantID, "T3-3 entity")
+	invID := seedInvoiceWithViolations(t, super, tenantID, entityID, "T3-3", "draft",
+		`[{"rule_key":"x","severity":"error","message":"blocking"}]`)
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'kept' WHERE id = $1`, invID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.Rollup(cA)
+	if err != nil {
+		t.Fatalf("Rollup: %v", err)
+	}
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	if row := got.Clients[0]; row.NeedsAttention != 1 {
+		t.Errorf("NeedsAttention = %d, want 1 (a kept blocked draft still counts, unchanged from today)", row.NeedsAttention)
 	}
 }

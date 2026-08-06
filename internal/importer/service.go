@@ -511,14 +511,17 @@ const (
 // storeDuplicateRowError builds the RowError for an against-store duplicate
 // (both the upfront precheck at ExistingNumbers time and the racing-INSERT
 // backstop at Create time), so both emit sites report the IDENTICAL enriched
-// shape (DUP-03).
-func storeDuplicateRowError(rowIdxs []int) RowError {
+// shape (DUP-03). invoiceID is the collided invoice's stored id, or "" when
+// none is resolvable (the racing-INSERT backstop) -- omitempty then omits
+// the key entirely.
+func storeDuplicateRowError(rowIdxs []int, invoiceID string) RowError {
 	return RowError{
-		Rows:     sheetRows(rowIdxs),
-		Field:    "invoice_number",
-		RuleKey:  ruleKeyDuplicateInvoiceNumber,
-		Severity: "error",
-		Message:  msgDuplicateInvoiceNumber,
+		Rows:      sheetRows(rowIdxs),
+		Field:     "invoice_number",
+		RuleKey:   ruleKeyDuplicateInvoiceNumber,
+		Severity:  "error",
+		InvoiceID: invoiceID,
+		Message:   msgDuplicateInvoiceNumber,
 	}
 }
 
@@ -669,8 +672,10 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			invalidRows += len(g.rowIdxs)
 			continue
 		}
-		if existing[num] {
-			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs))
+		if _, ok := existing[num]; ok {
+			// TODO: wire the resolved id through once routing lands --
+			// deliberately "" for now.
+			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs, ""))
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
 			continue
@@ -852,7 +857,8 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			// [dedup] A concurrent 23505 racing past the upfront
 			// ExistingNumbers precheck -- report the SAME enriched shape the
 			// precheck itself emits (DUP-04), never the bare generic form.
-			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs))
+			// No id: the racing tx's row may not even be visible yet.
+			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs, ""))
 		} else {
 			errorsList = append(errorsList, RowError{
 				Rows:    sheetRows(g.rowIdxs),

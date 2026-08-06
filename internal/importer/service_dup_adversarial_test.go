@@ -65,7 +65,7 @@ import (
 // INDISTINGUISHABLE from a present-but-empty one. omitempty is only proven by
 // checking the KEY is absent, not that the decoded value is "".
 func TestRowError_OmitemptyDistinguishesRuleShapedFromStructural(t *testing.T) {
-	ruleShaped := storeDuplicateRowError([]int{1, 0})
+	ruleShaped := storeDuplicateRowError([]int{1, 0}, "") // id unresolved, same as the upfront precheck's current scaffold value
 	bareStructural := RowError{
 		Rows:    sheetRows([]int{4, 6}),
 		Field:   "total",
@@ -84,6 +84,11 @@ func TestRowError_OmitemptyDistinguishesRuleShapedFromStructural(t *testing.T) {
 
 		_, hasRuleKey := generic["rule_key"]
 		_, hasSeverity := generic["severity"]
+		_, hasInvoiceID := generic["invoice_id"]
+
+		if hasInvoiceID {
+			t.Errorf("%s: %s carries key %q, want ABSENT (omitempty) -- id is \"\" here", name, string(b), "invoice_id")
+		}
 
 		switch name {
 		case "rule-shaped":

@@ -58,7 +58,8 @@ import (
 // against the scaffold: the stub returns the bare shape, so RuleKey/
 // Severity are both "".
 func TestStoreDuplicateRowError_ReturnsRuleShapedViolation(t *testing.T) {
-	got := storeDuplicateRowError([]int{1, 0})
+	const wantInvoiceID = "11111111-1111-1111-1111-111111111111"
+	got := storeDuplicateRowError([]int{1, 0}, wantInvoiceID)
 
 	wantRows := []int{2, 3}
 	if !intSliceEqual(got.Rows, wantRows) {
@@ -75,6 +76,9 @@ func TestStoreDuplicateRowError_ReturnsRuleShapedViolation(t *testing.T) {
 	}
 	if got.Message == "" {
 		t.Errorf("Message is empty, want a non-empty human-readable message (e.g. %q)", msgDuplicateInvoiceNumber)
+	}
+	if got.InvoiceID != wantInvoiceID {
+		t.Errorf("InvoiceID = %q, want %q", got.InvoiceID, wantInvoiceID)
 	}
 }
 

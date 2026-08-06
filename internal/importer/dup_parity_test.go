@@ -109,8 +109,8 @@ func TestPredicateParity_StateBlindImporterIndexParitySweep(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ExistingNumbers: %v", err)
 			}
-			if !existing[number] {
-				t.Errorf("ExistingNumbers[%q] (stored status=%s) = %v, want true -- the importer precheck must be state-blind (PAR-01, Core AC#2)", number, state, existing[number])
+			if id, ok := existing[number]; !ok || id != invID {
+				t.Errorf("ExistingNumbers[%q] (stored status=%s) = (%q, ok=%v), want (%q, true) -- the importer precheck must be state-blind (PAR-01, Core AC#2)", number, state, id, ok, invID)
 			}
 
 			// (ii) the manual store-level backstop rejects a same-number
@@ -200,8 +200,8 @@ func TestPredicateParity_CrossTenantNoFalseCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExistingNumbers: %v", err)
 	}
-	if existing["INV-X"] {
-		t.Errorf(`ExistingNumbers(as tenant A)["INV-X"] = true, want absent -- tenant B's row must be RLS-scoped out (PAR-05, Core AC#5)`)
+	if _, ok := existing["INV-X"]; ok {
+		t.Errorf(`ExistingNumbers(as tenant A)["INV-X"] present, want absent -- tenant B's row must be RLS-scoped out (PAR-05, Core AC#5)`)
 	}
 
 	// (i.b) the importer precheck does not see tenant B's row even when
@@ -212,8 +212,8 @@ func TestPredicateParity_CrossTenantNoFalseCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExistingNumbers(as tenant A, foreign entityB): %v", err)
 	}
-	if foreign["INV-X"] {
-		t.Error(`ExistingNumbers(as tenant A, entityB)["INV-X"] = true, want absent -- tenant B's row must be RLS-scoped out, not merely entity-scoped (PAR-05, Core AC#5)`)
+	if _, ok := foreign["INV-X"]; ok {
+		t.Error(`ExistingNumbers(as tenant A, entityB)["INV-X"] present, want absent -- tenant B's row must be RLS-scoped out, not merely entity-scoped (PAR-05, Core AC#5)`)
 	}
 
 	// (ii) a manual Create for tenant A's own entity succeeds -- the DB

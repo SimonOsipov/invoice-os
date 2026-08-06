@@ -7,8 +7,13 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 func TestTenantFlag_SetRejectsNonUUID(t *testing.T) {
@@ -57,5 +62,77 @@ func TestRun_MissingValidationConfigFailsBeforeAnyQuery(t *testing.T) {
 	err := run(context.Background(), []string{"11111111-1111-1111-1111-111111111111"}, false, true, false)
 	if err == nil || !strings.Contains(err.Error(), "VALIDATION_URL") {
 		t.Fatalf("run() err = %v, want a VALIDATION_URL/S2S_TOKEN config error", err)
+	}
+}
+
+// TestEnumerateTenants_ReturnsEveryTenant (QA gap-close): internal/invoice's
+// TestRevalidateAllTenants_CoversEveryEnumeratedTenant proves the underlying
+// SQL property (the tenant_enumerate RLS policy is total for
+// invoice_tenant_reader) by re-running the SAME query directly against the
+// reader pool -- it never calls this package's own enumerateTenants.
+// Mutation-verified that gap is real: adding "LIMIT 1" to enumerateTenants's
+// query here passed every one of the 14 shipped specs silently. DB-gated
+// like the rest of the DB-backed suite; skips without DATABASE_READER_URL/
+// DATABASE_SUPERUSER_URL rather than running unscoped against a real DB.
+func TestEnumerateTenants_ReturnsEveryTenant(t *testing.T) {
+	readerURL := os.Getenv("DATABASE_READER_URL")
+	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
+	if readerURL == "" || superURL == "" {
+		t.Skip("enumerateTenants db-integration test skipped: set DATABASE_READER_URL and DATABASE_SUPERUSER_URL")
+	}
+	ctx := context.Background()
+
+	super, err := db.NewPool(ctx, superURL)
+	if err != nil {
+		t.Fatalf("connect superuser: %v", err)
+	}
+	t.Cleanup(super.Close)
+
+	reader, err := db.NewPool(ctx, readerURL)
+	if err != nil {
+		t.Fatalf("connect reader: %v", err)
+	}
+	t.Cleanup(reader.Close)
+
+	id := uuid.NewString()
+	if _, err := super.Exec(ctx, `INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, "enumerateTenants QA tenant"); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id) })
+
+	got, err := enumerateTenants(ctx, reader)
+	if err != nil {
+		t.Fatalf("enumerateTenants: %v", err)
+	}
+
+	rows, err := super.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
+	if err != nil {
+		t.Fatalf("superuser enumerate: %v", err)
+	}
+	var superIDs []string
+	for rows.Next() {
+		var tid string
+		if err := rows.Scan(&tid); err != nil {
+			t.Fatalf("scan tenant id: %v", err)
+		}
+		superIDs = append(superIDs, tid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("superuser enumerate rows: %v", err)
+	}
+
+	if len(got) != len(superIDs) {
+		t.Fatalf("enumerateTenants returned %d tenant(s), want %d (superuser SELECT id FROM tenants)", len(got), len(superIDs))
+	}
+	found := false
+	for _, tid := range got {
+		if tid == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("enumerateTenants did not include the freshly seeded tenant %s", id)
 	}
 }

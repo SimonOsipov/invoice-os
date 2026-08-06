@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1047,5 +1048,302 @@ func TestRevalidateActive_UpstreamOutageAbortsAndWritesNothing(t *testing.T) {
 	}
 	if n := auditCount(t, app, tenantID, "invoice.validated"); n != beforeValidated {
 		t.Errorf("audit_log invoice.validated rows = %d, want unchanged %d", n, beforeValidated)
+	}
+}
+
+// ============================================================================
+// task-412 (BUG-05-03) QA: adversarial coverage beyond AC-1..AC-10, plus one
+// gap-close for AC-9 that mutation-testing found. Mutation-verified: each
+// test below was confirmed to redden against the specific break it names.
+// ============================================================================
+
+// TestRevalidateActive_RefusesPrivilegedRoleBeforeAnyInvoiceIDIsRead (AC-9
+// gap-close): the shipped AC-9 spec only proves the refusal precedes the
+// validator call and any write -- moving refuseRevalidatePrivilegedRole to
+// AFTER validatedInvoiceIDs does not redden it. A malformed tenantID pins the
+// missing ordering: db.WithinTenantTx validates the uuid BEFORE issuing any
+// statement (db.go's own ErrNoTenant fail-closed guard), so if the id-read
+// ran first this test would observe a "list validated invoices" wrapping
+// error instead of ErrRevalidatePrivilegedRole.
+func TestRevalidateActive_RefusesPrivilegedRoleBeforeAnyInvoiceIDIsRead(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(super)
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := newTINValidatorServer(t, versionID)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	_, err := RevalidateActive(ctx, super, store, gate, "not-a-uuid", false)
+	if !errors.Is(err, ErrRevalidatePrivilegedRole) {
+		t.Errorf("err = %v, want ErrRevalidatePrivilegedRole (the privileged-role check must run before the id-read's own tenant-id validation, not merely before the write)", err)
+	}
+}
+
+// TestRevalidateActive_NeverTouchesAnotherTenantsInvoices: two tenants each
+// hold an equally TIN-less validated invoice; running RevalidateActive for
+// tenant A only must leave tenant B's invoice byte-identical. Uses the app
+// (invoice_app) pool -- the same RLS-scoped pool as every other spec in this
+// file, never super -- so this proves RLS isolation, not a hand-written
+// tenant_id filter.
+func TestRevalidateActive_NeverTouchesAnotherTenantsInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantA := seedTenant(t, super, "XTENANT tenant A")
+	entityA := seedEntity(t, super, tenantA, "XTENANT entity A")
+	seedInvoiceWithViolations(t, super, tenantA, entityA, "XTENANT-A", "validated", "[]")
+
+	tenantB := seedTenant(t, super, "XTENANT tenant B")
+	entityB := seedEntity(t, super, tenantB, "XTENANT entity B")
+	invB := seedInvoiceWithViolations(t, super, tenantB, entityB, "XTENANT-B", "validated", "[]")
+	beforeB := snapshotInvoiceGateState(t, super, invB)
+	beforeBHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invB)
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := newTINValidatorServer(t, versionID)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantA, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive(tenantA): %v (want nil)", err)
+	}
+	if res.Examined != 1 || res.Demoted != 1 {
+		t.Fatalf("res = %+v, want Examined=1 Demoted=1 (only tenant A's own invoice)", res)
+	}
+
+	assertGateSnapshotUnchanged(t, beforeB, snapshotInvoiceGateState(t, super, invB), "XTENANT-B")
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invB); n != beforeBHistory {
+		t.Errorf("tenant B invoice_status_history rows = %d, want unchanged %d", n, beforeBHistory)
+	}
+	if n := auditCountForInvoiceEvent(t, app, tenantB, "invoice.transitioned", invB); n != 0 {
+		t.Errorf("tenant B audit_log invoice.transitioned rows for its invoice = %d, want 0", n)
+	}
+}
+
+// TestRevalidateActive_TenantWithNoValidatedInvoicesIsACleanNoOp: a tenant
+// holding only non-validated invoices examines nothing, demotes nothing, and
+// the validator is never called (an empty id set produces zero chunks).
+func TestRevalidateActive_TenantWithNoValidatedInvoicesIsACleanNoOp(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "ZERO tenant")
+	entityID := seedEntity(t, super, tenantID, "ZERO entity")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "ZERO-DRAFT", StatusDraft)
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "ZERO-QUEUED", StatusQueued)
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := newTINValidatorServer(t, versionID)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v (want nil)", err)
+	}
+	if res.Examined != 0 || res.Demoted != 0 || res.Clean != 0 || res.Skipped != 0 || len(res.Notes) != 0 {
+		t.Errorf("res = %+v, want the zero value (nothing validated to examine)", res)
+	}
+	if srv.calls != 0 {
+		t.Errorf("validator received %d call(s), want 0 -- an empty id set must never round-trip", srv.calls)
+	}
+}
+
+// TestRevalidateActive_WarningSeverityDoesNotDemote: a violation with
+// severity="warning" (never "error") must not block -- HasBlockingViolation's
+// own contract, pinned end-to-end through RevalidateActive rather than only
+// at the store.go unit level.
+func TestRevalidateActive_WarningSeverityDoesNotDemote(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "WARN tenant")
+	entityID := seedEntity(t, super, tenantID, "WARN entity")
+	invID := seedInvoiceWithViolations(t, super, tenantID, entityID, "WARN-INV", "validated", "[]")
+	before := snapshotInvoiceGateState(t, super, invID)
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req validateBatchRequest
+		_ = json.Unmarshal(body, &req)
+		results := make([]validateBatchItemResult, len(req.Invoices))
+		for i, it := range req.Invoices {
+			results[i] = validateBatchItemResult{Ref: it.Ref, Violations: []Violation{
+				{RuleKey: "vat-standard-rate", Severity: "warning", Message: "advisory, never blocks"},
+			}}
+		}
+		writeValidateResponse(t, w, versionID, results)
+	}))
+	t.Cleanup(srv.Close)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v (want nil)", err)
+	}
+	if res.Demoted != 0 {
+		t.Errorf("Demoted = %d, want 0 -- only severity=error blocks", res.Demoted)
+	}
+	if res.Clean != 1 {
+		t.Errorf("Clean = %d, want 1", res.Clean)
+	}
+	assertGateSnapshotUnchanged(t, before, snapshotInvoiceGateState(t, super, invID), "WARN")
+}
+
+// TestRevalidateActive_SkippedCountsARaceLoss: an invoice leaves 'validated'
+// between the id-list read and demoteRevalidated's own write-lock -- the fake
+// 04 force-writes the invoice to draft (simulating a concurrent actor) the
+// moment it is asked to evaluate it, then still reports a blocking violation.
+// Skipped, not Demoted, must count it, and the row must stay exactly as the
+// race left it (draft, no rule_set_version_id stamp from this run).
+func TestRevalidateActive_SkippedCountsARaceLoss(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "SKIP tenant")
+	entityID := seedEntity(t, super, tenantID, "SKIP entity")
+	invID := seedInvoiceWithViolations(t, super, tenantID, entityID, "SKIP-INV", "validated", "[]")
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := super.Exec(context.Background(), `UPDATE invoices SET status = 'draft' WHERE id = $1`, invID); err != nil {
+			t.Fatalf("force-race invoice to draft: %v", err)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req validateBatchRequest
+		_ = json.Unmarshal(body, &req)
+		results := make([]validateBatchItemResult, len(req.Invoices))
+		for i, it := range req.Invoices {
+			results[i] = validateBatchItemResult{Ref: it.Ref, Violations: tinOnlyViolations(it.Invoice)}
+		}
+		writeValidateResponse(t, w, versionID, results)
+	}))
+	t.Cleanup(srv.Close)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v (want nil)", err)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1 (the invoice raced out of validated before the write lock)", res.Skipped)
+	}
+	if res.Demoted != 0 {
+		t.Errorf("Demoted = %d, want 0", res.Demoted)
+	}
+	if got := readInvoiceStatus(t, super, invID); got != StatusDraft {
+		t.Errorf("status = %q, want draft (from the race, not a demotion this run performed)", got)
+	}
+}
+
+// TestRevalidateActive_VerifyUpstreamOutageFailsLoudNotClean: --verify is
+// RevalidateActive(dryRun=true); an upstream outage during that pass must
+// still propagate raw, never settle to a false "0 examined, 0 demoted"
+// result that a caller could mistake for "everything is clean".
+func TestRevalidateActive_VerifyUpstreamOutageFailsLoudNotClean(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "VERIFY-OUTAGE tenant")
+	entityID := seedEntity(t, super, tenantID, "VERIFY-OUTAGE entity")
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "VERIFY-OUTAGE-INV", "validated", "[]")
+
+	srv := newOutageValidatorServer(t)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, true)
+	if !errors.Is(err, ErrNoActiveRuleSet) {
+		t.Errorf("err = %v, want ErrNoActiveRuleSet", err)
+	}
+	if res.Examined != 0 || res.Demoted != 0 {
+		t.Errorf("res = %+v, want the zero value -- an outage must never masquerade as a clean verify", res)
+	}
+}
+
+// TestRevalidateActive_ChunksAtExactlyRevalidateChunkSizeBoundary and
+// TestRevalidateActive_ChunksOneOverBoundaryIntoTwoCalls pin
+// revalidateChunkSize's value at LITERAL 200 (never the revalidateChunkSize
+// symbol itself, which would make the seed count and the assertion drift
+// together under any mutation of the constant and silently pass) via the
+// fake 04's own call counter -- mutation-verified unpinned before this pair
+// (both 1 and 10000 passed all 14 shipped specs). All invoices are clean (a
+// good buyer TIN) so no writes cloud the call count. A guard confirms
+// revalidateChunkSize itself is still 200, so these two tests fail loudly
+// (not silently pass wrong) if the constant is ever deliberately changed.
+func TestRevalidateActive_ChunksAtExactlyRevalidateChunkSizeBoundary(t *testing.T) {
+	if revalidateChunkSize != 200 {
+		t.Fatalf("revalidateChunkSize = %d, want 200 -- update this test's literal boundary too", revalidateChunkSize)
+	}
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	const n = 200
+	tenantID := seedTenant(t, super, "CHUNK tenant")
+	entityID := seedEntity(t, super, tenantID, "CHUNK entity")
+	for i := 0; i < n; i++ {
+		id := seedInvoiceWithViolations(t, super, tenantID, entityID, fmt.Sprintf("CHUNK-%d", i), "validated", "[]")
+		setBuyerTIN(t, super, id, "87654321-0002")
+	}
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := newTINValidatorServer(t, versionID)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v (want nil)", err)
+	}
+	if res.Examined != n {
+		t.Errorf("Examined = %d, want %d", res.Examined, n)
+	}
+	if srv.calls != 1 {
+		t.Errorf("validator received %d batch call(s), want exactly 1 for %d invoices at the chunk boundary", srv.calls, n)
+	}
+}
+
+func TestRevalidateActive_ChunksOneOverBoundaryIntoTwoCalls(t *testing.T) {
+	if revalidateChunkSize != 200 {
+		t.Fatalf("revalidateChunkSize = %d, want 200 -- update this test's literal boundary too", revalidateChunkSize)
+	}
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	const n = 201
+	tenantID := seedTenant(t, super, "CHUNK+1 tenant")
+	entityID := seedEntity(t, super, tenantID, "CHUNK+1 entity")
+	for i := 0; i < n; i++ {
+		id := seedInvoiceWithViolations(t, super, tenantID, entityID, fmt.Sprintf("CHUNK1-%d", i), "validated", "[]")
+		setBuyerTIN(t, super, id, "87654321-0002")
+	}
+
+	versionID := seedRuleSetVersionID(t, super)
+	srv := newTINValidatorServer(t, versionID)
+	validator := NewValidator(srv.URL, revalidateS2SToken, nil)
+	gate := NewGate(store, validator)
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v (want nil)", err)
+	}
+	if res.Examined != n {
+		t.Errorf("Examined = %d, want %d", res.Examined, n)
+	}
+	if srv.calls != 2 {
+		t.Errorf("validator received %d batch call(s), want exactly 2 for %d invoices (ceil over the 200 boundary)", srv.calls, n)
 	}
 }

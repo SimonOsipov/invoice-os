@@ -2078,6 +2078,35 @@ describe('ReviewBatch.tsx source: the already-imported tile caption carries the 
   })
 })
 
+// --- QA adversarial coverage (task-407 verification), new tests only ---
+
+// BUG08-QA-7 (task-407 QA): pins the Objective's own 750-row all-duplicate repro at the
+// view-model layer -- atZero (unreadable===0) is TRUE here even though alreadyImported is
+// 750, which is what makes ReviewBatch.tsx:328's at-zero caption ('Every row in the file
+// became part of an invoice.') false for this shape: server accounting guarantees
+// rows_valid = rows_total - rows_invalid (service.go:578), and every duplicate row is
+// quarantined, never ready, so 0 rows became a NEW invoice. No BUG-08 subtask's Test
+// Specs render this shape (BUG08-E2E-6/7 use either both-zero or a mixed fixture where
+// unreadable>0) -- flagged as an open AC-3 gap, not fixed here ([structural-untouched]
+// forbids this subtask from touching that caption).
+describe('channelTilesAll: atZero ignores alreadyImported even at the Objective\'s own all-duplicate shape (BUG08-QA-7)', () => {
+  it('BUG08-QA-7: the 750-row all-duplicate repro reports atZero true while alreadyImported is 750', () => {
+    const errors: RowError[] = Array.from({ length: 250 }, (_, i) => ({
+      rows: [i * 3 + 1, i * 3 + 2, i * 3 + 3],
+      rule_key: 'no-duplicate-invoice-number',
+      severity: 'error',
+      invoice_id: `inv-${i + 1}`,
+      message: 'An invoice with this number already exists for this entity.',
+    }))
+
+    const tiles = channelTilesAll([{ errors, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.atZero).toBe(true)
+    expect(tiles.frozen.alreadyImported).toBe(750)
+    expect(tiles.frozen.alreadyImportedAtZero).toBe(false)
+  })
+})
+
 // --- BULK-01-06 (task-311, Stage 2.5/Mode A) — RED specs for the run-widened review
 // derivations. Every function marked STUB in reviewBatch.ts throws `new Error('not
 // implemented')`, so specs against them fail on that throw — the correct RED reason.

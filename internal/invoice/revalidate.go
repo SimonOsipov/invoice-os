@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // DemoteRevalidatedTx walks a validated invoice back to draft after a re-run of
@@ -98,6 +102,10 @@ type RevalidateResult struct {
 	Notes    []string
 }
 
+// revalidateChunkSize bounds one 04 round trip; defaultValidateTimeout
+// (validator.go) is sized for ~500 invoices, so 200 sits well inside it.
+const revalidateChunkSize = 200
+
 // RevalidateActive re-evaluates every status='validated' invoice for
 // tenantID against the active rule set (via gate, over HTTP -- never
 // internal/validation in-process) and demotes any that now carry a blocking
@@ -105,10 +113,9 @@ type RevalidateResult struct {
 // gate.go header for why every invoice evaluated here must be
 // Store.Get-hydrated, never Store.List-sourced.
 //
-// STAGE 2.5 (Mode A) STUB: not yet implemented (task-412). Every
-// TestRevalidateActive_*/TestRevalidateAllTenants_*/TestRevalidateVerify_*
-// spec in revalidate_test.go must fail on this sentinel error, never on a
-// compile error.
+// dryRun evaluates and reports without writing; it is also how --verify
+// re-scans, since stored violations reflect the rule set active at the last
+// validation and no SQL predicate can answer "would this fail today".
 func RevalidateActive(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -117,5 +124,146 @@ func RevalidateActive(
 	tenantID string,
 	dryRun bool,
 ) (RevalidateResult, error) {
-	return RevalidateResult{}, errors.New("invoice: RevalidateActive not implemented")
+	if err := refuseRevalidatePrivilegedRole(ctx, pool); err != nil {
+		return RevalidateResult{}, err
+	}
+
+	// Built from our OWN tenantID argument rather than a caller's context, so
+	// "run as A, demote B's invoices" is unrepresentable.
+	ctx = auth.WithIdentity(ctx, auth.Identity{
+		Subject:  RevalidateActor(tenantID).Subject,
+		Role:     "authenticated",
+		TenantID: tenantID,
+	})
+
+	ids, err := validatedInvoiceIDs(ctx, pool, tenantID)
+	if err != nil {
+		return RevalidateResult{}, err
+	}
+
+	var res RevalidateResult
+	for chunk := range slices.Chunk(ids, revalidateChunkSize) {
+		items := make([]EvalItem, 0, len(chunk))
+		for _, id := range chunk {
+			// Get, NEVER List: List leaves LineItems nil and MBSPayload cannot
+			// tell that from a genuinely line-less invoice, which would fire
+			// line-items-required on the whole run (gate.go's header).
+			inv, err := store.Get(ctx, id)
+			if err != nil {
+				return RevalidateResult{}, fmt.Errorf("invoice: revalidate: get invoice %s: %w", id, err)
+			}
+			items = append(items, EvalItem{Ref: inv.ID, Invoice: inv})
+		}
+
+		out, err := gate.Evaluate(ctx, items)
+		if err != nil {
+			// ErrUpstream/ErrNoActiveRuleSet propagate RAW and abort the tenant:
+			// an outage is never a verdict.
+			return RevalidateResult{}, err
+		}
+
+		for _, it := range items {
+			res.Examined++
+			vs := out.ByRef[it.Ref]
+			if !HasBlockingViolation(vs) {
+				res.Clean++
+				continue
+			}
+			res.Notes = append(res.Notes, fmt.Sprintf("invoice %s: blocked by %s", it.Ref, strings.Join(blockingRuleKeys(vs), ", ")))
+
+			if dryRun {
+				res.Demoted++
+				continue
+			}
+			demoted, err := demoteRevalidated(ctx, pool, store, tenantID, it.Ref, vs, out.RuleSetVersionID)
+			if err != nil {
+				return RevalidateResult{}, fmt.Errorf("invoice: revalidate: demote invoice %s: %w", it.Ref, err)
+			}
+			if demoted {
+				res.Demoted++
+			} else {
+				res.Skipped++
+			}
+		}
+	}
+	return res, nil
+}
+
+// refuseRevalidatePrivilegedRole fails closed before the first invoice is
+// read. pg_roles is world-readable, so this costs one query.
+func refuseRevalidatePrivilegedRole(ctx context.Context, pool *pgxpool.Pool) error {
+	var privileged bool
+	if err := pool.QueryRow(ctx,
+		`SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = current_user`,
+	).Scan(&privileged); err != nil {
+		return fmt.Errorf("invoice: check current_user privileges: %w", err)
+	}
+	if privileged {
+		return ErrRevalidatePrivilegedRole
+	}
+	return nil
+}
+
+// validatedInvoiceIDs lists the tenant's validated invoices. RLS scopes the
+// SELECT; no tenant_id predicate is written by hand. The status filter IS the
+// terminal-status exclusion, and ORDER BY id makes the run deterministic.
+func validatedInvoiceIDs(ctx context.Context, pool *pgxpool.Pool, tenantID string) ([]string, error) {
+	var ids []string
+	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id FROM invoices WHERE status = 'validated' ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("invoice: revalidate: list validated invoices: %w", err)
+	}
+	return ids, nil
+}
+
+// demoteRevalidated runs one demotion in its own tx and reports whether it
+// happened. The status re-read is what keeps Skipped honest: DemoteRevalidatedTx
+// silently no-ops on a row that stopped being validated, and counting that as a
+// demotion would inflate the only number the run reports.
+func demoteRevalidated(ctx context.Context, pool *pgxpool.Pool, store *Store, tenantID, id string, vs []Violation, ruleSetVersionID string) (bool, error) {
+	var demoted bool
+	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1 FOR UPDATE`, id).Scan(&status); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if Status(status) != StatusValidated {
+			return nil
+		}
+		if _, err := store.DemoteRevalidatedTx(ctx, tx, id, tenantID, vs, ruleSetVersionID); err != nil {
+			return err
+		}
+		demoted = true
+		return nil
+	})
+	return demoted, err
+}
+
+// blockingRuleKeys names the severity:"error" rules behind a demotion, for the
+// run's Notes (what --verify lists).
+func blockingRuleKeys(vs []Violation) []string {
+	var keys []string
+	for _, v := range vs {
+		if v.Severity == "error" {
+			keys = append(keys, v.RuleKey)
+		}
+	}
+	return keys
 }

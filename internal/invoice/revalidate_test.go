@@ -472,7 +472,7 @@ func newOutageValidatorServer(t *testing.T) *httptest.Server {
 // JSON string literal (RS-V2-14 / F7 pin-detector scope note, gate_test.go).
 func writeValidateResponse(t *testing.T, w http.ResponseWriter, ruleSetVersionID string, results []validateBatchItemResult) {
 	t.Helper()
-	b, err := json.Marshal(validateBatchResponse{RuleSetVersion: 1, RuleSetVersionID: ruleSetVersionID, Results: results})
+	b, err := json.Marshal(validateBatchResponse{RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: ruleSetVersionID, Results: results})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return

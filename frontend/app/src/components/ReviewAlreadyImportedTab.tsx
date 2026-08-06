@@ -40,7 +40,7 @@ export function ReviewAlreadyImportedTab({
   onOpenInvoice: (id: string) => void
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div data-testid="review-already-imported-tab" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-muted-bg)', border: '1px solid var(--status-muted-border)', color: 'var(--status-muted-text)' }}>
         <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>{rows.length} rows were already in your ledger</div>
         <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>

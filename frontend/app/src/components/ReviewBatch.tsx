@@ -325,7 +325,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
                   view-model rather than `count === 0` inferred here. */}
               <Tile
                 value={`${tiles.frozen.unreadable} unreadable rows`}
-                caption={tiles.atZero ? 'Every row in the file became part of an invoice.' : 'No invoice exists for them.'}
+                caption={tiles.atZero ? 'Every row in the file could be read.' : 'No invoice exists for them.'}
                 bg={tiles.atZero ? 'var(--bg-3)' : 'var(--status-amber-bg)'}
                 border={tiles.atZero ? 'var(--line-2)' : 'var(--status-amber-border)'}
                 text={tiles.atZero ? 'var(--fg-3)' : 'var(--status-amber-text)'}

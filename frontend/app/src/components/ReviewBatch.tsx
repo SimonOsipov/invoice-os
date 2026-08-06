@@ -224,7 +224,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   const rows = unreadableRowsAll(batches)
   const tiles = channelTilesAll(batches, { cleanTotal, failingTotal })
   const header = reviewHeaderAll(batches, { allTotal })
-  const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable })
+  const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported })
   // The Unreadable tab can DISAPPEAR under a selected `tab` (a retry that now reports
   // zero structural errors), which would otherwise render a body with no tab above it.
   const activeTab = tabs.some((t) => t.id === tab) ? tab : 'invoices'

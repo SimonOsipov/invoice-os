@@ -562,14 +562,14 @@ describe('channelTiles: unreadable sums BOTH RowError shapes in one batch (SHELL
 
 describe('reviewTabs (AC-4, §7.2)', () => {
   it('SHELL-5: the Unreadable rows tab is OMITTED from the array at zero, not merely hidden — length 1, the remaining tab is "invoices"', () => {
-    const result = reviewTabs({ invoices: 12, unreadable: 0 })
+    const result = reviewTabs({ invoices: 12, unreadable: 0, alreadyImported: 0 })
 
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('invoices')
   })
 
   it('SHELL-5b (NEW — nothing in the frozen table pinned the label format or that the two counts come from different sources): both tabs render, each with its own count', () => {
-    const result = reviewTabs({ invoices: 500, unreadable: 4 })
+    const result = reviewTabs({ invoices: 500, unreadable: 4, alreadyImported: 0 })
 
     expect(result.map((t) => t.label)).toEqual(['Invoices (500)', 'Unreadable rows (4)'])
   })
@@ -607,7 +607,7 @@ describe('reviewTabs + channelTiles on an all-quarantined batch (QA Stage 4 — 
     }
 
     const tiles = channelTiles(batch, { cleanTotal: 0, failingTotal: 0 })
-    const tabs = reviewTabs({ invoices: 0, unreadable: tiles.frozen.unreadable })
+    const tabs = reviewTabs({ invoices: 0, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported })
 
     expect(tiles.frozen.unreadable).toBe(10)
     expect(tabs.map((t) => t.label)).toEqual(['Invoices (0)', 'Unreadable rows (10)'])

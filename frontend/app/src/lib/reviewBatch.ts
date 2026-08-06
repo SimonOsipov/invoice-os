@@ -137,7 +137,13 @@ export function verdictPill(input: VerdictInput): VerdictPill {
 
 export interface ChannelTiles {
   live: { cleanTotal: number; failingTotal: number }
-  frozen: { unreadable: number; ruleSetLabel: string }
+  frozen: {
+    unreadable: number
+    ruleSetLabel: string
+    alreadyImported: number // rows; stubbed 0 until the channel split lands
+    alreadyImportedInvoices: number // errors[] entries; stubbed 0
+    alreadyImportedAtZero: boolean // stubbed true
+  }
   atZero: boolean
 }
 
@@ -195,7 +201,13 @@ export function channelTiles(
   const unreadable = unreadableRows(batch.errors).length
   return {
     live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
-    frozen: { unreadable, ruleSetLabel: ruleSetLabel(batch.rule_set_version) },
+    frozen: {
+      unreadable,
+      ruleSetLabel: ruleSetLabel(batch.rule_set_version),
+      alreadyImported: 0,
+      alreadyImportedInvoices: 0,
+      alreadyImportedAtZero: true,
+    },
     atZero: unreadable === 0,
   }
 }
@@ -211,7 +223,13 @@ export function channelTilesAll(
   const unreadable = batches.reduce((sum, b) => sum + unreadableRows(b.errors).length, 0)
   return {
     live: { cleanTotal: live.cleanTotal, failingTotal: live.failingTotal },
-    frozen: { unreadable, ruleSetLabel: ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version))) },
+    frozen: {
+      unreadable,
+      ruleSetLabel: ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version))),
+      alreadyImported: 0,
+      alreadyImportedInvoices: 0,
+      alreadyImportedAtZero: true,
+    },
     atZero: unreadable === 0,
   }
 }
@@ -538,7 +556,10 @@ export interface ReviewTab {
   label: string
 }
 
-export function reviewTabs(counts: { invoices: number; unreadable: number }): ReviewTab[] {
+// `alreadyImported` is required (not optional) so a caller cannot silently omit it —
+// the body doesn't act on it yet (channel split lands separately); the required
+// parameter alone forces every call site to state it explicitly.
+export function reviewTabs(counts: { invoices: number; unreadable: number; alreadyImported: number }): ReviewTab[] {
   const tabs: ReviewTab[] = [{ id: 'invoices', label: `Invoices (${counts.invoices})` }]
   if (counts.unreadable > 0) tabs.push({ id: 'unreadable', label: `Unreadable rows (${counts.unreadable})` })
   return tabs

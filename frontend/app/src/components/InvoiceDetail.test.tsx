@@ -66,6 +66,8 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     revalidate_blocked_reason: null,
     can_submit: false,
     submit_blocked_reason: null,
+    can_view_ubl: true,
+    ubl_blocked_reason: null,
     ...over,
   }
 }

@@ -25,6 +25,9 @@ export interface ApiFetchOptions {
   body?: unknown // JSON-serialized + Content-Type: application/json when present
   token?: string | null // when truthy, injects Authorization: Bearer <token>
   signal?: AbortSignal
+  // 'text' resolves the raw body (the UBL route serves XML). Errors stay JSON on
+  // every path, so this is read only after the !res.ok check below.
+  responseType?: 'json' | 'text'
 }
 
 // Configured gateway base (trailing slashes stripped) or null when VITE_GATEWAY_URL is empty/unset.

@@ -51,6 +51,8 @@ function detailRecord(): InvoiceDetailRecord {
     revalidate_blocked_reason: null,
     can_submit: true,
     submit_blocked_reason: null,
+    can_view_ubl: true,
+    ubl_blocked_reason: null,
   }
 }
 

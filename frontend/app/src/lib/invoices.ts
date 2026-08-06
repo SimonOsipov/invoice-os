@@ -235,6 +235,8 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   revalidate_blocked_reason: string | null
   can_submit: boolean
   submit_blocked_reason: string | null
+  can_view_ubl: boolean
+  ubl_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -521,6 +523,11 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     can_submit: res.can_submit === true,
     submit_blocked_reason: res.submit_blocked_reason ?? null,
   }
+}
+
+// RED stub (task-400, BUG-04-04, Mode A) -- implemented in the GREEN pass.
+export async function getInvoiceUbl(_authedFetch: AuthedFetch, _base: string, _id: string): Promise<string> {
+  throw new Error('not implemented')
 }
 
 export async function getInvoiceHistory(

@@ -306,18 +306,32 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 
           <div style={{ flex: '1 1 280px', minWidth: 240 }}>
             <div className="label" style={{ marginBottom: 9 }}>Not imported</div>
-            {/* DASHED as well as amber, and STILL DASHED at zero — only greyed. The
-                channel stays visible at zero so its absence is a fact and not an
-                omission, which is also why `atZero` is an explicit field on the
-                view-model rather than `count === 0` inferred here. */}
-            <Tile
-              value={`${tiles.frozen.unreadable} unreadable rows`}
-              caption={tiles.atZero ? 'Every row in the file became part of an invoice.' : 'No invoice exists for them.'}
-              bg={tiles.atZero ? 'var(--bg-3)' : 'var(--status-amber-bg)'}
-              border={tiles.atZero ? 'var(--line-2)' : 'var(--status-amber-border)'}
-              text={tiles.atZero ? 'var(--fg-3)' : 'var(--status-amber-text)'}
-              dashed
-            />
+            {/* Column, not the live channel's row direction: the paragraph below has to
+                stay adjacent to the unreadable tile. `Tile` has no margin, hence gap. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* Value counts rows, caption counts invoices — BUG08-BATCH-8 pins both.
+                  No colour ternary: --status-muted-* is already the greyed value. */}
+              <Tile
+                value={`${tiles.frozen.alreadyImported} already imported`}
+                caption={tiles.frozen.alreadyImportedAtZero ? 'Nothing in this file was already in your ledger.' : `${tiles.frozen.alreadyImportedInvoices} invoices already in your ledger. Nothing to fix.`}
+                bg="var(--status-muted-bg)"
+                border="var(--status-muted-border)"
+                text="var(--status-muted-text)"
+                dashed
+              />
+              {/* DASHED as well as amber, and STILL DASHED at zero — only greyed. The
+                  channel stays visible at zero so its absence is a fact and not an
+                  omission, which is also why `atZero` is an explicit field on the
+                  view-model rather than `count === 0` inferred here. */}
+              <Tile
+                value={`${tiles.frozen.unreadable} unreadable rows`}
+                caption={tiles.atZero ? 'Every row in the file became part of an invoice.' : 'No invoice exists for them.'}
+                bg={tiles.atZero ? 'var(--bg-3)' : 'var(--status-amber-bg)'}
+                border={tiles.atZero ? 'var(--line-2)' : 'var(--status-amber-border)'}
+                text={tiles.atZero ? 'var(--fg-3)' : 'var(--status-amber-text)'}
+                dashed
+              />
+            </div>
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '9px 0 0', lineHeight: 1.55 }}>
               {tiles.atZero
                 ? 'This channel stays visible even at zero, so its absence is a fact and not an omission.'

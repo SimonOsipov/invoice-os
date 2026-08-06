@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { closeGlyph, plusGlyph } from '../glyphs'
+import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
@@ -55,6 +55,7 @@ import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
 import { ViolationsTable } from './ViolationsTable'
+import { XmlModal } from './XmlModal'
 import type { PlatformCtx } from '../types'
 
 export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
@@ -143,6 +144,10 @@ const REVALIDATE_REASON_ID = 'revalidate-blocked-reason-text'
 // aria-describedby targets never collide on a rejected invoice, where both render together.
 const SUBMIT_REASON_ID = 'submit-blocked-reason-text'
 
+// Same rationale again; a third distinct id, so no two disabled controls'
+// aria-describedby targets collide when they render together.
+const VIEW_UBL_REASON_ID = 'view-ubl-blocked-reason-text'
+
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView/ValidationView ([A-e]/[A-m]) —
@@ -168,6 +173,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // Stable — `useDismiss` re-registers its listeners on every identity change.
   const closePreview = useCallback(() => setPreviewOpen(false), [])
   const openPreview = useCallback(() => setPreviewOpen(true), [])
+  const [ublOpen, setUblOpen] = useState(false)
+  const closeUbl = useCallback(() => setUblOpen(false), [])
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) -- HOISTED above the status
   // ladder below: hooks can't be called from inside a conditional branch, and `inv` (the
@@ -463,8 +470,44 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               an invoice a PRIOR request already queued), and the banner describing that
               outcome must still render -- [never-report-success-on-a-skip] is not allowed
               to depend on the record still being editable afterward. */}
-          {((inv.can_edit && !editing) || submitSkipped != null || submitError != null) && (
+          {(!editing || submitSkipped != null || submitError != null) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
+              {/* The canonical document, always offered -- NOT behind `can_edit` like the bar
+                  below ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
+                  completeness, not lifecycle, and a compliance user needs the document most on
+                  queued/submitted/accepted/failed, where that bar is gone. Same four disabled
+                  layers as :480-499, minus `filter: 'none'` -- that neutralises
+                  .v2-btn-primary's brightening :hover (app-layer.css:213); .v2-btn-ghost's
+                  :hover (:215) sets no filter. Hidden while `editing`
+                  ([ubl-hidden-while-editing]): the form is dirty and the server would render
+                  the STORED record. A fragment, never a wrapping div -- a wrapper would fuse
+                  button and reason into one flex item of this column. */}
+              {!editing && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="view-ubl"
+                    onClick={() => setUblOpen(true)}
+                    disabled={!inv.can_view_ubl}
+                    title={inv.ubl_blocked_reason ?? undefined}
+                    aria-describedby={inv.ubl_blocked_reason != null ? VIEW_UBL_REASON_ID : undefined}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={{
+                      height: 32,
+                      padding: '0 14px',
+                      fontSize: 13,
+                      ...(!inv.can_view_ubl ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                    }}
+                  >
+                    <span style={{ display: 'inline-flex' }}>{docGlyph2}</span> View UBL/XML
+                  </button>
+                  {inv.ubl_blocked_reason != null && (
+                    <div id={VIEW_UBL_REASON_ID} data-testid="view-ubl-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
+                      {inv.ubl_blocked_reason}
+                    </div>
+                  )}
+                </>
+              )}
               {inv.can_edit && !editing && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -858,6 +901,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             createdBy={history.data?.[0]?.actor ?? null}
             onClose={closePreview}
           />
+        )}
+        {ublOpen && (
+          <XmlModal ctx={ctx} base={base} invoiceId={invoiceId} invoiceNumber={inv.invoice_number} onClose={closeUbl} />
         )}
       </>
     )

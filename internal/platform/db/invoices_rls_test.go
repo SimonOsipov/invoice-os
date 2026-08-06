@@ -68,6 +68,7 @@ package db_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -923,5 +924,217 @@ func TestRLS_InvoicesImportBatchDeleteOnlyNullsImportBatchID(t *testing.T) {
 	}
 	if gotSubtotal != "123.45" {
 		t.Errorf("subtotal after batch delete = %q, want unchanged %q", gotSubtotal, "123.45")
+	}
+}
+
+// --- BUG-07-01: widened keep-as-is status fence (failed joins draft) -------
+
+// T1-1: a `failed` invoice accepts the keep-as-is triple in one UPDATE, and the row
+// reads all three values back — the widened fence must allow `failed` exactly like
+// `draft`.
+func TestRLS_KeptAsIsMarkAllowedOnFailed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "KAI-01 A Corp")
+	defer cleanupEntityA()
+
+	var id string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, 'KAI-01-A', 'failed') RETURNING id`,
+			h.tenantA, entityA,
+		).Scan(&id)
+	})
+	if err != nil {
+		t.Fatalf("insert failed invoice: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id)
+	}()
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'reviewer@example.com', kept_as_is_reason = 'kept' WHERE id = $1`,
+			id,
+		)
+		return e
+	})
+	if err != nil {
+		t.Fatalf("mark keep-as-is on a failed invoice: want success, got: %v", err)
+	}
+
+	var keptAt, keptBy, keptReason *string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT kept_as_is_at::text, kept_as_is_by, kept_as_is_reason FROM invoices WHERE id = $1`, id,
+		).Scan(&keptAt, &keptBy, &keptReason)
+	})
+	if err != nil {
+		t.Fatalf("read back kept-as-is triple: %v", err)
+	}
+	if keptAt == nil || *keptAt == "" {
+		t.Error("kept_as_is_at read back = NULL, want set")
+	}
+	if keptBy == nil || *keptBy != "reviewer@example.com" {
+		t.Errorf("kept_as_is_by read back = %v, want %q", keptBy, "reviewer@example.com")
+	}
+	if keptReason == nil || *keptReason != "kept" {
+		t.Errorf("kept_as_is_reason read back = %v, want %q", keptReason, "kept")
+	}
+}
+
+// T1-2: every non-draft, non-failed status still refuses the keep-as-is triple — the
+// widened fence must not leak past `draft`/`failed`.
+func TestRLS_KeptAsIsMarkRefusedOnNonDraftNonFailed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "KAI-02 A Corp")
+	defer cleanupEntityA()
+
+	for _, status := range []string{"validated", "queued", "submitted", "accepted", "rejected"} {
+		t.Run(status, func(t *testing.T) {
+			var id string
+			err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx,
+					`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, $3, $4) RETURNING id`,
+					h.tenantA, entityA, "KAI-02-"+status, status,
+				).Scan(&id)
+			})
+			if err != nil {
+				t.Fatalf("insert %s invoice: %v", status, err)
+			}
+			defer func() {
+				_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id)
+			}()
+
+			err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				_, e := tx.Exec(ctx,
+					`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'reviewer@example.com', kept_as_is_reason = 'kept' WHERE id = $1`,
+					id,
+				)
+				return e
+			})
+			if err == nil {
+				t.Fatalf("mark keep-as-is on a %s invoice succeeded, want a 23514 (check_violation)", status)
+			}
+			if code := pgCode(err); code != "23514" {
+				t.Fatalf("mark keep-as-is on a %s invoice: SQLSTATE = %q, want 23514 (check_violation): %v", status, code, err)
+			}
+		})
+	}
+}
+
+// T1-3 (regression guard): a `draft` invoice still accepts the keep-as-is triple
+// exactly as before the widening.
+func TestRLS_KeptAsIsMarkStillAllowedOnDraft(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "KAI-03 A Corp")
+	defer cleanupEntityA()
+	id, cleanupInvoice := seedInvoice(t, h.tenantA, entityA, "KAI-03-A")
+	defer cleanupInvoice()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'reviewer@example.com', kept_as_is_reason = 'kept' WHERE id = $1`,
+			id,
+		)
+		return e
+	})
+	if err != nil {
+		t.Fatalf("mark keep-as-is on a draft invoice: want success, got: %v", err)
+	}
+}
+
+// T1-4: the all-or-none invoices_kept_as_is_complete CHECK still refuses a partial
+// write on a `failed` row — proves the status-fence widening didn't loosen
+// completeness. Asserts the constraint NAME, not just SQLSTATE 23514: a failed row
+// with the triple half-written also trips the status fence, and Postgres reports
+// whichever CHECK it evaluates first — pinning the name proves it's _complete, not
+// the status fence, doing the blocking, both before and after the fence is renamed.
+func TestRLS_KeptAsIsPartialWriteRefusedOnFailed(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "KAI-04 A Corp")
+	defer cleanupEntityA()
+
+	var id string
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, 'KAI-04-A', 'failed') RETURNING id`,
+			h.tenantA, entityA,
+		).Scan(&id)
+	})
+	if err != nil {
+		t.Fatalf("insert failed invoice: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, id)
+	}()
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE invoices SET kept_as_is_at = now() WHERE id = $1`, id)
+		return e
+	})
+	if err == nil {
+		t.Fatal("partial keep-as-is write (kept_as_is_at only) on a failed invoice succeeded, want a 23514 (invoices_kept_as_is_complete) violation")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("partial keep-as-is write on a failed invoice: SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "invoices_kept_as_is_complete") {
+		t.Errorf("error = %v, want it to name invoices_kept_as_is_complete", err)
+	}
+}
+
+// T1-5: exactly one status-fence CHECK constraint exists on `invoices` referencing
+// kept_as_is after the migration — invoices_kept_as_is_status is present,
+// invoices_kept_as_is_complete is untouched, and the old invoices_kept_as_is_draft_only
+// name is gone. Filters contype='c': PG18 also stores NOT NULL constraints in
+// pg_constraint (contype='n').
+func TestRLS_KeptAsIsExactlyOneStatusFence(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	rows, err := h.super.Query(ctx,
+		`SELECT conname FROM pg_constraint
+		  WHERE conrelid = 'public.invoices'::regclass AND contype = 'c' AND conname LIKE '%kept_as_is%'`)
+	if err != nil {
+		t.Fatalf("query kept_as_is CHECK constraints: %v", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan conname: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate kept_as_is CHECK constraints: %v", err)
+	}
+
+	has := func(name string) bool {
+		for _, n := range names {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("invoices_kept_as_is_status") {
+		t.Errorf("kept_as_is CHECK constraints = %v, want invoices_kept_as_is_status present", names)
+	}
+	if !has("invoices_kept_as_is_complete") {
+		t.Errorf("kept_as_is CHECK constraints = %v, want invoices_kept_as_is_complete present", names)
+	}
+	if has("invoices_kept_as_is_draft_only") {
+		t.Errorf("kept_as_is CHECK constraints = %v, want invoices_kept_as_is_draft_only absent (renamed to invoices_kept_as_is_status)", names)
 	}
 }

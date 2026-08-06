@@ -67,6 +67,16 @@ function cleanInvoiceFields(invoiceNumber: string) {
 // single starting line, and so T11's fingerprint check has real line ids to compare.
 // Same header numbers as cleanInvoiceFields (fires zero violations), just split across two
 // reconciling lines instead of one.
+function twoLineInvoiceFields(invoiceNumber: string) {
+  return {
+    ...cleanInvoiceFields(invoiceNumber),
+    line_items: [
+      { description: 'Line One', quantity: '2', unit_price: '250', line_total: '500' },
+      { description: 'Line Two', quantity: '5', unit_price: '100', line_total: '500' },
+    ],
+  }
+}
+
 // createFailedInvoice(): the draft->validated->queued->failed chain the
 // rejection_reasons test below drives inline, extracted here since the
 // resolve-outside tests need a fresh failed fixture several times.
@@ -84,16 +94,6 @@ async function createFailedInvoice(tok: string, entityId: string, invoiceNumber:
     body: { target: 'failed' },
   })
   return created.id
-}
-
-function twoLineInvoiceFields(invoiceNumber: string) {
-  return {
-    ...cleanInvoiceFields(invoiceNumber),
-    line_items: [
-      { description: 'Line One', quantity: '2', unit_price: '250', line_total: '500' },
-      { description: 'Line Two', quantity: '5', unit_price: '100', line_total: '500' },
-    ],
-  }
 }
 
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {

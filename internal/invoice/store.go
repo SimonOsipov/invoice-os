@@ -1838,3 +1838,21 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 	}
 	return inv, nil
 }
+
+// isApprover is a stub -- always false until the real admin/reviewer check lands.
+func isApprover(role string) bool { return false }
+
+// CallerRole is a stub -- always ("", nil) until the real memberships lookup lands.
+func (s *Store) CallerRole(ctx context.Context) (string, error) {
+	return "", nil
+}
+
+// ResolveOutside is a stub -- always errors until the real permission-gated write lands.
+func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice, error) {
+	return Invoice{}, errors.New("not implemented")
+}
+
+// UnresolveOutside is a stub -- always errors until the real permission-gated write lands.
+func (s *Store) UnresolveOutside(ctx context.Context, id string) (Invoice, error) {
+	return Invoice{}, errors.New("not implemented")
+}

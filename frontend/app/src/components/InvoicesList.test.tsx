@@ -632,3 +632,45 @@ describe('InvoicesList: violation disclosure chip (task-332, BUG-01-06)', () => 
     expect(text, 'must not count the two warnings into the chip').not.toMatch(/3 ERRORS?\b/)
   })
 })
+
+// RED specs (task-413, BUG-05-04, Mode A) -- no data-testid="buyer-tin" exists on the
+// register row yet, so getByTestId throws below rather than reaching an assertion.
+describe('buyer TIN missing signal (task-413, BUG-05-04)', () => {
+  it('AC-3: null and empty buyer TIN both read TIN MISSING in red', async () => {
+    const cases: Array<{ label: string; buyer_tin: string | null; invoiceNumber: string }> = [
+      { label: 'null', buyer_tin: null, invoiceNumber: 'INV-TIN-NULL' },
+      { label: 'empty string', buyer_tin: '', invoiceNumber: 'INV-TIN-EMPTY' },
+    ]
+
+    for (const { label, buyer_tin, invoiceNumber } of cases) {
+      mockFetchSequence([
+        listResponse([row({ id: `tin-${label}`, invoice_number: invoiceNumber, buyer_tin })], { limit: 50, offset: 0, total: 1 }),
+      ])
+
+      render(<InvoicesList ctx={listCtx()} />)
+      await screen.findByText(invoiceNumber)
+
+      const tin = screen.getByTestId('buyer-tin')
+      expect(tin.textContent, label).toBe('TIN MISSING')
+      expect(tin.style.color, label).toBe('var(--status-red-text)')
+
+      cleanup()
+    }
+  })
+
+  // Stage 1 gap-fill: today `r.buyer_tin ? grey : red` reads any non-empty string
+  // (including whitespace) as present, so whitespace renders grey and invisible --
+  // worse than the null/'' cases above, and untested at component level until now.
+  it('AC-3 gap-fill: a whitespace-only buyer TIN also reads TIN MISSING in red, not grey', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'tin-ws', invoice_number: 'INV-TIN-WS', buyer_tin: '   ' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-TIN-WS')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe('TIN MISSING')
+    expect(tin.style.color).toBe('var(--status-red-text)')
+  })
+})

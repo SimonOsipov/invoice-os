@@ -46,6 +46,7 @@ import {
   getInvoiceHistory,
   invoiceStatusStyle,
   invoicesViewState,
+  isBuyerTinMissing,
   isInFlight,
   isRowSelectable,
   keepInvoiceAsIs,
@@ -3384,6 +3385,24 @@ describe('diffEditInput: issue_date adversarial coverage (task-391, BUG-03-02)',
 
     expect(form.issue_date).toBe('garbage-stored ')
     expect(diffEditInput(inv, form)).toEqual({})
+  })
+})
+
+// RED specs (task-413, BUG-05-04, Mode A) -- isBuyerTinMissing's stub always returns
+// false, so every "missing" case below fails on the boolean, not on the import.
+describe('isBuyerTinMissing (task-413, BUG-05-04)', () => {
+  it('AC-1: null, undefined, empty and whitespace-only are all missing', () => {
+    const missing: Array<string | null | undefined> = [null, undefined, '', '   ']
+    for (const tin of missing) {
+      expect(isBuyerTinMissing(tin), `tin=${JSON.stringify(tin)}`).toBe(true)
+    }
+  })
+
+  // Already green under today's constant-false stub -- any nullary boolean stub
+  // trivially satisfies one direction. Load-bearing once the real predicate lands.
+  it('AC-1: a present value is not missing, even malformed', () => {
+    expect(isBuyerTinMissing('87654321-0002')).toBe(false)
+    expect(isBuyerTinMissing('BADTIN')).toBe(false)
   })
 })
 

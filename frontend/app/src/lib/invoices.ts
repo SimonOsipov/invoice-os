@@ -657,6 +657,13 @@ export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): bo
   return inv.violations.some((v) => v.severity === 'error')
 }
 
+// RED stub (task-413, BUG-05-04, Mode A) -- always false, so the missing-TIN specs in
+// invoices.test.ts fail on the boolean assertion, not on a missing export.
+export const BUYER_TIN_MISSING = 'TIN MISSING'
+export function isBuyerTinMissing(): boolean {
+  return false
+}
+
 // A total mapper over the APP's dotted MBS payload vocabulary (MBSPayload,
 // internal/invoice/payload.go:85-125; party(), :152-157) -- NOT the snake_case column
 // names (the fiscal-outcome migration header's `"path": "supplier_tin"` example is

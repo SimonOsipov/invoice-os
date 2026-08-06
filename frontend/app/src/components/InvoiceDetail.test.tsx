@@ -17,11 +17,13 @@ import {
   failureExplanation,
   skipReasonLabel,
   type InvoiceDetailRecord,
+  type InvoiceListResponse,
   type StatusChange,
 } from '../lib/invoices'
 import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoiceDetail } from './InvoiceDetail'
+import { InvoicesList } from './InvoicesList'
 
 interface MockResponse {
   ok: boolean
@@ -1034,5 +1036,99 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
     expect(banner.children[0].textContent).toBe(ROW_EXPANSION_COPY.keptPrefix)
     // Actor falls back to actorLabel(null) === 'Not recorded', not blank.
     expect(banner.children[1].textContent).toContain('Not recorded')
+  })
+})
+
+// RED specs (task-413, BUG-05-04, Mode A) -- no data-testid="buyer-tin" exists on the
+// Bill-to block yet, so getByTestId throws below rather than reaching an assertion.
+describe('Bill-to buyer TIN signal (task-413, BUG-05-04)', () => {
+  it('AC-2: a missing buyer TIN (null) reads TIN MISSING in red, no em-dash in the Bill-to block', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: null }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe('TIN MISSING')
+    expect(tin.style.color).toBe('var(--status-red-text)')
+    // buyer_name is non-null in the default fixture, so the Bill-to block's only
+    // possible em-dash source is the TIN line itself.
+    expect(tin.parentElement?.textContent).not.toContain('—')
+  })
+
+  // The pre-fix regression case: `??` treats whitespace as present, so today this
+  // renders empty rather than TIN MISSING.
+  it('AC-2: a blank buyer TIN also reads TIN MISSING, not empty', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: '  ' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    expect(screen.getByTestId('buyer-tin').textContent).toBe('TIN MISSING')
+  })
+
+  it('AC-5: a malformed buyer TIN renders the value in grey, not the missing copy', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: 'BADTIN' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe('BADTIN')
+    expect(tin.style.color).toBe('var(--fg-3)')
+  })
+})
+
+// Minimal register ctx/fetch, local to this one cross-component check -- InvoicesList
+// is otherwise only exercised by InvoicesList.test.tsx.
+function registerCtx(): PlatformCtx {
+  const ctx = {
+    mode: 'firm',
+    active: { entityId: 'ent-1' },
+    user: { tenantName: 'Acme Co' },
+    authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    openCreate: () => {},
+    openImportedInvoice: () => {},
+    invoiceQuery: '',
+  }
+  return ctx as unknown as PlatformCtx
+}
+
+function mockRegisterFetch(invoices: InvoiceDetailRecord[]) {
+  const body: InvoiceListResponse = { invoices, pagination: { limit: 50, offset: 0, total: invoices.length } }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) }))
+}
+
+// RED (task-413, BUG-05-04, AC-5, [surfaces-must-agree]) -- a real cross-component
+// comparison, not two assertions that happen to match: the SAME record drives both
+// components in turn, and their buyer-tin text/colour must be identical.
+describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () => {
+  it('missing, malformed and present buyer TINs render identical text and colour in both InvoicesList and InvoiceDetail', async () => {
+    const states: Array<{ label: string; buyer_tin: string | null }> = [
+      { label: 'missing', buyer_tin: null },
+      { label: 'malformed', buyer_tin: 'BADTIN' },
+      { label: 'present', buyer_tin: '87654321-0002' },
+    ]
+
+    for (const { label, buyer_tin } of states) {
+      const record = detailRecord({ buyer_tin })
+
+      mockDetailFetch(record)
+      render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+      await screen.findByText(record.invoice_number)
+      const detailTin = screen.getByTestId('buyer-tin')
+      const detailText = detailTin.textContent
+      const detailColor = detailTin.style.color
+      cleanup()
+
+      mockRegisterFetch([record])
+      render(<InvoicesList ctx={registerCtx()} />)
+      await screen.findByText(record.invoice_number)
+      const listTin = screen.getByTestId('buyer-tin')
+
+      expect(listTin.textContent, label).toBe(detailText)
+      expect(listTin.style.color, label).toBe(detailColor)
+      cleanup()
+    }
   })
 })

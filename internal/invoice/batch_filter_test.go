@@ -459,6 +459,47 @@ func TestStoreList_KeptAsIsFilterMatchesColumn(t *testing.T) {
 	}
 }
 
+// TestStoreList_KeptAsIsExcludesResolvedFailed (T6-9/T6-10, BUG-07-06): a resolved
+// failed invoice (BUG-07-01's widened mark) no longer means "kept as-is" and must
+// drop out of {KeptAsIs: true}, while a kept blocked draft -- the sibling test
+// above's own fixture -- still counts exactly as it does today.
+func TestStoreList_KeptAsIsExcludesResolvedFailed(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BATCH-FILTER-KEPTASIS-RESOLVED tenant")
+	entityID := seedEntity(t, super, tenantID, "BATCH-FILTER-KEPTASIS-RESOLVED entity")
+
+	resolvedFailedID := seedResolvedFailed(t, super, tenantID, entityID, "BATCH-FILTER-KEPTASIS-RESOLVED-failed", uuid.NewString(), "resolved outside")
+
+	const violationsJSON = `[{"rule_key":"vat-standard-rate","severity":"error","message":"bad rate"}]`
+	keptDraftID := seedInvoiceWithViolations(t, super, tenantID, entityID, "BATCH-FILTER-KEPTASIS-RESOLVED-kept-draft", string(StatusDraft), violationsJSON)
+	if _, err := super.Exec(ctx,
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'triaged' WHERE id = $1`, keptDraftID,
+	); err != nil {
+		t.Fatalf("seed kept-as-is triple: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{KeptAsIs: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (KeptAsIs: true): %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("List (KeptAsIs: true).total = %d, want 1 (only the kept draft; the resolved failed row must not count)", total)
+	}
+	if len(items) != 1 || items[0].ID != keptDraftID {
+		t.Fatalf("List (KeptAsIs: true) items = %+v, want exactly [%s]", items, keptDraftID)
+	}
+	for _, inv := range items {
+		if inv.ID == resolvedFailedID {
+			t.Errorf("List (KeptAsIs: true) incorrectly returned the resolved failed invoice %s", resolvedFailedID)
+		}
+	}
+}
+
 // TestStoreList_RuleKeyFilterIsParameterised (spec 5, AC-3): one invoice
 // violates vat-standard-rate, another violates currency-allowed.
 // {RuleKey: "vat-standard-rate"} must return exactly the first. A

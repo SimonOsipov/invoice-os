@@ -956,6 +956,7 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   it('AC4: a kept invoice shows the decision on its own page', async () => {
     const kept = detailRecord({
+      status: 'draft',
       kept_as_is_at: '2026-07-31T00:00:00Z',
       kept_as_is_by: APP_PERSONAS.firm.subject,
       kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
@@ -985,7 +986,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   // element it means to, not a missing one.
   it('AC4: the kept banner leads the Compliance panel, above violations-table', async () => {
     const kept = detailRecord({
-      status: 'validated',
+      status: 'draft',
       rule_set_version: 3,
       violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
       kept_as_is_at: '2026-07-31T00:00:00Z',
@@ -1033,6 +1034,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   it('an unrecognised kept_as_is_by renders raw on the banner, not blank', async () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
     const kept = detailRecord({
+      status: 'draft',
       kept_as_is_at: '2026-07-31T00:00:00Z',
       kept_as_is_by: unknown,
       kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
@@ -1053,6 +1055,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   // a stray "null" (JSX drops a null child silently; a template literal would not have).
   it('a null reason/actor renders no fabricated text and no stray "null" (defensive -- CHECK constraint should make this unreachable)', async () => {
     const kept = detailRecord({
+      status: 'draft',
       kept_as_is_at: '2026-07-31T00:00:00Z',
       kept_as_is_by: null,
       kept_as_is_reason: null,
@@ -1067,6 +1070,40 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
     expect(banner.children[0].textContent).toBe(ROW_EXPANSION_COPY.keptPrefix)
     // Actor falls back to actorLabel(null) === 'Not recorded', not blank.
     expect(banner.children[1].textContent).toContain('Not recorded')
+  })
+})
+
+// The kept mark means "kept as-is" only on a draft; on a failed invoice it means
+// resolved outside the system, which is not this banner's claim.
+describe('InvoiceDetail Compliance panel: the kept banner is a draft-only concept, not resolved-failed', () => {
+  it('a resolved failed invoice never shows the kept-as-is banner', async () => {
+    const resolved = detailRecord({
+      status: 'failed',
+      kept_as_is_at: '2026-08-06T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Filed manually with the tax authority.',
+    })
+    mockDetailFetch(resolved)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
+    expect(screen.queryAllByTestId('detail-kept-banner')).toHaveLength(0)
+  })
+
+  it('a kept draft still shows the kept-as-is banner (BUG-03 unchanged)', async () => {
+    const kept = detailRecord({
+      status: 'draft',
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent?.startsWith(ROW_EXPANSION_COPY.keptPrefix)).toBe(true)
   })
 })
 

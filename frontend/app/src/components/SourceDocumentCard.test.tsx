@@ -53,6 +53,8 @@ function detailRecord(): InvoiceDetailRecord {
     submit_blocked_reason: null,
     can_view_ubl: true,
     ubl_blocked_reason: null,
+    can_resolve_outside: false,
+    resolve_outside_blocked_reason: null,
   }
 }
 

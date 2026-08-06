@@ -237,6 +237,10 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   submit_blocked_reason: string | null
   can_view_ubl: boolean
   ubl_blocked_reason: string | null
+  // can_resolve_outside/resolve_outside_blocked_reason -- same no-omitempty,
+  // fail-closed convention as the four flags above.
+  can_resolve_outside: boolean
+  resolve_outside_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -600,6 +604,25 @@ export async function keepInvoiceAsIs(
   reason: string,
 ): Promise<InvoiceRecord> {
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/keep-as-is`, { method: 'POST', body: { reason } })
+}
+
+// RED stub -- implemented in the GREEN pass.
+export async function resolveInvoiceOutside(
+  _authedFetch: AuthedFetch,
+  _base: string,
+  _id: string,
+  _reason: string,
+): Promise<InvoiceRecord> {
+  throw new Error('not implemented')
+}
+
+// RED stub -- implemented in the GREEN pass.
+export async function unresolveInvoiceOutside(
+  _authedFetch: AuthedFetch,
+  _base: string,
+  _id: string,
+): Promise<InvoiceRecord> {
+  throw new Error('not implemented')
 }
 
 // POST /v1/invoices/submissions -- the batch-submit trigger ([trigger-surface] /
@@ -978,6 +1001,21 @@ export const FAILURE_EXPLANATION_FALLBACK = {
 export function failureExplanation(kind: string | null): FailureExplanation {
   if (kind === null) return FAILURE_EXPLANATION_FALLBACK
   return FAILURE_EXPLANATIONS[kind as FailureKind] ?? FAILURE_EXPLANATION_FALLBACK
+}
+
+// Placeholder -- filled in by the UI subtask's GREEN pass.
+export const RESOLVE_OUTSIDE_COPY = {} as const
+
+// RED stub -- implemented in the GREEN pass.
+export function canResolveOutside(_reason: string): boolean {
+  return false
+}
+
+// RED stub -- implemented in the GREEN pass.
+export function resolvedOutside(
+  _inv: Pick<InvoiceRecord, 'status' | 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
+): { at: string; by: string | null; reason: string | null } | null {
+  return null
 }
 
 // Founder-pinned, verbatim (Core AC #2) -- do not paraphrase or re-tone.

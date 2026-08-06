@@ -1,9 +1,9 @@
 // Package main implements revalidate-invoices: it re-evaluates every
 // status='validated' invoice against the active rule set and demotes any
 // that now carry a blocking violation back to draft
-// (internal/invoice.RevalidateActive) -- the fix for BUG-05, where an
-// invoice validated before the buyer-tin-required rule shipped can still
-// carry a missing buyer TIN.
+// (internal/invoice.RevalidateActive) -- for an invoice validated before a
+// stricter rule shipped and that now carries the violation the rule would
+// catch.
 //
 // Run with:
 //

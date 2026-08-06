@@ -322,7 +322,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         </div>
       </div>
     ) : null
-    const kept = keptAsIs(inv)
+    // keptAsIs has no status field to test; gate here since the mark means "kept as-is" only on a draft.
+    const kept = inv.status === 'draft' ? keptAsIs(inv) : null
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.

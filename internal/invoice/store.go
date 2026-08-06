@@ -622,7 +622,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			// The review shell's footer counter query ("N kept as-is") -- a real server
 			// total, never derived by arithmetic over the other totals
 			// ([filters-are-server-side]).
-			conditions = append(conditions, `kept_as_is_at IS NOT NULL`)
+			// status = 'draft': on a failed row the mark means resolved outside, not kept as-is.
+			conditions = append(conditions, `(status = 'draft' AND kept_as_is_at IS NOT NULL)`)
 		}
 		if f.RuleKey != "" {
 			// json.Marshal, never fmt.Sprintf: a quote-bearing rule_key built by

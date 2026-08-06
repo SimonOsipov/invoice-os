@@ -11,7 +11,7 @@ import path from 'node:path'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { AlreadyImportedRowAll } from '../lib/reviewBatch'
+import { alreadyImportedCsvAll, type AlreadyImportedRowAll } from '../lib/reviewBatch'
 import { ReviewAlreadyImportedTab } from './ReviewAlreadyImportedTab'
 
 afterEach(cleanup)
@@ -116,5 +116,169 @@ describe('ReviewAlreadyImportedTab: [C3] N rows can be unresolved at once, so th
     for (const id of ids) {
       expect(document.getElementById(id as string), `#${id} must exist as the reason element`).not.toBeNull()
     }
+  })
+})
+
+// --- QA adversarial coverage (task-406 verification), new tests only ---
+
+describe('ReviewAlreadyImportedTab: QA -- zero rows', () => {
+  it('AIMPTAB-QA-1: an empty channel renders a truthful zero state, no row controls', () => {
+    render(<ReviewAlreadyImportedTab rows={[]} rowsTotal={0} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+
+    expect(screen.getByText('0 rows were already in your ledger')).toBeTruthy()
+    expect(screen.getByText('0 of 0 rows were already in your ledger.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'View invoice' })).toBeNull()
+  })
+})
+
+describe('ReviewAlreadyImportedTab: QA -- scale (the real repro: 750 rows / 250 invoices)', () => {
+  it('AIMPTAB-QA-2: per-row reason ids stay unique and counts stay consistent at 750 rows', () => {
+    const rows: AlreadyImportedRowAll[] = []
+    for (let i = 0; i < 500; i++) {
+      rows.push({ file: `batch-${i % 5}.csv`, row: i + 1, invoiceId: `inv-${i % 250}` })
+    }
+    for (let i = 0; i < 250; i++) {
+      rows.push({ file: `batch-${i % 5}.csv`, row: 500 + i + 1, invoiceId: null })
+    }
+    const onOpenInvoice = vi.fn()
+
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={900} batchIds={['b1']} onOpenInvoice={onOpenInvoice} />)
+
+    expect(screen.getByText('750 rows were already in your ledger')).toBeTruthy()
+    expect(screen.getByText('750 of 900 rows were already in your ledger.')).toBeTruthy()
+
+    const buttons = screen.getAllByRole('button', { name: 'View invoice' }) as HTMLButtonElement[]
+    expect(buttons).toHaveLength(750)
+
+    const disabled = buttons.filter((b) => b.disabled)
+    expect(disabled).toHaveLength(250) // the 250 unresolved rows, none dropped
+
+    const reasonIds = disabled.map((b) => b.getAttribute('aria-describedby'))
+    expect(reasonIds.every((id) => id != null)).toBe(true)
+    expect(new Set(reasonIds).size).toBe(250) // all distinct at scale, not just at N=2 (AIMPTAB-6)
+    for (const id of reasonIds) expect(document.getElementById(id as string)).not.toBeNull()
+
+    // Spot-check routing still resolves the RIGHT id at the ends of a 750-row render.
+    fireEvent.click(buttons[0])
+    expect(onOpenInvoice).toHaveBeenLastCalledWith('inv-0')
+    fireEvent.click(buttons[499]) // last resolved row
+    expect(onOpenInvoice).toHaveBeenLastCalledWith('inv-249')
+  })
+})
+
+describe('ReviewAlreadyImportedTab: QA -- mixed resolved/unresolved routing', () => {
+  it('AIMPTAB-QA-3: resolved rows route their own id even with an unresolved row between them', () => {
+    const rows: AlreadyImportedRowAll[] = [
+      { file: 'a.csv', row: 1, invoiceId: 'inv-A' },
+      { file: 'b.csv', row: 2, invoiceId: null },
+      { file: 'c.csv', row: 3, invoiceId: 'inv-C' },
+    ]
+    const onOpenInvoice = vi.fn()
+
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={3} batchIds={['b1']} onOpenInvoice={onOpenInvoice} />)
+
+    const buttons = screen.getAllByRole('button', { name: 'View invoice' }) as HTMLButtonElement[]
+    expect(buttons).toHaveLength(3)
+    expect(buttons[1].disabled).toBe(true)
+
+    fireEvent.click(buttons[2])
+    expect(onOpenInvoice).toHaveBeenCalledTimes(1)
+    expect(onOpenInvoice).toHaveBeenLastCalledWith('inv-C')
+
+    fireEvent.click(buttons[0])
+    expect(onOpenInvoice).toHaveBeenCalledTimes(2)
+    expect(onOpenInvoice).toHaveBeenLastCalledWith('inv-A')
+
+    fireEvent.click(buttons[1]) // disabled -- must not add a third call
+    expect(onOpenInvoice).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('ReviewAlreadyImportedTab: QA -- per-row file label in a multi-file run', () => {
+  it('AIMPTAB-QA-4: each row pairs its own file, row number and invoice id -- no cross-row bleed', () => {
+    const rows: AlreadyImportedRowAll[] = [
+      { file: 'june.csv', row: 5, invoiceId: 'inv-1' },
+      { file: 'july.csv', row: 8, invoiceId: 'inv-2' },
+      { file: 'source not recorded', row: null, invoiceId: 'inv-3' },
+    ]
+    const onOpenInvoice = vi.fn()
+
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={3} batchIds={['b1', 'b2']} onOpenInvoice={onOpenInvoice} />)
+
+    for (const [file, rowLabel, invoiceId] of [
+      ['june.csv', '5', 'inv-1'],
+      ['july.csv', '8', 'inv-2'],
+      ['source not recorded', '—', 'inv-3'],
+    ] as const) {
+      const fileCell = screen.getByText(file)
+      const rowContainer = fileCell.parentElement as HTMLElement
+      expect(rowContainer.textContent, `row for ${file} must show ${rowLabel}`).toContain(rowLabel)
+      fireEvent.click(rowContainer.querySelector('button') as HTMLButtonElement)
+      expect(onOpenInvoice).toHaveBeenLastCalledWith(invoiceId)
+    }
+  })
+})
+
+describe('ReviewAlreadyImportedTab: QA -- CSV download wiring', () => {
+  it('AIMPTAB-QA-5: downloads the right filename and the exact CSV content for a mixed set', async () => {
+    const rows: AlreadyImportedRowAll[] = [
+      { file: 'june.csv', row: 5, invoiceId: 'inv-1' },
+      { file: 'july.csv', row: null, invoiceId: null },
+    ]
+    let capturedBlob: Blob | null = null
+    const createSpy = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockImplementation((b) => {
+        capturedBlob = b as Blob
+        return 'blob:test-already-imported'
+      })
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    let capturedHref = ''
+    let capturedDownload = ''
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      capturedHref = this.href
+      capturedDownload = this.download
+    })
+
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={10} batchIds={['b1', 'b2']} onOpenInvoice={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Download this list (CSV)' }))
+
+    expect(capturedDownload).toBe('already-imported-rows-b1-b2.csv') // own file, own name -- not the unreadable export's
+    expect(capturedHref).toBe('blob:test-already-imported')
+    expect(revokeSpy).toHaveBeenCalledWith('blob:test-already-imported')
+
+    // readAsText silently eats a leading BOM (it's an encoding signature, not data) --
+    // ArrayBuffer + raw bytes is the only way to prove the BOM is actually there.
+    const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result as ArrayBuffer)
+      r.onerror = reject
+      r.readAsArrayBuffer(capturedBlob as Blob)
+    })
+    const bytes = new Uint8Array(buf)
+    expect(Array.from(bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]) // UTF-8 BOM, byte-exact
+    expect(new TextDecoder('utf-8').decode(bytes.slice(3))).toBe(alreadyImportedCsvAll(rows))
+
+    createSpy.mockRestore()
+    revokeSpy.mockRestore()
+    clickSpy.mockRestore()
+  })
+})
+
+describe('ReviewAlreadyImportedTab: QA -- keyboard / accessibility of the disabled control', () => {
+  it('AIMPTAB-QA-6: a disabled row control cannot take focus, and its reason text matches aria-describedby', () => {
+    const rows: AlreadyImportedRowAll[] = [{ file: 'june.csv', row: 5, invoiceId: null }]
+
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+
+    const button = screen.getByRole('button', { name: 'View invoice' }) as HTMLButtonElement
+    button.focus()
+    expect(document.activeElement).not.toBe(button) // disabled -- genuinely out of the tab order
+
+    const describedbyId = button.getAttribute('aria-describedby')
+    expect(describedbyId).not.toBeNull()
+    const reasonEl = document.getElementById(describedbyId as string)
+    expect(reasonEl?.textContent).toBe('The matching invoice was not recorded for this row.')
+    expect(button.getAttribute('title')).toBe('The matching invoice was not recorded for this row.')
   })
 })

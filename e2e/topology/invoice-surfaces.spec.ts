@@ -1820,7 +1820,7 @@ test('buyer-tin: register and detail agree on missing, malformed, and well-forme
 
   for (const c of cases) {
     const invoiceNumber = `INV-BUG05-${c.label}-${Date.now()}`
-    await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber), buyer_tin: c.buyerTin })
+    const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber), buyer_tin: c.buyerTin })
 
     await goToInvoices(page)
     const row = invoiceRowByNumber(page, invoiceNumber)
@@ -1839,6 +1839,16 @@ test('buyer-tin: register and detail agree on missing, malformed, and well-forme
     } else {
       expect(registerText, `${c.label} must not render the missing-TIN copy`).not.toBe('TIN MISSING')
       expect(registerText, `${c.label} must render the exact stored value`).toBe(c.buyerTin)
+    }
+
+    // AC-5's own "and validates green": WELLFORMED is cleanInvoiceFields() untouched
+    // (fires zero violations by construction, per that fixture's own doc comment) --
+    // only this case's literal claim is checked, since the loop's other two are
+    // deliberately never validated.
+    if (c.label === 'WELLFORMED') {
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.violations, `WELLFORMED should validate with zero violations, got ${JSON.stringify(validated.violations)}`).toEqual([])
+      expect(validated.status, 'WELLFORMED should promote to validated').toBe('validated')
     }
   }
 

@@ -226,17 +226,22 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanViewUBL/UBLBlockedReason (BUG-04-03) follow both rules above -- appended
 // last, no omitempty -- and come from ublGate (ubl.go), which derives them from
 // invoice CONTENT via ubl.Missing, never from status.
+//
+// CanResolveOutside/ResolveOutsideBlockedReason follow the same two rules,
+// appended last of all, and come from resolveOutsideGate below.
 type getResponse struct {
 	Invoice
-	RuleSetVersion          *int    `json:"rule_set_version"`
-	QRPNGBase64             *string `json:"qr_png_base64"`
-	CanEdit                 bool    `json:"can_edit"`
-	CanRevalidate           bool    `json:"can_revalidate"`
-	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
-	CanSubmit               bool    `json:"can_submit"`
-	SubmitBlockedReason     *string `json:"submit_blocked_reason"`
-	CanViewUBL              bool    `json:"can_view_ubl"`
-	UBLBlockedReason        *string `json:"ubl_blocked_reason"`
+	RuleSetVersion              *int    `json:"rule_set_version"`
+	QRPNGBase64                 *string `json:"qr_png_base64"`
+	CanEdit                     bool    `json:"can_edit"`
+	CanRevalidate               bool    `json:"can_revalidate"`
+	RevalidateBlockedReason     *string `json:"revalidate_blocked_reason"`
+	CanSubmit                   bool    `json:"can_submit"`
+	SubmitBlockedReason         *string `json:"submit_blocked_reason"`
+	CanViewUBL                  bool    `json:"can_view_ubl"`
+	UBLBlockedReason            *string `json:"ubl_blocked_reason"`
+	CanResolveOutside           bool    `json:"can_resolve_outside"`
+	ResolveOutsideBlockedReason *string `json:"resolve_outside_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -268,11 +273,21 @@ func submitBlockedReason(s Status) *string {
 	return &reason
 }
 
+// resolveOutsideGate stub: real status-first-then-role logic and copy land
+// with the executor stage. Not yet wired into GetHandler's response.
+func resolveOutsideGate(s Status, role string) (bool, *string) {
+	return false, nil
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
 // Invoice (with line_items, [D7]) on success.
-func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+//
+// callerRole is accepted but not yet consulted -- GetHandler's response still
+// leaves CanResolveOutside/ResolveOutsideBlockedReason at their zero values;
+// wiring resolveOutsideGate's result into resp lands with the executor stage.
+func GetHandler(get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -866,6 +881,23 @@ func UnkeepAsIsHandler(unkeep func(ctx context.Context, id string) (Invoice, err
 		}
 
 		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// ResolveOutsideHandler stub: real validation/gate wiring lands with the
+// executor stage. Signature matches the eventual Store.ResolveOutside so the
+// call site and its tests need no further change once the body is filled in.
+func ResolveOutsideHandler(resolve func(ctx context.Context, id, reason string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// UnresolveOutsideHandler stub, ResolveOutsideHandler's un-do sibling -- see
+// its doc comment.
+func UnresolveOutsideHandler(unresolve func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

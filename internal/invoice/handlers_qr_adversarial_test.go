@@ -59,7 +59,7 @@ func TestGetHandler_RenderFailureLogDoesNotLeakQRPayloadOrTINOrAmount(t *testing
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	GetHandler(get, logger).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -116,7 +116,7 @@ func TestGetHandler_EmptyStringQRPayloadStillReturns200WithNullAndLogged(t *test
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	GetHandler(get, logger).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 even when qr_payload is a non-nil empty string (body=%s)",

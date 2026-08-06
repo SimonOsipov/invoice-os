@@ -115,6 +115,7 @@ interface DetailFetchOptions {
   submitResponses?: MockResponse[]
   editResponse?: MockResponse
   revalidateResponse?: MockResponse
+  resolveResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -151,17 +152,19 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
       }
       const body = JSON.parse(String(init.body)) as { reason: string }
       resolveCalls.push({ method: 'POST', body })
-      return Promise.resolve<MockResponse>({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            ...detail,
-            kept_as_is_at: '2026-08-06T12:00:00Z',
-            kept_as_is_by: APP_PERSONAS.firm.subject,
-            kept_as_is_reason: body.reason,
-          }),
-      })
+      return Promise.resolve<MockResponse>(
+        opts.resolveResponse ?? {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ...detail,
+              kept_as_is_at: '2026-08-06T12:00:00Z',
+              kept_as_is_by: APP_PERSONAS.firm.subject,
+              kept_as_is_reason: body.reason,
+            }),
+        },
+      )
     }
     if (method === 'POST' && url.endsWith('/invoices/submissions')) {
       const body = JSON.parse(String(init.body)) as SubmitCallBody
@@ -1258,6 +1261,105 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
     await waitFor(() => expect(resolveCalls).toHaveLength(1))
     expect(resolveCalls[0].method).toBe('DELETE')
+  })
+
+  // QA adversarial: T7-5 only covers the persistent (`can_resolve_outside: false`) disabled
+  // reason; the far more common one -- an empty reason -- must neutralise the filter too.
+  it('T7-9: the disabled button still neutralises its hover filter when blocked only by an empty reason', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.style.filter).toBe('none')
+  })
+
+  // QA adversarial: existing coverage checks each banner's absence in isolation; neither
+  // spans both banners in the same render, so a co-render regression would slip through.
+  it('T7-10: a resolved failed invoice shows the resolved banner and never the kept-as-is banner', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('detail-resolved-banner')
+    expect(screen.queryAllByTestId('detail-kept-banner')).toHaveLength(0)
+  })
+
+  it('T7-11: a kept draft shows the kept-as-is banner and never the resolved banner', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        kept_as_is_at: '2026-07-31T00:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('detail-kept-banner')
+    expect(screen.queryAllByTestId('detail-resolved-banner')).toHaveLength(0)
+  })
+
+  it('T7-12: a rejected resolve surfaces the error and leaves the control usable, not stuck disabled', async () => {
+    const { resolveCalls } = mockDetailFetch(
+      detailRecord({ status: 'failed', can_resolve_outside: true }),
+      [],
+      { resolveResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const input = (await screen.findByTestId('resolve-outside-reason')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Filed manually.' } })
+    fireEvent.click(screen.getByTestId('resolve-outside'))
+
+    await screen.findByText('boom')
+    expect(resolveCalls).toHaveLength(1)
+    const btn = screen.getByTestId('resolve-outside') as HTMLButtonElement
+    expect(btn.disabled, 'reason is still populated and nothing is in flight -- must not stay disabled').toBe(false)
+    expect(input.value).toBe('Filed manually.') // not cleared on failure
+  })
+
+  it('T7-13: a fast double-click on resolve-outside fires exactly one POST', async () => {
+    const { resolveCalls } = mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.change(await screen.findByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+    const btn = screen.getByTestId('resolve-outside')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(resolveCalls.length).toBeGreaterThan(0))
+    expect(resolveCalls).toHaveLength(1)
+  })
+
+  it('T7-14: a fast double-click on undo fires exactly one DELETE', async () => {
+    const { resolveCalls } = mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const btn = await screen.findByTestId('resolve-outside-undo')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(resolveCalls.length).toBeGreaterThan(0))
+    expect(resolveCalls).toHaveLength(1)
   })
 })
 

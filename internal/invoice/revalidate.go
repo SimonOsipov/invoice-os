@@ -89,9 +89,9 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 // importer.ErrBackfillPrivilegedRole, internal/importer/backfill.go:23).
 var ErrRevalidatePrivilegedRole = errors.New("invoice: refusing to revalidate over a SUPERUSER/BYPASSRLS role; run as invoice_app")
 
-// RevalidateResult is one tenant's re-validation run summary (task-412 /
-// BUG-05-03). Demoted is reported identically on both paths -- a dry run
-// writes nothing but still counts the yield a real run would produce.
+// RevalidateResult is one tenant's re-validation run summary. Demoted is
+// reported identically on both paths -- a dry run writes nothing but still
+// counts the yield a real run would produce.
 // Skipped counts a row that stopped being validated between the list read
 // and the write lock (DemoteRevalidatedTx's own no-op guard).
 type RevalidateResult struct {

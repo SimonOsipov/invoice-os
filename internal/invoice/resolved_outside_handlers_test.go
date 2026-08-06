@@ -494,3 +494,105 @@ func TestResolveOutsideGate_ReasonsAreNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+// --- QA adversarial: boundary length, DELETE body tolerance, unicode, exact copy --
+
+// TestResolveOutsideHandler_ReasonExactly1000CharsValid pins the boundary
+// paired with T4-3's 1001-char rejection: exactly maxKeepAsIsReasonLen must
+// pass through unrejected and unmodified.
+func TestResolveOutsideHandler_ReasonExactly1000CharsValid(t *testing.T) {
+	invoiceID := uuid.NewString()
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	var gotReason string
+	resolve := func(ctx context.Context, gotID, reason string) (Invoice, error) {
+		gotReason = reason
+		return Invoice{ID: gotID, Status: StatusFailed}, nil
+	}
+	body, err := json.Marshal(resolveOutsideRequestBody{Reason: strings.Repeat("a", maxKeepAsIsReasonLen)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	rec, _ := doInvoiceResolveOutside(t, resolve, &id, invoiceID, string(body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a reason at exactly the %d-char bound (body=%s)", rec.Code, maxKeepAsIsReasonLen, rec.Body.String())
+	}
+	if len(gotReason) != maxKeepAsIsReasonLen {
+		t.Errorf("resolve received a %d-char reason, want the full %d", len(gotReason), maxKeepAsIsReasonLen)
+	}
+}
+
+// TestUnresolveOutsideHandler_BodyPresentIgnored: DELETE decodes no body, so
+// a client that sends one anyway must not be rejected or change the outcome.
+func TestUnresolveOutsideHandler_BodyPresentIgnored(t *testing.T) {
+	invoiceID := uuid.NewString()
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	want := Invoice{ID: invoiceID, Status: StatusFailed}
+	unresolve := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+
+	r := httptest.NewRequest(http.MethodDelete, "/v1/invoices/"+invoiceID+"/resolved-outside", strings.NewReader(`{"reason":"unexpected but present"}`))
+	r.SetPathValue("id", invoiceID)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	UnresolveOutsideHandler(unresolve, nil).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 even with a body present (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestResolveOutsideHandler_UnicodeReasonRoundTrips: a reason carrying a
+// multi-byte em dash must decode and trim byte-for-byte -- a naive
+// byte-slice trim (rather than strings.TrimSpace's rune-aware one) would
+// corrupt it.
+func TestResolveOutsideHandler_UnicodeReasonRoundTrips(t *testing.T) {
+	invoiceID := uuid.NewString()
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	const want = "resolved by ops — see ticket OPS-4821"
+	var gotReason string
+	resolve := func(ctx context.Context, gotID, reason string) (Invoice, error) {
+		gotReason = reason
+		return Invoice{ID: gotID, Status: StatusFailed}, nil
+	}
+	body, err := json.Marshal(resolveOutsideRequestBody{Reason: "  " + want + "  "})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	rec, _ := doInvoiceResolveOutside(t, resolve, &id, invoiceID, string(body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotReason != want {
+		t.Errorf("resolve received reason = %q, want %q", gotReason, want)
+	}
+}
+
+// TestResolveOutsideHandler_ErrorMessagesExactText pins statusForErr's two
+// story-specific sentinel mappings by exact text -- ErrorStatusMap (T4-6)
+// only checks status code and non-emptiness.
+func TestResolveOutsideHandler_ErrorMessagesExactText(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"not_permitted", ErrNotPermitted, "approver rights are required to mark an invoice resolved outside the system"},
+		{"not_resolvable", ErrNotResolvable, "only a failed invoice can be marked resolved outside the system"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			invoiceID := uuid.NewString()
+			resolve := func(ctx context.Context, gotID, reason string) (Invoice, error) {
+				return Invoice{}, tt.err
+			}
+			body, err := json.Marshal(resolveOutsideRequestBody{Reason: "valid reason"})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			rec, resp := doInvoiceResolveOutside(t, resolve, &id, invoiceID, string(body))
+			if resp.Error != tt.want {
+				t.Errorf("err=%v: message = %q, want exact %q (status=%d)", tt.err, resp.Error, tt.want, rec.Code)
+			}
+		})
+	}
+}

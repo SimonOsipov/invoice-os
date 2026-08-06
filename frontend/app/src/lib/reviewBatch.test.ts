@@ -2078,17 +2078,36 @@ describe('ReviewBatch.tsx source: the already-imported tile caption carries the 
   })
 })
 
+// BUG08-BATCH-9 (task-408, folds task-409, AC-3) -- RED-first source scan pinning the
+// unreadable tile's at-zero caption fix. Same by-path idiom as BUG08-BATCH-8: reads
+// ReviewBatch.tsx by path, never this test file, so it cannot self-match. The old
+// caption ('Every row in the file became part of an invoice.') overclaims for the
+// all-duplicate shape BUG08-QA-7 pins below (0 unreadable, N already-imported, 0 new
+// invoices) -- atZero means only "unreadable === 0", never "nothing was a duplicate".
+// Genuinely RED today: the forbidden substring still sits at ReviewBatch.tsx:328.
+describe("ReviewBatch.tsx source: the unreadable tile's at-zero caption claims only readability, never invoice creation (AC-3, BUG08-BATCH-9)", () => {
+  it('BUG08-BATCH-9: the at-zero caption is replaced and the non-zero caption survives untouched', () => {
+    const srcPath = fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    // Sanity: the path resolved and read a real file, not an empty/missing one.
+    expect(source.length).toBeGreaterThan(1000)
+
+    // The old caption is GONE -- it claimed every row became an invoice, false whenever
+    // alreadyImported > 0 at this at-zero shape.
+    expect(source).not.toContain('became part of an invoice')
+    // The new caption states only readability -- true in both at-zero sub-cases.
+    expect(source).toContain('Every row in the file could be read.')
+    // [structural-untouched]: the non-zero arm is byte-unchanged.
+    expect(source).toContain('No invoice exists for them.')
+  })
+})
+
 // --- QA adversarial coverage (task-407 verification), new tests only ---
 
-// BUG08-QA-7 (task-407 QA): pins the Objective's own 750-row all-duplicate repro at the
-// view-model layer -- atZero (unreadable===0) is TRUE here even though alreadyImported is
-// 750, which is what makes ReviewBatch.tsx:328's at-zero caption ('Every row in the file
-// became part of an invoice.') false for this shape: server accounting guarantees
-// rows_valid = rows_total - rows_invalid (service.go:578), and every duplicate row is
-// quarantined, never ready, so 0 rows became a NEW invoice. No BUG-08 subtask's Test
-// Specs render this shape (BUG08-E2E-6/7 use either both-zero or a mixed fixture where
-// unreadable>0) -- flagged as an open AC-3 gap, not fixed here ([structural-untouched]
-// forbids this subtask from touching that caption).
+// BUG08-QA-7 (task-407 QA): pins the Objective's 750-row all-duplicate repro -- atZero
+// (unreadable===0) is TRUE while alreadyImported is 750; BUG08-BATCH-9 (task-408) is
+// what fixed the at-zero caption this shape exposed.
 describe('channelTilesAll: atZero ignores alreadyImported even at the Objective\'s own all-duplicate shape (BUG08-QA-7)', () => {
   it('BUG08-QA-7: the 750-row all-duplicate repro reports atZero true while alreadyImported is 750', () => {
     const errors: RowError[] = Array.from({ length: 250 }, (_, i) => ({

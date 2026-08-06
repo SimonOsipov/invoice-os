@@ -1,7 +1,7 @@
-// ubl_test.go: GET /v1/invoices/{id}/ubl -- RED specs authored before
-// UBLHandler/ublBlockedReason exist (BUG-04-02, task-398 §6). package invoice
-// (internal): ublBlockedReason is unexported and dbTestPools/seedTenant/
-// seedEntity live in store_test.go.
+// ubl_test.go: the acceptance-criteria specs for GET /v1/invoices/{id}/ubl.
+// package invoice (internal): ublBlockedReason is unexported and
+// dbTestPools/seedTenant/seedEntity live in store_test.go. Adversarial and
+// edge coverage lives in ubl_adversarial_test.go.
 package invoice
 
 import (

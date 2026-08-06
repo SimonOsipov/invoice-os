@@ -46,6 +46,7 @@ import {
   ALREADY_IMPORTED_CSV_HEADER_ALL,
   alreadyImportedCsvAll,
   alreadyImportedRows,
+  alreadyImportedRowsAll,
   BATCH_SUBMIT_MAX_IDS,
   bulkBarView,
   bulkOutcome,
@@ -60,6 +61,7 @@ import {
   fixEditPatch,
   formatReviewHash,
   initialReviewFilter,
+  isAlreadyImported,
   pagerLabels,
   pagerNav,
   parseReviewHash,
@@ -782,6 +784,147 @@ describe('channelTilesAll: the already-imported tile counts ROWS and reports the
 
     expect(tiles.atZero).toBe(true)
     expect(tiles.frozen.alreadyImportedAtZero).toBe(false)
+  })
+})
+
+// QA guard (D2/GAP-3): every AIMP-5/5b fixture gives each duplicate entry a distinct
+// invoice_id, so `new Set(...invoice_id).size` also lands on the right number there and
+// the mutation survives undetected. This fixture puts TWO unresolved (invoice_id-less)
+// entries in the same batch — a Set collapses both into one `undefined` bucket, so a
+// Set-based impl reports 2 while entry-counting reports 3.
+describe('channelTiles(All): alreadyImportedInvoices counts ENTRIES, not distinct invoice_id (BUG08-QA-1, D2/GAP-3 guard)', () => {
+  it('BUG08-QA-1a: two unresolved duplicate entries plus one resolved one count as THREE invoices, not two', () => {
+    const errors: RowError[] = [
+      { rows: [1], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-1', message: 'dup' },
+      { rows: [2], rule_key: 'no-duplicate-invoice-number', severity: 'error', message: 'racing-insert backstop' },
+      { rows: [3], rule_key: 'no-duplicate-invoice-number', severity: 'error', message: 'racing-insert backstop' },
+    ]
+
+    const tiles = channelTiles({ errors, rule_set_version: 5 }, { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.frozen.alreadyImported).toBe(3)
+    expect(tiles.frozen.alreadyImportedInvoices).toBe(3)
+  })
+
+  it('BUG08-QA-1b: the same fixture through channelTilesAll (single-batch array) counts THREE, not two', () => {
+    const errors: RowError[] = [
+      { rows: [1], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-1', message: 'dup' },
+      { rows: [2], rule_key: 'no-duplicate-invoice-number', severity: 'error', message: 'racing-insert backstop' },
+      { rows: [3], rule_key: 'no-duplicate-invoice-number', severity: 'error', message: 'racing-insert backstop' },
+    ]
+
+    const tiles = channelTilesAll([{ errors, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.frozen.alreadyImportedInvoices).toBe(3)
+  })
+})
+
+describe('isAlreadyImported / alreadyImportedRows: entries with no attributable row (BUG08-QA-2, no-swallow rule applies to the already-imported channel too)', () => {
+  it('BUG08-QA-2a: a duplicate entry with neither row nor rows still yields ONE row:null entry, never zero', () => {
+    const errors: RowError[] = [{ rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-1', message: 'dup' }]
+
+    expect(unreadableRows(errors)).toEqual([])
+    expect(alreadyImportedRows(errors)).toEqual([{ row: null, invoiceId: 'inv-1' }])
+  })
+
+  it('BUG08-QA-2b: an explicit empty rows array behaves like an absent one — ONE row:null entry, not zero', () => {
+    const errors: RowError[] = [{ rows: [], rule_key: 'no-duplicate-invoice-number', message: 'dup' }]
+
+    expect(alreadyImportedRows(errors)).toEqual([{ row: null, invoiceId: null }])
+  })
+})
+
+describe('isAlreadyImported: an empty-string rule_key (BUG08-QA-3, presence vs equality)', () => {
+  it('BUG08-QA-3: rule_key: "" is still non-null, so isAlreadyImported classifies it as already-imported — presence, not truthiness, matching AC-2\'s "tests rule_key presence, not equality with any literal"', () => {
+    const e: RowError = { row: 4, rule_key: '', message: 'm' }
+
+    expect(isAlreadyImported(e)).toBe(true)
+    expect(unreadableRows([e])).toEqual([])
+    expect(alreadyImportedRows([e])).toEqual([{ row: 4, invoiceId: null }])
+  })
+})
+
+describe('unreadableRowsAll / alreadyImportedRowsAll: mixed batches across a multi-file run (BUG08-QA-4)', () => {
+  it('BUG08-QA-4: a duplicate-only file, a structural-only file, and a mixed file each contribute rows to the right channel under the right file label', () => {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b1',
+      filename: 'f1.csv',
+      errors: [
+        { rows: [1, 2], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-1', message: 'dup' },
+      ],
+    }
+    const b2: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b2',
+      filename: 'f2.csv',
+      errors: [{ row: 5, message: 'bad row' }],
+    }
+    const b3: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+      id: 'b3',
+      filename: 'f3.csv',
+      errors: [
+        { row: 9, message: 'bad row 2' },
+        { rows: [10], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-2', message: 'dup2' },
+      ],
+    }
+
+    const already = alreadyImportedRowsAll([b1, b2, b3])
+    const unreadable = unreadableRowsAll([b1, b2, b3])
+
+    expect(already).toEqual([
+      { row: 1, invoiceId: 'inv-1', file: 'f1.csv' },
+      { row: 2, invoiceId: 'inv-1', file: 'f1.csv' },
+      { row: 10, invoiceId: 'inv-2', file: 'f3.csv' },
+    ])
+    expect(unreadable).toEqual([
+      { row: 5, column: '—', message: 'bad row', file: 'f2.csv' },
+      { row: 9, column: '—', message: 'bad row 2', file: 'f3.csv' },
+    ])
+  })
+})
+
+describe('alreadyImportedCsvAll: RFC-4180 escaping on the fields the new export actually varies (BUG08-QA-5)', () => {
+  it('BUG08-QA-5: an embedded double quote in the filename, an embedded comma in a resolved invoice id, and an embedded newline in another filename all round-trip correctly', () => {
+    const rows: AlreadyImportedRowAll[] = [
+      { file: 'a"b.csv', row: 1, invoiceId: 'inv-1' },
+      { file: 'c.csv', row: 2, invoiceId: 'inv,2' },
+      { file: 'd\ne.csv', row: 3, invoiceId: null },
+    ]
+
+    const csv = alreadyImportedCsvAll(rows)
+
+    expect(csv).toBe(['File,Row,Invoice id', '"a""b.csv",1,inv-1', 'c.csv,2,"inv,2"', '"d\ne.csv",3,'].join('\n'))
+  })
+})
+
+describe('channelTilesAll: the reconciliation property (AC-4) across a mixed MULTI-FILE run (BUG08-QA-6)', () => {
+  it('BUG08-QA-6: rows_valid + unreadable + alreadyImported reconciles to rows_total summed over two differently-shaped batches', () => {
+    const batchA: Pick<ImportBatch, 'errors' | 'rule_set_version'> = {
+      errors: [
+        { row: 3, message: 'bad' },
+        { rows: [4, 5], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-1', message: 'dup' },
+      ],
+      rule_set_version: 5,
+    }
+    const batchB: Pick<ImportBatch, 'errors' | 'rule_set_version'> = {
+      errors: [
+        { row: 2, message: 'bad2' },
+        { row: 3, message: 'bad3' },
+        { rows: [4], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-2', message: 'dup2' },
+      ],
+      rule_set_version: 5,
+    }
+    const rowsValidA = 2 // rows_total 5 - unreadable 1 - alreadyImported 2
+    const rowsTotalA = 5
+    const rowsValidB = 1 // rows_total 4 - unreadable 2 - alreadyImported 1
+    const rowsTotalB = 4
+
+    const tiles = channelTilesAll([batchA, batchB], { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.frozen.unreadable).toBe(3)
+    expect(tiles.frozen.alreadyImported).toBe(3)
+    expect(rowsValidA + rowsValidB + tiles.frozen.unreadable + tiles.frozen.alreadyImported).toBe(
+      rowsTotalA + rowsTotalB,
+    )
   })
 })
 

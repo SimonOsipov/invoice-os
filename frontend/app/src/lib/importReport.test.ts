@@ -11,14 +11,14 @@
 // claim was checked against its named destination rather than assumed covered, and
 // the two outcomes are deliberately NOT blurred together:
 //
-// MIGRATED — the invariant survives, asserted elsewhere today:
+// MIGRATED — the invariant survives, asserted elsewhere today (though not verbatim):
 //   - "a rule_key-bearing RowError stays STRUCTURAL" (RPT-03) -> UNREAD-3
-//     (reviewBatch.test.ts), over `unreadableRows`. NOT verbatim: RPT-03 asserted
-//     rule_key/severity were CARRIED onto the row, UNREAD-3 asserts they are DROPPED.
-//     Both express the same thing about the CHANNEL — a store-duplicate error is
-//     structural — over two row types with opposite shapes. RPT-03's other half
-//     ("violationRows is [] on the same report") has no successor and needs none:
-//     there is no content channel left for it to cross into.
+//     (reviewBatch.test.ts), over `unreadableRows`. RPT-03's own claim was later
+//     corrected: a store-duplicate error is its own already-imported channel, not
+//     structural, and UNREAD-3 was inverted in place to match — it now asserts the
+//     entry LEAVES `unreadableRows`. RPT-03's other half ("violationRows is [] on the
+//     same report") has no successor and needs none: there is no content channel left
+//     for it to cross into.
 //   - rowLabel's numbers == rowErrorRows(e), and {row:0} not dropped as falsy
 //     (RPT-02/12) -> importApi.test.ts's own `rowErrorRows` specs (the union reader
 //     at :450, the row-0 boundary at :750). That is the real source both the deleted

@@ -31,13 +31,16 @@ var (
 // single-row problem (Row set) or one shared across several rows (Rows set),
 // e.g. rows that disagree with each other on a value. Exactly one of
 // Row/Rows is set per entry; row numbers are 1-based spreadsheet rows.
+// InvoiceID names the invoice a store-level duplicate collided with, and is
+// omitted (never "") when unresolved.
 type RowError struct {
-	Row      int    `json:"row,omitempty"`
-	Rows     []int  `json:"rows,omitempty"`
-	Field    string `json:"field,omitempty"`
-	RuleKey  string `json:"rule_key,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	Message  string `json:"message"`
+	Row       int    `json:"row,omitempty"`
+	Rows      []int  `json:"rows,omitempty"`
+	Field     string `json:"field,omitempty"`
+	RuleKey   string `json:"rule_key,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	InvoiceID string `json:"invoice_id,omitempty"`
+	Message   string `json:"message"`
 }
 
 // Store persists import_batches rows as the invoice_app role, mirroring
@@ -139,20 +142,23 @@ func (s *Store) Finalize(ctx context.Context, id string, rowsTotal, rowsValid, r
 }
 
 // ExistingNumbers returns the subset of numbers already stored as
-// invoice_number on invoices for entityID — one query, not N. RLS scopes the
-// SELECT to the caller's tenant automatically, so a same-numbered invoice
-// under another tenant's entity never registers as "already used"
-// ([dedup-boundary]). An empty numbers slice short-circuits to an empty map
-// with no query.
-func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []string) (map[string]bool, error) {
-	found := map[string]bool{}
+// invoice_number on invoices for entityID, mapped to the stored invoice's own
+// id — one query, not N. RLS scopes the SELECT to the caller's tenant
+// automatically, so a same-numbered invoice under another tenant's entity
+// never registers as "already used" ([dedup-boundary]). An empty numbers
+// slice short-circuits to an empty map with no query. The map is
+// single-valued by construction: invoices_tenant_entity_number_uq is UNIQUE
+// over (tenant_id, entity_id, invoice_number), and this query is scoped to
+// one entity_id under RLS's tenant_id pin.
+func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []string) (map[string]string, error) {
+	found := map[string]string{}
 	if len(numbers) == 0 {
 		return found, nil
 	}
 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT invoice_number FROM invoices WHERE entity_id = $1 AND invoice_number = ANY($2)`,
+			`SELECT id, invoice_number FROM invoices WHERE entity_id = $1 AND invoice_number = ANY($2)`,
 			entityID, numbers,
 		)
 		if err != nil {
@@ -160,11 +166,11 @@ func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var number string
-			if err := rows.Scan(&number); err != nil {
+			var id, number string
+			if err := rows.Scan(&id, &number); err != nil {
 				return err
 			}
-			found[number] = true
+			found[number] = id
 		}
 		return rows.Err()
 	})

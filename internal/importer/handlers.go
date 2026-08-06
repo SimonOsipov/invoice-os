@@ -53,7 +53,9 @@ const maxMultipartMemory = 8 << 20 // 8 MiB
 // the row happens to be a NAMED rule -- this is still structural, not a
 // content violation: the row was never grouped into an evaluated invoice, so
 // it does NOT and must NOT ever appear in `invoice_violations` too. Core
-// AC#5's NEVER MIX invariant holds exactly as before.
+// AC#5's NEVER MIX invariant holds exactly as before. Such an entry still
+// lands in the wire's `errors[]` array, but the browser routes it to its own
+// already-imported tab rather than the Unreadable rows one.
 //
 // RuleSetVersion is a *int with NO omitempty on purpose: it must render an
 // explicit `null` when nothing was evaluated, never be absent and never be a

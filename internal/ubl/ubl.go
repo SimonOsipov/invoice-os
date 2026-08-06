@@ -1,10 +1,11 @@
 // Package ubl renders a stored invoice as a UBL 2.1 Invoice document.
 //
 // The output is structurally well-formed UBL declaring the PEPPOL BIS 3.0 profile and
-// faithfully reflecting stored invoice content. It is NOT a validator-certified document:
-// EN 16931 mandates seller and buyer postal address + country code, and nothing in this
-// system stores them -- see [followup-bis-party-address-gap]. No comment, error string or
-// test name here may claim otherwise [ubl-conformance-is-structural-not-certified].
+// faithfully reflecting stored invoice content. It is NOT a validator-certified document --
+// for example, EN 16931 mandates seller and buyer postal address + country code, and nothing
+// in this system stores them; see [followup-bis-party-address-gap]. That is an instance of the
+// gap, not the whole of it. No comment, error string or test name here may claim otherwise
+// [ubl-conformance-is-structural-not-certified].
 package ubl
 
 import (
@@ -22,9 +23,10 @@ import (
 var ErrIncomplete = errors.New("ubl: invoice is missing content the document needs")
 
 const (
-	nsInvoice = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
-	nsCAC     = "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
-	nsCBC     = "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+	// The Invoice-2 root URI has no constant: it lives in document's XMLName tag, and struct
+	// tags take no constants.
+	nsCAC = "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+	nsCBC = "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
 
 	// Same values as internal/submission/mock_wire.go:37-40 -- two citations of one external
 	// standard, not two derivations [ubl-bis-constants-mirror-the-wire].
@@ -35,8 +37,8 @@ const (
 	issueDateLayout = "2006-01-02"
 )
 
-// Field declaration order below IS the UBL document sequence -- nothing else pins it.
-// Optional members are pointers: `omitempty` on a value struct does nothing.
+// Field declaration order below IS the UBL document sequence; TestRender_ElementOrderFollowsTheUBLSequence
+// pins it. Optional members are pointers: `omitempty` on a value struct does nothing.
 type document struct {
 	XMLName  xml.Name `xml:"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2 Invoice"`
 	XMLNSCAC string   `xml:"xmlns:cac,attr"`
@@ -164,7 +166,8 @@ func build(c submission.Canonical) document {
 	}
 
 	if c.IssueDate != nil {
-		// Formatted in the value's OWN location: .UTC() would shift a WAT 00:30 date a day back.
+		// Formatted in the value's OWN location, never .UTC() -- see
+		// TestRender_IssueDateIsNotTimezoneShifted.
 		doc.IssueDate = c.IssueDate.Format(issueDateLayout)
 	}
 	if c.Currency != nil {

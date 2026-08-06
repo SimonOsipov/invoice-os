@@ -79,7 +79,6 @@ import { WorkflowsView } from './components/WorkflowsView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
 import { SettingsView } from './components/SettingsView'
-import { XmlModal } from './components/XmlModal'
 import type {
   Client,
   ConnectorId,
@@ -167,7 +166,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // prepend a locally-built invoice to a client's list is gone, so no creation path writes
   // active.invoices any more. Those generated SAMPLE rows never rendered anywhere live
   // anyway — InvoiceDetail's mock branch is fully retired (M5-09-04); they only ever fed
-  // CustomersView/ReportsView/XmlModal, themselves still-mock surfaces this plan's next
+  // CustomersView/ReportsView, themselves still-mock surfaces this plan's next
   // step migrates off active.invoices.
   const [clients, setClients] = useState<Client[]>([])
   useEffect(() => {
@@ -270,7 +269,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // opens — SETTINGS_TABS' array order decides only which renders first — so the two
   // have to be changed together.
   const [settingsTab, setSettingsTab_] = useState<SettingsTab>('members')
-  const [xmlOpen, setXmlOpen] = useState(false)
   const [connectors, setConnectors] = useState<ConnectorsState>(INITIAL_CONNECTORS)
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
@@ -955,14 +953,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setConnectorMappings((m) => ({ ...m, [id]: rows }))
   }
 
-  function openXml() {
-    setXmlOpen(true)
-  }
-
-  function closeXml() {
-    setXmlOpen(false)
-  }
-
   function openRule(key: string) {
     setOpenRuleKey(key)
   }
@@ -1116,7 +1106,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     switcherOpen,
     sandbox,
     settingsTab,
-    xmlOpen,
     connectors,
     connectorMappings,
     filing,
@@ -1170,8 +1159,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setSettingsTab,
     toggleConnector,
     saveConnectorMapping,
-    openXml,
-    closeXml,
     openRule,
     closeRule,
     addSuggestedRule,
@@ -1225,7 +1212,6 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
           {view === 'settings' && <SettingsView ctx={ctx} />}
         </div>
       </main>
-      {xmlOpen && <XmlModal ctx={ctx} />}
     </div>
   )
 }

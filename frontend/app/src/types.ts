@@ -278,7 +278,6 @@ export type PlatformCtx = {
   switcherOpen: boolean
   sandbox: boolean
   settingsTab: SettingsTab
-  xmlOpen: boolean
   connectors: ConnectorsState
   connectorMappings: ConnectorMappings
 
@@ -456,8 +455,6 @@ export type PlatformCtx = {
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void
   saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
-  openXml: () => void
-  closeXml: () => void
   // Rules screen. There is deliberately no editCustomRule/disableGoldenRule pair:
   // a tenant may adopt, switch off and remove its OWN rules, and may do nothing at
   // all to an inherited one.

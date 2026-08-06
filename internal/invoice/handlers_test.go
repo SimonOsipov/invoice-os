@@ -67,6 +67,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
 // --- test-local wire types --------------------------------------------------
@@ -3806,7 +3807,9 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"failure_kind",
 		"rule_set_version", "qr_png_base64",
 	}
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason"}
+	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
+	// additive set -- the exact-count assertion below re-balances on its own.
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -3958,6 +3961,9 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// appended last of all.
 		"rule_set_version", "qr_png_base64",
 		"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason",
+		// BUG-04-03 (task-399): appended after submit_blocked_reason, so they
+		// land last of all -- this is the only guard on AC #1's position clause.
+		"can_view_ubl", "ubl_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -4188,8 +4194,8 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
-// TestListHandler_NoActionFlagKeys (T14): List must stay clean of all five
-// action-flag keys, mirroring TestListHandler_NoRuleSetVersionKey -- they
+// TestListHandler_NoActionFlagKeys (T14): List must stay clean of every
+// action-flag key, mirroring TestListHandler_NoRuleSetVersionKey -- they
 // live only on GetHandler's getResponse wrapper, never on the domain
 // Invoice struct List marshals directly. ALREADY GREEN at RED (neither key
 // exists anywhere yet); kept as a permanent regression guard.
@@ -4205,7 +4211,9 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`} {
+	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`,
+		// BUG-04-03 (task-399): the UBL gate is detail-only too.
+		`"can_view_ubl":`, `"ubl_blocked_reason":`} {
 		if strings.Contains(body, k) {
 			t.Errorf("body = %s, List must NOT gain %s -- these keys belong only to GetHandler's getResponse wrapper", body, k)
 		}
@@ -5274,6 +5282,434 @@ func TestRoutes_BothResolveInBothDirections(t *testing.T) {
 			}
 			if *summaryCalled {
 				t.Error("GET /v1/invoices/<uuid> incorrectly resolved to ViolationSummaryHandler's closure")
+			}
+		})
+	}
+}
+
+// --- BUG-04-03 (task-399): can_view_ubl / ubl_blocked_reason ----------------
+//
+// RED at Stage 2.5: neither key is on getResponse yet, so every row below
+// fails on its OWN value assertion (the key reads back ublKeyAbsent), never on
+// a compile error. Nothing is stubbed in production code deliberately -- two
+// zero-valued struct fields would turn the presence/order/count rows green for
+// free.
+//
+// Fixtures come from ubl_test.go (same package): completeUBLInvoice and
+// ublInvoiceMissingLines both assert their own ubl.Missing floor, so a "true"
+// row can never silently be asserting against an incomplete invoice.
+
+// ublKeyAbsent marks a key that is not on the wire at all -- distinct from
+// "null" and from "false", the distinction no-omitempty exists to preserve.
+const ublKeyAbsent = "<absent>"
+
+// The two reason sentences, restated by hand rather than read back from
+// ublBlockedReason: an oracle derived from the code under test drifts in
+// lockstep with a bug in it.
+const (
+	ublReasonMissingLines = "This invoice cannot be rendered as a UBL document — it is missing at least one line item."
+	ublReasonAllSixGaps   = "This invoice cannot be rendered as a UBL document — it is missing an invoice number, an issue date, a currency, a supplier name, a buyer name and at least one line item."
+)
+
+// ublWireKeys reads both keys as RAW top-level JSON. Never through a struct: a
+// struct cannot tell an absent key from a zero value.
+func ublWireKeys(t *testing.T, rec *httptest.ResponseRecorder) (canView, reason string) {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+	}
+	canView, reason = ublKeyAbsent, ublKeyAbsent
+	if v, ok := raw["can_view_ubl"]; ok {
+		canView = string(v)
+	}
+	if v, ok := raw["ubl_blocked_reason"]; ok {
+		reason = string(v)
+	}
+	return canView, reason
+}
+
+// ublReasonValue decodes a raw ubl_blocked_reason. ok is false when the key is
+// absent OR JSON null; the caller decides which of the two its row forbids.
+func ublReasonValue(t *testing.T, raw string) (string, bool) {
+	t.Helper()
+	if raw == ublKeyAbsent || raw == "null" {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatalf("ubl_blocked_reason raw = %q, want a JSON string or null: %v", raw, err)
+	}
+	return s, true
+}
+
+// ublGetInvoice fetches one invoice through the real GetHandler.
+func ublGetInvoice(t *testing.T, inv Invoice) *httptest.ResponseRecorder {
+	t.Helper()
+	id := ublTestIdentity()
+	rec, _ := doInvoiceGet(t, ublGetOK(inv), &id, inv.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	return rec
+}
+
+// ublInvoiceAllSixGaps is the floor case: an id and a status, nothing else.
+func ublInvoiceAllSixGaps(t *testing.T, status Status) Invoice {
+	t.Helper()
+	inv := Invoice{ID: uuid.NewString(), Status: status}
+	if got := ubl.Missing(SubmissionCanonical(inv)); len(got) != 6 {
+		t.Fatalf("fixture gaps = %v, want all six", got)
+	}
+	return inv
+}
+
+// AC #2: a renderable invoice reports true, with an explicit null reason.
+func TestGetHandler_CanViewUBLTrueForACompleteInvoice(t *testing.T) {
+	inv := completeUBLInvoice(t, "INV-UBLGATE-OK")
+	canView, reason := ublWireKeys(t, ublGetInvoice(t, inv))
+
+	if canView != "true" {
+		t.Errorf("can_view_ubl raw = %q, want true for a renderable invoice", canView)
+	}
+	if reason != "null" {
+		t.Errorf("ubl_blocked_reason raw = %q, want the literal null when nothing is missing", reason)
+	}
+}
+
+// AC #2: one gap -> false, carrying the same sentence the /ubl 409 uses.
+func TestGetHandler_CanViewUBLFalseCarriesTheReason(t *testing.T) {
+	inv := ublInvoiceMissingLines(t, "INV-UBLGATE-NOLINES")
+	canView, reasonRaw := ublWireKeys(t, ublGetInvoice(t, inv))
+
+	if canView != "false" {
+		t.Errorf("can_view_ubl raw = %q, want false for an invoice with no line items", canView)
+	}
+	got, ok := ublReasonValue(t, reasonRaw)
+	if !ok {
+		t.Fatalf("ubl_blocked_reason raw = %q, want the missing-line-item sentence", reasonRaw)
+	}
+	if got != ublReasonMissingLines {
+		t.Errorf("ubl_blocked_reason = %q, want %q", got, ublReasonMissingLines)
+	}
+}
+
+// AC #2: the reason names every gap, not just the first one found.
+func TestGetHandler_UBLReasonNamesEveryMissingElement(t *testing.T) {
+	inv := ublInvoiceAllSixGaps(t, StatusDraft)
+	canView, reasonRaw := ublWireKeys(t, ublGetInvoice(t, inv))
+
+	if canView != "false" {
+		t.Errorf("can_view_ubl raw = %q, want false for an invoice missing all six elements", canView)
+	}
+	got, ok := ublReasonValue(t, reasonRaw)
+	if !ok {
+		t.Fatalf("ubl_blocked_reason raw = %q, want the full-gap sentence", reasonRaw)
+	}
+	if got != ublReasonAllSixGaps {
+		t.Errorf("ubl_blocked_reason = %q, want %q", got, ublReasonAllSixGaps)
+	}
+}
+
+// AC #2: no omitempty on either key. Both fixtures are load-bearing --
+// omitempty on the bool hides only behind the false case, on the pointer only
+// behind the nil case, so a single fixture cannot see both regressions.
+func TestGetHandler_UBLKeysNeverOmitted(t *testing.T) {
+	tests := []struct {
+		name string
+		inv  Invoice
+	}{
+		{"complete_false_bool_is_absent_here", completeUBLInvoice(t, "INV-UBLGATE-PRESENT-OK")},
+		{"incomplete_nil_pointer_is_absent_here", ublInvoiceMissingLines(t, "INV-UBLGATE-PRESENT-BAD")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := ublGetInvoice(t, tt.inv)
+			canView, reason := ublWireKeys(t, rec)
+
+			if canView == ublKeyAbsent {
+				t.Errorf("can_view_ubl is missing from the body (body=%s) -- present on every invoice, never omitted", rec.Body.String())
+			} else if canView != "true" && canView != "false" {
+				t.Errorf("can_view_ubl raw = %q, want literally true or false", canView)
+			}
+			if reason == ublKeyAbsent {
+				t.Errorf("ubl_blocked_reason is missing from the body (body=%s) -- present on every invoice, explicit null when unblocked", rec.Body.String())
+			} else if reason != "null" && !strings.HasPrefix(reason, `"`) {
+				t.Errorf("ubl_blocked_reason raw = %q, want a JSON string or the literal null", reason)
+			}
+		})
+	}
+}
+
+// AC #3, the whole gate: ubl_blocked_reason != null IFF can_view_ubl == false,
+// exhaustively over the 7-state universe x {complete, incomplete}. Presence and
+// legality are checked FIRST so two absent keys cannot satisfy the equivalence
+// vacuously.
+func TestGetHandler_UBLReasonNullIFFCanViewUBLFalse(t *testing.T) {
+	for _, status := range allStatuses {
+		for _, shape := range []string{"complete", "incomplete"} {
+			t.Run(string(status)+"/"+shape, func(t *testing.T) {
+				var inv Invoice
+				if shape == "complete" {
+					inv = completeUBLInvoice(t, "INV-IFF-OK-"+string(status))
+				} else {
+					inv = ublInvoiceMissingLines(t, "INV-IFF-BAD-"+string(status))
+				}
+				inv.Status = status
+
+				rec := ublGetInvoice(t, inv)
+				canView, reason := ublWireKeys(t, rec)
+
+				if canView != "true" && canView != "false" {
+					t.Fatalf("can_view_ubl raw = %q, want literally true or false (body=%s)", canView, rec.Body.String())
+				}
+				if reason != "null" && !strings.HasPrefix(reason, `"`) {
+					t.Fatalf("ubl_blocked_reason raw = %q, want a JSON string or the literal null (body=%s)", reason, rec.Body.String())
+				}
+				if (reason == "null") != (canView == "true") {
+					t.Errorf("can_view_ubl = %s but ubl_blocked_reason = %s -- the reason must be null EXACTLY when can_view_ubl is true", canView, reason)
+				}
+			})
+		}
+	}
+}
+
+// AC #4: the same renderable content answers true on every status -- the gate
+// reads content, never inv.Status.
+func TestGetHandler_UBLGateIsStatusIndependent(t *testing.T) {
+	for _, status := range allStatuses {
+		t.Run(string(status), func(t *testing.T) {
+			inv := completeUBLInvoice(t, "INV-STATUSIND-OK")
+			inv.Status = status
+			canView, reason := ublWireKeys(t, ublGetInvoice(t, inv))
+
+			if canView != "true" {
+				t.Errorf("can_view_ubl raw = %q on status %s, want true -- the same renderable content on every status", canView, status)
+			}
+			if reason != "null" {
+				t.Errorf("ubl_blocked_reason raw = %q on status %s, want null", reason, status)
+			}
+		})
+	}
+}
+
+// AC #4, the other half: the same UNrenderable content answers false on every
+// status. Required alongside the row above -- a status switch that happened to
+// return true everywhere would pass the true-only row unnoticed.
+func TestGetHandler_UBLGateIsStatusIndependentWhenBlocked(t *testing.T) {
+	for _, status := range allStatuses {
+		t.Run(string(status), func(t *testing.T) {
+			inv := ublInvoiceMissingLines(t, "INV-STATUSIND-BAD")
+			inv.Status = status
+			canView, reasonRaw := ublWireKeys(t, ublGetInvoice(t, inv))
+
+			if canView != "false" {
+				t.Errorf("can_view_ubl raw = %q on status %s, want false -- the same unrenderable content on every status", canView, status)
+			}
+			got, ok := ublReasonValue(t, reasonRaw)
+			if !ok {
+				t.Fatalf("ubl_blocked_reason raw = %q on status %s, want the missing-line-item sentence", reasonRaw, status)
+			}
+			if got != ublReasonMissingLines {
+				t.Errorf("ubl_blocked_reason = %q on status %s, want %q", got, status, ublReasonMissingLines)
+			}
+		})
+	}
+}
+
+// AC #3/#4, deferred here from task-398 (it could not compile there --
+// ubl_blocked_reason did not exist): the /ubl 409's error value and the detail
+// payload's ubl_blocked_reason are the SAME string, so the SPA's tooltip and
+// the route's refusal can never say different things.
+func TestUBLHandler_409BodyEqualsTheDetailPayloadReason(t *testing.T) {
+	inv := ublInvoiceMissingLines(t, "INV-CROSSENDPOINT")
+	id := ublTestIdentity()
+
+	getRec, _ := doInvoiceGet(t, ublGetOK(inv), &id, inv.ID)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200 (body=%s)", getRec.Code, getRec.Body.String())
+	}
+	_, reasonRaw := ublWireKeys(t, getRec)
+	payloadReason, ok := ublReasonValue(t, reasonRaw)
+	if !ok {
+		t.Fatalf("ubl_blocked_reason raw = %q, want a reason string for an unrenderable invoice", reasonRaw)
+	}
+
+	ublRec := doUBL(t, ublGetOK(inv), &id, inv.ID)
+	if ublRec.Code != http.StatusConflict {
+		t.Fatalf("GET /ubl status = %d, want 409 (body=%s)", ublRec.Code, ublRec.Body.String())
+	}
+	routeReason := ublErrorValue(t, ublRec)
+
+	if payloadReason == "" {
+		t.Error("ubl_blocked_reason is the empty string, want real copy")
+	}
+	if payloadReason != routeReason {
+		t.Errorf("ubl_blocked_reason = %q but the /ubl 409 says %q -- the two must be one string", payloadReason, routeReason)
+	}
+}
+
+// AC #3/#4: the payload gate and the /ubl route agree row for row. The table
+// carries at least one 200 and one 409 so the agreement cannot hold vacuously.
+func TestGetHandler_UBLGateAgreesWithTheUBLRoute(t *testing.T) {
+	missingCurrency := completeUBLInvoice(t, "INV-AGREE-NOCCY")
+	missingCurrency.Currency = nil
+	if got := ubl.Missing(SubmissionCanonical(missingCurrency)); len(got) != 1 || got[0] != "a currency" {
+		t.Fatalf("missing-currency fixture gaps = %v, want exactly [a currency]", got)
+	}
+
+	tests := []struct {
+		name string
+		inv  Invoice
+	}{
+		{"complete", completeUBLInvoice(t, "INV-AGREE-OK")},
+		{"missing_lines", ublInvoiceMissingLines(t, "INV-AGREE-NOLINES")},
+		{"missing_currency", missingCurrency},
+		{"all_six_gaps", ublInvoiceAllSixGaps(t, StatusValidated)},
+	}
+
+	var saw200, saw409 int
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := ublTestIdentity()
+			getRec, _ := doInvoiceGet(t, ublGetOK(tt.inv), &id, tt.inv.ID)
+			if getRec.Code != http.StatusOK {
+				t.Fatalf("GET status = %d, want 200 (body=%s)", getRec.Code, getRec.Body.String())
+			}
+			canView, reason := ublWireKeys(t, getRec)
+
+			ublRec := doUBL(t, ublGetOK(tt.inv), &id, tt.inv.ID)
+			switch ublRec.Code {
+			case http.StatusOK:
+				saw200++
+			case http.StatusConflict:
+				saw409++
+			default:
+				t.Fatalf("GET /ubl status = %d, want 200 or 409 (body=%s)", ublRec.Code, ublRec.Body.String())
+			}
+
+			wantCanView, wantReasonNull := "false", false
+			if ublRec.Code == http.StatusOK {
+				wantCanView, wantReasonNull = "true", true
+			}
+			if canView != wantCanView {
+				t.Errorf("can_view_ubl raw = %q, want %q -- /ubl answered %d", canView, wantCanView, ublRec.Code)
+			}
+			if wantReasonNull {
+				if reason != "null" {
+					t.Errorf("ubl_blocked_reason raw = %q, want null -- /ubl answered 200", reason)
+				}
+			} else if got, ok := ublReasonValue(t, reason); !ok || got == "" {
+				t.Errorf("ubl_blocked_reason raw = %q, want a reason string -- /ubl answered 409", reason)
+			}
+		})
+	}
+	if saw200 == 0 || saw409 == 0 {
+		t.Fatalf("non-vacuity floor: the table produced %d 200s and %d 409s, want at least one of each", saw200, saw409)
+	}
+}
+
+// AC #2/#5: guards the embed boundary the same way
+// TestGetHandler_CanSubmitKeyAppearsExactlyOnce does -- a future Invoice field
+// carrying either tag would silently DROP both same-depth entries under
+// encoding/json's ambiguous-field rule.
+func TestGetHandler_UBLKeysAppearExactlyOnce(t *testing.T) {
+	body := ublGetInvoice(t, completeUBLInvoice(t, "INV-UBLGATE-ONCE")).Body.String()
+	for _, k := range []string{`"can_view_ubl":`, `"ubl_blocked_reason":`} {
+		if got := strings.Count(body, k); got != 1 {
+			t.Errorf("body has %d occurrences of %s key, want exactly 1 (body=%s)", got, k, body)
+		}
+	}
+}
+
+// AC #3/#4, DB-BACKED: the only row that drives the REAL Store.Get. Every row
+// above hands GetHandler a fixture whose LineItems are already populated, so
+// none of them can see the hazard SubmissionCanonical's header names -- a
+// Store.List-shaped invoice has LineItems == nil and maps to zero canonical
+// lines, which would render a false can_view_ubl:false on a perfectly
+// renderable invoice. The gaps floor below fails loudly if Get stops hydrating.
+func TestRLS_GetHandlerUBLGateFromTheRealStore(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "BUG-04-03 UBL gate tenant")
+	entityID := seedEntity(t, super, tenantID, "BUG-04-03 UBL gate entity")
+	store := NewStore(app)
+	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	tenantCtx := auth.WithIdentity(ctx, identity)
+	issued := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
+
+	// Identical header content in both cases; the line items are the only
+	// difference, so a divergent verdict can only come from the lines.
+	create := func(t *testing.T, number string, lines []LineItemInput) string {
+		t.Helper()
+		inv, err := store.Create(tenantCtx, CreateInput{
+			EntityID:      entityID,
+			InvoiceNumber: number,
+			IssueDate:     &issued,
+			BuyerName:     ublStr("Beta Buyers Ltd"),
+			Currency:      ublStr("NGN"),
+			Subtotal:      ublStr("100.00"),
+			VAT:           ublStr("7.50"),
+			Total:         ublStr("107.50"),
+			LineItems:     lines,
+		})
+		if err != nil {
+			t.Fatalf("Create(%s): %v", number, err)
+		}
+		return inv.ID
+	}
+
+	withLine := create(t, "BUG-04-03-WITH-LINE", []LineItemInput{{
+		Description: ublStr("Widget"),
+		Quantity:    ublStr("2"),
+		UnitPrice:   ublStr("50.00"),
+		LineTotal:   ublStr("100.00"),
+		LineTax:     ublStr("7.50"),
+	}})
+	noLine := create(t, "BUG-04-03-NO-LINE", nil)
+
+	tests := []struct {
+		name        string
+		invoiceID   string
+		wantGaps    []string
+		wantCanView string
+		wantReason  string // "" means the wire value must be null
+	}{
+		{"complete_with_a_line_item", withLine, nil, "true", ""},
+		{"same_header_zero_lines", noLine, []string{"at least one line item"}, "false", ublReasonMissingLines},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hydrated, err := store.Get(tenantCtx, tt.invoiceID)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got := ubl.Missing(SubmissionCanonical(hydrated)); !reflect.DeepEqual(got, tt.wantGaps) {
+				t.Fatalf("ubl.Missing over the STORED invoice = %v, want %v -- the fixture (or Store.Get's line hydration) is wrong, not the handler", got, tt.wantGaps)
+			}
+
+			rec, _ := doInvoiceGet(t, store.Get, &identity, tt.invoiceID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			canView, reasonRaw := ublWireKeys(t, rec)
+
+			if canView != tt.wantCanView {
+				t.Errorf("can_view_ubl raw = %q, want %q (body=%s)", canView, tt.wantCanView, rec.Body.String())
+			}
+			if tt.wantReason == "" {
+				if reasonRaw != "null" {
+					t.Errorf("ubl_blocked_reason raw = %q, want null", reasonRaw)
+				}
+				return
+			}
+			got, ok := ublReasonValue(t, reasonRaw)
+			if !ok {
+				t.Fatalf("ubl_blocked_reason raw = %q, want %q", reasonRaw, tt.wantReason)
+			}
+			if got != tt.wantReason {
+				t.Errorf("ubl_blocked_reason = %q, want %q", got, tt.wantReason)
 			}
 		})
 	}

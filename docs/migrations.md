@@ -392,6 +392,76 @@ so the default `go` job and a bare `go test ./...` stay green without a database
 
 ---
 
+## 9. Publishing a rule-set version and its retrospective pass (BUG-05)
+
+A migration can add a rule-set version and mark it active. It **cannot** re-check the
+invoices that were validated under the old one — a migration transaction cannot call the
+validation engine. So publishing a *stricter* rule is two steps: the migration, then
+`tools/revalidate-invoices`, which re-evaluates every `status='validated'` invoice against
+the active rule set and demotes any that now carry a blocking violation back to `draft`.
+
+### The activation window is real and expected
+
+The migration activates the new version at gateway boot (§2). Until the pass runs,
+already-`validated` invoices that would now fail **remain submittable**. Nothing in
+`db.Provision`'s pipeline can close this — run the pass immediately after the deploy gate
+goes green.
+
+### Env
+
+| Mode | Needs |
+|---|---|
+| `--tenant <uuid>` | `DATABASE_URL`, `VALIDATION_URL`, `S2S_TOKEN` |
+| `--all-tenants` | the above **plus** `DATABASE_READER_URL` |
+
+`--tenant` is turnkey on the **`invoice`** service: it already has all three
+(`cmd/invoice/main.go:38,106`). `--all-tenants` additionally needs `DATABASE_READER_URL`
+(the `invoice_tenant_reader` DSN, §8) to enumerate tenants — that variable is wired only on
+`cmd/reconciliation`, which in turn has no `VALIDATION_URL`/`S2S_TOKEN`. **No service has all
+four**, so for an `--all-tenants` run the operator supplies `DATABASE_READER_URL` by hand
+alongside `invoice`'s own variables.
+
+### The three commands
+
+Run against the target environment under `railway run`, in this order:
+
+```bash
+# 1. Count only. --dry-run defaults to TRUE, so this writes nothing.
+railway run go run ./tools/revalidate-invoices --all-tenants
+
+# 2. The real run. The '=' is required -- `--dry-run false` silently leaves it true.
+railway run go run ./tools/revalidate-invoices --all-tenants --dry-run=false
+
+# 3. The gate. Read-only re-scan; must exit 0.
+railway run go run ./tools/revalidate-invoices --verify
+```
+
+**`--verify`'s exit code is the release gate.** It exits non-zero while any invoice is still
+`validated` with a blocking violation, and lists them. Publishing a rule-set version is not
+done until `--verify` exits **0 in production**. No CI job can force this — it is an
+operator action.
+
+### Caveats
+
+- **`--verify` is not a snapshot.** The pass enumerates a tenant's validated invoices, then
+  demotes them one at a time; anything validated *between* the enumeration and the re-scan
+  is not covered. On a live system `--verify` can legitimately exit 1 right after a clean
+  run. Re-run it.
+- **A mid-run failure commits what it already wrote.** Each demotion is its own transaction
+  (`demoteRevalidated`, `internal/invoice/revalidate.go:237-257`). If the validation service
+  errors partway through a tenant, the demotions already committed stay committed, and the
+  CLI prints the error *without* that tenant's counts — the run reports nothing about what
+  landed. Other tenants still run; the aggregate error comes at the end. Just re-run: the
+  pass only ever looks at invoices that are still `validated`, so it is restartable and
+  idempotent.
+- **Output is one line per demoted invoice, unbounded.** A large first run prints a lot.
+  Capture stdout.
+- **Clean invoices keep their old `rule_set_version_id`.** The pass writes only for invoices
+  it demotes, so an invoice the pass confirmed clean still reads *"Evaluated against
+  rule-set v<old>"* in the UI. Truthful about when it was last stamped; not a bug.
+
+---
+
 ## Appendix: Provisioning the dev Postgres (M2-01 subtask 4)
 
 **Scope note:** this runbook provisions `development`'s own Postgres — the one
@@ -474,3 +544,5 @@ real passwords live **only** in Railway.
 - [deploy-model.md](./deploy-model.md) — the per-PR ephemeral-environment model (create →
   deploy → verify → teardown → sweep) the dev Postgres is exempt from.
 - `db/bootstrap.sql`, root `Makefile`, `migrations/` — the harness this doc specifies.
+- `tools/revalidate-invoices` — the retrospective pass §9 runs; its package comment carries
+  the full flag reference.

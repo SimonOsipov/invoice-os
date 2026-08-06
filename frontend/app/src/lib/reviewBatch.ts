@@ -274,6 +274,18 @@ export function unreadableRowsAll(batches: Pick<ImportBatch, 'id' | 'filename' |
   return batches.flatMap((b) => unreadableRows(b.errors).map((r) => ({ ...r, file: filenameLabel(b.filename) })))
 }
 
+// The store-duplicate half of RowError[] — the sibling channel unreadableRows must stop
+// counting. STUB: always empty. The classifier (rule_key presence) and the wiring into
+// this selector are the executor's job.
+export interface AlreadyImportedRow {
+  row: number | null
+  invoiceId: string | null
+}
+
+export function alreadyImportedRows(_errors: RowError[]): AlreadyImportedRow[] {
+  return []
+}
+
 export type ReviewPill = 'all' | 'needs-fix' | 'ready' | 'queued'
 
 // `all` returns an object with ZERO keys, not `{needsFix:false, status:undefined}` -- the
@@ -622,6 +634,18 @@ export function unreadableCsvAll(rows: UnreadableRowAll[]): string {
     [r.file, r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
   )
   return [UNREADABLE_CSV_HEADER_ALL, ...lines].join('\n')
+}
+
+// Sibling of UnreadableRowAll for the already-imported channel's CSV download.
+export interface AlreadyImportedRowAll extends AlreadyImportedRow {
+  file: string
+}
+
+export const ALREADY_IMPORTED_CSV_HEADER_ALL = 'File,Row,Invoice id'
+
+// STUB: header only, no row rendering yet — pairs with alreadyImportedRows(All) above.
+export function alreadyImportedCsvAll(_rows: AlreadyImportedRowAll[]): string {
+  return ALREADY_IMPORTED_CSV_HEADER_ALL
 }
 
 // --- Files strip (AC-8/9/10/11/12, BULK-01-06) ---

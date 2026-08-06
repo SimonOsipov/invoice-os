@@ -7,10 +7,11 @@
 //   - structural  -> reviewBatch.ts's `unreadableRows`, over the same `errors[]` through
 //                    the same `rowErrorRows`, with a strictly better contract (a
 //                    `row: null` entry instead of a silently dropped error, an em-dash
-//                    column instead of an invented one). The channel invariant — a
-//                    rule_key-bearing RowError is STRUCTURAL — moved with it and is
-//                    pinned there as UNREAD-3. See importReport.test.ts's header for
-//                    the per-claim audit of what migrated and what was retired.
+//                    column instead of an invented one). The channel invariant here was
+//                    later corrected: a rule_key-bearing RowError is its own
+//                    already-imported channel, not structural — pinned as the inverted
+//                    UNREAD-3. See importReport.test.ts's header for the per-claim audit
+//                    of what migrated and what was retired.
 //   - content     -> per-row verdicts off the LIVE `InvoiceRecord.violations` (D4: the
 //                    review screen re-fetches rather than reading a frozen import-time
 //                    payload), never this report.

@@ -43,6 +43,9 @@ import type { ImportBatch, ImportReport, RowError } from './importApi'
 import { MAX_RUN_FILES, type ImportRun } from './importRun'
 import { fmtDateTime } from './format'
 import {
+  ALREADY_IMPORTED_CSV_HEADER_ALL,
+  alreadyImportedCsvAll,
+  alreadyImportedRows,
   BATCH_SUBMIT_MAX_IDS,
   bulkBarView,
   bulkOutcome,
@@ -84,6 +87,7 @@ import {
   unreadableRows,
   unreadableRowsAll,
   verdictPill,
+  type AlreadyImportedRowAll,
   type ReviewFilterState,
   type UnreadableRow,
   type UnreadableRowAll,
@@ -414,16 +418,16 @@ describe('unreadableRows (AC-4)', () => {
 // of the six throws `new Error('not implemented')` (see reviewBatch.ts's "09 STUB"
 // comment), so specs against them fail on that throw — the correct RED reason.
 //
-// Three specs below are GREEN-BEFORE, not RED, and are labelled as such at their own
-// describe block: SHELL-4 and SHELL-7 per task-285's own audit, and UNREAD-3 (an
-// independent finding made while authoring this file, not called out in the plan) —
-// all three exercise channelTiles/unreadableRows, which 08 already shipped. They are
-// still authored here because each pins an invariant nothing else in this suite covers:
-// SHELL-4 is the only spec pinning a NON-zero unreadable count from two RowError shapes
-// in one batch, SHELL-7 guards the UnreadableRow shape against a future `...e` spread,
-// and UNREAD-3 re-homes RPT-03's invariant (a rule_key-bearing RowError stays
-// structural) before importReport.ts's structuralErrorRows — RPT-03's only other home —
-// is deleted in Stage 3.
+// Two specs below are GREEN-BEFORE, not RED, and are labelled as such at their own
+// describe block: SHELL-4 and SHELL-7 per task-285's own audit — both exercise
+// channelTiles/unreadableRows, which 08 already shipped, and are still authored here
+// because each pins an invariant nothing else in this suite covers: SHELL-4 is the only
+// spec pinning a NON-zero unreadable count from two RowError shapes in one batch, SHELL-7
+// guards the UnreadableRow shape against a future `...e` spread. UNREAD-3 originally
+// re-homed RPT-03's invariant here too (a rule_key-bearing RowError stays structural,
+// before importReport.ts's structuralErrorRows — RPT-03's only other home — was deleted
+// in Stage 3); a later correction inverted it in place — it now pins the entry LEAVING
+// unreadableRows, and is genuinely RED until the classifier ships.
 //
 // task-285's own table retired SHELL-1 (unimplementable under environment:'node' — no
 // `location`, no React; replaced by HASH-3 below), SHELL-2 (green-before AND a literal
@@ -621,6 +625,9 @@ describe('unreadableRows: shape guard (SHELL-7, task-285 §8 — GREEN-BEFORE st
       { rows: [7, 8], message: 'm2' },
     ]
 
+    // Post-split: the first entry (rule_key-bearing) yields zero unreadable rows, so
+    // this forEach runs over the second entry's two rows (7, 8) alone — still proving
+    // the {row, column, message} shape, still green.
     const result = unreadableRows(errors)
 
     result.forEach((row) => {
@@ -629,16 +636,206 @@ describe('unreadableRows: shape guard (SHELL-7, task-285 §8 — GREEN-BEFORE st
   })
 })
 
-describe('unreadableRows: a rule_key-bearing RowError (store-duplicate) stays structural (UNREAD-3, task-285 §8 — re-homes RPT-03 before importReport.ts\'s structuralErrorRows, RPT-03\'s only other home, is deleted in Stage 3. ALSO GREEN-BEFORE, an independent finding: unreadableRows already ships and already drops rule_key/severity by construction — but the INVARIANT itself has no home left once structuralErrorRows is gone, which is why this is authored rather than skipped)', () => {
-  it('UNREAD-3: a RowError carrying rule_key + severity (the store-level duplicate shape) still yields one unreadable row per row, with no rule_key/severity/invoiceId key on it', () => {
-    const errors: RowError[] = [{ row: 4, rule_key: 'duplicate_invoice_number', severity: 'error', message: 'duplicate invoice number' }]
+describe('unreadableRows / alreadyImportedRows: a rule_key-bearing RowError (store-duplicate) leaves the unreadable channel (UNREAD-3, INVERTED — the invariant this pinned was itself corrected: a store-duplicate is its own already-imported channel, not structural)', () => {
+  it('UNREAD-3 (INVERTED): a rule_key-bearing RowError leaves the unreadable channel', () => {
+    const errors: RowError[] = [
+      {
+        row: 4,
+        rule_key: 'no-duplicate-invoice-number',
+        severity: 'error',
+        field: 'invoice_number',
+        message: 'An invoice with this number already exists for this entity.',
+      },
+    ]
 
-    const result = unreadableRows(errors)
+    expect(unreadableRows(errors)).toEqual([])
+    expect(alreadyImportedRows(errors)).toHaveLength(1)
+  })
+})
 
-    expect(result).toEqual([{ row: 4, column: '—', message: 'duplicate invoice number' }])
-    expect(result[0]).not.toHaveProperty('rule_key')
-    expect(result[0]).not.toHaveProperty('severity')
-    expect(result[0]).not.toHaveProperty('invoiceId')
+// --- BUG-08: the already-imported channel (AC-1/3/4/5/6) — RED specs transcribed from
+// task-405's Implementation Plan Test Specs table. isAlreadyImported/the unreadableRows
+// filter/alreadyImportedRows(All)'s real bodies are the executor's job; the stubs
+// committed alongside these specs (alreadyImportedRows -> [], alreadyImportedCsvAll ->
+// header only, ChannelTiles.frozen's three new fields -> 0/0/true, reviewTabs' third
+// count inert) make every spec below fail on an assertion, never a compile error.
+
+// Shared fixture for AIMP-1/AIMP-2/AIMP-10 — one structural entry, one store-duplicate
+// entry. A function, not a module-level const, so no test can mutate another's copy.
+function mixedErrors(): RowError[] {
+  return [
+    { rows: [2, 3], message: 'rows disagree on issue_date' },
+    {
+      rows: [4, 5],
+      rule_key: 'no-duplicate-invoice-number',
+      severity: 'error',
+      field: 'invoice_number',
+      invoice_id: 'inv-1',
+      message: 'An invoice with this number already exists for this entity.',
+    },
+  ]
+}
+
+describe('unreadableRows + alreadyImportedRows: a mixed errors[] splits into the two channels (AIMP-1/AIMP-2, AC-6)', () => {
+  it('AIMP-1: a mixed errors[] splits into the two channels with no row in both and none dropped', () => {
+    const errors = mixedErrors()
+
+    const unreadable = unreadableRows(errors)
+    const already = alreadyImportedRows(errors)
+
+    expect(unreadable.map((r) => r.row)).toEqual([2, 3])
+    expect(already.map((r) => r.row)).toEqual([4, 5])
+    expect(unreadable.length + already.length).toBe(4)
+  })
+
+  it("AIMP-2: the structural entry's rendered fields are untouched by the split", () => {
+    expect(unreadableRows(mixedErrors())).toEqual([
+      { row: 2, column: '—', message: 'rows disagree on issue_date' },
+      { row: 3, column: '—', message: 'rows disagree on issue_date' },
+    ])
+  })
+})
+
+describe('alreadyImportedRows: invoiceId resolution (AIMP-3/AIMP-4, AC-5)', () => {
+  it("AIMP-3: a duplicate entry with no invoice_id yields invoiceId null, never '' or undefined", () => {
+    const errors: RowError[] = [
+      { rows: [7], rule_key: 'no-duplicate-invoice-number', severity: 'error', message: 'racing-insert backstop' },
+    ]
+
+    expect(alreadyImportedRows(errors)).toEqual([{ row: 7, invoiceId: null }])
+  })
+
+  it('AIMP-4: rows:[5,6] on one duplicate entry yields TWO rows both pointing at the same invoice', () => {
+    const errors: RowError[] = [
+      { rows: [5, 6], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-9', message: 'dup' },
+    ]
+
+    expect(alreadyImportedRows(errors)).toEqual([
+      { row: 5, invoiceId: 'inv-9' },
+      { row: 6, invoiceId: 'inv-9' },
+    ])
+  })
+})
+
+describe('channelTilesAll: the already-imported tile counts ROWS and reports the distinct-entry INVOICE count separately (AIMP-5/AIMP-5b/AIMP-6/AIMP-8, AC-3/4)', () => {
+  it('AIMP-5: the tiles count ROWS and report the distinct INVOICE count separately', () => {
+    const errors: RowError[] = [
+      { rows: [1, 2], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-1', message: 'dup' },
+      { rows: [3, 4], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-2', message: 'dup' },
+      { rows: [5, 6], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-3', message: 'dup' },
+      { rows: [7, 8], message: 'structural' },
+    ]
+
+    const tiles = channelTilesAll([{ errors, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.frozen.alreadyImported).toBe(6)
+    expect(tiles.frozen.alreadyImportedInvoices).toBe(3)
+    expect(tiles.frozen.unreadable).toBe(2)
+  })
+
+  // The swapped-noun oracle: 250 duplicate errors[] entries, each covering 3 sheet rows
+  // (the real 750-row / 250-invoice line-item shape the reported repro describes). Any
+  // fixture with one row per invoice makes alreadyImported === alreadyImportedInvoices
+  // and cannot catch a Set-based (distinct-invoice_id) miscount — this is the one spec
+  // in the suite shaped so the two numbers are provably different.
+  it('AIMP-5b: rows and distinct invoices are DIFFERENT numbers at the reported repro\'s own shape — THE swapped-noun oracle', () => {
+    const errors: RowError[] = Array.from({ length: 250 }, (_, i) => ({
+      rows: [i * 3 + 1, i * 3 + 2, i * 3 + 3],
+      rule_key: 'no-duplicate-invoice-number',
+      severity: 'error',
+      invoice_id: `inv-${i + 1}`,
+      message: 'An invoice with this number already exists for this entity.',
+    }))
+
+    const tiles = channelTilesAll([{ errors, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.frozen.alreadyImported).toBe(750)
+    expect(tiles.frozen.alreadyImportedInvoices).toBe(250)
+    expect(tiles.frozen.alreadyImported).not.toBe(tiles.frozen.alreadyImportedInvoices)
+  })
+
+  it('AIMP-6: rows_valid + unreadable + alreadyImported reconciles to rows_total', () => {
+    const mixed: RowError[] = [
+      { rows: [1, 2, 3, 4], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-1', message: 'dup' },
+      { rows: [5, 6], message: 'structural' },
+    ]
+    const mixedTiles = channelTilesAll([{ errors: mixed, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+    expect(4 + mixedTiles.frozen.unreadable + mixedTiles.frozen.alreadyImported).toBe(10)
+
+    const allDuplicate: RowError[] = Array.from({ length: 250 }, (_, i) => ({
+      rows: [i * 3 + 1, i * 3 + 2, i * 3 + 3],
+      rule_key: 'no-duplicate-invoice-number',
+      severity: 'error',
+      invoice_id: `inv-${i + 1}`,
+      message: 'dup',
+    }))
+    const dupTiles = channelTilesAll([{ errors: allDuplicate, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+    expect(0 + dupTiles.frozen.unreadable + dupTiles.frozen.alreadyImported).toBe(750)
+  })
+
+  it('AIMP-8: alreadyImportedAtZero is an explicit fact, and atZero still means unreadable===0', () => {
+    const errors: RowError[] = [
+      { rows: [1, 2], rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'inv-1', message: 'dup' },
+    ]
+
+    const tiles = channelTilesAll([{ errors, rule_set_version: 5 }], { cleanTotal: 0, failingTotal: 0 })
+
+    expect(tiles.atZero).toBe(true)
+    expect(tiles.frozen.alreadyImportedAtZero).toBe(false)
+  })
+})
+
+describe('reviewTabs: the third tab (AIMP-7, AC-3)', () => {
+  it('AIMP-7: the third tab appears with a true label and is omitted at zero', () => {
+    expect(reviewTabs({ invoices: 0, unreadable: 0, alreadyImported: 750 }).map((t) => t.label)).toEqual([
+      'Invoices (0)',
+      'Already imported (750)',
+    ])
+    expect(reviewTabs({ invoices: 3, unreadable: 2, alreadyImported: 0 }).map((t) => t.label)).toEqual([
+      'Invoices (3)',
+      'Unreadable rows (2)',
+    ])
+  })
+})
+
+describe('alreadyImportedCsvAll (AIMP-9, AC-3)', () => {
+  it('AIMP-9: the already-imported CSV quotes per RFC-4180 and renders an unresolved id as an empty cell', () => {
+    const rows: AlreadyImportedRowAll[] = [
+      { file: 'a,b.csv', row: 5, invoiceId: 'inv-1' },
+      { file: 'c.csv', row: null, invoiceId: null },
+    ]
+
+    const csv = alreadyImportedCsvAll(rows)
+    const lines = csv.split('\n')
+
+    expect(lines[0]).toBe(ALREADY_IMPORTED_CSV_HEADER_ALL)
+    expect(lines[1]).toBe('"a,b.csv",5,inv-1')
+    expect(lines[2]).toBe('c.csv,,')
+  })
+})
+
+describe('unreadableCsvAll: no longer carries duplicate rows (AIMP-10, AC-6)', () => {
+  it('AIMP-10: the structural CSV is byte-unchanged and no longer contains duplicate rows', () => {
+    const csv = unreadableCsvAll(unreadableRowsAll([{ id: 'b1', filename: 'a.csv', errors: mixedErrors() }]))
+
+    expect(csv).toBe(
+      [
+        'File,Row,Field,Why it could not be read',
+        'a.csv,2,—,rows disagree on issue_date',
+        'a.csv,3,—,rows disagree on issue_date',
+      ].join('\n'),
+    )
+  })
+})
+
+describe('reviewBatch.ts source: the already-imported classifier is the SOLE reader of RowError.rule_key beyond railPills/fixCard (AIMP-11, AC-1 — GAP-2 correction: a comment-immune `.rule_key` property-access scan pinned at 4, not a bare `rule_key` string pinned at 1, which already occurs 5x in comments/railPills/fixCard and could never go green)', () => {
+  it('AIMP-11 (guard): `.rule_key` occurs exactly 4 times in the source — railPills x2, fixCard x1, and one inside the already-imported classifier', () => {
+    const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
+    const source = readFileSync(srcPath, 'utf8')
+
+    const matches = source.match(/\.rule_key\b/g) ?? []
+
+    expect(matches).toHaveLength(4)
   })
 })
 

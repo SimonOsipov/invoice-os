@@ -37,11 +37,13 @@ import { EmptyState, ErrorState, gatewayBase, Loading, toApiError, useAsync, typ
 import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
+  BUYER_TIN_MISSING,
   gateByActiveEntity,
   hasBlockingViolation,
   invoiceListIsEmpty,
   invoiceStatusStyle,
   invoicesViewState,
+  isBuyerTinMissing,
   isRowSelectable,
   LIVE_POLL_MS,
   listInvoices,
@@ -483,7 +485,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                   <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
-                    <span className="mono" style={{ fontSize: 11, color: r.buyer_tin ? 'var(--fg-3)' : 'var(--status-red-text)' }}>{r.buyer_tin ?? 'TIN MISSING'}</span>
+                    <span data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(r.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(r.buyer_tin) ? BUYER_TIN_MISSING : r.buyer_tin}</span>
                   </span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>

@@ -39,9 +39,11 @@ import { chevDownGlyph } from '../glyphs'
 import type { ImportBatch } from '../lib/importApi'
 import { fmt, fmtDate } from '../lib/format'
 import {
+  BUYER_TIN_MISSING,
   diffLineItems,
   editInvoice,
   getInvoice,
+  isBuyerTinMissing,
   isRowSelectable,
   keepInvoiceAsIs,
   revalidateInvoice,
@@ -166,12 +168,10 @@ export function Row({
             </span>
           )}
         </span>
-        {/* Buyer name + TIN, InvoicesList.tsx:419-422's treatment verbatim: this is the
-            compliance review surface and `buyer-tin-format` is a live rule, so a missing
-            TIN is the single most useful thing this column can shout about. */}
+        {/* Missing-TIN colour/text: shared isBuyerTinMissing/BUYER_TIN_MISSING (lib/invoices.ts). */}
         <span style={{ minWidth: 0 }}>
           <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name ?? '—'}</span>
-          <span className="mono" style={{ fontSize: 11, color: r.buyer_tin ? 'var(--fg-3)' : 'var(--status-red-text)' }}>{r.buyer_tin ?? 'TIN MISSING'}</span>
+          <span data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(r.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(r.buyer_tin) ? BUYER_TIN_MISSING : r.buyer_tin}</span>
         </span>
         {/* NO `?? created_at` fallback, unlike InvoicesList.tsx:424 — that column is
             labelled "Date"; this one says "Issue date", and labelling a creation timestamp

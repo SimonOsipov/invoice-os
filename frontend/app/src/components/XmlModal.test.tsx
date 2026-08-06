@@ -445,3 +445,245 @@ describe('XmlModal shell -- unchanged chrome and dismissal (task-402)', () => {
     expect(inner.onClose, 'reading the document must not dismiss it').not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// QA adversarial coverage (task-402, Mode B). Q1 and Q3 close mutants the V-rows
+// above let live; the rest are the edge/negative cases they never reach.
+// ---------------------------------------------------------------------------
+
+describe('XmlModal -- QA adversarial coverage (task-402)', () => {
+  it('Q1/AC9: an empty 200 body is a failure, not a blank document', async () => {
+    // The truthiness gate. `text()` resolves '' without throwing and resolveStatus's
+    // default isEmpty is Array-gated, so useAsync reports 'ready' with data ''. Without
+    // the gate this ships a blank <pre> and a download of zero bytes.
+    stubOk('')
+    renderModal()
+    await settle()
+
+    expect(screen.queryAllByTestId('ubl-xml'), 'an empty body is not a document').toHaveLength(0)
+    expect(downloadByName(), 'nothing to download from an empty body').toBeNull()
+    expect(screen.queryAllByTestId('download-ubl')).toHaveLength(0)
+    expect(screen.queryByText(LOAD_FAILED), 'it falls to the generic failure arm').not.toBeNull()
+  })
+
+  it('Q2/AC9: a 200 whose body cannot be read scrubs the malformed sentinel', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve({ ok: true, status: 200, text: () => Promise.reject(new Error('boom')) })),
+    )
+    renderModal()
+    await settle()
+
+    expect(screen.queryByText(/malformed response body/i), 'the client sentinel must not surface').toBeNull()
+    expect(screen.queryByText(/boom/), 'the underlying reason must not surface').toBeNull()
+    expect(screen.queryByText(LOAD_FAILED)).not.toBeNull()
+    expect(screen.queryAllByTestId('ubl-xml')).toHaveLength(0)
+  })
+
+  it.each([
+    // Per-character map, NOT a collapsing run: a `+` quantifier would give 'INV-2026-0001.xml'
+    // for the first row and pass V11 unchanged.
+    ['INV  2026//0001', 'INV--2026--0001.xml'],
+    // Every disallowed char maps to '-', so a non-empty number can never reach the
+    // 'invoice' fallback -- only the empty string does (V11).
+    ['!!!', '---.xml'],
+    ['   ', '---.xml'],
+    // Already-legal punctuation is preserved verbatim, including a leading dot.
+    ['..', '...xml'],
+  ])('Q3/AC4: %s downloads as %s', async (invoiceNumber, filename) => {
+    stubOk(DOC)
+    let seen: string | null = null
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      seen = this.download
+    })
+
+    renderModal({ invoiceNumber })
+    await settle()
+    fireEvent.click(screen.getByTestId('download-ubl'))
+
+    expect(seen as string | null).toBe(filename)
+  })
+
+  it('Q4/AC4: a very long invoice number is sanitised but never truncated', async () => {
+    const long = `${'A'.repeat(200)}/${'B'.repeat(100)}`
+    stubOk(DOC)
+    let seen: string | null = null
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      seen = this.download
+    })
+
+    renderModal({ invoiceNumber: long })
+    await settle()
+    fireEvent.click(screen.getByTestId('download-ubl'))
+
+    // No length cap by design (AC4 states no cap); pinned so a future cap is a deliberate change.
+    expect(seen as string | null).toBe(`${'A'.repeat(200)}-${'B'.repeat(100)}.xml`)
+  })
+
+  it('Q5/AC1+AC3: multibyte content renders verbatim and downloads byte-identically', async () => {
+    // Naira sign, CJK, a DECOMPOSED combining acute and an astral emoji: a UTF-8 slip or a
+    // Unicode normalisation anywhere in the Blob/FileReader path breaks byte-identity.
+    const unicode = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<Invoice>',
+      '  <cbc:PayableAmount currencyID="NGN">₦1,075.00</cbc:PayableAmount>',
+      '  <cbc:Note>发票 é 🧾</cbc:Note>',
+      '</Invoice>',
+    ].join('\n')
+
+    stubOk(unicode)
+    const create = vi.spyOn(URL, 'createObjectURL')
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    renderModal()
+    await settle()
+
+    expect(screen.getByTestId('ubl-xml').textContent, 'the naira sign survives to the DOM').toBe(unicode)
+    fireEvent.click(screen.getByTestId('download-ubl'))
+
+    const saved = await readBlob(create.mock.calls[0][0] as Blob)
+    expect(saved).toBe(unicode)
+    expect(saved, 'the combining acute is not normalised into U+00E9').toContain('é')
+  })
+
+  it('Q6/AC1+AC3: a multi-megabyte document renders in full and downloads intact', async () => {
+    const line = '  <cac:InvoiceLine><cbc:ID>0000</cbc:ID></cac:InvoiceLine>\n'
+    const big = `<Invoice>\n${line.repeat(36000)}</Invoice>` // ~2.1 MB
+    expect(big.length, 'floor: this really is a multi-megabyte document').toBeGreaterThan(2_000_000)
+
+    stubOk(big)
+    const create = vi.spyOn(URL, 'createObjectURL')
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    renderModal()
+    await settle()
+
+    // No truncation, no windowing: the <pre> holds every byte.
+    expect(screen.getByTestId('ubl-xml').textContent?.length).toBe(big.length)
+    fireEvent.click(screen.getByTestId('download-ubl'))
+    expect((create.mock.calls[0][0] as Blob).size, 'the saved blob is the whole document').toBe(
+      new TextEncoder().encode(big).length,
+    )
+  })
+
+  it('Q7/AC9: Retry on the generic arm refetches and clears the stale error', async () => {
+    let n = 0
+    const mock = vi.fn(() => {
+      n += 1
+      return n === 1
+        ? Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'internal server error' }) })
+        : Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(DOC) })
+    })
+    vi.stubGlobal('fetch', mock)
+
+    renderModal()
+    await settle()
+    expect(screen.queryByText(LOAD_FAILED), 'floor: the first load failed').not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    await settle()
+
+    expect(mock, 'Retry issues a second request').toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('ubl-xml').textContent, 'the document replaces the error').toBe(DOC)
+    expect(screen.queryByText(LOAD_FAILED), 'the stale error is gone').toBeNull()
+    expect(screen.queryByRole('button', { name: /retry/i }), 'and so is its Retry').toBeNull()
+    expect(screen.queryByTestId('download-ubl'), 'the download appears once there are bytes').not.toBeNull()
+  })
+
+  it('Q8/AC3: each download creates and revokes its own object URL -- repeat clicks leak none', async () => {
+    stubOk(DOC)
+    const create = vi.spyOn(URL, 'createObjectURL')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    renderModal()
+    await settle()
+
+    const btn = screen.getByTestId('download-ubl')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    expect(create).toHaveBeenCalledTimes(3)
+    expect(revoke, 'every created URL is revoked').toHaveBeenCalledTimes(3)
+    const created = create.mock.results.map((r) => r.value)
+    const revoked = revoke.mock.calls.map((c) => c[0])
+    expect(revoked, 'and each one is the URL its own click created').toEqual(created)
+  })
+
+  it('Q9: mounting and unmounting without a download allocates no object URL', async () => {
+    stubOk(DOC)
+    const create = vi.spyOn(URL, 'createObjectURL')
+
+    const { unmount } = renderModal()
+    await settle()
+    unmount()
+
+    expect(create, 'nothing is allocated until the user asks to save').not.toHaveBeenCalled()
+  })
+
+  it('Q10/AC2: closing mid-flight drops the late response and reopening refetches exactly once', async () => {
+    let release: ((v: unknown) => void) | null = null
+    const mock = vi.fn(() => new Promise((resolve) => { release = resolve }))
+    vi.stubGlobal('fetch', mock)
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { unmount } = renderModal()
+    await settle()
+    expect(mock).toHaveBeenCalledTimes(1)
+    unmount()
+
+    // The response lands after the viewer is gone: useAsync's runId guard must drop it
+    // rather than set state on an unmounted tree.
+    await act(async () => {
+      release?.({ ok: true, status: 200, text: () => Promise.resolve(DOC) })
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(errs, 'no state update on an unmounted tree').not.toHaveBeenCalled()
+
+    stubOk(DOC)
+    renderModal()
+    await settle()
+    expect(screen.getByTestId('ubl-xml').textContent, 'reopening loads the document').toBe(DOC)
+  })
+
+  it('Q12/AC2: a parent re-render does not refetch -- one request per open, under polling', async () => {
+    // InvoiceDetail live-polls (useLiveRefresh, InvoiceDetail.tsx:227) and keeps this modal
+    // mounted across ticks, so a tick re-renders it with fresh props. The fetch is keyed on
+    // invoiceId alone; the document deliberately stays the one fetched at open, which is
+    // exactly what the provenance sentence discloses ("when you opened this view").
+    const mock = stubOk(DOC)
+    const { rerender } = renderModal()
+    await settle()
+    expect(mock).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <XmlModal ctx={modalCtx()} base={BASE} invoiceId={ID} invoiceNumber="INV-2026-9999" onClose={vi.fn()} />,
+    )
+    await settle()
+
+    expect(mock, 'a poll tick must not re-request the document').toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('ubl-xml').textContent, 'the opened document is still on screen').toBe(DOC)
+    // The new number does reach the filename -- it is read at click time, not at open.
+    let seen: string | null = null
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      seen = this.download
+    })
+    fireEvent.click(screen.getByTestId('download-ubl'))
+    expect(seen as string | null).toBe('INV-2026-9999.xml')
+  })
+
+  it('Q11/AC9: the longest real blocked reason renders verbatim inside the refusal', async () => {
+    // Six Missing() gaps joined -- the worst case ublGate can emit (ubl_test.go).
+    const longest =
+      'This invoice cannot be rendered as a UBL document — it is missing at least one line item, ' +
+      'the supplier TIN, the supplier name, the buyer name, the invoice date and the currency code.'
+    stubFail(409, longest)
+    renderModal()
+    await settle()
+
+    expect(screen.queryByText(longest), 'the server sentence is not truncated or reflowed away').not.toBeNull()
+    expect(screen.queryByRole('button', { name: /retry/i }), 'a content refusal can only 409 again').toBeNull()
+    expect(downloadByName()).toBeNull()
+  })
+})

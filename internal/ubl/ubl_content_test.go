@@ -166,9 +166,10 @@ func wantChildOrder(t *testing.T, nodes []xmlNode, parentPath string, want []str
 }
 
 const (
-	supplierPath = "Invoice/cac:AccountingSupplierParty/cac:Party"
-	buyerPath    = "Invoice/cac:AccountingCustomerParty/cac:Party"
-	linePath     = "Invoice/cac:InvoiceLine"
+	supplierPath      = "Invoice/cac:AccountingSupplierParty/cac:Party"
+	buyerPath         = "Invoice/cac:AccountingCustomerParty/cac:Party"
+	linePath          = "Invoice/cac:InvoiceLine"
+	monetaryTotalPath = "Invoice/cac:LegalMonetaryTotal"
 )
 
 // --- AC #4: order below the top level ------------------------------------------------------------
@@ -186,7 +187,7 @@ func TestRender_NestedElementOrderFollowsTheUBLSequence(t *testing.T) {
 		wantChildOrder(t, nodes, party, []string{"cac:PartyName", "cac:PartyTaxScheme"})
 		wantChildOrder(t, nodes, party+"/cac:PartyTaxScheme", []string{"cbc:CompanyID", "cac:TaxScheme"})
 	}
-	wantChildOrder(t, nodes, "Invoice/cac:LegalMonetaryTotal",
+	wantChildOrder(t, nodes, monetaryTotalPath,
 		[]string{"cbc:LineExtensionAmount", "cbc:TaxExclusiveAmount", "cbc:PayableAmount"})
 	wantChildOrder(t, nodes, linePath, []string{
 		"cbc:ID", "cbc:InvoicedQuantity", "cbc:LineExtensionAmount", "cac:TaxTotal", "cac:Item", "cac:Price",

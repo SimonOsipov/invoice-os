@@ -44,17 +44,17 @@ type document struct {
 	XMLNSCAC string   `xml:"xmlns:cac,attr"`
 	XMLNSCBC string   `xml:"xmlns:cbc,attr"`
 
-	CustomizationID      string        `xml:"cbc:CustomizationID"`
-	ProfileID            string        `xml:"cbc:ProfileID"`
-	ID                   string        `xml:"cbc:ID"`
-	IssueDate            string        `xml:"cbc:IssueDate"` // pre-formatted, never time.Time
-	InvoiceTypeCode      string        `xml:"cbc:InvoiceTypeCode"`
-	DocumentCurrencyCode string        `xml:"cbc:DocumentCurrencyCode,omitempty"`
-	Supplier             party         `xml:"cac:AccountingSupplierParty"`
-	Buyer                party         `xml:"cac:AccountingCustomerParty"`
-	TaxTotal             *taxTotal     `xml:"cac:TaxTotal,omitempty"`
-	LegalMonetaryTotal   monetaryTotal `xml:"cac:LegalMonetaryTotal"`
-	Lines                []line        `xml:"cac:InvoiceLine"`
+	CustomizationID      string         `xml:"cbc:CustomizationID"`
+	ProfileID            string         `xml:"cbc:ProfileID"`
+	ID                   string         `xml:"cbc:ID"`
+	IssueDate            string         `xml:"cbc:IssueDate"` // pre-formatted, never time.Time
+	InvoiceTypeCode      string         `xml:"cbc:InvoiceTypeCode"`
+	DocumentCurrencyCode string         `xml:"cbc:DocumentCurrencyCode,omitempty"`
+	Supplier             party          `xml:"cac:AccountingSupplierParty"`
+	Buyer                party          `xml:"cac:AccountingCustomerParty"`
+	TaxTotal             *taxTotal      `xml:"cac:TaxTotal,omitempty"`
+	LegalMonetaryTotal   *monetaryTotal `xml:"cac:LegalMonetaryTotal,omitempty"`
+	Lines                []line         `xml:"cac:InvoiceLine"`
 }
 
 type party struct {
@@ -152,7 +152,8 @@ func Missing(c submission.Canonical) []string {
 }
 
 // build reads c only; the document is local to Render and never escapes, so aliasing c's
-// strings is safe here.
+// strings is safe here. Assumes Missing(c) is empty -- cac:Party has no unconditional member
+// and relies on that gate for a name.
 func build(c submission.Canonical) document {
 	doc := document{
 		XMLNSCAC:        nsCAC,
@@ -178,10 +179,14 @@ func build(c submission.Canonical) document {
 	}
 	// LineExtensionAmount and TaxExclusiveAmount both read Subtotal; separate calls so the two
 	// elements never share a pointer.
-	doc.LegalMonetaryTotal = monetaryTotal{
+	mt := monetaryTotal{
 		LineExtensionAmount: amountFrom(c.Subtotal, c.Currency),
 		TaxExclusiveAmount:  amountFrom(c.Subtotal, c.Currency),
 		PayableAmount:       amountFrom(c.Total, c.Currency),
+	}
+	// A container with no members is omitted, not emitted empty -- TestRender_EmitsNoEmptyContainer.
+	if mt.LineExtensionAmount != nil || mt.TaxExclusiveAmount != nil || mt.PayableAmount != nil {
+		doc.LegalMonetaryTotal = &mt
 	}
 
 	// Slice order, not LineNo order -- Store.Get already sorts by line_no.

@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/SimonOsipov/invoice-os/internal/submission"
@@ -19,29 +20,124 @@ import (
 
 // --- empty containers ------------------------------------------------------------------------
 
-// TestRender_EmitsAnEmptyLegalMonetaryTotalWhenNoMoneyIsStored PINS, does not require: Missing
-// does not gate on money, and cac:LegalMonetaryTotal is a value struct, so a canonical with no
-// stored totals renders the container with nothing inside it. EN 16931 makes cbc:PayableAmount
-// mandatory, so this document declares a profile it does not populate -- an owner decision
-// (gate on a total, or omit the container), not something to patch here.
-func TestRender_EmitsAnEmptyLegalMonetaryTotalWhenNoMoneyIsStored(t *testing.T) {
+// TestRender_OmitsLegalMonetaryTotalWhenEveryAmountIsAbsent pins omission (AC #6): with no
+// stored money the container is dropped entirely, never emitted empty. Its positive counterpart
+// below asserts the same path present, so neither can pass on a typo.
+func TestRender_OmitsLegalMonetaryTotalWhenEveryAmountIsAbsent(t *testing.T) {
 	c := completeCanonical(t)
 	c.Subtotal, c.VAT, c.Total = nil, nil, nil
 
 	out := mustRender(t, c)
 	nodes := walkDocument(t, out)
 
-	total := oneAt(t, nodes, "Invoice/cac:LegalMonetaryTotal")
-	if total.children != 0 || total.text != "" {
-		t.Errorf("cac:LegalMonetaryTotal has %d children and text %q; PINNED behaviour is an empty container",
-			total.children, total.text)
+	if got := nodesAt(nodes, monetaryTotalPath); len(got) != 0 {
+		t.Errorf("cac:LegalMonetaryTotal rendered with no stored money: %#v", got)
 	}
-	// The document-level cac:TaxTotal is a pointer and drops out entirely -- containers differ.
 	if got := nodesAt(nodes, "Invoice/cac:TaxTotal"); len(got) != 0 {
 		t.Errorf("document cac:TaxTotal present with a nil VAT: %#v", got)
 	}
 	if err := wellFormed(out); err != nil {
 		t.Errorf("moneyless document is not well-formed: %v", err)
+	}
+}
+
+// TestRender_EmitsLegalMonetaryTotalWithOnlyThePresentAmounts: one stored amount is enough to
+// emit the container, and it carries exactly the members that are present.
+func TestRender_EmitsLegalMonetaryTotalWithOnlyThePresentAmounts(t *testing.T) {
+	tests := []struct {
+		name     string
+		subtotal *string
+		total    *string
+		want     [][2]string // child element, text -- in document order
+	}{
+		{"total only", nil, ublStr("1075.00"), [][2]string{{"cbc:PayableAmount", "1075.00"}}},
+		{"subtotal only", ublStr("1000.00"), nil, [][2]string{
+			{"cbc:LineExtensionAmount", "1000.00"}, {"cbc:TaxExclusiveAmount", "1000.00"},
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := completeCanonical(t)
+			c.Subtotal, c.Total = tc.subtotal, tc.total
+
+			nodes := walkDocument(t, mustRender(t, c))
+
+			var wantKids []string
+			for _, kv := range tc.want {
+				wantKids = append(wantKids, kv[0])
+			}
+			wantChildOrder(t, nodes, monetaryTotalPath, wantKids)
+			for _, kv := range tc.want {
+				wantTextAt(t, nodes, monetaryTotalPath+"/"+kv[0], kv[1],
+					"a present amount reaches the document verbatim")
+			}
+		})
+	}
+}
+
+// barestCanonical carries exactly what Missing accepts and not one optional more.
+func barestCanonical() submission.Canonical {
+	issued := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	return submission.Canonical{
+		InvoiceNumber: "INV-2026-0002",
+		IssueDate:     &issued,
+		Supplier:      submission.Party{Name: ublStr("Acme Supplies Ltd")},
+		Buyer:         submission.Party{Name: ublStr("Beta Trading Ltd")},
+		Currency:      ublStr("NGN"),
+		Lines:         []submission.CanonicalLine{{LineNo: 1}},
+	}
+}
+
+// TestRender_EmitsNoEmptyContainer generalises the rule: a cac: element exists to hold children,
+// so one with none is an absent container emitted anyway. Swept over each optional set ALONE --
+// a childless container can appear at a partial fill, not only at the barest one.
+func TestRender_EmitsNoEmptyContainer(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*submission.Canonical)
+	}{
+		{"no optional at all", func(*submission.Canonical) {}},
+		{"subtotal alone", func(c *submission.Canonical) { c.Subtotal = ublStr("1000.00") }},
+		{"vat alone", func(c *submission.Canonical) { c.VAT = ublStr("75.00") }},
+		{"total alone", func(c *submission.Canonical) { c.Total = ublStr("1075.00") }},
+		{"supplier tin alone", func(c *submission.Canonical) { c.Supplier.TIN = ublStr("12345678-0001") }},
+		{"buyer tin alone", func(c *submission.Canonical) { c.Buyer.TIN = ublStr("87654321-0001") }},
+		{"description alone", func(c *submission.Canonical) { c.Lines[0].Description = ublStr("Widget") }},
+		{"blank description alone", func(c *submission.Canonical) { c.Lines[0].Description = ublStr("") }},
+		{"quantity alone", func(c *submission.Canonical) { c.Lines[0].Quantity = ublStr("2") }},
+		{"unit price alone", func(c *submission.Canonical) { c.Lines[0].UnitPrice = ublStr("400.00") }},
+		{"line total alone", func(c *submission.Canonical) { c.Lines[0].LineTotal = ublStr("800.00") }},
+		{"line tax alone", func(c *submission.Canonical) { c.Lines[0].LineTax = ublStr("60.00") }},
+		{"every optional", func(c *submission.Canonical) {
+			full := completeCanonical(t)
+			c.Subtotal, c.VAT, c.Total = full.Subtotal, full.VAT, full.Total
+			c.Supplier.TIN, c.Buyer.TIN = full.Supplier.TIN, full.Buyer.TIN
+			c.Lines = full.Lines
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := barestCanonical()
+			tc.set(&c)
+
+			nodes := walkDocument(t, mustRender(t, c))
+
+			var containers int
+			for _, n := range nodes {
+				if !strings.HasPrefix(n.path[strings.LastIndex(n.path, "/")+1:], "cac:") {
+					continue
+				}
+				containers++
+				if n.children == 0 {
+					t.Errorf("%s rendered with no children -- an absent container is omitted, not emitted empty", n.path)
+				}
+			}
+			if containers == 0 {
+				t.Fatal("no cac: elements found -- the loop above is not seeing the document")
+			}
+		})
 	}
 }
 

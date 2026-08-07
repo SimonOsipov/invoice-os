@@ -11,9 +11,12 @@ import (
 // preflight. These are the grant this gateway makes — the exact methods and request
 // headers that round trip needs, nothing wider. PATCH is granted for the portfolio
 // entity edit (M3-08, PATCH /api/portfolio/v1/entities/{id}) — the first PATCH caller
-// from the browser.
+// from the browser. DELETE is granted for the resolved-outside undo (and keep-as-is
+// undo) round trip — without it the browser blocks the actual DELETE after a preflight
+// that omits it, failing client-side with net::ERR_FAILED before the request ever
+// reaches this service.
 const (
-	corsAllowMethods = "GET, POST, PATCH, OPTIONS"
+	corsAllowMethods = "GET, POST, PATCH, DELETE, OPTIONS"
 	corsAllowHeaders = "Authorization, Content-Type"
 	corsMaxAge       = "600" // seconds a browser may cache a preflight before re-asking
 )

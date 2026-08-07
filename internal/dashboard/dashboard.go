@@ -17,13 +17,33 @@ type Counts struct {
 	Failed    int `json:"failed"`
 }
 
+// Metric is one readiness/health indicator, numerator over denominator
+// (e.g. readiness: invoices ready / total invoices).
+type Metric struct {
+	Num int64 `json:"num"`
+	Den int64 `json:"den"`
+}
+
+// Metric keys emitted per client and in Totals.Metrics.
+const (
+	MetricReadiness            = "readiness"
+	MetricBarFieldCompleteness = "bar_field_completeness"
+	MetricBarTaxAccuracy       = "bar_tax_accuracy"
+	MetricBarIdentifiersFormat = "bar_identifiers_format"
+	MetricBlockedByRules       = "blocked_by_rules"
+	MetricFailedInTransmission = "failed_in_transmission"
+	MetricNeverValidated       = "never_validated"
+	MetricVATTracked           = "vat_tracked"
+)
+
 // Bucket is one rollup scope: the state counts plus the needs-attention
 // overlay. NeedsAttention is NOT an eighth state — it cuts across
 // draft/rejected/failed (rejected ∪ failed ∪ (draft AND an error-severity
 // violation), AC-3).
 type Bucket struct {
-	Counts         Counts `json:"counts"`
-	NeedsAttention int    `json:"needs_attention"`
+	Counts         Counts            `json:"counts"`
+	NeedsAttention int               `json:"needs_attention"`
+	Metrics        map[string]Metric `json:"metrics"`
 }
 
 // Client is one per-entity row. Bucket is embedded ANONYMOUSLY so

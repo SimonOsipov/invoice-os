@@ -212,6 +212,11 @@ func marshalEdit(t *testing.T, body editInvoiceRequest) string {
 	return string(b)
 }
 
+// adminRoleStub is the shared callerRole stub for GetHandler call sites in
+// this package that don't exercise the resolve-outside gate itself --
+// resolved_outside_handlers_test.go injects role-specific stubs of its own.
+func adminRoleStub(ctx context.Context) (string, error) { return "admin", nil }
+
 func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, invoiceBody) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/v1/invoices/"+invoiceID, nil)
@@ -220,7 +225,7 @@ func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoic
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, nil).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -2507,7 +2512,7 @@ func TestGetHandler_UnrenderableQRPayloadIsLogged(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	GetHandler(get, logger).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -3809,7 +3814,8 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	}
 	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
 	// additive set -- the exact-count assertion below re-balances on its own.
-	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason"}
+	// can_resolve_outside/resolve_outside_blocked_reason join the same way.
+	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -3964,6 +3970,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// BUG-04-03 (task-399): appended after submit_blocked_reason, so they
 		// land last of all -- this is the only guard on AC #1's position clause.
 		"can_view_ubl", "ubl_blocked_reason",
+		// appended after ubl_blocked_reason, so they land last of all.
+		"can_resolve_outside", "resolve_outside_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -4242,7 +4250,7 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -4282,7 +4290,7 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4407,7 +4415,7 @@ func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4457,7 +4465,7 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", rec.Code, rec.Body.String())
@@ -5243,9 +5251,9 @@ func TestRoutes_BothResolveInBothDirections(t *testing.T) {
 		mux = http.NewServeMux()
 		if literalFirst {
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, nil))
 		} else {
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, nil))
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
 		}
 		return mux, getCalled, summaryCalled

@@ -76,6 +76,8 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     submit_blocked_reason: null,
     can_view_ubl: true,
     ubl_blocked_reason: null,
+    can_resolve_outside: false,
+    resolve_outside_blocked_reason: null,
     ...over,
   }
 }
@@ -98,6 +100,11 @@ interface SubmitCallBody {
   idempotency_key: string
 }
 
+interface ResolveCall {
+  method: 'POST' | 'DELETE'
+  body: { reason: string } | null
+}
+
 interface DetailFetchOptions {
   // Real getInvoice() GET calls after the first (always `detail`) resolve from here in
   // order; the last entry repeats once exhausted. The source-document GET never touches
@@ -108,6 +115,8 @@ interface DetailFetchOptions {
   submitResponses?: MockResponse[]
   editResponse?: MockResponse
   revalidateResponse?: MockResponse
+  resolveResponse?: MockResponse
+  unresolveResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -122,12 +131,43 @@ interface DetailFetchOptions {
 function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = [], opts: DetailFetchOptions = {}) {
   let detailCalls = 0
   const submitCalls: SubmitCallBody[] = []
+  const resolveCalls: ResolveCall[] = []
 
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET'
 
     if (url.endsWith('/history')) {
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(history) })
+    }
+    // resolveInvoiceOutside/unresolveInvoiceOutside (lib/invoices.ts:614/626) -- must be
+    // dispatched before the GET fallback below, or a POST/DELETE here silently falls
+    // through and answers with the unrelated detail-fetch branch.
+    if (url.endsWith('/resolved-outside')) {
+      if (method === 'DELETE') {
+        resolveCalls.push({ method: 'DELETE', body: null })
+        return Promise.resolve<MockResponse>(
+          opts.unresolveResponse ?? {
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ...detail, kept_as_is_at: null, kept_as_is_by: null, kept_as_is_reason: null }),
+          },
+        )
+      }
+      const body = JSON.parse(String(init.body)) as { reason: string }
+      resolveCalls.push({ method: 'POST', body })
+      return Promise.resolve<MockResponse>(
+        opts.resolveResponse ?? {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              ...detail,
+              kept_as_is_at: '2026-08-06T12:00:00Z',
+              kept_as_is_by: APP_PERSONAS.firm.subject,
+              kept_as_is_reason: body.reason,
+            }),
+        },
+      )
     }
     if (method === 'POST' && url.endsWith('/invoices/submissions')) {
       const body = JSON.parse(String(init.body)) as SubmitCallBody
@@ -167,7 +207,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(record) })
   })
   vi.stubGlobal('fetch', fetchMock)
-  return { fetchMock, submitCalls }
+  return { fetchMock, submitCalls, resolveCalls }
 }
 
 beforeEach(() => {
@@ -259,14 +299,21 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
   })
 
   // [actions-bar-gate-stands], pinned structurally rather than by inspection: the panel
-  // is diagnosis only, so no clickable control may ever appear inside it.
-  it('the failed-dead-end card renders no button or link -- diagnosis only, never a recovery control', async () => {
+  // is diagnosis only, so no clickable control may ever appear inside it -- resolve-outside
+  // excepted, the one affordance this card is allowed to carry (Core AC #6: it marks, it
+  // never re-drives/retries/submits). Rescoped from a blanket zero-button assertion, which
+  // the resolve-outside control (always rendered, disabled or not, on a `failed` invoice)
+  // makes too broad.
+  it('the failed-dead-end card carries no link and no button beyond resolve-outside -- never a re-drive control', async () => {
     mockDetailFetch(detailRecord({ failure_kind: 'acknowledged_no_verdict', rejection_reasons: [] }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const card = await screen.findByTestId('failed-dead-end')
-    expect(card.querySelectorAll('button, a').length).toBe(0)
+    expect(card.querySelectorAll('a').length).toBe(0)
+    const buttons = Array.from(card.querySelectorAll('button'))
+    expect(buttons.map((b) => b.dataset.testid)).toEqual(['resolve-outside'])
+    expect(buttons.some((b) => /submit|retry|re-?drive|resubmit|validate/i.test(b.textContent ?? ''))).toBe(false)
   })
 })
 
@@ -954,6 +1001,7 @@ describe('InvoiceDetail status history: actor resolution ([actor-label-shared])'
 describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   it('AC4: a kept invoice shows the decision on its own page', async () => {
     const kept = detailRecord({
+      status: 'draft',
       kept_as_is_at: '2026-07-31T00:00:00Z',
       kept_as_is_by: APP_PERSONAS.firm.subject,
       kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
@@ -983,7 +1031,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   // element it means to, not a missing one.
   it('AC4: the kept banner leads the Compliance panel, above violations-table', async () => {
     const kept = detailRecord({
-      status: 'validated',
+      status: 'draft',
       rule_set_version: 3,
       violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
       kept_as_is_at: '2026-07-31T00:00:00Z',
@@ -1031,6 +1079,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   it('an unrecognised kept_as_is_by renders raw on the banner, not blank', async () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
     const kept = detailRecord({
+      status: 'draft',
       kept_as_is_at: '2026-07-31T00:00:00Z',
       kept_as_is_by: unknown,
       kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
@@ -1051,6 +1100,7 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
   // a stray "null" (JSX drops a null child silently; a template literal would not have).
   it('a null reason/actor renders no fabricated text and no stray "null" (defensive -- CHECK constraint should make this unreachable)', async () => {
     const kept = detailRecord({
+      status: 'draft',
       kept_as_is_at: '2026-07-31T00:00:00Z',
       kept_as_is_by: null,
       kept_as_is_reason: null,
@@ -1065,6 +1115,383 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
     expect(banner.children[0].textContent).toBe(ROW_EXPANSION_COPY.keptPrefix)
     // Actor falls back to actorLabel(null) === 'Not recorded', not blank.
     expect(banner.children[1].textContent).toContain('Not recorded')
+  })
+})
+
+// The kept mark means "kept as-is" only on a draft; on a failed invoice it means
+// resolved outside the system, which is not this banner's claim.
+describe('InvoiceDetail Compliance panel: the kept banner is a draft-only concept, not resolved-failed', () => {
+  it('a resolved failed invoice never shows the kept-as-is banner', async () => {
+    const resolved = detailRecord({
+      status: 'failed',
+      kept_as_is_at: '2026-08-06T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Filed manually with the tax authority.',
+    })
+    mockDetailFetch(resolved)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByText('INV-FAILED-1') // wait for the record to render before asserting absence
+    expect(screen.queryAllByTestId('detail-kept-banner')).toHaveLength(0)
+  })
+
+  it('a kept draft still shows the kept-as-is banner (BUG-03 unchanged)', async () => {
+    const kept = detailRecord({
+      status: 'draft',
+      kept_as_is_at: '2026-07-31T00:00:00Z',
+      kept_as_is_by: APP_PERSONAS.firm.subject,
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    mockDetailFetch(kept)
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    expect(banner.textContent?.startsWith(ROW_EXPANSION_COPY.keptPrefix)).toBe(true)
+  })
+})
+
+// RED specs (Mode A). None of `resolve-outside` / `resolve-outside-reason` /
+// `resolve-outside-blocked-reason` / `detail-resolved-banner` / `resolve-outside-undo`
+// exist yet, so every spec here fails on a missing element or a wrong disabled/call state,
+// never a type/import error.
+describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
+  it('T7-1: resolve action renders inside the failed card, not invoice-actions', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const card = await screen.findByTestId('failed-dead-end')
+    expect(within(card).getByTestId('resolve-outside')).toBeTruthy()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+  })
+
+  it('T7-2: mark-resolved is disabled until a reason is typed', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    const input = screen.getByTestId('resolve-outside-reason')
+    expect(btn.disabled, 'empty reason').toBe(true)
+
+    fireEvent.change(input, { target: { value: '  ' } })
+    expect(btn.disabled, 'whitespace-only reason').toBe(true)
+
+    fireEvent.change(input, { target: { value: 'filed' } })
+    expect(btn.disabled, 'non-empty trimmed reason').toBe(false)
+  })
+
+  it('T7-3: a blocked caller sees a disabled button carrying the server reason', async () => {
+    const reason = 'Only an approver can mark this invoice resolved outside the system.'
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: false, resolve_outside_blocked_reason: reason }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(screen.getByTestId('resolve-outside-blocked-reason').textContent).toBe(reason)
+  })
+
+  it('T7-4: no reason means no reason element, never a fallback', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: false, resolve_outside_blocked_reason: null }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('resolve-outside')
+    expect(screen.queryAllByTestId('resolve-outside-blocked-reason')).toHaveLength(0)
+  })
+
+  it("T7-5: the disabled primary button neutralises its hover filter", async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: false }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = await screen.findByTestId('resolve-outside')
+    expect(btn.style.filter).toBe('none')
+  })
+
+  it('T7-6: a resolved invoice shows the banner and an undo', async () => {
+    const at = '2026-08-06T12:00:00Z'
+    const reason = 'Filed manually with the tax authority.'
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: at,
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: reason,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const banner = await screen.findByTestId('detail-resolved-banner')
+    expect(banner.textContent).toContain(reason)
+    expect(banner.textContent).toContain(fmtDateTime(at))
+    expect(screen.getByTestId('resolve-outside-undo')).toBeTruthy()
+  })
+
+  it('T7-7: marking resolved fires exactly one POST and no transition', async () => {
+    const { fetchMock, resolveCalls, submitCalls } = mockDetailFetch(
+      detailRecord({ status: 'failed', can_resolve_outside: true }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.change(await screen.findByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+    fireEvent.click(screen.getByTestId('resolve-outside'))
+
+    await waitFor(() => expect(resolveCalls).toHaveLength(1))
+    expect(resolveCalls[0].method).toBe('POST')
+    expect(submitCalls).toHaveLength(0)
+    const transitionCalls = fetchMock.mock.calls.filter(([url]) => /\/transitions|\/validate/.test(String(url)))
+    expect(transitionCalls).toHaveLength(0)
+  })
+
+  it('T7-8: undo fires exactly one DELETE', async () => {
+    const { resolveCalls } = mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.click(await screen.findByTestId('resolve-outside-undo'))
+
+    await waitFor(() => expect(resolveCalls).toHaveLength(1))
+    expect(resolveCalls[0].method).toBe('DELETE')
+  })
+
+  // QA adversarial: T7-5 only covers the persistent (`can_resolve_outside: false`) disabled
+  // reason; the far more common one -- an empty reason -- must neutralise the filter too.
+  it('T7-9: the disabled button still neutralises its hover filter when blocked only by an empty reason', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.style.filter).toBe('none')
+  })
+
+  // QA adversarial: existing coverage checks each banner's absence in isolation; neither
+  // spans both banners in the same render, so a co-render regression would slip through.
+  it('T7-10: a resolved failed invoice shows the resolved banner and never the kept-as-is banner', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('detail-resolved-banner')
+    expect(screen.queryAllByTestId('detail-kept-banner')).toHaveLength(0)
+  })
+
+  it('T7-11: a kept draft shows the kept-as-is banner and never the resolved banner', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        kept_as_is_at: '2026-07-31T00:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    await screen.findByTestId('detail-kept-banner')
+    expect(screen.queryAllByTestId('detail-resolved-banner')).toHaveLength(0)
+  })
+
+  it('T7-12: a rejected resolve surfaces the error and leaves the control usable, not stuck disabled', async () => {
+    const { resolveCalls } = mockDetailFetch(
+      detailRecord({ status: 'failed', can_resolve_outside: true }),
+      [],
+      { resolveResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const input = (await screen.findByTestId('resolve-outside-reason')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Filed manually.' } })
+    fireEvent.click(screen.getByTestId('resolve-outside'))
+
+    await screen.findByText('boom')
+    expect(resolveCalls).toHaveLength(1)
+    const btn = screen.getByTestId('resolve-outside') as HTMLButtonElement
+    expect(btn.disabled, 'reason is still populated and nothing is in flight -- must not stay disabled').toBe(false)
+    expect(input.value).toBe('Filed manually.') // not cleared on failure
+  })
+
+  it('T7-13: a fast double-click on resolve-outside fires exactly one POST', async () => {
+    const { resolveCalls } = mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.change(await screen.findByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+    const btn = screen.getByTestId('resolve-outside')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(resolveCalls.length).toBeGreaterThan(0))
+    expect(resolveCalls).toHaveLength(1)
+  })
+
+  it('T7-14: a fast double-click on undo fires exactly one DELETE', async () => {
+    const { resolveCalls } = mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    const btn = await screen.findByTestId('resolve-outside-undo')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(resolveCalls.length).toBeGreaterThan(0))
+    expect(resolveCalls).toHaveLength(1)
+  })
+
+  // CodeRabbit review finding 1: a `live` overlay left over from watching queued -> failed
+  // in this session must not mask a successful resolve/undo behind a stale render. Real
+  // wait, not fake timers -- matches the poll-tick convention above (:928-960).
+  it(
+    'T7-15: a poll tick that observed queued -> failed does not mask a successful resolve behind a stale overlay',
+    async () => {
+      const initial = detailRecord({ status: 'queued', can_resolve_outside: false })
+      const afterPoll = detailRecord({ status: 'failed', can_resolve_outside: true })
+      const resolved = detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually.',
+      })
+      const { resolveCalls, fetchMock } = mockDetailFetch(initial, [], { detailSequence: [afterPoll, resolved] })
+
+      render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+      const detailGetCalls = () =>
+        fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
+          const method = init?.method ?? 'GET'
+          const u = String(url)
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+        })
+      // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
+      await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
+
+      fireEvent.change(await screen.findByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+      fireEvent.click(screen.getByTestId('resolve-outside'))
+
+      await waitFor(() => expect(resolveCalls).toHaveLength(1))
+      await screen.findByTestId('detail-resolved-banner')
+    },
+    LIVE_POLL_MS + 5000,
+  )
+
+  it(
+    'T7-16: a poll tick that observed queued -> failed does not mask a successful undo behind a stale overlay',
+    async () => {
+      const initial = detailRecord({ status: 'queued', can_resolve_outside: false })
+      const afterPoll = detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      })
+      const unresolved = detailRecord({ status: 'failed', can_resolve_outside: true })
+      const { resolveCalls, fetchMock } = mockDetailFetch(initial, [], { detailSequence: [afterPoll, unresolved] })
+
+      render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+      const detailGetCalls = () =>
+        fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
+          const method = init?.method ?? 'GET'
+          const u = String(url)
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+        })
+      await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
+
+      fireEvent.click(await screen.findByTestId('resolve-outside-undo'))
+
+      await waitFor(() => expect(resolveCalls).toHaveLength(1))
+      await screen.findByTestId('resolve-outside-reason')
+      expect(screen.queryAllByTestId('detail-resolved-banner')).toHaveLength(0)
+    },
+    LIVE_POLL_MS + 5000,
+  )
+
+  // CodeRabbit review finding 2 (Core AC #4): a blocked Undo must carry the server reason,
+  // same as the mark-resolved button, never a silently disabled control.
+  it('T7-17: a blocked Undo shows the server reason, not a silently disabled control', async () => {
+    const reason = 'Only an approver can mark an invoice resolved outside the system — ask an admin or a reviewer on your team.'
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: false,
+        resolve_outside_blocked_reason: reason,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside-undo')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    const reasonEl = screen.getByTestId('resolve-outside-blocked-reason')
+    expect(reasonEl.textContent).toBe(reason)
+    expect(btn.getAttribute('aria-describedby')).toBe(reasonEl.id)
+  })
+
+  // CodeRabbit review finding 3: resolveOutsideError must render in BOTH the resolved and
+  // unresolved branches -- a failed undo has no branch to render its error in otherwise.
+  it('T7-18: a rejected undo surfaces its error while the resolved banner is still showing', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+      [],
+      { unresolveResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.click(await screen.findByTestId('resolve-outside-undo'))
+
+    await screen.findByText('boom')
+    expect(screen.getByTestId('detail-resolved-banner')).toBeTruthy()
+  })
+
+  // Pins the declarations only -- jsdom applies no CSS, so this cannot prove the label
+  // stops wrapping on screen, only that the fix stays wired up.
+  it('T7-19: resolve-outside is pinned to its own width and its row wraps instead', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    expect(btn.style.flexShrink).toBe('0')
+    expect(btn.style.whiteSpace).toBe('nowrap')
+    expect(btn.parentElement?.style.flexWrap).toBe('wrap')
   })
 })
 

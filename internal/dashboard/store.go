@@ -31,8 +31,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // []Client{} so an empty tenant still marshals "clients":[], never null —
 // AC-1/DASH-03), then sums Clients element-wise into Totals in Go (no second
 // aggregate query). needs_attention cuts across draft/rejected/failed
-// (AC-3): rejected/failed always count, a draft counts only when its
-// violations contain an error-severity entry. TopViolations (pre-declared as
+// (AC-3): rejected always counts, failed counts unless resolved outside
+// (kept_as_is_at set), a draft counts only when its violations contain an
+// error-severity entry. TopViolations (pre-declared as
 // []RuleCount{}, same never-nil reasoning) counts, per rule_key, the distinct
 // invoices carrying a severity:"error" entry for that rule, ordered invoices
 // DESC then rule_key ASC.
@@ -53,7 +54,8 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 			    count(*) FILTER (WHERE i.status = 'rejected')  AS rejected,
 			    count(*) FILTER (WHERE i.status = 'failed')    AS failed,
 			    count(*) FILTER (
-			        WHERE i.status IN ('rejected', 'failed')
+			        WHERE i.status = 'rejected'
+			           OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)
 			           OR (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)
 			    ) AS needs_attention
 			 FROM invoices i

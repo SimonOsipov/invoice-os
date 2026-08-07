@@ -382,6 +382,16 @@ var (
 	// asked for something that is not currently true, not something malformed
 	// (400) or missing (404).
 	ErrNotKeepable = errors.New("invoice: not keepable")
+
+	// ErrNotPermitted is Store.ResolveOutside/UnresolveOutside's own precondition
+	// sentinel: the caller's memberships.role is not admin/reviewer. A 403 in
+	// statusForErr -- this package's first 403-class sentinel.
+	ErrNotPermitted = errors.New("invoice: not permitted")
+
+	// ErrNotResolvable is Store.ResolveOutside/UnresolveOutside's own precondition
+	// sentinel: the invoice is not currently `failed`. A 409 in statusForErr,
+	// alongside ErrNotKeepable.
+	ErrNotResolvable = errors.New("invoice: not resolvable")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

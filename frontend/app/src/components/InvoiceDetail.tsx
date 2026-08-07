@@ -18,6 +18,7 @@ import { actorLabel } from '../lib/actor'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
+  canResolveOutside,
   computedLineSum,
   DETAIL_SUBMIT_COPY,
   diffEditInput,
@@ -33,6 +34,9 @@ import {
   newIdempotencyKey,
   reasonFieldFlags,
   rejectionProvenance,
+  resolveInvoiceOutside,
+  RESOLVE_OUTSIDE_COPY,
+  resolvedOutside,
   revalidateInvoice,
   shouldFetchInvoices,
   shouldPollInvoice,
@@ -41,6 +45,7 @@ import {
   shouldShowRejectionCard,
   singleSubmitOutcome,
   submitInvoices,
+  unresolveInvoiceOutside,
   verdictStatus,
   type EditFieldKey,
   type EditFormState,
@@ -147,6 +152,9 @@ const SUBMIT_REASON_ID = 'submit-blocked-reason-text'
 // Same rationale again; a third distinct id, so no two disabled controls'
 // aria-describedby targets collide when they render together.
 const VIEW_UBL_REASON_ID = 'view-ubl-blocked-reason-text'
+
+// Same rationale again; a fourth distinct id, for the resolve-outside button.
+const RESOLVE_OUTSIDE_REASON_ID = 'resolve-outside-blocked-reason-text'
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
@@ -267,6 +275,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [submitSkipped, setSubmitSkipped] = useState<string | null>(null)
   const submitInFlight = useRef(false)
 
+  // Resolve-outside control (failed invoices only, Core AC #1/#4/#5/#6). Both handlers DO
+  // gen-bump / setLive(null) before detail.run() (handleRevalidate's precedent) -- `live`
+  // can still hold a stale snapshot from watching queued -> failed earlier in this session.
+  const [resolveReason, setResolveReason] = useState('')
+  const [resolving, setResolving] = useState(false)
+  const [undoing, setUndoing] = useState(false)
+  const [resolveOutsideError, setResolveOutsideError] = useState<string | null>(null)
+
   // Inline edit mode ([edit-ux]/[edit-mode-in-body], INVED-01-07). The ONLY new state this
   // component gains: the editor itself is a child mounted only while true, seeding its own
   // field/row state once at mount, so Cancel is just setEditing(false) -> unmount -> state
@@ -322,11 +338,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         </div>
       </div>
     ) : null
-    const kept = keptAsIs(inv)
+    // keptAsIs has no status field to test; gate here since the mark means "kept as-is" only on a draft.
+    const kept = inv.status === 'draft' ? keptAsIs(inv) : null
+    // Unlike keptAsIs above, resolvedOutside self-gates on status === 'failed', so no
+    // extra status check is needed here.
+    const resolvedMark = resolvedOutside(inv)
     // Two independent reasons to disable, styled identically: the wire says the action is
     // unavailable (persistent, carries a reason), or one is already in flight (transient,
     // the label says "Revalidating…"). No status comparison -- `can_revalidate` only.
     const revalidateDisabled = !inv.can_revalidate || revalidating
+    const resolveOutsideDisabled = !inv.can_resolve_outside || resolving || !canResolveOutside(resolveReason)
 
     // Arrow functions (not `function` declarations): narrowing of `base` to non-null
     // (established by the `if (base == null)` branch above) does not survive into a
@@ -424,6 +445,45 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         // the bar on the error leg.
         setSubmitPhase((p) => bulkPhaseReducer(p, { type: 'settled' }))
         submitInFlight.current = false
+      }
+    }
+
+    // Mirrors keepInvoiceAsIs's caller shape (ReviewRow.tsx handleKeep) -- a thin POST
+    // wrapper, one re-entrancy guard, refetch on success. Core AC #6: this never chains
+    // into revalidateInvoice/submitInvoices.
+    const handleResolveOutside = async () => {
+      if (resolving) return
+      setResolving(true)
+      setResolveOutsideError(null)
+      try {
+        await resolveInvoiceOutside(ctx.authedFetch, base, invoiceId, resolveReason)
+        setResolveReason('')
+        // See handleRevalidate above -- clear the overlay before the real refresh, so a
+        // `live` value left over from watching queued -> failed can't mask this result.
+        gen.current++
+        setLive(null)
+        detail.run()
+      } catch (err) {
+        setResolveOutsideError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        setResolving(false)
+      }
+    }
+
+    const handleUndoResolveOutside = async () => {
+      if (undoing) return
+      setUndoing(true)
+      setResolveOutsideError(null)
+      try {
+        await unresolveInvoiceOutside(ctx.authedFetch, base, invoiceId)
+        // See handleResolveOutside above -- same overlay-clear, same rationale.
+        gen.current++
+        setLive(null)
+        detail.run()
+      } catch (err) {
+        setResolveOutsideError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        setUndoing(false)
       }
     }
 
@@ -755,6 +815,105 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   >
                     {failure.nextStep}
                   </div>
+                  {/* Resolve-outside (Core AC #1/#4/#5/#6) -- inline, never a modal
+                      ([no-modal]), the only affordance this diagnosis-only card carries.
+                      Resolved and unresolved are mutually exclusive renders: the banner +
+                      Undo replace the reason input + mark-resolved button entirely. */}
+                  {resolvedMark ? (
+                    <>
+                      <div
+                        data-testid="detail-resolved-banner"
+                        style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+                      >
+                        <div>{RESOLVE_OUTSIDE_COPY.resolvedPrefix}{resolvedMark.reason}</div>
+                        <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(resolvedMark.by).text} · {fmtDateTime(resolvedMark.at)}</div>
+                      </div>
+                      {/* Re-resolving is legal (the wire's can_resolve_outside does not go
+                          false once resolved), so Undo reads the same flag as the mark
+                          button below rather than a separate one. Same reason wiring as
+                          `resolve-outside` below (Core AC #4, disabled-with-reason, never
+                          hidden) -- reusing RESOLVE_OUTSIDE_REASON_ID/its testid is safe
+                          because resolved and unresolved never render at once. */}
+                      <button
+                        type="button"
+                        data-testid="resolve-outside-undo"
+                        onClick={() => void handleUndoResolveOutside()}
+                        disabled={!inv.can_resolve_outside || undoing}
+                        title={inv.resolve_outside_blocked_reason ?? undefined}
+                        aria-describedby={inv.resolve_outside_blocked_reason != null ? RESOLVE_OUTSIDE_REASON_ID : undefined}
+                        className="v2-btn v2-btn-ghost pf-btn"
+                        style={{
+                          height: 32,
+                          padding: '0 14px',
+                          fontSize: 13,
+                          alignSelf: 'flex-start',
+                          ...(!inv.can_resolve_outside || undoing ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        }}
+                      >
+                        {RESOLVE_OUTSIDE_COPY.undoLabel}
+                      </button>
+                      {inv.resolve_outside_blocked_reason != null && (
+                        <div id={RESOLVE_OUTSIDE_REASON_ID} data-testid="resolve-outside-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+                          {inv.resolve_outside_blocked_reason}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {/* The label is wider than the rail can hold beside the input, so the
+                          row wraps to a second line instead of squeezing text inside the pill. */}
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <input
+                          type="text"
+                          data-testid="resolve-outside-reason"
+                          aria-label="Resolved outside reason"
+                          placeholder={RESOLVE_OUTSIDE_COPY.reasonPlaceholder}
+                          value={resolveReason}
+                          onChange={(e) => setResolveReason(e.target.value)}
+                          disabled={resolving}
+                          className="pf-input"
+                          style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
+                        />
+                        {/* Same four-layer disabled recipe as Submit (:573-590) -- `filter:
+                            'none'` is mandatory: this is `.v2-btn-primary`, whose unguarded
+                            `:hover` (app-layer.css:213) sets `filter: brightness(1.22)`. */}
+                        <button
+                          type="button"
+                          data-testid="resolve-outside"
+                          onClick={() => void handleResolveOutside()}
+                          disabled={resolveOutsideDisabled}
+                          title={inv.resolve_outside_blocked_reason ?? undefined}
+                          aria-describedby={inv.resolve_outside_blocked_reason != null ? RESOLVE_OUTSIDE_REASON_ID : undefined}
+                          className="v2-btn v2-btn-primary pf-btn"
+                          style={{
+                            height: 32,
+                            padding: '0 14px',
+                            fontSize: 13,
+                            // Must not flex-shrink below its own text -- that's what wrapped the label.
+                            flexShrink: 0,
+                            whiteSpace: 'nowrap',
+                            ...(resolveOutsideDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                          }}
+                        >
+                          {RESOLVE_OUTSIDE_COPY.label}
+                        </button>
+                      </div>
+                      {/* The backend's copy, verbatim -- never an SPA-authored fallback. */}
+                      {inv.resolve_outside_blocked_reason != null && (
+                        <div id={RESOLVE_OUTSIDE_REASON_ID} data-testid="resolve-outside-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+                          {inv.resolve_outside_blocked_reason}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {/* Outside the resolved/unresolved ternary on purpose: a failed
+                      handleUndoResolveOutside sets this too, and it must not be stranded
+                      with no branch to render in while the resolved banner is still shown. */}
+                  {resolveOutsideError && (
+                    <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+                      {resolveOutsideError}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

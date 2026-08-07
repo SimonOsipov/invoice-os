@@ -30,6 +30,7 @@ import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-
 import { createAuthedFetch } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 import {
+  canResolveOutside,
   clampFilterText,
   computedLineSum,
   createInvoice,
@@ -58,6 +59,8 @@ import {
   pruneSelection,
   reasonFieldFlags,
   rejectionProvenance,
+  resolveInvoiceOutside,
+  resolvedOutside,
   revalidateInvoice,
   selectableIds,
   selectAllState,
@@ -71,6 +74,7 @@ import {
   skipReasonLabel,
   submitInvoices,
   toggleSelection,
+  unresolveInvoiceOutside,
   verdictStatus,
   violationSummary,
   type BatchSubmitResultItem,
@@ -607,6 +611,8 @@ describe('getInvoice', () => {
       submit_blocked_reason: null,
       can_view_ubl: true,
       ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -632,6 +638,8 @@ describe('getInvoice', () => {
       submit_blocked_reason: null,
       can_view_ubl: true,
       ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -655,6 +663,8 @@ describe('getInvoice', () => {
       submit_blocked_reason: null,
       can_view_ubl: true,
       ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -699,6 +709,8 @@ describe('getInvoice', () => {
       submit_blocked_reason: null,
       can_view_ubl: true,
       ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -790,6 +802,8 @@ describe('getInvoice', () => {
       submit_blocked_reason: null,
       can_view_ubl: true,
       ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -1100,6 +1114,213 @@ describe('keepInvoiceAsIs (INVCR-01-15, D6, task-291)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(409)
+  })
+})
+
+describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / resolvedOutside', () => {
+  it('RESOLVE-INV-1: POST body is {reason} only', async () => {
+    const resolved: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually through the NRS portal.',
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(resolved) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await resolveInvoiceOutside(af, base, 'inv-1', 'Filed manually through the NRS portal.')
+
+    expect(result).toEqual(resolved)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1/resolved-outside')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ reason: 'Filed manually through the NRS portal.' }))
+  })
+
+  it('RESOLVE-INV-2: DELETE sends no body', async () => {
+    const unresolved: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'failed',
+      kept_as_is_at: null,
+      kept_as_is_by: null,
+      kept_as_is_reason: null,
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(unresolved) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await unresolveInvoiceOutside(af, base, 'inv-1')
+
+    expect(result).toEqual(unresolved)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/invoices/inv-1/resolved-outside')
+    expect(init.method).toBe('DELETE')
+    expect(init.body).toBeUndefined()
+  })
+
+  it('RESOLVE-INV-3: normalizer fails closed', async () => {
+    const wire: InvoiceDetailRecord = {
+      ...draftInvoice,
+      status: 'failed',
+      rule_set_version: null,
+      qr_png_base64: null,
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
+      can_submit: false,
+      submit_blocked_reason: null,
+      can_view_ubl: false,
+      ubl_blocked_reason: null,
+      can_resolve_outside: true,
+      resolve_outside_blocked_reason: null,
+    }
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const { can_resolve_outside: _omitted, ...withoutKey } = wire
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutKey) })
+    const absent = await getInvoice(af, base, 'inv-1')
+    expect(absent.can_resolve_outside).toBe(false)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...wire, can_resolve_outside: undefined }) })
+    const undef = await getInvoice(af, base, 'inv-1')
+    expect(undef.can_resolve_outside).toBe(false)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...wire, can_resolve_outside: 'true' }) })
+    const stringly = await getInvoice(af, base, 'inv-1')
+    expect(stringly.can_resolve_outside).toBe(false)
+  })
+
+  it('RESOLVE-INV-4: reason passes through verbatim', async () => {
+    const reasonText = 'Filed via the NRS portal — receipt #4471.  '
+    const wire = { ...draftInvoice, status: 'failed', can_resolve_outside: false, resolve_outside_blocked_reason: reasonText }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.resolve_outside_blocked_reason).toBe(reasonText)
+  })
+
+  it('RESOLVE-INV-5: canResolveOutside requires a reason', () => {
+    const cases: Array<[string, boolean]> = [
+      ['', false],
+      ['   ', false],
+      ['\t\n', false],
+      ['a real reason', true],
+      ['  padded  ', true],
+    ]
+
+    const results = cases.map(([reason]) => canResolveOutside(reason))
+
+    expect(results).toEqual(cases.map(([, expected]) => expected))
+  })
+
+  it('RESOLVE-INV-6: resolvedOutside is status-gated', () => {
+    const failedMarked = resolvedOutside({
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually through the NRS portal.',
+    })
+    expect(failedMarked).not.toBeNull()
+
+    const draftMarked = resolvedOutside({
+      status: 'draft',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+    })
+    expect(draftMarked).toBeNull()
+
+    const failedUnmarked = resolvedOutside({
+      status: 'failed',
+      kept_as_is_at: null,
+      kept_as_is_by: null,
+      kept_as_is_reason: null,
+    })
+    expect(failedUnmarked).toBeNull()
+  })
+
+  it('RESOLVE-INV-7: a non-2xx response rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: () => Promise.resolve({ error: 'invoice is not in a failed state' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => resolveInvoiceOutside(af, base, 'inv-1', 'some reason'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(409)
+  })
+
+  it('RESOLVE-INV-8: unresolveInvoiceOutside on a non-2xx response rejects with the ApiError untouched', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: () => Promise.resolve({ error: 'invoice not found' }),
+    })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const err = await captureRejection(() => unresolveInvoiceOutside(af, base, 'inv-1'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).kind).toBe('http')
+    expect((err as ApiError).status).toBe(404)
+  })
+
+  it('RESOLVE-INV-9: resolvedOutside is null for every non-failed status, not just draft', () => {
+    const nonFailed: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected']
+
+    for (const status of nonFailed) {
+      expect(
+        resolvedOutside({
+          status,
+          kept_as_is_at: '2026-08-01T00:00:00Z',
+          kept_as_is_by: 'user-1',
+          kept_as_is_reason: 'Filed manually through the NRS portal.',
+        }),
+      ).toBeNull()
+    }
+  })
+
+  it('RESOLVE-INV-10: resolvedOutside accepts both a list-row (InvoiceRecord) and a detail-row (InvoiceDetailRecord) call shape', () => {
+    // A future list-marker caller passes a bare listInvoices() row; a future detail-banner
+    // caller passes a full getInvoice() row. Pick<InvoiceRecord, ...> must satisfy both --
+    // this pins that it does, not just that the narrow fields do.
+    const listRow: InvoiceRecord = {
+      ...draftInvoice,
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually through the NRS portal.',
+    }
+    const detailRow: InvoiceDetailRecord = {
+      ...listRow,
+      rule_set_version: null,
+      qr_png_base64: null,
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: null,
+      can_submit: false,
+      submit_blocked_reason: null,
+      can_view_ubl: false,
+      ubl_blocked_reason: null,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: null,
+    }
+
+    const fromList = resolvedOutside(listRow)
+    const fromDetail = resolvedOutside(detailRow)
+
+    expect(fromList).toEqual({ at: '2026-08-01T00:00:00Z', by: 'user-1', reason: 'Filed manually through the NRS portal.' })
+    expect(fromDetail).toEqual(fromList)
   })
 })
 

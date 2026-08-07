@@ -264,6 +264,69 @@ describe('verdictPill: a kept row is KEPT · INVALID and does not stack (PILL-5)
   })
 })
 
+// The kept mark means "kept as-is" only on a draft; on a failed invoice it means
+// resolved outside the system, which is not this badge's claim.
+describe('verdictPill: the kept mark is a draft-only concept, not resolved-failed (PILL-9..PILL-11)', () => {
+  it('PILL-9: a resolved failed row is not badged KEPT · INVALID', () => {
+    const input: VerdictInput = { status: 'failed', violations: [], kept_as_is_at: '2026-08-06T00:00:00Z' }
+
+    const result = verdictPill(input)
+
+    expect(result.badges).toEqual([])
+    expect(result.status.label).toBe('FAILED')
+  })
+
+  it('PILL-10: a resolved failed row badges its violations, never the mark', () => {
+    const violations: Violation[] = [{ rule_key: 'r1', severity: 'error', message: 'e1' }]
+    const input: VerdictInput = { status: 'failed', violations, kept_as_is_at: '2026-08-06T00:00:00Z' }
+
+    const result = verdictPill(input)
+
+    expect(result.badges).toHaveLength(1)
+    expect(result.badges[0].kind).toBe('rules-failed')
+    expect(result.badges[0].count).toBe(1)
+    expect(result.badges.some((b) => b.kind === 'kept-invalid')).toBe(false)
+  })
+
+  // Regression guard: byte-identical to PILL-5 above -- a draft-only gate must not
+  // touch the case it already handled correctly.
+  it('PILL-5 still holds: a kept draft is still KEPT · INVALID', () => {
+    const violations: Violation[] = [
+      { rule_key: 'r1', severity: 'error', message: 'e1' },
+      { rule_key: 'r2', severity: 'error', message: 'e2' },
+    ]
+    const input: VerdictInput = { status: 'draft', violations, kept_as_is_at: '2026-07-30T00:00:00Z' }
+
+    const result = verdictPill(input)
+
+    expect(result.badges).toHaveLength(1)
+    expect(result.badges[0].kind).toBe('kept-invalid')
+    expect(result.badges[0].count).toBe(2)
+  })
+
+  it('PILL-11: every non-draft status ignores the mark', () => {
+    const nonDraftStatuses: InvoiceStatus[] = ['validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+    for (const status of nonDraftStatuses) {
+      const result = verdictPill({ status, violations: [], kept_as_is_at: '2026-08-06T00:00:00Z' })
+      expect(result.badges.some((b) => b.kind === 'kept-invalid')).toBe(false)
+    }
+  })
+
+  // No shipped rule is warning-severity today, so a `failed` row can't actually reach
+  // here -- verdictPill is pure, so the branch is still pinned in case that changes.
+  it('a resolved failed row with only advisory violations badges ADVISORY, never the mark', () => {
+    const violations: Violation[] = [{ rule_key: 'r1', severity: 'warning', message: 'w1' }]
+    const input: VerdictInput = { status: 'failed', violations, kept_as_is_at: '2026-08-06T00:00:00Z' }
+
+    const result = verdictPill(input)
+
+    expect(result.badges).toHaveLength(1)
+    expect(result.badges[0].kind).toBe('advisory')
+    expect(result.badges[0].count).toBe(1)
+  })
+})
+
 describe('filterToQuery (AC-7)', () => {
   it('FILTER-1: each pill maps to server params; All emits an object with ZERO keys, never an explicit needsFix:false/status:undefined', () => {
     const all = filterToQuery('all')

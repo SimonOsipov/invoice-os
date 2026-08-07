@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,13 +34,13 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // aggregate query). needs_attention cuts across draft/rejected/failed
 // (AC-3): rejected always counts, failed counts unless resolved outside
 // (kept_as_is_at set), a draft counts only when its violations contain an
-// error-severity entry. TopViolations (pre-declared as
-// []RuleCount{}, same never-nil reasoning) counts, per rule_key, the distinct
-// invoices carrying a severity:"error" entry for that rule, ordered invoices
-// DESC then rule_key ASC.
+// error-severity entry. TopViolations is grouped per entity_id AND rule_key
+// and attached to each Client; the root/Totals list is the Go-side sum
+// across entities, re-sorted invoices DESC then rule_key ASC (map iteration
+// order isn't deterministic, so the sort can't be skipped).
 func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	clients := []Client{}
-	topViolations := []RuleCount{}
+	ruleSums := map[string]int{}
 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
@@ -125,6 +126,7 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 				MetricNeverValidated:       {Num: neverValidated, Den: total},
 				MetricVATTracked:           {Num: vatKobo, Den: total},
 			}
+			c.TopViolations = []RuleCount{}
 			clients = append(clients, c)
 		}
 		if err := rows.Err(); err != nil {
@@ -138,33 +140,46 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 		// confirmed), so it costs nothing on the array-shaped rows the real
 		// write path always produces.
 		ruleRows, err := tx.Query(ctx,
-			`SELECT v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
+			`SELECT i.entity_id, v->>'rule_key' AS rule_key, count(DISTINCT i.id) AS invoices
 			 FROM invoices i
 			 CROSS JOIN LATERAL jsonb_array_elements(i.violations) AS v
 			 WHERE jsonb_typeof(i.violations) = 'array'
 			   AND v->>'severity' = 'error'
 			   AND nullif(v->>'rule_key', '') IS NOT NULL
-			 GROUP BY 1
-			 ORDER BY 2 DESC, 1 ASC`,
+			 GROUP BY i.entity_id, 2
+			 ORDER BY i.entity_id, 3 DESC, 2 ASC`,
 		)
 		if err != nil {
 			return err
 		}
 		defer ruleRows.Close()
+		byEntity := map[string][]RuleCount{}
 		for ruleRows.Next() {
+			var entityID string
 			var rc RuleCount
-			if err := ruleRows.Scan(&rc.RuleKey, &rc.Invoices); err != nil {
+			if err := ruleRows.Scan(&entityID, &rc.RuleKey, &rc.Invoices); err != nil {
 				return err
 			}
-			topViolations = append(topViolations, rc)
+			byEntity[entityID] = append(byEntity[entityID], rc)
+			ruleSums[rc.RuleKey] += rc.Invoices
 		}
-		return ruleRows.Err()
+		if err := ruleRows.Err(); err != nil {
+			return err
+		}
+		// Row order within each entity_id group is already invoices DESC,
+		// rule_key ASC from the query -- no further per-client sort needed.
+		for i := range clients {
+			if list, ok := byEntity[clients[i].EntityID]; ok {
+				clients[i].TopViolations = list
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return Rollup{}, err
 	}
 
-	totals := Bucket{Metrics: map[string]Metric{}}
+	totals := Bucket{Metrics: map[string]Metric{}, TopViolations: []RuleCount{}}
 	for _, c := range clients {
 		totals.Counts.Draft += c.Counts.Draft
 		totals.Counts.Validated += c.Counts.Validated
@@ -176,6 +191,21 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 		totals.NeedsAttention += c.NeedsAttention
 		addMetrics(totals.Metrics, c.Metrics)
 	}
+
+	// Re-sort is mandatory: map iteration order is randomized, and
+	// invoices-DESC/rule_key-ASC is a complete order (rule_key is unique
+	// per group), not a probabilistic tie-break.
+	topViolations := []RuleCount{}
+	for k, v := range ruleSums {
+		topViolations = append(topViolations, RuleCount{RuleKey: k, Invoices: v})
+	}
+	sort.Slice(topViolations, func(i, j int) bool {
+		if topViolations[i].Invoices != topViolations[j].Invoices {
+			return topViolations[i].Invoices > topViolations[j].Invoices
+		}
+		return topViolations[i].RuleKey < topViolations[j].RuleKey
+	})
+	totals.TopViolations = topViolations
 
 	return Rollup{Totals: totals, Clients: clients, TopViolations: topViolations}, nil
 }

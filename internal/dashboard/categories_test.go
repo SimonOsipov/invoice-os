@@ -1,17 +1,3 @@
-// Spec-to-test map (Test Specs table, METR-01-01 story / task-425):
-//
-//	MCAT-01 TestCategories_EveryActiveRuleIsMapped
-//	MCAT-02 TestCategories_EveryMappedKeyIsActive
-//	MCAT-03 TestCategories_PartitionSizesMatchSpec
-//	MCAT-04 TestCategories_KeysDisjointAndCoverTheMap
-//	MCAT-05 TestCategories_KeysSortedAndStable
-//	MCAT-06 TestCategories_GuardSurvivesEnabledFlip
-//
-// Run: `make test-rls`, or directly, e.g.:
-//
-//	DATABASE_URL="postgres://invoice_app:app@localhost:5433/invoice_os?sslmode=disable" \
-//	DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:5433/invoice_os?sslmode=disable" \
-//	go test -count=1 -run TestCategories ./internal/dashboard/...
 package dashboard
 
 import (
@@ -107,9 +93,8 @@ func TestCategories_PartitionSizesMatchSpec(t *testing.T) {
 	}
 }
 
-// MCAT-04: categoryKeys for the three categories are pairwise disjoint and
-// their union is the whole map. Fails when a key lands in two text[]
-// params and double-counts against two bars.
+// MCAT-04: categoryKeys results are pairwise disjoint and cover the map.
+// Fails when a key lands in two categories, double-counting a bar.
 func TestCategories_KeysDisjointAndCoverTheMap(t *testing.T) {
 	fc := categoryKeys(CategoryFieldCompleteness)
 	ta := categoryKeys(CategoryTaxAccuracy)
@@ -135,9 +120,8 @@ func TestCategories_KeysDisjointAndCoverTheMap(t *testing.T) {
 	}
 }
 
-// MCAT-05: categoryKeys is sorted and stable across calls. Fails when SQL
-// parameter order flaps between runs, making plans and failures
-// non-reproducible.
+// MCAT-05: categoryKeys is sorted ascending and stable across calls. Fails
+// when SQL param order flaps, making query plans non-reproducible.
 func TestCategories_KeysSortedAndStable(t *testing.T) {
 	for _, cat := range []Category{CategoryFieldCompleteness, CategoryTaxAccuracy, CategoryIdentifiers} {
 		first := categoryKeys(cat)
@@ -157,10 +141,8 @@ func TestCategories_KeysSortedAndStable(t *testing.T) {
 	}
 }
 
-// MCAT-06: the guard still passes with a rule's enabled flipped to false.
-// Fails when a kill-switch flip breaks the dashboard instead of just the
-// rule. rules_content_lock() excludes `enabled` from its sealed-content
-// check, and invoice_app holds UPDATE(enabled), so this is a legal write.
+// MCAT-06: the guard survives a rule's enabled flip to false -- legal
+// since rules_content_lock() excludes `enabled` from its sealed check.
 func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
 	_, app := dbTestPools(t)
 	active := fetchActiveRuleKeys(t, app)

@@ -8,8 +8,7 @@ import (
 )
 
 // Every value must be one of the three known categories -- catches an
-// empty-string or whitespace Category value silently dropping a key from
-// every categoryKeys() result.
+// empty/whitespace Category silently dropping a key from every result.
 func TestCategories_AllValuesAreKnownCategories(t *testing.T) {
 	known := map[Category]bool{
 		CategoryFieldCompleteness: true,
@@ -32,10 +31,8 @@ func TestCategories_UnknownCategoryReturnsEmpty(t *testing.T) {
 	}
 }
 
-// Rule keys are lowercase kebab-case (the DB's own convention -- see
-// migrations/20260711121327_seed_mbs_v1.sql). A case-differing key is a
-// distinct map entry, not a collision, so nothing else would catch a typo
-// like "Buyer-TIN-Required" coexisting with "buyer-tin-required".
+// Rule keys are lowercase kebab-case (the DB's convention) -- a case-
+// differing key is a distinct map entry, so a stray typo wouldn't be caught.
 func TestCategories_KeysAreLowercase(t *testing.T) {
 	for key := range ruleCategories {
 		if key != strings.ToLower(key) {

@@ -860,7 +860,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </>
                   ) : (
                     <>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      {/* The label is wider than the rail can hold beside the input, so the
+                          row wraps to a second line instead of squeezing text inside the pill. */}
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <input
                           type="text"
                           data-testid="resolve-outside-reason"
@@ -887,6 +889,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             height: 32,
                             padding: '0 14px',
                             fontSize: 13,
+                            // Must not flex-shrink below its own text -- that's what wrapped the label.
+                            flexShrink: 0,
+                            whiteSpace: 'nowrap',
                             ...(resolveOutsideDisabled ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
                           }}
                         >

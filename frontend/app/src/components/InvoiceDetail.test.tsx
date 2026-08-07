@@ -1480,6 +1480,19 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
     await screen.findByText('boom')
     expect(screen.getByTestId('detail-resolved-banner')).toBeTruthy()
   })
+
+  // Pins the declarations only -- jsdom applies no CSS, so this cannot prove the label
+  // stops wrapping on screen, only that the fix stays wired up.
+  it('T7-19: resolve-outside is pinned to its own width and its row wraps instead', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
+    expect(btn.style.flexShrink).toBe('0')
+    expect(btn.style.whiteSpace).toBe('nowrap')
+    expect(btn.parentElement?.style.flexWrap).toBe('wrap')
+  })
 })
 
 // RED specs (task-401, BUG-04-05, Mode A). None of `view-ubl` /

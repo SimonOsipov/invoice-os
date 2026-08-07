@@ -1,11 +1,8 @@
-// RED, DB-backed tests for the resolve/unresolve-outside write path -- written
-// BEFORE Store.ResolveOutside/UnresolveOutside/CallerRole/isApprover are real
-// (RED against not-implemented stubs in store.go: every assertion below fails on
-// VALUE, not on a compile/collection error, until the real bodies land). Reuses
-// the dbTestPools/seedTenant/seedEntity/seedInvoiceAtStatus/mustKeptAsIsTriple/
-// auditCount/auditActor/mustCount harness from store_test.go/
-// transition_adversarial_test.go/kept_as_is_test.go (same package) -- nothing
-// here is redefined.
+// DB-backed tests for the resolve/unresolve-outside write path (Store.ResolveOutside/
+// UnresolveOutside/CallerRole/isApprover). Reuses the dbTestPools/seedTenant/seedEntity/
+// seedInvoiceAtStatus/mustKeptAsIsTriple/auditCount/auditActor/mustCount harness from
+// store_test.go/transition_adversarial_test.go/kept_as_is_test.go (same package) --
+// nothing here is redefined.
 //
 // Run: `make test-rls` does NOT cover this package -- use:
 //

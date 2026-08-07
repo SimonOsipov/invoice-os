@@ -275,9 +275,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [submitSkipped, setSubmitSkipped] = useState<string | null>(null)
   const submitInFlight = useRef(false)
 
-  // Resolve-outside control (failed invoices only, Core AC #1/#4/#5/#6). No gen bump /
-  // setLive(null) like handleRevalidate/handleSubmit: `failed` is terminal, so
-  // shouldPollInvoice never polls it and there is no poll overlay to invalidate.
+  // Resolve-outside control (failed invoices only, Core AC #1/#4/#5/#6). Both handlers DO
+  // gen-bump / setLive(null) before detail.run() (handleRevalidate's precedent) -- `live`
+  // can still hold a stale snapshot from watching queued -> failed earlier in this session.
   const [resolveReason, setResolveReason] = useState('')
   const [resolving, setResolving] = useState(false)
   const [undoing, setUndoing] = useState(false)
@@ -458,6 +458,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       try {
         await resolveInvoiceOutside(ctx.authedFetch, base, invoiceId, resolveReason)
         setResolveReason('')
+        // See handleRevalidate above -- clear the overlay before the real refresh, so a
+        // `live` value left over from watching queued -> failed can't mask this result.
+        gen.current++
+        setLive(null)
         detail.run()
       } catch (err) {
         setResolveOutsideError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
@@ -472,6 +476,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       setResolveOutsideError(null)
       try {
         await unresolveInvoiceOutside(ctx.authedFetch, base, invoiceId)
+        // See handleResolveOutside above -- same overlay-clear, same rationale.
+        gen.current++
+        setLive(null)
         detail.run()
       } catch (err) {
         setResolveOutsideError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
@@ -823,12 +830,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       </div>
                       {/* Re-resolving is legal (the wire's can_resolve_outside does not go
                           false once resolved), so Undo reads the same flag as the mark
-                          button below rather than a separate one. */}
+                          button below rather than a separate one. Same reason wiring as
+                          `resolve-outside` below (Core AC #4, disabled-with-reason, never
+                          hidden) -- reusing RESOLVE_OUTSIDE_REASON_ID/its testid is safe
+                          because resolved and unresolved never render at once. */}
                       <button
                         type="button"
                         data-testid="resolve-outside-undo"
                         onClick={() => void handleUndoResolveOutside()}
                         disabled={!inv.can_resolve_outside || undoing}
+                        title={inv.resolve_outside_blocked_reason ?? undefined}
+                        aria-describedby={inv.resolve_outside_blocked_reason != null ? RESOLVE_OUTSIDE_REASON_ID : undefined}
                         className="v2-btn v2-btn-ghost pf-btn"
                         style={{
                           height: 32,
@@ -840,6 +852,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       >
                         {RESOLVE_OUTSIDE_COPY.undoLabel}
                       </button>
+                      {inv.resolve_outside_blocked_reason != null && (
+                        <div id={RESOLVE_OUTSIDE_REASON_ID} data-testid="resolve-outside-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+                          {inv.resolve_outside_blocked_reason}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>
@@ -847,6 +864,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         <input
                           type="text"
                           data-testid="resolve-outside-reason"
+                          aria-label="Resolved outside reason"
                           placeholder={RESOLVE_OUTSIDE_COPY.reasonPlaceholder}
                           value={resolveReason}
                           onChange={(e) => setResolveReason(e.target.value)}
@@ -881,12 +899,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           {inv.resolve_outside_blocked_reason}
                         </div>
                       )}
-                      {resolveOutsideError && (
-                        <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
-                          {resolveOutsideError}
-                        </div>
-                      )}
                     </>
+                  )}
+                  {/* Outside the resolved/unresolved ternary on purpose: a failed
+                      handleUndoResolveOutside sets this too, and it must not be stranded
+                      with no branch to render in while the resolved banner is still shown. */}
+                  {resolveOutsideError && (
+                    <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+                      {resolveOutsideError}
+                    </div>
                   )}
                 </div>
               </div>

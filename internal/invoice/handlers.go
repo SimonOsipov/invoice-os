@@ -338,12 +338,17 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 		// ([ubl-gate-is-content-not-status]).
 		canViewUBL, ublReason := ublGate(SubmissionCanonical(inv))
 
-		// An erroring callerRole fails closed to "" (not-an-approver) rather
-		// than propagating -- the injected func is not assumed to honor
-		// Store.CallerRole's own "never errors" contract.
-		role, err := callerRole(r.Context())
-		if err != nil {
-			role = ""
+		// resolveOutsideGate is status-first: on any non-failed status it returns the
+		// status reason regardless of role, so skip callerRole's own tenant-scoped query
+		// unless the invoice is actually failed. An erroring callerRole fails closed to
+		// "" (not-an-approver) rather than propagating -- the injected func is not
+		// assumed to honor Store.CallerRole's own "never errors" contract.
+		var role string
+		if inv.Status == StatusFailed {
+			role, err = callerRole(r.Context())
+			if err != nil {
+				role = ""
+			}
 		}
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
 

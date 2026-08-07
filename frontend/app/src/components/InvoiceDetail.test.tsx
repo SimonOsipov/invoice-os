@@ -116,6 +116,7 @@ interface DetailFetchOptions {
   editResponse?: MockResponse
   revalidateResponse?: MockResponse
   resolveResponse?: MockResponse
+  unresolveResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -144,11 +145,13 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     if (url.endsWith('/resolved-outside')) {
       if (method === 'DELETE') {
         resolveCalls.push({ method: 'DELETE', body: null })
-        return Promise.resolve<MockResponse>({
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({ ...detail, kept_as_is_at: null, kept_as_is_by: null, kept_as_is_reason: null }),
-        })
+        return Promise.resolve<MockResponse>(
+          opts.unresolveResponse ?? {
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ...detail, kept_as_is_at: null, kept_as_is_by: null, kept_as_is_reason: null }),
+          },
+        )
       }
       const body = JSON.parse(String(init.body)) as { reason: string }
       resolveCalls.push({ method: 'POST', body })
@@ -1360,6 +1363,122 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
     await waitFor(() => expect(resolveCalls.length).toBeGreaterThan(0))
     expect(resolveCalls).toHaveLength(1)
+  })
+
+  // CodeRabbit review finding 1: a `live` overlay left over from watching queued -> failed
+  // in this session must not mask a successful resolve/undo behind a stale render. Real
+  // wait, not fake timers -- matches the poll-tick convention above (:928-960).
+  it(
+    'T7-15: a poll tick that observed queued -> failed does not mask a successful resolve behind a stale overlay',
+    async () => {
+      const initial = detailRecord({ status: 'queued', can_resolve_outside: false })
+      const afterPoll = detailRecord({ status: 'failed', can_resolve_outside: true })
+      const resolved = detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually.',
+      })
+      const { resolveCalls, fetchMock } = mockDetailFetch(initial, [], { detailSequence: [afterPoll, resolved] })
+
+      render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+      const detailGetCalls = () =>
+        fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
+          const method = init?.method ?? 'GET'
+          const u = String(url)
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+        })
+      // 1 initial mount fetch + 1 poll tick that observes the queued -> failed transition.
+      await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
+
+      fireEvent.change(await screen.findByTestId('resolve-outside-reason'), { target: { value: 'Filed manually.' } })
+      fireEvent.click(screen.getByTestId('resolve-outside'))
+
+      await waitFor(() => expect(resolveCalls).toHaveLength(1))
+      await screen.findByTestId('detail-resolved-banner')
+    },
+    LIVE_POLL_MS + 5000,
+  )
+
+  it(
+    'T7-16: a poll tick that observed queued -> failed does not mask a successful undo behind a stale overlay',
+    async () => {
+      const initial = detailRecord({ status: 'queued', can_resolve_outside: false })
+      const afterPoll = detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      })
+      const unresolved = detailRecord({ status: 'failed', can_resolve_outside: true })
+      const { resolveCalls, fetchMock } = mockDetailFetch(initial, [], { detailSequence: [afterPoll, unresolved] })
+
+      render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+      const detailGetCalls = () =>
+        fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => {
+          const method = init?.method ?? 'GET'
+          const u = String(url)
+          return method === 'GET' && !u.endsWith('/history') && !u.endsWith('/source-document')
+        })
+      await waitFor(() => expect(detailGetCalls().length).toBeGreaterThanOrEqual(2), { timeout: LIVE_POLL_MS + 1500, interval: 100 })
+
+      fireEvent.click(await screen.findByTestId('resolve-outside-undo'))
+
+      await waitFor(() => expect(resolveCalls).toHaveLength(1))
+      await screen.findByTestId('resolve-outside-reason')
+      expect(screen.queryAllByTestId('detail-resolved-banner')).toHaveLength(0)
+    },
+    LIVE_POLL_MS + 5000,
+  )
+
+  // CodeRabbit review finding 2 (Core AC #4): a blocked Undo must carry the server reason,
+  // same as the mark-resolved button, never a silently disabled control.
+  it('T7-17: a blocked Undo shows the server reason, not a silently disabled control', async () => {
+    const reason = 'Only an approver can mark an invoice resolved outside the system — ask an admin or a reviewer on your team.'
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: false,
+        resolve_outside_blocked_reason: reason,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const btn = (await screen.findByTestId('resolve-outside-undo')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    const reasonEl = screen.getByTestId('resolve-outside-blocked-reason')
+    expect(reasonEl.textContent).toBe(reason)
+    expect(btn.getAttribute('aria-describedby')).toBe(reasonEl.id)
+  })
+
+  // CodeRabbit review finding 3: resolveOutsideError must render in BOTH the resolved and
+  // unresolved branches -- a failed undo has no branch to render its error in otherwise.
+  it('T7-18: a rejected undo surfaces its error while the resolved banner is still showing', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'failed',
+        can_resolve_outside: true,
+        kept_as_is_at: '2026-08-06T12:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Filed manually with the tax authority.',
+      }),
+      [],
+      { unresolveResponse: { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    fireEvent.click(await screen.findByTestId('resolve-outside-undo'))
+
+    await screen.findByText('boom')
+    expect(screen.getByTestId('detail-resolved-banner')).toBeTruthy()
   })
 })
 

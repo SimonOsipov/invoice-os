@@ -2,9 +2,9 @@
 // BatchValidateHandler driven end-to-end against the REAL Store
 // (LoadActiveRuleSetGlobal, currently the QA scaffold in
 // store_qa_scaffold.go) and the REAL validation.Engine (NewDefaultEngine)
-// over the live migrated DB (v2 active, 19 rules -- verified live, Stage-1
-// addendum). No identity is ever placed in the request context here --
-// that is the whole point of the tenant-free batch endpoint ([s2s-identity]).
+// over the live migrated DB (v4 active, 20 rules). No identity is ever placed
+// in the request context here -- that is the whole point of the tenant-free
+// batch endpoint ([s2s-identity]).
 //
 // Run: `make dev-db` once, then with the per-role DSNs set directly (see
 // dbTestPools in schema_test.go):
@@ -108,9 +108,8 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 	if len(body.Results) != 1 {
 		t.Fatalf("len(results) = %d, want 1", len(body.Results))
 	}
-	// v2's live `required` rules -- 9 of the 19, verified live against the
-	// local DB (Stage-1 addendum): currency, invoice_number, issue_date,
-	// line_items, subtotal, supplier.name, supplier.tin, total, vat.
+	// A subset of v4's 10 `required` rules -- membership only, so a future
+	// publish that adds another one does not redden this.
 	wantKeys := []string{
 		"currency-required", "invoice-number-required", "issue-date-required",
 		"line-items-required", "subtotal-required", "supplier-name-required",

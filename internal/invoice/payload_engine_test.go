@@ -508,8 +508,8 @@ func TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2(t *testing.T) {
 	}
 	// TRAP FOR THE NEXT PUBLISH: bump this literal (and gate_test.go's identical one)
 	// together on every future rule-set publish -- see that file's matching note.
-	if rs.Version != 3 || len(rs.Rules) != 19 {
-		t.Fatalf("active rule set = version %d with %d rules, want version 3 with 19 "+
+	if rs.Version != 4 || len(rs.Rules) != 20 {
+		t.Fatalf("active rule set = version %d with %d rules, want version 4 with 20 "+
 			"rules -- dev DB drifted from the pinned state [PAY-18 precondition]", rs.Version, len(rs.Rules))
 	}
 

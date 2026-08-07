@@ -199,8 +199,8 @@ func TestRuleSetV2_LoadActiveRuleSetReturnsV2(t *testing.T) {
 	if rs.Version != activeSeedVersion {
 		t.Errorf("RuleSet.Version = %d, want %d [RS-V2-05]", rs.Version, activeSeedVersion)
 	}
-	if len(rs.Rules) != 19 {
-		t.Errorf("len(RuleSet.Rules) = %d, want 19 [RS-V2-05]", len(rs.Rules))
+	if len(rs.Rules) != 20 {
+		t.Errorf("len(RuleSet.Rules) = %d, want 20 [RS-V2-05]", len(rs.Rules))
 	}
 }
 

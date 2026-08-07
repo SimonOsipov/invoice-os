@@ -108,7 +108,7 @@ func newTestIdentity() context.Context {
 // through here or by discovering it from the DB, so the next version publish
 // is a one-line change here rather than a scavenger hunt through scattered
 // literals ([active-version-pinning-is-the-bug]).
-const activeSeedVersion = 3
+const activeSeedVersion = 4
 
 // loadActive loads the ACTIVE RuleSet via the real Store -- the shared "DB
 // load" half of this file's DB-load -> engine-evaluate chain (combining
@@ -237,13 +237,13 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 		t.Fatalf("active RuleSet.Version = %d, want %d -- expected the migration-seeded active version",
 			rs.Version, activeSeedVersion)
 	}
-	if len(rs.Rules) != 19 {
-		t.Fatalf("len(RuleSet.Rules) = %d, want 19 -- expected the migration-seeded active (v2) rule set "+
-			"(v1's 17 base rules + the 2 line-item rules, re-issued under v2 by the rule_set_v2 migration)", len(rs.Rules))
+	if len(rs.Rules) != 20 {
+		t.Fatalf("len(RuleSet.Rules) = %d, want 20 -- expected the migration-seeded active rule set", len(rs.Rules))
 	}
 
 	wantKeys := []string{
 		"buyer-tin-format",
+		"buyer-tin-required",
 		"currency-allowed",
 		"currency-required",
 		"invoice-number-required",

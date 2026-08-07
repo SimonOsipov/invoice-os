@@ -18,14 +18,18 @@ import {
   FAILURE_KINDS,
   LIVE_POLL_MS,
   failureExplanation,
+  isBuyerTinMissing,
   skipReasonLabel,
   type InvoiceDetailRecord,
+  type InvoiceListResponse,
   type InvoiceStatus,
   type StatusChange,
 } from '../lib/invoices'
 import { ROW_EXPANSION_COPY } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoiceDetail } from './InvoiceDetail'
+import { InvoicesList } from './InvoicesList'
+import { Row } from './ReviewRow'
 
 interface MockResponse {
   ok: boolean
@@ -1115,6 +1119,242 @@ describe('InvoiceDetail Compliance panel: the kept-as-is banner', () => {
     expect(banner.children[0].textContent).toBe(ROW_EXPANSION_COPY.keptPrefix)
     // Actor falls back to actorLabel(null) === 'Not recorded', not blank.
     expect(banner.children[1].textContent).toContain('Not recorded')
+  })
+})
+
+// RED specs (task-413, BUG-05-04, Mode A) -- no data-testid="buyer-tin" exists on the
+// Bill-to block yet, so getByTestId throws below rather than reaching an assertion.
+describe('Bill-to buyer TIN signal (task-413, BUG-05-04)', () => {
+  it('AC-2: a missing buyer TIN (null) reads TIN MISSING in red, no em-dash in the Bill-to block', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: null }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe('TIN MISSING')
+    expect(tin.style.color).toBe('var(--status-red-text)')
+    // buyer_name is non-null in the default fixture, so the Bill-to block's only
+    // possible em-dash source is the TIN line itself.
+    expect(tin.parentElement?.textContent).not.toContain('—')
+  })
+
+  // The pre-fix regression case: `??` treats whitespace as present, so today this
+  // renders empty rather than TIN MISSING.
+  it('AC-2: a blank buyer TIN also reads TIN MISSING, not empty', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: '  ' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    expect(screen.getByTestId('buyer-tin').textContent).toBe('TIN MISSING')
+  })
+
+  it('AC-5: a malformed buyer TIN renders the value in grey, not the missing copy', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: 'BADTIN' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe('BADTIN')
+    expect(tin.style.color).toBe('var(--fg-3)')
+  })
+})
+
+// Minimal register ctx/fetch, local to this one cross-component check -- InvoicesList
+// is otherwise only exercised by InvoicesList.test.tsx.
+function registerCtx(): PlatformCtx {
+  const ctx = {
+    mode: 'firm',
+    active: { entityId: 'ent-1' },
+    user: { tenantName: 'Acme Co' },
+    authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    openCreate: () => {},
+    openImportedInvoice: () => {},
+    invoiceQuery: '',
+  }
+  return ctx as unknown as PlatformCtx
+}
+
+function mockRegisterFetch(invoices: InvoiceDetailRecord[]) {
+  const body: InvoiceListResponse = { invoices, pagination: { limit: 50, offset: 0, total: invoices.length } }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) }))
+}
+
+// RED (task-413, BUG-05-04, AC-5, [surfaces-must-agree]) -- a real cross-component
+// comparison, not two assertions that happen to match: the SAME record drives both
+// components in turn, and their buyer-tin text/colour must be identical.
+describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () => {
+  it('missing, malformed and present buyer TINs render identical text and colour in both InvoicesList and InvoiceDetail', async () => {
+    const states: Array<{ label: string; buyer_tin: string | null }> = [
+      { label: 'missing', buyer_tin: null },
+      { label: 'malformed', buyer_tin: 'BADTIN' },
+      { label: 'present', buyer_tin: '87654321-0002' },
+    ]
+
+    for (const { label, buyer_tin } of states) {
+      const record = detailRecord({ buyer_tin })
+
+      mockDetailFetch(record)
+      render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+      await screen.findByText(record.invoice_number)
+      const detailTin = screen.getByTestId('buyer-tin')
+      const detailText = detailTin.textContent
+      const detailColor = detailTin.style.color
+      cleanup()
+
+      mockRegisterFetch([record])
+      render(<InvoicesList ctx={registerCtx()} />)
+      await screen.findByText(record.invoice_number)
+      const listTin = screen.getByTestId('buyer-tin')
+
+      expect(listTin.textContent, label).toBe(detailText)
+      expect(listTin.style.color, label).toBe(detailColor)
+      cleanup()
+    }
+  })
+})
+
+// QA Stage 4 adversarial (task-413, BUG-05-04): the story's own per-state table, driven
+// through all THREE surfaces (not just the register/detail pair above) -- ReviewRow's
+// Row needs no fetch mock (rendered directly, expanded=false skips its own fetch).
+describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-04)', () => {
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['whitespace-only', '   '],
+    ['malformed', 'BADTIN'],
+    ['well-formed', '87654321-0002'],
+  ] as const)('%s renders identical text and colour on InvoicesList, InvoiceDetail and ReviewRow', async (_label, buyerTin) => {
+    const record = detailRecord({ buyer_tin: buyerTin as unknown as string | null })
+
+    mockDetailFetch(record)
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText(record.invoice_number)
+    const detailTin = screen.getByTestId('buyer-tin')
+    const detailText = detailTin.textContent
+    const detailColor = detailTin.style.color
+    cleanup()
+
+    mockRegisterFetch([record])
+    render(<InvoicesList ctx={registerCtx()} />)
+    await screen.findByText(record.invoice_number)
+    const listTin = screen.getByTestId('buyer-tin')
+    expect(listTin.textContent, 'InvoicesList').toBe(detailText)
+    expect(listTin.style.color, 'InvoicesList').toBe(detailColor)
+    cleanup()
+
+    render(
+      <Row
+        r={record}
+        batches={[]}
+        checked={false}
+        expanded={false}
+        onToggleExpand={() => {}}
+        onToggle={() => {}}
+        ctx={registerCtx()}
+        base="https://gw"
+        onChanged={() => {}}
+      />,
+    )
+    const reviewTin = screen.getByTestId('buyer-tin')
+    expect(reviewTin.textContent, 'ReviewRow').toBe(detailText)
+    expect(reviewTin.style.color, 'ReviewRow').toBe(detailColor)
+    cleanup()
+  })
+})
+
+// Adversarial (task-413, BUG-05-04, QA Stage 4): U+200B is not in Unicode's White_Space
+// category in EITHER runtime, so JS's trim() leaves it exactly as untouched as Go's
+// strings.TrimSpace does (internal/validation/evaluators.go's requiredEval, pinned by
+// TestV4_BuyerTinRequiredZeroWidthSpaceGap) -- front and back AGREE this is "present",
+// not missing. Rendered as the raw (invisible) character in grey, not red TIN MISSING.
+describe('buyer TIN zero-width-space edge case (task-413, BUG-05-04)', () => {
+  it('a U+200B-only buyer TIN is NOT missing -- same non-blank verdict as the backend required rule', () => {
+    expect(isBuyerTinMissing('​')).toBe(false)
+  })
+
+  it('detail: a U+200B-only buyer TIN renders the raw value in grey, not TIN MISSING', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: '​' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe('​')
+    expect(tin.style.color).toBe('var(--fg-3)')
+  })
+})
+
+// Adversarial (task-413, BUG-05-04, QA Stage 4): a present value surrounded by ordinary
+// whitespace is non-blank overall (isBuyerTinMissing trims before checking blankness),
+// but the RENDERED text is the raw untrimmed string -- no site trims for display.
+describe('buyer TIN surrounded by whitespace (task-413, BUG-05-04)', () => {
+  it('detail: a valid TIN padded with spaces counts as present and renders untrimmed', async () => {
+    mockDetailFetch(detailRecord({ buyer_tin: ' 87654321-0002 ' }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const tin = screen.getByTestId('buyer-tin')
+    expect(tin.textContent).toBe(' 87654321-0002 ')
+    expect(tin.style.color).toBe('var(--fg-3)')
+  })
+})
+
+// Disclosure, not a fix (task-413 Implementation Notes, Phase 3.5 input #1): the missing
+// buyer TIN is stated TWICE on this page in two grammars, both visible without scrolling.
+// This subtask closes the register/detail wording GAP (AC-2/3); it does not deduplicate
+// the two grammars, which is a legitimate design question for a later story.
+describe('missing buyer TIN stated twice, in two grammars (disclosure, task-413)', () => {
+  it('a blocked invoice shows both the Bill-to red TIN MISSING and the Compliance panel Error row for the same fact', async () => {
+    mockDetailFetch(
+      detailRecord({
+        buyer_tin: null,
+        rule_set_version_id: 'rsv-4',
+        rule_set_version: 4,
+        violations: [{ rule_key: 'buyer-tin-required', severity: 'error', message: 'Buyer TIN is required.', path: 'buyer.tin' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    expect(screen.getByTestId('buyer-tin').textContent).toBe('TIN MISSING')
+    const table = screen.getByTestId('violations-table')
+    expect(table.textContent).toContain('Buyer TIN is required.')
+    expect(within(table).getByText('Error')).toBeTruthy()
+  })
+})
+
+// Disclosure, not a fix (task-413 Implementation Notes, Phase 3.5 input #2): [stale-
+// violations-honest] (store.go:1067-1135) means an edit demotes validated->draft without
+// touching the stored violations. Constructed directly via fixture (a rendering-state
+// question, reachable on first load -- verdictStatus's demotedSinceValidation arm needs
+// no prior interaction, just status=draft + a stamped rule_set_version_id + a clean
+// stored violation set) rather than driving the actual edit flow.
+describe('stale violations beside a live-missing buyer TIN (disclosure, task-413)', () => {
+  it('a demoted-but-unrevalidated invoice shows red TIN MISSING, a green clean-pass panel, and the amber stale banner between them', async () => {
+    mockDetailFetch(
+      detailRecord({
+        status: 'draft',
+        buyer_tin: null,
+        rule_set_version_id: 'rsv-4',
+        rule_set_version: 4,
+        violations: [],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    expect(screen.getByTestId('buyer-tin').textContent).toBe('TIN MISSING')
+    expect(screen.getByTestId('stale-verdict').textContent).toBe(
+      'Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.',
+    )
+    expect(screen.getByTestId('violations-table').textContent).toBe('Passes all rules — no violations. Evaluated against rule-set v4.')
   })
 })
 

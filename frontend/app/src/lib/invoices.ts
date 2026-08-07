@@ -698,6 +698,13 @@ export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): bo
   return inv.violations.some((v) => v.severity === 'error')
 }
 
+// Shared missing-buyer-TIN signal for the register, review row and Bill-to block --
+// blank/whitespace counts as missing, closing the `??` hole all three used to have.
+export const BUYER_TIN_MISSING = 'TIN MISSING'
+export function isBuyerTinMissing(tin: string | null | undefined): boolean {
+  return tin == null || tin.trim() === ''
+}
+
 // A total mapper over the APP's dotted MBS payload vocabulary (MBSPayload,
 // internal/invoice/payload.go:85-125; party(), :152-157) -- NOT the snake_case column
 // names (the fiscal-outcome migration header's `"path": "supplier_tin"` example is

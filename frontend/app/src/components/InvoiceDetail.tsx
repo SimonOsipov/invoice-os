@@ -18,6 +18,7 @@ import { actorLabel } from '../lib/actor'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { detailTarget } from '../lib/importReport'
 import {
+  BUYER_TIN_MISSING,
   canResolveOutside,
   computedLineSum,
   DETAIL_SUBMIT_COPY,
@@ -29,6 +30,7 @@ import {
   getInvoice,
   getInvoiceHistory,
   invoiceStatusStyle,
+  isBuyerTinMissing,
   keptAsIs,
   LIVE_POLL_MS,
   newIdempotencyKey,
@@ -757,7 +759,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     <div style={{ textAlign: 'right' }}>
                       <div className="label" style={{ marginBottom: 3 }}>Bill to</div>
                       <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.buyer_name ?? '—'}</div>
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{inv.buyer_tin ?? '—'}</div>
+                      <div data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(inv.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(inv.buyer_tin) ? BUYER_TIN_MISSING : inv.buyer_tin}</div>
                     </div>
                   </div>
                   <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-input)', overflow: 'hidden' }}>

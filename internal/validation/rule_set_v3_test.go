@@ -207,11 +207,16 @@ func TestRuleSetV3_IsV2PlusFourTargets(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// AC-2 -- v3 is the sole active version, and both v2/v3 are sealed.
+// AC-2 -- exactly one version is active, and both v2/v3 are sealed.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV3_ActiveAndSealed (AC-2): exactly one rule_set_versions row is active, it
-// is v3, and it is sealed; v2 is inactive but still sealed (sealing is permanent).
+// TestRuleSetV3_ActiveAndSealed (AC-2; the "and it's v3" half retired below): exactly one
+// rule_set_versions row is active, and v3/v2 are both sealed -- sealing is permanent.
+//
+// AC-2's ORIGINAL claim ("the active row is v3") held only until BUG-05 published v4 and
+// superseded it. Which version is active is a moving target every publish changes, and is
+// asserted going forward by rule_set_v4_test.go's TestV4_IsTheSoleSealedActiveVersion, not
+// re-litigated here -- so v3 is resolved by its permanent version number instead.
 func TestRuleSetV3_ActiveAndSealed(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
@@ -224,13 +229,10 @@ func TestRuleSetV3_ActiveAndSealed(t *testing.T) {
 		t.Fatalf("count(rule_set_versions WHERE is_active) = %d, want 1 [AC-2]", activeCount)
 	}
 
-	var v3Active, v3Sealed bool
-	if err := app.QueryRow(ctx, `SELECT is_active, sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3Active, &v3Sealed); err != nil {
-		t.Fatalf("read v3 is_active/sealed: %v -- expected the v3 migration to be applied "+
+	var v3Sealed bool
+	if err := app.QueryRow(ctx, `SELECT sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3Sealed); err != nil {
+		t.Fatalf("read v3 sealed: %v -- expected the v3 migration to be applied "+
 			"(has `make migrate-up` been run?) [AC-2]", err)
-	}
-	if !v3Active {
-		t.Error("v3.is_active = false, want true [AC-2]")
 	}
 	if !v3Sealed {
 		t.Error("v3.sealed = false, want true [AC-2]")
@@ -282,9 +284,8 @@ func TestRuleSetV2_StillHasNineteenRules(t *testing.T) {
 // TestRuleSetV3_DownRestoresV2Active (AC-3): mirrors TestRuleSetV2_DownRestoresV1's
 // pattern -- runs the v3 migration's Down (migrations/20260731090000_rule_set_v3.sql)
 // inside a superuser tx that is ALWAYS rolled back, so it never permanently mutates the
-// shared DB other tests in this package depend on. Guards against a vacuous pass the
-// same way: first asserts v3 really is active+sealed (a loud, real RED today -- there is
-// no v3 yet) before attempting the Down.
+// shared DB other tests in this package depend on. Guards against a vacuous pass by
+// asserting v3 really is active+sealed before attempting the Down.
 func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
@@ -294,6 +295,23 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 		t.Fatalf("begin superuser tx: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// This test simulates the v3 migration's OWN Down, whose precondition is "v3 active"
+	// -- true only until BUG-05 published v4 and superseded it. Establish that
+	// precondition inside this always-rolled-back tx: clear whichever version is really
+	// active, then activate v3. The seal guard permits an is_active flip on a sealed row.
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
+		t.Fatalf("clear the active slot (simulated AC-3 precondition): %v", err)
+	}
+	// Rowcount-checked: a missing v3 row would otherwise let the whole Down sequence
+	// below pass trivially.
+	tag, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 3`)
+	if err != nil {
+		t.Fatalf("activate v3 (simulated AC-3 precondition): %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("activating v3 touched %d rows, want 1 [AC-3 precondition]", tag.RowsAffected())
+	}
 
 	var v3Active, v3Sealed bool
 	if err := tx.QueryRow(ctx, `SELECT is_active, sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3Active, &v3Sealed); err != nil {

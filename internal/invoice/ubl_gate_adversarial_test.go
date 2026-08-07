@@ -330,7 +330,7 @@ func TestRLS_GetHandlerCrossTenantUBLKeysNotLeaked(t *testing.T) {
 	r.SetPathValue("id", invB.ID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))
 	recA := httptest.NewRecorder()
-	GetHandler(store.Get, nil).ServeHTTP(recA, r)
+	GetHandler(store.Get, store.CallerRole, nil).ServeHTTP(recA, r)
 
 	if recA.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", recA.Code, recA.Body.String())

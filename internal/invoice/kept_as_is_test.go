@@ -269,7 +269,7 @@ func TestKeptAsIs_PartialTripleRejected(t *testing.T) {
 }
 
 // TestKeptAsIs_NonDraftRejected (AC-1): a validated invoice, force-triple-written,
-// must 23514 against invoices_kept_as_is_draft_only -- D6's "it stays a draft and can
+// must 23514 against invoices_kept_as_is_status -- D6's "it stays a draft and can
 // never be sent" enforced by the DB, not by Store.KeepAsIs's own status guard alone.
 func TestKeptAsIs_NonDraftRejected(t *testing.T) {
 	super, _ := dbTestPools(t)
@@ -282,13 +282,13 @@ func TestKeptAsIs_NonDraftRejected(t *testing.T) {
 	_, err := super.Exec(ctx,
 		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'x' WHERE id = $1`, invID)
 	if err == nil {
-		t.Fatal("UPDATE setting the triple on a validated invoice succeeded, want a 23514 (invoices_kept_as_is_draft_only) violation")
+		t.Fatal("UPDATE setting the triple on a validated invoice succeeded, want a 23514 (invoices_kept_as_is_status) violation")
 	}
 	if code := pgCode(err); code != "23514" {
 		t.Fatalf("pgCode = %q, want 23514 (check_violation): %v", code, err)
 	}
-	if !strings.Contains(err.Error(), "invoices_kept_as_is_draft_only") {
-		t.Errorf("error = %v, want it to name invoices_kept_as_is_draft_only", err)
+	if !strings.Contains(err.Error(), "invoices_kept_as_is_status") {
+		t.Errorf("error = %v, want it to name invoices_kept_as_is_status", err)
 	}
 }
 

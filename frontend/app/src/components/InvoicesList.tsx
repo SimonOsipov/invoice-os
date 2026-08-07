@@ -50,6 +50,7 @@ import {
   newIdempotencyKey,
   pruneSelection,
   REGISTER_PAGE_SIZE,
+  resolvedOutside,
   selectableIds,
   selectAllState,
   shouldFetchInvoices,
@@ -500,6 +501,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                     {hasBlockingViolation(r) && (
                       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-red-text)', letterSpacing: '0.04em' }}>
                         {errorCount} ERROR{errorCount === 1 ? '' : 'S'}
+                      </span>
+                    )}
+                    {resolvedOutside(r) != null && (
+                      <span data-testid="invoice-resolved-marker" className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)', letterSpacing: '0.04em' }}>
+                        RESOLVED
                       </span>
                     )}
                   </span>

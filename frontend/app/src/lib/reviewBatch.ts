@@ -109,7 +109,8 @@ export function verdictPill(input: VerdictInput): VerdictPill {
   const errorCount = input.violations.filter((v) => v.severity === 'error').length
   const advisoryCount = input.violations.length - errorCount
 
-  if (input.kept_as_is_at != null) {
+  // The mark means "kept as-is" only on a draft; on a failed invoice it means resolved outside.
+  if (input.status === 'draft' && input.kept_as_is_at != null) {
     // `count` is the number of BLOCKING violations the row was kept despite -- machine-
     // readable context for a tooltip, never interpolated into this badge's own label.
     return { status, badges: [{ kind: 'kept-invalid', count: errorCount, label: 'KEPT · INVALID', tone: tone('warning') }] }

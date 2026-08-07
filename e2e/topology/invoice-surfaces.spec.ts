@@ -1157,6 +1157,87 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await expect(page.getByTestId('view-ubl')).toBeEnabled()
   await expect(page.getByTestId('view-ubl-blocked-reason')).toHaveCount(0)
 
+  // resolve-outside is the one permitted control on this dead-end card -- present
+  // alongside the removed actions bar, not inside it.
+  await expect(page.getByTestId('resolve-outside')).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('resolve/unresolve loop: marking a failed invoice resolved drops it from needs-attention without re-driving it, and undo reverses that', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `M509 resolve ${Date.now()}`, tin: freshTin() })
+
+  // Same sanctioned failed-fixture chain as the dead-end test above -- the -0006
+  // timeout trigger is forbidden there for the same reason it would be here.
+  const invoiceNumber = `INV-M509-RESOLVE-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  await validateInvoice(token, inv.id)
+  await transitionInvoice(token, inv.id, 'queued')
+  await transitionInvoice(token, inv.id, 'failed')
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  const reason = `resolved outside the system ${Date.now()}`
+  await page.getByTestId('resolve-outside-reason').fill(reason)
+  await page.getByTestId('resolve-outside').click()
+
+  // Core AC #5: the banner carries the operator's own reason. Core AC #6: status is
+  // untouched -- resolving is not a transition.
+  await expect(page.getByTestId('detail-resolved-banner')).toContainText(reason)
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('FAILED')
+
+  const row = invoiceRowByNumber(page, invoiceNumber)
+
+  // Needs attention ON: kept_as_is_at IS NOT NULL takes it out of the server-side
+  // predicate (store.go's NeedsAttention fragment) -- it must vanish from the DOM.
+  await goToInvoices(page)
+  const filteredResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('needs_attention') === 'true',
+  )
+  await page.getByTestId('needs-attention-toggle').click()
+  await filteredResp
+  await expect(row).toHaveCount(0)
+
+  // Needs attention OFF: the row is still there (nothing was deleted), now carrying
+  // the resolved marker (Core AC #3).
+  const unfilteredResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('needs_attention') === null,
+  )
+  await page.getByTestId('needs-attention-toggle').click()
+  await unfilteredResp
+  await expect(row).toBeVisible()
+  await expect(row.getByTestId('invoice-resolved-marker')).toBeVisible()
+
+  // Undo, then re-apply the filter: the round trip reverses cleanly (Core AC #5).
+  await openInvoiceRow(page, invoiceNumber)
+  await page.getByTestId('resolve-outside-undo').click()
+  await expect(page.getByTestId('resolve-outside-reason')).toBeVisible()
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('FAILED')
+
+  await goToInvoices(page)
+  const refilteredResp = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('needs_attention') === 'true',
+  )
+  await page.getByTestId('needs-attention-toggle').click()
+  await refilteredResp
+  await expect(row).toBeVisible()
+  await expect(row.getByTestId('invoice-resolved-marker')).toHaveCount(0)
+
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

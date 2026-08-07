@@ -461,7 +461,8 @@ function ExpandedFixPanel({
             triage decision before typing a new one. Amber, mirroring KEPT · INVALID's
             own tone (verdictPill, lib/reviewBatch.ts) rather than inventing a second
             colour for the same fact. */}
-        {view.keptReason != null && (
+        {/* rowExpansionView cannot gate on status itself (no status in its input); gate the consumer instead. */}
+        {inv.status === 'draft' && view.keptReason != null && (
           <div
             data-testid="review-kept-banner"
             style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}

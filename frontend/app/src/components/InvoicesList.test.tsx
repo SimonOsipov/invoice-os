@@ -674,3 +674,101 @@ describe('buyer TIN missing signal (task-413, BUG-05-04)', () => {
     expect(tin.style.color).toBe('var(--status-red-text)')
   })
 })
+
+// RED specs (Mode A) -- no resolved marker exists yet, so AC-1 fails on the row's
+// actual textContent, not an import/compile error.
+describe('InvoicesList: resolved-failed marker', () => {
+  it('a resolved failed row is marked and still listed', async () => {
+    const resolved = row({
+      id: 'resolved-1',
+      invoice_number: 'INV-RESOLVED',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually with FIRS',
+    })
+    mockFetchSequence([listResponse([resolved], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-RESOLVED')
+
+    const invRow = screen.getByTestId('invoice-row')
+    expect(invRow.querySelector('[data-testid="invoice-status-badge"]')?.textContent, 'the row keeps its FAILED pill').toMatch(/FAILED/)
+    expect(screen.getByTestId('invoice-resolved-marker'), 'a resolved marker must render alongside the pill').toBeDefined()
+  })
+
+  it('an unresolved failed row has no marker', async () => {
+    const unresolved = row({
+      id: 'unresolved-1',
+      invoice_number: 'INV-UNRESOLVED',
+      status: 'failed',
+      kept_as_is_at: null,
+    })
+    mockFetchSequence([listResponse([unresolved], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-UNRESOLVED')
+
+    expect(screen.queryAllByTestId('invoice-resolved-marker'), 'an unresolved failed row must carry no resolved marker').toHaveLength(0)
+  })
+
+  it('a kept blocked draft gets no resolved marker', async () => {
+    const keptBlocked = row({
+      id: 'kept-1',
+      invoice_number: 'INV-KEPT',
+      status: 'draft',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Client accepted as-is',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([keptBlocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-KEPT')
+
+    const text = screen.getByTestId('invoice-row').textContent
+    expect(screen.queryAllByTestId('invoice-resolved-marker'), 'the marker is status-gated (failed only), not mark-gated -- a kept draft must not get it').toHaveLength(0)
+    expect(text, 'the existing ERROR chip must still render for the kept draft').toMatch(/1 ERROR\b/)
+  })
+
+  it('the marker adds nothing to the row count', async () => {
+    const resolved = row({ id: 'r-1', invoice_number: 'INV-A', status: 'failed', kept_as_is_at: '2026-08-01T00:00:00Z' })
+    const draft = row({ id: 'r-2', invoice_number: 'INV-B', status: 'draft' })
+    const failed = row({ id: 'r-3', invoice_number: 'INV-C', status: 'failed', kept_as_is_at: null })
+    mockFetchSequence([listResponse([resolved, draft, failed], { limit: 50, offset: 0, total: 3 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    const rows = screen.getAllByTestId('invoice-row')
+    expect(rows, 'the resolved mark must never hide, remove, or add a row').toHaveLength(3)
+    expect(rows.map((r) => r.textContent?.includes('INV-A') ? 'A' : r.textContent?.includes('INV-B') ? 'B' : 'C')).toEqual(['A', 'B', 'C'])
+  })
+
+  // QA adversarial: resolvedOutside and hasBlockingViolation gate independently, so a
+  // resolved failed row can still carry a blocking violation -- both markers must stack
+  // without either swallowing the other. Uses .toContain, not a \b-anchored regex: the
+  // two chips are adjacent sibling spans with no text separator between them, so
+  // textContent reads "...1 ERRORRESOLVED" and a trailing \b on /1 ERROR\b/ never matches.
+  it('a resolved failed row with a blocking violation renders both markers', async () => {
+    const both = row({
+      id: 'both-1',
+      invoice_number: 'INV-BOTH',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually with FIRS',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([both], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BOTH')
+
+    const text = screen.getByTestId('invoice-row').textContent
+    expect(text, 'the ERROR chip must still render alongside the resolved mark').toContain('1 ERROR')
+    expect(screen.getByTestId('invoice-resolved-marker').textContent, 'the resolved marker itself must not fold into the ERROR count').toBe('RESOLVED')
+    expect(screen.getAllByTestId('invoice-resolved-marker'), 'exactly one resolved marker, not one per violation').toHaveLength(1)
+  })
+})

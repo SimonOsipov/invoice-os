@@ -226,17 +226,22 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanViewUBL/UBLBlockedReason (BUG-04-03) follow both rules above -- appended
 // last, no omitempty -- and come from ublGate (ubl.go), which derives them from
 // invoice CONTENT via ubl.Missing, never from status.
+//
+// CanResolveOutside/ResolveOutsideBlockedReason follow the same two rules,
+// appended last of all, and come from resolveOutsideGate below.
 type getResponse struct {
 	Invoice
-	RuleSetVersion          *int    `json:"rule_set_version"`
-	QRPNGBase64             *string `json:"qr_png_base64"`
-	CanEdit                 bool    `json:"can_edit"`
-	CanRevalidate           bool    `json:"can_revalidate"`
-	RevalidateBlockedReason *string `json:"revalidate_blocked_reason"`
-	CanSubmit               bool    `json:"can_submit"`
-	SubmitBlockedReason     *string `json:"submit_blocked_reason"`
-	CanViewUBL              bool    `json:"can_view_ubl"`
-	UBLBlockedReason        *string `json:"ubl_blocked_reason"`
+	RuleSetVersion              *int    `json:"rule_set_version"`
+	QRPNGBase64                 *string `json:"qr_png_base64"`
+	CanEdit                     bool    `json:"can_edit"`
+	CanRevalidate               bool    `json:"can_revalidate"`
+	RevalidateBlockedReason     *string `json:"revalidate_blocked_reason"`
+	CanSubmit                   bool    `json:"can_submit"`
+	SubmitBlockedReason         *string `json:"submit_blocked_reason"`
+	CanViewUBL                  bool    `json:"can_view_ubl"`
+	UBLBlockedReason            *string `json:"ubl_blocked_reason"`
+	CanResolveOutside           bool    `json:"can_resolve_outside"`
+	ResolveOutsideBlockedReason *string `json:"resolve_outside_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -268,11 +273,32 @@ func submitBlockedReason(s Status) *string {
 	return &reason
 }
 
+// resolveOutsideGate checks status BEFORE role, deliberately the reverse of
+// Store.ResolveOutside's permission-first order (store.go): the store's
+// order exists only to stop a non-approver probing row existence via a
+// 409-vs-404 distinction, but this gate runs on a row already fetched, so
+// status-first gives the more relevant message instead.
+func resolveOutsideGate(s Status, role string) (bool, *string) {
+	if s != StatusFailed {
+		r := "Only a failed invoice can be marked resolved outside the system."
+		return false, &r
+	}
+	if !isApprover(role) {
+		r := "Only an approver can mark an invoice resolved outside the system — ask an admin or a reviewer on your team."
+		return false, &r
+	}
+	return true, nil
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
 // Invoice (with line_items, [D7]) on success.
-func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+//
+// callerRole feeds resolveOutsideGate alongside the fetched invoice's
+// status. It is not assumed to honor Store.CallerRole's own "never errors"
+// contract -- an error from it fails closed (not-an-approver), never a 5xx.
+func GetHandler(get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -312,6 +338,20 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 		// ([ubl-gate-is-content-not-status]).
 		canViewUBL, ublReason := ublGate(SubmissionCanonical(inv))
 
+		// resolveOutsideGate is status-first: on any non-failed status it returns the
+		// status reason regardless of role, so skip callerRole's own tenant-scoped query
+		// unless the invoice is actually failed. An erroring callerRole fails closed to
+		// "" (not-an-approver) rather than propagating -- the injected func is not
+		// assumed to honor Store.CallerRole's own "never errors" contract.
+		var role string
+		if inv.Status == StatusFailed {
+			role, err = callerRole(r.Context())
+			if err != nil {
+				role = ""
+			}
+		}
+		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
+
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
 		// a fourth hand-maintained status list and re-open Core AC 4.
@@ -323,15 +363,17 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), log *
 		// revalidate_blocked_reason != null IFF a disabled Re-validate button is
 		// rendered ([actions-visibility]: the action bar renders iff can_edit).
 		resp := getResponse{
-			Invoice:             inv,
-			RuleSetVersion:      inv.RuleSetVersion,
-			QRPNGBase64:         qrPNGBase64,
-			CanEdit:             canEdit(inv.Status),
-			CanRevalidate:       canRevalidate(inv.Status),
-			CanSubmit:           canSubmit(inv.Status),
-			SubmitBlockedReason: submitBlockedReason(inv.Status),
-			CanViewUBL:          canViewUBL,
-			UBLBlockedReason:    ublReason,
+			Invoice:                     inv,
+			RuleSetVersion:              inv.RuleSetVersion,
+			QRPNGBase64:                 qrPNGBase64,
+			CanEdit:                     canEdit(inv.Status),
+			CanRevalidate:               canRevalidate(inv.Status),
+			CanSubmit:                   canSubmit(inv.Status),
+			SubmitBlockedReason:         submitBlockedReason(inv.Status),
+			CanViewUBL:                  canViewUBL,
+			UBLBlockedReason:            ublReason,
+			CanResolveOutside:           canResolveOutside,
+			ResolveOutsideBlockedReason: resolveOutsideReason,
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
@@ -869,6 +911,78 @@ func UnkeepAsIsHandler(unkeep func(ctx context.Context, id string) (Invoice, err
 	}
 }
 
+// ResolveOutsideHandler returns POST /v1/invoices/{id}/resolved-outside.
+// Mirrors KeepAsIsHandler's exact validation order (identity, decode, trim,
+// bound), reusing keepAsIsRequest/maxKeepAsIsReasonLen -- both endpoints
+// bound the same free-text reason the same way. Errors map via statusForErr,
+// including the ErrNotPermitted/ErrNotResolvable arms.
+func ResolveOutsideHandler(resolve func(ctx context.Context, id, reason string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var req keepAsIsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		reason := strings.TrimSpace(req.Reason)
+		if reason == "" {
+			writeError(w, http.StatusBadRequest, "reason is required")
+			return
+		}
+		if len(reason) > maxKeepAsIsReasonLen {
+			writeError(w, http.StatusBadRequest, "reason exceeds the 1000-char bound")
+			return
+		}
+
+		inv, err := resolve(r.Context(), r.PathValue("id"), reason)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: resolve outside", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
+// UnresolveOutsideHandler returns DELETE /v1/invoices/{id}/resolved-outside,
+// ResolveOutsideHandler's un-do sibling -- see its doc comment. No body to
+// decode, matching UnkeepAsIsHandler's own no-body shape.
+func UnresolveOutsideHandler(unresolve func(ctx context.Context, id string) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		inv, err := unresolve(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: unresolve outside", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, inv)
+	}
+}
+
 // HistoryHandler returns GET /v1/invoices/{id}/history (task-160/M4-22-01).
 // ErrNotFound covers both an unknown id and a cross-tenant one (RLS-scoped
 // zero rows) -- 404, same as GetHandler. Malformed id maps ErrValidation ->
@@ -1144,6 +1258,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice is not in a fixable state"
 	case errors.Is(err, ErrNotKeepable):
 		return http.StatusConflict, "invoice must be a draft with a blocking violation to be kept as-is"
+	case errors.Is(err, ErrNotPermitted):
+		return http.StatusForbidden, "approver rights are required to mark an invoice resolved outside the system"
+	case errors.Is(err, ErrNotResolvable):
+		return http.StatusConflict, "only a failed invoice can be marked resolved outside the system"
 	case errors.Is(err, ErrUpstream):
 		return http.StatusBadGateway, "validation service unavailable"
 	case errors.Is(err, ErrNoActiveRuleSet):

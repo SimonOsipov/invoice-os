@@ -598,7 +598,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			conditions = append(conditions, fmt.Sprintf("entity_id = $%d", len(args)))
 		}
 		if f.NeedsAttention {
-			conditions = append(conditions, `(status IN ('rejected', 'failed') OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
+			conditions = append(conditions, `(status = 'rejected' OR (status = 'failed' AND kept_as_is_at IS NULL) OR (status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb))`)
 		}
 		if len(f.ImportBatchIDs) > 0 {
 			args = append(args, f.ImportBatchIDs)
@@ -612,16 +612,18 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			// AND kept_as_is_at IS NULL (INVCR-01-15, D6, [needs-fix-is-a-new-predicate]):
 			// a kept row still matches the base needs_fix shape (draft + a blocking
 			// violation) but has left the "needs a fix" working set by operator decision --
-			// this clause lands ONLY here, never on needs_attention's verbatim-pinned
-			// fragment above (which stays byte-identical to the dashboard rollup,
-			// TestStoreList_NeedsAttentionMatchesDashboardRollup).
+			// this clause lands ONLY here, never on needs_attention's fragment above
+			// (which stays behaviourally in lockstep with the dashboard rollup, pinned by
+			// TestStoreList_NeedsAttentionMatchesDashboardRollup -- not byte-identical,
+			// since that query aliases the table `i.` and this one doesn't).
 			conditions = append(conditions, `(status = 'draft' AND violations @> '[{"severity": "error"}]'::jsonb AND kept_as_is_at IS NULL)`)
 		}
 		if f.KeptAsIs {
 			// The review shell's footer counter query ("N kept as-is") -- a real server
 			// total, never derived by arithmetic over the other totals
 			// ([filters-are-server-side]).
-			conditions = append(conditions, `kept_as_is_at IS NOT NULL`)
+			// status = 'draft': on a failed row the mark means resolved outside, not kept as-is.
+			conditions = append(conditions, `(status = 'draft' AND kept_as_is_at IS NOT NULL)`)
 		}
 		if f.RuleKey != "" {
 			// json.Marshal, never fmt.Sprintf: a quote-bearing rule_key built by
@@ -1372,6 +1374,50 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // the endpoint's own contract, not an edge-table property.
 func canSubmit(s Status) bool { return s == StatusValidated }
 
+// isApprover takes the memberships.role, not auth.Identity.Role -- the latter
+// is the GoTrue role, always "authenticated" (gateway.go:160-170).
+func isApprover(role string) bool { return role == "admin" || role == "reviewer" }
+
+// callerRoleTx is CallerRole's query run on an already-open tx -- the shape
+// ResolveOutside/UnresolveOutside inline as their own first step, so the
+// permission check shares one transaction with the row lock instead of
+// opening a second (nesting db.WithinRequestTenantTx's own pool.Begin from
+// inside a closure has no precedent in this codebase and risks pool
+// exhaustion). Fails closed like CallerRole: no row is ("", nil), never an error.
+func callerRoleTx(ctx context.Context, tx pgx.Tx, subject string) (string, error) {
+	var role string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM memberships WHERE user_id = $1`, subject,
+	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return role, nil
+}
+
+// CallerRole reads the caller's memberships.role, RLS-scoped like
+// tenancy.Store.Me (internal/tenancy/store.go): a thin WithinRequestTenantTx
+// wrapper around callerRoleTx. Exported for the handler layer, which needs
+// the role without a write.
+func (s *Store) CallerRole(ctx context.Context) (string, error) {
+	var role string
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		id, _ := auth.IdentityFromContext(ctx)
+		r, err := callerRoleTx(ctx, tx, id.Subject)
+		if err != nil {
+			return err
+		}
+		role = r
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return role, nil
+}
+
 // Transition is the PUBLIC, request-scoped status change (M4-02-02, System
 // Design [D1]/[D2]/[D4]/[D11]) and one of transitionTx's exactly two callers
 // (M4-04-05's extraction moved the SOLE-writer-of-invoices.status role down
@@ -1819,7 +1865,9 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 			return err
 		}
 
-		if locked.KeptAsIsAt == nil {
+		// A failed invoice's mark is ResolveOutside's, cleared only by
+		// UnresolveOutside -- UnkeepAsIs stays draft-only.
+		if locked.KeptAsIsAt == nil || locked.Status != StatusDraft {
 			inv = locked
 			return nil
 		}
@@ -1832,6 +1880,118 @@ func (s *Store) UnkeepAsIs(ctx context.Context, id string) (Invoice, error) {
 		}
 
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.unkept_as_is", map[string]any{"id": id})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
+}
+
+// ResolveOutside marks a failed invoice resolved outside the system: an
+// approver-only (isApprover) stamp of kept_as_is_at/by/reason, auditing
+// "invoice.resolved_outside" in the same transaction as the write. The
+// permission check (callerRoleTx) runs BEFORE the row lock, inside the SAME
+// transaction, so a non-approver cannot probe id existence via a
+// 403-vs-404/409 distinction. Never calls transitionTx -- status is untouched.
+// Re-resolving an already-resolved invoice is legal and overwrites
+// at/by/reason, same as KeepAsIs.
+func (s *Store) ResolveOutside(ctx context.Context, id, reason string) (Invoice, error) {
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		role, err := callerRoleTx(ctx, tx, callerID.Subject)
+		if err != nil {
+			return err
+		}
+		if !isApprover(role) {
+			return ErrNotPermitted
+		}
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if locked.Status != StatusFailed {
+			return ErrNotResolvable
+		}
+
+		now := time.Now().UTC()
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = $1, kept_as_is_by = $2, kept_as_is_reason = $3
+			 WHERE id = $4 RETURNING `+invoiceColumns,
+			now, callerID.Subject, reason, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.resolved_outside", map[string]any{
+			"id":     id,
+			"reason": reason,
+		})
+	})
+	if err != nil {
+		return Invoice{}, err
+	}
+	return inv, nil
+}
+
+// UnresolveOutside is ResolveOutside's un-do: same in-tx permission-before-lock
+// and not-failed guards, then an idempotent no-op (no write, no audit) if the
+// invoice is not currently resolved, else clears the triple and audits
+// "invoice.unresolved_outside" in the same transaction.
+func (s *Store) UnresolveOutside(ctx context.Context, id string) (Invoice, error) {
+	var inv Invoice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		callerID, _ := auth.IdentityFromContext(ctx)
+
+		role, err := callerRoleTx(ctx, tx, callerID.Subject)
+		if err != nil {
+			return err
+		}
+		if !isApprover(role) {
+			return ErrNotPermitted
+		}
+
+		var locked Invoice
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		), &locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		if locked.Status != StatusFailed {
+			return ErrNotResolvable
+		}
+
+		if locked.KeptAsIsAt == nil {
+			inv = locked
+			return nil
+		}
+
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL
+			 WHERE id = $1 RETURNING `+invoiceColumns, id,
+		), &inv); err != nil {
+			return err
+		}
+
+		return audit.Record(ctx, tx, callerID.Subject, "invoice.unresolved_outside", map[string]any{"id": id})
 	})
 	if err != nil {
 		return Invoice{}, err

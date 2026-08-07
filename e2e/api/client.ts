@@ -310,6 +310,11 @@ export interface Invoice {
   csid: string | null
   qr_payload: string | null
   rejection_reasons: RejectionReason[]
+  // kept_as_is_at/by/reason -- needed to assert the resolved-outside endpoints' 200
+  // bodies (a second, mutually exclusive meaning on `failed` invoices).
+  kept_as_is_at: string | null
+  kept_as_is_by: string | null
+  kept_as_is_reason: string | null
   line_items?: InvoiceLineItem[]
 }
 
@@ -362,6 +367,8 @@ export interface GetInvoiceResult extends Invoice {
   submit_blocked_reason: string | null
   can_view_ubl: boolean
   ubl_blocked_reason: string | null
+  can_resolve_outside: boolean
+  resolve_outside_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

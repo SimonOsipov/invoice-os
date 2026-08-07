@@ -114,6 +114,30 @@ func TestCORSPreflightGrantsPATCH(t *testing.T) {
 	}
 }
 
+// TestCORSPreflightGrantsDELETE proves the preflight for the resolved-outside undo
+// (DELETE /api/invoice/v1/invoices/{id}/resolved-outside) is granted: a caught bug where
+// this method was missing from corsAllowMethods let the actual DELETE pass every backend
+// test while failing client-side with net::ERR_FAILED, since the browser never sends a
+// request the preflight doesn't grant.
+func TestCORSPreflightGrantsDELETE(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	r := httptest.NewRequest("OPTIONS", "/api/invoice/v1/invoices/00000000-0000-0000-0000-000000000001/resolved-outside", nil)
+	r.Header.Set("Origin", allowedOrigin)
+	r.Header.Set("Access-Control-Request-Method", "DELETE")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", rec.Code)
+	}
+	got := rec.Header().Get("Access-Control-Allow-Methods")
+	if !strings.Contains(got, "DELETE") {
+		t.Errorf("Access-Control-Allow-Methods = %q, want it to contain DELETE", got)
+	}
+}
+
 // TestCORSPreflightBypassesAuth wires the CORS layer exactly as main does — OUTSIDE the
 // JWT verifier — and proves a preflight to a protected /api route is answered 204, not
 // 401. Without the outer CORS the same OPTIONS (no bearer) is a 401 from the verifier.

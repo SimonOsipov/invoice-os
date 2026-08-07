@@ -237,6 +237,10 @@ export interface InvoiceDetailRecord extends InvoiceRecord {
   submit_blocked_reason: string | null
   can_view_ubl: boolean
   ubl_blocked_reason: string | null
+  // can_resolve_outside/resolve_outside_blocked_reason -- same no-omitempty,
+  // fail-closed convention as the four flags above.
+  can_resolve_outside: boolean
+  resolve_outside_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -524,6 +528,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     submit_blocked_reason: res.submit_blocked_reason ?? null,
     can_view_ubl: res.can_view_ubl === true,
     ubl_blocked_reason: res.ubl_blocked_reason ?? null,
+    can_resolve_outside: res.can_resolve_outside === true,
+    resolve_outside_blocked_reason: res.resolve_outside_blocked_reason ?? null,
   }
 }
 
@@ -600,6 +606,29 @@ export async function keepInvoiceAsIs(
   reason: string,
 ): Promise<InvoiceRecord> {
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/keep-as-is`, { method: 'POST', body: { reason } })
+}
+
+// POST/DELETE /v1/invoices/{id}/resolved-outside -- the `failed`-status sibling of
+// keep-as-is. `reason` is sent as received, same thin-wrapper contract as
+// keepInvoiceAsIs; the caller gates on canResolveOutside before this is reached.
+export async function resolveInvoiceOutside(
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+  reason: string,
+): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/resolved-outside`, {
+    method: 'POST',
+    body: { reason },
+  })
+}
+
+export async function unresolveInvoiceOutside(
+  authedFetch: AuthedFetch,
+  base: string,
+  id: string,
+): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/resolved-outside`, { method: 'DELETE' })
 }
 
 // POST /v1/invoices/submissions -- the batch-submit trigger ([trigger-surface] /
@@ -985,6 +1014,28 @@ export const FAILURE_EXPLANATION_FALLBACK = {
 export function failureExplanation(kind: string | null): FailureExplanation {
   if (kind === null) return FAILURE_EXPLANATION_FALLBACK
   return FAILURE_EXPLANATIONS[kind as FailureKind] ?? FAILURE_EXPLANATION_FALLBACK
+}
+
+// Static copy for the resolve-outside action's UI, same shape as DETAIL_SUBMIT_COPY;
+// tone matches keep-as-is's ROW_EXPANSION_COPY.
+export const RESOLVE_OUTSIDE_COPY = {
+  label: 'Resolved outside the system',
+  reasonPlaceholder: 'How was this invoice resolved outside ASComply? (required)',
+  resolvedPrefix: 'Resolved outside the system — ',
+  undoLabel: 'Undo',
+} as const
+
+export function canResolveOutside(reason: string): boolean {
+  return reason.trim() !== ''
+}
+
+// `failed` is the only status this action applies to -- a `draft` row with the
+// same kept_as_is_* triple is a keep-as-is, not a resolve-outside.
+export function resolvedOutside(
+  inv: Pick<InvoiceRecord, 'status' | 'kept_as_is_at' | 'kept_as_is_by' | 'kept_as_is_reason'>,
+): { at: string; by: string | null; reason: string | null } | null {
+  if (inv.status !== 'failed' || inv.kept_as_is_at == null) return null
+  return { at: inv.kept_as_is_at, by: inv.kept_as_is_by ?? null, reason: inv.kept_as_is_reason ?? null }
 }
 
 // Founder-pinned, verbatim (Core AC #2) -- do not paraphrase or re-tone.

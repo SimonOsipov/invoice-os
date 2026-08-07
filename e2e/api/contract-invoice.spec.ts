@@ -77,6 +77,25 @@ function twoLineInvoiceFields(invoiceNumber: string) {
   }
 }
 
+// createFailedInvoice(): the draft->validated->queued->failed chain the
+// rejection_reasons test below drives inline, extracted here since the
+// resolve-outside tests need a fresh failed fixture several times.
+async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
+  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
+  await validateInvoice(tok, created.id)
+  await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { target: 'queued' },
+  })
+  await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { target: 'failed' },
+  })
+  return created.id
+}
+
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
   let entity: Entity
@@ -667,6 +686,114 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         body: { line_items: [{ description: 'x', unit_price: 'not-a-number' }] },
       })
       assertErrorEnvelope(res, 400, 'malformed line numeric')
+    })
+  })
+
+  test.describe('resolve-outside', () => {
+    test('POST resolved-outside on a failed invoice with a reason -> 200 {kept_as_is_at/by/reason}; whitespace-only reason -> 400', async () => {
+      const id = await createFailedInvoice(token, entity.id, `INV-RO-${freshTin()}`)
+      const reason = `resolved outside the system ${freshTin()}`
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${id}/resolved-outside`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { reason },
+      })
+      expect(res.status, 'resolved-outside with a real reason should return 200').toBe(200)
+      const body = res.body as Record<string, unknown>
+      expect(body.kept_as_is_at, 'kept_as_is_at should be stamped').not.toBeNull()
+      expect(body.kept_as_is_by, 'kept_as_is_by should be stamped').not.toBeNull()
+      expect(body.kept_as_is_reason, 'kept_as_is_reason should echo the reason').toBe(reason)
+
+      const blankRes = await rawFetch(`/api/invoice/v1/invoices/${id}/resolved-outside`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { reason: '  ' },
+      })
+      assertErrorEnvelope(blankRes, 400, 'resolved-outside whitespace-only reason')
+    })
+
+    test('POST resolved-outside on a draft invoice -> 409 {error: string}', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-RO-${freshTin()}` })
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/resolved-outside`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { reason: 'not applicable, still a draft' },
+      })
+      assertErrorEnvelope(res, 409, 'resolved-outside on a draft')
+    })
+
+    test('POST resolved-outside on a random UUID -> 404 {error: string}', async () => {
+      const res = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/resolved-outside`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { reason: 'does not matter' },
+      })
+      assertErrorEnvelope(res, 404, 'resolved-outside not-found')
+    })
+
+    test('DELETE resolved-outside on a resolved failed invoice -> 200 with the triple nulled, and again idempotently', async () => {
+      const id = await createFailedInvoice(token, entity.id, `INV-RO-${freshTin()}`)
+      const resolveRes = await rawFetch(`/api/invoice/v1/invoices/${id}/resolved-outside`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { reason: `resolved ${freshTin()}` },
+      })
+      expect(resolveRes.status, 'setup: resolving should return 200').toBe(200)
+
+      const firstDelete = await rawFetch(`/api/invoice/v1/invoices/${id}/resolved-outside`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(firstDelete.status, 'un-resolving should return 200').toBe(200)
+      const firstBody = firstDelete.body as Record<string, unknown>
+      expect(firstBody.kept_as_is_at, 'kept_as_is_at should be nulled').toBeNull()
+      expect(firstBody.kept_as_is_by, 'kept_as_is_by should be nulled').toBeNull()
+      expect(firstBody.kept_as_is_reason, 'kept_as_is_reason should be nulled').toBeNull()
+
+      // Un-resolving an already-unresolved invoice is a no-op, not an error.
+      const secondDelete = await rawFetch(`/api/invoice/v1/invoices/${id}/resolved-outside`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      expect(secondDelete.status, 'a second un-resolve should still return 200').toBe(200)
+      const secondBody = secondDelete.body as Record<string, unknown>
+      expect(secondBody.kept_as_is_at, 'kept_as_is_at should stay null').toBeNull()
+    })
+
+    test('GET can_resolve_outside is present on both a draft and a failed invoice; the draft is blocked with a reason', async () => {
+      const draft = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-RO-${freshTin()}` })
+      const failedId = await createFailedInvoice(token, entity.id, `INV-RO-${freshTin()}`)
+
+      const draftRes = await rawFetch(`/api/invoice/v1/invoices/${draft.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const draftBody = draftRes.body as Record<string, unknown>
+      expect('can_resolve_outside' in draftBody, 'GET should carry can_resolve_outside on a draft').toBe(true)
+      expect(draftBody.can_resolve_outside, 'a draft cannot be resolved outside the system').toBe(false)
+      expect(draftBody.resolve_outside_blocked_reason, 'a blocked draft must carry a reason').not.toBeNull()
+
+      const failedRes = await rawFetch(`/api/invoice/v1/invoices/${failedId}`, { headers: { Authorization: `Bearer ${token}` } })
+      const failedBody = failedRes.body as Record<string, unknown>
+      expect('can_resolve_outside' in failedBody, 'GET should carry can_resolve_outside on a failed invoice').toBe(true)
+    })
+
+    test('resolving a failed invoice never re-drives it: status and history are unchanged', async () => {
+      const id = await createFailedInvoice(token, entity.id, `INV-RO-${freshTin()}`)
+      const beforeHistory = await rawFetch(`/api/invoice/v1/invoices/${id}/history`, { headers: { Authorization: `Bearer ${token}` } })
+      const beforeCount = (beforeHistory.body as Record<string, unknown>[]).length
+
+      const resolveRes = await rawFetch(`/api/invoice/v1/invoices/${id}/resolved-outside`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { reason: `resolved ${freshTin()}` },
+      })
+      expect(resolveRes.status, 'resolving should return 200').toBe(200)
+
+      const getRes = await rawFetch(`/api/invoice/v1/invoices/${id}`, { headers: { Authorization: `Bearer ${token}` } })
+      expect((getRes.body as Record<string, unknown>).status, 'resolving must not change status').toBe('failed')
+
+      const afterHistory = await rawFetch(`/api/invoice/v1/invoices/${id}/history`, { headers: { Authorization: `Bearer ${token}` } })
+      const afterCount = (afterHistory.body as Record<string, unknown>[]).length
+      expect(afterCount, 'resolving must not add a history row').toBe(beforeCount)
     })
   })
 })

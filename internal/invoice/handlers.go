@@ -251,6 +251,13 @@ type getResponse struct {
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
 
+// notApproverTransmitReason is the ONE refusal sentence both transmit doors
+// emit, so a blocked caller's 403 never varies by request shape
+// (TestTransmitGate_NoExistenceOracle). Deliberately not routed through
+// ErrNotPermitted: that sentinel's statusForErr arm answers with the
+// resolve-outside copy, which would be a wire lie here.
+const notApproverTransmitReason = "Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team."
+
 // submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
 // but the copy FORKS by status: draft points at a live, enabled Re-validate,
 // rejected points at a disabled one, so one shared sentence would lie on
@@ -632,8 +639,10 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 // Hand-off: if M4-05 adds a second production consumer of Store.Transition,
 // re-evaluate this placement.
 //
-// callerRole is the transmission role gate's seam, shaped like GetHandler's.
-// The gate itself is not written yet -- transmission_rbac_test.go is red on it.
+// callerRole gates transmission: only an admin or a reviewer may drive a
+// transition, matching the shipped capability matrix. It is not assumed to
+// honor Store.CallerRole's "never errors" contract -- an error fails closed to
+// 403, never a 5xx.
 func TransitionHandler(transition func(ctx context.Context, id string, target Status) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -641,6 +650,16 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// Refusing before any row is read keeps a non-approver from probing
+		// whether an id exists. callerRole opens its own transaction, separate
+		// from the write below, so a suspension racing the write is a known,
+		// accepted TOCTOU.
+		role, err := callerRole(r.Context())
+		if err != nil || !isApprover(role) {
+			writeError(w, http.StatusForbidden, notApproverTransmitReason)
 			return
 		}
 
@@ -1079,8 +1098,8 @@ const maxBatchSubmitBodyBytes = 64 * 1024
 // non-uuid id -> 400 -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound ->
 // 404, ErrValidation -> 400, the existing map) -> 200 + BatchSubmitResult.
 //
-// callerRole is the transmission role gate's seam, shaped like GetHandler's.
-// The gate itself is not written yet -- transmission_rbac_test.go is red on it.
+// callerRole gates transmission the same way TransitionHandler does: admin and
+// reviewer only, errors failing closed to 403.
 func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -1088,6 +1107,14 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// Ahead of the decode, for TransitionHandler's reasons: no existence
+		// oracle, and the same accepted TOCTOU on suspension.
+		role, err := callerRole(r.Context())
+		if err != nil || !isApprover(role) {
+			writeError(w, http.StatusForbidden, notApproverTransmitReason)
 			return
 		}
 

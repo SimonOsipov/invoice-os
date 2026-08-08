@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -92,13 +93,129 @@ func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
 	return memberships, nil
 }
 
-// errNotImplemented is the Stage-3 seam for SetMembershipStatus. Delete it
-// with the real body.
-var errNotImplemented = errors.New("tenancy: not implemented")
-
-// SetMembershipStatus is the Stage-3 seam for the PATCH /v1/memberships/{user_id}
-// store method (admin-only status change, last-active-admin guard, audit in the
-// same tx). Replace this body with the real implementation.
+// SetMembershipStatus applies an admin-directed status change to one membership
+// row and audits it in the same transaction. Statement order is the security
+// property, not a style choice:
+//
+// The caller's role is read FIRST, unlocked and taking no target argument, so a
+// non-admin is refused identically whether the target exists, belongs to another
+// tenant, or is garbage — there is no 403-vs-404 existence oracle
+// (TestMembership_PermissionCheckedBeforeRowRead). That read carries
+// AND status = 'active' so a suspended admin cannot reactivate themselves
+// (TestMembership_SuspendedAdminCannotAdminister).
+//
+// The second statement locks the target AND the whole active-admin set in
+// user_id order: the last-active-admin guard then runs over rows no concurrent
+// PATCH can move under it, and contention waits instead of deadlocking. A plain
+// count, or a lock on the target alone, would let two concurrent PATCHes strand
+// the tenant at zero active admins (TestMembership_ConcurrentLastTwoAdmins).
+// Both statements are bare of any tenant_id clause — RLS scopes them, so a
+// cross-tenant target is simply absent from the result.
+//
+// Guards run in this order: target missing -> target invited -> already at the
+// requested status (200 no-op, no UPDATE, no audit) -> last active admin. The
+// no-op must precede the last-admin guard, or re-suspending an already-suspended
+// sole admin would 409 a request that changes nothing.
 func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) (Membership, error) {
-	return Membership{}, errNotImplemented
+	// Re-validated here, not only in the handler, so a direct caller fails
+	// closed rather than writing an out-of-vocabulary status.
+	if status != "active" && status != "suspended" {
+		return Membership{}, ErrInvalidStatus
+	}
+
+	var updated Membership
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		var callerRole string
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
+		).Scan(&callerRole); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotPermitted
+			}
+			return err
+		}
+		if callerRole != "admin" {
+			return ErrNotPermitted
+		}
+
+		rows, err := tx.Query(ctx,
+			`SELECT user_id, role, status, display_name, email FROM memberships
+			  WHERE user_id = $1 OR (role = 'admin' AND status = 'active')
+			  ORDER BY user_id
+			    FOR UPDATE`, userID)
+		if err != nil {
+			return err
+		}
+		var locked []Membership
+		for rows.Next() {
+			var m Membership
+			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email); err != nil {
+				rows.Close()
+				return err
+			}
+			locked = append(locked, m)
+		}
+		// Closed explicitly rather than deferred: the UPDATE below reuses this
+		// transaction's connection.
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		var target *Membership
+		for i := range locked {
+			if locked[i].UserID == userID {
+				target = &locked[i]
+				break
+			}
+		}
+		if target == nil {
+			return ErrMembershipNotFound
+		}
+		if target.Status == "invited" {
+			return ErrInvitedNotTransitionable
+		}
+		if target.Status == status {
+			updated = *target
+			return nil
+		}
+		if status == "suspended" && target.Role == "admin" {
+			others := 0
+			for _, m := range locked {
+				if m.Role == "admin" && m.Status == "active" && m.UserID != userID {
+					others++
+				}
+			}
+			if others == 0 {
+				return ErrLastActiveAdmin
+			}
+		}
+
+		from := target.Status
+		if err := tx.QueryRow(ctx,
+			`UPDATE memberships SET status = $2 WHERE user_id = $1
+			 RETURNING user_id, role, status, display_name, email`, userID, status,
+		).Scan(&updated.UserID, &updated.Role, &updated.Status, &updated.DisplayName, &updated.Email); err != nil {
+			return err
+		}
+
+		event := "membership.reactivated"
+		if status == "suspended" {
+			event = "membership.suspended"
+		}
+		// Last statement in the closure: a failing audit write aborts the tx and
+		// rolls the status change back.
+		return audit.Record(ctx, tx, caller.Subject, event, map[string]any{
+			"user_id": userID,
+			"from":    from,
+			"to":      status,
+		})
+	})
+	if err != nil {
+		return Membership{}, err
+	}
+	return updated, nil
 }

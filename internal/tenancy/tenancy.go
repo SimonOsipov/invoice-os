@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -174,13 +176,92 @@ type membershipsResponse struct {
 // the production implementation.
 type MembershipStatusSetter func(ctx context.Context, userID, status string) (Membership, error)
 
-// SetMembershipStatusHandler is the Stage-3 seam for PATCH
-// /v1/memberships/{user_id}: replace this body with the real
-// MaxBytesReader/decode/cap/status-vocabulary handler (set is unused until
-// then; delete store.go's errNotImplemented alongside it).
+// maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
+// platform server applies no request body limit of its own. A legitimate body
+// is ~30 bytes, so 4 KiB is ~130x headroom without opening the door to
+// unbounded allocation. Over-cap is a 400, not a 413
+// (TestMembership_BodyOverCapRejected).
+const maxSetStatusBodyBytes = 4 * 1024
+
+// setMembershipStatusRequest is the PATCH /v1/memberships/{user_id} wire body.
+type setMembershipStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// SetMembershipStatusHandler returns PATCH /v1/memberships/{user_id}: identity
+// (401, before anything else) -> capped decode (400 on any decode error) ->
+// status vocabulary (400) -> path user_id -> set -> 200 with the updated
+// membership in the same five-key shape as a list element.
+//
+// The body is validated before the path id so a malformed request reads as 400
+// rather than 404 (TestMembership_InvalidStatusRejected). Admin-only-ness and
+// the last-active-admin rule are the store's, not this layer's — see
+// Store.SetMembershipStatus for why the caller's role must be read before the
+// target row.
 func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusInternalServerError, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
+		var req setMembershipStatusRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Status != "active" && req.Status != "suspended" {
+			writeError(w, http.StatusBadRequest, `status must be "active" or "suspended"`)
+			return
+		}
+
+		// Parsed last: no route can deliver an empty segment. An unparseable id
+		// is 404, not 400 — indistinguishable by design from one that is merely
+		// invisible. The canonical form is what the store compares against the
+		// uuid text Postgres returns.
+		userID, err := uuid.Parse(r.PathValue("user_id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+
+		membership, err := set(r.Context(), userID.String(), req.Status)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: set membership status", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, membership)
+	}
+}
+
+// statusForErr maps a store error to the HTTP status + message, in the
+// internal/portfolio shape. The two 409 messages are hand-written rather than
+// err.Error() so the "tenancy: " sentinel prefix never reaches the SPA, which
+// renders them as the reason.
+func statusForErr(err error) (status int, msg string) {
+	switch {
+	case errors.Is(err, db.ErrNoTenant):
+		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, ErrInvalidStatus):
+		return http.StatusBadRequest, `status must be "active" or "suspended"`
+	case errors.Is(err, ErrNotPermitted):
+		return http.StatusForbidden, "only an admin can change a member's status"
+	case errors.Is(err, ErrMembershipNotFound):
+		return http.StatusNotFound, "membership not found"
+	case errors.Is(err, ErrInvitedNotTransitionable):
+		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
+	case errors.Is(err, ErrLastActiveAdmin):
+		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
+	default:
+		return http.StatusInternalServerError, "internal server error"
 	}
 }
 

@@ -148,14 +148,26 @@ func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
 	active := fetchActiveRuleKeys(t, app)
 	target := active[0]
 
+	// Same key exists in every rule_set_versions row (v1..v4 each copy the
+	// prior version) -- scope by the active row's id, not by key, or the
+	// flip leaks into sealed historical versions.
+	var ruleID string
+	var prevEnabled bool
+	if err := app.QueryRow(context.Background(),
+		`SELECT r.id, r.enabled FROM rules r
+		   JOIN rule_set_versions v ON v.id = r.rule_set_version_id
+		  WHERE v.is_active AND r.key = $1`, target).Scan(&ruleID, &prevEnabled); err != nil {
+		t.Fatalf("locate active rule %q: %v", target, err)
+	}
+
 	if _, err := app.Exec(context.Background(),
-		`UPDATE rules SET enabled = false WHERE key = $1`, target); err != nil {
+		`UPDATE rules SET enabled = false WHERE id = $1`, ruleID); err != nil {
 		t.Fatalf("flip enabled=false on %q: %v", target, err)
 	}
 	t.Cleanup(func() {
 		if _, err := app.Exec(context.Background(),
-			`UPDATE rules SET enabled = true WHERE key = $1`, target); err != nil {
-			t.Fatalf("restore enabled=true on %q: %v", target, err)
+			`UPDATE rules SET enabled = $1 WHERE id = $2`, prevEnabled, ruleID); err != nil {
+			t.Fatalf("restore enabled=%v on %q: %v", prevEnabled, target, err)
 		}
 	})
 

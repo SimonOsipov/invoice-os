@@ -1893,6 +1893,23 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     expect(REMOVE_EXPLANATION).toContain('touched; audit history is never rewritten.')
   })
 
+  // AC8 [suspend-copy-is-true], RED ahead of the fix: suspension only pulls approver rights,
+  // it does not block sign-in, and the copy at lib/members.ts:555 says otherwise today.
+  it("AC8: SUSPEND_EXPLANATION stops claiming to block sign-in", () => {
+    expect(SUSPEND_EXPLANATION).not.toContain('Blocks sign-in')
+    expect(SUSPEND_EXPLANATION).toContain('Sign-in is not blocked yet.')
+  })
+
+  it('AC8: the shared audit-trail clause survives the rewrite in both explanations', () => {
+    // SUSPEND_EXPLANATION's clause ends the sentence with a full stop, both before and
+    // after the rewrite -- this guards the rewrite from dropping it.
+    expect(SUSPEND_EXPLANATION).toContain('Their name stays on every invoice they touched.')
+    // REMOVE_EXPLANATION continues past the clause with a semicolon, never a full stop (its
+    // own docblock: "The semicolon is load-bearing") -- period-less, matching the pin at
+    // :1887-1889 this deliberately does not duplicate the punctuation of.
+    expect(REMOVE_EXPLANATION).toContain('Their name stays on every invoice they touched')
+  })
+
   it("interpolates the member's real name into the confirm question (T7.2)", () => {
     // §8 writes this one with the name inside it, which is why it is a function. The
     // template placeholder must never survive into the rendered string.

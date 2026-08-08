@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 
 import { APP_PERSONAS } from '../auth'
 import { CFG } from '../data'
+import type { AuthedFetch } from './portfolio'
 import * as membersModule from './members'
 import {
   ACCESS_ROLES,
@@ -11,14 +14,11 @@ import {
   CAPABILITY_FOOTNOTE,
   CAPABILITY_ROWS,
   classifyInvites,
-  clientAccessLabel,
-  clientAccessNames,
   clientSelectionCount,
   CLIENT_ROSTER,
   CLIENT_USERS_COPY,
   delegateCandidates,
-  DEPARTMENTS,
-  departmentsInUse,
+  emailLabel,
   filterClientRoster,
   filterMembers,
   hasDerivableName,
@@ -29,9 +29,11 @@ import {
   isFiltering,
   isProtectedAdmin,
   isValidEmail,
-  joinedLabel,
-  lastActiveLabel,
-  memberFromInvite,
+  listMembers,
+  memberInitials,
+  MEMBER_UNBACKED,
+  membersSurface,
+  membersViewState,
   mergeChips,
   nameFromEmail,
   needsClientPick,
@@ -43,32 +45,246 @@ import {
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
-  SEED_FIRM_MEMBERS,
-  SEED_INHOUSE_MEMBERS,
-  seedMembers,
-  setMemberRole,
-  setMemberStatus,
+  setMembershipStatus,
   SUSPEND_EXPLANATION,
-  type InviteOptions,
+  toMember,
   type Member,
   type MemberStatus,
+  type MembershipWire,
 } from './members'
 import { SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from './roles'
 
 // --- fixtures ---------------------------------------------------------------
-// Every spec starts from a fresh clone, never from a SEED_* constant — except T1.2/T1.2b,
-// where the aliasing between the clone and the constant IS what is under test.
+// The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
+// FIXTURE now, not a shipped constant: it exercises the reducers and the derivations over
+// rows the live directory (identity + access role + status only) cannot express — invited
+// rows, departments, per-person client access, `invitedBy`.
+const SEED_FIRM_MEMBERS: readonly Member[] = [
+  {
+    id: 'mf1',
+    name: APP_PERSONAS.firm.name,
+    initials: APP_PERSONAS.firm.initials,
+    email: APP_PERSONAS.firm.email,
+    role: 'admin',
+    status: 'active',
+    isYou: true,
+  },
+  {
+    id: 'mf2',
+    name: 'Folake Adesina',
+    initials: 'FA',
+    email: 'f.adesina@okafor.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mf3',
+    name: 'Musa Danjuma',
+    initials: 'MD',
+    email: 'm.danjuma@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mf4',
+    name: 'Chiamaka Nwosu',
+    initials: 'CN',
+    email: 'c.nwosu@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    // §10.9 — the deliberately long name + email row, guarding the column widths.
+    id: 'mf5',
+    name: 'Oluwaseyifunmi Adebanjo-Ogunleye',
+    initials: 'OA',
+    email: 'o.adebanjo-ogunleye@okaforandpartners.com.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mf6',
+    name: 'Bature Suleiman',
+    initials: 'BS',
+    email: 'b.suleiman@okafor.ng',
+    role: 'preparer',
+    status: 'invited',
+    isYou: false,
+  },
+  {
+    id: 'mf7',
+    name: 'Halima Yusuf',
+    initials: 'HY',
+    email: 'h.yusuf@okafor.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    isYou: false,
+  },
+]
+
+const SEED_INHOUSE_MEMBERS: readonly Member[] = [
+  {
+    id: 'mh1',
+    name: APP_PERSONAS.inhouse.name,
+    initials: APP_PERSONAS.inhouse.initials,
+    email: APP_PERSONAS.inhouse.email,
+    role: 'admin',
+    status: 'active',
+    isYou: true,
+  },
+  {
+    id: 'mh2',
+    name: 'Yetunde Fashola',
+    initials: 'YF',
+    email: 'y.fashola@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh3',
+    name: 'Emeka Uzowulu',
+    initials: 'EU',
+    email: 'e.uzowulu@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh4',
+    name: 'Tunde Adeyemi',
+    initials: 'TA',
+    email: 't.adeyemi@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh5',
+    name: 'Ibrahim Bello',
+    initials: 'IB',
+    email: 'i.bello@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    // §2's headline frame: the only cfo holder, suspended, so both cfo approval steps block.
+    id: 'mh6',
+    name: 'Adebayo Ogunlesi',
+    initials: 'AO',
+    email: 'a.ogunlesi@honeywell.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    isYou: false,
+  },
+  {
+    id: 'mh7',
+    name: 'Zainab Lawal',
+    initials: 'ZL',
+    email: 'z.lawal@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh8',
+    name: 'Chidi Anyanwu',
+    initials: 'CA',
+    email: 'c.anyanwu@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh9',
+    name: 'Aisha Mohammed',
+    initials: 'AM',
+    email: 'a.mohammed@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh10',
+    name: 'Segun Oyelaran',
+    initials: 'SO',
+    email: 's.oyelaran@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    // §13 check 11 runs in both modes, and in-house is the riskier one (7 columns to firm's
+    // 6) — so in-house gets a long name/email row too (Decision `[inhouse-long-row]`).
+    id: 'mh11',
+    name: 'Oluwafunmilayo Ademola-Oyediran',
+    initials: 'OA',
+    email: 'o.ademola-oyediran@honeywellgroup.com.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh12',
+    name: 'Kelechi Obi',
+    initials: 'KO',
+    email: 'k.obi@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh13',
+    name: 'Hauwa Abubakar',
+    initials: 'HA',
+    email: 'h.abubakar@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh14',
+    name: 'Olumide Bakare',
+    initials: 'OB',
+    email: 'o.bakare@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    isYou: false,
+  },
+  {
+    id: 'mh15',
+    name: 'Nneka Chukwu',
+    initials: 'NC',
+    email: 'n.chukwu@honeywell.ng',
+    role: 'preparer',
+    status: 'invited',
+    isYou: false,
+  },
+  {
+    id: 'mh16',
+    name: 'Sadiq Ibrahim',
+    initials: 'SI',
+    email: 's.ibrahim@honeywell.ng',
+    role: 'reviewer',
+    status: 'invited',
+    isYou: false,
+  },
+]
+
+/** The deleted `seedMembers`, over the fixture. Composes the module's own deep clone. */
+const seedMembers = () => ({ firm: SEED_FIRM_MEMBERS.map((m) => ({ ...m })), inhouse: SEED_INHOUSE_MEMBERS.map((m) => ({ ...m })) })
+
+// Every spec starts from a fresh copy, never from a SEED_* constant. A `Member` is flat, so
+// a spread is a full copy — the nested `clientAccess` the old deep clone existed for is gone.
 const firm = () => seedMembers().firm
 const inhouse = () => seedMembers().inhouse
 const names = (list: readonly Member[]) => list.map((m) => m.name)
 const you = (list: readonly Member[]): Member => list.filter((m) => m.isYou)[0]
-
-/** Reads a subset-scoped `clientAccess` as the array it must be — T1.2b's clone probe. */
-const scopedIds = (list: readonly Member[], index: number): number[] => {
-  const access = list[index].clientAccess
-  if (!Array.isArray(access)) throw new Error(`expected a subset-scoped clientAccess at index ${index}`)
-  return access
-}
 
 /** A hand-built in-house row, for the frames the shipped seed deliberately cannot reach. */
 const inhouseRow = (name: string, status: MemberStatus): Member => ({
@@ -81,20 +297,14 @@ const inhouseRow = (name: string, status: MemberStatus): Member => ({
   email: `${name.split(' ')[0].toLowerCase()}@honeywell.ng`,
   role: 'reviewer',
   status,
-  lastActive: status === 'active' ? '2 hours ago' : null,
-  joined: status === 'invited' ? null : '12 Mar 2025',
-  invitedBy: 'Ngozi Balogun',
   isYou: false,
-  department: 'Finance',
 })
 
 /**
- * The firm mirror of `inhouseRow` — the one fixture MEMB-01-01 did not need. The T2 reducer
- * specs need a row they can hand to `addMembers`/`replaceMember` that is NOT in the seed,
- * and `clientAccess` (firm-only) is the module's single nested value, so it is the whole
- * point of having it.
+ * The firm mirror of `inhouseRow`. The T2 reducer specs need a row they can hand to
+ * `addMembers`/`replaceMember` that is NOT in the seed.
  */
-const firmRow = (name: string, status: MemberStatus, clientAccess: 'all' | number[]): Member => ({
+const firmRow = (name: string, status: MemberStatus): Member => ({
   id: `m-${name.split(' ')[0].toLowerCase()}`,
   name,
   initials: name
@@ -104,32 +314,19 @@ const firmRow = (name: string, status: MemberStatus, clientAccess: 'all' | numbe
   email: `${name.split(' ')[0].toLowerCase()}@okafor.ng`,
   role: 'preparer',
   status,
-  lastActive: status === 'active' ? '2 hours ago' : null,
-  joined: status === 'invited' ? null : '12 Mar 2025',
-  invitedBy: 'Chinedu Okafor',
   isYou: false,
-  clientAccess,
 })
 
-const NOTIFY_BASE = [
-  'Finance',
-  'Tax & Compliance',
-  'Accounts Payable',
-  'Executive',
-  'Procurement',
-  'Audit Committee',
-  'Board',
-  'Preparer',
-]
+const NOTIFY_BASE = ['Audit Committee', 'Board', 'Preparer']
 
-describe('seed shape (T1.1–T1.6, §15.6)', () => {
+describe('seed shape (T1.1–T1.5, §15.6)', () => {
   it('ships 7 firm members and 16 in-house members (T1.1)', () => {
     const store = seedMembers()
     expect(store.firm).toHaveLength(7)
     expect(store.inhouse).toHaveLength(16)
   })
 
-  it('clones the rows, so a mutated row leaks into neither the other clone nor the seed (T1.2)', () => {
+  it('copies the rows, so a mutated row leaks into neither the other copy nor the fixture (T1.2)', () => {
     const a = seedMembers()
     const b = seedMembers()
 
@@ -142,23 +339,6 @@ describe('seed shape (T1.1–T1.6, §15.6)', () => {
     expect(SEED_FIRM_MEMBERS[0].name).toBe('Chinedu Okafor')
   })
 
-  it('clones the nested clientAccess array too, not just the row object (T1.2b)', () => {
-    const a = seedMembers()
-    const b = seedMembers()
-
-    // The subset-scoped row. T1.2 mutates a scalar on an `'all'` row and would pass against
-    // a `{...m}` shallow copy; `clientAccess` is the module's only nested value, so this is
-    // the assertion that actually pins the deep clone.
-    expect(a.firm[1].name).toBe('Folake Adesina')
-    expect(a.firm[1].clientAccess).not.toBe(b.firm[1].clientAccess)
-    expect(a.firm[1].clientAccess).not.toBe(SEED_FIRM_MEMBERS[1].clientAccess)
-
-    scopedIds(a.firm, 1).push(4)
-    expect(scopedIds(a.firm, 1)).toEqual([0, 1, 3, 4])
-    expect(scopedIds(b.firm, 1)).toEqual([0, 1, 3])
-    expect(scopedIds(SEED_FIRM_MEMBERS, 1)).toEqual([0, 1, 3])
-  })
-
   it('the firm you-row is the shipped firm persona (T1.3)', () => {
     const row = you(firm())
     expect(row).toMatchObject({
@@ -166,7 +346,6 @@ describe('seed shape (T1.1–T1.6, §15.6)', () => {
       initials: 'CO',
       email: 'c.okafor@okafor.ng',
       role: 'admin',
-      clientAccess: 'all',
     })
 
     // The three-field subset only: `Persona.role` is the JWT role 'authenticated'
@@ -192,16 +371,6 @@ describe('seed shape (T1.1–T1.6, §15.6)', () => {
     expect(firm().filter((m) => m.isYou)).toHaveLength(1)
     expect(inhouse().filter((m) => m.isYou)).toHaveLength(1)
   })
-
-  it('leaks no columns across modes — firm has no department, in-house no client access (T1.6)', () => {
-    const f = firm()
-    const h = inhouse()
-    expect(f).toHaveLength(7)
-    expect(h).toHaveLength(16)
-
-    for (const m of f) expect(m.department).toBeUndefined()
-    for (const m of h) expect(m.clientAccess).toBeUndefined()
-  })
 })
 
 // AC-1 — Member.position is gone from the type and from both seeds.
@@ -212,70 +381,47 @@ describe('AC-1 — Member.position is gone', () => {
     }
   })
 
-  it('the in-house seed is otherwise byte-identical — ids, names, statuses, departments', () => {
+  it('the in-house seed is otherwise byte-identical — ids, names, statuses', () => {
     // Not expected to go red on its own: nothing here touches `position`, so this holds
     // today too. Pinned as the regression guard that catches the deletion taking anything
     // else with it, the same shape as AC-13's RoleKey-widening guard above.
-    expect(SEED_INHOUSE_MEMBERS.map((m) => [m.id, m.name, m.status, m.department])).toEqual([
-      ['mh1', 'Ngozi Balogun', 'active', 'Finance'],
-      ['mh2', 'Yetunde Fashola', 'active', 'Finance'],
-      ['mh3', 'Emeka Uzowulu', 'active', 'Procurement'],
-      ['mh4', 'Tunde Adeyemi', 'active', 'Finance'],
-      ['mh5', 'Ibrahim Bello', 'active', 'Tax & Compliance'],
-      ['mh6', 'Adebayo Ogunlesi', 'suspended', 'Executive'],
-      ['mh7', 'Zainab Lawal', 'active', 'Accounts Payable'],
-      ['mh8', 'Chidi Anyanwu', 'active', 'Accounts Payable'],
-      ['mh9', 'Aisha Mohammed', 'active', 'Accounts Payable'],
-      ['mh10', 'Segun Oyelaran', 'active', 'Procurement'],
-      ['mh11', 'Oluwafunmilayo Ademola-Oyediran', 'active', 'Tax & Compliance'],
-      ['mh12', 'Kelechi Obi', 'active', 'Finance'],
-      ['mh13', 'Hauwa Abubakar', 'active', 'Executive'],
-      ['mh14', 'Olumide Bakare', 'active', 'Procurement'],
-      ['mh15', 'Nneka Chukwu', 'invited', 'Accounts Payable'],
-      ['mh16', 'Sadiq Ibrahim', 'invited', 'Finance'],
+    expect(SEED_INHOUSE_MEMBERS.map((m) => [m.id, m.name, m.status])).toEqual([
+      ['mh1', 'Ngozi Balogun', 'active'],
+      ['mh2', 'Yetunde Fashola', 'active'],
+      ['mh3', 'Emeka Uzowulu', 'active'],
+      ['mh4', 'Tunde Adeyemi', 'active'],
+      ['mh5', 'Ibrahim Bello', 'active'],
+      ['mh6', 'Adebayo Ogunlesi', 'suspended'],
+      ['mh7', 'Zainab Lawal', 'active'],
+      ['mh8', 'Chidi Anyanwu', 'active'],
+      ['mh9', 'Aisha Mohammed', 'active'],
+      ['mh10', 'Segun Oyelaran', 'active'],
+      ['mh11', 'Oluwafunmilayo Ademola-Oyediran', 'active'],
+      ['mh12', 'Kelechi Obi', 'active'],
+      ['mh13', 'Hauwa Abubakar', 'active'],
+      ['mh14', 'Olumide Bakare', 'active'],
+      ['mh15', 'Nneka Chukwu', 'invited'],
+      ['mh16', 'Sadiq Ibrahim', 'invited'],
     ])
   })
 
-  it('memberFromInvite still forks the mode-specific columns, minus position', () => {
-    const firmRow = memberFromInvite('t.okonkwo@x.ng', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
-    expect(firmRow.clientAccess).toBe('all')
-    expect('department' in firmRow).toBe(false)
-    expect('position' in firmRow).toBe(false)
-
-    const inhouseRow_ = memberFromInvite(
-      't.okonkwo@x.ng',
-      { mode: 'inhouse', role: 'reviewer', department: 'Finance' },
-      'Ngozi Balogun',
-    )
-    expect(inhouseRow_.department).toBe('Finance')
-    expect('clientAccess' in inhouseRow_).toBe(false)
-    expect('position' in inhouseRow_).toBe(false)
-  })
 })
 
-describe('departments and notify targets (T1.27–T1.31, §11.4)', () => {
-  it('lists all five departments, in DEPARTMENTS order (T1.27)', () => {
-    expect(departmentsInUse(inhouse())).toEqual(['Finance', 'Tax & Compliance', 'Accounts Payable', 'Executive', 'Procurement'])
-    expect(departmentsInUse(inhouse())).toEqual([...DEPARTMENTS])
-  })
+describe('notify targets (T1.29–T1.31, §11.4)', () => {
 
-  it('drops a department once no member sits in it (T1.28)', () => {
-    const list = inhouse().filter((m) => m.department !== 'Procurement')
-    expect(list.length).toBeLessThan(inhouse().length)
-    expect(departmentsInUse(list)).toEqual(['Finance', 'Tax & Compliance', 'Accounts Payable', 'Executive'])
-  })
-
-  it('offers departments, then the standing committees, then Preparer (T1.29)', () => {
-    expect(inhouseNotifyTargets(inhouse(), 'Finance')).toEqual(NOTIFY_BASE)
+  it('offers the standing committees, then Preparer (T1.29)', () => {
+    // The five departments that used to lead this list went with the field. `toMember` never
+    // set one, so the dropdown had already lost them.
+    expect(inhouseNotifyTargets('Finance')).toEqual([...NOTIFY_BASE, 'Finance'])
   })
 
   it('keeps a legacy stored target selectable, appended last (T1.30)', () => {
     // polH1's seeded notify target (workflows.ts:179) is not a department or a committee.
-    expect(inhouseNotifyTargets(inhouse(), 'Tax Team')).toEqual([...NOTIFY_BASE, 'Tax Team'])
+    expect(inhouseNotifyTargets('Tax Team')).toEqual([...NOTIFY_BASE, 'Tax Team'])
   })
 
   it('does not duplicate a current value the list already carries (T1.31)', () => {
-    const targets = inhouseNotifyTargets(inhouse(), 'Board')
+    const targets = inhouseNotifyTargets('Board')
     expect(targets).toEqual(NOTIFY_BASE)
     expect(targets.filter((t) => t === 'Board')).toHaveLength(1)
   })
@@ -296,41 +442,6 @@ describe('delegateCandidates (T1.32, §11.3)', () => {
     expect(candidates).not.toContain('Sadiq Ibrahim') // invited
     expect(candidates).not.toContain('Ngozi Balogun') // admin, not reviewer
     expect(candidates).not.toContain('Zainab Lawal') // preparer
-  })
-})
-
-describe('client access (T1.33–T1.34, §6)', () => {
-  it('labels all / a subset / none (T1.33)', () => {
-    expect(clientAccessLabel('all')).toBe('All clients')
-    expect(clientAccessLabel([0, 1, 3])).toBe('3 clients')
-    expect(clientAccessLabel([2, 5])).toBe('2 clients')
-    expect(clientAccessLabel([])).toBe('No clients')
-  })
-
-  it('resolves ids to CFG client names, in CFG order (T1.34)', () => {
-    expect(clientAccessNames([0, 1, 3])).toEqual([
-      'Lagos Freight & Logistics Ltd',
-      'Sahara Foods Distribution Ltd',
-      'Adeyemi & Sons Trading',
-    ])
-  })
-})
-
-describe('lastActiveLabel (T1.35–T1.37, §10.1)', () => {
-  it('reads as the invite expiry for an invited member (T1.35)', () => {
-    expect(lastActiveLabel(inhouseRow('Nneka Chukwu', 'invited'))).toBe('Expires in 6 days')
-  })
-
-  it('reads the stored value for an active member (T1.36)', () => {
-    const row = inhouseRow('Kelechi Obi', 'active')
-    expect(row.lastActive).toBe('2 hours ago')
-    expect(lastActiveLabel(row)).toBe('2 hours ago')
-  })
-
-  it('reads as an em dash for a non-invited member with no last-active value (T1.37)', () => {
-    const row = inhouseRow('Halima Yusuf', 'suspended')
-    expect(row.lastActive).toBeNull()
-    expect(lastActiveLabel(row)).toBe('—')
   })
 })
 
@@ -378,52 +489,15 @@ describe('CLIENT_ROSTER (QA1, §14.5)', () => {
   })
 })
 
-describe('client access — decided-but-unpinned behaviour (QA2–QA5, §6)', () => {
-  it("resolves 'all' to every roster name rather than to an empty list (QA2)", () => {
-    // A judgement call the story does not make: `'all'` could equally have returned []
-    // and pushed the special case onto callers. It does not — pinned so MEMB-01-04's
-    // tooltip and MEMB-01-07's drawer can rely on it.
-    expect(clientAccessNames('all')).toEqual(CFG.map((c) => c.name))
-    expect(clientAccessNames('all')).toHaveLength(6)
-  })
-
-  it('returns names in CFG order whatever order the stored ids are in (QA3)', () => {
-    // T1.34 passes [0,1,3] — already sorted — so it cannot see an implementation that
-    // simply maps the stored order.
-    expect(clientAccessNames([3, 0])).toEqual(['Lagos Freight & Logistics Ltd', 'Adeyemi & Sons Trading'])
-    expect(clientAccessNames([5, 2, 0])).toEqual([
-      'Lagos Freight & Logistics Ltd',
-      'Nigerian Delta Supplies Co.',
-      'Kano Textile Mills Plc',
-    ])
-  })
-
-  it('resolves an empty subset to nothing and ignores an id off the roster (QA4)', () => {
-    expect(clientAccessNames([])).toEqual([])
-    expect(clientAccessNames([99])).toEqual([])
-    expect(clientAccessNames([0, 99])).toEqual(['Lagos Freight & Logistics Ltd'])
-  })
-
-  it('labels a single-client subset in the singular — the seeded invited firm row (QA5)', () => {
-    // Bature Suleiman ships `[0]`, so '1 client' is reachable on the shipped screen;
-    // T1.33 only exercises 'all' / 3 / 2 / 0.
-    const bature = firm().find((m) => m.name === 'Bature Suleiman')
-    expect(bature?.clientAccess).toEqual([0])
-    expect(clientAccessLabel([0])).toBe('1 client')
-    expect(clientAccessLabel([0, 1])).toBe('2 clients')
-  })
-})
-
 describe('inhouseNotifyTargets — empty current (QA13, §11.4)', () => {
   it('appends nothing when the node carries no stored target (QA13)', () => {
     // A new notify node's target starts empty; an unguarded push would put a blank
     // option at the bottom of the select.
-    expect(inhouseNotifyTargets(inhouse(), '')).toEqual(NOTIFY_BASE)
-    expect(inhouseNotifyTargets([], '')).toEqual(['Audit Committee', 'Board', 'Preparer'])
+    expect(inhouseNotifyTargets('')).toEqual(NOTIFY_BASE)
   })
 })
 
-describe('activeAdmins and lastActiveLabel — status precedence (QA14–QA15, §9/§10.1)', () => {
+describe('activeAdmins — status precedence (QA14, §9)', () => {
   it('counts only ACTIVE admins — a suspended or invited admin does not hold the lock (QA14)', () => {
     // Both seeds ship exactly one admin, so T1.38 reads 1 whether or not status filters.
     const list = [
@@ -434,41 +508,20 @@ describe('activeAdmins and lastActiveLabel — status precedence (QA14–QA15, �
     expect(names(activeAdmins(list))).toEqual(['Ngozi Balogun'])
   })
 
-  it('reads the invite expiry even when an invited row carries a last-active value (QA15)', () => {
-    // §10.1 makes the Last active column read the expiry for invited rows, full stop —
-    // status wins over the stored string. Every seeded invited row has `null`, so the
-    // precedence was unobservable.
-    const row: Member = { ...inhouseRow('Nneka Chukwu', 'invited'), lastActive: '5 minutes ago' }
-    expect(lastActiveLabel(row)).toBe('Expires in 6 days')
-  })
 })
 
-describe('seed invariants the reducers will depend on (QA16–QA17, §15.6)', () => {
+describe('seed invariants the reducers depend on (QA16, §15.6)', () => {
   it('gives every member a unique id and a unique email within its mode (QA16)', () => {
     // MEMB-01-02's replaceMember / removeMember key off `id`, and classifyInvites
     // compares lower-cased emails; a duplicate in either would break them silently.
     for (const list of [firm(), inhouse()]) {
       const ids = list.map((m) => m.id)
-      const emails = list.map((m) => m.email.toLowerCase())
+      const emails = list.map((m) => (m.email ?? '').toLowerCase())
       expect(new Set(ids).size).toBe(list.length)
       expect(new Set(emails).size).toBe(list.length)
     }
   })
 
-  it('marks the two founding admins as invited by nobody, and everyone else by a name (QA17)', () => {
-    // Decided, not specified: inventing an inviter for the founding admin would invent
-    // a fact. §8's drawer renders this string as-is.
-    for (const list of [firm(), inhouse()]) {
-      for (const m of list) {
-        if (m.isYou) expect(m.invitedBy).toBe('—')
-        else expect(m.invitedBy).not.toBe('—')
-      }
-    }
-    expect(you(firm()).invitedBy).toBe('—')
-    expect(you(inhouse()).invitedBy).toBe('—')
-    expect(firm().find((m) => m.name === 'Folake Adesina')?.invitedBy).toBe('Chinedu Okafor')
-    expect(inhouse().find((m) => m.name === 'Yetunde Fashola')?.invitedBy).toBe('Ngozi Balogun')
-  })
 })
 
 describe('CAPABILITY_ROWS copy (QA18, §6)', () => {
@@ -595,57 +648,10 @@ describe('classifyInvites (T2.15–T2.20, §7)', () => {
   })
 })
 
-describe('memberFromInvite (T2.21–T2.24, §7)', () => {
-  it('mints an invited row with the derived name, the passed inviter and no activity (T2.21)', () => {
-    const m = memberFromInvite('t.okonkwo@x.ng', { mode: 'inhouse', role: 'reviewer', department: 'Finance' }, 'Ngozi Balogun')
-    expect(m).toMatchObject({
-      email: 't.okonkwo@x.ng',
-      name: 'T Okonkwo',
-      initials: 'TO',
-      role: 'reviewer',
-      status: 'invited',
-      lastActive: null,
-      joined: null,
-      isYou: false,
-      invitedBy: 'Ngozi Balogun',
-    })
-    // QA17 pins `invitedBy === '—'` IFF `isYou`, and an invited row is never `isYou`.
-    expect(m.invitedBy).not.toBe('—')
-  })
-
-  it('mints unique ids that collide with no seeded id, five in one call chain (T2.22)', () => {
-    const minted = ['a1@x.ng', 'a2@x.ng', 'a3@x.ng', 'a4@x.ng', 'a5@x.ng'].map((e) =>
-      memberFromInvite(e, { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor'),
-    )
-    const ids = minted.map((m) => m.id)
-    expect(new Set(ids).size).toBe(5)
-
-    const store = seedMembers()
-    const seeded = new Set([...store.firm, ...store.inhouse].map((m) => m.id))
-    for (const id of ids) expect(seeded.has(id)).toBe(false)
-  })
-
-  it('gives a firm invite its clientAccess and NO in-house keys at all (T2.23)', () => {
-    const m = memberFromInvite('t.okonkwo@x.ng', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
-    expect(m.clientAccess).toBe('all')
-    // Key ABSENT, not merely undefined: `{department: undefined}` would satisfy a
-    // `toBeUndefined()` check while still shipping the column into the firm table.
-    expect('department' in m).toBe(false)
-    expect('position' in m).toBe(false)
-  })
-
-  it('gives an in-house invite its department and NO clientAccess key (T2.24)', () => {
-    const m = memberFromInvite('t.okonkwo@x.ng', { mode: 'inhouse', role: 'reviewer', department: 'Finance' }, 'Ngozi Balogun')
-    expect(m.department).toBe('Finance')
-    expect('position' in m).toBe(false)
-    expect('clientAccess' in m).toBe(false)
-  })
-})
-
-describe('reducers — immutability and misses (T2.25–T2.32b, §15.1)', () => {
+describe('reducers — immutability and misses (T2.25–T2.28, T2.32, §15.1)', () => {
   it('appends without touching the input list (T2.25)', () => {
     const list = firm()
-    const added = firmRow('Tosin Okonkwo', 'invited', [0])
+    const added = firmRow('Tosin Okonkwo', 'invited')
     const out = addMembers(list, [added])
 
     expect(out).not.toBe(list)
@@ -669,7 +675,7 @@ describe('reducers — immutability and misses (T2.25–T2.32b, §15.1)', () => 
 
   it('returns a NEW array of the same values when the id is not present (T2.27)', () => {
     const list = firm()
-    const ghost = firmRow('Ghost Person', 'active', 'all')
+    const ghost = firmRow('Ghost Person', 'active')
     expect(list.map((m) => m.id)).not.toContain(ghost.id)
 
     const out = replaceMember(list, ghost)
@@ -687,40 +693,12 @@ describe('reducers — immutability and misses (T2.25–T2.32b, §15.1)', () => 
     expect(list).toEqual(firm())
   })
 
-  it('builds a NEW member object rather than assigning into the old one (T2.29)', () => {
-    const list = firm()
-    const out = setMemberRole(list, 'mf2', 'admin')
-
-    expect(out[1]).not.toBe(list[1])
-    expect(out[1].role).toBe('admin')
-    expect(list[1].role).toBe('preparer')
-  })
-
-  it('flips active to suspended and changes nothing else on the row (T2.30)', () => {
-    const list = firm()
-    const out = setMemberStatus(list, 'mf2', 'suspended')
-
-    expect(out[1].status).toBe('suspended')
-    expect(list[1].status).toBe('active')
-    expect({ ...out[1], status: 'active' }).toEqual(list[1])
-  })
-
-  it('flips suspended back to active (T2.31)', () => {
-    const list = firm()
-    expect(list[6].id).toBe('mf7')
-    expect(list[6].status).toBe('suspended')
-
-    const out = setMemberStatus(list, 'mf7', 'active')
-    expect(out[6].status).toBe('active')
-    expect(list[6].status).toBe('suspended')
-  })
-
   it('never touches its input list or the seed, in either mode (T2.32)', () => {
     const seedFirmBefore = structuredClone(SEED_FIRM_MEMBERS)
     const seedInhouseBefore = structuredClone(SEED_INHOUSE_MEMBERS)
 
     const cases = [
-      { list: firm(), pristine: firm(), id: 'mf2', extra: firmRow('Tosin Okonkwo', 'invited', [0]) },
+      { list: firm(), pristine: firm(), id: 'mf2', extra: firmRow('Tosin Okonkwo', 'invited') },
       { list: inhouse(), pristine: inhouse(), id: 'mh4', extra: inhouseRow('Tosin Okonkwo', 'invited') },
     ]
 
@@ -733,37 +711,12 @@ describe('reducers — immutability and misses (T2.25–T2.32b, §15.1)', () => 
       untouched()
       removeMember(c.list, c.id)
       untouched()
-      setMemberRole(c.list, c.id, 'admin')
-      untouched()
-      setMemberStatus(c.list, c.id, 'suspended')
-      untouched()
     }
 
     expect(SEED_FIRM_MEMBERS).toEqual(seedFirmBefore)
     expect(SEED_INHOUSE_MEMBERS).toEqual(seedInhouseBefore)
-    expect(scopedIds(SEED_FIRM_MEMBERS, 1)).toEqual([0, 1, 3])
-    expect(scopedIds(SEED_FIRM_MEMBERS, 2)).toEqual([2, 5])
   })
 
-  it('copies the nested clientAccess when it builds a row, it does not alias it (T2.32b)', () => {
-    // T2.32 alone cannot see this: it compares by VALUE, and an aliased array holds the
-    // right value until something writes through it. `clientAccess` is the module's only
-    // nested value and exists only on firm rows, so the probe has to sit on a
-    // subset-scoped firm row — mf2's [0,1,3]. Same hole T1.2b closed for `seedMembers`.
-    const list = firm()
-    expect(list[1].id).toBe('mf2')
-    expect(scopedIds(list, 1)).toEqual([0, 1, 3])
-
-    for (const out of [setMemberRole(list, 'mf2', 'admin'), setMemberStatus(list, 'mf2', 'suspended')]) {
-      expect(out[1].clientAccess).not.toBe(list[1].clientAccess)
-      expect(out[1].clientAccess).not.toBe(SEED_FIRM_MEMBERS[1].clientAccess)
-
-      scopedIds(out, 1).push(4)
-      expect(scopedIds(out, 1)).toEqual([0, 1, 3, 4])
-      expect(scopedIds(list, 1)).toEqual([0, 1, 3])
-      expect(scopedIds(SEED_FIRM_MEMBERS, 1)).toEqual([0, 1, 3])
-    }
-  })
 })
 
 describe('filterMembers (T2.33–T2.39, §6)', () => {
@@ -862,15 +815,17 @@ describe('isProtectedAdmin (T2.40–T2.44, §9)', () => {
   })
 
   it('protects neither admin once there are two active ones (T2.42)', () => {
-    const list = setMemberRole(inhouse(), 'mh4', 'admin')
+    const base = inhouse()
+    const list = replaceMember(base, { ...base[3], role: 'admin' })
     expect(activeAdmins(list)).toHaveLength(2)
     expect(isProtectedAdmin(list, list[0])).toBe(false)
     expect(isProtectedAdmin(list, list[3])).toBe(false)
   })
 
   it('re-locks the first admin once the second is suspended (T2.43)', () => {
-    const two = setMemberRole(inhouse(), 'mh4', 'admin')
-    const list = setMemberStatus(two, 'mh4', 'suspended')
+    const base = inhouse()
+    const two = replaceMember(base, { ...base[3], role: 'admin' })
+    const list = replaceMember(two, { ...two[3], status: 'suspended' })
 
     expect(list[3].status).toBe('suspended')
     expect(isProtectedAdmin(list, list[0])).toBe(true)
@@ -878,7 +833,8 @@ describe('isProtectedAdmin (T2.40–T2.44, §9)', () => {
   })
 
   it('does not count an invited admin (T2.44)', () => {
-    const list = setMemberRole(inhouse(), 'mh16', 'admin')
+    const base = inhouse()
+    const list = replaceMember(base, { ...base[15], role: 'admin' })
 
     expect(list[15].name).toBe('Sadiq Ibrahim')
     expect(list[15].status).toBe('invited')
@@ -895,7 +851,7 @@ describe('isProtectedAdmin (T2.40–T2.44, §9)', () => {
 // showed those specs CANNOT see: every spec below was written against a mutant that
 // survived the whole T2 suite. The mutation it kills is named in each spec's comment.
 
-describe('reducer misses — the four AC#6 leaves T2.27 does not reach (QA19–QA22, §15.1)', () => {
+describe('reducer misses — the leaves T2.27 does not reach (QA19–QA20, §15.1)', () => {
   // AC#6 covers a miss for ALL FIVE reducers, but T2.27 covers `replaceMember` alone. The
   // superseded rules.ts:253-268 reading (`return rules as CustomRule[]`, the input
   // REFERENCE) survives the entire T2 suite in the other four. These are the guards.
@@ -924,27 +880,6 @@ describe('reducer misses — the four AC#6 leaves T2.27 does not reach (QA19–Q
     expect(list).toEqual(firm())
   })
 
-  it('setMemberRole allocates a new array when the id is not present (QA21)', () => {
-    const list = firm()
-    const out = setMemberRole(list, 'mf99', 'admin')
-
-    expect(out).not.toBe(list)
-    expect(out).toEqual(list)
-    expect(out.map((m) => m.role)).toEqual(list.map((m) => m.role))
-    expect(out[0]).toBe(list[0])
-    expect(list).toEqual(firm())
-  })
-
-  it('setMemberStatus allocates a new array when the id is not present (QA22)', () => {
-    const list = firm()
-    const out = setMemberStatus(list, 'mf99', 'suspended')
-
-    expect(out).not.toBe(list)
-    expect(out).toEqual(list)
-    expect(out.map((m) => m.status)).toEqual(list.map((m) => m.status))
-    expect(out[0]).toBe(list[0])
-    expect(list).toEqual(firm())
-  })
 })
 
 describe('reducers key off id, never email (QA23, §15.1)', () => {
@@ -973,51 +908,23 @@ describe('reducers key off id, never email (QA23, §15.1)', () => {
   })
 })
 
-describe('minted ids are unique ACROSS modes, not only within one (QA24, §7)', () => {
-  it('prefixes per mode over one shared counter, colliding with no seeded id (QA24)', () => {
-    // T2.22 mints five FIRM invites only, so the mf/mh fork — the actual mechanism for
-    // cross-mode uniqueness — is never observed there: an `mf`-only implementation passes it.
-    const firmInvites = ['q1@x.ng', 'q2@x.ng'].map((e) =>
-      memberFromInvite(e, { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor'),
-    )
-    const inhouseInvites = ['q3@x.ng', 'q4@x.ng'].map((e) =>
-      memberFromInvite(e, { mode: 'inhouse', role: 'reviewer', department: 'Finance' }, 'Ngozi Balogun'),
-    )
-
-    for (const m of firmInvites) expect(m.id.startsWith('mf')).toBe(true)
-    for (const m of inhouseInvites) expect(m.id.startsWith('mh')).toBe(true)
-
-    const ids = [...firmInvites, ...inhouseInvites].map((m) => m.id)
-    expect(new Set(ids).size).toBe(4)
-
-    // Against BOTH seeded modes, not just the minting one.
-    const store = seedMembers()
-    const seeded = new Set([...store.firm, ...store.inhouse].map((m) => m.id))
-    for (const id of ids) expect(seeded.has(id)).toBe(false)
-  })
-})
-
 describe('the seed literals themselves, as an oracle no snapshot can launder (QA25, §15.6)', () => {
   it('holds its hand-authored values after every reducer runs over the CONSTANTS (QA25)', () => {
     // T2.32 snapshots SEED_* with structuredClone at the top of its own body, so corruption
     // committed by an earlier spec in this file is captured by the snapshot and the
     // comparison passes vacuously. This spec asserts the literals directly — and runs the
-    // five reducers over the constants THEMSELVES (not a clone) first, which is the one
-    // call shape T2.32 never makes.
-    const extraFirm = firmRow('Tosin Okonkwo', 'invited', [0])
+    // reducers over the constants THEMSELVES (not a clone) first, which is the one call
+    // shape T2.32 never makes.
+    const extraFirm = firmRow('Tosin Okonkwo', 'invited')
     const extraInhouse = inhouseRow('Tosin Okonkwo', 'invited')
 
     replaceMember(SEED_FIRM_MEMBERS, { ...SEED_FIRM_MEMBERS[1], role: 'admin' })
     addMembers(SEED_FIRM_MEMBERS, [extraFirm])
     removeMember(SEED_FIRM_MEMBERS, 'mf2')
-    setMemberRole(SEED_FIRM_MEMBERS, 'mf2', 'admin')
-    setMemberStatus(SEED_FIRM_MEMBERS, 'mf2', 'suspended')
 
     replaceMember(SEED_INHOUSE_MEMBERS, { ...SEED_INHOUSE_MEMBERS[3], role: 'admin' })
     addMembers(SEED_INHOUSE_MEMBERS, [extraInhouse])
     removeMember(SEED_INHOUSE_MEMBERS, 'mh4')
-    setMemberRole(SEED_INHOUSE_MEMBERS, 'mh4', 'admin')
-    setMemberStatus(SEED_INHOUSE_MEMBERS, 'mh4', 'suspended')
 
     expect(SEED_FIRM_MEMBERS.map((m) => m.id)).toEqual(['mf1', 'mf2', 'mf3', 'mf4', 'mf5', 'mf6', 'mf7'])
     expect(SEED_FIRM_MEMBERS.map((m) => m.role)).toEqual([
@@ -1038,7 +945,6 @@ describe('the seed literals themselves, as an oracle no snapshot can launder (QA
       'invited',
       'suspended',
     ])
-    expect(SEED_FIRM_MEMBERS.map((m) => m.clientAccess)).toEqual(['all', [0, 1, 3], [2, 5], 'all', 'all', [0], 'all'])
 
     expect(SEED_INHOUSE_MEMBERS.map((m) => m.id)).toEqual([
       'mh1',
@@ -1126,15 +1032,6 @@ describe('name and initials — the branches no acceptance criterion names (QA26
     expect(nameFromEmail('chinedu+okafor@x.ng')).toBe('Chinedu Okafor')
   })
 
-  it('stores the address VERBATIM and normalises only the derived name (QA29)', () => {
-    // `parseEmailInput` keeps the first spelling seen because that is what gets mailed;
-    // `memberFromInvite` has to agree, or the chip and the row disagree on the address.
-    const m = memberFromInvite('MiXeD.CaSe@X.NG', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
-    expect(m.email).toBe('MiXeD.CaSe@X.NG')
-    expect(m.name).toBe('Mixed Case')
-    expect(m.initials).toBe('MC')
-  })
-
   it('does not trim — the pipeline trims in parseEmailInput, not in the validator (QA30)', () => {
     expect(isValidEmail(' a@b.co')).toBe(false)
     expect(isValidEmail('a@b.co ')).toBe(false)
@@ -1151,24 +1048,7 @@ describe('name and initials — the branches no acceptance criterion names (QA26
   })
 })
 
-describe('invite-pipeline contracts MEMB-01-06 has to honour (QA32–QA35, §7)', () => {
-  it('copies a firm invite\'s clientAccess so minted rows never share one array (QA32)', () => {
-    // MEMB-01-06 maps `memberFromInvite` over a whole chip list from a SINGLE `opts`. If the
-    // array were assigned through, every invited row would alias it — and the drawer's
-    // scoping editor would then edit all of them at once.
-    const opts: Extract<InviteOptions, { mode: 'firm' }> = { mode: 'firm', role: 'preparer', clientAccess: [0, 2] }
-    const a = memberFromInvite('a@x.ng', opts, 'Chinedu Okafor')
-    const b = memberFromInvite('b@x.ng', opts, 'Chinedu Okafor')
-
-    expect(a.clientAccess).toEqual([0, 2])
-    expect(b.clientAccess).toEqual([0, 2])
-    expect(a.clientAccess).not.toBe(b.clientAccess)
-    expect(a.clientAccess).not.toBe(opts.clientAccess)
-    ;(a.clientAccess as number[]).push(4)
-    expect(b.clientAccess).toEqual([0, 2])
-    expect(opts.clientAccess).toEqual([0, 2])
-  })
-
+describe('invite-pipeline contracts MEMB-01-06 has to honour (QA33–QA35, §7)', () => {
   it('classifies each address independently — no memory of earlier verdicts (QA33)', () => {
     // `parseEmailInput` de-dupes within ONE paste. `classifyInvites` de-dupes nothing, so a
     // second paste of the same address reads `ok` again. MEMB-01-06 owns that de-dupe.
@@ -1186,18 +1066,15 @@ describe('invite-pipeline contracts MEMB-01-06 has to honour (QA32–QA35, §7)'
     expect(list).toEqual(firm())
   })
 
-  it('accepts a separators-only local part and mints a NAMELESS row (QA35)', () => {
+  it('accepts a separators-only local part, and derives neither a name nor initials (QA35)', () => {
     // RECORDED, NOT ENDORSED. `isValidEmail` is deliberately minimal, so a local part made
-    // only of separators passes it, classifies `ok`, and mints a row whose name and initials
-    // are both empty — a blank Person cell in MEMB-01-04's table. Pinned so the behaviour is
-    // a visible decision rather than an accident; the UX call (reject the chip) belongs to
-    // MEMB-01-06 and is recorded in its notes.
+    // only of separators passes it and classifies `ok`. `hasDerivableName` is the gate that
+    // stops it becoming a row with a blank Person cell.
     expect(isValidEmail('...@x.ng')).toBe(true)
     expect(classifyInvites(firm(), ['...@x.ng'])).toEqual(['ok'])
-
-    const m = memberFromInvite('...@x.ng', { mode: 'firm', role: 'preparer', clientAccess: 'all' }, 'Chinedu Okafor')
-    expect(m.name).toBe('')
-    expect(m.initials).toBe('')
+    expect(nameFromEmail('...@x.ng')).toBe('')
+    expect(initialsFrom('...@x.ng')).toBe('')
+    expect(hasDerivableName('...@x.ng')).toBe(false)
   })
 })
 
@@ -1217,23 +1094,15 @@ describe('filter and guard — boundaries the T2 batch does not reach (QA36–QA
     // QA12 covered MEMB-01-01's derivations at the empty boundary; none of MEMB-01-02's
     // exports had that coverage.
     const empty: readonly Member[] = []
-    const row = firmRow('Ghost Person', 'active', 'all')
+    const row = firmRow('Ghost Person', 'active')
 
     expect(classifyInvites(empty, ['a@x.ng', 'bad'])).toEqual(['ok', 'malformed'])
     expect(filterMembers(empty, 'ngozi', 'all')).toEqual([])
     expect(addMembers(empty, [row])).toEqual([row])
     expect(replaceMember(empty, row)).toEqual([])
     expect(removeMember(empty, 'mf1')).toEqual([])
-    expect(setMemberRole(empty, 'mf1', 'admin')).toEqual([])
-    expect(setMemberStatus(empty, 'mf1', 'active')).toEqual([])
 
-    for (const out of [
-      addMembers(empty, []),
-      replaceMember(empty, row),
-      removeMember(empty, 'mf1'),
-      setMemberRole(empty, 'mf1', 'admin'),
-      setMemberStatus(empty, 'mf1', 'active'),
-    ]) {
+    for (const out of [addMembers(empty, []), replaceMember(empty, row), removeMember(empty, 'mf1')]) {
       expect(out).not.toBe(empty)
     }
   })
@@ -1246,7 +1115,7 @@ describe('filter and guard — boundaries the T2 batch does not reach (QA36–QA
     expect(sole.role).toBe('admin')
     expect(isProtectedAdmin([], sole)).toBe(false)
 
-    const detached: Member = { ...firmRow('Ghost Admin', 'active', 'all'), role: 'admin' }
+    const detached: Member = { ...firmRow('Ghost Admin', 'active'), role: 'admin' }
     expect(inhouse().map((m) => m.id)).not.toContain(detached.id)
     expect(isProtectedAdmin(inhouse(), detached)).toBe(true)
   })
@@ -1258,7 +1127,7 @@ describe('filter and guard — boundaries the T2 batch does not reach (QA36–QA
 // All three shipped inside MembersTable/MembersView, where `environment: node` cannot reach
 // them: two of them are INVENTED COPY (a singular §6 and a singular §10.4 that the story
 // supplies only in the plural) and the third has a fallback branch no screenshot can hit.
-// Pulled into this module — which already owns `clientAccessLabel`, `lastActiveLabel` and
+// Pulled into this module — which already owns `emailLabel` and
 // CAPABILITY_ROWS' copy — so the reconstructions are artifacts a spec holds rather than
 // strings only a reviewer's eye guards.
 
@@ -1344,7 +1213,7 @@ describe('MEMB-01-06 invite modal copy (T6.2, §7)', () => {
     expect(active.status).toBe('active')
     expect(pending.status).toBe('invited')
 
-    const verdicts = classifyInvites(list, [active.email, pending.email, 'not-an-email', 'new@x.ng'])
+    const verdicts = classifyInvites(list, [active.email ?? '', pending.email ?? '', 'not-an-email', 'new@x.ng'])
     expect(verdicts).toEqual(['member', 'invited', 'malformed', 'ok'])
     for (const v of verdicts) {
       if (v === 'ok') continue
@@ -1374,7 +1243,7 @@ describe('hasDerivableName — DEFECT D1 settled without moving QA35 (T6.3-T6.4,
 
   it('accepts every address the pipeline is meant to mint, and is not a validator (T6.4)', () => {
     // Every seeded address in both modes, so the gate can never reject a real member's shape.
-    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email)).toBe(true)
+    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email ?? '')).toBe(true)
 
     // The awkward shapes the QA26-QA31 batch already pinned name/initials for.
     for (const address of ['a@x.ng', 'c+tag@x.ng', 'MiXeD.CaSe@X.NG', 'o.adebanjo-ogunleye@okaforandpartners.com.ng']) {
@@ -1551,7 +1420,9 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     // §8's two bullets, character for character. This is the text a buyer reads to decide
     // whether removing someone destroys their audit trail, and the answer is no — which is
     // a promise the product keeps only if the sentence keeps saying it.
-    expect(SUSPEND_EXPLANATION).toBe('Blocks sign-in and keeps all history. Their name stays on every invoice they touched.')
+    expect(SUSPEND_EXPLANATION).toBe(
+      'Removes their approver rights and keeps all history. Sign-in is not blocked yet. Their name stays on every invoice they touched.',
+    )
     expect(REMOVE_EXPLANATION).toBe(
       'Revokes access permanently. Their name stays on every invoice they touched; audit history is never rewritten.',
     )
@@ -1566,6 +1437,22 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     // The semicolon, not a full stop. `Remove`'s second clause is what makes the first
     // survivable, and a sentence break demotes it to an afterthought.
     expect(REMOVE_EXPLANATION).toContain('touched; audit history is never rewritten.')
+  })
+
+  // AC8 [suspend-copy-is-true]: suspension only pulls approver rights, it does not block
+  // sign-in — nothing in the auth path reads the status column.
+  it('AC8: SUSPEND_EXPLANATION stops claiming to block sign-in', () => {
+    expect(SUSPEND_EXPLANATION).not.toContain('Blocks sign-in')
+    expect(SUSPEND_EXPLANATION).toContain('Sign-in is not blocked yet.')
+  })
+
+  it('AC8: the shared audit-trail clause survives the rewrite in both explanations', () => {
+    // SUSPEND_EXPLANATION's clause ends the sentence with a full stop, both before and
+    // after the rewrite -- this guards the rewrite from dropping it.
+    expect(SUSPEND_EXPLANATION).toContain('Their name stays on every invoice they touched.')
+    // REMOVE_EXPLANATION continues past the clause with a semicolon, never a full stop (its
+    // own docblock: "The semicolon is load-bearing") -- so this half is period-less.
+    expect(REMOVE_EXPLANATION).toContain('Their name stays on every invoice they touched')
   })
 
   it("interpolates the member's real name into the confirm question (T7.2)", () => {
@@ -1600,28 +1487,6 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
   })
 })
 
-describe("joinedLabel — the Activity section's first look at `joined` (T7.7)", () => {
-  it('renders the date, and never the word "null" (T7.7)', () => {
-    const list = firm()
-    // Every active/suspended seed row carries a real date string.
-    expect(joinedLabel(list.filter((m) => m.name === 'Folake Adesina')[0])).toBe('18 Mar 2024')
-    expect(joinedLabel(you(list))).toBe('4 Feb 2024')
-
-    // The branch that matters. `joined` is null on every invited row, and a bare
-    // `{member.joined}` renders nothing at all — an empty Activity cell reads as a layout
-    // bug, not as "they have not joined yet".
-    const invited = list.filter((m) => m.status === 'invited')
-    expect(invited.length).toBeGreaterThan(0)
-    for (const m of invited) {
-      expect(m.joined).toBeNull()
-      expect(joinedLabel(m)).toBe('—')
-    }
-    // The SAME em-dash `lastActiveLabel` returns for a missing value, so the three Activity
-    // cells cannot disagree about how absence renders.
-    expect(joinedLabel(invited[0])).toBe(lastActiveLabel({ ...invited[0], status: 'active', lastActive: null }))
-  })
-})
-
 describe('needsClientPick — §7\'s zero-selected rule, now read by two components (T7.8)', () => {
   it("treats 'all' and [] as the discriminated union they are (T7.8)", () => {
     // It moved into this module when MEMB-01-07 extracted `ClientAccessPicker`: the picker
@@ -1632,15 +1497,8 @@ describe('needsClientPick — §7\'s zero-selected rule, now read by two compone
     expect(needsClientPick([0])).toBe(false)
     expect(needsClientPick([0, 1, 3])).toBe(false)
 
-    // `[]` is representable and meaningful — it is simply not sendable. The pairing below
-    // is the point: 'No clients' is a real label for a real state, and this predicate is
-    // what stops that state being granted by accident.
-    expect(clientAccessLabel([])).toBe('No clients')
-    expect(clientAccessLabel('all')).toBe('All clients')
-
-    // The seed's subset row is sendable, and stays sendable after the drawer unticks two
-    // of its three — but not after it unticks the third.
-    const scoped = scopedIds(firm(), 1)
+    // `[]` is representable and meaningful — it is simply not sendable.
+    const scoped = [0, 1, 3]
     expect(needsClientPick(scoped)).toBe(false)
     expect(needsClientPick(scoped.slice(0, 1))).toBe(false)
     expect(needsClientPick(scoped.slice(0, 0))).toBe(true)
@@ -1654,5 +1512,334 @@ describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', (
     const candidates = delegateCandidates(SEED_FIRM_MEMBERS)
     expect(candidates).toEqual(['Musa Danjuma', 'Chiamaka Nwosu'])
     expect(candidates).not.toContain('Chinedu Okafor') // admin, not reviewer
+  })
+})
+
+// ============================================================================
+// APPR-15-05 — Mode A RED specs for the live member wire and projection
+// ============================================================================
+// listMembers/setMembershipStatus/toMember/memberInitials/emailLabel/membersViewState
+// are stubbed to throw, and MEMBER_UNBACKED ships empty, so every spec below fails on
+// the stub — not on an import or compile error. filterMembers/classifyInvites are the
+// SHIPPED implementations, unchanged: their null-email specs fail because those two
+// still call `.toLowerCase()` on `email` unguarded (members.ts:640,731).
+
+/** authedFetch.test.ts's / portfolio.test.ts's own helper, for the ApiError rethrow specs. */
+async function captureRejection(thunk: () => unknown): Promise<unknown> {
+  try {
+    await thunk()
+  } catch (err) {
+    return err
+  }
+  throw new Error('expected the call to reject, but it resolved')
+}
+
+const wire = (overrides: Partial<MembershipWire> = {}): MembershipWire => ({
+  user_id: 'c0000000-0000-0000-0000-000000000003',
+  role: 'reviewer',
+  status: 'active',
+  display_name: 'Folake Adesina',
+  email: 'f.adesina@okafor.ng',
+  ...overrides,
+})
+
+const SELF_SUBJECT = 'c0000000-0000-0000-0000-000000000001'
+
+/** A Member row with a wire-null email, forced past the (still-required) `email: string` field. */
+const nullEmailMember = (name: string): Member => ({ ...inhouseRow(name, 'active'), email: null as unknown as string })
+
+describe('AC-1 — listMembers targets the memberships endpoint', () => {
+  it('GETs <base>/api/tenancy/v1/memberships via the injected authedFetch, no token option of its own', async () => {
+    const af = vi.fn().mockResolvedValue({ memberships: [wire()] }) as unknown as AuthedFetch
+    const base = 'https://gw'
+
+    await listMembers(af, base)
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith(`${base}/api/tenancy/v1/memberships`)
+  })
+
+  it('rethrows a given ApiError unreshaped — the same instance', async () => {
+    const boom = new ApiError('http', 'unauthorized', 401, { error: 'unauthorized' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => listMembers(af, 'https://gw'))
+    expect(caught).toBe(boom)
+  })
+})
+
+describe('AC-1 — setMembershipStatus PATCHes memberships/<id>', () => {
+  it('sends PATCH with body {status} to the member-scoped URL', async () => {
+    const af = vi.fn().mockResolvedValue(wire({ status: 'suspended' })) as unknown as AuthedFetch
+    const base = 'https://gw'
+
+    await setMembershipStatus(af, base, 'u1', 'suspended')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith(`${base}/api/tenancy/v1/memberships/u1`, {
+      method: 'PATCH',
+      body: { status: 'suspended' },
+    })
+  })
+
+  it('rethrows a 409 ApiError with status and body intact', async () => {
+    const boom = new ApiError('http', 'suspended approver', 409, { error: 'suspended approver' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => setMembershipStatus(af, 'https://gw', 'u1', 'suspended'))
+    expect(caught).toBe(boom)
+    expect((caught as ApiError).status).toBe(409)
+    expect((caught as ApiError).body).toEqual({ error: 'suspended approver' })
+  })
+})
+
+describe('AC-2 — toMember maps the wire row to a Member', () => {
+  it('maps the five wire fields to {id, name, email, role, status}', () => {
+    const w = wire({
+      user_id: 'c0000000-0000-0000-0000-000000000005',
+      display_name: 'Chiamaka Nwosu',
+      email: 'c.nwosu@okafor.ng',
+      role: 'reviewer',
+      status: 'active',
+    })
+    const m = toMember(w, SELF_SUBJECT)
+    expect(m.id).toBe(w.user_id)
+    expect(m.name).toBe('Chiamaka Nwosu')
+    expect(m.email).toBe('c.nwosu@okafor.ng')
+    expect(m.role as string).toBe('reviewer')
+    expect(m.status).toBe('active')
+  })
+
+  it('keeps role VERBATIM — reviewer stays reviewer, an unexpected Auditor is kept, not defaulted or lower-cased', () => {
+    expect(toMember(wire({ role: 'reviewer' }), SELF_SUBJECT).role as string).toBe('reviewer')
+    expect(toMember(wire({ role: 'Auditor' }), SELF_SUBJECT).role as string).toBe('Auditor')
+  })
+
+  it('falls back the name display_name -> email -> user_id', () => {
+    expect(toMember(wire({ display_name: 'Folake Adesina', email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe(
+      'Folake Adesina',
+    )
+    expect(toMember(wire({ display_name: null, email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe('f.adesina@okafor.ng')
+    expect(
+      toMember(wire({ display_name: null, email: null, user_id: 'c0000000-0000-0000-0000-000000000009' }), SELF_SUBJECT).name,
+    ).toBe('c0000000-0000-0000-0000-000000000009')
+  })
+
+  it('resolves isYou from the passed self subject', () => {
+    expect(toMember(wire({ user_id: SELF_SUBJECT }), SELF_SUBJECT).isYou).toBe(true)
+    expect(toMember(wire({ user_id: 'c0000000-0000-0000-0000-000000000099' }), SELF_SUBJECT).isYou).toBe(false)
+  })
+})
+
+describe('AC-2/[APPR-10 trap] — delegateCandidates survives the live projection', () => {
+  it('a projected active reviewer is a non-empty delegate candidate', () => {
+    const rows = [
+      wire({ user_id: 'c1', role: 'reviewer', status: 'active', display_name: 'Musa Danjuma' }),
+      wire({ user_id: 'c2', role: 'admin', status: 'active', display_name: 'Chinedu Okafor' }),
+    ].map((w) => toMember(w, SELF_SUBJECT))
+    expect(delegateCandidates(rows)).toEqual(['Musa Danjuma'])
+  })
+})
+
+describe('AC-3 — memberInitials composes initials()/initialsFrom(), no third variant', () => {
+  it('takes initials from the display name when present', () => {
+    expect(memberInitials('Folake Adesina', 'f.adesina@x.ng', 'u1')).toBe('FA')
+  })
+
+  it('falls back to initialsFrom(email) when there is no display name', () => {
+    expect(memberInitials(null, 'f.adesina@x.ng', 'u1')).toBe('FA')
+  })
+
+  it('falls back to the first two characters of the subject, upper-cased, when both are absent', () => {
+    expect(memberInitials(null, null, 'zzuser')).toBe('ZZ')
+  })
+})
+
+describe('AC-5 — emailLabel', () => {
+  it('renders a missing email as an em dash', () => {
+    expect(emailLabel(nullEmailMember('Nomail Person'))).toBe('—')
+  })
+
+  it('renders a real address verbatim', () => {
+    expect(emailLabel({ ...inhouseRow('Has Mail', 'active'), email: 'a@b.ng' })).toBe('a@b.ng')
+  })
+})
+
+describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () => {
+  it('filterMembers tolerates a null email, both when the name matches and when nothing does', () => {
+    const row = nullEmailMember('Nomail Person')
+    // The `||` short-circuits on the name match before `email` is ever touched — this half
+    // is already true today and is pinned as a fact, not a red.
+    expect(names(filterMembers([row], 'nomail', 'all'))).toEqual(['Nomail Person'])
+    // A query the name does NOT match forces evaluation of `m.email.toLowerCase()` — this
+    // is the genuine red: today it throws instead of falling through to "no match".
+    expect(() => filterMembers([row], 'zzz-no-match', 'all')).not.toThrow()
+    expect(filterMembers([row], 'zzz-no-match', 'all')).toEqual([])
+  })
+
+  it('classifyInvites treats a null-email row as no match, and does not throw', () => {
+    const row = nullEmailMember('Nomail Person')
+    expect(() => classifyInvites([row], ['fresh@x.ng'])).not.toThrow()
+    expect(classifyInvites([row], ['fresh@x.ng'])).toEqual(['ok'])
+  })
+})
+
+describe('AC-7 — MEMBER_UNBACKED', () => {
+  it('supplies one distinct, non-empty sentence per unbacked control', () => {
+    const keys = ['invite', 'remove', 'role', 'department', 'clientAccess'] as const
+    for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
+    const values = keys.map((k) => MEMBER_UNBACKED[k])
+    expect(new Set(values).size).toBe(keys.length)
+  })
+})
+
+describe('AC-8 — membersViewState never turns an error into empty', () => {
+  it('null base -> idle', () => {
+    expect(membersViewState(null, 'ready')).toBe('idle')
+  })
+
+  it('an error status passes through as error, never empty', () => {
+    expect(membersViewState('https://gw', 'error')).toBe('error')
+  })
+
+  it('an empty status passes through as empty', () => {
+    expect(membersViewState('https://gw', 'empty')).toBe('empty')
+  })
+})
+
+// Expected to RED against the still-present exports — this subtask does not delete
+// them ([two-step-type-narrowing]; App.tsx:299 still calls seedMembers at this commit).
+describe('AC-9 — the member seed is gone from the app path', () => {
+  it('module exports carry no SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS or seedMembers', () => {
+    expect('SEED_FIRM_MEMBERS' in membersModule).toBe(false)
+    expect('SEED_INHOUSE_MEMBERS' in membersModule).toBe(false)
+    expect('seedMembers' in membersModule).toBe(false)
+  })
+})
+
+// ============================================================================
+// QA (Stage 4) — adversarial coverage over the live wire and projection
+// ============================================================================
+
+describe('AC-2 — toMember keeps status VERBATIM too, and an unfamiliar one is simply inert', () => {
+  it('an unrecognised status is kept as-is, not defaulted or dropped', () => {
+    expect(toMember(wire({ status: 'pending_kyc' }), SELF_SUBJECT).status as string).toBe('pending_kyc')
+  })
+
+  it('an unrecognised status matches no status-gated derivation rather than crashing one', () => {
+    const m = toMember(wire({ status: 'pending_kyc', role: 'admin' }), SELF_SUBJECT)
+    expect(() => activeAdmins([m])).not.toThrow()
+    expect(activeAdmins([m])).toEqual([]) // neither 'active' nor anything else it compares against
+  })
+})
+
+describe('AC-3 — memberInitials, adversarial shapes', () => {
+  it('an empty-string display name is falsy, so it falls through to email like a missing one', () => {
+    expect(memberInitials('', 'f.adesina@okafor.ng', 'u1')).toBe('FA')
+  })
+
+  it('a punctuation-only display name strips to nothing — unreachable from the seed, deliberately unguarded', () => {
+    expect(memberInitials('---', 'f.adesina@okafor.ng', 'u1')).toBe('')
+  })
+
+  it('a single-word display name yields one letter, not a two-word pair', () => {
+    expect(memberInitials('Zainab', null, 'u1')).toBe('Z')
+  })
+
+  it('diacritics do not crash or mojibake — the underlying initials() strips non-ASCII letters rather than transliterating them', () => {
+    expect(() => memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null, 'u1')).not.toThrow()
+    // 'Ò' is stripped along with the other accented characters, so the second word's leading
+    // letter is its first PLAIN one ('g'), not the accented 'Ò' a person would read as the name's
+    // initial — recorded fact, not a regression this subtask introduced (initials() is customers.ts's).
+    expect(memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null, 'u1')).toBe('AG')
+  })
+})
+
+describe('AC-5 — emailLabel does not conflate an empty string with a null email', () => {
+  it('null renders the em dash; an empty string renders as itself — `??` only catches null/undefined', () => {
+    const nullRow = nullEmailMember('Nomail Person')
+    const emptyRow = { ...inhouseRow('Blank Mail', 'active'), email: '' }
+    expect(emailLabel(nullRow)).toBe('—')
+    expect(emailLabel(emptyRow)).toBe('')
+    expect(emailLabel(emptyRow)).not.toBe(emailLabel(nullRow))
+  })
+})
+
+describe('AC-8 — membersViewState over every AsyncStatus value, not just the three the AC names', () => {
+  const ALL_STATUSES: AsyncStatus[] = ['idle', 'loading', 'error', 'empty', 'ready']
+
+  it('a non-null base passes every status through unchanged, including loading and idle itself', () => {
+    for (const s of ALL_STATUSES) expect(membersViewState('https://gw', s)).toBe(s)
+  })
+
+  it('a null base collapses every status to idle, including one that is already idle', () => {
+    for (const s of ALL_STATUSES) expect(membersViewState(null, s)).toBe('idle')
+  })
+})
+
+describe('activeAdmins/isProtectedAdmin — a short LIVE-shaped roster (4 rows) with a suspended admin', () => {
+  const live = [
+    wire({ user_id: 'c1', role: 'admin', status: 'active', display_name: 'Sole Admin' }),
+    wire({ user_id: 'c2', role: 'admin', status: 'suspended', display_name: 'Suspended Admin' }),
+    wire({ user_id: 'c3', role: 'reviewer', status: 'active', display_name: 'Reviewer One' }),
+    wire({ user_id: 'c4', role: 'preparer', status: 'active', display_name: 'Preparer One' }),
+  ].map((w) => toMember(w, SELF_SUBJECT))
+
+  it('a suspended admin is excluded from activeAdmins', () => {
+    expect(activeAdmins(live).map((m) => m.name)).toEqual(['Sole Admin'])
+  })
+
+  it('the sole active admin is still protected with a suspended second admin present', () => {
+    const solo = live.find((m) => m.name === 'Sole Admin')!
+    expect(isProtectedAdmin(live, solo)).toBe(true)
+  })
+
+  it('the suspended admin is never protected — the guard reads status, not role alone', () => {
+    const suspended = live.find((m) => m.name === 'Suspended Admin')!
+    expect(isProtectedAdmin(live, suspended)).toBe(false)
+  })
+
+  it('a non-admin over the same roster is never protected', () => {
+    const reviewer = live.find((m) => m.name === 'Reviewer One')!
+    expect(isProtectedAdmin(live, reviewer)).toBe(false)
+  })
+})
+
+describe('membersSurface — the one derivation both tabs branch on, over every AsyncStatus', () => {
+  it('loading stays loading', () => {
+    expect(membersSurface('loading')).toBe('loading')
+  })
+
+  it('idle (no gateway configured) reads as empty, the roster-of-nothing surface', () => {
+    expect(membersSurface('idle')).toBe('empty')
+  })
+
+  it('empty (a landed, zero-row roster) reads as empty', () => {
+    expect(membersSurface('empty')).toBe('empty')
+  })
+
+  it('ready (a landed, non-empty roster) reads as roster', () => {
+    expect(membersSurface('ready')).toBe('roster')
+  })
+
+  // The whole point of AC1: a fetch that FAILED must never render as an empty SUCCESS. If
+  // this ever regressed to 'empty', both tabs would paint "just you" / "no roles yet" over
+  // a roster that never loaded, which is indistinguishable on screen from the truth.
+  it('error reads as error, never as empty or roster', () => {
+    expect(membersSurface('error')).toBe('error')
+    expect(membersSurface('error')).not.toBe('empty')
+    expect(membersSurface('error')).not.toBe('roster')
+  })
+
+  it('every status maps to exactly one surface, and only ready reaches roster', () => {
+    const ALL: AsyncStatus[] = ['idle', 'loading', 'error', 'empty', 'ready']
+    const bySurface = ALL.map((s) => [s, membersSurface(s)] as const)
+    expect(bySurface).toEqual([
+      ['idle', 'empty'],
+      ['loading', 'loading'],
+      ['error', 'error'],
+      ['empty', 'empty'],
+      ['ready', 'roster'],
+    ])
   })
 })

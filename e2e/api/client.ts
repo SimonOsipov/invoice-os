@@ -103,9 +103,15 @@ export interface Me {
   user: { id: string; role: string }
 }
 
+// Membership mirrors internal/tenancy's Membership struct: five keys, none tagged
+// omitempty, so display_name/email are present as an explicit value or an explicit null.
+// Both the list element and the PATCH response body take this shape.
 export interface Membership {
   user_id: string
   role: string
+  status: string
+  display_name: string | null
+  email: string | null
 }
 
 export interface MembershipsResponse {
@@ -207,6 +213,17 @@ export function me(token: string): Promise<Me> {
 
 export function memberships(token: string): Promise<MembershipsResponse> {
   return apiFetch<MembershipsResponse>(`${apiBase()}/api/tenancy/v1/memberships`, { token })
+}
+
+// setMembershipStatus(): PATCH /v1/memberships/{user_id}, admin-only, audited. `invited` is
+// excluded at the type level rather than by a 400 — it is a column value, not a target.
+// Answers the updated row in the same five-key shape as a list element.
+export function setMembershipStatus(token: string, userId: string, status: 'active' | 'suspended'): Promise<Membership> {
+  return apiFetch<Membership>(`${apiBase()}/api/tenancy/v1/memberships/${userId}`, {
+    method: 'PATCH',
+    body: { status },
+    token,
+  })
 }
 
 export function createEntity(token: string, body: EntityInput): Promise<Entity> {

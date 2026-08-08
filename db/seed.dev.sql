@@ -24,17 +24,32 @@ INSERT INTO tenants (id, name, kind) VALUES
     ('22222222-2222-2222-2222-222222222222', 'Honeywell Group',   'in_house')
 ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind;
 
--- M3-02: demo firm memberships (all three roles) + the in-house persona's own membership
--- so her /me sign-in stays green now that /me is membership-gated (fail-closed 403
--- otherwise). Roles (admin/preparer/reviewer) already exist from the M3-01 migration.
-INSERT INTO memberships (tenant_id, user_id, role) VALUES
-    -- Okafor & Partners (kind='firm') — all three roles
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 'admin'),     -- Chinedu Okafor (firm persona)
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000003', 'preparer'),  -- seed-only
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000004', 'reviewer'),  -- seed-only
-    -- Honeywell Group (in-house persona)
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin')      -- Ngozi Balogun
-ON CONFLICT (tenant_id, user_id) DO NOTHING;
+-- Widened demo memberships: identity (display_name/email) + status, carried over
+-- from lib/members.ts's deleted SEED_*_MEMBERS. DO UPDATE (not DO NOTHING)
+-- converges the new columns on an already-seeded environment, including
+-- production (env-name-gating-trap) -- safe because every subject below is
+-- seed-only and cannot sign in (loginPersonas, internal/gateway/gateway.go).
+INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status) VALUES
+    -- Okafor & Partners (firm) -- all three roles, one suspended, quality_reviewer unstaffed
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 'admin',    'Chinedu Okafor',                   'c.okafor@okafor.ng',                           'active'),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000003', 'preparer', 'Folake Adesina',                   'f.adesina@okafor.ng',                          'active'),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000004', 'reviewer', 'Musa Danjuma',                     'm.danjuma@okafor.ng',                          'active'),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000005', 'reviewer', 'Chiamaka Nwosu',                   'c.nwosu@okafor.ng',                            'active'),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000006', 'preparer', 'Oluwaseyifunmi Adebanjo-Ogunleye', 'o.adebanjo-ogunleye@okaforandpartners.com.ng', 'active'),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000007', 'reviewer', 'Halima Yusuf',                     'h.yusuf@okafor.ng',                            'suspended'),
+    -- Honeywell Group (in-house) -- all three roles, one suspended (sole cfo holder)
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin',    'Ngozi Balogun',                    'n.balogun@honeywell.ng',                       'active'),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000008', 'reviewer', 'Yetunde Fashola',                  'y.fashola@honeywell.ng',                       'active'),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000009', 'reviewer', 'Emeka Uzowulu',                    'e.uzowulu@honeywell.ng',                       'active'),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000010', 'reviewer', 'Tunde Adeyemi',                    't.adeyemi@honeywell.ng',                       'active'),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000011', 'reviewer', 'Ibrahim Bello',                    'i.bello@honeywell.ng',                         'active'),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000012', 'reviewer', 'Adebayo Ogunlesi',                 'a.ogunlesi@honeywell.ng',                      'suspended'),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000013', 'preparer', 'Zainab Lawal',                     'z.lawal@honeywell.ng',                         'active')
+ON CONFLICT (tenant_id, user_id) DO UPDATE SET
+    role         = EXCLUDED.role,
+    display_name = EXCLUDED.display_name,
+    email        = EXCLUDED.email,
+    status       = EXCLUDED.status;
 
 -- task-162/M4-22-03: fold the former reset script's rule re-enable + curated
 -- demo portfolio into the boot-time seed ([demo-seed-shape]). No DELETE is

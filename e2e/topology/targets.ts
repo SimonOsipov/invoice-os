@@ -26,13 +26,16 @@ export const TENANTS = {
     kind: 'firm',
     subject: 'c0000000-0000-0000-0000-000000000001',
     role: 'admin',
-    // All three seeded members of this tenant (db/seed.dev.sql) — the live
+    // All six seeded members of this tenant (db/seed.dev.sql) — the live
     // membership-list proof (isolation.spec.ts) asserts GET /v1/memberships
     // returns exactly these user_ids and none of tenant b's.
     members: [
       'c0000000-0000-0000-0000-000000000001',
       'c0000000-0000-0000-0000-000000000003',
       'c0000000-0000-0000-0000-000000000004',
+      'c0000000-0000-0000-0000-000000000005',
+      'c0000000-0000-0000-0000-000000000006',
+      'c0000000-0000-0000-0000-000000000007',
     ],
   },
   b: {
@@ -41,7 +44,16 @@ export const TENANTS = {
     kind: 'in_house',
     subject: 'c0000000-0000-0000-0000-000000000002',
     role: 'admin',
-    members: ['c0000000-0000-0000-0000-000000000002'],
+    // All seven seeded members of this tenant (db/seed.dev.sql).
+    members: [
+      'c0000000-0000-0000-0000-000000000002',
+      'c0000000-0000-0000-0000-000000000008',
+      'c0000000-0000-0000-0000-000000000009',
+      'c0000000-0000-0000-0000-000000000010',
+      'c0000000-0000-0000-0000-000000000011',
+      'c0000000-0000-0000-0000-000000000012',
+      'c0000000-0000-0000-0000-000000000013',
+    ],
   },
 } as const
 

@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -25,13 +27,16 @@ type Tenant struct {
 	Kind string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
 }
 
-// Membership is one row of the caller's tenant's memberships: a user and their
-// domain role. Added in M3-02-01 for the Me/loader shape; M3-02-02's member-list
-// endpoint is the first consumer of the slice form. JSON tags are snake_case
-// (user_id, role) -- the GET /v1/memberships wire contract (A3).
+// Membership is one row of the caller's tenant's memberships. JSON tags are
+// snake_case (user_id, role, status, display_name, email) -- the GET
+// /v1/memberships wire contract (A3). display_name/email are nullable and
+// serialize as JSON null, never omitted.
 type Membership struct {
-	UserID string `json:"user_id"`
-	Role   string `json:"role"`
+	UserID      string  `json:"user_id"`
+	Role        string  `json:"role"`
+	Status      string  `json:"status"`
+	DisplayName *string `json:"display_name"`
+	Email       *string `json:"email"`
 }
 
 // ErrTenantNotFound means the caller's tenant id resolved to no visible row — a
@@ -42,6 +47,15 @@ var ErrTenantNotFound = errors.New("tenancy: tenant not found")
 // caller holds no memberships row in that tenant — an authenticated caller with
 // no domain role. Fail-closed: a role must never be defaulted when this occurs.
 var ErrNoMembership = errors.New("tenancy: no membership")
+
+// Sentinels for PATCH /v1/memberships/{user_id} (SetMembershipStatus).
+var (
+	ErrNotPermitted             = errors.New("tenancy: not permitted")
+	ErrMembershipNotFound       = errors.New("tenancy: membership not found")
+	ErrInvalidStatus            = errors.New("tenancy: invalid status")
+	ErrInvitedNotTransitionable = errors.New("tenancy: invited membership is not transitionable")
+	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
+)
 
 // MeLoader resolves the current caller's tenant and their domain role (from
 // memberships). The handler depends on this narrow function type rather than a
@@ -152,9 +166,103 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 }
 
 // membershipsResponse is the GET /v1/memberships body: the caller's tenant's
-// memberships, each as {user_id, role} (A3).
+// memberships, each as {user_id, role, status, display_name, email} (A3).
 type membershipsResponse struct {
 	Memberships []Membership `json:"memberships"`
+}
+
+// MembershipStatusSetter applies an admin-directed status change to one
+// membership row, returning the updated row. Store.SetMembershipStatus is
+// the production implementation.
+type MembershipStatusSetter func(ctx context.Context, userID, status string) (Membership, error)
+
+// maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
+// platform server applies no request body limit of its own. A legitimate body
+// is ~30 bytes, so 4 KiB is ~130x headroom without opening the door to
+// unbounded allocation. Over-cap is a 400, not a 413
+// (TestMembership_BodyOverCapRejected).
+const maxSetStatusBodyBytes = 4 * 1024
+
+// setMembershipStatusRequest is the PATCH /v1/memberships/{user_id} wire body.
+type setMembershipStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// SetMembershipStatusHandler returns PATCH /v1/memberships/{user_id}: identity
+// (401, before anything else) -> capped decode (400 on any decode error) ->
+// status vocabulary (400) -> path user_id -> set -> 200 with the updated
+// membership in the same five-key shape as a list element.
+//
+// The body is validated before the path id so a malformed request reads as 400
+// rather than 404 (TestMembership_InvalidStatusRejected). Admin-only-ness and
+// the last-active-admin rule are the store's, not this layer's — see
+// Store.SetMembershipStatus for why the caller's role must be read before the
+// target row.
+func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
+		var req setMembershipStatusRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Status != "active" && req.Status != "suspended" {
+			writeError(w, http.StatusBadRequest, `status must be "active" or "suspended"`)
+			return
+		}
+
+		// Parsed last: no route can deliver an empty segment. An unparseable id
+		// is 404, not 400 — indistinguishable by design from one that is merely
+		// invisible. The canonical form is what the store compares against the
+		// uuid text Postgres returns.
+		userID, err := uuid.Parse(r.PathValue("user_id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+
+		membership, err := set(r.Context(), userID.String(), req.Status)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: set membership status", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, membership)
+	}
+}
+
+// statusForErr maps a store error to the HTTP status + message, in the
+// internal/portfolio shape. The two 409 messages are hand-written rather than
+// err.Error() so the "tenancy: " sentinel prefix never reaches the SPA, which
+// renders them as the reason.
+func statusForErr(err error) (status int, msg string) {
+	switch {
+	case errors.Is(err, db.ErrNoTenant):
+		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, ErrInvalidStatus):
+		return http.StatusBadRequest, `status must be "active" or "suspended"`
+	case errors.Is(err, ErrNotPermitted):
+		return http.StatusForbidden, "only an admin can change a member's status"
+	case errors.Is(err, ErrMembershipNotFound):
+		return http.StatusNotFound, "membership not found"
+	case errors.Is(err, ErrInvitedNotTransitionable):
+		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
+	case errors.Is(err, ErrLastActiveAdmin):
+		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
+	default:
+		return http.StatusInternalServerError, "internal server error"
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

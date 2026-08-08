@@ -35,12 +35,20 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
+	"io/fs"
+	"os"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 // seedMembership inserts one memberships row for tenantID/userID/role as the
@@ -312,5 +320,364 @@ func TestRLS_MembershipsSameUserAcrossTenants(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("verify tenant B view: %v", err)
+	}
+}
+
+// AC-1: a row inserted with no status column named backfills to 'active' via the
+// column's own DEFAULT.
+func TestRLS_MembershipsStatusDefaultsActive(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	id, cleanup := seedMembership(t, h.tenantA, uuid.NewString(), "admin")
+	defer cleanup()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var status string
+		if e := tx.QueryRow(ctx, `SELECT status FROM memberships WHERE id = $1`, id).Scan(&status); e != nil {
+			return e
+		}
+		if status != "active" {
+			t.Errorf("status = %q, want %q", status, "active")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read status back: %v", err)
+	}
+}
+
+// AC-1: status accepts exactly active/invited/suspended; anything else is refused
+// with a check_violation, SQLSTATE 23514.
+func TestRLS_MembershipsStatusVocabulary(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, status := range []string{"active", "invited", "suspended"} {
+		t.Run(status, func(t *testing.T) {
+			var id string
+			err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx,
+					`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', $3) RETURNING id`,
+					h.tenantA, uuid.NewString(), status,
+				).Scan(&id)
+			})
+			if err != nil {
+				t.Fatalf("insert with status = %q: %v", status, err)
+			}
+			defer func() {
+				_, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id)
+			}()
+		})
+	}
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'deleted')`,
+			h.tenantA, uuid.NewString(),
+		)
+		return e
+	})
+	if err == nil {
+		t.Fatal("insert with status = 'deleted' succeeded, want check_violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("insert with status = 'deleted': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+}
+
+// AC-1: display_name/email default to NULL, not empty string, when not named on
+// insert.
+func TestRLS_MembershipsIdentityColumnsDefaultNull(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	id, cleanup := seedMembership(t, h.tenantA, uuid.NewString(), "admin")
+	defer cleanup()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var displayName, email *string
+		if e := tx.QueryRow(ctx,
+			`SELECT display_name, email FROM memberships WHERE id = $1`, id,
+		).Scan(&displayName, &email); e != nil {
+			return e
+		}
+		if displayName != nil {
+			t.Errorf("display_name = %q, want NULL", *displayName)
+		}
+		if email != nil {
+			t.Errorf("email = %q, want NULL", *email)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read identity columns back: %v", err)
+	}
+}
+
+// AC-2: status is subject to the same tenant_isolation policy as the rest of the
+// row — an app tx scoped to A cannot UPDATE B's status, and B's row stays 'active'.
+func TestRLS_MembershipsCrossTenantStatusUpdateInvisible(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	idB, cleanupB := seedMembership(t, h.tenantB, uuid.NewString(), "admin")
+	defer cleanupB()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1`, h.tenantB)
+		if e != nil {
+			return e
+		}
+		if n := tag.RowsAffected(); n != 0 {
+			t.Errorf("rows affected by cross-tenant status UPDATE = %d, want 0", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant status UPDATE: %v", err)
+	}
+
+	var status string
+	if e := h.super.QueryRow(ctx, `SELECT status FROM memberships WHERE id = $1`, idB).Scan(&status); e != nil {
+		t.Fatalf("read back B's status as superuser: %v", e)
+	}
+	if status != "active" {
+		t.Errorf("B's status after the refused cross-tenant UPDATE = %q, want %q", status, "active")
+	}
+}
+
+// membershipsMigrationVersion is the memberships-identity migration's goose version
+// id, taken from the embedded filename rather than hardcoded.
+func membershipsMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	const glob = "*_memberships_status_and_identity.sql"
+	matches, err := fs.Glob(migrations.FS, glob)
+	if err != nil {
+		t.Fatalf("glob %s in migrations.FS: %v", glob, err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("migrations.FS holds %d files matching %s (%v), want exactly 1", len(matches), glob, matches)
+	}
+	v, err := strconv.ParseInt(strings.SplitN(matches[0], "_", 2)[0], 10, 64)
+	if err != nil {
+		t.Fatalf("parse goose version out of %q: %v", matches[0], err)
+	}
+	return v
+}
+
+// membershipsColumns reads memberships' current column set, ordinal-position order.
+func membershipsColumns(t *testing.T, ctx context.Context) []string {
+	t.Helper()
+	rows, err := h.super.Query(ctx,
+		`SELECT column_name FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = 'memberships'
+		 ORDER BY ordinal_position`)
+	if err != nil {
+		t.Fatalf("query memberships columns: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column name: %v", err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate memberships columns: %v", err)
+	}
+	return out
+}
+
+// AC-3: the migration's own Down drops exactly status/display_name/email, and
+// re-applying Up restores them. Driven through goose (ApplyVersion on the real
+// provider, reading migrations.FS) rather than a hand-copied ALTER TABLE, so this
+// proves the shipped Down body itself, not a restatement of it. ApplyVersion targets
+// this one version directly instead of scanning the apply-order ledger (DownTo/UpTo),
+// so it is immune to another test in this package (e.g.
+// TestDemoRepairMigrationAppliesThroughGoose's goose.WithAllowOutOfOrder) leaving
+// goose_db_version's apply order out of step with version-number order.
+func TestRLS_MembershipsDownDropsExactlyThreeColumns(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	version := membershipsMigrationVersion(t)
+
+	migDSN := os.Getenv("DATABASE_MIGRATION_URL")
+	sqlDB, err := sql.Open("pgx", migDSN)
+	if err != nil {
+		t.Fatalf("open migrator connection: %v", err)
+	}
+	// Registered before the restore cleanup below so LIFO runs restore first, close
+	// last — a plain `defer` here would close the connection before t.Cleanup runs.
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("build migration provider: %v", err)
+	}
+
+	// Restore the column set regardless of how the assertions below turn out — later
+	// tests in this package depend on status/display_name/email existing.
+	t.Cleanup(func() {
+		if _, err := provider.Up(context.Background()); err != nil {
+			t.Errorf("restore memberships schema after the Down/Up round-trip: %v", err)
+		}
+	})
+
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back the memberships identity migration: %v", err)
+	}
+
+	wantDown := []string{"id", "tenant_id", "user_id", "role", "created_at"}
+	if got := membershipsColumns(t, ctx); !reflect.DeepEqual(got, wantDown) {
+		t.Fatalf("columns after Down = %v, want %v", got, wantDown)
+	}
+
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("re-apply the memberships identity migration: %v", err)
+	}
+
+	wantUp := []string{"id", "tenant_id", "user_id", "role", "created_at", "status", "display_name", "email"}
+	if got := membershipsColumns(t, ctx); !reflect.DeepEqual(got, wantUp) {
+		t.Fatalf("columns after re-applying Up = %v, want %v", got, wantUp)
+	}
+}
+
+// AC-1 (QA-added): a row that existed BEFORE the migration ran backfills to 'active'
+// via the column's own DEFAULT. TestRLS_MembershipsStatusDefaultsActive only proves a
+// fresh insert takes the DEFAULT; this proves the migration's actual backfill claim by
+// rolling the migration back, seeding a row while status/display_name/email don't
+// exist, then re-applying Up and reading that same pre-existing row back.
+func TestRLS_MembershipsPreMigrationRowBackfillsToActive(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	version := membershipsMigrationVersion(t)
+
+	migDSN := os.Getenv("DATABASE_MIGRATION_URL")
+	sqlDB, err := sql.Open("pgx", migDSN)
+	if err != nil {
+		t.Fatalf("open migrator connection: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("build migration provider: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := provider.Up(context.Background()); err != nil {
+			t.Errorf("restore memberships schema: %v", err)
+		}
+	})
+
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back the memberships identity migration: %v", err)
+	}
+
+	id, cleanup := seedMembership(t, h.tenantA, uuid.NewString(), "admin")
+	defer cleanup()
+
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("re-apply the memberships identity migration: %v", err)
+	}
+
+	var status string
+	var displayName, email *string
+	if err := h.super.QueryRow(ctx,
+		`SELECT status, display_name, email FROM memberships WHERE id = $1`, id,
+	).Scan(&status, &displayName, &email); err != nil {
+		t.Fatalf("read pre-migration row back after re-applying Up: %v", err)
+	}
+	if status != "active" {
+		t.Errorf("pre-migration row status = %q, want %q", status, "active")
+	}
+	if displayName != nil {
+		t.Errorf("pre-migration row display_name = %q, want NULL", *displayName)
+	}
+	if email != nil {
+		t.Errorf("pre-migration row email = %q, want NULL", *email)
+	}
+}
+
+// AC-2 (QA-added): cross-tenant SELECT is refused for the new identity columns too,
+// not just status (TestRLS_MembershipsCrossTenantStatusUpdateInvisible covers the
+// UPDATE case) — an app tx scoped to A cannot read B's display_name/email.
+func TestRLS_MembershipsCrossTenantIdentityColumnsInvisible(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	idB, cleanupB := seedMembership(t, h.tenantB, uuid.NewString(), "admin")
+	defer cleanupB()
+	if _, err := h.super.Exec(ctx,
+		`UPDATE memberships SET display_name = 'B Name', email = 'b@example.com' WHERE id = $1`, idB,
+	); err != nil {
+		t.Fatalf("seed B's identity columns: %v", err)
+	}
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var displayName, email *string
+		e := tx.QueryRow(ctx,
+			`SELECT display_name, email FROM memberships WHERE id = $1`, idB,
+		).Scan(&displayName, &email)
+		if e == pgx.ErrNoRows {
+			return nil // correct: B's row, and its identity columns, are invisible to A
+		}
+		if e != nil {
+			return e
+		}
+		t.Errorf("A read B's identity columns: display_name=%v email=%v, want no row", displayName, email)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant identity-column SELECT: %v", err)
+	}
+}
+
+// AC-1 (QA-added): status is NOT NULL — an explicit NULL is refused with
+// not_null_violation, SQLSTATE 23502 (not silently coerced to the DEFAULT).
+func TestRLS_MembershipsStatusExplicitNullRejected(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', NULL)`,
+			h.tenantA, uuid.NewString(),
+		)
+		return e
+	})
+	if err == nil {
+		t.Fatal("insert with status = NULL succeeded, want not_null_violation (SQLSTATE 23502)")
+	}
+	if code := pgCode(err); code != "23502" {
+		t.Fatalf("insert with status = NULL: SQLSTATE = %q, want 23502 (not_null_violation): %v", code, err)
+	}
+}
+
+// AC-1 (QA-added): the CHECK is an exact-string match — not case-insensitive, and
+// empty string isn't a silent alias for any accepted value.
+func TestRLS_MembershipsStatusVocabularyRejectsCaseAndEmpty(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, status := range []string{"", "Active", "ACTIVE", "invited "} {
+		status := status
+		t.Run("status="+status, func(t *testing.T) {
+			err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+				_, e := tx.Exec(ctx,
+					`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', $3)`,
+					h.tenantA, uuid.NewString(), status,
+				)
+				return e
+			})
+			if err == nil {
+				t.Fatalf("insert with status = %q succeeded, want check_violation (SQLSTATE 23514)", status)
+			}
+			if code := pgCode(err); code != "23514" {
+				t.Fatalf("insert with status = %q: SQLSTATE = %q, want 23514 (check_violation): %v", status, code, err)
+			}
+		})
 	}
 }

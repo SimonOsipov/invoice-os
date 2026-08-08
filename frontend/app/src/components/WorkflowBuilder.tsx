@@ -196,7 +196,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
   // node off it drops it from the list. `''` covers "nothing selected" and "not a notify
   // node" alike — inhouseNotifyTargets' append guard is falsy-safe.
   const notifyOptions = inhouse
-    ? toOptions(inhouseNotifyTargets(ctx.members, selected?.type === 'notify' ? selected.target : ''))
+    ? toOptions(inhouseNotifyTargets(selected?.type === 'notify' ? selected.target : ''))
     : TARGET_OPTIONS
 
   // Same per-node reason as `notifyOptions`: the deleted key the list carries is the SELECTED

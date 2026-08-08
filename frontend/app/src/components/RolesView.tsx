@@ -11,8 +11,9 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { EmptyState } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
+import { membersSurface } from '../lib/members'
 import {
   filterRoles,
   holderCount,
@@ -60,12 +61,17 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   // STABLE — it is a `useDismiss` dependency inside the modal (useDismiss.ts:36-37).
   const closeModal = useCallback(() => setModal(null), [])
 
+  // The SAME ladder the Members tab runs, off the same helper: two rosters of one tenant on
+  // one screen must not disagree about whether the directory loaded. Every count and avatar
+  // below resolves against `members`, so an errored fetch would otherwise paint every role
+  // unheld and the amber notice would assert a coverage failure that is really a fetch one.
+  const surface = membersSurface(ctx.membersState)
   const unassigned = unassignedRoles(roles, members)
   const shown = filterRoles(roles, query)
   const searching = query.trim() !== ''
-  // The Members rule (MembersView.tsx:84-91): "nothing here yet" is a statement about the
-  // LIST, so it must never appear over a live search — that reads as the search having
-  // deleted everything. Filtered-to-zero always gets the muted card instead.
+  // The Members rule (MembersView.tsx): "nothing here yet" is a statement about the LIST, so
+  // it must never appear over a live search — that reads as the search having deleted
+  // everything. Filtered-to-zero always gets the muted card instead.
   const noRoles = roles.length === 0 && !searching
 
   return (
@@ -93,40 +99,48 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
         <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} />
       </div>
 
-      {/* Above the grid AND above both empty surfaces: coverage is a statement about the
-          workspace, which a search box cannot change. No mode gate — unlike the Members
-          tab's notice, this one counts real roles and both modes seed one nobody holds. */}
-      {unassigned.length > 0 && (
-        <AmberNote testId="roles-unassigned" style={{ marginBottom: 16 }}>
-          {unassignedNotice(unassigned.length)}
-          <div style={{ fontWeight: 600, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
-        </AmberNote>
-      )}
+      {surface === 'loading' && <Loading label="Loading members…" />}
 
-      {noRoles ? (
-        <div data-testid="roles-empty">
-          <EmptyState title={EMPTY_TITLE} message={EMPTY_MESSAGE} />
-          {/* Beneath, not inside: `EmptyState` takes {title, message} only, and widening a
-              shared package for one tab's button is the wrong edit. */}
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
-            <NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} />
-          </div>
-        </div>
-      ) : shown.length === 0 ? (
-        // WorkflowsView's empty-list card (WorkflowsView.tsx:73): a card grid has no table
-        // chrome to hang a muted row inside, so the muted row is its own card.
-        <div
-          data-testid="roles-no-match"
-          style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '26px 20px', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)' }}
-        >
-          {NO_MATCH}
-        </div>
-      ) : (
-        <div data-testid="roles-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
-          {shown.map((r) => (
-            <RoleCard key={r.key} ctx={ctx} role={r} onEdit={() => openRoleModal('edit', r)} />
-          ))}
-        </div>
+      {surface === 'error' && ctx.membersError && <ErrorState error={ctx.membersError} onRetry={ctx.refetchMembers} />}
+
+      {surface !== 'loading' && surface !== 'error' && (
+        <>
+          {/* Above the grid AND above both empty surfaces: coverage is a statement about the
+              workspace, which a search box cannot change. Gated on the roster having landed,
+              though — over an errored fetch every role reads unheld. */}
+          {surface === 'roster' && unassigned.length > 0 && (
+            <AmberNote testId="roles-unassigned" style={{ marginBottom: 16 }}>
+              {unassignedNotice(unassigned.length)}
+              <div style={{ fontWeight: 600, marginTop: 3 }}>{unassigned.map((r) => r.title).join(' · ')}</div>
+            </AmberNote>
+          )}
+
+          {noRoles ? (
+            <div data-testid="roles-empty">
+              <EmptyState title={EMPTY_TITLE} message={EMPTY_MESSAGE} />
+              {/* Beneath, not inside: `EmptyState` takes {title, message} only, and widening a
+                  shared package for one tab's button is the wrong edit. */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
+                <NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} />
+              </div>
+            </div>
+          ) : shown.length === 0 ? (
+            // WorkflowsView's empty-list card (WorkflowsView.tsx:73): a card grid has no table
+            // chrome to hang a muted row inside, so the muted row is its own card.
+            <div
+              data-testid="roles-no-match"
+              style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '26px 20px', fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)' }}
+            >
+              {NO_MATCH}
+            </div>
+          ) : (
+            <div data-testid="roles-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
+              {shown.map((r) => (
+                <RoleCard key={r.key} ctx={ctx} role={r} onEdit={() => openRoleModal('edit', r)} />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* Conditional, so every open is a fresh mount and the draft it seeds is the CURRENT role. */}

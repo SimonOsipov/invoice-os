@@ -34,7 +34,7 @@ type SourceDocumentRecord struct {
 	ContentHash         string    `json:"content_hash"`
 	UploadedAt          time.Time `json:"uploaded_at"`
 	// UploadedBy is a bare GoTrue subject uuid: there is no users/profiles
-	// table, and memberships carries no name or email.
+	// table.
 	UploadedBy       *string `json:"uploaded_by"`
 	InvoicesCreated  int     `json:"invoices_created"`
 	OtherInvoiceRows []int   `json:"other_invoice_rows"`

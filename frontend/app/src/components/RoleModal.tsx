@@ -1,6 +1,6 @@
 // §2's create/edit role modal — a 560px centred modal, the app's sixth overlay.
 //
-// `InviteMembersModal`'s scrim + panel + `useDismiss` shape, with `maxHeight: 86vh` and a
+// The app's scrim + panel + `useDismiss` overlay shape, with `maxHeight: 86vh` and a
 // scrolling body: the picker list makes this the first modal whose height is driven by
 // workspace data. The draft is local and lifted to the workspace only on Save, so Cancel,
 // Escape and the backdrop all discard cleanly.
@@ -12,6 +12,7 @@
 import { useState } from 'react'
 
 import { closeGlyph } from '../glyphs'
+import { accessRoleLabel, emailLabel } from '../lib/members'
 import {
   canSaveRole,
   deletedNotice,
@@ -24,7 +25,6 @@ import {
   newRoleKey,
   pickerHiddenAmongSelected,
   pickerMembers,
-  pickerMeta,
   pickerSelectionCount,
   savedNotice,
   steps,
@@ -116,7 +116,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ minWidth: 0 }}>
             <div className="card-title">{role ? 'Edit role' : 'New role'}</div>
-            {/* A sentence, so NOT the `.mono` eyebrow InviteMembersModal's second line takes. */}
+            {/* A sentence, so NOT the `.mono` eyebrow a modal's second line usually takes. */}
             <div style={{ marginTop: 3, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
               {role ? EDIT_ROLE_SUBTITLE : NEW_ROLE_SUBTITLE}
             </div>
@@ -213,11 +213,13 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                           {m.name}
                         </span>
                         <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.email}
+                          {emailLabel(m)}
                         </span>
                       </span>
+                      {/* Both modes. The in-house fork read a department, which no membership
+                          row carries. */}
                       <span style={{ flex: 'none', fontSize: 11.5, color: 'var(--fg-3)' }}>
-                        {pickerMeta(ctx.mode, m)}
+                        {accessRoleLabel(m.role)}
                         {/* Red carries the fact, as it does on the role card. */}
                         {m.status === 'suspended' && <span style={{ color: 'var(--status-red-text)' }}> · suspended</span>}
                       </span>
@@ -288,9 +290,8 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                 disabled={!canSave}
                 className="v2-btn v2-btn-primary pf-btn"
                 data-testid="role-modal-save"
-                // The app's shipped disabled-primary treatment (InviteMembersModal.tsx:363-365):
-                // the real attribute, plus an inline swap so a dead button is not still painted
-                // as the action.
+                // The app's disabled-primary treatment: the real attribute, plus an inline swap
+                // so a dead button is not still painted as the action.
                 style={{ height: 36, fontSize: 13, background: canSave ? 'var(--action)' : 'var(--bg-3)', color: canSave ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: canSave ? 'pointer' : 'not-allowed' }}
               >
                 {role ? 'Save role' : 'Create role'}

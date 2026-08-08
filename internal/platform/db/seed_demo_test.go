@@ -4206,3 +4206,288 @@ func TestSeedNeverReintroducesAWithdrawnTIN(t *testing.T) {
 		}
 	}
 }
+
+// membershipRow is a seeded memberships row's presentable identity.
+// display_name/email are coalesced to "" when fetched, so NULL and "" read as
+// the same failure for the identity checks below.
+type membershipRow struct {
+	tenantID, userID, role, displayName, email, status string
+}
+
+// fetchDemoMemberships returns tenantID's membership rows, ordered by user_id.
+func fetchDemoMemberships(t *testing.T, pool *pgxpool.Pool, tenantID string) []membershipRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT tenant_id, user_id, role, coalesce(display_name, ''), coalesce(email, ''), status
+		 FROM memberships WHERE tenant_id = $1 ORDER BY user_id`,
+		tenantID,
+	)
+	if err != nil {
+		t.Fatalf("query memberships for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	var got []membershipRow
+	for rows.Next() {
+		var r membershipRow
+		if err := rows.Scan(&r.tenantID, &r.userID, &r.role, &r.displayName, &r.email, &r.status); err != nil {
+			t.Fatalf("scan memberships row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate memberships rows for tenant %s: %v", tenantID, err)
+	}
+	return got
+}
+
+// fetchAllPersonaMemberships combines both persona tenants' membership rows.
+func fetchAllPersonaMemberships(t *testing.T, pool *pgxpool.Pool) []membershipRow {
+	t.Helper()
+	return append(fetchDemoMemberships(t, pool, demoTenantID), fetchDemoMemberships(t, pool, honeywellTenantID)...)
+}
+
+// TestSeedMembershipsHaveIdentity: story §5 AC-1. Every seeded membership row
+// in the two persona tenants carries a non-empty display_name and email.
+func TestSeedMembershipsHaveIdentity(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, r := range fetchAllPersonaMemberships(t, pool) {
+		if r.displayName == "" {
+			t.Errorf("tenant %s, user %s: display_name = %q, want non-empty", r.tenantID, r.userID, r.displayName)
+		}
+		if r.email == "" {
+			t.Errorf("tenant %s, user %s: email = %q, want non-empty", r.tenantID, r.userID, r.email)
+		}
+	}
+}
+
+// TestSeedMembershipCountsPerTenant: story §5 AC-1. Tenant A (firm) has 6
+// seeded memberships, tenant B (in-house) has 7.
+func TestSeedMembershipCountsPerTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 6 {
+		t.Errorf("count(memberships) for tenant A (%s) = %d, want 6", demoTenantID, got)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, honeywellTenantID); got != 7 {
+		t.Errorf("count(memberships) for tenant B (%s) = %d, want 7", honeywellTenantID, got)
+	}
+}
+
+// TestSeedRepairsMutatedMembership: story §5 AC-2 -- the load-bearing test for
+// the DO NOTHING -> DO UPDATE flip. Hand-mutates a seeded row's display_name,
+// status, and role, then re-runs Seed: all three must be restored, proving the
+// upsert repairs rather than skips an already-present conflict row.
+func TestSeedRepairsMutatedMembership(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated baseline): %v", err)
+	}
+
+	const userID = "c0000000-0000-0000-0000-000000000003" // curated: preparer, Folake Adesina, active
+	const curatedRole = "preparer"
+	const curatedName = "Folake Adesina"
+	const curatedStatus = "active"
+
+	// While seed.dev.sql is still ON CONFLICT DO NOTHING, the repair Seed call
+	// below can't restore this row -- restore it directly so a RED run doesn't
+	// leave user 0003 mutated for every other test sharing this tenant (e.g.
+	// seed_test.go's TestSeedFromEmbeddedIsIdempotent, which pins its role).
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`UPDATE memberships SET display_name = $3, status = $4, role = $5 WHERE tenant_id = $1 AND user_id = $2`,
+			demoTenantID, userID, curatedName, curatedStatus, curatedRole)
+	})
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE memberships SET display_name = '', status = 'suspended', role = 'reviewer' WHERE tenant_id = $1 AND user_id = $2`,
+		demoTenantID, userID,
+	); err != nil {
+		t.Fatalf("mutate curated row (precondition): %v", err)
+	}
+
+	var mutatedName, mutatedStatus, mutatedRole string
+	if err := pool.QueryRow(ctx,
+		`SELECT coalesce(display_name, ''), status, role FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		demoTenantID, userID,
+	).Scan(&mutatedName, &mutatedStatus, &mutatedRole); err != nil {
+		t.Fatalf("read back mutated row (precondition): %v", err)
+	}
+	if mutatedName != "" || mutatedStatus != "suspended" || mutatedRole != "reviewer" {
+		t.Fatalf("precondition: row after mutation = (name=%q, status=%q, role=%q), want (\"\", \"suspended\", \"reviewer\")", mutatedName, mutatedStatus, mutatedRole)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (repair): %v", err)
+	}
+
+	var name, status, role, email string
+	if err := pool.QueryRow(ctx,
+		`SELECT coalesce(display_name, ''), status, role, coalesce(email, '') FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		demoTenantID, userID,
+	).Scan(&name, &status, &role, &email); err != nil {
+		t.Fatalf("read back repaired row: %v", err)
+	}
+	if name != curatedName {
+		t.Errorf("display_name after repair Seed = %q, want curated %q -- a DO NOTHING upsert would leave the blanked name in place", name, curatedName)
+	}
+	if status != curatedStatus {
+		t.Errorf("status after repair Seed = %q, want curated %q -- a DO NOTHING upsert would leave the flipped status in place", status, curatedStatus)
+	}
+	if role != curatedRole {
+		t.Errorf("role after repair Seed = %q, want curated %q -- a DO NOTHING upsert would leave the changed role in place", role, curatedRole)
+	}
+	if email == "" {
+		t.Errorf("email after repair Seed is empty, want the curated non-empty value")
+	}
+}
+
+// TestSeedMembershipsAreIdempotent: story §5 AC-2. Running Seed twice leaves
+// the two persona tenants' membership rows byte-identical across both runs.
+func TestSeedMembershipsAreIdempotent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	first := fetchAllPersonaMemberships(t, pool)
+	if len(first) != 13 {
+		t.Fatalf("count(memberships) across the two persona tenants after the FIRST Seed = %d, want 13 (6 + 7)", len(first))
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (idempotency): %v", err)
+	}
+	second := fetchAllPersonaMemberships(t, pool)
+	if len(second) != 13 {
+		t.Fatalf("count(memberships) across the two persona tenants after the SECOND Seed = %d, want 13 (no duplication)", len(second))
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("membership rows differ between the first and second Seed call, want byte-identical\nfirst:  %+v\nsecond: %+v", first, second)
+	}
+}
+
+// TestSeedHasSuspendedMemberPerPersonaTenant: story §5 AC-3. Exactly one
+// suspended member per persona tenant -- what keeps the suspended-only state
+// reachable on the deployed demo.
+func TestSeedHasSuspendedMemberPerPersonaTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND status = 'suspended'`, tenantID)
+		if got != 1 {
+			t.Errorf("count(suspended memberships) for tenant %s = %d, want exactly 1", tenantID, got)
+		}
+	}
+}
+
+// TestSeedCoversAllThreeRolesPerPersonaTenant: story §5 AC-3. Both persona
+// tenants have at least one admin, one preparer, and one reviewer.
+func TestSeedCoversAllThreeRolesPerPersonaTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, tenantID := range []string{demoTenantID, honeywellTenantID} {
+		for _, role := range []string{"admin", "preparer", "reviewer"} {
+			got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND role = $2`, tenantID, role)
+			if got < 1 {
+				t.Errorf("tenant %s: count(role=%s) = %d, want at least 1", tenantID, role, got)
+			}
+		}
+	}
+}
+
+// seedOnlySubjectIDPattern matches the seed-only c0000000-...-0000000000NN
+// subject block (internal/gateway/gateway.go's loginPersonas never mints a
+// token for anything outside it).
+var seedOnlySubjectIDPattern = regexp.MustCompile(`^c0000000-0000-0000-0000-0000000000[0-9]{2}$`)
+
+// TestSeedMembershipSubjectsAreSeedOnlyBlock: story §5 AC-6. Every seeded
+// membership's user_id stays inside the seed-only subject block.
+func TestSeedMembershipSubjectsAreSeedOnlyBlock(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, r := range fetchAllPersonaMemberships(t, pool) {
+		if !seedOnlySubjectIDPattern.MatchString(r.userID) {
+			t.Errorf("tenant %s: user_id %q is outside the seed-only c0000000-...-0000000000NN block", r.tenantID, r.userID)
+		}
+	}
+}
+
+// TestSeedMembershipUpsertNeverTouchesNonSeedRow: production-safety proof for
+// the DO NOTHING -> DO UPDATE flip. A real, non-curated membership row (a
+// genuinely invited member, outside the 13 literal (tenant_id, user_id) keys
+// db/seed.dev.sql's ON CONFLICT targets) must survive re-seeding byte-identical
+// -- the INSERT ... VALUES ... ON CONFLICT is not predicate-based, so it can
+// structurally never match a row whose key isn't one of the 13 literals.
+func TestSeedMembershipUpsertNeverTouchesNonSeedRow(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	const realUserID = "55555555-5555-5555-5555-555555555555" // outside c0000000-...-NN and outside every curated key
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM memberships WHERE user_id = $1`, realUserID)
+	})
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status)
+		 VALUES ($1, $2, 'preparer', 'Real Invited Person', 'real.invited@example.com', 'active')`,
+		demoTenantID, realUserID,
+	); err != nil {
+		t.Fatalf("seed a real (non-curated) membership row (precondition): %v", err)
+	}
+
+	before := fetchDemoMemberships(t, pool, demoTenantID)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed: %v", err)
+	}
+
+	after := fetchDemoMemberships(t, pool, demoTenantID)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("tenant A membership rows (including the real, non-seed one) differ after 2 re-seeds, want byte-identical\nbefore: %+v\nafter:  %+v", before, after)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 7 {
+		t.Errorf("count(memberships) for tenant A after re-seed = %d, want 7 (6 curated + 1 real)", got)
+	}
+}

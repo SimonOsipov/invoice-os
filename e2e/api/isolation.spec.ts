@@ -84,7 +84,7 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     const userIdsA = membersA.map((m) => m.user_id).sort()
     const userIdsB = membersB.map((m) => m.user_id).sort()
 
-    // Positive: each list is exactly its tenant's seeded members (A: 3, B: 1).
+    // Positive: each list is exactly its tenant's seeded members (A: 6, B: 7).
     expect(userIdsA).toEqual([...TENANTS.a.members].sort())
     expect(userIdsB).toEqual([...TENANTS.b.members].sort())
 

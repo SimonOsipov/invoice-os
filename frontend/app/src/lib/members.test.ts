@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiError } from '@invoice-os/api-client'
+import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
 
 import { APP_PERSONAS } from '../auth'
 import { CFG } from '../data'
@@ -2181,5 +2181,93 @@ describe('AC-9 — the member seed is gone from the app path', () => {
     expect('SEED_FIRM_MEMBERS' in membersModule).toBe(false)
     expect('SEED_INHOUSE_MEMBERS' in membersModule).toBe(false)
     expect('seedMembers' in membersModule).toBe(false)
+  })
+})
+
+// ============================================================================
+// QA (Stage 4) — adversarial coverage over the live wire and projection
+// ============================================================================
+
+describe('AC-2 — toMember keeps status VERBATIM too, and an unfamiliar one is simply inert', () => {
+  it('an unrecognised status is kept as-is, not defaulted or dropped', () => {
+    expect(toMember(wire({ status: 'pending_kyc' }), SELF_SUBJECT).status as string).toBe('pending_kyc')
+  })
+
+  it('an unrecognised status matches no status-gated derivation rather than crashing one', () => {
+    const m = toMember(wire({ status: 'pending_kyc', role: 'admin' }), SELF_SUBJECT)
+    expect(() => activeAdmins([m])).not.toThrow()
+    expect(activeAdmins([m])).toEqual([]) // neither 'active' nor anything else it compares against
+  })
+})
+
+describe('AC-3 — memberInitials, adversarial shapes', () => {
+  it('an empty-string display name is falsy, so it falls through to email like a missing one', () => {
+    expect(memberInitials('', 'f.adesina@okafor.ng', 'u1')).toBe('FA')
+  })
+
+  it('a punctuation-only display name strips to nothing — unreachable from the seed, deliberately unguarded', () => {
+    expect(memberInitials('---', 'f.adesina@okafor.ng', 'u1')).toBe('')
+  })
+
+  it('a single-word display name yields one letter, not a two-word pair', () => {
+    expect(memberInitials('Zainab', null, 'u1')).toBe('Z')
+  })
+
+  it('diacritics do not crash or mojibake — the underlying initials() strips non-ASCII letters rather than transliterating them', () => {
+    expect(() => memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null, 'u1')).not.toThrow()
+    // 'Ò' is stripped along with the other accented characters, so the second word's leading
+    // letter is its first PLAIN one ('g'), not the accented 'Ò' a person would read as the name's
+    // initial — recorded fact, not a regression this subtask introduced (initials() is customers.ts's).
+    expect(memberInitials('Adébáyọ̀ Ògúnlẹ́sì', null, 'u1')).toBe('AG')
+  })
+})
+
+describe('AC-5 — emailLabel does not conflate an empty string with a null email', () => {
+  it('null renders the em dash; an empty string renders as itself — `??` only catches null/undefined', () => {
+    const nullRow = nullEmailMember('Nomail Person')
+    const emptyRow = { ...inhouseRow('Blank Mail', 'active'), email: '' }
+    expect(emailLabel(nullRow)).toBe('—')
+    expect(emailLabel(emptyRow)).toBe('')
+    expect(emailLabel(emptyRow)).not.toBe(emailLabel(nullRow))
+  })
+})
+
+describe('AC-8 — membersViewState over every AsyncStatus value, not just the three the AC names', () => {
+  const ALL_STATUSES: AsyncStatus[] = ['idle', 'loading', 'error', 'empty', 'ready']
+
+  it('a non-null base passes every status through unchanged, including loading and idle itself', () => {
+    for (const s of ALL_STATUSES) expect(membersViewState('https://gw', s)).toBe(s)
+  })
+
+  it('a null base collapses every status to idle, including one that is already idle', () => {
+    for (const s of ALL_STATUSES) expect(membersViewState(null, s)).toBe('idle')
+  })
+})
+
+describe('activeAdmins/isProtectedAdmin — a short LIVE-shaped roster (4 rows) with a suspended admin', () => {
+  const live = [
+    wire({ user_id: 'c1', role: 'admin', status: 'active', display_name: 'Sole Admin' }),
+    wire({ user_id: 'c2', role: 'admin', status: 'suspended', display_name: 'Suspended Admin' }),
+    wire({ user_id: 'c3', role: 'reviewer', status: 'active', display_name: 'Reviewer One' }),
+    wire({ user_id: 'c4', role: 'preparer', status: 'active', display_name: 'Preparer One' }),
+  ].map((w) => toMember(w, SELF_SUBJECT))
+
+  it('a suspended admin is excluded from activeAdmins', () => {
+    expect(activeAdmins(live).map((m) => m.name)).toEqual(['Sole Admin'])
+  })
+
+  it('the sole active admin is still protected with a suspended second admin present', () => {
+    const solo = live.find((m) => m.name === 'Sole Admin')!
+    expect(isProtectedAdmin(live, solo)).toBe(true)
+  })
+
+  it('the suspended admin is never protected — the guard reads status, not role alone', () => {
+    const suspended = live.find((m) => m.name === 'Suspended Admin')!
+    expect(isProtectedAdmin(live, suspended)).toBe(false)
+  })
+
+  it('a non-admin over the same roster is never protected', () => {
+    const reviewer = live.find((m) => m.name === 'Reviewer One')!
+    expect(isProtectedAdmin(live, reviewer)).toBe(false)
   })
 })

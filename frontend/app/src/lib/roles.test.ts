@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
-import { setMemberStatus, type Member } from './members'
+import { setMemberStatus, toMember, type Member, type MembershipWire } from './members'
 import {
   canSaveRole,
   deleteRoleConfirm,
@@ -1137,6 +1137,67 @@ describe('AC-10 — SEED_*_ROLES members are re-pointed at the seeded subjects',
     expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual([])
     expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'ceo')?.members).toEqual([])
     expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'cfo')?.members).toEqual(['c0000000-0000-0000-0000-000000000012'])
+  })
+})
+
+// ============================================================================
+// AC-10 — unassignedRoles/resolve against the SHIPPED re-point and a LIVE-shaped directory
+// ============================================================================
+// The AC-10 block above pins the re-point by id; nothing yet exercises unassignedRoles or
+// resolve against SEED_FIRM_ROLES/SEED_INHOUSE_ROLES (the real, shipped constants) combined
+// with a directory built the way the server actually states one — through toMember, over
+// MembershipWire rows matching db/seed.dev.sql. Built from the wire, not hand-written, so
+// this reds the moment the seed and the re-point drift apart, from either side.
+
+const seedWire = (userId: string, role: string, name: string, email: string, status: string): MembershipWire => ({
+  user_id: userId,
+  role,
+  status,
+  display_name: name,
+  email,
+})
+
+const SEEDED_FIRM_MEMBERS: readonly Member[] = [
+  seedWire('c0000000-0000-0000-0000-000000000001', 'admin', 'Chinedu Okafor', 'c.okafor@okafor.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000003', 'preparer', 'Folake Adesina', 'f.adesina@okafor.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000004', 'reviewer', 'Musa Danjuma', 'm.danjuma@okafor.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000005', 'reviewer', 'Chiamaka Nwosu', 'c.nwosu@okafor.ng', 'active'),
+  seedWire(
+    'c0000000-0000-0000-0000-000000000006',
+    'preparer',
+    'Oluwaseyifunmi Adebanjo-Ogunleye',
+    'o.adebanjo-ogunleye@okaforandpartners.com.ng',
+    'active',
+  ),
+  seedWire('c0000000-0000-0000-0000-000000000007', 'reviewer', 'Halima Yusuf', 'h.yusuf@okafor.ng', 'suspended'),
+].map((w) => toMember(w, 'nobody'))
+
+const SEEDED_INHOUSE_MEMBERS: readonly Member[] = [
+  seedWire('c0000000-0000-0000-0000-000000000002', 'admin', 'Ngozi Balogun', 'n.balogun@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000008', 'reviewer', 'Yetunde Fashola', 'y.fashola@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000009', 'reviewer', 'Emeka Uzowulu', 'e.uzowulu@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000010', 'reviewer', 'Tunde Adeyemi', 't.adeyemi@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000011', 'reviewer', 'Ibrahim Bello', 'i.bello@honeywell.ng', 'active'),
+  seedWire('c0000000-0000-0000-0000-000000000012', 'reviewer', 'Adebayo Ogunlesi', 'a.ogunlesi@honeywell.ng', 'suspended'),
+  seedWire('c0000000-0000-0000-0000-000000000013', 'preparer', 'Zainab Lawal', 'z.lawal@honeywell.ng', 'active'),
+].map((w) => toMember(w, 'nobody'))
+
+describe('AC-10 — unassignedRoles/resolve against the shipped re-point and a live-shaped directory', () => {
+  it('firm: only quality_reviewer is unassigned, and every one of the ten seeded approval steps resolves without warn', () => {
+    expect(unassignedRoles(SEED_FIRM_ROLES, SEEDED_FIRM_MEMBERS).map((r) => r.key)).toEqual(['quality_reviewer'])
+    const stepRoles = approvalRoles(SEED_FIRM_POLICIES)
+    expect(stepRoles.length).toBe(10) // guard against a vacuous pass
+    for (const key of stepRoles) {
+      const result = resolve(SEED_FIRM_ROLES, SEEDED_FIRM_MEMBERS, key)
+      expect(result.warn).toBe(false)
+      expect(result.text).not.toBe('Nobody assigned')
+    }
+  })
+
+  it('inhouse: fin_mgr/cfo/ceo are unassigned, cfo blocks on its lone suspended holder, fin_dir resolves its active pair', () => {
+    expect(unassignedRoles(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['fin_mgr', 'cfo', 'ceo'])
+    expect(resolve(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi', warn: true })
+    expect(resolve(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS, 'fin_dir')).toEqual({ text: 'Ngozi Balogun +1', warn: false })
   })
 })
 

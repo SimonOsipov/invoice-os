@@ -4,11 +4,11 @@
 // untested in both directions. Mirrors InvoiceDetail.test.tsx's fetch-mock + ctx-cast
 // idiom (single-endpoint mock: DashboardActive fires only getRollup, unlike
 // InvoiceDetail's two concurrent effects).
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import type { Counts, Rollup } from '../lib/dashboard'
+import type { Counts, Metrics, Rollup } from '../lib/dashboard'
 import type { PlatformCtx } from '../types'
 import { DashboardActive } from './DashboardActive'
 
@@ -18,10 +18,12 @@ interface MockResponse {
   json: () => Promise<unknown>
 }
 
-function rollup(needsAttention: number, countsOver: Partial<Counts> = {}): Rollup {
-  const counts: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0, ...countsOver }
+const ZERO_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }
+
+function rollup(needsAttention: number, countsOver: Partial<Counts> = {}, metricsOver: Metrics = {}): Rollup {
+  const counts: Counts = { ...ZERO_COUNTS, ...countsOver }
   return {
-    totals: { counts, needs_attention: needsAttention, metrics: {}, top_violations: [] },
+    totals: { counts, needs_attention: needsAttention, metrics: metricsOver, top_violations: [] },
     clients: [],
     top_violations: [],
   }
@@ -97,5 +99,82 @@ describe('DashboardActive needs-attention chip (task-332, BUG-01-06, [overview-c
     // page (donut zero-segments, other KPI tiles) so they're not usable as negative
     // assertions here.
     expect(screen.getAllByText('3')).toHaveLength(2)
+  })
+})
+
+// mode: 'firm' with a selected client -- scopedBucket resolves to that client's `clients`
+// row instead of rollup.totals, so live panels must read bucket.*, never data.* directly.
+function firmCtx(entityId: string, name: string): PlatformCtx {
+  const ctx = {
+    mode: 'firm',
+    active: { entityId, name },
+    user: { tenantName: 'Acme Co' },
+    authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    nav: () => {},
+  }
+  return ctx as unknown as PlatformCtx
+}
+
+describe('DashboardActive live panels (task-429, METR-01-05)', () => {
+  it('(a) the Readiness tile drops its SAMPLE chip; trend and activity panels keep theirs', async () => {
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const readinessHead = (await screen.findByText('Readiness score')).parentElement
+    expect(within(readinessHead!).queryByText('SAMPLE')).toBeNull()
+    expect(screen.getByText('12 WEEKS · SAMPLE')).toBeDefined()
+    const activityHead = screen.getByText('Recent activity').parentElement
+    expect(within(activityHead!).getByText('SAMPLE')).toBeDefined()
+  })
+
+  it('(b) Top validation failures drops its FIRM-WIDE chip', async () => {
+    mockRollupFetch(rollup(0))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const failuresHead = (await screen.findByText('Top validation failures')).parentElement
+    expect(within(failuresHead!).queryByText('FIRM-WIDE')).toBeNull()
+  })
+
+  it('(c) the live score renders from metrics.readiness', async () => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 85, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    expect(await screen.findByText('85')).toBeDefined()
+  })
+
+  it('(d) a client with zero invoices renders the em-dash and "No invoices yet", never 0%', async () => {
+    mockRollupFetch(rollup(0)) // metrics: {} -- the empty-client signal, not a zero score
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    expect(await screen.findByText('No invoices yet')).toBeDefined()
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+    expect(screen.queryByText('0%')).toBeNull()
+  })
+
+  it('(e) AC-7: a firm-mode client renders its OWN top_violations, not the tenant-wide list', async () => {
+    const data: Rollup = {
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      clients: [
+        {
+          entity_id: 'ent-1',
+          entity_name: 'Dangote Cement PLC',
+          counts: ZERO_COUNTS,
+          needs_attention: 0,
+          metrics: {},
+          top_violations: [{ rule_key: 'client-only-rule', invoices: 4 }],
+        },
+      ],
+      top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }],
+    }
+    mockRollupFetch(data)
+
+    render(<DashboardActive ctx={firmCtx('ent-1', 'Dangote Cement PLC')} />)
+
+    expect(await screen.findByText('client-only-rule')).toBeDefined()
+    expect(screen.queryByText('tenant-wide-rule')).toBeNull()
   })
 })

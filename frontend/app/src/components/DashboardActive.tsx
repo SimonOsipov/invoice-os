@@ -9,20 +9,16 @@
 // decision; the sourceless ones run on lib/dashboardMock.ts until the rollup
 // grows the fields. Which panel is which:
 //
-//   LIVE (rollup)   needs-attention KPI · invoice-status donut ·
+//   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
-//   MOCK            readiness ring + bars · 12-week trend · VAT amount ·
-//                   sparkline shapes · activity feed
+//   MOCK            12-week trend · sparkline shapes · activity feed
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
 // SELECTED client's own bucket, not the whole tenant — scopedBucket (lib/dashboard.ts)
 // resolves in-house to the tenant totals (its one "client" IS the tenant) and firm mode
 // to the active entity's own row, or an honest zero bucket when none resolves yet / the
-// entity has never had an invoice. "Top validation failures" is the one exception: the
-// wire carries only ONE tenant-wide RuleCount[] (dashboard.go's Rollup — no per-entity
-// breakdown exists), so it stays tenant-wide regardless of selection; its own
-// "FIRM-WIDE" meta chip already discloses that honestly.
+// entity has never had an invoice.
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -30,7 +26,11 @@ import { crossGlyph, tickGlyph13 } from '../glyphs'
 import {
   dashboardViewState,
   donutSegments,
+  formatMetric,
   getRollup,
+  readinessBars,
+  readinessNote,
+  readinessRing,
   resolveCtaLabel,
   scopedBucket,
   topFailures,
@@ -95,15 +95,14 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 }
 
 // KPI tile values come off the live counts; only the sparkline SHAPE is mocked, so a
-// tile never contradicts the donut beside it. VAT is the exception — the rollup
-// carries no monetary total, so that one number is fabricated.
+// tile never contradicts the donut beside it.
 function kpiValues(counts: Counts, needsAttention: number, vatLabel: string) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   const transmitted = counts.submitted + counts.accepted
   const awaiting = counts.draft + counts.validated
   return [
     { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
-    { label: 'VAT tracked', value: vatLabel, delta: 'incl. 7.5% VAT', deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
+    { label: 'VAT tracked', value: vatLabel, delta: 'output VAT', deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
     { label: 'Failing invoices', value: String(needsAttention), delta: needsAttention ? 'needs fixing' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)', stroke: 'var(--status-red-text)' },
     { label: 'Awaiting submission', value: String(awaiting), delta: awaiting ? 'not yet sent' : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)', stroke: 'var(--status-amber-text)' },
   ]
@@ -153,51 +152,51 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   const segments = donutSegments(bucket.counts)
   const total = Object.values(bucket.counts).reduce((a, b) => a + b, 0)
   const needsAttention = bucket.needs_attention
-  // top_violations has no per-entity breakdown on the wire — stays tenant-wide
-  // regardless of selection (see the file-header comment); its own "FIRM-WIDE" meta chip
-  // below already discloses that.
-  const failures = topFailures(data.top_violations)
+  const failures = topFailures(bucket.top_violations)
+  const ring = readinessRing(bucket.metrics)
+  const note = readinessNote(bucket.metrics)
+  const bars = readinessBars(bucket.metrics)
   const mock = buildMockPanels(seed)
-  const kpis = kpiValues(bucket.counts, needsAttention, mock.vatLabel)
+  const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'))
 
   return (
     <>
-      {/* Row A: readiness ring + bars (mock) | four KPI tiles (live values, mock sparks) */}
+      {/* Row A: readiness ring + bars (live) | four KPI tiles (live values, mock sparks) */}
       <div
         className="pf-dash-row-a"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
       >
         <div style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column' }}>
-          <TileHead title="Readiness score" meta="SAMPLE" />
+          <TileHead title="Readiness score" />
           <div style={{ ...TILE_BODY, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 22, marginBottom: 24 }}>
               <div style={{ position: 'relative', width: 116, height: 116, flex: 'none' }}>
                 <svg width="116" height="116" viewBox="0 0 116 116" style={{ transform: 'rotate(-90deg)' }}>
                   <circle cx="58" cy="58" r="50" fill="none" stroke="var(--bg-3)" strokeWidth="11" />
-                  <circle cx="58" cy="58" r="50" fill="none" stroke={mock.ring.color} strokeWidth="11" strokeLinecap="round" strokeDasharray={mock.ring.circ} strokeDashoffset={mock.ring.offset} />
+                  <circle cx="58" cy="58" r="50" fill="none" stroke={ring.color} strokeWidth="11" strokeLinecap="round" strokeDasharray={ring.circ} strokeDashoffset={ring.offset} />
                 </svg>
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                   <span className="money" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>
-                    {mock.score}
+                    {ring.score ?? '—'}
                   </span>
                   <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: '0.06em', marginTop: 2 }}>
                     % READY
                   </span>
                 </div>
               </div>
-              <p style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>{mock.readinessNote}</p>
+              <p style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>{note}</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 13, paddingTop: 20, borderTop: '1px solid var(--line-1)' }}>
-              {mock.readinessMetrics.map((m) => (
+              {bars.map((m) => (
                 <div key={m.label}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                     <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{m.label}</span>
                     <span className="money mono" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>
-                      {m.pct}
+                      {m.pctLabel}
                     </span>
                   </div>
                   <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                    <div style={{ width: m.pct, height: '100%', background: m.color, borderRadius: 'var(--radius-sm)' }} />
+                    <div style={{ width: m.pct === null ? '0%' : m.pctLabel, height: '100%', background: m.color, borderRadius: 'var(--radius-sm)' }} />
                   </div>
                 </div>
               ))}
@@ -347,7 +346,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
           `calc((100% - 396px) / 2)` narrow column as row B — see there for the 396. */}
       <div className="pf-dash-row-c" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) calc((100% - 396px) / 2)', gap: 18 }}>
       <div style={TILE_CARD}>
-        <TileHead title="Top validation failures" meta="FIRM-WIDE" />
+        <TileHead title="Top validation failures" />
         {failures.length > 0 ? (
           <div>
             {failures.map((f) => (

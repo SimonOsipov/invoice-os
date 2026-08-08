@@ -141,8 +141,11 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 			return ErrNotPermitted
 		}
 
+		// is_target is computed by Postgres so which row is the target never
+		// depends on the text form of a uuid agreeing between SQL and Go.
 		rows, err := tx.Query(ctx,
-			`SELECT user_id, role, status, display_name, email FROM memberships
+			`SELECT user_id, role, status, display_name, email, user_id = $1 AS is_target
+			   FROM memberships
 			  WHERE user_id = $1 OR (role = 'admin' AND status = 'active')
 			  ORDER BY user_id
 			    FOR UPDATE`, userID)
@@ -150,11 +153,16 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 			return err
 		}
 		var locked []Membership
+		targetIdx := -1
 		for rows.Next() {
 			var m Membership
-			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email); err != nil {
+			var isTarget bool
+			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email, &isTarget); err != nil {
 				rows.Close()
 				return err
+			}
+			if isTarget {
+				targetIdx = len(locked)
 			}
 			locked = append(locked, m)
 		}
@@ -165,27 +173,21 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 			return err
 		}
 
-		var target *Membership
-		for i := range locked {
-			if locked[i].UserID == userID {
-				target = &locked[i]
-				break
-			}
-		}
-		if target == nil {
+		if targetIdx < 0 {
 			return ErrMembershipNotFound
 		}
+		target := locked[targetIdx]
 		if target.Status == "invited" {
 			return ErrInvitedNotTransitionable
 		}
 		if target.Status == status {
-			updated = *target
+			updated = target
 			return nil
 		}
 		if status == "suspended" && target.Role == "admin" {
 			others := 0
-			for _, m := range locked {
-				if m.Role == "admin" && m.Status == "active" && m.UserID != userID {
+			for i, m := range locked {
+				if i != targetIdx && m.Role == "admin" && m.Status == "active" {
 					others++
 				}
 			}

@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS } from '../auth'
 import { CFG } from '../data'
+import type { AuthedFetch } from './portfolio'
 import * as membersModule from './members'
 import {
   ACCESS_ROLES,
@@ -19,6 +22,7 @@ import {
   delegateCandidates,
   DEPARTMENTS,
   departmentsInUse,
+  emailLabel,
   filterClientRoster,
   filterMembers,
   hasDerivableName,
@@ -31,7 +35,11 @@ import {
   isValidEmail,
   joinedLabel,
   lastActiveLabel,
+  listMembers,
   memberFromInvite,
+  memberInitials,
+  MEMBER_UNBACKED,
+  membersViewState,
   mergeChips,
   nameFromEmail,
   needsClientPick,
@@ -47,11 +55,14 @@ import {
   SEED_INHOUSE_MEMBERS,
   seedMembers,
   setMemberRole,
+  setMembershipStatus,
   setMemberStatus,
   SUSPEND_EXPLANATION,
+  toMember,
   type InviteOptions,
   type Member,
   type MemberStatus,
+  type MembershipWire,
 } from './members'
 import { SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from './roles'
 
@@ -1654,5 +1665,207 @@ describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', (
     const candidates = delegateCandidates(SEED_FIRM_MEMBERS)
     expect(candidates).toEqual(['Musa Danjuma', 'Chiamaka Nwosu'])
     expect(candidates).not.toContain('Chinedu Okafor') // admin, not reviewer
+  })
+})
+
+// ============================================================================
+// APPR-15-05 — Mode A RED specs for the live member wire and projection
+// ============================================================================
+// listMembers/setMembershipStatus/toMember/memberInitials/emailLabel/membersViewState
+// are stubbed to throw, and MEMBER_UNBACKED ships empty, so every spec below fails on
+// the stub — not on an import or compile error. filterMembers/classifyInvites are the
+// SHIPPED implementations, unchanged: their null-email specs fail because those two
+// still call `.toLowerCase()` on `email` unguarded (members.ts:640,731).
+
+/** authedFetch.test.ts's / portfolio.test.ts's own helper, for the ApiError rethrow specs. */
+async function captureRejection(thunk: () => unknown): Promise<unknown> {
+  try {
+    await thunk()
+  } catch (err) {
+    return err
+  }
+  throw new Error('expected the call to reject, but it resolved')
+}
+
+const wire = (overrides: Partial<MembershipWire> = {}): MembershipWire => ({
+  user_id: 'c0000000-0000-0000-0000-000000000003',
+  role: 'reviewer',
+  status: 'active',
+  display_name: 'Folake Adesina',
+  email: 'f.adesina@okafor.ng',
+  ...overrides,
+})
+
+const SELF_SUBJECT = 'c0000000-0000-0000-0000-000000000001'
+
+/** A Member row with a wire-null email, forced past the (still-required) `email: string` field. */
+const nullEmailMember = (name: string): Member => ({ ...inhouseRow(name, 'active'), email: null as unknown as string })
+
+describe('AC-1 — listMembers targets the memberships endpoint', () => {
+  it('GETs <base>/api/tenancy/v1/memberships via the injected authedFetch, no token option of its own', async () => {
+    const af = vi.fn().mockResolvedValue({ memberships: [wire()] }) as unknown as AuthedFetch
+    const base = 'https://gw'
+
+    await listMembers(af, base)
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith(`${base}/api/tenancy/v1/memberships`)
+  })
+
+  it('rethrows a given ApiError unreshaped — the same instance', async () => {
+    const boom = new ApiError('http', 'unauthorized', 401, { error: 'unauthorized' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => listMembers(af, 'https://gw'))
+    expect(caught).toBe(boom)
+  })
+})
+
+describe('AC-1 — setMembershipStatus PATCHes memberships/<id>', () => {
+  it('sends PATCH with body {status} to the member-scoped URL', async () => {
+    const af = vi.fn().mockResolvedValue(wire({ status: 'suspended' })) as unknown as AuthedFetch
+    const base = 'https://gw'
+
+    await setMembershipStatus(af, base, 'u1', 'suspended')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith(`${base}/api/tenancy/v1/memberships/u1`, {
+      method: 'PATCH',
+      body: { status: 'suspended' },
+    })
+  })
+
+  it('rethrows a 409 ApiError with status and body intact', async () => {
+    const boom = new ApiError('http', 'suspended approver', 409, { error: 'suspended approver' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => setMembershipStatus(af, 'https://gw', 'u1', 'suspended'))
+    expect(caught).toBe(boom)
+    expect((caught as ApiError).status).toBe(409)
+    expect((caught as ApiError).body).toEqual({ error: 'suspended approver' })
+  })
+})
+
+describe('AC-2 — toMember maps the wire row to a Member', () => {
+  it('maps the five wire fields to {id, name, email, role, status}', () => {
+    const w = wire({
+      user_id: 'c0000000-0000-0000-0000-000000000005',
+      display_name: 'Chiamaka Nwosu',
+      email: 'c.nwosu@okafor.ng',
+      role: 'reviewer',
+      status: 'active',
+    })
+    const m = toMember(w, SELF_SUBJECT)
+    expect(m.id).toBe(w.user_id)
+    expect(m.name).toBe('Chiamaka Nwosu')
+    expect(m.email).toBe('c.nwosu@okafor.ng')
+    expect(m.role as string).toBe('reviewer')
+    expect(m.status).toBe('active')
+  })
+
+  it('keeps role VERBATIM — reviewer stays reviewer, an unexpected Auditor is kept, not defaulted or lower-cased', () => {
+    expect(toMember(wire({ role: 'reviewer' }), SELF_SUBJECT).role as string).toBe('reviewer')
+    expect(toMember(wire({ role: 'Auditor' }), SELF_SUBJECT).role as string).toBe('Auditor')
+  })
+
+  it('falls back the name display_name -> email -> user_id', () => {
+    expect(toMember(wire({ display_name: 'Folake Adesina', email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe(
+      'Folake Adesina',
+    )
+    expect(toMember(wire({ display_name: null, email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe('f.adesina@okafor.ng')
+    expect(
+      toMember(wire({ display_name: null, email: null, user_id: 'c0000000-0000-0000-0000-000000000009' }), SELF_SUBJECT).name,
+    ).toBe('c0000000-0000-0000-0000-000000000009')
+  })
+
+  it('resolves isYou from the passed self subject', () => {
+    expect(toMember(wire({ user_id: SELF_SUBJECT }), SELF_SUBJECT).isYou).toBe(true)
+    expect(toMember(wire({ user_id: 'c0000000-0000-0000-0000-000000000099' }), SELF_SUBJECT).isYou).toBe(false)
+  })
+})
+
+describe('AC-2/[APPR-10 trap] — delegateCandidates survives the live projection', () => {
+  it('a projected active reviewer is a non-empty delegate candidate', () => {
+    const rows = [
+      wire({ user_id: 'c1', role: 'reviewer', status: 'active', display_name: 'Musa Danjuma' }),
+      wire({ user_id: 'c2', role: 'admin', status: 'active', display_name: 'Chinedu Okafor' }),
+    ].map((w) => toMember(w, SELF_SUBJECT))
+    expect(delegateCandidates(rows)).toEqual(['Musa Danjuma'])
+  })
+})
+
+describe('AC-3 — memberInitials composes initials()/initialsFrom(), no third variant', () => {
+  it('takes initials from the display name when present', () => {
+    expect(memberInitials('Folake Adesina', 'f.adesina@x.ng', 'u1')).toBe('FA')
+  })
+
+  it('falls back to initialsFrom(email) when there is no display name', () => {
+    expect(memberInitials(null, 'f.adesina@x.ng', 'u1')).toBe('FA')
+  })
+
+  it('falls back to the first two characters of the subject, upper-cased, when both are absent', () => {
+    expect(memberInitials(null, null, 'zzuser')).toBe('ZZ')
+  })
+})
+
+describe('AC-5 — emailLabel', () => {
+  it('renders a missing email as an em dash', () => {
+    expect(emailLabel(nullEmailMember('Nomail Person'))).toBe('—')
+  })
+
+  it('renders a real address verbatim', () => {
+    expect(emailLabel({ ...inhouseRow('Has Mail', 'active'), email: 'a@b.ng' })).toBe('a@b.ng')
+  })
+})
+
+describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () => {
+  it('filterMembers tolerates a null email, both when the name matches and when nothing does', () => {
+    const row = nullEmailMember('Nomail Person')
+    // The `||` short-circuits on the name match before `email` is ever touched — this half
+    // is already true today and is pinned as a fact, not a red.
+    expect(names(filterMembers([row], 'nomail', 'all'))).toEqual(['Nomail Person'])
+    // A query the name does NOT match forces evaluation of `m.email.toLowerCase()` — this
+    // is the genuine red: today it throws instead of falling through to "no match".
+    expect(() => filterMembers([row], 'zzz-no-match', 'all')).not.toThrow()
+    expect(filterMembers([row], 'zzz-no-match', 'all')).toEqual([])
+  })
+
+  it('classifyInvites treats a null-email row as no match, and does not throw', () => {
+    const row = nullEmailMember('Nomail Person')
+    expect(() => classifyInvites([row], ['fresh@x.ng'])).not.toThrow()
+    expect(classifyInvites([row], ['fresh@x.ng'])).toEqual(['ok'])
+  })
+})
+
+describe('AC-7 — MEMBER_UNBACKED', () => {
+  it('supplies one distinct, non-empty sentence per unbacked control', () => {
+    const keys = ['invite', 'remove', 'role', 'department', 'clientAccess'] as const
+    for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
+    const values = keys.map((k) => MEMBER_UNBACKED[k])
+    expect(new Set(values).size).toBe(keys.length)
+  })
+})
+
+describe('AC-8 — membersViewState never turns an error into empty', () => {
+  it('null base -> idle', () => {
+    expect(membersViewState(null, 'ready')).toBe('idle')
+  })
+
+  it('an error status passes through as error, never empty', () => {
+    expect(membersViewState('https://gw', 'error')).toBe('error')
+  })
+
+  it('an empty status passes through as empty', () => {
+    expect(membersViewState('https://gw', 'empty')).toBe('empty')
+  })
+})
+
+// Expected to RED against the still-present exports — this subtask does not delete
+// them ([two-step-type-narrowing]; App.tsx:299 still calls seedMembers at this commit).
+describe('AC-9 — the member seed is gone from the app path', () => {
+  it('module exports carry no SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS or seedMembers', () => {
+    expect('SEED_FIRM_MEMBERS' in membersModule).toBe(false)
+    expect('SEED_INHOUSE_MEMBERS' in membersModule).toBe(false)
+    expect('seedMembers' in membersModule).toBe(false)
   })
 })

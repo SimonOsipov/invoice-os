@@ -25,6 +25,8 @@
 
 import { CFG } from '../data'
 import { APP_PERSONAS } from '../auth'
+import type { AuthedFetch } from './portfolio'
+import type { AsyncStatus } from '@invoice-os/api-client'
 import type { WorkflowMode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -926,3 +928,50 @@ export function joinedLabel(member: Member): string {
 export function needsClientPick(access: 'all' | readonly number[]): boolean {
   return access !== 'all' && access.length === 0
 }
+
+// ---------------------------------------------------------------------------
+// APPR-15-05 — the live wire, the projection and the honest-absence vocabulary
+// ---------------------------------------------------------------------------
+// STUBS: every body below throws, or ships empty, so the specs in members.test.ts fail
+// on the stub itself, not on an import or compile error. The executor replaces each body
+// next; the seed above and its two constants stay untouched until then ([two-step-type-narrowing]).
+
+/** One row of GET/PATCH .../memberships (internal/tenancy/tenancy.go). */
+export type MembershipWire = {
+  user_id: string
+  role: string
+  status: string
+  display_name: string | null
+  email: string | null
+}
+
+export async function listMembers(_f: AuthedFetch, _base: string): Promise<MembershipWire[]> {
+  throw new Error('not implemented')
+}
+
+export async function setMembershipStatus(
+  _f: AuthedFetch,
+  _base: string,
+  _userId: string,
+  _status: Exclude<MemberStatus, 'invited'>,
+): Promise<MembershipWire> {
+  throw new Error('not implemented')
+}
+
+export function toMember(_w: MembershipWire, _selfSubject: string): Member {
+  throw new Error('not implemented')
+}
+
+export function memberInitials(_displayName: string | null, _email: string | null, _userId: string): string {
+  throw new Error('not implemented')
+}
+
+export function emailLabel(_member: Member): string {
+  throw new Error('not implemented')
+}
+
+export function membersViewState(_base: string | null, _status: AsyncStatus): AsyncStatus {
+  throw new Error('not implemented')
+}
+
+export const MEMBER_UNBACKED: Partial<Record<'invite' | 'remove' | 'role' | 'department' | 'clientAccess', string>> = {}

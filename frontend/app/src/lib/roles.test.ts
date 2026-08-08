@@ -778,3 +778,41 @@ describe('resolve — blocked with more than one inactive holder still appends +
     expect(resolve(roles, SEED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi +1', warn: true })
   })
 })
+
+// ============================================================================
+// AC-10 — SEED_*_ROLES re-pointed at the §5 seeded subjects ([member-id-is-the-subject])
+// ============================================================================
+// Currently RED against the shipped mock ids (mf1-mf5 / mh1-mh7) — the re-point is
+// APPR-15-05's implementation, not yet done.
+
+describe('AC-10 — SEED_*_ROLES members are re-pointed at the seeded subjects', () => {
+  const SUBJECT_RE = /^c0000000-0000-0000-0000-0000000000\d{2}$/
+
+  it('every staffed role id in SEED_FIRM_ROLES and SEED_INHOUSE_ROLES is a seeded subject', () => {
+    const ids = [...SEED_FIRM_ROLES, ...SEED_INHOUSE_ROLES].flatMap((r) => r.members)
+    expect(ids.length).toBeGreaterThan(0) // guard against a vacuous pass
+    for (const id of ids) expect(id).toMatch(SUBJECT_RE)
+  })
+
+  it('the unstaffed and suspended-only states survive the re-point', () => {
+    expect(SEED_FIRM_ROLES.find((r) => r.key === 'quality_reviewer')?.members).toEqual([])
+    expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual([])
+    expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'ceo')?.members).toEqual([])
+    expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'cfo')?.members).toEqual(['c0000000-0000-0000-0000-000000000012'])
+  })
+})
+
+// [roles.ts:348] — a third `.toLowerCase()` on `email` no AC names (found in the plan pass).
+// Same shape as members.test.ts's filterMembers/classifyInvites null-email specs.
+describe('filterPickerMembers tolerates a null email', () => {
+  it('tolerates a null email, both when the name matches and when nothing does', () => {
+    const nullEmailRow = { ...SEED_INHOUSE_MEMBERS[0], email: null as unknown as string }
+    // The `||` short-circuits on the name match before `email` is ever touched — this half
+    // is already true today and is pinned as a fact, not a red.
+    expect(filterPickerMembers([nullEmailRow], 'ngozi').map((m) => m.id)).toEqual([nullEmailRow.id])
+    // A query the name does NOT match forces evaluation of `m.email.toLowerCase()` — the
+    // genuine red: today it throws instead of falling through to "no match".
+    expect(() => filterPickerMembers([nullEmailRow], 'zzz-no-match')).not.toThrow()
+    expect(filterPickerMembers([nullEmailRow], 'zzz-no-match')).toEqual([])
+  })
+})

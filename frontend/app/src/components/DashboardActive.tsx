@@ -11,7 +11,7 @@
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
-//   MOCK            12-week trend · sparkline shapes · activity feed
+//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes · activity feed
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the

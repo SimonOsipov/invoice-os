@@ -5,11 +5,11 @@
 // them ([hide-sourceless]). They are restored here by explicit product decision, on
 // mock data, until the rollup grows the corresponding fields.
 //
-// EVERY value this module returns is fabricated. It is deliberately the only file
-// that fabricates dashboard numbers, so "what on this screen is not real?" has one
-// answer: whatever came from here. Panels that CAN be sourced from the live rollup
-// are not built here — DashboardActive reads those off Rollup directly, so the KPI
-// tiles show real counts with only their sparkline shape mocked.
+// This module fabricates the trend's shape/history, sparkline shapes and the activity
+// feed — the trend's endpoint is live, derived from liveScorePct. Panels that CAN be
+// sourced from the live rollup are not built here — DashboardActive reads those off
+// Rollup directly, so the KPI tiles show real counts with only their sparkline shape
+// mocked.
 //
 // Chart-path maths (spark/trend/chartScore) is restored verbatim from the pre-M4-10
 // lib/charts.ts, which ported it from Platform.dc.html ~L1084-1116. The COLOUR tokens

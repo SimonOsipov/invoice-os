@@ -368,10 +368,10 @@ test('in-house Settings: its own live roster, three seats that cannot be signed,
   for (const m of SEED_FIRM_MEMBERS) {
     await expect(memberRow(page, m.name), `${m.name} must not leak into the in-house roster`).toHaveCount(0)
   }
+  // ONE column set, both modes — byte-identical to the firm's above. In-house's Department
+  // and Approval position went with the fields; the drawer says why, below.
   await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
-  // One column set, both modes: in-house's department went with the column, and the drawer
-  // says why below.
   await expectDisabledWithReason(
     page.getByTestId('members-invite'),
     page.getByTestId('members-invite-reason'),

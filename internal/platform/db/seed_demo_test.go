@@ -4449,3 +4449,45 @@ func TestSeedMembershipSubjectsAreSeedOnlyBlock(t *testing.T) {
 		}
 	}
 }
+
+// TestSeedMembershipUpsertNeverTouchesNonSeedRow: production-safety proof for
+// the DO NOTHING -> DO UPDATE flip. A real, non-curated membership row (a
+// genuinely invited member, outside the 13 literal (tenant_id, user_id) keys
+// db/seed.dev.sql's ON CONFLICT targets) must survive re-seeding byte-identical
+// -- the INSERT ... VALUES ... ON CONFLICT is not predicate-based, so it can
+// structurally never match a row whose key isn't one of the 13 literals.
+func TestSeedMembershipUpsertNeverTouchesNonSeedRow(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	const realUserID = "55555555-5555-5555-5555-555555555555" // outside c0000000-...-NN and outside every curated key
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM memberships WHERE user_id = $1`, realUserID)
+	})
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status)
+		 VALUES ($1, $2, 'preparer', 'Real Invited Person', 'real.invited@example.com', 'active')`,
+		demoTenantID, realUserID,
+	); err != nil {
+		t.Fatalf("seed a real (non-curated) membership row (precondition): %v", err)
+	}
+
+	before := fetchDemoMemberships(t, pool, demoTenantID)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed: %v", err)
+	}
+
+	after := fetchDemoMemberships(t, pool, demoTenantID)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("tenant A membership rows (including the real, non-seed one) differ after 2 re-seeds, want byte-identical\nbefore: %+v\nafter:  %+v", before, after)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 7 {
+		t.Errorf("count(memberships) for tenant A after re-seed = %d, want 7 (6 curated + 1 real)", got)
+	}
+}

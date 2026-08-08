@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -144,6 +145,43 @@ func TestMe_InternalError500(t *testing.T) {
 	}
 	if body.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+// TestMe_UserKeySetUnchanged (AC-4, regression guard -- expected to pass
+// today and must stay green): GET /v1/me's user object key set is exactly
+// {id, role}, pinning that /v1/me is byte-unchanged by the memberships
+// widening.
+func TestMe_UserKeySetUnchanged(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) (Tenant, string, error) {
+		return Tenant{ID: id.TenantID, Name: "Okafor & Partners", Kind: "firm"}, "admin", nil
+	}
+	r := httptest.NewRequest("GET", "/v1/me", nil)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	MeHandler(load, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	var user map[string]json.RawMessage
+	if err := json.Unmarshal(body["user"], &user); err != nil {
+		t.Fatalf("decode user %q: %v", body["user"], err)
+	}
+
+	want := []string{"id", "role"}
+	got := make([]string, 0, len(user))
+	for k := range user {
+		got = append(got, k)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("user keys = %v, want %v", got, want)
 	}
 }
 
@@ -512,6 +550,72 @@ func TestMemberships_Error500(t *testing.T) {
 	}
 }
 
+// TestMemberships_ProjectsFiveKeys (AC-1, RED until Membership widens): a
+// loader-returned membership must serialize with exactly the identity
+// projection's five keys -- user_id, role, status, display_name, email --
+// no fewer, no more.
+func TestMemberships_ProjectsFiveKeys(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) {
+		return []Membership{{UserID: "u1", Role: "admin"}}, nil
+	}
+	rec, body := doMemberships(t, load, &id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(body.Memberships, &items); err != nil {
+		t.Fatalf("decode memberships %q: %v", body.Memberships, err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(memberships) = %d, want 1", len(items))
+	}
+
+	want := []string{"display_name", "email", "role", "status", "user_id"}
+	got := make([]string, 0, len(items[0]))
+	for k := range items[0] {
+		got = append(got, k)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("memberships[0] keys = %v, want %v", got, want)
+	}
+}
+
+// TestMemberships_NullIdentityKeysArePresent (AC-1, RED until Membership
+// widens): a membership with no display_name/email on file must still
+// serialize both keys as explicit JSON null -- never omitted.
+func TestMemberships_NullIdentityKeysArePresent(t *testing.T) {
+	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
+	load := func(context.Context) ([]Membership, error) {
+		return []Membership{{UserID: "u1", Role: "admin"}}, nil
+	}
+	rec, body := doMemberships(t, load, &id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(body.Memberships, &items); err != nil {
+		t.Fatalf("decode memberships %q: %v", body.Memberships, err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(memberships) = %d, want 1", len(items))
+	}
+
+	for _, key := range []string{"display_name", "email"} {
+		raw, ok := items[0][key]
+		if !ok {
+			t.Errorf("memberships[0] missing key %q, want present with JSON null", key)
+			continue
+		}
+		if string(raw) != "null" {
+			t.Errorf("memberships[0][%q] = %s, want null", key, raw)
+		}
+	}
+}
+
 // TestStoreListMemberships_OwnTenantOnly (M3-02-02 Test Specs, core AC #6 --
 // service-layer isolation): tenant A seeded with 3 memberships (admin,
 // preparer, reviewer) and tenant B seeded with 1 unrelated membership;
@@ -830,5 +934,102 @@ func TestStoreListMemberships_ContentFidelity(t *testing.T) {
 		if !seen[userID] {
 			t.Errorf("expected user_id %q missing from result: %+v", userID, got)
 		}
+	}
+}
+
+// TestStoreListMemberships_ReadsStatusAndIdentity (AC-2, RED until Membership
+// and the ListMemberships SELECT widen): two rows seeded in one tenant --
+// 'suspended' with a display_name and email on file, and a bare 'active' row
+// with neither -- must round-trip through ListMemberships with the stored
+// values (nulls preserved for the bare row) in created_at, user_id order.
+// Membership doesn't (yet) expose Status/DisplayName/Email as Go fields, so
+// this asserts on the JSON-marshaled wire shape rather than referencing
+// fields that don't exist yet -- a compile error is not an acceptable RED.
+func TestStoreListMemberships_ReadsStatusAndIdentity(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	userSuspended, userBare := uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test status-identity', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, display_name, email, created_at)
+		 VALUES ($1, $2, 'reviewer', 'suspended', 'Ada Okafor', 'ada@example.com', '2026-01-01T00:00:00Z')`,
+		tenantID, userSuspended); err != nil {
+		t.Fatalf("seed suspended membership: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, created_at) VALUES ($1, $2, 'admin', '2026-01-02T00:00:00Z')`,
+		tenantID, userBare); err != nil {
+		t.Fatalf("seed bare membership: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userSuspended, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(memberships) = %d, want 2: %+v", len(got), got)
+	}
+
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal memberships: %v", err)
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(b, &items); err != nil {
+		t.Fatalf("decode marshaled memberships %s: %v", b, err)
+	}
+
+	var gotSuspended, gotBare string
+	if err := json.Unmarshal(items[0]["user_id"], &gotSuspended); err != nil {
+		t.Fatalf("memberships[0].user_id: %v", err)
+	}
+	if err := json.Unmarshal(items[1]["user_id"], &gotBare); err != nil {
+		t.Fatalf("memberships[1].user_id: %v", err)
+	}
+	if gotSuspended != userSuspended || gotBare != userBare {
+		t.Fatalf("order = [%s, %s], want [%s, %s] (created_at, user_id)", gotSuspended, gotBare, userSuspended, userBare)
+	}
+
+	if raw, ok := items[0]["status"]; !ok {
+		t.Error(`memberships[0] missing key "status"`)
+	} else if string(raw) != `"suspended"` {
+		t.Errorf(`memberships[0]["status"] = %s, want "suspended"`, raw)
+	}
+	if raw, ok := items[0]["display_name"]; !ok {
+		t.Error(`memberships[0] missing key "display_name"`)
+	} else if string(raw) != `"Ada Okafor"` {
+		t.Errorf(`memberships[0]["display_name"] = %s, want "Ada Okafor"`, raw)
+	}
+	if raw, ok := items[0]["email"]; !ok {
+		t.Error(`memberships[0] missing key "email"`)
+	} else if string(raw) != `"ada@example.com"` {
+		t.Errorf(`memberships[0]["email"] = %s, want "ada@example.com"`, raw)
+	}
+
+	if raw, ok := items[1]["status"]; !ok {
+		t.Error(`memberships[1] missing key "status"`)
+	} else if string(raw) != `"active"` {
+		t.Errorf(`memberships[1]["status"] = %s, want "active"`, raw)
+	}
+	if raw, ok := items[1]["display_name"]; !ok {
+		t.Error(`memberships[1] missing key "display_name", want present with JSON null`)
+	} else if string(raw) != "null" {
+		t.Errorf(`memberships[1]["display_name"] = %s, want null`, raw)
+	}
+	if raw, ok := items[1]["email"]; !ok {
+		t.Error(`memberships[1] missing key "email", want present with JSON null`)
+	} else if string(raw) != "null" {
+		t.Errorf(`memberships[1]["email"] = %s, want null`, raw)
 	}
 }

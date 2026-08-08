@@ -593,3 +593,49 @@ describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough
     expect(EMPTY_BUCKET.top_violations).toEqual([])
   })
 })
+
+// QA adversarial coverage (Mode B, task-428) — appended post-implementation, same
+// convention as the DASH-T block above: not from the architect's FMR table, targets
+// gaps the happy-path table doesn't reach.
+
+describe('metricRatio — QA adversarial', () => {
+  it('QA-MR1: num > den (cannot happen server-side) is not clamped to 100 — documents the gap, not a passing contract', () => {
+    expect(metricRatio({ x: { num: 150, den: 100 } }, 'x')).toBe(150)
+  })
+
+  it('QA-MR2: a negative num is not clamped to 0 either — same unclamped-math gap as QA-MR1', () => {
+    expect(metricRatio({ x: { num: -5, den: 100 } }, 'x')).toBe(-5)
+  })
+
+  it('QA-MR3: den:1 boundary — num:0 reads 0%, num:1 reads 100%, neither is mistaken for the null/absent case', () => {
+    expect(metricRatio({ x: { num: 0, den: 1 } }, 'x')).toBe(0)
+    expect(metricRatio({ x: { num: 1, den: 1 } }, 'x')).toBe(100)
+  })
+})
+
+describe('formatMetric — QA adversarial', () => {
+  it('QA-FM1: den:1 boundary renders "0%" and "100%", not the em dash', () => {
+    expect(formatMetric({ readiness: { num: 0, den: 1 } }, 'readiness')).toBe('0%')
+    expect(formatMetric({ readiness: { num: 1, den: 1 } }, 'readiness')).toBe('100%')
+  })
+
+  it('QA-FM2: a very large kobo amount (billions of naira) still routes through fmtShort — no separate "B" unit, so it renders as a 4-digit "M" figure, not an em dash or a throw', () => {
+    const m: Metrics = { vat_tracked: { num: 350_000_000_000, den: 1 } } // 3.5B naira after /100
+    expect(formatMetric(m, 'vat_tracked')).toBe('₦3500.0M')
+  })
+})
+
+describe('readinessBars — QA adversarial', () => {
+  it('QA-RB1: only one of the three bar metrics present — that one computes normally, the other two read null/em-dash, all three still returned in fixed order', () => {
+    const m: Metrics = { bar_tax_accuracy: { num: 90, den: 100 } }
+    const bars = readinessBars(m)
+
+    expect(bars).toHaveLength(3)
+    expect(bars[0].pct).toBeNull()
+    expect(bars[0].pctLabel).toBe('—')
+    expect(bars[1].pct).toBe(90)
+    expect(bars[1].pctLabel).toBe('90%')
+    expect(bars[2].pct).toBeNull()
+    expect(bars[2].pctLabel).toBe('—')
+  })
+})

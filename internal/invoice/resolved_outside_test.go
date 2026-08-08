@@ -49,6 +49,25 @@ func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role st
 	return id
 }
 
+// seedMembershipWithStatus is seedMembership plus an explicit status -- the
+// [suspend-is-real] tests below need a suspended row, which seedMembership's
+// DEFAULT 'active' can't produce.
+func seedMembershipWithStatus(t *testing.T, super *pgxpool.Pool, tenantID, userID, role, status string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	if err := super.QueryRow(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4) RETURNING id`,
+		tenantID, userID, role, status,
+	).Scan(&id); err != nil {
+		t.Fatalf("seed memberships: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id)
+	})
+	return id
+}
+
 // seedResolvedFailed seeds a `failed` invoice with the kept_as_is triple already
 // set, via a direct superuser UPDATE -- Store.ResolveOutside is not implemented
 // yet at this stage, so fixtures needing "already resolved" as GIVEN cannot route
@@ -1054,5 +1073,109 @@ func TestUnkeepAsIs_NoopAcrossEveryNonDraftStatusWithNoMark(t *testing.T) {
 				t.Errorf("invoice.unkept_as_is audit rows (%s) = %d, want unchanged %d (a no-op must not audit)", status, n, before)
 			}
 		})
+	}
+}
+
+// --- [suspend-is-real]: callerRoleTx must refuse a suspended caller --------
+
+// TestStore_ResolveOutside_SuspendedApproverRefused: a suspended admin must
+// be refused by ResolveOutside exactly like a non-approver -- callerRoleTx's
+// query must carry AND status = 'active'.
+func TestStore_ResolveOutside_SuspendedApproverRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-SUSPEND-RESOLVE tenant")
+	entityID := seedEntity(t, super, tenantID, "T-SUSPEND-RESOLVE entity")
+	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, "T-SUSPEND-RESOLVE", StatusFailed)
+
+	subject := uuid.NewString()
+	seedMembershipWithStatus(t, super, tenantID, subject, "admin", "suspended")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	store := NewStore(app)
+	if _, err := store.ResolveOutside(c, invID, "x"); !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("ResolveOutside (suspended admin) err = %v, want ErrNotPermitted", err)
+	}
+
+	at, by, reason := mustKeptAsIsTriple(t, super, invID)
+	if at != nil || by != nil || reason != nil {
+		t.Errorf("triple after refused suspended-admin ResolveOutside = (%v,%v,%v), want all NULL", at, by, reason)
+	}
+}
+
+// TestStore_UnresolveOutside_SuspendedApproverRefused: the UnresolveOutside
+// side of the same refusal, with the mark left in place.
+func TestStore_UnresolveOutside_SuspendedApproverRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-SUSPEND-UNRESOLVE tenant")
+	entityID := seedEntity(t, super, tenantID, "T-SUSPEND-UNRESOLVE entity")
+	invID := seedResolvedFailed(t, super, tenantID, entityID, "T-SUSPEND-UNRESOLVE", uuid.NewString(), "was resolved")
+
+	subject := uuid.NewString()
+	seedMembershipWithStatus(t, super, tenantID, subject, "reviewer", "suspended")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	beforeAt, beforeBy, beforeReason := mustKeptAsIsTriple(t, super, invID)
+
+	store := NewStore(app)
+	if _, err := store.UnresolveOutside(c, invID); !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("UnresolveOutside (suspended reviewer) err = %v, want ErrNotPermitted", err)
+	}
+
+	afterAt, afterBy, afterReason := mustKeptAsIsTriple(t, super, invID)
+	if afterAt == nil || afterBy == nil || afterReason == nil {
+		t.Fatalf("triple after refused suspended-reviewer UnresolveOutside = (%v,%v,%v), want it to STAY resolved", afterAt, afterBy, afterReason)
+	}
+	if *afterAt != *beforeAt || *afterBy != *beforeBy || *afterReason != *beforeReason {
+		t.Errorf("triple changed across a refused UnresolveOutside: before=(%s,%s,%s) after=(%s,%s,%s), want byte-identical",
+			*beforeAt, *beforeBy, *beforeReason, *afterAt, *afterBy, *afterReason)
+	}
+}
+
+// TestStore_CallerRole_SuspendedReadsEmpty: a suspended member's role reads
+// as "" through CallerRole, the same fail-closed no-row shape as no
+// membership at all -- this is what makes the detail page's
+// can_resolve_outside gate agree with the store's refusal for a suspended
+// caller.
+func TestStore_CallerRole_SuspendedReadsEmpty(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-SUSPEND-CALLERROLE tenant")
+	subject := uuid.NewString()
+	seedMembershipWithStatus(t, super, tenantID, subject, "admin", "suspended")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	store := NewStore(app)
+	role, err := store.CallerRole(c)
+	if err != nil {
+		t.Fatalf("CallerRole (suspended admin): %v", err)
+	}
+	if role != "" {
+		t.Errorf("CallerRole (suspended admin) = %q, want \"\" (fail-closed, same as no membership)", role)
+	}
+}
+
+// TestStore_CallerRole_ActiveUnaffected: the suspended-refusal predicate must
+// not regress the normal active path.
+func TestStore_CallerRole_ActiveUnaffected(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-ACTIVE-CALLERROLE tenant")
+	subject := uuid.NewString()
+	seedMembership(t, super, tenantID, subject, "admin")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID})
+
+	store := NewStore(app)
+	role, err := store.CallerRole(c)
+	if err != nil {
+		t.Fatalf("CallerRole (active admin): %v", err)
+	}
+	if role != "admin" {
+		t.Errorf("CallerRole (active admin) = %q, want %q", role, "admin")
 	}
 }

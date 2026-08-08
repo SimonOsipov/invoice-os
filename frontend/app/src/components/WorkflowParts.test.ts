@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { nodeSub, nodeTitle, roleOptions, simSub, simTitle, toOptions } from './WorkflowParts'
-import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS } from '../lib/members'
+import { toMember, type Member, type MembershipWire } from '../lib/members'
 import { resolve, SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from '../lib/roles'
 import type { ApprovalNode, AutoApproveNode, NotifyNode, RoleKey, Sla } from '../lib/workflows'
 
@@ -9,6 +9,29 @@ import type { ApprovalNode, AutoApproveNode, NotifyNode, RoleKey, Sla } from '..
 // reading a module constant, and roleOptions replaces the old ROLE_OPTIONS constant.
 
 const A = (role: RoleKey, sla: Sla): ApprovalNode => ({ id: 'n', type: 'approval', role, sla, delegate: false })
+
+// The in-house directory as the server states it, keyed by the membership subjects
+// SEED_INHOUSE_ROLES now points at — projected through `toMember`, so a change to either the
+// projection or the re-point shows up here rather than in a hand-written row that agrees with
+// nothing. `resolve` reads name and status only. The firm side needs no roster: its one spec
+// resolves a key no role holds.
+const wire = (userID: string, name: string, status: string): MembershipWire => ({
+  user_id: userID,
+  role: 'reviewer',
+  status,
+  display_name: name,
+  email: null,
+})
+
+const INHOUSE_MEMBERS: readonly Member[] = [
+  wire('c0000000-0000-0000-0000-000000000002', 'Ngozi Balogun', 'active'),
+  wire('c0000000-0000-0000-0000-000000000008', 'Yetunde Fashola', 'active'),
+  wire('c0000000-0000-0000-0000-000000000009', 'Emeka Uzowulu', 'active'),
+  wire('c0000000-0000-0000-0000-000000000010', 'Tunde Adeyemi', 'active'),
+  wire('c0000000-0000-0000-0000-000000000011', 'Ibrahim Bello', 'active'),
+  wire('c0000000-0000-0000-0000-000000000012', 'Adebayo Ogunlesi', 'suspended'),
+  wire('c0000000-0000-0000-0000-000000000013', 'Zainab Lawal', 'active'),
+].map((w) => toMember(w, 'nobody'))
 
 describe('AC-2 — nodeTitle reads the supplied role list', () => {
   it('titles an approval step from the role list passed in, not a module constant', () => {
@@ -66,7 +89,7 @@ describe('AC-4 — roleOptions and a stored key naming no role', () => {
 
 describe('AC-6 — the canvas line never contains the word suspended', () => {
   it('a blocked in-house role renders the holder alone', () => {
-    const text = resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo').text
+    const text = resolve(SEED_INHOUSE_ROLES, INHOUSE_MEMBERS, 'cfo').text
     const rendered = nodeSub(A('cfo', '72'), SEED_INHOUSE_ROLES, text)
     expect(rendered).toContain('Adebayo Ogunlesi')
     expect(rendered).not.toContain('suspended')
@@ -82,7 +105,7 @@ describe('AC-7 — simSub renders the resolved holder, uppercased, never the dep
   })
 
   it('a suspended-only in-house holder still names them, without the word SUSPENDED', () => {
-    const res = resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo')
+    const res = resolve(SEED_INHOUSE_ROLES, INHOUSE_MEMBERS, 'cfo')
     expect(res.warn).toBe(true) // the row's amber trigger — simSub itself carries no tone
     const out = simSub(A('cfo', '72'), SEED_INHOUSE_ROLES, res.text)
     expect(out).toBe('ADEBAYO OGUNLESI')
@@ -90,10 +113,10 @@ describe('AC-7 — simSub renders the resolved holder, uppercased, never the dep
   })
 
   it('the unheld and deleted states', () => {
-    const unheld = resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'ceo')
+    const unheld = resolve(SEED_INHOUSE_ROLES, INHOUSE_MEMBERS, 'ceo')
     expect(simSub(A('ceo', '48'), SEED_INHOUSE_ROLES, unheld.text)).toBe('NOBODY ASSIGNED')
 
-    const deleted = resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'ghost')
+    const deleted = resolve(SEED_FIRM_ROLES, [], 'ghost')
     expect(simSub(A('ghost', '48'), SEED_FIRM_ROLES, deleted.text)).toBe('ROLE NO LONGER EXISTS')
   })
 

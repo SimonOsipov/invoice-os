@@ -52,6 +52,10 @@ func main() {
 	// RLS. Reached via the gateway as /api/tenancy/v1/memberships.
 	app.Mux.HandleFunc("GET /v1/memberships", tenancy.MembershipsHandler(store.ListMemberships, app.Logger))
 
+	// PATCH /v1/memberships/{user_id} — admin-only suspend/reactivate. The
+	// gateway proxies it unchanged: its mount carries no method.
+	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
+
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("tenancy: %v", err)
 	}

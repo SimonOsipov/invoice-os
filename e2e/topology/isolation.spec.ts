@@ -88,8 +88,8 @@ test('cross-tenant isolation: each tenant token lists exactly its own members th
   const aUserIds = a.memberships.map((m) => m.user_id).sort()
   const bUserIds = b.memberships.map((m) => m.user_id).sort()
 
-  // Positive: the firm token's list is exactly its 3 seeded members (admin/preparer/
-  // reviewer); the in-house token's list is exactly its 1 seeded member.
+  // Positive: the firm token's list is exactly its 6 seeded members (admin/preparer/
+  // reviewer); the in-house token's list is exactly its 7 seeded members.
   expect(aUserIds).toEqual([...TENANTS.a.members].sort())
   expect(bUserIds).toEqual([...TENANTS.b.members].sort())
 

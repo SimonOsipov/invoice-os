@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS } from '../auth'
 import { CFG } from '../data'
+import type { AuthedFetch } from './portfolio'
 import * as membersModule from './members'
 import {
   ACCESS_ROLES,
@@ -14,11 +17,13 @@ import {
   clientAccessLabel,
   clientAccessNames,
   clientSelectionCount,
+  cloneMembers,
   CLIENT_ROSTER,
   CLIENT_USERS_COPY,
   delegateCandidates,
   DEPARTMENTS,
   departmentsInUse,
+  emailLabel,
   filterClientRoster,
   filterMembers,
   hasDerivableName,
@@ -31,7 +36,11 @@ import {
   isValidEmail,
   joinedLabel,
   lastActiveLabel,
+  listMembers,
   memberFromInvite,
+  memberInitials,
+  MEMBER_UNBACKED,
+  membersViewState,
   mergeChips,
   nameFromEmail,
   needsClientPick,
@@ -43,19 +52,335 @@ import {
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
-  SEED_FIRM_MEMBERS,
-  SEED_INHOUSE_MEMBERS,
-  seedMembers,
   setMemberRole,
+  setMembershipStatus,
   setMemberStatus,
   SUSPEND_EXPLANATION,
+  toMember,
   type InviteOptions,
   type Member,
   type MemberStatus,
+  type MembershipWire,
 } from './members'
 import { SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from './roles'
 
 // --- fixtures ---------------------------------------------------------------
+// The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
+// FIXTURE now, not a shipped constant: it exercises the reducers and the derivations over
+// rows the live directory (identity + access role + status only) cannot express — invited
+// rows, departments, per-person client access, `invitedBy`.
+const SEED_FIRM_MEMBERS: readonly Member[] = [
+  {
+    id: 'mf1',
+    name: APP_PERSONAS.firm.name,
+    initials: APP_PERSONAS.firm.initials,
+    email: APP_PERSONAS.firm.email,
+    role: 'admin',
+    status: 'active',
+    lastActive: 'Just now',
+    joined: '4 Feb 2024',
+    invitedBy: '—',
+    isYou: true,
+    clientAccess: 'all',
+  },
+  {
+    id: 'mf2',
+    name: 'Folake Adesina',
+    initials: 'FA',
+    email: 'f.adesina@okafor.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '2 hours ago',
+    joined: '18 Mar 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [0, 1, 3],
+  },
+  {
+    id: 'mf3',
+    name: 'Musa Danjuma',
+    initials: 'MD',
+    email: 'm.danjuma@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '6 May 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [2, 5],
+  },
+  {
+    id: 'mf4',
+    name: 'Chiamaka Nwosu',
+    initials: 'CN',
+    email: 'c.nwosu@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '3 days ago',
+    joined: '11 Sep 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+  {
+    // §10.9 — the deliberately long name + email row, guarding the column widths.
+    id: 'mf5',
+    name: 'Oluwaseyifunmi Adebanjo-Ogunleye',
+    initials: 'OA',
+    email: 'o.adebanjo-ogunleye@okaforandpartners.com.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '5 hours ago',
+    joined: '2 Dec 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+  {
+    id: 'mf6',
+    name: 'Bature Suleiman',
+    initials: 'BS',
+    email: 'b.suleiman@okafor.ng',
+    role: 'preparer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [0],
+  },
+  {
+    id: 'mf7',
+    name: 'Halima Yusuf',
+    initials: 'HY',
+    email: 'h.yusuf@okafor.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    lastActive: '1 month ago',
+    joined: '22 Jan 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+]
+
+const SEED_INHOUSE_MEMBERS: readonly Member[] = [
+  {
+    id: 'mh1',
+    name: APP_PERSONAS.inhouse.name,
+    initials: APP_PERSONAS.inhouse.initials,
+    email: APP_PERSONAS.inhouse.email,
+    role: 'admin',
+    status: 'active',
+    lastActive: 'Just now',
+    joined: '9 Jan 2024',
+    invitedBy: '—',
+    isYou: true,
+    department: 'Finance',
+  },
+  {
+    id: 'mh2',
+    name: 'Yetunde Fashola',
+    initials: 'YF',
+    email: 'y.fashola@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '1 hour ago',
+    joined: '20 Feb 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh3',
+    name: 'Emeka Uzowulu',
+    initials: 'EU',
+    email: 'e.uzowulu@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '3 hours ago',
+    joined: '20 Feb 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    id: 'mh4',
+    name: 'Tunde Adeyemi',
+    initials: 'TA',
+    email: 't.adeyemi@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '4 Mar 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh5',
+    name: 'Ibrahim Bello',
+    initials: 'IB',
+    email: 'i.bello@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '2 days ago',
+    joined: '4 Mar 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Tax & Compliance',
+  },
+  {
+    // §2's headline frame: the only cfo holder, suspended, so both cfo approval steps block.
+    id: 'mh6',
+    name: 'Adebayo Ogunlesi',
+    initials: 'AO',
+    email: 'a.ogunlesi@honeywell.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    lastActive: '3 weeks ago',
+    joined: '9 Jan 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Executive',
+  },
+  {
+    id: 'mh7',
+    name: 'Zainab Lawal',
+    initials: 'ZL',
+    email: 'z.lawal@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '20 minutes ago',
+    joined: '15 Apr 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh8',
+    name: 'Chidi Anyanwu',
+    initials: 'CA',
+    email: 'c.anyanwu@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '4 hours ago',
+    joined: '15 Apr 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh9',
+    name: 'Aisha Mohammed',
+    initials: 'AM',
+    email: 'a.mohammed@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '2 Jun 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh10',
+    name: 'Segun Oyelaran',
+    initials: 'SO',
+    email: 's.oyelaran@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '2 days ago',
+    joined: '2 Jun 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    // §13 check 11 runs in both modes, and in-house is the riskier one (7 columns to firm's
+    // 6) — so in-house gets a long name/email row too (Decision `[inhouse-long-row]`).
+    id: 'mh11',
+    name: 'Oluwafunmilayo Ademola-Oyediran',
+    initials: 'OA',
+    email: 'o.ademola-oyediran@honeywellgroup.com.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '6 hours ago',
+    joined: '19 Jul 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Tax & Compliance',
+  },
+  {
+    id: 'mh12',
+    name: 'Kelechi Obi',
+    initials: 'KO',
+    email: 'k.obi@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '30 minutes ago',
+    joined: '19 Jul 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh13',
+    name: 'Hauwa Abubakar',
+    initials: 'HA',
+    email: 'h.abubakar@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '5 hours ago',
+    joined: '3 Sep 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Executive',
+  },
+  {
+    id: 'mh14',
+    name: 'Olumide Bakare',
+    initials: 'OB',
+    email: 'o.bakare@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '3 days ago',
+    joined: '3 Sep 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    id: 'mh15',
+    name: 'Nneka Chukwu',
+    initials: 'NC',
+    email: 'n.chukwu@honeywell.ng',
+    role: 'preparer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh16',
+    name: 'Sadiq Ibrahim',
+    initials: 'SI',
+    email: 's.ibrahim@honeywell.ng',
+    role: 'reviewer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+]
+
+/** The deleted `seedMembers`, over the fixture. Composes the module's own deep clone. */
+const seedMembers = () => ({ firm: cloneMembers(SEED_FIRM_MEMBERS), inhouse: cloneMembers(SEED_INHOUSE_MEMBERS) })
+
 // Every spec starts from a fresh clone, never from a SEED_* constant — except T1.2/T1.2b,
 // where the aliasing between the clone and the constant IS what is under test.
 const firm = () => seedMembers().firm
@@ -449,7 +774,7 @@ describe('seed invariants the reducers will depend on (QA16–QA17, §15.6)', ()
     // compares lower-cased emails; a duplicate in either would break them silently.
     for (const list of [firm(), inhouse()]) {
       const ids = list.map((m) => m.id)
-      const emails = list.map((m) => m.email.toLowerCase())
+      const emails = list.map((m) => (m.email ?? '').toLowerCase())
       expect(new Set(ids).size).toBe(list.length)
       expect(new Set(emails).size).toBe(list.length)
     }
@@ -1344,7 +1669,7 @@ describe('MEMB-01-06 invite modal copy (T6.2, §7)', () => {
     expect(active.status).toBe('active')
     expect(pending.status).toBe('invited')
 
-    const verdicts = classifyInvites(list, [active.email, pending.email, 'not-an-email', 'new@x.ng'])
+    const verdicts = classifyInvites(list, [active.email ?? '', pending.email ?? '', 'not-an-email', 'new@x.ng'])
     expect(verdicts).toEqual(['member', 'invited', 'malformed', 'ok'])
     for (const v of verdicts) {
       if (v === 'ok') continue
@@ -1374,7 +1699,7 @@ describe('hasDerivableName — DEFECT D1 settled without moving QA35 (T6.3-T6.4,
 
   it('accepts every address the pipeline is meant to mint, and is not a validator (T6.4)', () => {
     // Every seeded address in both modes, so the gate can never reject a real member's shape.
-    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email)).toBe(true)
+    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email ?? '')).toBe(true)
 
     // The awkward shapes the QA26-QA31 batch already pinned name/initials for.
     for (const address of ['a@x.ng', 'c+tag@x.ng', 'MiXeD.CaSe@X.NG', 'o.adebanjo-ogunleye@okaforandpartners.com.ng']) {
@@ -1654,5 +1979,207 @@ describe('AC-14 — delegateCandidates stays reviewers-only in firm mode too', (
     const candidates = delegateCandidates(SEED_FIRM_MEMBERS)
     expect(candidates).toEqual(['Musa Danjuma', 'Chiamaka Nwosu'])
     expect(candidates).not.toContain('Chinedu Okafor') // admin, not reviewer
+  })
+})
+
+// ============================================================================
+// APPR-15-05 — Mode A RED specs for the live member wire and projection
+// ============================================================================
+// listMembers/setMembershipStatus/toMember/memberInitials/emailLabel/membersViewState
+// are stubbed to throw, and MEMBER_UNBACKED ships empty, so every spec below fails on
+// the stub — not on an import or compile error. filterMembers/classifyInvites are the
+// SHIPPED implementations, unchanged: their null-email specs fail because those two
+// still call `.toLowerCase()` on `email` unguarded (members.ts:640,731).
+
+/** authedFetch.test.ts's / portfolio.test.ts's own helper, for the ApiError rethrow specs. */
+async function captureRejection(thunk: () => unknown): Promise<unknown> {
+  try {
+    await thunk()
+  } catch (err) {
+    return err
+  }
+  throw new Error('expected the call to reject, but it resolved')
+}
+
+const wire = (overrides: Partial<MembershipWire> = {}): MembershipWire => ({
+  user_id: 'c0000000-0000-0000-0000-000000000003',
+  role: 'reviewer',
+  status: 'active',
+  display_name: 'Folake Adesina',
+  email: 'f.adesina@okafor.ng',
+  ...overrides,
+})
+
+const SELF_SUBJECT = 'c0000000-0000-0000-0000-000000000001'
+
+/** A Member row with a wire-null email, forced past the (still-required) `email: string` field. */
+const nullEmailMember = (name: string): Member => ({ ...inhouseRow(name, 'active'), email: null as unknown as string })
+
+describe('AC-1 — listMembers targets the memberships endpoint', () => {
+  it('GETs <base>/api/tenancy/v1/memberships via the injected authedFetch, no token option of its own', async () => {
+    const af = vi.fn().mockResolvedValue({ memberships: [wire()] }) as unknown as AuthedFetch
+    const base = 'https://gw'
+
+    await listMembers(af, base)
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith(`${base}/api/tenancy/v1/memberships`)
+  })
+
+  it('rethrows a given ApiError unreshaped — the same instance', async () => {
+    const boom = new ApiError('http', 'unauthorized', 401, { error: 'unauthorized' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => listMembers(af, 'https://gw'))
+    expect(caught).toBe(boom)
+  })
+})
+
+describe('AC-1 — setMembershipStatus PATCHes memberships/<id>', () => {
+  it('sends PATCH with body {status} to the member-scoped URL', async () => {
+    const af = vi.fn().mockResolvedValue(wire({ status: 'suspended' })) as unknown as AuthedFetch
+    const base = 'https://gw'
+
+    await setMembershipStatus(af, base, 'u1', 'suspended')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith(`${base}/api/tenancy/v1/memberships/u1`, {
+      method: 'PATCH',
+      body: { status: 'suspended' },
+    })
+  })
+
+  it('rethrows a 409 ApiError with status and body intact', async () => {
+    const boom = new ApiError('http', 'suspended approver', 409, { error: 'suspended approver' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    const caught = await captureRejection(() => setMembershipStatus(af, 'https://gw', 'u1', 'suspended'))
+    expect(caught).toBe(boom)
+    expect((caught as ApiError).status).toBe(409)
+    expect((caught as ApiError).body).toEqual({ error: 'suspended approver' })
+  })
+})
+
+describe('AC-2 — toMember maps the wire row to a Member', () => {
+  it('maps the five wire fields to {id, name, email, role, status}', () => {
+    const w = wire({
+      user_id: 'c0000000-0000-0000-0000-000000000005',
+      display_name: 'Chiamaka Nwosu',
+      email: 'c.nwosu@okafor.ng',
+      role: 'reviewer',
+      status: 'active',
+    })
+    const m = toMember(w, SELF_SUBJECT)
+    expect(m.id).toBe(w.user_id)
+    expect(m.name).toBe('Chiamaka Nwosu')
+    expect(m.email).toBe('c.nwosu@okafor.ng')
+    expect(m.role as string).toBe('reviewer')
+    expect(m.status).toBe('active')
+  })
+
+  it('keeps role VERBATIM — reviewer stays reviewer, an unexpected Auditor is kept, not defaulted or lower-cased', () => {
+    expect(toMember(wire({ role: 'reviewer' }), SELF_SUBJECT).role as string).toBe('reviewer')
+    expect(toMember(wire({ role: 'Auditor' }), SELF_SUBJECT).role as string).toBe('Auditor')
+  })
+
+  it('falls back the name display_name -> email -> user_id', () => {
+    expect(toMember(wire({ display_name: 'Folake Adesina', email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe(
+      'Folake Adesina',
+    )
+    expect(toMember(wire({ display_name: null, email: 'f.adesina@okafor.ng' }), SELF_SUBJECT).name).toBe('f.adesina@okafor.ng')
+    expect(
+      toMember(wire({ display_name: null, email: null, user_id: 'c0000000-0000-0000-0000-000000000009' }), SELF_SUBJECT).name,
+    ).toBe('c0000000-0000-0000-0000-000000000009')
+  })
+
+  it('resolves isYou from the passed self subject', () => {
+    expect(toMember(wire({ user_id: SELF_SUBJECT }), SELF_SUBJECT).isYou).toBe(true)
+    expect(toMember(wire({ user_id: 'c0000000-0000-0000-0000-000000000099' }), SELF_SUBJECT).isYou).toBe(false)
+  })
+})
+
+describe('AC-2/[APPR-10 trap] — delegateCandidates survives the live projection', () => {
+  it('a projected active reviewer is a non-empty delegate candidate', () => {
+    const rows = [
+      wire({ user_id: 'c1', role: 'reviewer', status: 'active', display_name: 'Musa Danjuma' }),
+      wire({ user_id: 'c2', role: 'admin', status: 'active', display_name: 'Chinedu Okafor' }),
+    ].map((w) => toMember(w, SELF_SUBJECT))
+    expect(delegateCandidates(rows)).toEqual(['Musa Danjuma'])
+  })
+})
+
+describe('AC-3 — memberInitials composes initials()/initialsFrom(), no third variant', () => {
+  it('takes initials from the display name when present', () => {
+    expect(memberInitials('Folake Adesina', 'f.adesina@x.ng', 'u1')).toBe('FA')
+  })
+
+  it('falls back to initialsFrom(email) when there is no display name', () => {
+    expect(memberInitials(null, 'f.adesina@x.ng', 'u1')).toBe('FA')
+  })
+
+  it('falls back to the first two characters of the subject, upper-cased, when both are absent', () => {
+    expect(memberInitials(null, null, 'zzuser')).toBe('ZZ')
+  })
+})
+
+describe('AC-5 — emailLabel', () => {
+  it('renders a missing email as an em dash', () => {
+    expect(emailLabel(nullEmailMember('Nomail Person'))).toBe('—')
+  })
+
+  it('renders a real address verbatim', () => {
+    expect(emailLabel({ ...inhouseRow('Has Mail', 'active'), email: 'a@b.ng' })).toBe('a@b.ng')
+  })
+})
+
+describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () => {
+  it('filterMembers tolerates a null email, both when the name matches and when nothing does', () => {
+    const row = nullEmailMember('Nomail Person')
+    // The `||` short-circuits on the name match before `email` is ever touched — this half
+    // is already true today and is pinned as a fact, not a red.
+    expect(names(filterMembers([row], 'nomail', 'all'))).toEqual(['Nomail Person'])
+    // A query the name does NOT match forces evaluation of `m.email.toLowerCase()` — this
+    // is the genuine red: today it throws instead of falling through to "no match".
+    expect(() => filterMembers([row], 'zzz-no-match', 'all')).not.toThrow()
+    expect(filterMembers([row], 'zzz-no-match', 'all')).toEqual([])
+  })
+
+  it('classifyInvites treats a null-email row as no match, and does not throw', () => {
+    const row = nullEmailMember('Nomail Person')
+    expect(() => classifyInvites([row], ['fresh@x.ng'])).not.toThrow()
+    expect(classifyInvites([row], ['fresh@x.ng'])).toEqual(['ok'])
+  })
+})
+
+describe('AC-7 — MEMBER_UNBACKED', () => {
+  it('supplies one distinct, non-empty sentence per unbacked control', () => {
+    const keys = ['invite', 'remove', 'role', 'department', 'clientAccess'] as const
+    for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
+    const values = keys.map((k) => MEMBER_UNBACKED[k])
+    expect(new Set(values).size).toBe(keys.length)
+  })
+})
+
+describe('AC-8 — membersViewState never turns an error into empty', () => {
+  it('null base -> idle', () => {
+    expect(membersViewState(null, 'ready')).toBe('idle')
+  })
+
+  it('an error status passes through as error, never empty', () => {
+    expect(membersViewState('https://gw', 'error')).toBe('error')
+  })
+
+  it('an empty status passes through as empty', () => {
+    expect(membersViewState('https://gw', 'empty')).toBe('empty')
+  })
+})
+
+// Expected to RED against the still-present exports — this subtask does not delete
+// them ([two-step-type-narrowing]; App.tsx:299 still calls seedMembers at this commit).
+describe('AC-9 — the member seed is gone from the app path', () => {
+  it('module exports carry no SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS or seedMembers', () => {
+    expect('SEED_FIRM_MEMBERS' in membersModule).toBe(false)
+    expect('SEED_INHOUSE_MEMBERS' in membersModule).toBe(false)
+    expect('seedMembers' in membersModule).toBe(false)
   })
 })

@@ -1383,11 +1383,14 @@ func isApprover(role string) bool { return role == "admin" || role == "reviewer"
 // permission check shares one transaction with the row lock instead of
 // opening a second (nesting db.WithinRequestTenantTx's own pool.Begin from
 // inside a closure has no precedent in this codebase and risks pool
-// exhaustion). Fails closed like CallerRole: no row is ("", nil), never an error.
+// exhaustion). Fails closed like CallerRole: no row is ("", nil), never an
+// error — and a suspended or invited member IS no row, so suspension refuses
+// the isApprover-gated writes rather than only changing a pill
+// (TestStore_ResolveOutside_SuspendedApproverRefused).
 func callerRoleTx(ctx context.Context, tx pgx.Tx, subject string) (string, error) {
 	var role string
 	if err := tx.QueryRow(ctx,
-		`SELECT role FROM memberships WHERE user_id = $1`, subject,
+		`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, subject,
 	).Scan(&role); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil

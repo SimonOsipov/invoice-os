@@ -350,3 +350,76 @@ describe('DashboardActive trend re-anchor (task-430, METR-01-06)', () => {
     expect(within(trendTile).getByText('12 WEEKS · SAMPLE')).toBeDefined()
   })
 })
+
+// QA Mode B adversarial coverage (task-430, METR-01-06). MTR-01..06 in dashboardMock.test.ts
+// prove buildMockPanels is correct in isolation; these prove the RENDERED page never lets
+// the ring and the trend headline drift apart, at the boundary scores and across a client
+// switch, which is the actual product guarantee the story cares about.
+describe('DashboardActive trend re-anchor — adversarial (QA task-430)', () => {
+  it.each([0, 45, 100])('the ring and the trend headline show the same live value at score %i', async (score) => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: score, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const ringTile = (await screen.findByText('Readiness score')).parentElement!.parentElement!
+    expect(within(ringTile).getByText(String(score))).toBeDefined()
+    const trendTile = screen.getByText('Readiness trend').parentElement!.parentElement!
+    expect(within(trendTile).getByText(`${score}%`)).toBeDefined()
+    // The SAMPLE chip stays even once the headline goes live -- only the endpoint is
+    // real, the 12-week series behind it is still fabricated.
+    expect(within(trendTile).getByText('12 WEEKS · SAMPLE')).toBeDefined()
+  })
+
+  // chartScore's last point is pinned to finalScore verbatim (dashboardMock.ts) and its
+  // y-coordinate is `168 - 1.5 * finalScore` (ch=176, top pad 8, plot height 150) --
+  // asserting the RENDERED <path d> ending, not just chart.now, catches a regression that
+  // anchors the headline number but leaves the curve itself still ending on the old
+  // fabricated score.
+  it('score 100 draws a curve whose rendered SVG path actually ends at the live score', async () => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 100, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const trendTile = (await screen.findByText('Readiness trend')).parentElement!.parentElement!
+    const linePath = trendTile.querySelector('path[stroke="var(--action)"]')
+    expect(linePath?.getAttribute('d')?.endsWith(' L 680.0 18.0')).toBe(true)
+  })
+
+  it('score 0 draws a curve whose rendered SVG path actually ends at the live score -- 0 is a score, not an absence', async () => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 0, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const trendTile = (await screen.findByText('Readiness trend')).parentElement!.parentElement!
+    const linePath = trendTile.querySelector('path[stroke="var(--action)"]')
+    expect(linePath?.getAttribute('d')?.endsWith(' L 680.0 168.0')).toBe(true)
+  })
+
+  it('switching the selected client updates BOTH the ring and the trend together, with no stale value left behind', async () => {
+    const data: Rollup = {
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      clients: [
+        { entity_id: 'ent-a', entity_name: 'Client A', counts: ZERO_COUNTS, needs_attention: 0, metrics: { readiness: { num: 30, den: 100 } }, top_violations: [] },
+        { entity_id: 'ent-b', entity_name: 'Client B', counts: ZERO_COUNTS, needs_attention: 0, metrics: { readiness: { num: 95, den: 100 } }, top_violations: [] },
+      ],
+      top_violations: [],
+    }
+    mockRollupFetch(data)
+
+    const { rerender } = render(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
+
+    const ringTileA = (await screen.findByText('Readiness score')).parentElement!.parentElement!
+    expect(within(ringTileA).getByText('30')).toBeDefined()
+    const trendTileA = screen.getByText('Readiness trend').parentElement!.parentElement!
+    expect(within(trendTileA).getByText('30%')).toBeDefined()
+
+    rerender(<DashboardActive ctx={firmCtx('ent-b', 'Client B')} />)
+
+    const ringTileB = screen.getByText('Readiness score').parentElement!.parentElement!
+    expect(within(ringTileB).getByText('95')).toBeDefined()
+    expect(within(ringTileB).queryByText('30')).toBeNull()
+    const trendTileB = screen.getByText('Readiness trend').parentElement!.parentElement!
+    expect(within(trendTileB).getByText('95%')).toBeDefined()
+    expect(within(trendTileB).queryByText('30%')).toBeNull()
+  })
+})

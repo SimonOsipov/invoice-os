@@ -62,11 +62,15 @@ const TABLE_MIN_WIDTH = 744
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// The tallest menu is now the invited row: three items (~34px each) plus TWO wrapped reason
+// The tallest menu is the invited row: three items (~34px each) plus TWO wrapped reason
 // notes, since every unbacked control states its own and the two sentences differ. At 196px
 // wide and 11px/1.45 those run ~5-6 lines each: 102 + ~100 + ~115 + the 6px offset ≈ 320,
 // rounded up. AN UNMEASURED UPPER BOUND, not a verified figure — over-padding costs
 // whitespace, under-padding clips the menu. Owed: measure it on the deployed build.
+//
+// No seeded tenant carries an `invited` row (db/seed.dev.sql) and no endpoint mints one, so
+// the tallest menu REACHABLE on a deployed build is the shorter active non-self row: Edit +
+// Suspend + Remove, one reason note. Measuring there confirms nothing about the bound above.
 //
 // The obvious alternative — flip the menu upward for the last few rows — was measured and
 // rejected: a row is ~58px, so opening downward needs three rows below and upward needs

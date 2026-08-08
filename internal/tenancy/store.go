@@ -209,9 +209,11 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 			event = "membership.suspended"
 		}
 		// Last statement in the closure: a failing audit write aborts the tx and
-		// rolls the status change back.
+		// rolls the status change back. The id is the RETURNING row's, not the
+		// argument's: a non-HTTP caller passing an uncanonical uuid text would
+		// otherwise audit an id that does not match the row it describes.
 		return audit.Record(ctx, tx, caller.Subject, event, map[string]any{
-			"user_id": userID,
+			"user_id": updated.UserID,
 			"from":    from,
 			"to":      status,
 		})

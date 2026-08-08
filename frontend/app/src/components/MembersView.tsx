@@ -56,7 +56,9 @@ const EMPTY_TITLE: Record<PlatformCtx['mode'], string> = {
   inhouse: 'Just you on the team',
 }
 
-const EMPTY_MESSAGE = "Invite as many people as you need — you're priced by compliance need, not per seat."
+// The invite clause is DELETED, not reworded: invite is disabled-with-a-reason on this
+// tab, and an empty state that promises it is the defect this story exists to fix.
+const EMPTY_MESSAGE = "You're priced by compliance need, not per seat."
 
 export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   const { members, mode, setMemberStatus } = ctx

@@ -62,10 +62,17 @@ test('cross-tenant isolation: each token reads exactly its own tenant + domain r
 // whole member LIST for the caller's tenant, so this is the end-to-end deployed proof
 // that RLS — not application code — is what scopes the list, exactly like the
 // service-layer proof (internal/tenancy/tenancy_test.go TestStoreListMemberships_*).
+//
+// The row shape below is a SECOND, independent mirror of e2e/api/client.ts's `Membership` —
+// this file drives Playwright's own request context and imports nothing from api/. Widened
+// to five keys with that one; a TS generic validates no JSON at runtime, so a stale mirror
+// here is stale-not-broken and would go unnoticed.
+type MembershipRow = { user_id: string; role: string; status: string; display_name: string | null; email: string | null }
+
 async function fetchMemberships(
   request: APIRequestContext,
   t: { id: string; subject: string },
-): Promise<{ memberships: { user_id: string; role: string }[] }> {
+): Promise<{ memberships: MembershipRow[] }> {
   const login = await request.post(`${GATEWAY_URL}/auth/login`, {
     data: { subject: t.subject, role: 'authenticated', tenant_id: t.id },
   })
@@ -76,7 +83,7 @@ async function fetchMemberships(
     headers: { Authorization: `Bearer ${access_token}` },
   })
   expect(res.ok(), `/v1/memberships for ${t.id} returned HTTP ${res.status()}`).toBeTruthy()
-  return (await res.json()) as { memberships: { user_id: string; role: string }[] }
+  return (await res.json()) as { memberships: MembershipRow[] }
 }
 
 test('cross-tenant isolation: each tenant token lists exactly its own members through the live gateway', async ({

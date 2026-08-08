@@ -25,13 +25,16 @@ type Tenant struct {
 	Kind string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
 }
 
-// Membership is one row of the caller's tenant's memberships: a user and their
-// domain role. Added in M3-02-01 for the Me/loader shape; M3-02-02's member-list
-// endpoint is the first consumer of the slice form. JSON tags are snake_case
-// (user_id, role) -- the GET /v1/memberships wire contract (A3).
+// Membership is one row of the caller's tenant's memberships. JSON tags are
+// snake_case (user_id, role, status, display_name, email) -- the GET
+// /v1/memberships wire contract (A3). display_name/email are nullable and
+// serialize as JSON null, never omitted.
 type Membership struct {
-	UserID string `json:"user_id"`
-	Role   string `json:"role"`
+	UserID      string  `json:"user_id"`
+	Role        string  `json:"role"`
+	Status      string  `json:"status"`
+	DisplayName *string `json:"display_name"`
+	Email       *string `json:"email"`
 }
 
 // ErrTenantNotFound means the caller's tenant id resolved to no visible row — a
@@ -152,7 +155,7 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 }
 
 // membershipsResponse is the GET /v1/memberships body: the caller's tenant's
-// memberships, each as {user_id, role} (A3).
+// memberships, each as {user_id, role, status, display_name, email} (A3).
 type membershipsResponse struct {
 	Memberships []Membership `json:"memberships"`
 }

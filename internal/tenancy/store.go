@@ -63,22 +63,23 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 	return t, role, nil
 }
 
-// ListMemberships lists the caller's tenant's memberships (user_id, role),
-// RLS-scoped: SELECT user_id, role FROM memberships ORDER BY created_at,
-// user_id -- bare (no WHERE tenant_id), same as Me's tenant query, inside a
-// SINGLE db.WithinRequestTenantTx call. An empty tenant returns an empty
-// non-nil slice and a nil error (never nil, nil).
+// ListMemberships lists the caller's tenant's memberships (user_id, role,
+// status, display_name, email), RLS-scoped: SELECT user_id, role, status,
+// display_name, email FROM memberships ORDER BY created_at, user_id -- bare
+// (no WHERE tenant_id), same as Me's tenant query, inside a SINGLE
+// db.WithinRequestTenantTx call. An empty tenant returns an empty non-nil
+// slice and a nil error (never nil, nil).
 func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
 	memberships := []Membership{}
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT user_id, role FROM memberships ORDER BY created_at, user_id`)
+		rows, err := tx.Query(ctx, `SELECT user_id, role, status, display_name, email FROM memberships ORDER BY created_at, user_id`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var m Membership
-			if err := rows.Scan(&m.UserID, &m.Role); err != nil {
+			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email); err != nil {
 				return err
 			}
 			memberships = append(memberships, m)

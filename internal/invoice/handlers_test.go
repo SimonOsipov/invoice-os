@@ -256,7 +256,7 @@ func doInvoiceTransition(t *testing.T, transition func(ctx context.Context, id s
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	TransitionHandler(transition, nil).ServeHTTP(rec, r)
+	TransitionHandler(transition, adminRoleStub, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)

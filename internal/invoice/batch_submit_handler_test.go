@@ -62,7 +62,7 @@ func doBatchSubmit(t *testing.T, submit func(ctx context.Context, in BatchSubmit
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	BatchSubmitHandler(submit, nil).ServeHTTP(rec, r)
+	BatchSubmitHandler(submit, adminRoleStub, nil).ServeHTTP(rec, r)
 	var resp batchSubmitResponseWire
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp) // best-effort; some assertions read raw bytes instead
 	return rec, resp

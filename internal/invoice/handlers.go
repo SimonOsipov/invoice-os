@@ -631,7 +631,10 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 // Store.Transition could promote without validating -- there is none today.
 // Hand-off: if M4-05 adds a second production consumer of Store.Transition,
 // re-evaluate this placement.
-func TransitionHandler(transition func(ctx context.Context, id string, target Status) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+//
+// callerRole is the transmission role gate's seam, shaped like GetHandler's.
+// The gate itself is not written yet -- transmission_rbac_test.go is red on it.
+func TransitionHandler(transition func(ctx context.Context, id string, target Status) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -1075,7 +1078,10 @@ const maxBatchSubmitBodyBytes = 64 * 1024
 // invoice_ids -> 400; >200 ids -> 400; blank or >218-char idempotency_key -> 400; any
 // non-uuid id -> 400 -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound ->
 // 404, ErrValidation -> 400, the existing map) -> 200 + BatchSubmitResult.
-func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), log *slog.Logger) http.HandlerFunc {
+//
+// callerRole is the transmission role gate's seam, shaped like GetHandler's.
+// The gate itself is not written yet -- transmission_rbac_test.go is red on it.
+func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}

@@ -24,8 +24,13 @@ import {
   deslug,
   EMPTY_BUCKET,
   entityHealth,
+  formatMetric,
   getRollup,
   isEmptyRollup,
+  metricRatio,
+  readinessBars,
+  readinessNote,
+  readinessRing,
   resolveCtaLabel,
   scopedBucket,
   topFailures,
@@ -33,6 +38,8 @@ import {
   type Counts,
   type Rollup,
   type RollupClient,
+  type Metrics,
+  type RuleCount,
 } from './dashboard'
 
 // Calls a (currently throwing) helper and returns the caught error, tolerating both a
@@ -398,4 +405,180 @@ describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero'
       expect(isEmptyRollup(r)).toBe(false)
     })
   }
+})
+
+// Metric registry & derived helpers (Mode A RED, task-428) — transcribed from the
+// architect's Test Specs table (FMR-01..FMR-13). dashboard.ts does not yet export
+// Metrics/metricRatio/formatMetric/readinessRing/readinessBars/readinessNote, and
+// RollupBucket/RollupClient don't yet carry metrics/top_violations — every spec below
+// is expected to fail on that missing surface, not a typo.
+
+const CIRC = 2 * Math.PI * 50
+
+describe('metricRatio', () => {
+  it('FMR-01: rounds num/den to a 0..100 percentage', () => {
+    const m: Metrics = { readiness: { num: 2, den: 262 } }
+    expect(metricRatio(m, 'readiness')).toBe(1)
+  })
+
+  it('FMR-02: an absent key and a zero denominator both read null, never 0', () => {
+    const m: Metrics = { readiness: { num: 5, den: 0 } }
+    expect(metricRatio({}, 'readiness')).toBeNull()
+    expect(metricRatio(m, 'readiness')).toBeNull()
+  })
+})
+
+describe('formatMetric', () => {
+  it('FMR-03: a null underlying value renders the em dash for every kind (ratio/count/amount)', () => {
+    expect(formatMetric({}, 'readiness')).toBe('—')
+    expect(formatMetric({}, 'blocked_by_rules')).toBe('—')
+    expect(formatMetric({}, 'vat_tracked')).toBe('—')
+  })
+
+  it('FMR-04: vat_tracked converts kobo to naira exactly once, formatted via fmtShort', () => {
+    const m: Metrics = { vat_tracked: { num: 240_000_000, den: 2 } }
+    expect(formatMetric(m, 'vat_tracked')).toBe('₦2.4M')
+  })
+
+  it('FMR-05: a count metric renders the plain integer, not a percentage', () => {
+    const m: Metrics = { blocked_by_rules: { num: 12, den: 259 } }
+    expect(formatMetric(m, 'blocked_by_rules')).toBe('12')
+  })
+
+  it('FMR-06: an unregistered key renders the em dash and does not throw', () => {
+    const m: Metrics = { made_up_key: { num: 1, den: 1 } }
+    expect(() => formatMetric(m, 'made_up_key')).not.toThrow()
+    expect(formatMetric(m, 'made_up_key')).toBe('—')
+  })
+})
+
+describe('readinessRing', () => {
+  it('FMR-07a: 79% is amber-banded, offset matches the shipped ring geometry', () => {
+    const ring = readinessRing({ readiness: { num: 79, den: 100 } })
+    expect(ring.score).toBe(79)
+    expect(ring.color).toBe('var(--status-amber-text)')
+    expect(ring.circ).toBe(CIRC.toFixed(1))
+    expect(ring.offset).toBe((CIRC * (1 - 79 / 100)).toFixed(1))
+  })
+
+  it('FMR-07b: 90% crosses into the --action band', () => {
+    const ring = readinessRing({ readiness: { num: 90, den: 100 } })
+    expect(ring.color).toBe('var(--action)')
+  })
+
+  it('FMR-07c: 60% falls into the red band', () => {
+    const ring = readinessRing({ readiness: { num: 60, den: 100 } })
+    expect(ring.color).toBe('var(--status-red-text)')
+  })
+
+  it('FMR-07d: an absent readiness metric yields a null score and a fully-offset (empty) ring', () => {
+    const ring = readinessRing({})
+    expect(ring.score).toBeNull()
+    expect(ring.offset).toBe(CIRC.toFixed(1))
+  })
+})
+
+describe('readinessBars', () => {
+  it('FMR-08: exactly three bars, fixed order, pinned labels', () => {
+    const m: Metrics = {
+      bar_field_completeness: { num: 90, den: 100 },
+      bar_tax_accuracy: { num: 70, den: 100 },
+      bar_identifiers_format: { num: 50, den: 100 },
+    }
+    const bars = readinessBars(m)
+    expect(bars).toHaveLength(3)
+    expect(bars.map((b) => b.label)).toEqual([
+      'Field completeness',
+      'Tax accuracy · VAT / WHT',
+      'Identifiers & format',
+    ])
+  })
+
+  it('FMR-09: an absent bar metric reads pct:null and the em-dash label', () => {
+    const bars = readinessBars({})
+    expect(bars).toHaveLength(3)
+    for (const bar of bars) {
+      expect(bar.pct).toBeNull()
+      expect(bar.pctLabel).toBe('—')
+    }
+  })
+})
+
+describe('readinessNote', () => {
+  it('FMR-10: non-zero clauses join in fixed order: blocked, failed, unchecked', () => {
+    const m: Metrics = {
+      blocked_by_rules: { num: 12, den: 300 },
+      failed_in_transmission: { num: 3, den: 300 },
+      never_validated: { num: 259, den: 300 },
+    }
+    expect(readinessNote(m)).toBe('12 blocked by rules · 3 failed in transmission · 259 not yet checked')
+  })
+
+  // Closes a vacuous-pass gap FMR-10/11 alone would leave open: a join that never
+  // actually omits a zero clause would still satisfy both of those.
+  it('FMR-10b: a zero clause is omitted from the join, not rendered as "0 ..."', () => {
+    const m: Metrics = {
+      blocked_by_rules: { num: 0, den: 300 },
+      failed_in_transmission: { num: 4, den: 300 },
+      never_validated: { num: 0, den: 300 },
+    }
+    expect(readinessNote(m)).toBe('4 failed in transmission')
+  })
+
+  it('FMR-11: all three counts zero renders the all-clear sentence', () => {
+    const m: Metrics = {
+      blocked_by_rules: { num: 0, den: 300 },
+      failed_in_transmission: { num: 0, den: 300 },
+      never_validated: { num: 0, den: 300 },
+    }
+    expect(readinessNote(m)).toBe('All invoices checked and clear of blocking rules.')
+  })
+
+  it('FMR-12: no metrics at all reads "No invoices yet"', () => {
+    expect(readinessNote({})).toBe('No invoices yet')
+  })
+})
+
+describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough', () => {
+  const totalsMetrics: Metrics = { readiness: { num: 80, den: 100 } }
+  const totalsViolations: RuleCount[] = [{ rule_key: 'supplier-tin-required', invoices: 2 }]
+  const clientMetrics: Metrics = { readiness: { num: 60, den: 50 } }
+  const clientViolations: RuleCount[] = [{ rule_key: 'buyer-tin-required', invoices: 1 }]
+
+  const rollup: Rollup = {
+    totals: {
+      counts: counts({ draft: 5 }),
+      needs_attention: 3,
+      metrics: totalsMetrics,
+      top_violations: totalsViolations,
+    },
+    clients: [
+      {
+        entity_id: 'e1',
+        entity_name: 'Acme',
+        counts: counts({ validated: 4 }),
+        needs_attention: 1,
+        metrics: clientMetrics,
+        top_violations: clientViolations,
+      },
+    ],
+    top_violations: [],
+  }
+
+  it('FMR-13a: in-house mode carries metrics and top_violations through (rollup.totals)', () => {
+    const bucket = scopedBucket(true, null, rollup)
+    expect(bucket.metrics).toEqual(totalsMetrics)
+    expect(bucket.top_violations).toEqual(totalsViolations)
+  })
+
+  it('FMR-13b: firm mode carries metrics and top_violations through from the selected client, not totals', () => {
+    const bucket = scopedBucket(false, 'e1', rollup)
+    expect(bucket.metrics).toEqual(clientMetrics)
+    expect(bucket.top_violations).toEqual(clientViolations)
+  })
+
+  it('FMR-13c: EMPTY_BUCKET carries metrics: {} and top_violations: []', () => {
+    expect(EMPTY_BUCKET.metrics).toEqual({})
+    expect(EMPTY_BUCKET.top_violations).toEqual([])
+  })
 })

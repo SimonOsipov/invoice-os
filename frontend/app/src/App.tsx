@@ -31,7 +31,6 @@ import {
   addMembers,
   removeMember,
   replaceMember,
-  seedMembers,
   type Member,
   type MemberStore,
 } from './lib/members'
@@ -296,7 +295,8 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   // different rosters, and `mode` is fixed by the signed-in persona for the session.
   // Held here rather than in MembersView because the Workflows builder resolves a step's
   // role to these people, so it is not one tab's private state.
-  const [memberStore, setMemberStore] = useState<MemberStore>(seedMembers)
+  // Interim: the seed is gone and the live fetch lands next. Empty until then.
+  const [memberStore, setMemberStore] = useState<MemberStore>(() => ({ firm: [], inhouse: [] }))
   const members = memberStore[mode]
   // The approval seats a policy's steps point at, PER WORKSPACE MODE (lib/roles.ts) — the
   // memberStore shape above, for the same reason. A firm's engagement seats and an in-house

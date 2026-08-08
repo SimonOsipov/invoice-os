@@ -1,32 +1,28 @@
-// Members (Settings › Members) — types, constants, seed and read-only derivations
-// (MEMB-01-01).
+// Members (Settings › Members) — types, the memberships wire and read-only derivations.
 //
-// Mock-only, and permanently so for now: there is no members endpoint at all. The shipped
-// `memberships` table has no status column, no inviter, no expiry and no `users` row, and
-// nothing anywhere holds a department — so Suspend and Remove have no backend mechanism to
-// call (MEMB-01 §Decisions). Everything here is seed data plus pure functions of their
-// arguments, shaped so that swapping the seed for a fetch changes no component.
+// Identity, access role and status are SERVER truth, read through `listMembers` and written
+// through `setMembershipStatus`. Everything else this module still models — invite, remove,
+// department, per-person client access — has no endpoint behind it; `MEMBER_UNBACKED` says
+// so in one sentence per control.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —
 // lives in lib/roles.ts, which imports this one and never the reverse.
 //
-// Dependency direction is ONE-WAY: members.ts → workflows.ts, for `WorkflowMode` alone.
-// workflows.ts never learns members exist. members.ts imports NOTHING from types.ts:
-// types.ts already type-imports from ./lib/workflows, and MEMB-01-03 makes types.ts import
-// THIS module, so a back-edge here would be a real cycle rather than a hypothetical one.
+// Dependency direction is ONE-WAY: members.ts → workflows.ts (type-only, `WorkflowMode`),
+// members.ts → customers.ts (runtime, `initials`), members.ts → portfolio.ts (type-only,
+// `AuthedFetch`). None of the three imports this module back. members.ts imports NOTHING
+// from types.ts: types.ts already type-imports ./lib/workflows and this module, so a
+// back-edge here would be a real cycle rather than a hypothetical one.
 //
-// Reducers (MEMB-01-02) are immutable, and `seedMembers` deep-clones. `SEED_*` are module
-// constants that are readonly at the type level only — nothing freezes them at runtime —
-// so a mutating reducer or a shallow clone would silently alias the seed across a mode
-// switch. `clientAccess` is the only nested value in the whole module and is exactly where
-// that bites: it is the same bug class lib/workflows.ts:15-18 records the Workflows port
-// fixing.
+// Reducers are immutable. `clientAccess` is the only nested value in the whole module, so a
+// shallow clone silently aliases it across a mode switch — the bug class lib/workflows.ts:15-18
+// records the Workflows port fixing.
 
 import { CFG } from '../data'
-import { APP_PERSONAS } from '../auth'
 import type { AuthedFetch } from './portfolio'
 import type { AsyncStatus } from '@invoice-os/api-client'
+import { initials } from './customers'
 import type { WorkflowMode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -50,15 +46,18 @@ export type Member = {
   id: string
   name: string
   initials: string
-  email: string
+  /** `null` when the membership row carries no address — render via `emailLabel`. */
+  email: string | null
   role: AccessRole
   status: MemberStatus
-  /** A human string ('2 hours ago'), not a date. `null` while invited. */
-  lastActive: string | null
-  /** `null` while invited. */
-  joined: string | null
-  invitedBy: string
   isYou: boolean
+  // Mock-only: no membership column backs any of the five. Optional rather than deleted
+  // because their render sites are still live at this commit; `toMember` never sets them.
+  /** A human string ('2 hours ago'), not a date. `null` while invited. */
+  lastActive?: string | null
+  /** `null` while invited. */
+  joined?: string | null
+  invitedBy?: string
   /** FIRM mode only — `'all'`, or a subset of CLIENT_ROSTER ids (CFG indices). */
   clientAccess?: 'all' | number[]
   /** IN-HOUSE mode only. */
@@ -143,331 +142,9 @@ export const CLIENT_USERS_COPY =
  */
 export const CLIENT_ROSTER: readonly { id: number; name: string }[] = CFG.map((c, i) => ({ id: i, name: c.name }))
 
-// ---------------------------------------------------------------------------
-// Seed
-// ---------------------------------------------------------------------------
-// Only the two `isYou` rows take name/initials/email from APP_PERSONAS, so the row flagged
-// YOU can never drift from the name the sidebar renders two inches away. Every other row
-// carries hand-authored initials. `invitedBy` is an em dash on those two rows: they are the
-// founding admins and nobody invited them.
-
-export const SEED_FIRM_MEMBERS: readonly Member[] = [
-  {
-    id: 'mf1',
-    name: APP_PERSONAS.firm.name,
-    initials: APP_PERSONAS.firm.initials,
-    email: APP_PERSONAS.firm.email,
-    role: 'admin',
-    status: 'active',
-    lastActive: 'Just now',
-    joined: '4 Feb 2024',
-    invitedBy: '—',
-    isYou: true,
-    clientAccess: 'all',
-  },
-  {
-    id: 'mf2',
-    name: 'Folake Adesina',
-    initials: 'FA',
-    email: 'f.adesina@okafor.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '2 hours ago',
-    joined: '18 Mar 2024',
-    invitedBy: 'Chinedu Okafor',
-    isYou: false,
-    clientAccess: [0, 1, 3],
-  },
-  {
-    id: 'mf3',
-    name: 'Musa Danjuma',
-    initials: 'MD',
-    email: 'm.danjuma@okafor.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: 'Yesterday',
-    joined: '6 May 2024',
-    invitedBy: 'Chinedu Okafor',
-    isYou: false,
-    clientAccess: [2, 5],
-  },
-  {
-    id: 'mf4',
-    name: 'Chiamaka Nwosu',
-    initials: 'CN',
-    email: 'c.nwosu@okafor.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: '3 days ago',
-    joined: '11 Sep 2024',
-    invitedBy: 'Chinedu Okafor',
-    isYou: false,
-    clientAccess: 'all',
-  },
-  {
-    // §10.9 — the deliberately long name + email row, guarding the column widths.
-    id: 'mf5',
-    name: 'Oluwaseyifunmi Adebanjo-Ogunleye',
-    initials: 'OA',
-    email: 'o.adebanjo-ogunleye@okaforandpartners.com.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '5 hours ago',
-    joined: '2 Dec 2024',
-    invitedBy: 'Chinedu Okafor',
-    isYou: false,
-    clientAccess: 'all',
-  },
-  {
-    id: 'mf6',
-    name: 'Bature Suleiman',
-    initials: 'BS',
-    email: 'b.suleiman@okafor.ng',
-    role: 'preparer',
-    status: 'invited',
-    lastActive: null,
-    joined: null,
-    invitedBy: 'Chinedu Okafor',
-    isYou: false,
-    clientAccess: [0],
-  },
-  {
-    id: 'mf7',
-    name: 'Halima Yusuf',
-    initials: 'HY',
-    email: 'h.yusuf@okafor.ng',
-    role: 'reviewer',
-    status: 'suspended',
-    lastActive: '1 month ago',
-    joined: '22 Jan 2024',
-    invitedBy: 'Chinedu Okafor',
-    isYou: false,
-    clientAccess: 'all',
-  },
-]
-
-export const SEED_INHOUSE_MEMBERS: readonly Member[] = [
-  {
-    id: 'mh1',
-    name: APP_PERSONAS.inhouse.name,
-    initials: APP_PERSONAS.inhouse.initials,
-    email: APP_PERSONAS.inhouse.email,
-    role: 'admin',
-    status: 'active',
-    lastActive: 'Just now',
-    joined: '9 Jan 2024',
-    invitedBy: '—',
-    isYou: true,
-    department: 'Finance',
-  },
-  {
-    id: 'mh2',
-    name: 'Yetunde Fashola',
-    initials: 'YF',
-    email: 'y.fashola@honeywell.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: '1 hour ago',
-    joined: '20 Feb 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Finance',
-  },
-  {
-    id: 'mh3',
-    name: 'Emeka Uzowulu',
-    initials: 'EU',
-    email: 'e.uzowulu@honeywell.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: '3 hours ago',
-    joined: '20 Feb 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Procurement',
-  },
-  {
-    id: 'mh4',
-    name: 'Tunde Adeyemi',
-    initials: 'TA',
-    email: 't.adeyemi@honeywell.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: 'Yesterday',
-    joined: '4 Mar 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Finance',
-  },
-  {
-    id: 'mh5',
-    name: 'Ibrahim Bello',
-    initials: 'IB',
-    email: 'i.bello@honeywell.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: '2 days ago',
-    joined: '4 Mar 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Tax & Compliance',
-  },
-  {
-    // §2's headline frame: the only cfo holder, suspended, so both cfo approval steps block.
-    id: 'mh6',
-    name: 'Adebayo Ogunlesi',
-    initials: 'AO',
-    email: 'a.ogunlesi@honeywell.ng',
-    role: 'reviewer',
-    status: 'suspended',
-    lastActive: '3 weeks ago',
-    joined: '9 Jan 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Executive',
-  },
-  {
-    id: 'mh7',
-    name: 'Zainab Lawal',
-    initials: 'ZL',
-    email: 'z.lawal@honeywell.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '20 minutes ago',
-    joined: '15 Apr 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Accounts Payable',
-  },
-  {
-    id: 'mh8',
-    name: 'Chidi Anyanwu',
-    initials: 'CA',
-    email: 'c.anyanwu@honeywell.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '4 hours ago',
-    joined: '15 Apr 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Accounts Payable',
-  },
-  {
-    id: 'mh9',
-    name: 'Aisha Mohammed',
-    initials: 'AM',
-    email: 'a.mohammed@honeywell.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: 'Yesterday',
-    joined: '2 Jun 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Accounts Payable',
-  },
-  {
-    id: 'mh10',
-    name: 'Segun Oyelaran',
-    initials: 'SO',
-    email: 's.oyelaran@honeywell.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '2 days ago',
-    joined: '2 Jun 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Procurement',
-  },
-  {
-    // §13 check 11 runs in both modes, and in-house is the riskier one (7 columns to firm's
-    // 6) — so in-house gets a long name/email row too (Decision `[inhouse-long-row]`).
-    id: 'mh11',
-    name: 'Oluwafunmilayo Ademola-Oyediran',
-    initials: 'OA',
-    email: 'o.ademola-oyediran@honeywellgroup.com.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: '6 hours ago',
-    joined: '19 Jul 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Tax & Compliance',
-  },
-  {
-    id: 'mh12',
-    name: 'Kelechi Obi',
-    initials: 'KO',
-    email: 'k.obi@honeywell.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '30 minutes ago',
-    joined: '19 Jul 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Finance',
-  },
-  {
-    id: 'mh13',
-    name: 'Hauwa Abubakar',
-    initials: 'HA',
-    email: 'h.abubakar@honeywell.ng',
-    role: 'reviewer',
-    status: 'active',
-    lastActive: '5 hours ago',
-    joined: '3 Sep 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Executive',
-  },
-  {
-    id: 'mh14',
-    name: 'Olumide Bakare',
-    initials: 'OB',
-    email: 'o.bakare@honeywell.ng',
-    role: 'preparer',
-    status: 'active',
-    lastActive: '3 days ago',
-    joined: '3 Sep 2024',
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Procurement',
-  },
-  {
-    id: 'mh15',
-    name: 'Nneka Chukwu',
-    initials: 'NC',
-    email: 'n.chukwu@honeywell.ng',
-    role: 'preparer',
-    status: 'invited',
-    lastActive: null,
-    joined: null,
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Accounts Payable',
-  },
-  {
-    id: 'mh16',
-    name: 'Sadiq Ibrahim',
-    initials: 'SI',
-    email: 's.ibrahim@honeywell.ng',
-    role: 'reviewer',
-    status: 'invited',
-    lastActive: null,
-    joined: null,
-    invitedBy: 'Ngozi Balogun',
-    isYou: false,
-    department: 'Finance',
-  },
-]
-
-/** Deep clone per call, mirroring `seedPolicies` (workflows.ts:206-216). */
-export function seedMembers(): MemberStore {
-  return { firm: cloneMembers(SEED_FIRM_MEMBERS), inhouse: cloneMembers(SEED_INHOUSE_MEMBERS) }
-}
-
 /**
  * `clientAccess` is the only nested value a `Member` carries, so it is the only thing a
- * `{...m}` spread would leave aliased to the seed — mirroring `cloneNode`'s own
+ * `{...m}` spread would leave aliased to the row it replaced — mirroring `cloneNode`'s own
  * `then`/`else` copy (workflows.ts:214-216). Shared with the row-building reducers
  * (`setMemberRole`/`setMemberStatus`), which face exactly the same hazard.
  */
@@ -475,7 +152,8 @@ function copyMember(m: Member): Member {
   return Array.isArray(m.clientAccess) ? { ...m, clientAccess: m.clientAccess.slice() } : { ...m }
 }
 
-function cloneMembers(list: readonly Member[]): Member[] {
+/** Orphaned by the seed's removal; the sweep is the next subtask's, not this one's. */
+export function cloneMembers(list: readonly Member[]): Member[] {
   return list.map((m) => copyMember(m))
 }
 
@@ -638,8 +316,9 @@ export function classifyInvites(existing: readonly Member[], addresses: readonly
   return addresses.map((address): InviteVerdict => {
     if (!isValidEmail(address)) return 'malformed'
     // Lower-cased on BOTH sides: the stored spelling is whatever was typed when the row was
-    // created, so a raw `===` would let the same person be invited twice.
-    const match = existing.find((m) => m.email.toLowerCase() === address.toLowerCase())
+    // created, so a raw `===` would let the same person be invited twice. A null-email row
+    // can never match a parsed address (`EMAIL_RE` rejects `''`), which is the right verdict.
+    const match = existing.find((m) => (m.email ?? '').toLowerCase() === address.toLowerCase())
     if (!match) return 'ok'
     return match.status === 'invited' ? 'invited' : 'member'
   })
@@ -730,7 +409,8 @@ export function filterMembers(list: readonly Member[], query: string, roleFilter
   return list.filter((m) => {
     if (roleFilter !== 'all' && m.role !== roleFilter) return false
     if (!q) return true
-    return m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q)
+    // `q` is non-empty here, so a null email's `''` never matches.
+    return m.name.toLowerCase().includes(q) || (m.email ?? '').toLowerCase().includes(q)
   })
 }
 
@@ -930,11 +610,8 @@ export function needsClientPick(access: 'all' | readonly number[]): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// APPR-15-05 — the live wire, the projection and the honest-absence vocabulary
+// The live wire, the projection and the honest-absence vocabulary
 // ---------------------------------------------------------------------------
-// STUBS: every body below throws, or ships empty, so the specs in members.test.ts fail
-// on the stub itself, not on an import or compile error. The executor replaces each body
-// next; the seed above and its two constants stay untouched until then ([two-step-type-narrowing]).
 
 /** One row of GET/PATCH .../memberships (internal/tenancy/tenancy.go). */
 export type MembershipWire = {
@@ -945,33 +622,74 @@ export type MembershipWire = {
   email: string | null
 }
 
-export async function listMembers(_f: AuthedFetch, _base: string): Promise<MembershipWire[]> {
-  throw new Error('not implemented')
+// The envelope is unwrapped here: it carries exactly one key and no pagination, so unlike
+// `listInvoices` there is nothing in it to lose. No try/catch anywhere below — `ApiError`
+// propagates unreshaped so the view can render the server's own reason. Neither function is
+// ever called with a null base; the caller short-circuits (invoices.ts:1167-1174).
+export async function listMembers(f: AuthedFetch, base: string): Promise<MembershipWire[]> {
+  const body = await f<{ memberships: MembershipWire[] }>(`${base}/api/tenancy/v1/memberships`)
+  return body.memberships
 }
 
-export async function setMembershipStatus(
-  _f: AuthedFetch,
-  _base: string,
-  _userId: string,
-  _status: Exclude<MemberStatus, 'invited'>,
+/** `invited` is a column value, not a PATCH target — excluded at the type level, not by a 400. */
+export function setMembershipStatus(
+  f: AuthedFetch,
+  base: string,
+  userId: string,
+  status: Exclude<MemberStatus, 'invited'>,
 ): Promise<MembershipWire> {
-  throw new Error('not implemented')
+  return f<MembershipWire>(`${base}/api/tenancy/v1/memberships/${userId}`, {
+    method: 'PATCH',
+    body: { status },
+  })
 }
 
-export function toMember(_w: MembershipWire, _selfSubject: string): Member {
-  throw new Error('not implemented')
+/**
+ * Sets exactly seven keys and never a mock-only one — a row the server did not state is a
+ * row this projection does not invent.
+ *
+ * `role` is VERBATIM: never re-cased, never defaulted. The cast admits that the server's
+ * vocabulary is wider than the union, and `accessRoleLabel`'s `?? role` fallback renders an
+ * unknown value rather than crashing. Defaulting would silently grant or remove power, and
+ * would empty the delegate picker `delegateCandidates` feeds.
+ */
+export function toMember(w: MembershipWire, selfSubject: string): Member {
+  return {
+    id: w.user_id,
+    name: w.display_name ?? w.email ?? w.user_id,
+    initials: memberInitials(w.display_name, w.email, w.user_id),
+    email: w.email,
+    role: w.role as AccessRole,
+    status: w.status as MemberStatus,
+    isYou: w.user_id === selfSubject,
+  }
 }
 
-export function memberInitials(_displayName: string | null, _email: string | null, _userId: string): string {
-  throw new Error('not implemented')
+/** Composes the two existing helpers rather than adding a third initials variant. */
+export function memberInitials(displayName: string | null, email: string | null, userId: string): string {
+  if (displayName) return initials(displayName)
+  if (email) return initialsFrom(email)
+  return userId.slice(0, 2).toUpperCase()
 }
 
-export function emailLabel(_member: Member): string {
-  throw new Error('not implemented')
+/** The em dash `lastActiveLabel`/`joinedLabel` already use, so the three cells cannot disagree. */
+export function emailLabel(member: Member): string {
+  return member.email ?? '—'
 }
 
-export function membersViewState(_base: string | null, _status: AsyncStatus): AsyncStatus {
-  throw new Error('not implemented')
+/** Null base is `idle`; every other status passes through, so an error can never read as empty. */
+export function membersViewState(base: string | null, status: AsyncStatus): AsyncStatus {
+  return base == null ? 'idle' : status
 }
 
-export const MEMBER_UNBACKED: Partial<Record<'invite' | 'remove' | 'role' | 'department' | 'clientAccess', string>> = {}
+/**
+ * One sentence per control the roster still offers but no endpoint backs. Plain and
+ * server-stated: what is missing, not an apology or a promise.
+ */
+export const MEMBER_UNBACKED: Record<'invite' | 'remove' | 'role' | 'department' | 'clientAccess', string> = {
+  invite: 'There is no invite endpoint yet — nothing mints a token, tracks an expiry, or sends the email.',
+  remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
+  role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
+  department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
+  clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
+}

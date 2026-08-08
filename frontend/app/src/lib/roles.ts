@@ -38,33 +38,46 @@ export type RoleSteps = { total: number; policies: { policyName: string; count: 
 // Seed
 // ---------------------------------------------------------------------------
 
+// `members` holds MEMBERSHIP SUBJECTS (db/seed.dev.sql), the same ids `toMember` projects a
+// live roster onto — a mock id here resolves to zero holders.
+//
 // Practice vocabulary on the keys `SEED_FIRM_POLICIES` already references; `quality_reviewer`
 // is the one net-new key and the one role nobody holds, which is what puts the blocking copy
-// on screen at first load. mf3 Musa Danjuma is the seeded two-role holder.
+// on screen at first load. …0004 Musa Danjuma is the seeded two-role holder.
 export const SEED_FIRM_ROLES: readonly Role[] = [
-  { key: 'preparer', title: 'Invoice Preparer', desc: 'Prepares and imports client invoices', members: ['mf2', 'mf5'] },
-  { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: ['mf3'] },
-  { key: 'fin_dir', title: 'Senior Manager', desc: 'Second sign-off above ₦250m', members: ['mf3'] },
-  { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: ['mf4'] },
-  { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['mf1'] },
+  {
+    key: 'preparer',
+    title: 'Invoice Preparer',
+    desc: 'Prepares and imports client invoices',
+    members: ['c0000000-0000-0000-0000-000000000003', 'c0000000-0000-0000-0000-000000000006'],
+  },
+  { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: ['c0000000-0000-0000-0000-000000000004'] },
+  { key: 'fin_dir', title: 'Senior Manager', desc: 'Second sign-off above ₦250m', members: ['c0000000-0000-0000-0000-000000000004'] },
+  { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: ['c0000000-0000-0000-0000-000000000005'] },
+  { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['c0000000-0000-0000-0000-000000000001'] },
   { key: 'quality_reviewer', title: 'Quality Reviewer', desc: 'Second-partner review on flagged engagements', members: [] },
 ]
 
 // The eight shipped `position` values restaffed, each old department string kept as `desc`.
-// mh6 is suspended and the only cfo holder, which is what makes the suspended-only state
-// reachable without a user constructing it.
+// …0012 Adebayo Ogunlesi is suspended and the only cfo holder, which is what makes the
+// suspended-only state reachable without a user constructing it.
 export const SEED_INHOUSE_ROLES: readonly Role[] = [
-  { key: 'preparer', title: 'Preparer', desc: 'Accounts Payable', members: ['mh7'] },
-  { key: 'line_mgr', title: 'Line Manager', desc: 'Requesting dept.', members: ['mh3'] },
+  { key: 'preparer', title: 'Preparer', desc: 'Accounts Payable', members: ['c0000000-0000-0000-0000-000000000013'] },
+  { key: 'line_mgr', title: 'Line Manager', desc: 'Requesting dept.', members: ['c0000000-0000-0000-0000-000000000009'] },
   { key: 'fin_mgr', title: 'Finance Manager', desc: 'Finance', members: [] },
-  { key: 'controller', title: 'Financial Controller', desc: 'Finance', members: ['mh4'] },
-  { key: 'fin_dir', title: 'Finance Director', desc: 'Finance', members: ['mh1', 'mh2'] },
-  { key: 'compliance', title: 'Compliance Officer', desc: 'Tax & Compliance', members: ['mh5'] },
-  { key: 'cfo', title: 'CFO', desc: 'Executive', members: ['mh6'] },
+  { key: 'controller', title: 'Financial Controller', desc: 'Finance', members: ['c0000000-0000-0000-0000-000000000010'] },
+  {
+    key: 'fin_dir',
+    title: 'Finance Director',
+    desc: 'Finance',
+    members: ['c0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000008'],
+  },
+  { key: 'compliance', title: 'Compliance Officer', desc: 'Tax & Compliance', members: ['c0000000-0000-0000-0000-000000000011'] },
+  { key: 'cfo', title: 'CFO', desc: 'Executive', members: ['c0000000-0000-0000-0000-000000000012'] },
   { key: 'ceo', title: 'CEO', desc: 'Executive', members: [] },
 ]
 
-/** Deep clone per call, mirroring `seedPolicies` / `seedMembers`. */
+/** Deep clone per call, mirroring `seedPolicies`. */
 export function seedRoles(): RoleStore {
   return { firm: cloneRoles(SEED_FIRM_ROLES), inhouse: cloneRoles(SEED_INHOUSE_ROLES) }
 }
@@ -345,7 +358,8 @@ export function pickerMeta(mode: WorkflowMode, member: Member): string {
 export function filterPickerMembers(list: readonly Member[], query: string): Member[] {
   const q = query.trim().toLowerCase()
   if (!q) return list.slice()
-  return list.filter((m) => m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q))
+  // `q` is non-empty here, so a null email's `''` never matches.
+  return list.filter((m) => m.name.toLowerCase().includes(q) || (m.email ?? '').toLowerCase().includes(q))
 }
 
 /**

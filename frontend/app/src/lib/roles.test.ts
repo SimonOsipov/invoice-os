@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { SEED_FIRM_MEMBERS, SEED_INHOUSE_MEMBERS, setMemberStatus } from './members'
+import { APP_PERSONAS } from '../auth'
+import { setMemberStatus, type Member } from './members'
 import {
   canSaveRole,
   deleteRoleConfirm,
@@ -41,6 +42,343 @@ import {
 import { SEED_FIRM_POLICIES, SEED_INHOUSE_POLICIES, type Policy } from './workflows'
 
 // --- fixtures ---------------------------------------------------------------
+// The mock roster and the role lists that staff it, copied here when lib/members.ts stopped
+// shipping a seed and SEED_*_ROLES were re-pointed at the live membership subjects. The two
+// travel together: a role's `members` ids only mean something against the directory they
+// were written for. Specs that pin the SHIPPED re-point use the real constants — see the
+// AC-10 block at the foot of this file.
+const MOCK_FIRM_MEMBERS: readonly Member[] = [
+  {
+    id: 'mf1',
+    name: APP_PERSONAS.firm.name,
+    initials: APP_PERSONAS.firm.initials,
+    email: APP_PERSONAS.firm.email,
+    role: 'admin',
+    status: 'active',
+    lastActive: 'Just now',
+    joined: '4 Feb 2024',
+    invitedBy: '—',
+    isYou: true,
+    clientAccess: 'all',
+  },
+  {
+    id: 'mf2',
+    name: 'Folake Adesina',
+    initials: 'FA',
+    email: 'f.adesina@okafor.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '2 hours ago',
+    joined: '18 Mar 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [0, 1, 3],
+  },
+  {
+    id: 'mf3',
+    name: 'Musa Danjuma',
+    initials: 'MD',
+    email: 'm.danjuma@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '6 May 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [2, 5],
+  },
+  {
+    id: 'mf4',
+    name: 'Chiamaka Nwosu',
+    initials: 'CN',
+    email: 'c.nwosu@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '3 days ago',
+    joined: '11 Sep 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+  {
+    // §10.9 — the deliberately long name + email row, guarding the column widths.
+    id: 'mf5',
+    name: 'Oluwaseyifunmi Adebanjo-Ogunleye',
+    initials: 'OA',
+    email: 'o.adebanjo-ogunleye@okaforandpartners.com.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '5 hours ago',
+    joined: '2 Dec 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+  {
+    id: 'mf6',
+    name: 'Bature Suleiman',
+    initials: 'BS',
+    email: 'b.suleiman@okafor.ng',
+    role: 'preparer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [0],
+  },
+  {
+    id: 'mf7',
+    name: 'Halima Yusuf',
+    initials: 'HY',
+    email: 'h.yusuf@okafor.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    lastActive: '1 month ago',
+    joined: '22 Jan 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+]
+
+const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
+  {
+    id: 'mh1',
+    name: APP_PERSONAS.inhouse.name,
+    initials: APP_PERSONAS.inhouse.initials,
+    email: APP_PERSONAS.inhouse.email,
+    role: 'admin',
+    status: 'active',
+    lastActive: 'Just now',
+    joined: '9 Jan 2024',
+    invitedBy: '—',
+    isYou: true,
+    department: 'Finance',
+  },
+  {
+    id: 'mh2',
+    name: 'Yetunde Fashola',
+    initials: 'YF',
+    email: 'y.fashola@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '1 hour ago',
+    joined: '20 Feb 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh3',
+    name: 'Emeka Uzowulu',
+    initials: 'EU',
+    email: 'e.uzowulu@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '3 hours ago',
+    joined: '20 Feb 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    id: 'mh4',
+    name: 'Tunde Adeyemi',
+    initials: 'TA',
+    email: 't.adeyemi@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '4 Mar 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh5',
+    name: 'Ibrahim Bello',
+    initials: 'IB',
+    email: 'i.bello@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '2 days ago',
+    joined: '4 Mar 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Tax & Compliance',
+  },
+  {
+    // §2's headline frame: the only cfo holder, suspended, so both cfo approval steps block.
+    id: 'mh6',
+    name: 'Adebayo Ogunlesi',
+    initials: 'AO',
+    email: 'a.ogunlesi@honeywell.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    lastActive: '3 weeks ago',
+    joined: '9 Jan 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Executive',
+  },
+  {
+    id: 'mh7',
+    name: 'Zainab Lawal',
+    initials: 'ZL',
+    email: 'z.lawal@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '20 minutes ago',
+    joined: '15 Apr 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh8',
+    name: 'Chidi Anyanwu',
+    initials: 'CA',
+    email: 'c.anyanwu@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '4 hours ago',
+    joined: '15 Apr 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh9',
+    name: 'Aisha Mohammed',
+    initials: 'AM',
+    email: 'a.mohammed@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '2 Jun 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh10',
+    name: 'Segun Oyelaran',
+    initials: 'SO',
+    email: 's.oyelaran@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '2 days ago',
+    joined: '2 Jun 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    // §13 check 11 runs in both modes, and in-house is the riskier one (7 columns to firm's
+    // 6) — so in-house gets a long name/email row too (Decision `[inhouse-long-row]`).
+    id: 'mh11',
+    name: 'Oluwafunmilayo Ademola-Oyediran',
+    initials: 'OA',
+    email: 'o.ademola-oyediran@honeywellgroup.com.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '6 hours ago',
+    joined: '19 Jul 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Tax & Compliance',
+  },
+  {
+    id: 'mh12',
+    name: 'Kelechi Obi',
+    initials: 'KO',
+    email: 'k.obi@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '30 minutes ago',
+    joined: '19 Jul 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh13',
+    name: 'Hauwa Abubakar',
+    initials: 'HA',
+    email: 'h.abubakar@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '5 hours ago',
+    joined: '3 Sep 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Executive',
+  },
+  {
+    id: 'mh14',
+    name: 'Olumide Bakare',
+    initials: 'OB',
+    email: 'o.bakare@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '3 days ago',
+    joined: '3 Sep 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    id: 'mh15',
+    name: 'Nneka Chukwu',
+    initials: 'NC',
+    email: 'n.chukwu@honeywell.ng',
+    role: 'preparer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh16',
+    name: 'Sadiq Ibrahim',
+    initials: 'SI',
+    email: 's.ibrahim@honeywell.ng',
+    role: 'reviewer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+]
+
+const MOCK_FIRM_ROLES: readonly Role[] = [
+  { key: 'preparer', title: 'Invoice Preparer', desc: 'Prepares and imports client invoices', members: ['mf2', 'mf5'] },
+  { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: ['mf3'] },
+  { key: 'fin_dir', title: 'Senior Manager', desc: 'Second sign-off above ₦250m', members: ['mf3'] },
+  { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: ['mf4'] },
+  { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['mf1'] },
+  { key: 'quality_reviewer', title: 'Quality Reviewer', desc: 'Second-partner review on flagged engagements', members: [] },
+]
+
+// The eight shipped `position` values restaffed, each old department string kept as `desc`.
+// mh6 is suspended and the only cfo holder, which is what makes the suspended-only state
+// reachable without a user constructing it.
+const MOCK_INHOUSE_ROLES: readonly Role[] = [
+  { key: 'preparer', title: 'Preparer', desc: 'Accounts Payable', members: ['mh7'] },
+  { key: 'line_mgr', title: 'Line Manager', desc: 'Requesting dept.', members: ['mh3'] },
+  { key: 'fin_mgr', title: 'Finance Manager', desc: 'Finance', members: [] },
+  { key: 'controller', title: 'Financial Controller', desc: 'Finance', members: ['mh4'] },
+  { key: 'fin_dir', title: 'Finance Director', desc: 'Finance', members: ['mh1', 'mh2'] },
+  { key: 'compliance', title: 'Compliance Officer', desc: 'Tax & Compliance', members: ['mh5'] },
+  { key: 'cfo', title: 'CFO', desc: 'Executive', members: ['mh6'] },
+  { key: 'ceo', title: 'CEO', desc: 'Executive', members: [] },
+]
+
 // Every approval node in a seeded policy set, root lane and both branch lanes, one level
 // deep — mirrors stepsFor's own traversal (members.ts:576-596).
 function approvalRoles(policies: readonly Policy[]): string[] {
@@ -101,12 +439,12 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
   })
 
   it('firm has exactly one unsignable role', () => {
-    expect(unassignedRoles(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS).map((r) => r.key)).toEqual(['quality_reviewer'])
+    expect(unassignedRoles(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS).map((r) => r.key)).toEqual(['quality_reviewer'])
   })
 
   it('inhouse has three unsignable roles, one of them suspended-only', () => {
-    expect(unassignedRoles(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['fin_mgr', 'cfo', 'ceo'])
-    expect(resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo').text).toBe('Adebayo Ogunlesi')
+    expect(unassignedRoles(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['fin_mgr', 'cfo', 'ceo'])
+    expect(resolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo').text).toBe('Adebayo Ogunlesi')
   })
 
   it('every seeded approval step names a role that exists in that mode', () => {
@@ -124,8 +462,8 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
 
   it('every seeded holder id is a member of the same mode', () => {
     const cases = [
-      [SEED_FIRM_ROLES, SEED_FIRM_MEMBERS],
-      [SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS],
+      [MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS],
+      [MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS],
     ] as const
     for (const [roles, members] of cases) {
       const holderIds = roles.flatMap((r) => r.members)
@@ -137,8 +475,8 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
 
   it('no invited member holds a role', () => {
     const cases = [
-      [SEED_FIRM_ROLES, SEED_FIRM_MEMBERS],
-      [SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS],
+      [MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS],
+      [MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS],
     ] as const
     for (const [roles, members] of cases) {
       const holderIds = roles.flatMap((r) => r.members)
@@ -152,7 +490,7 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
 
   it('firm seeds exactly one person in two roles', () => {
     const counts = new Map<string, number>()
-    for (const r of SEED_FIRM_ROLES) for (const id of r.members) counts.set(id, (counts.get(id) ?? 0) + 1)
+    for (const r of MOCK_FIRM_ROLES) for (const id of r.members) counts.set(id, (counts.get(id) ?? 0) + 1)
     const multi = [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id)
     expect(multi).toEqual(['mf3'])
   })
@@ -245,39 +583,39 @@ describe('AC-6 — roleOf', () => {
 
 describe('AC-7 — holders and rolesOfMember order', () => {
   it('rolesOfMember returns both roles for the two-role holder', () => {
-    expect(rolesOfMember(SEED_FIRM_ROLES, 'mf3').map((r) => r.title)).toEqual(['Engagement Manager', 'Senior Manager'])
+    expect(rolesOfMember(MOCK_FIRM_ROLES, 'mf3').map((r) => r.title)).toEqual(['Engagement Manager', 'Senior Manager'])
   })
 
   it('rolesOfMember is empty for someone in no role', () => {
-    expect(rolesOfMember(SEED_FIRM_ROLES, 'mf7')).toEqual([])
+    expect(rolesOfMember(MOCK_FIRM_ROLES, 'mf7')).toEqual([])
   })
 
   it('holders returns members in role.members order, not roster order', () => {
     const roles = [role('preparer', 'Invoice Preparer', '', ['mf5', 'mf2'])]
-    expect(holders(roles, SEED_FIRM_MEMBERS, 'preparer').map((m) => m.id)).toEqual(['mf5', 'mf2'])
+    expect(holders(roles, MOCK_FIRM_MEMBERS, 'preparer').map((m) => m.id)).toEqual(['mf5', 'mf2'])
   })
 })
 
 describe('AC-8 — resolve and inspectorResolve', () => {
   it('resolve covers all five states', () => {
     // ok, one active holder
-    expect(resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'fin_mgr')).toEqual({ text: 'Musa Danjuma', warn: false })
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'fin_mgr')).toEqual({ text: 'Musa Danjuma', warn: false })
     // ok, several
-    expect(resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'preparer')).toEqual({ text: 'Folake Adesina +1', warn: false })
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'preparer')).toEqual({ text: 'Folake Adesina +1', warn: false })
     // nobody holds it
-    expect(resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'quality_reviewer')).toEqual({ text: 'Nobody assigned', warn: true })
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'quality_reviewer')).toEqual({ text: 'Nobody assigned', warn: true })
     // only suspended holders
-    expect(resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi', warn: true })
+    expect(resolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi', warn: true })
     // key names no role
-    expect(resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'nope')).toEqual({ text: 'Role no longer exists', warn: true })
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'nope')).toEqual({ text: 'Role no longer exists', warn: true })
   })
 
   it('resolve appends +N counting the other holders', () => {
-    expect(resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'preparer').text).toBe('Folake Adesina +1')
+    expect(resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'preparer').text).toBe('Folake Adesina +1')
   })
 
   it('resolve never appends the word suspended', () => {
-    const text = resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo').text
+    const text = resolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo').text
     expect(text).toBe('Adebayo Ogunlesi')
     expect(text).not.toContain('suspended')
   })
@@ -285,35 +623,35 @@ describe('AC-8 — resolve and inspectorResolve', () => {
   it('resolve prefers the first ACTIVE holder, not the first listed', () => {
     // mh6 Adebayo Ogunlesi (suspended) listed first, mh1 Ngozi Balogun (active) second.
     const roles = [role('fin_dir', 'Finance Director', '', ['mh6', 'mh1'])]
-    const result = resolve(roles, SEED_INHOUSE_MEMBERS, 'fin_dir')
+    const result = resolve(roles, MOCK_INHOUSE_MEMBERS, 'fin_dir')
     expect(result.warn).toBe(false)
     expect(result.text).toBe('Ngozi Balogun +1')
   })
 
   it('warn is true for none, blocked and missing alike', () => {
-    const none = resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'quality_reviewer')
-    const blocked = resolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo')
-    const missing = resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'nope')
+    const none = resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'quality_reviewer')
+    const blocked = resolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo')
+    const missing = resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'nope')
     expect(none.warn).toBe(true)
     expect(blocked.warn).toBe(true)
     expect(missing.warn).toBe(true)
-    expect(inspectorResolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'quality_reviewer').warn).toBe(true)
-    expect(inspectorResolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo').warn).toBe(true)
-    expect(inspectorResolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'nope').warn).toBe(true)
+    expect(inspectorResolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'quality_reviewer').warn).toBe(true)
+    expect(inspectorResolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo').warn).toBe(true)
+    expect(inspectorResolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'nope').warn).toBe(true)
   })
 
   it("inspectorResolve uses its own three strings", () => {
-    expect(inspectorResolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'cfo').text).toBe('Currently: Chinedu Okafor')
-    expect(inspectorResolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'quality_reviewer').text).toBe(
+    expect(inspectorResolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'cfo').text).toBe('Currently: Chinedu Okafor')
+    expect(inspectorResolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'quality_reviewer').text).toBe(
       'Nobody holds this role — this step will block',
     )
-    expect(inspectorResolve(SEED_INHOUSE_ROLES, SEED_INHOUSE_MEMBERS, 'cfo').text).toBe(
+    expect(inspectorResolve(MOCK_INHOUSE_ROLES, MOCK_INHOUSE_MEMBERS, 'cfo').text).toBe(
       'Currently: Adebayo Ogunlesi — this step will block',
     )
   })
 
   it('inspectorResolve omits +N', () => {
-    const text = inspectorResolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, 'preparer').text
+    const text = inspectorResolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, 'preparer').text
     expect(text).toBe('Currently: Folake Adesina')
     expect(text).not.toContain('+1')
   })
@@ -325,15 +663,15 @@ describe('AC-8 — resolve and inspectorResolve', () => {
 describe('AC-8 — a deleted role resolves to the deleted-role sentence, in both display functions', () => {
   it('resolve and inspectorResolve both flag a role removed from the list as missing', () => {
     const withoutCompliance = removeRole(SEED_FIRM_ROLES, 'compliance')
-    expect(resolve(withoutCompliance, SEED_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
-    expect(inspectorResolve(withoutCompliance, SEED_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
+    expect(resolve(withoutCompliance, MOCK_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
+    expect(inspectorResolve(withoutCompliance, MOCK_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
   })
 })
 
 describe('AC-9 — unassignedRoles', () => {
   it('unassignedRoles is empty when every role has an active holder', () => {
     const roles = [role('a', 'A', '', ['mf1']), role('b', 'B', '', ['mf2'])]
-    expect(unassignedRoles(roles, SEED_FIRM_MEMBERS)).toEqual([])
+    expect(unassignedRoles(roles, MOCK_FIRM_MEMBERS)).toEqual([])
   })
 })
 
@@ -355,16 +693,16 @@ describe('AC-10 — steps', () => {
 
 describe('AC-11 — stepsForMember', () => {
   it('stepsForMember unions every role the person holds', () => {
-    expect(stepsForMember(SEED_FIRM_POLICIES, SEED_FIRM_ROLES, 'mf3')?.total).toBe(5)
+    expect(stepsForMember(SEED_FIRM_POLICIES, MOCK_FIRM_ROLES, 'mf3')?.total).toBe(5)
   })
 
   it('stepsForMember returns null when the total is zero', () => {
     // mf2 Folake Adesina holds only Invoice Preparer, which no firm policy references.
-    expect(stepsForMember(SEED_FIRM_POLICIES, SEED_FIRM_ROLES, 'mf2')).toBeNull()
+    expect(stepsForMember(SEED_FIRM_POLICIES, MOCK_FIRM_ROLES, 'mf2')).toBeNull()
   })
 
   it('stepsForMember returns null for a member holding no role', () => {
-    expect(stepsForMember(SEED_FIRM_POLICIES, SEED_FIRM_ROLES, 'mf6')).toBeNull()
+    expect(stepsForMember(SEED_FIRM_POLICIES, MOCK_FIRM_ROLES, 'mf6')).toBeNull()
   })
 })
 
@@ -449,20 +787,20 @@ describe('QA — intro', () => {
 })
 
 // RoleModal's picker and delete-confirm helpers. Seed counts are pinned against
-// SEED_FIRM_MEMBERS / SEED_INHOUSE_MEMBERS directly, so a wrong body fails on OUR
+// MOCK_FIRM_MEMBERS / MOCK_INHOUSE_MEMBERS directly, so a wrong body fails on OUR
 // assertion, not a number this file invented.
 
 describe('AC-4 — pickerMembers excludes invited people in both modes', () => {
   it('firm: 7 seeded, 1 invited (mf6) -> 6 rows, none invited', () => {
-    expect(SEED_FIRM_MEMBERS.filter((m) => m.status === 'invited').map((m) => m.id)).toEqual(['mf6']) // guard: pins the seed fact this test relies on
-    const rows = pickerMembers(SEED_FIRM_MEMBERS)
+    expect(MOCK_FIRM_MEMBERS.filter((m) => m.status === 'invited').map((m) => m.id)).toEqual(['mf6']) // guard: pins the seed fact this test relies on
+    const rows = pickerMembers(MOCK_FIRM_MEMBERS)
     expect(rows).toHaveLength(6)
     expect(rows.some((m) => m.status === 'invited')).toBe(false)
   })
 
   it('inhouse: 16 seeded, 2 invited (mh15, mh16) -> 14 rows, none invited', () => {
-    expect(SEED_INHOUSE_MEMBERS.filter((m) => m.status === 'invited').map((m) => m.id)).toEqual(['mh15', 'mh16']) // guard
-    const rows = pickerMembers(SEED_INHOUSE_MEMBERS)
+    expect(MOCK_INHOUSE_MEMBERS.filter((m) => m.status === 'invited').map((m) => m.id)).toEqual(['mh15', 'mh16']) // guard
+    const rows = pickerMembers(MOCK_INHOUSE_MEMBERS)
     expect(rows).toHaveLength(14)
     expect(rows.some((m) => m.status === 'invited')).toBe(false)
   })
@@ -470,13 +808,13 @@ describe('AC-4 — pickerMembers excludes invited people in both modes', () => {
 
 describe('AC-4 — pickerMeta reads department in-house and the access-role label in firm', () => {
   it("inhouse reads the member's department", () => {
-    const mh4 = SEED_INHOUSE_MEMBERS.find((m) => m.id === 'mh4')!
+    const mh4 = MOCK_INHOUSE_MEMBERS.find((m) => m.id === 'mh4')!
     expect(mh4.department).toBe('Finance') // guard: pins the fixture fact, independent of pickerMeta
     expect(pickerMeta('inhouse', mh4)).toBe('Finance')
   })
 
   it("firm reads the member's access-role LABEL, not the raw lowercase id", () => {
-    const mf3 = SEED_FIRM_MEMBERS.find((m) => m.id === 'mf3')!
+    const mf3 = MOCK_FIRM_MEMBERS.find((m) => m.id === 'mf3')!
     expect(mf3.role).toBe('reviewer') // guard: pins the fixture fact — pickerMeta must NOT just echo this
     expect(pickerMeta('firm', mf3)).toBe('Reviewer')
   })
@@ -485,7 +823,7 @@ describe('AC-4 — pickerMeta reads department in-house and the access-role labe
 describe('AC-4 — filterPickerMembers matches name or email, case-insensitively, and trims', () => {
   // Built directly rather than via pickerMembers(), so this spec's own failure reason can
   // never be masked by the pickerMembers stub throwing first.
-  const inhouseSelectable = SEED_INHOUSE_MEMBERS.filter((m) => m.status !== 'invited')
+  const inhouseSelectable = MOCK_INHOUSE_MEMBERS.filter((m) => m.status !== 'invited')
 
   it('a padded, wrong-case query matches on name', () => {
     expect(filterPickerMembers(inhouseSelectable, '  LAWAL ').map((m) => m.id)).toEqual(['mh7'])
@@ -509,22 +847,22 @@ describe('AC-4 — filterPickerMembers matches name or email, case-insensitively
 
 describe('AC-5 — pickerSelectionCount denominators on the selectable count, not the roster', () => {
   it('firm: 2 selected of 6 selectable (mf6, invited, excluded from the denominator)', () => {
-    expect(SEED_FIRM_MEMBERS).toHaveLength(7) // guard: pins the roster length this test means to NOT use
-    expect(pickerSelectionCount(2, SEED_FIRM_MEMBERS)).toBe('2 of 6 selected')
+    expect(MOCK_FIRM_MEMBERS).toHaveLength(7) // guard: pins the roster length this test means to NOT use
+    expect(pickerSelectionCount(2, MOCK_FIRM_MEMBERS)).toBe('2 of 6 selected')
   })
 
   it('inhouse: 5 selected of 14 selectable', () => {
-    expect(pickerSelectionCount(5, SEED_INHOUSE_MEMBERS)).toBe('5 of 14 selected')
+    expect(pickerSelectionCount(5, MOCK_INHOUSE_MEMBERS)).toBe('5 of 14 selected')
   })
 })
 
 describe('AC-5 — hiddenInvitedFootnote pluralises around one', () => {
   it('firm has exactly one invited person -> the singular residue string', () => {
-    expect(hiddenInvitedFootnote(SEED_FIRM_MEMBERS)).toBe('1 invited person is hidden until they accept the invite.')
+    expect(hiddenInvitedFootnote(MOCK_FIRM_MEMBERS)).toBe('1 invited person is hidden until they accept the invite.')
   })
 
   it('inhouse has two invited people -> the plural form', () => {
-    expect(hiddenInvitedFootnote(SEED_INHOUSE_MEMBERS)).toBe('2 invited people are hidden until they accept the invite.')
+    expect(hiddenInvitedFootnote(MOCK_INHOUSE_MEMBERS)).toBe('2 invited people are hidden until they accept the invite.')
   })
 })
 
@@ -622,17 +960,17 @@ describe('[key-is-a-slug] — renaming a role never re-derives its key', () => {
 // disabled (widens pickerMembers' return shape for every caller, not just this one).
 describe('the invited-holder picker contract, pinned on purpose', () => {
   it('pickerMembers keeps excluding the invited person regardless of any role membership', () => {
-    const mh15 = SEED_INHOUSE_MEMBERS.find((m) => m.id === 'mh15')!
+    const mh15 = MOCK_INHOUSE_MEMBERS.find((m) => m.id === 'mh15')!
     expect(mh15.status).toBe('invited') // guard
-    expect(pickerMembers(SEED_INHOUSE_MEMBERS).some((m) => m.id === 'mh15')).toBe(false)
+    expect(pickerMembers(MOCK_INHOUSE_MEMBERS).some((m) => m.id === 'mh15')).toBe(false)
   })
 
   it('pickerSelectionCount keeps echoing its numerator, uncrossed against the selectable set', () => {
     // Stand-in for role.members once a role holds an invited id: two real selectable holders
     // plus one invited id the picker will never render as a row.
     const inflatedSelected = ['mh1', 'mh2', 'mh15']
-    expect(pickerSelectionCount(inflatedSelected.length, SEED_INHOUSE_MEMBERS)).toBe('3 of 14 selected')
-    const checkableRows = pickerMembers(SEED_INHOUSE_MEMBERS).map((m) => m.id)
+    expect(pickerSelectionCount(inflatedSelected.length, MOCK_INHOUSE_MEMBERS)).toBe('3 of 14 selected')
+    const checkableRows = pickerMembers(MOCK_INHOUSE_MEMBERS).map((m) => m.id)
     const checkableOfSelected = inflatedSelected.filter((id) => checkableRows.includes(id))
     // The picker can only ever tick 2 of those 3 ids — the numerator above does not know that.
     expect(checkableOfSelected).toEqual(['mh1', 'mh2'])
@@ -641,13 +979,13 @@ describe('the invited-holder picker contract, pinned on purpose', () => {
 
   it('pickerHiddenAmongSelected names the gap the count above cannot explain on its own', () => {
     const inflatedSelected = ['mh1', 'mh2', 'mh15']
-    expect(pickerHiddenAmongSelected(inflatedSelected, SEED_INHOUSE_MEMBERS)).toBe(1)
-    expect(pickerHiddenAmongSelected(['mh1', 'mh2'], SEED_INHOUSE_MEMBERS)).toBe(0)
+    expect(pickerHiddenAmongSelected(inflatedSelected, MOCK_INHOUSE_MEMBERS)).toBe(1)
+    expect(pickerHiddenAmongSelected(['mh1', 'mh2'], MOCK_INHOUSE_MEMBERS)).toBe(0)
   })
 
   it('hiddenSelectionNote renders the role-modal-count addendum for that gap', () => {
     const inflatedSelected = ['mh1', 'mh2', 'mh15']
-    const n = pickerHiddenAmongSelected(inflatedSelected, SEED_INHOUSE_MEMBERS)
+    const n = pickerHiddenAmongSelected(inflatedSelected, MOCK_INHOUSE_MEMBERS)
     expect(hiddenSelectionNote(n)).toBe('+1 invited')
   })
 })
@@ -658,24 +996,24 @@ describe('the invited-holder picker contract, pinned on purpose', () => {
 
 describe('rosterRoleCell — the roster column, first title plus N', () => {
   it('shows the first title plus N, with the full list newline-joined in the tooltip', () => {
-    expect(rosterRoleCell(SEED_FIRM_ROLES, 'mf3')).toEqual({
+    expect(rosterRoleCell(MOCK_FIRM_ROLES, 'mf3')).toEqual({
       text: 'Engagement Manager +1',
       tooltip: 'Engagement Manager\nSenior Manager',
     })
   })
 
   it('shows a bare title for a single role, with no +N and a one-line tooltip', () => {
-    expect(rosterRoleCell(SEED_FIRM_ROLES, 'mf4')).toEqual({ text: 'Tax Reviewer', tooltip: 'Tax Reviewer' })
+    expect(rosterRoleCell(MOCK_FIRM_ROLES, 'mf4')).toEqual({ text: 'Tax Reviewer', tooltip: 'Tax Reviewer' })
   })
 
   it('is an em dash with an empty tooltip for nobody', () => {
-    expect(rosterRoleCell(SEED_FIRM_ROLES, 'mf6')).toEqual({ text: '—', tooltip: '' })
+    expect(rosterRoleCell(MOCK_FIRM_ROLES, 'mf6')).toEqual({ text: '—', tooltip: '' })
   })
 })
 
 describe('stepsForMember and stepsWarning — the suspended-row warning counts every held role', () => {
   it('the suspended in-house cfo holder still blocks the two cfo steps', () => {
-    const result = stepsForMember(SEED_INHOUSE_POLICIES, SEED_INHOUSE_ROLES, 'mh6')
+    const result = stepsForMember(SEED_INHOUSE_POLICIES, MOCK_INHOUSE_ROLES, 'mh6')
     expect(result?.total).toBe(2)
     expect(result?.policies.map((p) => p.policyName)).toEqual(['Company approval policy', 'Capital expenditure'])
   })
@@ -698,16 +1036,16 @@ describe('drawerRoleHelper — forks on the access role, not the workflow role',
 
 describe('[remove-prunes-suspend-keeps] — pruneMember vs setMemberStatus', () => {
   it('pruning a removed member empties the role they solely held', () => {
-    const pruned = pruneMember(SEED_INHOUSE_ROLES, 'mh6')
-    const result = resolve(pruned, SEED_INHOUSE_MEMBERS, 'cfo')
+    const pruned = pruneMember(MOCK_INHOUSE_ROLES, 'mh6')
+    const result = resolve(pruned, MOCK_INHOUSE_MEMBERS, 'cfo')
     expect(result.text).toBe('Nobody assigned')
     expect(result.warn).toBe(true)
   })
 
   it('suspending does not unstaff — the role keeps the member, resolve just blocks', () => {
-    expect(SEED_FIRM_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual(['mf3']) // guard
-    const suspended = setMemberStatus(SEED_FIRM_MEMBERS, 'mf3', 'suspended')
-    const result = resolve(SEED_FIRM_ROLES, suspended, 'fin_mgr')
+    expect(MOCK_FIRM_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual(['mf3']) // guard
+    const suspended = setMemberStatus(MOCK_FIRM_MEMBERS, 'mf3', 'suspended')
+    const result = resolve(MOCK_FIRM_ROLES, suspended, 'fin_mgr')
     expect(result.text).toBe('Musa Danjuma')
     expect(result.warn).toBe(true)
   })
@@ -718,7 +1056,7 @@ describe('the firm workspace resolves every seeded approval step to a named pers
     const stepRoles = approvalRoles(SEED_FIRM_POLICIES)
     expect(stepRoles.length).toBe(10) // guard against a vacuous pass
     for (const key of stepRoles) {
-      const result = resolve(SEED_FIRM_ROLES, SEED_FIRM_MEMBERS, key)
+      const result = resolve(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS, key)
       expect(result.warn).toBe(false)
       expect(result.text).not.toBe('Nobody assigned')
       expect(result.text).not.toBe('Role no longer exists')
@@ -775,7 +1113,7 @@ describe('resolve — blocked with more than one inactive holder still appends +
   it('two inactive holders (suspended + invited): warn true, text carries +1', () => {
     // mh6 suspended, mh16 invited — neither active, so the role is blocked with two holders.
     const roles = [role('cfo', 'CFO', '', ['mh6', 'mh16'])]
-    expect(resolve(roles, SEED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi +1', warn: true })
+    expect(resolve(roles, MOCK_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi +1', warn: true })
   })
 })
 
@@ -806,7 +1144,7 @@ describe('AC-10 — SEED_*_ROLES members are re-pointed at the seeded subjects',
 // Same shape as members.test.ts's filterMembers/classifyInvites null-email specs.
 describe('filterPickerMembers tolerates a null email', () => {
   it('tolerates a null email, both when the name matches and when nothing does', () => {
-    const nullEmailRow = { ...SEED_INHOUSE_MEMBERS[0], email: null as unknown as string }
+    const nullEmailRow = { ...MOCK_INHOUSE_MEMBERS[0], email: null as unknown as string }
     // The `||` short-circuits on the name match before `email` is ever touched — this half
     // is already true today and is pinned as a fact, not a red.
     expect(filterPickerMembers([nullEmailRow], 'ngozi').map((m) => m.id)).toEqual([nullEmailRow.id])

@@ -17,6 +17,7 @@ import {
   clientAccessLabel,
   clientAccessNames,
   clientSelectionCount,
+  cloneMembers,
   CLIENT_ROSTER,
   CLIENT_USERS_COPY,
   delegateCandidates,
@@ -51,9 +52,6 @@ import {
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
-  SEED_FIRM_MEMBERS,
-  SEED_INHOUSE_MEMBERS,
-  seedMembers,
   setMemberRole,
   setMembershipStatus,
   setMemberStatus,
@@ -67,6 +65,322 @@ import {
 import { SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from './roles'
 
 // --- fixtures ---------------------------------------------------------------
+// The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
+// FIXTURE now, not a shipped constant: it exercises the reducers and the derivations over
+// rows the live directory (identity + access role + status only) cannot express — invited
+// rows, departments, per-person client access, `invitedBy`.
+const SEED_FIRM_MEMBERS: readonly Member[] = [
+  {
+    id: 'mf1',
+    name: APP_PERSONAS.firm.name,
+    initials: APP_PERSONAS.firm.initials,
+    email: APP_PERSONAS.firm.email,
+    role: 'admin',
+    status: 'active',
+    lastActive: 'Just now',
+    joined: '4 Feb 2024',
+    invitedBy: '—',
+    isYou: true,
+    clientAccess: 'all',
+  },
+  {
+    id: 'mf2',
+    name: 'Folake Adesina',
+    initials: 'FA',
+    email: 'f.adesina@okafor.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '2 hours ago',
+    joined: '18 Mar 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [0, 1, 3],
+  },
+  {
+    id: 'mf3',
+    name: 'Musa Danjuma',
+    initials: 'MD',
+    email: 'm.danjuma@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '6 May 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [2, 5],
+  },
+  {
+    id: 'mf4',
+    name: 'Chiamaka Nwosu',
+    initials: 'CN',
+    email: 'c.nwosu@okafor.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '3 days ago',
+    joined: '11 Sep 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+  {
+    // §10.9 — the deliberately long name + email row, guarding the column widths.
+    id: 'mf5',
+    name: 'Oluwaseyifunmi Adebanjo-Ogunleye',
+    initials: 'OA',
+    email: 'o.adebanjo-ogunleye@okaforandpartners.com.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '5 hours ago',
+    joined: '2 Dec 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+  {
+    id: 'mf6',
+    name: 'Bature Suleiman',
+    initials: 'BS',
+    email: 'b.suleiman@okafor.ng',
+    role: 'preparer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: [0],
+  },
+  {
+    id: 'mf7',
+    name: 'Halima Yusuf',
+    initials: 'HY',
+    email: 'h.yusuf@okafor.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    lastActive: '1 month ago',
+    joined: '22 Jan 2024',
+    invitedBy: 'Chinedu Okafor',
+    isYou: false,
+    clientAccess: 'all',
+  },
+]
+
+const SEED_INHOUSE_MEMBERS: readonly Member[] = [
+  {
+    id: 'mh1',
+    name: APP_PERSONAS.inhouse.name,
+    initials: APP_PERSONAS.inhouse.initials,
+    email: APP_PERSONAS.inhouse.email,
+    role: 'admin',
+    status: 'active',
+    lastActive: 'Just now',
+    joined: '9 Jan 2024',
+    invitedBy: '—',
+    isYou: true,
+    department: 'Finance',
+  },
+  {
+    id: 'mh2',
+    name: 'Yetunde Fashola',
+    initials: 'YF',
+    email: 'y.fashola@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '1 hour ago',
+    joined: '20 Feb 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh3',
+    name: 'Emeka Uzowulu',
+    initials: 'EU',
+    email: 'e.uzowulu@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '3 hours ago',
+    joined: '20 Feb 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    id: 'mh4',
+    name: 'Tunde Adeyemi',
+    initials: 'TA',
+    email: 't.adeyemi@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '4 Mar 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh5',
+    name: 'Ibrahim Bello',
+    initials: 'IB',
+    email: 'i.bello@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '2 days ago',
+    joined: '4 Mar 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Tax & Compliance',
+  },
+  {
+    // §2's headline frame: the only cfo holder, suspended, so both cfo approval steps block.
+    id: 'mh6',
+    name: 'Adebayo Ogunlesi',
+    initials: 'AO',
+    email: 'a.ogunlesi@honeywell.ng',
+    role: 'reviewer',
+    status: 'suspended',
+    lastActive: '3 weeks ago',
+    joined: '9 Jan 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Executive',
+  },
+  {
+    id: 'mh7',
+    name: 'Zainab Lawal',
+    initials: 'ZL',
+    email: 'z.lawal@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '20 minutes ago',
+    joined: '15 Apr 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh8',
+    name: 'Chidi Anyanwu',
+    initials: 'CA',
+    email: 'c.anyanwu@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '4 hours ago',
+    joined: '15 Apr 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh9',
+    name: 'Aisha Mohammed',
+    initials: 'AM',
+    email: 'a.mohammed@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: 'Yesterday',
+    joined: '2 Jun 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh10',
+    name: 'Segun Oyelaran',
+    initials: 'SO',
+    email: 's.oyelaran@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '2 days ago',
+    joined: '2 Jun 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    // §13 check 11 runs in both modes, and in-house is the riskier one (7 columns to firm's
+    // 6) — so in-house gets a long name/email row too (Decision `[inhouse-long-row]`).
+    id: 'mh11',
+    name: 'Oluwafunmilayo Ademola-Oyediran',
+    initials: 'OA',
+    email: 'o.ademola-oyediran@honeywellgroup.com.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '6 hours ago',
+    joined: '19 Jul 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Tax & Compliance',
+  },
+  {
+    id: 'mh12',
+    name: 'Kelechi Obi',
+    initials: 'KO',
+    email: 'k.obi@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '30 minutes ago',
+    joined: '19 Jul 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+  {
+    id: 'mh13',
+    name: 'Hauwa Abubakar',
+    initials: 'HA',
+    email: 'h.abubakar@honeywell.ng',
+    role: 'reviewer',
+    status: 'active',
+    lastActive: '5 hours ago',
+    joined: '3 Sep 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Executive',
+  },
+  {
+    id: 'mh14',
+    name: 'Olumide Bakare',
+    initials: 'OB',
+    email: 'o.bakare@honeywell.ng',
+    role: 'preparer',
+    status: 'active',
+    lastActive: '3 days ago',
+    joined: '3 Sep 2024',
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Procurement',
+  },
+  {
+    id: 'mh15',
+    name: 'Nneka Chukwu',
+    initials: 'NC',
+    email: 'n.chukwu@honeywell.ng',
+    role: 'preparer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Accounts Payable',
+  },
+  {
+    id: 'mh16',
+    name: 'Sadiq Ibrahim',
+    initials: 'SI',
+    email: 's.ibrahim@honeywell.ng',
+    role: 'reviewer',
+    status: 'invited',
+    lastActive: null,
+    joined: null,
+    invitedBy: 'Ngozi Balogun',
+    isYou: false,
+    department: 'Finance',
+  },
+]
+
+/** The deleted `seedMembers`, over the fixture. Composes the module's own deep clone. */
+const seedMembers = () => ({ firm: cloneMembers(SEED_FIRM_MEMBERS), inhouse: cloneMembers(SEED_INHOUSE_MEMBERS) })
+
 // Every spec starts from a fresh clone, never from a SEED_* constant — except T1.2/T1.2b,
 // where the aliasing between the clone and the constant IS what is under test.
 const firm = () => seedMembers().firm
@@ -460,7 +774,7 @@ describe('seed invariants the reducers will depend on (QA16–QA17, §15.6)', ()
     // compares lower-cased emails; a duplicate in either would break them silently.
     for (const list of [firm(), inhouse()]) {
       const ids = list.map((m) => m.id)
-      const emails = list.map((m) => m.email.toLowerCase())
+      const emails = list.map((m) => (m.email ?? '').toLowerCase())
       expect(new Set(ids).size).toBe(list.length)
       expect(new Set(emails).size).toBe(list.length)
     }
@@ -1355,7 +1669,7 @@ describe('MEMB-01-06 invite modal copy (T6.2, §7)', () => {
     expect(active.status).toBe('active')
     expect(pending.status).toBe('invited')
 
-    const verdicts = classifyInvites(list, [active.email, pending.email, 'not-an-email', 'new@x.ng'])
+    const verdicts = classifyInvites(list, [active.email ?? '', pending.email ?? '', 'not-an-email', 'new@x.ng'])
     expect(verdicts).toEqual(['member', 'invited', 'malformed', 'ok'])
     for (const v of verdicts) {
       if (v === 'ok') continue
@@ -1385,7 +1699,7 @@ describe('hasDerivableName — DEFECT D1 settled without moving QA35 (T6.3-T6.4,
 
   it('accepts every address the pipeline is meant to mint, and is not a validator (T6.4)', () => {
     // Every seeded address in both modes, so the gate can never reject a real member's shape.
-    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email)).toBe(true)
+    for (const m of [...firm(), ...inhouse()]) expect(hasDerivableName(m.email ?? '')).toBe(true)
 
     // The awkward shapes the QA26-QA31 batch already pinned name/initials for.
     for (const address of ['a@x.ng', 'c+tag@x.ng', 'MiXeD.CaSe@X.NG', 'o.adebanjo-ogunleye@okaforandpartners.com.ng']) {

@@ -35,8 +35,6 @@ function mulberrySeed(name: string): () => number {
   }
 }
 
-export type ReadinessMetric = { label: string; pct: string; color: string }
-
 export type TrendChart = {
   line: string
   area: string
@@ -56,13 +54,8 @@ export type ActivityRow = {
 }
 
 export type MockPanels = {
-  score: number
-  ring: { circ: string; offset: string; color: string }
-  readinessNote: string
-  readinessMetrics: ReadinessMetric[]
-  vatLabel: string
   sparks: string[]
-  chart: TrendChart
+  chart: TrendChart | null
   activity: ActivityRow[]
 }
 
@@ -121,49 +114,16 @@ const ACTIVITY_DOT: Record<string, string> = {
   muted: 'var(--line-3)',
 }
 
-const NGN = (n: number): string =>
-  n >= 1_000_000 ? '₦' + (n / 1_000_000).toFixed(2) + 'M' : '₦' + Math.round(n / 1000) + 'K'
-
 // `seed` keys every fabricated value; pass the tenant name so a workspace is stable.
-export function buildMockPanels(seed: string): MockPanels {
+// liveScorePct anchors the trend's endpoint to the real readiness score; null (no
+// invoices yet) yields chart: null rather than a curve ending at a fabricated 0.
+export function buildMockPanels(seed: string, liveScorePct: number | null): MockPanels {
   const rnd = mulberrySeed(seed || 'workspace')
 
-  const score = 72 + Math.floor(rnd() * 24)
-  const circ = 2 * Math.PI * 50
-  const ringColor =
-    score >= 85 ? 'var(--action)' : score >= 70 ? 'var(--status-amber-text)' : 'var(--status-red-text)'
-
-  const readiness: [number, number, number] = [
-    78 + Math.floor(rnd() * 20),
-    74 + Math.floor(rnd() * 24),
-    66 + Math.floor(rnd() * 30),
-  ]
-  const bar = (pct: number, label: string): ReadinessMetric => ({
-    label,
-    pct: pct + '%',
-    color: pct >= 85 ? 'var(--status-green-text)' : 'var(--status-amber-text)',
-  })
-
   return {
-    score,
-    ring: {
-      circ: circ.toFixed(1),
-      offset: (circ * (1 - score / 100)).toFixed(1),
-      color: ringColor,
-    },
-    readinessNote:
-      score >= 85
-        ? 'Most rule groups clear. Only a few optional fields remain on older invoices.'
-        : 'Several rule groups still failing — resolve open errors to reach transmit-ready.',
-    readinessMetrics: [
-      bar(readiness[0], 'Field completeness'),
-      bar(readiness[1], 'Tax accuracy · VAT / WHT'),
-      bar(readiness[2], 'Transmit-ready'),
-    ],
-    vatLabel: NGN(2_400_000 + rnd() * 9_000_000),
     // One per KPI tile, in render order; the last trends down (failures should fall).
     sparks: [spark(trend(rnd, 1)), spark(trend(rnd, 1)), spark(trend(rnd, -1)), spark(trend(rnd, 1))],
-    chart: chartScore(rnd, score),
+    chart: liveScorePct !== null ? chartScore(rnd, liveScorePct) : null,
     activity: (
       [
         ['You', 'approved', 'INV-2026-00481', '2m ago', 'teal'],

@@ -156,7 +156,9 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   const ring = readinessRing(bucket.metrics)
   const note = readinessNote(bucket.metrics)
   const bars = readinessBars(bucket.metrics)
-  const mock = buildMockPanels(seed)
+  // Trend endpoint anchors to the SAME ring.score read above -- AC-1 (headline ==
+  // ring score) holds structurally, not by convention: both come from one metricRatio call.
+  const mock = buildMockPanels(seed, ring.score)
   const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'))
 
   return (
@@ -319,26 +321,38 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
       <div style={{ ...TILE_CARD, marginBottom: 18 }}>
         <TileHead title="Readiness trend" meta="12 WEEKS · SAMPLE" />
         <div style={TILE_BODY}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
-            <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
-              {mock.chart.now}%
-            </span>
-            <span className="label">{mock.chart.deltaLabel}</span>
-          </div>
-          <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
-            {mock.chart.grid.map((g) => (
-              <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-            ))}
-            <path d={mock.chart.area} fill="var(--action-tint)" />
-            <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-            {mock.chart.months.map((mo) => (
-              <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-                {mo}
+          {mock.chart ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
+                <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
+                  {mock.chart.now}%
+                </span>
+                <span className="label">{mock.chart.deltaLabel}</span>
+              </div>
+              <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+                {mock.chart.grid.map((g) => (
+                  <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                ))}
+                <path d={mock.chart.area} fill="var(--action-tint)" />
+                <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+                {mock.chart.months.map((mo) => (
+                  <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
+                    {mo}
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : (
+            // No live score to anchor on -- an em-dash headline, not a curve ending at a fabricated 0.
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
+                —
               </span>
-            ))}
-          </div>
+              <span style={{ fontSize: 13, color: 'var(--fg-3)' }}>No invoices yet</span>
+            </div>
+          )}
         </div>
       </div>
 

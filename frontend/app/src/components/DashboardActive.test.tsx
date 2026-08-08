@@ -150,11 +150,13 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
 
     render(<DashboardActive ctx={dashCtx()} />)
 
-    expect(await screen.findByText('No invoices yet')).toBeDefined()
-    // Scoped to the Readiness tile itself: donutSegments legitimately renders '0%' for
-    // all seven canonical states when the invoice-status donut has no invoices, so a
-    // document-wide queryByText('0%') is a false positive there, not a real assertion.
+    await screen.findByText('Readiness score') // wait for the ready state to settle
+    // Scoped to the Readiness tile itself: the trend tile shows the same "No invoices
+    // yet" copy under a null live score, and donutSegments legitimately renders '0%' for
+    // all seven canonical states when the invoice-status donut has no invoices, so
+    // document-wide queries would be false positives here, not real assertions.
     const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
+    expect(within(readinessTile).getByText('No invoices yet')).toBeDefined()
     expect(within(readinessTile).getAllByText('—').length).toBeGreaterThan(0)
     expect(within(readinessTile).queryByText('0%')).toBeNull()
   })
@@ -269,8 +271,11 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     // metrics: {} on the matched row reads the same empty-state copy as EMPTY_BUCKET, so
     // the counts (only present on a real clients row, never on EMPTY_BUCKET) are the proof
     // scopedBucket found the row rather than falling through. The invoice-status donut
-    // legitimately repeats the same total, so scope each KPI query to its own tile.
-    expect(await screen.findByText('No invoices yet')).toBeDefined()
+    // legitimately repeats the same total, and the trend tile shows the same "No invoices
+    // yet" copy under a null live score, so scope each query to its own tile.
+    await screen.findByText('Readiness score') // wait for the ready state to settle
+    const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
+    expect(within(readinessTile).getByText('No invoices yet')).toBeDefined()
     const invoicesTile = screen.getByText('Invoices').parentElement!.parentElement!
     expect(within(invoicesTile).getByText('7')).toBeDefined() // 5 draft + 2 submitted
     const awaitingTile = screen.getByText('Awaiting submission').parentElement!.parentElement!
@@ -292,7 +297,11 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
 
     render(<DashboardActive ctx={firmCtx('ghost-entity', 'Ghost Co')} />)
 
-    expect(await screen.findByText('No invoices yet')).toBeDefined()
+    await screen.findByText('Readiness score') // wait for the ready state to settle
+    // Scoped to the Readiness tile: the trend tile shows the same "No invoices yet"
+    // copy under a null live score.
+    const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
+    expect(within(readinessTile).getByText('No invoices yet')).toBeDefined()
     expect(screen.getByText('No open failures')).toBeDefined()
     expect(screen.queryByText('99')).toBeNull()
     expect(screen.queryByText('tenant-rule')).toBeNull()

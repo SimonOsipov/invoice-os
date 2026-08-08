@@ -111,6 +111,11 @@ function rowCells(page: Page, name: string): Locator {
   return memberRow(page, name).locator('xpath=./span')
 }
 
+/** The roster's head row — the table's first direct child — and its five column labels. */
+function tableHeads(page: Page): Locator {
+  return page.getByTestId('members-table').locator('xpath=./div[1]/span')
+}
+
 /**
  * A `WfSelect`'s underlying <select>, found through its own <label>. Structural on purpose:
  * the label wraps the control, so an accessible-name lookup would fold the selected option's
@@ -202,7 +207,7 @@ test('firm Settings: the live member directory, the seeded seats, and every cont
 
   // Removed, not hidden. Firm's client-scoping column, in-house's department and Last active
   // are gone with the fields no membership row carries.
-  await expect(page.getByTestId('members-table').locator('> div').first().locator('span')).toHaveText(MEMBERS_TABLE_HEADS)
+  await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
   // The suspended row carries no blocking warning: the warning is derived from the STEPS a
   // person's roles are named in, and …0007 holds none. Status alone must not raise it.
@@ -363,7 +368,7 @@ test('in-house Settings: its own live roster, three seats that cannot be signed,
   for (const m of SEED_FIRM_MEMBERS) {
     await expect(memberRow(page, m.name), `${m.name} must not leak into the in-house roster`).toHaveCount(0)
   }
-  await expect(page.getByTestId('members-table').locator('> div').first().locator('span')).toHaveText(MEMBERS_TABLE_HEADS)
+  await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
   // One column set, both modes: in-house's department went with the column, and the drawer
   // says why below.

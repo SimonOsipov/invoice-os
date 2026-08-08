@@ -50,8 +50,11 @@
 //     above: each seeded tenant has exactly ONE admin and it is the sign-in
 //     persona, and PATCH writes `status` only — it can never mint a second
 //     admin, so no seed-only subject can trigger this branch. Covered instead
-//     by TestMembership_LastActiveAdminRefused (internal/tenancy/tenancy_test.go)
-//     against an isolated per-test fixture. A cited gap, not a silent one.
+//     by a PAIR in internal/tenancy/tenancy_test.go, each half over an isolated
+//     fixture: TestMembership_LastActiveAdminRefused proves the store REFUSES
+//     (ErrLastActiveAdmin, both shapes), and TestMembership_StatusForErrTable
+//     proves that error maps to HTTP 409 with the sentence the SPA renders.
+//     Neither alone is the wire claim. A cited gap, not a silent one.
 //   - 409 invited-not-transitionable: no seeded row has status `invited` and
 //     nothing mints one.
 import { test, expect } from '@playwright/test'
@@ -162,6 +165,14 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
     // no-op arm of the store returns 200 without writing or auditing, so this is
     // free when the row is already clean.
     test.beforeAll(async () => {
+      await setMembershipStatus(token, PATCH_SUBJECT, 'active')
+    })
+
+    // Belt to the round-trip's braces. A killed worker never reaches a `finally`,
+    // and Playwright replays a describe's hooks on retry — so the seeded value is
+    // restated here as well as there, and `active` IS this row's seeded value
+    // (db/seed.dev.sql), not merely the state it happened to be in.
+    test.afterAll(async () => {
       await setMembershipStatus(token, PATCH_SUBJECT, 'active')
     })
 

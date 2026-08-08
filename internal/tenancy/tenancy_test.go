@@ -9,11 +9,15 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -1213,5 +1217,544 @@ func TestStoreListMemberships_OrderTiebreakOnEqualCreatedAt(t *testing.T) {
 	if got[0].UserID != uLow || got[1].UserID != uHigh {
 		t.Errorf("order = [%s, %s], want [%s, %s] (user_id ascending tiebreak on equal created_at)",
 			got[0].UserID, got[1].UserID, uLow, uHigh)
+	}
+}
+
+// --- PATCH /v1/memberships/{user_id} (SetMembershipStatus) -----------------
+
+// seedTenant inserts one throwaway tenants row (kind 'firm') and registers a
+// cleanup -- new here because none of the inline tenant INSERTs above are
+// shared, and the PATCH suite below needs many.
+func seedTenant(t *testing.T, super *pgxpool.Pool, name string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, name); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
+	})
+	return id
+}
+
+// seedMembership inserts one memberships row with an explicit status -- the
+// inline INSERTs above rely on the 'active' DEFAULT and can't seed
+// suspended/invited rows, which the PATCH suite below needs.
+func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role, status string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+		tenantID, userID, role, status); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+}
+
+// auditCount counts audit_log rows for tenantID+event -- mirrors
+// internal/invoice/store_test.go's helper of the same name (a _test.go
+// helper in another package, not importable).
+func auditCount(t *testing.T, pool *pgxpool.Pool, tenantID, event string) int {
+	t.Helper()
+	ctx := context.Background()
+	var n int
+	if err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE event = $1`, event).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count audit_log: %v", err)
+	}
+	return n
+}
+
+// auditActor returns the actor of the most recent audit_log row for
+// tenantID+event.
+func auditActor(t *testing.T, pool *pgxpool.Pool, tenantID, event string) string {
+	t.Helper()
+	ctx := context.Background()
+	var actor string
+	if err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT actor FROM audit_log WHERE event = $1 ORDER BY created_at DESC LIMIT 1`, event,
+		).Scan(&actor)
+	}); err != nil {
+		t.Fatalf("read audit_log actor: %v", err)
+	}
+	return actor
+}
+
+// pgCode extracts the SQLSTATE from err, or "" if err does not wrap a
+// *pgconn.PgError. Copied verbatim from internal/platform/db/tenants_kind_test.go.
+func pgCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
+
+// TestMembership_SuspendRequiresAdmin (AC-2): a preparer caller cannot PATCH
+// another member's status; the target is left unchanged.
+func TestMembership_SuspendRequiresAdmin(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-ADMIN-ONLY tenant")
+	callerID := uuid.NewString()
+	seedMembership(t, super, tenantID, callerID, "preparer", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
+	if _, err := store.SetMembershipStatus(c, targetID, "suspended"); !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("SetMembershipStatus (preparer caller) err = %v, want ErrNotPermitted", err)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM memberships WHERE user_id = $1`, targetID).Scan(&status); err != nil {
+		t.Fatalf("read back target status: %v", err)
+	}
+	if status != "active" {
+		t.Errorf("target status after a refused PATCH = %q, want unchanged %q", status, "active")
+	}
+}
+
+// TestMembership_PermissionCheckedBeforeRowRead (AC-2): a non-admin caller
+// targeting a user_id with no membership row at all still gets
+// ErrNotPermitted, never ErrMembershipNotFound -- no 403-vs-404 existence
+// probe.
+func TestMembership_PermissionCheckedBeforeRowRead(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-GUARD-ORDER tenant")
+	callerID := uuid.NewString()
+	seedMembership(t, super, tenantID, callerID, "preparer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
+	if _, err := store.SetMembershipStatus(c, uuid.NewString(), "suspended"); !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("SetMembershipStatus (non-admin, unknown target) err = %v, want ErrNotPermitted (never ErrMembershipNotFound)", err)
+	}
+}
+
+// TestMembership_SuspendAndReactivate (AC-3): an admin can suspend an active
+// target, then reactivate it.
+func TestMembership_SuspendAndReactivate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-SUSPEND-REACTIVATE tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+
+	got, err := store.SetMembershipStatus(c, targetID, "suspended")
+	if err != nil {
+		t.Fatalf("SetMembershipStatus (suspend): %v", err)
+	}
+	if got.Status != "suspended" {
+		t.Errorf("status after suspend = %q, want %q", got.Status, "suspended")
+	}
+
+	got, err = store.SetMembershipStatus(c, targetID, "active")
+	if err != nil {
+		t.Fatalf("SetMembershipStatus (reactivate): %v", err)
+	}
+	if got.Status != "active" {
+		t.Errorf("status after reactivate = %q, want %q", got.Status, "active")
+	}
+}
+
+// TestMembership_InvalidStatusRejected (AC-3): every malformed or
+// out-of-vocabulary request body maps to 400, and the setter must never run.
+// Driven through the real HTTP boundary since the malformed-JSON case has no
+// store-level equivalent (there is no JSON body at that layer).
+func TestMembership_InvalidStatusRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"invited status", `{"status":"invited"}`},
+		{"empty status", `{"status":""}`},
+		{"empty object", `{}`},
+		{"malformed json", `{"status":`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+			set := func(context.Context, string, string) (Membership, error) {
+				t.Fatal("setter must not run for a rejected request body")
+				return Membership{}, nil
+			}
+			r := httptest.NewRequest("PATCH", "/v1/memberships/"+uuid.NewString(), strings.NewReader(c.body))
+			r = r.WithContext(auth.WithIdentity(r.Context(), id))
+			rec := httptest.NewRecorder()
+			SetMembershipStatusHandler(set, nil).ServeHTTP(rec, r)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestMembership_BodyOverCapRejected (AC-14): a request body over the cap
+// maps to 400, not 413 -- the invoice handlers.go shape, not the
+// validation/importer "house pattern". The plan's cap is 4 KiB; a legitimate
+// body is ~30 bytes.
+func TestMembership_BodyOverCapRejected(t *testing.T) {
+	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	set := func(context.Context, string, string) (Membership, error) {
+		t.Fatal("setter must not run for an over-cap body")
+		return Membership{}, nil
+	}
+	oversized := `{"status":"suspended","padding":"` + strings.Repeat("x", 8*1024) + `"}`
+	r := httptest.NewRequest("PATCH", "/v1/memberships/"+uuid.NewString(), strings.NewReader(oversized))
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	SetMembershipStatusHandler(set, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (not 413): %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMembership_InvitedTargetNotTransitionable (AC-3): a target still
+// `invited` cannot be transitioned; the row is unchanged.
+func TestMembership_InvitedTargetNotTransitionable(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-INVITED tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "preparer", "invited")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+	if _, err := store.SetMembershipStatus(c, targetID, "active"); !errors.Is(err, ErrInvitedNotTransitionable) {
+		t.Fatalf("SetMembershipStatus (invited target) err = %v, want ErrInvitedNotTransitionable", err)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM memberships WHERE user_id = $1`, targetID).Scan(&status); err != nil {
+		t.Fatalf("read back target status: %v", err)
+	}
+	if status != "invited" {
+		t.Errorf("target status after a refused PATCH = %q, want unchanged %q", status, "invited")
+	}
+}
+
+// TestMembership_SameStatusIsNoOpWithoutAudit (AC-3): PATCHing a target to
+// its current status is a 200 no-op -- no audit row.
+func TestMembership_SameStatusIsNoOpWithoutAudit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-NOOP tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	const event = "membership.reactivated"
+	before := auditCount(t, app, tenantID, event)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+	got, err := store.SetMembershipStatus(c, targetID, "active")
+	if err != nil {
+		t.Fatalf("SetMembershipStatus (already active): %v", err)
+	}
+	if got.Status != "active" {
+		t.Errorf("status = %q, want unchanged %q", got.Status, "active")
+	}
+	if after := auditCount(t, app, tenantID, event); after != before {
+		t.Errorf("audit_log rows for %s = %d, want unchanged %d (a no-op must not audit)", event, after, before)
+	}
+}
+
+// TestMembership_UnknownTargetNotFound (AC-3): a well-formed but unseeded
+// user_id maps to ErrMembershipNotFound.
+func TestMembership_UnknownTargetNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-UNKNOWN-TARGET tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+	if _, err := store.SetMembershipStatus(c, uuid.NewString(), "suspended"); !errors.Is(err, ErrMembershipNotFound) {
+		t.Fatalf("SetMembershipStatus (unknown target) err = %v, want ErrMembershipNotFound", err)
+	}
+}
+
+// TestMembership_CrossTenantTargetNotFound (AC-3, plan §F): an admin of
+// tenant A targeting tenant B's user_id gets ErrMembershipNotFound (RLS makes
+// the row invisible, not merely denied); B's row is untouched.
+// TestRLS_MembershipsCrossTenantStatusUpdateInvisible (subtask 01) already
+// proves the raw-SQL RLS half -- this is the new endpoint-level half.
+func TestMembership_CrossTenantTargetNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "T-CROSS-TENANT tenant A")
+	tenantB := seedTenant(t, super, "T-CROSS-TENANT tenant B")
+	adminA := uuid.NewString()
+	seedMembership(t, super, tenantA, adminA, "admin", "active")
+	targetB := uuid.NewString()
+	seedMembership(t, super, tenantB, targetB, "reviewer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminA, Role: "authenticated", TenantID: tenantA})
+	if _, err := store.SetMembershipStatus(c, targetB, "suspended"); !errors.Is(err, ErrMembershipNotFound) {
+		t.Fatalf("SetMembershipStatus (tenant A admin on tenant B's user_id) err = %v, want ErrMembershipNotFound", err)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM memberships WHERE user_id = $1`, targetB).Scan(&status); err != nil {
+		t.Fatalf("read back tenant B's target status: %v", err)
+	}
+	if status != "active" {
+		t.Errorf("tenant B's target status after a refused cross-tenant PATCH = %q, want unchanged %q", status, "active")
+	}
+}
+
+// TestMembership_SuspendWritesAudit (AC-4): suspend writes
+// "membership.suspended" with the caller as actor; reactivate writes
+// "membership.reactivated".
+func TestMembership_SuspendWritesAudit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-AUDIT tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+
+	const suspendEvent = "membership.suspended"
+	beforeSuspend := auditCount(t, app, tenantID, suspendEvent)
+	if _, err := store.SetMembershipStatus(c, targetID, "suspended"); err != nil {
+		t.Fatalf("SetMembershipStatus (suspend): %v", err)
+	}
+	if after := auditCount(t, app, tenantID, suspendEvent); after != beforeSuspend+1 {
+		t.Fatalf("audit_log rows for %s = %d, want %d (+1)", suspendEvent, after, beforeSuspend+1)
+	}
+	if actor := auditActor(t, app, tenantID, suspendEvent); actor != adminID {
+		t.Errorf("audit actor = %q, want caller subject %q", actor, adminID)
+	}
+
+	const reactivateEvent = "membership.reactivated"
+	beforeReactivate := auditCount(t, app, tenantID, reactivateEvent)
+	if _, err := store.SetMembershipStatus(c, targetID, "active"); err != nil {
+		t.Fatalf("SetMembershipStatus (reactivate): %v", err)
+	}
+	if after := auditCount(t, app, tenantID, reactivateEvent); after != beforeReactivate+1 {
+		t.Fatalf("audit_log rows for %s = %d, want %d (+1)", reactivateEvent, after, beforeReactivate+1)
+	}
+	if actor := auditActor(t, app, tenantID, reactivateEvent); actor != adminID {
+		t.Errorf("audit actor = %q, want caller subject %q", actor, adminID)
+	}
+}
+
+// TestMembership_AuditFailureRollsBackStatus (AC-4): mirrors
+// internal/invoice's TestResolveOutside_AuditFailureRollsBackColumnWrite.
+// SetMembershipStatus's own caller-role read binds the identity Subject
+// against memberships.user_id (uuid NOT NULL), so a malformed 256-char
+// Subject 22P02s there before ever reaching the audit write -- so this
+// reconstructs the store method's write-tx body directly on the app pool: a
+// real target row, a bad actor bound only to audit.Record, proving the
+// UPDATE rolls back with a failing audit write. This exercises audit_log's
+// own CHECK constraint and transactional atomicity rather than any
+// not-yet-written application code, so it passes today; it continues to hold
+// once SetMembershipStatus is wired to this identical shape.
+func TestMembership_AuditFailureRollsBackStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-AUDIT-TX tenant")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	badActor := strings.Repeat("a", 256)
+	err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		var current string
+		if err := tx.QueryRow(ctx,
+			`SELECT status FROM memberships WHERE user_id = $1 FOR UPDATE`, targetID,
+		).Scan(&current); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE memberships SET status = 'suspended' WHERE user_id = $1`, targetID,
+		); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, badActor, "membership.suspended", map[string]any{
+			"user_id": targetID, "from": current, "to": "suspended",
+		})
+	})
+	if err == nil {
+		t.Fatal("write-tx with a 256-char audit actor succeeded, want an audit_log actor CHECK violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("pgCode = %q, want 23514 (check_violation): %v", code, err)
+	}
+
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM memberships WHERE user_id = $1`, targetID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if status != "active" {
+		t.Errorf("status after a rolled-back write = %q, want unchanged %q", status, "active")
+	}
+}
+
+// TestMembership_LastActiveAdminRefused (AC-5): both shapes of the
+// last-active-admin rule -- a sole admin suspending themselves, and the
+// surviving admin of a tenant already narrowed to one active admin.
+func TestMembership_LastActiveAdminRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	t.Run("sole admin", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "T-LAST-ADMIN tenant sole")
+		adminID := uuid.NewString()
+		seedMembership(t, super, tenantID, adminID, "admin", "active")
+
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+		if _, err := store.SetMembershipStatus(c, adminID, "suspended"); !errors.Is(err, ErrLastActiveAdmin) {
+			t.Fatalf("SetMembershipStatus (sole active admin, self-suspend) err = %v, want ErrLastActiveAdmin", err)
+		}
+		var status string
+		if err := super.QueryRow(ctx, `SELECT status FROM memberships WHERE user_id = $1`, adminID).Scan(&status); err != nil {
+			t.Fatalf("read back status: %v", err)
+		}
+		if status != "active" {
+			t.Errorf("status after a refused self-suspend = %q, want unchanged %q", status, "active")
+		}
+	})
+
+	t.Run("last other admin already suspended", func(t *testing.T) {
+		tenantID := seedTenant(t, super, "T-LAST-ADMIN tenant narrowed")
+		survivor := uuid.NewString()
+		seedMembership(t, super, tenantID, survivor, "admin", "active")
+		other := uuid.NewString()
+		seedMembership(t, super, tenantID, other, "admin", "suspended")
+
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: survivor, Role: "authenticated", TenantID: tenantID})
+		if _, err := store.SetMembershipStatus(c, survivor, "suspended"); !errors.Is(err, ErrLastActiveAdmin) {
+			t.Fatalf("SetMembershipStatus (last active admin, other already suspended) err = %v, want ErrLastActiveAdmin", err)
+		}
+	})
+}
+
+// TestMembership_AdminSuspendableWhileAnotherActiveAdminExists (AC-5): with
+// two active admins, suspending one succeeds.
+func TestMembership_AdminSuspendableWhileAnotherActiveAdminExists(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-TWO-ADMINS tenant")
+	callerAdmin, targetAdmin := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, callerAdmin, "admin", "active")
+	seedMembership(t, super, tenantID, targetAdmin, "admin", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: callerAdmin, Role: "authenticated", TenantID: tenantID})
+	got, err := store.SetMembershipStatus(c, targetAdmin, "suspended")
+	if err != nil {
+		t.Fatalf("SetMembershipStatus (two active admins, suspend one): %v", err)
+	}
+	if got.Status != "suspended" {
+		t.Errorf("status = %q, want %q", got.Status, "suspended")
+	}
+}
+
+// TestMembership_SuspendedAdminCannotAdminister (AC-10, [suspension-is-not-self-undoable]):
+// a suspended admin is refused whether targeting themselves (the self-undo
+// case this rule exists for) or another member. Without the caller-role
+// read's own AND status='active' predicate, a suspended admin could PATCH
+// themselves back to active.
+func TestMembership_SuspendedAdminCannotAdminister(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-SUSPENDED-ADMIN tenant")
+	suspendedAdmin := uuid.NewString()
+	seedMembership(t, super, tenantID, suspendedAdmin, "admin", "suspended")
+	otherAdmin := uuid.NewString()
+	seedMembership(t, super, tenantID, otherAdmin, "admin", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: suspendedAdmin, Role: "authenticated", TenantID: tenantID})
+
+	t.Run("self reactivate", func(t *testing.T) {
+		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, ErrNotPermitted) {
+			t.Fatalf("SetMembershipStatus (suspended admin reactivates self) err = %v, want ErrNotPermitted -- suspension must not be self-undoable", err)
+		}
+	})
+	t.Run("suspend another", func(t *testing.T) {
+		if _, err := store.SetMembershipStatus(c, otherAdmin, "suspended"); !errors.Is(err, ErrNotPermitted) {
+			t.Fatalf("SetMembershipStatus (suspended admin targets another) err = %v, want ErrNotPermitted", err)
+		}
+	})
+}
+
+// TestMembership_ConcurrentLastTwoAdmins (AC-11, [last-admin-guard-is-race-safe]):
+// two active admins concurrently suspend each other -- exactly one must
+// succeed and one must get ErrLastActiveAdmin, and at least one active admin
+// must survive. A plain count (no FOR UPDATE over the admin set) would let
+// both commit and strand the tenant at zero admins.
+func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-CONCURRENT-ADMINS tenant")
+	adminX, adminY := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, adminX, "admin", "active")
+	seedMembership(t, super, tenantID, adminY, "admin", "active")
+
+	store := NewStore(app)
+	cX := auth.WithIdentity(ctx, auth.Identity{Subject: adminX, Role: "authenticated", TenantID: tenantID})
+	cY := auth.WithIdentity(ctx, auth.Identity{Subject: adminY, Role: "authenticated", TenantID: tenantID})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); _, errs[0] = store.SetMembershipStatus(cX, adminY, "suspended") }()
+	go func() { defer wg.Done(); _, errs[1] = store.SetMembershipStatus(cY, adminX, "suspended") }()
+	wg.Wait()
+
+	oks, lastAdmin := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			oks++
+		case errors.Is(err, ErrLastActiveAdmin):
+			lastAdmin++
+		}
+	}
+	if oks != 1 || lastAdmin != 1 {
+		t.Fatalf("results = %v, want exactly one nil and one ErrLastActiveAdmin", errs)
+	}
+
+	var active int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND role = 'admin' AND status = 'active'`, tenantID,
+	).Scan(&active); err != nil {
+		t.Fatalf("count active admins: %v", err)
+	}
+	if active < 1 {
+		t.Errorf("active admins after the race = %d, want >= 1", active)
 	}
 }

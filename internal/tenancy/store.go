@@ -91,3 +91,14 @@ func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
 	}
 	return memberships, nil
 }
+
+// errNotImplemented is the Stage-3 seam for SetMembershipStatus. Delete it
+// with the real body.
+var errNotImplemented = errors.New("tenancy: not implemented")
+
+// SetMembershipStatus is the Stage-3 seam for the PATCH /v1/memberships/{user_id}
+// store method (admin-only status change, last-active-admin guard, audit in the
+// same tx). Replace this body with the real implementation.
+func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) (Membership, error) {
+	return Membership{}, errNotImplemented
+}

@@ -46,6 +46,15 @@ var ErrTenantNotFound = errors.New("tenancy: tenant not found")
 // no domain role. Fail-closed: a role must never be defaulted when this occurs.
 var ErrNoMembership = errors.New("tenancy: no membership")
 
+// Sentinels for PATCH /v1/memberships/{user_id} (SetMembershipStatus).
+var (
+	ErrNotPermitted             = errors.New("tenancy: not permitted")
+	ErrMembershipNotFound       = errors.New("tenancy: membership not found")
+	ErrInvalidStatus            = errors.New("tenancy: invalid status")
+	ErrInvitedNotTransitionable = errors.New("tenancy: invited membership is not transitionable")
+	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
+)
+
 // MeLoader resolves the current caller's tenant and their domain role (from
 // memberships). The handler depends on this narrow function type rather than a
 // pool, so its HTTP contract is unit-testable without a database; the production
@@ -158,6 +167,21 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 // memberships, each as {user_id, role, status, display_name, email} (A3).
 type membershipsResponse struct {
 	Memberships []Membership `json:"memberships"`
+}
+
+// MembershipStatusSetter applies an admin-directed status change to one
+// membership row, returning the updated row. Store.SetMembershipStatus is
+// the production implementation.
+type MembershipStatusSetter func(ctx context.Context, userID, status string) (Membership, error)
+
+// SetMembershipStatusHandler is the Stage-3 seam for PATCH
+// /v1/memberships/{user_id}: replace this body with the real
+// MaxBytesReader/decode/cap/status-vocabulary handler (set is unused until
+// then; delete store.go's errNotImplemented alongside it).
+func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusInternalServerError, "not implemented")
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

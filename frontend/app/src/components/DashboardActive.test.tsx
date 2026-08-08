@@ -314,3 +314,30 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
     expect(screen.queryByText('tenant-wide-rule')).toBeNull()
   })
 })
+
+describe('DashboardActive trend re-anchor (task-430, METR-01-06)', () => {
+  it('the readiness ring and the trend headline show the same live score', async () => {
+    // 67 sits below buildMockPanels' fabricated range (72-95) for any seed, so a
+    // not-yet-anchored trend is guaranteed to show a different number here.
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 67, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const ringTile = (await screen.findByText('Readiness score')).parentElement!.parentElement!
+    expect(within(ringTile).getByText('67')).toBeDefined()
+    const trendTile = screen.getByText('Readiness trend').parentElement!.parentElement!
+    expect(within(trendTile).getByText('67%')).toBeDefined()
+  })
+
+  it('null live score renders the trend empty state, no fabricated curve, chip stays', async () => {
+    mockRollupFetch(rollup(0)) // metrics: {} -- no invoices, no live score
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    const trendTile = (await screen.findByText('Readiness trend')).parentElement!.parentElement!
+    expect(trendTile.querySelectorAll('svg').length).toBe(0)
+    expect(within(trendTile).getByText('—')).toBeDefined()
+    expect(within(trendTile).getByText('No invoices yet')).toBeDefined()
+    expect(within(trendTile).getByText('12 WEEKS · SAMPLE')).toBeDefined()
+  })
+})

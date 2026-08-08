@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
-import { setMemberStatus, toMember, type Member, type MembershipWire } from './members'
+import { replaceMember, toMember, type Member, type MembershipWire } from './members'
 import {
   canSaveRole,
   deleteRoleConfirm,
@@ -17,7 +17,6 @@ import {
   newRoleKey,
   pickerHiddenAmongSelected,
   pickerMembers,
-  pickerMeta,
   pickerSelectionCount,
   pruneMember,
   removeRole,
@@ -55,11 +54,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: APP_PERSONAS.firm.email,
     role: 'admin',
     status: 'active',
-    lastActive: 'Just now',
-    joined: '4 Feb 2024',
-    invitedBy: '—',
     isYou: true,
-    clientAccess: 'all',
   },
   {
     id: 'mf2',
@@ -68,11 +63,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: 'f.adesina@okafor.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '2 hours ago',
-    joined: '18 Mar 2024',
-    invitedBy: 'Chinedu Okafor',
     isYou: false,
-    clientAccess: [0, 1, 3],
   },
   {
     id: 'mf3',
@@ -81,11 +72,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: 'm.danjuma@okafor.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: 'Yesterday',
-    joined: '6 May 2024',
-    invitedBy: 'Chinedu Okafor',
     isYou: false,
-    clientAccess: [2, 5],
   },
   {
     id: 'mf4',
@@ -94,11 +81,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: 'c.nwosu@okafor.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: '3 days ago',
-    joined: '11 Sep 2024',
-    invitedBy: 'Chinedu Okafor',
     isYou: false,
-    clientAccess: 'all',
   },
   {
     // §10.9 — the deliberately long name + email row, guarding the column widths.
@@ -108,11 +91,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: 'o.adebanjo-ogunleye@okaforandpartners.com.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '5 hours ago',
-    joined: '2 Dec 2024',
-    invitedBy: 'Chinedu Okafor',
     isYou: false,
-    clientAccess: 'all',
   },
   {
     id: 'mf6',
@@ -121,11 +100,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: 'b.suleiman@okafor.ng',
     role: 'preparer',
     status: 'invited',
-    lastActive: null,
-    joined: null,
-    invitedBy: 'Chinedu Okafor',
     isYou: false,
-    clientAccess: [0],
   },
   {
     id: 'mf7',
@@ -134,11 +109,7 @@ const MOCK_FIRM_MEMBERS: readonly Member[] = [
     email: 'h.yusuf@okafor.ng',
     role: 'reviewer',
     status: 'suspended',
-    lastActive: '1 month ago',
-    joined: '22 Jan 2024',
-    invitedBy: 'Chinedu Okafor',
     isYou: false,
-    clientAccess: 'all',
   },
 ]
 
@@ -150,11 +121,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: APP_PERSONAS.inhouse.email,
     role: 'admin',
     status: 'active',
-    lastActive: 'Just now',
-    joined: '9 Jan 2024',
-    invitedBy: '—',
     isYou: true,
-    department: 'Finance',
   },
   {
     id: 'mh2',
@@ -163,11 +130,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'y.fashola@honeywell.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: '1 hour ago',
-    joined: '20 Feb 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Finance',
   },
   {
     id: 'mh3',
@@ -176,11 +139,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'e.uzowulu@honeywell.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: '3 hours ago',
-    joined: '20 Feb 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Procurement',
   },
   {
     id: 'mh4',
@@ -189,11 +148,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 't.adeyemi@honeywell.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: 'Yesterday',
-    joined: '4 Mar 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Finance',
   },
   {
     id: 'mh5',
@@ -202,11 +157,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'i.bello@honeywell.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: '2 days ago',
-    joined: '4 Mar 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Tax & Compliance',
   },
   {
     // §2's headline frame: the only cfo holder, suspended, so both cfo approval steps block.
@@ -216,11 +167,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'a.ogunlesi@honeywell.ng',
     role: 'reviewer',
     status: 'suspended',
-    lastActive: '3 weeks ago',
-    joined: '9 Jan 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Executive',
   },
   {
     id: 'mh7',
@@ -229,11 +176,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'z.lawal@honeywell.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '20 minutes ago',
-    joined: '15 Apr 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Accounts Payable',
   },
   {
     id: 'mh8',
@@ -242,11 +185,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'c.anyanwu@honeywell.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '4 hours ago',
-    joined: '15 Apr 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Accounts Payable',
   },
   {
     id: 'mh9',
@@ -255,11 +194,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'a.mohammed@honeywell.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: 'Yesterday',
-    joined: '2 Jun 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Accounts Payable',
   },
   {
     id: 'mh10',
@@ -268,11 +203,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 's.oyelaran@honeywell.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '2 days ago',
-    joined: '2 Jun 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Procurement',
   },
   {
     // §13 check 11 runs in both modes, and in-house is the riskier one (7 columns to firm's
@@ -283,11 +214,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'o.ademola-oyediran@honeywellgroup.com.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: '6 hours ago',
-    joined: '19 Jul 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Tax & Compliance',
   },
   {
     id: 'mh12',
@@ -296,11 +223,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'k.obi@honeywell.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '30 minutes ago',
-    joined: '19 Jul 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Finance',
   },
   {
     id: 'mh13',
@@ -309,11 +232,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'h.abubakar@honeywell.ng',
     role: 'reviewer',
     status: 'active',
-    lastActive: '5 hours ago',
-    joined: '3 Sep 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Executive',
   },
   {
     id: 'mh14',
@@ -322,11 +241,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'o.bakare@honeywell.ng',
     role: 'preparer',
     status: 'active',
-    lastActive: '3 days ago',
-    joined: '3 Sep 2024',
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Procurement',
   },
   {
     id: 'mh15',
@@ -335,11 +250,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 'n.chukwu@honeywell.ng',
     role: 'preparer',
     status: 'invited',
-    lastActive: null,
-    joined: null,
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Accounts Payable',
   },
   {
     id: 'mh16',
@@ -348,11 +259,7 @@ const MOCK_INHOUSE_MEMBERS: readonly Member[] = [
     email: 's.ibrahim@honeywell.ng',
     role: 'reviewer',
     status: 'invited',
-    lastActive: null,
-    joined: null,
-    invitedBy: 'Ngozi Balogun',
     isYou: false,
-    department: 'Finance',
   },
 ]
 
@@ -806,20 +713,6 @@ describe('AC-4 — pickerMembers excludes invited people in both modes', () => {
   })
 })
 
-describe('AC-4 — pickerMeta reads department in-house and the access-role label in firm', () => {
-  it("inhouse reads the member's department", () => {
-    const mh4 = MOCK_INHOUSE_MEMBERS.find((m) => m.id === 'mh4')!
-    expect(mh4.department).toBe('Finance') // guard: pins the fixture fact, independent of pickerMeta
-    expect(pickerMeta('inhouse', mh4)).toBe('Finance')
-  })
-
-  it("firm reads the member's access-role LABEL, not the raw lowercase id", () => {
-    const mf3 = MOCK_FIRM_MEMBERS.find((m) => m.id === 'mf3')!
-    expect(mf3.role).toBe('reviewer') // guard: pins the fixture fact — pickerMeta must NOT just echo this
-    expect(pickerMeta('firm', mf3)).toBe('Reviewer')
-  })
-})
-
 describe('AC-4 — filterPickerMembers matches name or email, case-insensitively, and trims', () => {
   // Built directly rather than via pickerMembers(), so this spec's own failure reason can
   // never be masked by the pickerMembers stub throwing first.
@@ -949,7 +842,7 @@ describe('[key-is-a-slug] — renaming a role never re-derives its key', () => {
 })
 
 // Forward risk, now DECIDED: [invite-writes-both-stores] makes a role holding an invited
-// member's id reachable (inviteMembers puts the fresh id straight into the chosen role), so
+// member's id reachable (an invite used to put the fresh id straight into the chosen role), so
 // the picker's "X of Y selected" contract needs an explicit call rather than a silent one.
 // Decision: (a) — the numerator keeps counting the invited id (pickerMembers/pickerSelectionCount
 // are UNCHANGED, both still correct in isolation), and a NEW additive export names how many of
@@ -1034,7 +927,7 @@ describe('drawerRoleHelper — forks on the access role, not the workflow role',
   })
 })
 
-describe('[remove-prunes-suspend-keeps] — pruneMember vs setMemberStatus', () => {
+describe('[remove-prunes-suspend-keeps] — pruneMember vs a status write', () => {
   it('pruning a removed member empties the role they solely held', () => {
     const pruned = pruneMember(MOCK_INHOUSE_ROLES, 'mh6')
     const result = resolve(pruned, MOCK_INHOUSE_MEMBERS, 'cfo')
@@ -1044,7 +937,8 @@ describe('[remove-prunes-suspend-keeps] — pruneMember vs setMemberStatus', () 
 
   it('suspending does not unstaff — the role keeps the member, resolve just blocks', () => {
     expect(MOCK_FIRM_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual(['mf3']) // guard
-    const suspended = setMemberStatus(MOCK_FIRM_MEMBERS, 'mf3', 'suspended')
+    const mf3 = MOCK_FIRM_MEMBERS.find((m) => m.id === 'mf3')!
+    const suspended = replaceMember(MOCK_FIRM_MEMBERS, { ...mf3, status: 'suspended' })
     const result = resolve(MOCK_FIRM_ROLES, suspended, 'fin_mgr')
     expect(result.text).toBe('Musa Danjuma')
     expect(result.warn).toBe(true)

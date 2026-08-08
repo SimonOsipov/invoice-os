@@ -5,11 +5,10 @@
 // policy lists arrive as ARGUMENTS (the shape `stepsFor` already uses), so nothing imports this
 // module back and the graph stays acyclic.
 //
-// The members.ts edge carries ONE runtime import — `accessRoleLabel`, which the picker's firm
-// meta column must not re-case itself (members.ts warns that re-casing drifts silently). The
-// workflows.ts edge stays type-only.
+// Both edges are TYPE-ONLY: the picker's meta column moved to `accessRoleLabel` at its own
+// call site when the in-house department fork went, so this module imports no runtime value.
 
-import { accessRoleLabel, type AccessRole, type Member } from './members'
+import type { AccessRole, Member } from './members'
 import type { Policy, WorkflowMode } from './workflows'
 
 // ---------------------------------------------------------------------------
@@ -25,7 +24,7 @@ export type Role = {
   members: string[]
 }
 
-/** Keyed per workspace mode, mirroring `PolicyStore` / `MemberStore` — NOT per client. */
+/** Keyed per workspace mode, mirroring `PolicyStore` — NOT per client. */
 export type RoleStore = Record<WorkflowMode, Role[]>
 
 /** The card, the canvas and the inspector all need the amber tone to travel WITH the string. */
@@ -341,17 +340,6 @@ export const INVITE_ROLE_HELPER =
 /** The picker's rows for one mode — an invited person holds no place in a role yet. */
 export function pickerMembers(list: readonly Member[]): Member[] {
   return list.filter((m) => m.status !== 'invited')
-}
-
-/**
- * Right-aligned meta column: department in-house, access-role LABEL in firm. The label comes
- * from `accessRoleLabel` rather than from re-casing `m.role` — the one thing members.ts:104-115
- * says not to do, because a label edit there would leave this column behind.
- */
-export function pickerMeta(mode: WorkflowMode, member: Member): string {
-  // `department` is optional only because a FIRM row carries none; every in-house row has one,
-  // by seed and by `memberFromInvite` alike.
-  return mode === 'firm' ? accessRoleLabel(member.role) : (member.department ?? '')
 }
 
 /** Case-insensitive name/email search over an already-selectable list; trims the query. */

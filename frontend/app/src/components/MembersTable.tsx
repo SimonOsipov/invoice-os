@@ -5,9 +5,9 @@
 // CustomersView, RulesView). The one real <table>, ViolationsTable, is a shared component
 // embedded inside screens rather than a screen's own layout.
 //
-// ONE column set differs per workspace mode: firm scopes a person to CLIENT COMPANIES,
-// in-house places them in a DEPARTMENT. `Workflow roles` renders in BOTH — a role staffs
-// people in either workspace now — so the two grids differ by that one column only.
+// ONE column set, both modes. The two that used to fork — firm's client scoping, in-house's
+// department — are gone with the columns themselves: a membership row carries an identity,
+// an access role and a status, and nothing else.
 //
 // Nothing is derived here. Every value comes from lib/members.ts or lib/roles.ts — vitest
 // is `environment: node` in this project, so a derivation written into a component is a
@@ -17,77 +17,69 @@ import { Fragment, useCallback, useState } from 'react'
 
 import {
   accessRoleLabel,
-  clientAccessLabel,
-  clientAccessNames,
+  emailLabel,
   isProtectedAdmin,
-  lastActiveLabel,
+  MEMBER_UNBACKED,
   PROTECTED_ADMIN_NOTE,
   type Member,
+  type MemberStatus,
 } from '../lib/members'
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import { AmberNote, InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
-type Mode = PlatformCtx['mode']
-
-// §15.7's grids, plus the two things a grid template does not state and this table needs:
+// §15.7's grid, plus the two things a grid template does not state and this table needs:
 // the gap and the row padding. Both are the house constants — gap 16, head '11px 18px',
 // row '14px 18px' (InvoicesList.tsx:361/:392, ClientsView.tsx:140/:157).
-const COLS: Record<Mode, string> = {
-  firm: 'minmax(190px,1fr) 130px 130px 160px 120px 140px 44px',
-  inhouse: 'minmax(190px,1fr) 120px 150px 160px 110px 130px 44px',
-}
+const COLS = 'minmax(190px,1fr) 130px 160px 120px 44px'
 
-const HEADS: Record<Mode, string[]> = {
-  // The trailing '' is the `⋯` column: at 44px no uppercase 10.5px label fits, and every
-  // action column in the app is unlabelled.
-  firm: ['Person', 'Access role', 'Client access', 'Workflow roles', 'Status', 'Last active', ''],
-  inhouse: ['Person', 'Access role', 'Department', 'Workflow roles', 'Status', 'Last active', ''],
-}
+// The trailing '' is the `⋯` column: at 44px no uppercase 10.5px label fits, and every
+// action column in the app is unlabelled.
+const HEADS = ['Person', 'Access role', 'Workflow roles', 'Status', '']
 
-// The width the grid actually needs, per mode. RulesView.tsx:19-29's arithmetic redone for
-// this table — RulesView's own 790 does not transfer, because its rationale is sitting
-// beside a fixed 244px rail and this table has none.
+// The width the grid actually needs. RulesView.tsx:19-29's arithmetic redone for this
+// table — RulesView's own 790 does not transfer, because its rationale is sitting beside a
+// fixed 244px rail and this table has none.
 //
-//   firm    = 190 person floor + 724 fixed (130+130+160+120+140+44) + 6 gaps x 16 + 36 padding = 1046
-//   inhouse = 190 person floor + 714 fixed (120+150+160+110+130+44) + 6 gaps x 16 + 36 padding = 1036
+//   190 person floor + 454 fixed (130+160+120+44) + 4 gaps x 16 + 36 padding = 744
 //
-// Firm gained a seventh column with `Workflow roles` and is now the WIDER of the two; 160px
-// is the in-house Approval-position column's own width, which already carried titles this
-// long. "WORKFLOW ROLES" as a 10.5px uppercase `.label` measures ~102px, so no head truncates.
+// 160px is the old in-house Approval-position column's width, which already carried titles
+// this long. "WORKFLOW ROLES" as a 10.5px uppercase `.label` measures ~102px, so no head
+// truncates.
 //
 // The Settings content box is ~1116px at a 1440px viewport (1440 - 252 sidebar,
-// Sidebar.tsx:132 - 72 page padding, SettingsView.tsx:47), which leaves the firm person
-// column ~260px — above its 190px floor, but §15.7's stated ">=300px" headroom is not the
-// real figure and must not be relied on. Both modes therefore overflow on any viewport below
-// ~1420px, an ordinary laptop.
-//
-// Without a scroll container of its own that overflow would scroll the WHOLE Settings page
-// sideways, dragging the h1 and the tab strip with it: App.tsx:800's `.pf-scroll` sets only
-// `overflowY: 'auto'`, and CSS raises the other axis from `visible` to `auto`. So the
-// container below takes `overflowX` and every direct child restates `minWidth`, exactly as
-// RulesView.tsx:49/69/196/208/241/273 does.
-const TABLE_MIN_WIDTH: Record<Mode, number> = { firm: 1046, inhouse: 1036 }
+// Sidebar.tsx:132 - 72 page padding, SettingsView.tsx:47), so at 744 the table no longer
+// overflows it — the three deleted columns took ~300px with them. The scroll container
+// below is kept anyway: it is what stops an overflow at a narrow viewport scrolling the
+// WHOLE Settings page sideways, dragging the h1 and the tab strip with it (App.tsx:800's
+// `.pf-scroll` sets only `overflowY`, and CSS raises the other axis from `visible` to
+// `auto`). Every direct child restates `minWidth`, exactly as RulesView.tsx does.
+const TABLE_MIN_WIDTH = 744
 
 // `overflowX: 'auto'` makes that container a scroll container on BOTH axes, for the same
 // reason `.pf-scroll` is — so the absolutely-positioned `⋯` menu would be clipped, and
-// would spawn a vertical scrollbar, on any row without ~155px of table below it. The
-// scroller simply makes room for whichever menu is open. 168 = the tallest menu (3 items
-// plus the last-admin note) and its 6px offset.
+// would spawn a vertical scrollbar, on any row without room below it. The scroller simply
+// makes room for whichever menu is open.
+//
+// The tallest menu is now the invited row: three items (~34px each) plus TWO wrapped reason
+// notes, since every unbacked control states its own and the two sentences differ. At 196px
+// wide and 11px/1.45 those run ~5-6 lines each: 102 + ~100 + ~115 + the 6px offset ≈ 320,
+// rounded up. AN UNMEASURED UPPER BOUND, not a verified figure — over-padding costs
+// whitespace, under-padding clips the menu. Owed: measure it on the deployed build.
 //
 // The obvious alternative — flip the menu upward for the last few rows — was measured and
 // rejected: a row is ~58px, so opening downward needs three rows below and upward needs
 // two above, and ANY filtered list under about four rows then clips in both directions.
 // Searching one person's name produces exactly that list. The app has no portal and no
 // fixed-position popover to borrow instead.
-const MENU_CLEARANCE = 168
+const MENU_CLEARANCE = 360
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
+export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
@@ -99,19 +91,20 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
    */
   policies: Policy[]
   roles: Role[]
-  /** Opens that member's drawer. MembersView owns the open id (types.ts:255-265). */
+  /** Opens that member's drawer. MembersView owns the open id. */
   onOpen: (id: string) => void
-  /** Raises the top-bar confirmation flash; MembersView owns the state and the timer. */
-  onFlash: (message: string) => void
+  /** The live status write. Never rejects — MembersView catches into `statusError`. */
+  onStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => void
+  /** The last failed write's server reason, and the row it happened on. */
+  statusError: { id: string; message: string } | null
 }) {
-  const { members, mode } = ctx
-  const isFirm = mode === 'firm'
+  const { members } = ctx
   // One id, so only one menu can be open — the app's house pattern for dismissible
   // surfaces — and so the container below knows to make room for it.
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   // Stable: it is a `useDismiss` dependency.
   const closeMenu = useCallback(() => setOpenMenuId(null), [])
-  const minWidth = TABLE_MIN_WIDTH[mode]
+  const minWidth = TABLE_MIN_WIDTH
   // Checked against the rendered rows, not just `!= null`: a filter can narrow the list
   // out from under an open menu, and the clearance below must not be held open for a menu
   // that no longer exists.
@@ -119,43 +112,34 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
 
   function menuItems(m: Member, protectedAdmin: boolean): MenuAction[] {
     if (m.status === 'invited') {
+      // All three disabled with the server's own reason: nothing mints a token, nothing
+      // sends an email, and nothing deletes a membership. Rendered rather than hidden — a
+      // control that vanishes says the product never had it.
       return [
-        { label: 'Resend invite', onSelect: () => onFlash(`Invite resent to ${m.email}`) },
-        // Deliberately does NOT touch the clipboard. There is no invite link — this tab is
-        // mock-only and there is no members endpoint at all — and putting a fabricated URL
-        // on someone's clipboard is a worse lie than a mock confirmation on a mock screen.
-        // AC#8 asks only for the inline confirmation.
-        { label: 'Copy invite link', onSelect: () => onFlash('Invite link copied') },
-        { label: 'Revoke invite', danger: true, onSelect: () => ctx.dropMember(m.id) },
+        { label: 'Resend invite', disabled: true, reason: MEMBER_UNBACKED.invite },
+        { label: 'Copy invite link', disabled: true, reason: MEMBER_UNBACKED.invite },
+        { label: 'Revoke invite', danger: true, disabled: true, reason: MEMBER_UNBACKED.remove },
       ]
     }
     const items: MenuAction[] = [
       // The same target as the row click below. `MoreMenu` calls `onClose()` after
       // `onSelect()`, so the menu is gone in the commit that opens the drawer and no two
-      // Escape listeners are ever live at once.
+      // Escape listeners are ever live at once — which is also why a failed write's reason
+      // renders on the ROW below rather than in here.
       { label: 'Edit', onSelect: () => onOpen(m.id) },
-      // A shallow spread is safe for the row being replaced: `replaceMember` discards the
-      // old object and nothing else holds its `clientAccess` array (ctx.members is already
-      // `seedMembers()`'s deep clone), which is the aliasing `copyMember` guards against.
       m.status === 'suspended'
-        ? { label: 'Reactivate', onSelect: () => ctx.saveMember({ ...m, status: 'active' }) }
-        : { label: 'Suspend', disabled: protectedAdmin, onSelect: () => ctx.saveMember({ ...m, status: 'suspended' }) },
+        ? { label: 'Reactivate', onSelect: () => onStatus(m.id, 'active') }
+        : {
+            label: 'Suspend',
+            disabled: protectedAdmin,
+            reason: protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined,
+            onSelect: () => onStatus(m.id, 'suspended'),
+          },
     ]
     // §6: your own menu has no Remove. A SEPARATE rule from the last-admin lock — `isYou`,
-    // not `isProtectedAdmin` — and load-bearing rather than cosmetic: `dropMember` is an
-    // unguarded pass-through by design (task-296 AC#4) and MembersView's empty-surface
-    // chain has no `members.length === 0` branch, so an empty roster would fall through to
-    // "No members match this search." with no search running. This rule is the only thing
-    // that keeps that state unreachable.
+    // not `isProtectedAdmin`.
     if (!m.isYou) {
-      // UNCONFIRMED, deliberately — and the drawer's own `Remove` is confirmed. §6 lists this
-      // menu item as a removal action and §9 requires it to be DISABLABLE, which a
-      // drawer-opener would have nothing to disable; §8's confirm sentence sits under the
-      // heading "Member drawer" and is scoped there. So the story really does ask for two
-      // postures. FLAGGED FOR THE HUMAN at the Phase 3.5 gate rather than averaged here: the
-      // faster path to remove someone is the one that never shows them §8's explanation. If
-      // the human agrees, the fix is this one `onSelect`.
-      items.push({ label: 'Remove', danger: true, disabled: protectedAdmin, onSelect: () => ctx.dropMember(m.id) })
+      items.push({ label: 'Remove', danger: true, disabled: true, reason: MEMBER_UNBACKED.remove })
     }
     return items
   }
@@ -182,7 +166,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: COLS[mode],
+            gridTemplateColumns: COLS,
             gap: 16,
             padding: '11px 18px',
             background: 'var(--bg-1)',
@@ -191,7 +175,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
             minWidth,
           }}
         >
-          {HEADS[mode].map((h, i) => (
+          {HEADS.map((h, i) => (
             <span key={i} className="label" style={ELLIPSIS}>
               {h}
             </span>
@@ -228,7 +212,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
                 onClick={() => onOpen(m.id)}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: COLS[mode],
+                  gridTemplateColumns: COLS,
                   gap: 16,
                   padding: '14px 18px',
                   // The warning strip below carries the hairline when there is one, so the
@@ -252,28 +236,15 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
                       {m.isYou && <YouChip />}
                     </span>
                     <span className="mono" style={{ display: 'block', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
-                      {m.email}
+                      {emailLabel(m)}
                     </span>
                   </span>
                 </span>
 
                 <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
 
-                {isFirm ? (
-                  <span
-                    // AC#3's tooltip. Newline-joined rather than comma-joined: six client
-                    // names on one line is a tooltip nobody reads.
-                    title={clientAccessNames(m.clientAccess ?? []).join('\n')}
-                    style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}
-                  >
-                    {clientAccessLabel(m.clientAccess ?? [])}
-                  </span>
-                ) : (
-                  <span style={{ ...ELLIPSIS, fontSize: 13, color: 'var(--fg-2)' }}>{m.department ?? '—'}</span>
-                )}
-
-                {/* Newline-joined for the same reason the Client access tooltip is; empty on
-                    a roleless row, which is the `—` case and wants no tooltip at all. */}
+                {/* Newline-joined tooltip; empty on a roleless row, which is the `—` case and
+                    wants no tooltip at all. */}
                 <span
                   title={roleCell.tooltip || undefined}
                   style={{ ...ELLIPSIS, fontSize: 13, color: roleCell.tooltip ? 'var(--fg-2)' : 'var(--fg-4)' }}
@@ -285,19 +256,36 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onFlash }: {
                   <MemberStatusPill status={m.status} />
                 </span>
 
-                <span className="mono" style={{ ...ELLIPSIS, fontSize: 12, color: 'var(--fg-3)' }}>
-                  {lastActiveLabel(m)}
-                </span>
-
                 <MoreMenu
                   open={openMenuId === m.id}
                   onOpen={() => setOpenMenuId(m.id)}
                   onClose={closeMenu}
                   label={m.name}
                   items={menuItems(m, protectedAdmin)}
-                  note={protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined}
                 />
               </div>
+
+              {/* The failed write's SERVER reason, in the slot the steps warning already
+                  occupies. Here and not in the `⋯` menu because `MoreMenu` closes on select,
+                  so the control that started the write no longer exists when it settles. */}
+              {statusError?.id === m.id && (
+                <div style={{ padding: '0 18px 12px', minWidth }}>
+                  <div
+                    data-testid="member-status-error"
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--status-red-bg)',
+                      border: '1px solid var(--status-red-border)',
+                      fontSize: 12.5,
+                      lineHeight: 1.5,
+                      color: 'var(--status-red-text)',
+                    }}
+                  >
+                    {statusError.message}
+                  </div>
+                </div>
+              )}
 
               {blocked > 0 && (
                 // A full-width strip under the row rather than a third line inside the Person

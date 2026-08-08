@@ -17,7 +17,7 @@ import type { MappingGroup } from './lib/mappingGroups'
 // erased at compile — this file has zero runtime exports. `tsc` is what enforces it
 // (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
 // value import here and emits a byte-identical bundle.
-import type { Member } from './lib/members'
+import type { Member, MemberStatus } from './lib/members'
 import type { CustomRule, Suggestion } from './lib/rules'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
@@ -317,16 +317,22 @@ export type PlatformCtx = {
   editingPolicyId: string | null
 
   // --- Settings › Members tab -----------------------------------------------
-  // The CURRENT WORKSPACE's people, already resolved out of the per-mode store in
-  // App.tsx — per mode, not per client, the same reasoning as `policies` above.
-  // Held on ctx rather than in MembersView because the Workflows builder resolves a
-  // step's role to these people, so two surfaces read the one list.
+  // The tenant's live membership directory, fetched ONCE in App.tsx and shared by the
+  // Members tab, the Roles tab and the Workflows builder — the entities/entitiesState/
+  // entitiesError/refetchEntities shape above, for the same reason: three surfaces
+  // reading one list cannot disagree about who is in this workspace.
   //
   // Everything transient inside the tab — search text, the role filter, which drawer
-  // or menu is open, the invite modal — is local to MembersView, following the
-  // SettingsView precedent at SettingsView.tsx:6-9 rather than the openRuleKey /
-  // editingPolicyId one: those are screens reachable by nav, this is a tab panel.
+  // or menu is open — is local to MembersView, following the SettingsView precedent at
+  // SettingsView.tsx:6-9 rather than the openRuleKey / editingPolicyId one: those are
+  // screens reachable by nav, this is a tab panel.
+  //
+  // Both tabs branch on `membersState` and never on `members.length` — a failed fetch
+  // resolves `data` to null, which an emptiness check would render as an empty tenant.
   members: Member[]
+  membersState: AsyncStatus
+  membersError: ApiError | null
+  refetchMembers: () => void
 
   // --- Settings › Roles tab -------------------------------------------------
   // The CURRENT WORKSPACE's approval seats, resolved out of the per-mode store in
@@ -471,15 +477,12 @@ export type PlatformCtx = {
   createPolicy: () => void
   deletePolicy: (id: string) => void
   savePolicy: (next: Policy) => void
-  // Settings › Members. Same one-funnel contract as `savePolicy`: the tab composes the
-  // next Member(s) with the pure reducers in lib/members.ts and hands whole objects
-  // back, so App.tsx never needs to know a member's shape. Deliberately no
-  // suspend/reactivate/setRole pair — those are `saveMember` with a different row.
-  saveMember: (next: Member) => void
-  /** `roleKey` staffs the minted rows into that workflow role; `null` is the None sentinel. */
-  inviteMembers: (next: Member[], roleKey: string | null) => void
-  /** Also prunes the id from every role — suspending, deliberately, does not. */
-  dropMember: (id: string) => void
+  // Settings › Members. The ONE membership write the server backs. It resolves once the
+  // server's own row has replaced the old one, and REJECTS with the gateway's ApiError
+  // unreshaped — the caller renders that message at the control, so nothing here may
+  // swallow it. Invite, remove and access-role writes have no endpoint; their controls
+  // ship disabled with `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
+  setMemberStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => Promise<void>
   // Settings › Roles, same one-funnel contract again. `addRole` takes a whole Role because
   // the key is minted at compose time by `newRoleKey`, which needs the existing list.
   saveRole: (next: Role) => void

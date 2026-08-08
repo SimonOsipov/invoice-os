@@ -6,16 +6,17 @@
 // where the specs are (§15.8). `ClientAccessPicker` is the one that holds state rather than
 // taking it all as props, and its docblock says why.
 //
-// The invite modal and the member drawer reuse `InitialsChip`, `MemberStatusPill`,
-// `RoleCards`, `ClientAccessPicker` and `DepartmentField` from here. `WorkflowRolePills` has
-// only the drawer as a call site — the invite modal takes a single select instead — and lives
-// here anyway, beside the drawer's other controls.
+// The roster table, the member drawer and the role modal share these. Several of the
+// drawer's — `RoleCards`, `ClientAccessPicker`, `DepartmentField` — now mount read-only,
+// so each takes its writer callback as OPTIONAL rather than growing a `disabled` prop the
+// other call sites would never set.
 
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { moreGlyph } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 import {
+  ABSENT_LABEL,
   ACCESS_ROLES,
   clientSelectionCount,
   DEPARTMENTS,
@@ -169,13 +170,8 @@ export function AmberNote({ children, testId, style }: { children: ReactNode; te
 
 /**
  * §7's access-role picker — three radio CARDS, each carrying an `ACCESS_ROLES` label and
- * description. That copy is §3 verbatim and is already pinned by T1.39
- * (members.test.ts:456-462), labels and descriptions alike, so nothing is re-pinned here.
- *
- * Shared from day one rather than inlined in the modal: MEMB-01-06's invite modal and
- * MEMB-01-07's drawer render the same control, and `disabledIds` + `note` exist for the
- * drawer's §9 last-admin lock — building that surface now is what stops -07 rewriting this
- * file to add it.
+ * description. That copy is §3 verbatim and already pinned by T1.39, labels and descriptions
+ * alike, so nothing is re-pinned here.
  *
  * NATIVE RADIOS, and the app's first. `frontend/app/src` contains no `type="radio"`, no
  * `role="radio"` and no `radiogroup`; the ARIA-on-button idiom it does have (RulesView.tsx:259,
@@ -191,27 +187,30 @@ export function AmberNote({ children, testId, style }: { children: ReactNode; te
  * --bg-2 modal panel where --bg-2 would be invisible. It is the pair `WfSelect` already uses
  * for a control inside a panel (WorkflowParts.tsx:217).
  */
-export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
+export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdProp, idPrefix }: {
   value: AccessRole
-  onChange: (role: AccessRole) => void
-  /** MEMB-01-07 passes the two roles a sole admin may not switch to. */
+  /** Absent when every card is disabled — there is nothing left that can emit. */
+  onChange?: (role: AccessRole) => void
+  /** The roles this caller may not switch to. */
   disabledIds?: readonly AccessRole[]
   /**
-   * §9's explanation, rendered as visible text beneath the cards. Set it whenever any card is
-   * disabled — the same contract as `MoreMenu`'s `note`, for the same reason: it is the only
-   * layer a screenshot, a keyboard user and a text assertion can all reach.
+   * Why those cards are disabled, rendered as visible text beneath them. Set it whenever any
+   * card is disabled — it is the only layer a screenshot, a keyboard user and a text
+   * assertion can all reach.
    */
   note?: string
+  /** Lets a caller point its own `aria-describedby` at the note. Defaults to a local id. */
+  noteId?: string
   /**
-   * Names the radio group, so the modal's three and the drawer's three can be mounted at the
-   * same time without one stealing the other's selection. Deliberately a caller-supplied
-   * string and not `useId()`: React emits `:r3:`, which needs escaping in a CSS selector and
-   * moves with the render tree, and these ids are the handle the browser-only gate uses to
-   * find the cards.
+   * Names the radio group, so two instances can be mounted at once without one stealing the
+   * other's selection. Deliberately a caller-supplied string and not `useId()`: React emits
+   * `:r3:`, which needs escaping in a CSS selector and moves with the render tree, and these
+   * ids are the handle the browser-only gate uses to find the cards.
    */
   idPrefix: string
 }) {
-  const noteId = useId()
+  const localNoteId = useId()
+  const noteId = noteIdProp ?? localNoteId
 
   return (
     <div>
@@ -253,7 +252,7 @@ export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
                 value={r.id}
                 checked={sel}
                 disabled={disabled}
-                onChange={() => onChange(r.id)}
+                onChange={() => onChange?.(r.id)}
                 title={disabled ? note : undefined}
                 aria-describedby={disabled && note ? noteId : undefined}
                 style={{ flex: 'none', margin: '2px 0 0' }}
@@ -282,9 +281,9 @@ export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
 // ---------------------------------------------------------------------------
 
 /**
- * Extracted from `InviteMembersModal` in MEMB-01-07, when the member drawer became its
- * second call site. Not speculative abstraction: this control carries five decisions a
- * second copy would have to re-make and could silently get wrong —
+ * Extracted from the invite modal when the member drawer became its second call site. Not
+ * speculative abstraction: this control carries five decisions a second copy would have to
+ * re-make and could silently get wrong —
  *
  *   1. toggling back to `All clients` KEEPS the ticked set (a mis-click must not destroy a
  *      selection assembled one checkbox at a time);
@@ -293,9 +292,9 @@ export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
  *   4. `Selected clients` with nothing ticked is representable but not grantable;
  *   5. the `.pf-row` checkbox rows.
  *
- * (1) and (2) are exactly what MEMB-01-06's QA put on the gate list, so duplicating the
- * JSX would duplicate both of them out of coverage. The derivations themselves already
- * live in lib/members.ts with specs — only the markup was ever at stake here.
+ * (1) and (2) were on that subtask's own QA gate list, so duplicating the JSX would
+ * duplicate both of them out of coverage. The derivations themselves already live in
+ * lib/members.ts with specs — only the markup was ever at stake here.
  *
  * `scope` and the ticked `ids` are OWN state, seeded once from `value`, and that split is
  * load-bearing: `value` alone cannot be the source of truth, because collapsing "scope is
@@ -310,8 +309,12 @@ export function RoleCards({ value, onChange, disabledIds, note, idPrefix }: {
  */
 export function ClientAccessPicker({ value, onChange, idPrefix }: {
   value: 'all' | readonly number[]
-  /** Always a new array in the `selected` case — no caller ever receives this control's own state. */
-  onChange: (next: 'all' | number[]) => void
+  /**
+   * Always a new array in the `selected` case — no caller ever receives this control's own
+   * state. Absent when the caller mounts this read-only: nothing can emit through a
+   * `<fieldset disabled>`.
+   */
+  onChange?: (next: 'all' | number[]) => void
   /** Names the scope radio group and every `data-testid` here, exactly as `RoleCards` does. */
   idPrefix: string
 }) {
@@ -326,7 +329,7 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
   function pick(nextScope: 'all' | 'selected', nextIds: number[]) {
     setScope(nextScope)
     setIds(nextIds)
-    onChange(nextScope === 'all' ? 'all' : [...nextIds])
+    onChange?.(nextScope === 'all' ? 'all' : [...nextIds])
   }
 
   return (
@@ -402,26 +405,30 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
 
 const DEPARTMENT_OPTIONS: WfOption[] = DEPARTMENTS.map((d) => ({ value: d, label: d }))
 
+// A membership row carries no department, so `null` is a reachable value and the control
+// has to render SOMETHING. One option holding the em dash absence renders everywhere else
+// on this tab — never an empty box, which reads as a load failure.
+const ABSENT_OPTIONS: WfOption[] = [{ value: '', label: ABSENT_LABEL }]
+
 /**
  * What is left of `PositionFields` once Axis B became a workflow role. It SPLIT rather than
  * growing a mode branch: the pills below render in both modes and this select renders in
  * neither firm surface, so one atom would have had to know which mode it was in.
  *
  * Fully controlled — there is no internal state a mis-click could destroy, so the caller owns
- * the value outright. No `None` sentinel: `department` is required and non-nullable on both
- * call sites, so there is no unassigned value for a placeholder to stand for.
+ * the value outright. `onDepartment` is absent when the caller mounts it read-only.
  */
 export function DepartmentField({ department, onDepartment, marginBottom }: {
-  department: Department
-  onDepartment: (next: Department) => void
+  department: Department | null
+  onDepartment?: (next: Department) => void
   marginBottom?: number
 }) {
   return (
     <WfSelect
       label="Department"
-      value={department}
-      options={DEPARTMENT_OPTIONS}
-      onChange={(v) => onDepartment(v as Department)}
+      value={department ?? ''}
+      options={department == null ? ABSENT_OPTIONS : DEPARTMENT_OPTIONS}
+      onChange={(v) => onDepartment?.(v as Department)}
       width="100%"
       marginBottom={marginBottom}
     />
@@ -496,9 +503,15 @@ const POPOVER_SHADOW = '0 16px 40px -16px oklch(20% .02 210 / 0.28)'
 
 export type MenuAction = {
   label: string
-  /** Absent = rendered now, wired by a later subtask; selecting it only closes the menu. */
+  /** Absent on a disabled item; selecting anything else closes the menu after it runs. */
   onSelect?: () => void
   disabled?: boolean
+  /**
+   * Why this item is disabled — layer (3) of the treatment below, rendered as a visible
+   * note. PER ITEM, because one row can disable Suspend for the last-admin lock and Remove
+   * for a missing endpoint at the same time, and a single menu-wide note cannot say both.
+   */
+  reason?: string
   /** Destructive wording — Remove / Revoke invite. */
   danger?: boolean
 }
@@ -518,7 +531,7 @@ export type MenuAction = {
  * at a time and the table can make vertical room for whichever one it is (MENU_CLEARANCE
  * in MembersTable.tsx).
  */
-export function MoreMenu({ open, onOpen, onClose, label, items, note }: {
+export function MoreMenu({ open, onOpen, onClose, label, items }: {
   open: boolean
   onOpen: () => void
   /** Must be stable — it is a `useDismiss` dependency. */
@@ -526,18 +539,17 @@ export function MoreMenu({ open, onOpen, onClose, label, items, note }: {
   /** Names the row, for the trigger's accessible name. */
   label: string
   items: MenuAction[]
-  /**
-   * §9's explanation, rendered as visible text beneath the items. Set it whenever any item
-   * is disabled: it is layer (3) of the disabled treatment below, and the only layer a
-   * screenshot can see.
-   */
-  note?: string
 }) {
   // On the WRAPPER, not the panel: with the ref on the panel alone, clicking the trigger of
   // an open menu would dismiss it on mousedown and re-open it on click.
   const wrapRef = useRef<HTMLDivElement>(null)
   const noteId = useId()
   useDismiss(open, onClose, wrapRef)
+
+  // One note per DISTINCT reason, in item order, so a row disabled for two different
+  // reasons states both and each item points at its own.
+  const reasons = [...new Set(items.filter((i) => i.disabled && i.reason).map((i) => i.reason as string))]
+  const reasonId = (reason: string) => `${noteId}-${reasons.indexOf(reason)}`
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', justifySelf: 'end' }}>
@@ -597,8 +609,8 @@ export function MoreMenu({ open, onOpen, onClose, label, items, note }: {
               key={item.label}
               type="button"
               disabled={item.disabled}
-              title={item.disabled ? note : undefined}
-              aria-describedby={item.disabled && note ? noteId : undefined}
+              title={item.disabled ? item.reason : undefined}
+              aria-describedby={item.disabled && item.reason ? reasonId(item.reason) : undefined}
               onClick={(e) => {
                 e.stopPropagation()
                 item.onSelect?.()
@@ -638,11 +650,16 @@ export function MoreMenu({ open, onOpen, onClose, label, items, note }: {
               {item.label}
             </button>
           ))}
-          {note && (
-            <div id={noteId} style={{ padding: '8px 12px 10px', borderTop: '1px solid var(--line-1)', fontSize: 11, lineHeight: 1.45, color: 'var(--fg-3)' }}>
-              {note}
+          {reasons.map((reason) => (
+            <div
+              key={reason}
+              id={reasonId(reason)}
+              data-testid="member-menu-reason"
+              style={{ padding: '8px 12px 10px', borderTop: '1px solid var(--line-1)', fontSize: 11, lineHeight: 1.45, color: 'var(--fg-3)' }}
+            >
+              {reason}
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>

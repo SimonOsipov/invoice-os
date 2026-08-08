@@ -28,11 +28,14 @@ import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type Mappin
 import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import { createImport, makeImportAuth, previewImport, type ImportPreview } from './lib/importApi'
 import {
-  addMembers,
-  removeMember,
+  listMembers,
+  membersViewState,
   replaceMember,
+  setMembershipStatus,
+  toMember,
   type Member,
-  type MemberStore,
+  type MemberStatus,
+  type MembershipWire,
 } from './lib/members'
 import {
   addSuggested,
@@ -47,8 +50,6 @@ import {
 // `addRole` is aliased: ctx's verb of that name is this file's own wrapper below.
 import {
   addRole as appendRole,
-  addRoleMembers,
-  pruneMember,
   removeRole,
   replaceRole,
   seedRoles,
@@ -290,14 +291,25 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   const [policyStore, setPolicyStore] = useState<PolicyStore>(seedPolicies)
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null)
   const policies = policyStore[mode]
-  // The workspace's people, PER WORKSPACE MODE (lib/members.ts) — the policyStore shape
-  // above, for the same reason: a firm's staff and an in-house finance team are two
-  // different rosters, and `mode` is fixed by the signed-in persona for the session.
-  // Held here rather than in MembersView because the Workflows builder resolves a step's
-  // role to these people, so it is not one tab's private state.
-  // Interim: the seed is gone and the live fetch lands next. Empty until then.
-  const [memberStore, setMemberStore] = useState<MemberStore>(() => ({ firm: [], inhouse: [] }))
-  const members = memberStore[mode]
+  // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
+  // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because
+  // one persona is one tenant and the server answers for that tenant alone.
+  const membersAsync = useAsync<Member[]>(
+    () =>
+      base
+        ? listMembers(authedFetch, base).then((ws) => ws.map((w) => toMember(w, session.persona.subject)))
+        : Promise.reject(new Error('no gateway configured')),
+    { immediate: base != null },
+  )
+  const membersState = membersViewState(base, membersAsync.status)
+  // A local mirror rebuilt from the async data, the `entitiesList → setClients` shape:
+  // `asyncReducer`'s `start` nulls `data`, so refetching after a status write would blank
+  // the whole roster for the round trip. The write patches this instead; any later refetch
+  // overwrites it wholesale, so the fetch stays authoritative.
+  const [members, setMembers] = useState<Member[]>([])
+  useEffect(() => {
+    setMembers(membersAsync.data ?? [])
+  }, [membersAsync.data])
   // The approval seats a policy's steps point at, PER WORKSPACE MODE (lib/roles.ts) — the
   // memberStore shape above, for the same reason. A firm's engagement seats and an in-house
   // finance ladder are two different sets, and switching mode swaps the whole list rather
@@ -1019,37 +1031,16 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     updatePolicies((list) => replacePolicy(list, next))
   }
 
-  // Same one-funnel shape again: resolve THIS workspace's member list, run the pure
-  // reducer from lib/members.ts, store it back under the mode key. Every member write
-  // goes through here, so no caller has to know the store is keyed.
+  // The one membership write the server backs. The row that lands is the SERVER's own,
+  // never a client-composed one — so a status the server declined to set can never appear
+  // on screen.
   //
-  // Deliberately a pure pass-through: the last-admin invariant (§9) is NOT enforced
-  // here. It is enforced at the call sites, where a refusal can be explained — a funnel
-  // that silently declined the write would leave the UI no way to say why.
-  function updateMembers(fn: (list: Member[]) => Member[]) {
-    setMemberStore((store) => ({ ...store, [mode]: fn(store[mode]) }))
-  }
-
-  // The ONE write funnel's three verbs. The tab composes the next Member with the pure
-  // reducers and hands the whole object back, so nothing here knows a member's shape.
-  function saveMember(next: Member) {
-    updateMembers((list) => replaceMember(list, next))
-  }
-
-  // Two stores, one commit: holders live on the ROLE, and this file is the only place that
-  // sees both. React batches the pair, so no render observes a half-applied write.
-  function inviteMembers(next: Member[], roleKey: string | null) {
-    updateMembers((list) => addMembers(list, next))
-    if (roleKey == null) return
-    const ids = next.map((m) => m.id)
-    updateRoles((list) => addRoleMembers(list, roleKey, ids))
-  }
-
-  function dropMember(id: string) {
-    updateMembers((list) => removeMember(list, id))
-    // `[remove-prunes-suspend-keeps]` — `setMemberStatus` deliberately does not, which is what
-    // keeps the suspended-only-holder state reachable.
-    updateRoles((list) => pruneMember(list, id))
+  // No try/catch: the rejection has to reach MembersView, which renders the gateway's own
+  // reason at the control. Because nothing writes before the await, a failed call leaves
+  // the previous status rendered and there is no optimistic state to roll back.
+  async function setMemberStatus(id: string, status: Exclude<MemberStatus, 'invited'>) {
+    const wire: MembershipWire = await setMembershipStatus(authedFetch, base!, id, status)
+    setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
   }
 
   // The one-funnel shape once more, and the same pure pass-through: nothing is refused
@@ -1115,6 +1106,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     policies,
     editingPolicyId,
     members,
+    membersState,
+    membersError: membersAsync.error,
+    refetchMembers: membersAsync.run,
     roles,
     entityId,
     pickedFiles,
@@ -1169,9 +1163,7 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     createPolicy,
     deletePolicy,
     savePolicy,
-    saveMember,
-    inviteMembers,
-    dropMember,
+    setMemberStatus,
     saveRole,
     addRole,
     deleteRole,

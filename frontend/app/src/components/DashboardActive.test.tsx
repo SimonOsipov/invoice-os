@@ -182,3 +182,135 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
     expect(screen.queryByText('tenant-wide-rule')).toBeNull()
   })
 })
+
+// QA Mode B adversarial coverage. A mutation pass (bucket.metrics -> data.totals.metrics
+// on the ring/note/bars/VAT call sites) left every test above green, because they're all
+// inhouse-mode where scopedBucket resolves straight to rollup.totals -- same trap AC-7
+// already called out for top_violations, but the executor's tests didn't extend it to
+// metrics. These fixtures make the two buckets diverge to close that gap.
+describe('DashboardActive live panels — adversarial (QA task-429)', () => {
+  it('(f) firm-mode client renders its OWN readiness score, note, bar and VAT figure, never the tenant rollup totals', async () => {
+    const data: Rollup = {
+      totals: {
+        counts: ZERO_COUNTS,
+        needs_attention: 0,
+        metrics: {
+          readiness: { num: 40, den: 100 },
+          blocked_by_rules: { num: 9, den: 0 },
+          bar_field_completeness: { num: 20, den: 100 },
+          vat_tracked: { num: 50000000, den: 0 },
+        },
+        top_violations: [],
+      },
+      clients: [
+        {
+          entity_id: 'ent-1',
+          entity_name: 'Dangote Cement PLC',
+          counts: ZERO_COUNTS,
+          needs_attention: 0,
+          metrics: {
+            readiness: { num: 92, den: 100 },
+            bar_field_completeness: { num: 88, den: 100 },
+            vat_tracked: { num: 12340000, den: 0 },
+          },
+          top_violations: [],
+        },
+      ],
+      top_violations: [],
+    }
+    mockRollupFetch(data)
+
+    render(<DashboardActive ctx={firmCtx('ent-1', 'Dangote Cement PLC')} />)
+
+    expect(await screen.findByText('92')).toBeDefined()
+    expect(screen.getByText('88%')).toBeDefined()
+    expect(screen.getByText('₦123k')).toBeDefined()
+    expect(screen.getByText('All invoices checked and clear of blocking rules.')).toBeDefined()
+    expect(screen.queryByText('40')).toBeNull()
+    expect(screen.queryByText('20%')).toBeNull()
+    expect(screen.queryByText('₦500k')).toBeNull()
+    expect(screen.queryByText(/9 blocked by rules/)).toBeNull()
+  })
+
+  it('(g) readiness ring colours >=85 as var(--action) at the exact boundary', async () => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 85, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('85')
+    const tile = screen.getByText('Readiness score').parentElement!.parentElement!
+    const circles = tile.querySelectorAll('circle')
+    expect(circles[1].getAttribute('stroke')).toBe('var(--action)')
+  })
+
+  it('(h) readiness ring colours the 70-84 band as var(--status-amber-text) at the exact boundary', async () => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 70, den: 100 } }))
+
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByText('70')
+    const tile = screen.getByText('Readiness score').parentElement!.parentElement!
+    const circles = tile.querySelectorAll('circle')
+    expect(circles[1].getAttribute('stroke')).toBe('var(--status-amber-text)')
+  })
+
+  it('(i) firm-mode client with zero metrics still resolves via the matched clients row, not EMPTY_BUCKET', async () => {
+    const data: Rollup = {
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      clients: [
+        { entity_id: 'ent-2', entity_name: 'Zenith Traders', counts: { ...ZERO_COUNTS, draft: 5, submitted: 2 }, needs_attention: 0, metrics: {}, top_violations: [] },
+      ],
+      top_violations: [],
+    }
+    mockRollupFetch(data)
+
+    render(<DashboardActive ctx={firmCtx('ent-2', 'Zenith Traders')} />)
+
+    // metrics: {} on the matched row reads the same empty-state copy as EMPTY_BUCKET, so
+    // the counts (only present on a real clients row, never on EMPTY_BUCKET) are the proof
+    // scopedBucket found the row rather than falling through. The invoice-status donut
+    // legitimately repeats the same total, so scope each KPI query to its own tile.
+    expect(await screen.findByText('No invoices yet')).toBeDefined()
+    const invoicesTile = screen.getByText('Invoices').parentElement!.parentElement!
+    expect(within(invoicesTile).getByText('7')).toBeDefined() // 5 draft + 2 submitted
+    const awaitingTile = screen.getByText('Awaiting submission').parentElement!.parentElement!
+    expect(within(awaitingTile).getByText('5')).toBeDefined() // draft only
+  })
+
+  it('(j) firm-mode entityId with no matching clients row falls through to EMPTY_BUCKET and renders the empty state, not a crash', async () => {
+    const data: Rollup = {
+      totals: {
+        counts: { ...ZERO_COUNTS, draft: 99 },
+        needs_attention: 0,
+        metrics: { readiness: { num: 40, den: 100 } },
+        top_violations: [{ rule_key: 'tenant-rule', invoices: 5 }],
+      },
+      clients: [],
+      top_violations: [{ rule_key: 'tenant-rule', invoices: 5 }],
+    }
+    mockRollupFetch(data)
+
+    render(<DashboardActive ctx={firmCtx('ghost-entity', 'Ghost Co')} />)
+
+    expect(await screen.findByText('No invoices yet')).toBeDefined()
+    expect(screen.getByText('No open failures')).toBeDefined()
+    expect(screen.queryByText('99')).toBeNull()
+    expect(screen.queryByText('tenant-rule')).toBeNull()
+  })
+
+  it('(k) firm-mode client with empty top_violations renders "No open failures", not the tenant-wide list', async () => {
+    const data: Rollup = {
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }] },
+      clients: [
+        { entity_id: 'ent-3', entity_name: 'Clean Client Ltd', counts: ZERO_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] },
+      ],
+      top_violations: [{ rule_key: 'tenant-wide-rule', invoices: 10 }],
+    }
+    mockRollupFetch(data)
+
+    render(<DashboardActive ctx={firmCtx('ent-3', 'Clean Client Ltd')} />)
+
+    expect(await screen.findByText('No open failures')).toBeDefined()
+    expect(screen.queryByText('tenant-wide-rule')).toBeNull()
+  })
+})

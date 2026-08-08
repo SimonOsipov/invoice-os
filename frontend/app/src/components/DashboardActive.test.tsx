@@ -151,8 +151,12 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
     render(<DashboardActive ctx={dashCtx()} />)
 
     expect(await screen.findByText('No invoices yet')).toBeDefined()
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
-    expect(screen.queryByText('0%')).toBeNull()
+    // Scoped to the Readiness tile itself: donutSegments legitimately renders '0%' for
+    // all seven canonical states when the invoice-status donut has no invoices, so a
+    // document-wide queryByText('0%') is a false positive there, not a real assertion.
+    const readinessTile = screen.getByText('Readiness score').parentElement!.parentElement!
+    expect(within(readinessTile).getAllByText('—').length).toBeGreaterThan(0)
+    expect(within(readinessTile).queryByText('0%')).toBeNull()
   })
 
   it('(e) AC-7: a firm-mode client renders its OWN top_violations, not the tenant-wide list', async () => {

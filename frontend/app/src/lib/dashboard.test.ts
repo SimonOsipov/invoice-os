@@ -24,8 +24,13 @@ import {
   deslug,
   EMPTY_BUCKET,
   entityHealth,
+  formatMetric,
   getRollup,
   isEmptyRollup,
+  metricRatio,
+  readinessBars,
+  readinessNote,
+  readinessRing,
   resolveCtaLabel,
   scopedBucket,
   topFailures,
@@ -33,6 +38,8 @@ import {
   type Counts,
   type Rollup,
   type RollupClient,
+  type Metrics,
+  type RuleCount,
 } from './dashboard'
 
 // Calls a (currently throwing) helper and returns the caught error, tolerating both a
@@ -63,8 +70,10 @@ function counts(overrides: Partial<Counts> = {}): Counts {
 }
 
 const rollupFixture: Rollup = {
-  totals: { counts: counts({ draft: 1 }), needs_attention: 1 },
-  clients: [{ entity_id: 'e1', entity_name: 'Okafor & Partners', counts: counts({ draft: 1 }), needs_attention: 1 }],
+  totals: { counts: counts({ draft: 1 }), needs_attention: 1, metrics: {}, top_violations: [] },
+  clients: [
+    { entity_id: 'e1', entity_name: 'Okafor & Partners', counts: counts({ draft: 1 }), needs_attention: 1, metrics: {}, top_violations: [] },
+  ],
   top_violations: [{ rule_key: 'supplier-tin-format', invoices: 1 }],
 }
 
@@ -212,13 +221,17 @@ describe('resolveCtaLabel', () => {
 
 describe('isEmptyRollup', () => {
   it('DASH-T17: all-zero totals.counts is empty', () => {
-    const r: Rollup = { totals: { counts: counts(), needs_attention: 0 }, clients: [], top_violations: [] }
+    const r: Rollup = { totals: { counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }, clients: [], top_violations: [] }
 
     expect(isEmptyRollup(r)).toBe(true)
   })
 
   it('DASH-T18: any non-zero total count is not empty', () => {
-    const r: Rollup = { totals: { counts: counts({ draft: 1 }), needs_attention: 0 }, clients: [], top_violations: [] }
+    const r: Rollup = {
+      totals: { counts: counts({ draft: 1 }), needs_attention: 0, metrics: {}, top_violations: [] },
+      clients: [],
+      top_violations: [],
+    }
 
     expect(isEmptyRollup(r)).toBe(false)
   })
@@ -246,20 +259,20 @@ describe('dashboardViewState', () => {
 })
 
 describe('entityHealth', () => {
-  const clientA: RollupClient = { entity_id: 'A', entity_name: 'Acme', counts: counts(), needs_attention: 0 }
+  const clientA: RollupClient = { entity_id: 'A', entity_name: 'Acme', counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }
 
   it('DASH-T21: an entity absent from clients reads no-invoices', () => {
     expect(entityHealth([clientA], 'Z')).toEqual({ kind: 'no-invoices' })
   })
 
   it('DASH-T22: an entity present with needs_attention:2 reads needs-attention with that count', () => {
-    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 2 }
+    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 2, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'needs-attention', count: 2 })
   })
 
   it('DASH-T23: an entity present with needs_attention:0 reads clear', () => {
-    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0 }
+    const clientZ: RollupClient = { entity_id: 'Z', entity_name: 'Zeta', counts: counts(), needs_attention: 0, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientA, clientZ], 'Z')).toEqual({ kind: 'clear' })
   })
@@ -270,9 +283,9 @@ describe('entityHealth', () => {
 // architect's original DASH-T1-T23 table.
 describe('scopedBucket', () => {
   const rollup: Rollup = {
-    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3 },
+    totals: { counts: counts({ draft: 5, accepted: 2 }), needs_attention: 3, metrics: {}, top_violations: [] },
     clients: [
-      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1 },
+      { entity_id: 'e1', entity_name: 'Acme', counts: counts({ validated: 4 }), needs_attention: 1, metrics: {}, top_violations: [] },
     ],
     top_violations: [],
   }
@@ -283,7 +296,12 @@ describe('scopedBucket', () => {
   })
 
   it('firm mode with a real entityId present in `clients` resolves that entity\'s own bucket, not totals', () => {
-    expect(scopedBucket(false, 'e1', rollup)).toEqual({ counts: counts({ validated: 4 }), needs_attention: 1 })
+    expect(scopedBucket(false, 'e1', rollup)).toEqual({
+      counts: counts({ validated: 4 }),
+      needs_attention: 1,
+      metrics: {},
+      top_violations: [],
+    })
   })
 
   it('firm mode with entityId===null (no client resolved yet) resolves EMPTY_BUCKET, never totals', () => {
@@ -370,7 +388,7 @@ describe('entityHealth — QA adversarial', () => {
   })
 
   it('QA-EH2: a present client with a large needs_attention count round-trips that exact count, uncapped/untruncated', () => {
-    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137 }
+    const clientBig: RollupClient = { entity_id: 'BIG', entity_name: 'Big Co', counts: counts(), needs_attention: 137, metrics: {}, top_violations: [] }
 
     expect(entityHealth([clientBig], 'BIG')).toEqual({ kind: 'needs-attention', count: 137 })
   })
@@ -390,7 +408,7 @@ describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero'
   for (const key of stateKeys) {
     it(`QA-IE-${key}: only "${key}" nonzero is not empty (guards a helper checking a subset of the 7 keys)`, () => {
       const r: Rollup = {
-        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0 },
+        totals: { counts: counts({ [key]: 1 } as Partial<Counts>), needs_attention: 0, metrics: {}, top_violations: [] },
         clients: [],
         top_violations: [],
       }
@@ -398,4 +416,226 @@ describe('isEmptyRollup — QA adversarial: exactly one of the 7 states nonzero'
       expect(isEmptyRollup(r)).toBe(false)
     })
   }
+})
+
+// Metric registry & derived helpers (Mode A RED, task-428) — transcribed from the
+// architect's Test Specs table (FMR-01..FMR-13). dashboard.ts does not yet export
+// Metrics/metricRatio/formatMetric/readinessRing/readinessBars/readinessNote, and
+// RollupBucket/RollupClient don't yet carry metrics/top_violations — every spec below
+// is expected to fail on that missing surface, not a typo.
+
+const CIRC = 2 * Math.PI * 50
+
+describe('metricRatio', () => {
+  it('FMR-01: rounds num/den to a 0..100 percentage', () => {
+    const m: Metrics = { readiness: { num: 2, den: 262 } }
+    expect(metricRatio(m, 'readiness')).toBe(1)
+  })
+
+  it('FMR-02: an absent key and a zero denominator both read null, never 0', () => {
+    const m: Metrics = { readiness: { num: 5, den: 0 } }
+    expect(metricRatio({}, 'readiness')).toBeNull()
+    expect(metricRatio(m, 'readiness')).toBeNull()
+  })
+})
+
+describe('formatMetric', () => {
+  it('FMR-03: a null underlying value renders the em dash for every kind (ratio/count/amount)', () => {
+    expect(formatMetric({}, 'readiness')).toBe('—')
+    expect(formatMetric({}, 'blocked_by_rules')).toBe('—')
+    expect(formatMetric({}, 'vat_tracked')).toBe('—')
+  })
+
+  it('FMR-04: vat_tracked converts kobo to naira exactly once, formatted via fmtShort', () => {
+    const m: Metrics = { vat_tracked: { num: 240_000_000, den: 2 } }
+    expect(formatMetric(m, 'vat_tracked')).toBe('₦2.4M')
+  })
+
+  it('FMR-05: a count metric renders the plain integer, not a percentage', () => {
+    const m: Metrics = { blocked_by_rules: { num: 12, den: 259 } }
+    expect(formatMetric(m, 'blocked_by_rules')).toBe('12')
+  })
+
+  it('FMR-06: an unregistered key renders the em dash and does not throw', () => {
+    const m: Metrics = { made_up_key: { num: 1, den: 1 } }
+    expect(() => formatMetric(m, 'made_up_key')).not.toThrow()
+    expect(formatMetric(m, 'made_up_key')).toBe('—')
+  })
+})
+
+describe('readinessRing', () => {
+  it('FMR-07a: 79% is amber-banded, offset matches the shipped ring geometry', () => {
+    const ring = readinessRing({ readiness: { num: 79, den: 100 } })
+    expect(ring.score).toBe(79)
+    expect(ring.color).toBe('var(--status-amber-text)')
+    expect(ring.circ).toBe(CIRC.toFixed(1))
+    expect(ring.offset).toBe((CIRC * (1 - 79 / 100)).toFixed(1))
+  })
+
+  it('FMR-07b: 90% crosses into the --action band', () => {
+    const ring = readinessRing({ readiness: { num: 90, den: 100 } })
+    expect(ring.color).toBe('var(--action)')
+  })
+
+  it('FMR-07c: 60% falls into the red band', () => {
+    const ring = readinessRing({ readiness: { num: 60, den: 100 } })
+    expect(ring.color).toBe('var(--status-red-text)')
+  })
+
+  it('FMR-07d: an absent readiness metric yields a null score and a fully-offset (empty) ring', () => {
+    const ring = readinessRing({})
+    expect(ring.score).toBeNull()
+    expect(ring.offset).toBe(CIRC.toFixed(1))
+  })
+})
+
+describe('readinessBars', () => {
+  it('FMR-08: exactly three bars, fixed order, pinned labels', () => {
+    const m: Metrics = {
+      bar_field_completeness: { num: 90, den: 100 },
+      bar_tax_accuracy: { num: 70, den: 100 },
+      bar_identifiers_format: { num: 50, den: 100 },
+    }
+    const bars = readinessBars(m)
+    expect(bars).toHaveLength(3)
+    expect(bars.map((b) => b.label)).toEqual([
+      'Field completeness',
+      'Tax accuracy · VAT / WHT',
+      'Identifiers & format',
+    ])
+  })
+
+  it('FMR-09: an absent bar metric reads pct:null and the em-dash label', () => {
+    const bars = readinessBars({})
+    expect(bars).toHaveLength(3)
+    for (const bar of bars) {
+      expect(bar.pct).toBeNull()
+      expect(bar.pctLabel).toBe('—')
+    }
+  })
+})
+
+describe('readinessNote', () => {
+  it('FMR-10: non-zero clauses join in fixed order: blocked, failed, unchecked', () => {
+    const m: Metrics = {
+      blocked_by_rules: { num: 12, den: 300 },
+      failed_in_transmission: { num: 3, den: 300 },
+      never_validated: { num: 259, den: 300 },
+    }
+    expect(readinessNote(m)).toBe('12 blocked by rules · 3 failed in transmission · 259 not yet checked')
+  })
+
+  // Closes a vacuous-pass gap FMR-10/11 alone would leave open: a join that never
+  // actually omits a zero clause would still satisfy both of those.
+  it('FMR-10b: a zero clause is omitted from the join, not rendered as "0 ..."', () => {
+    const m: Metrics = {
+      blocked_by_rules: { num: 0, den: 300 },
+      failed_in_transmission: { num: 4, den: 300 },
+      never_validated: { num: 0, den: 300 },
+    }
+    expect(readinessNote(m)).toBe('4 failed in transmission')
+  })
+
+  it('FMR-11: all three counts zero renders the all-clear sentence', () => {
+    const m: Metrics = {
+      blocked_by_rules: { num: 0, den: 300 },
+      failed_in_transmission: { num: 0, den: 300 },
+      never_validated: { num: 0, den: 300 },
+    }
+    expect(readinessNote(m)).toBe('All invoices checked and clear of blocking rules.')
+  })
+
+  it('FMR-12: no metrics at all reads "No invoices yet"', () => {
+    expect(readinessNote({})).toBe('No invoices yet')
+  })
+})
+
+describe('scopedBucket / EMPTY_BUCKET — metrics and top_violations passthrough', () => {
+  const totalsMetrics: Metrics = { readiness: { num: 80, den: 100 } }
+  const totalsViolations: RuleCount[] = [{ rule_key: 'supplier-tin-required', invoices: 2 }]
+  const clientMetrics: Metrics = { readiness: { num: 60, den: 50 } }
+  const clientViolations: RuleCount[] = [{ rule_key: 'buyer-tin-required', invoices: 1 }]
+
+  const rollup: Rollup = {
+    totals: {
+      counts: counts({ draft: 5 }),
+      needs_attention: 3,
+      metrics: totalsMetrics,
+      top_violations: totalsViolations,
+    },
+    clients: [
+      {
+        entity_id: 'e1',
+        entity_name: 'Acme',
+        counts: counts({ validated: 4 }),
+        needs_attention: 1,
+        metrics: clientMetrics,
+        top_violations: clientViolations,
+      },
+    ],
+    top_violations: [],
+  }
+
+  it('FMR-13a: in-house mode carries metrics and top_violations through (rollup.totals)', () => {
+    const bucket = scopedBucket(true, null, rollup)
+    expect(bucket.metrics).toEqual(totalsMetrics)
+    expect(bucket.top_violations).toEqual(totalsViolations)
+  })
+
+  it('FMR-13b: firm mode carries metrics and top_violations through from the selected client, not totals', () => {
+    const bucket = scopedBucket(false, 'e1', rollup)
+    expect(bucket.metrics).toEqual(clientMetrics)
+    expect(bucket.top_violations).toEqual(clientViolations)
+  })
+
+  it('FMR-13c: EMPTY_BUCKET carries metrics: {} and top_violations: []', () => {
+    expect(EMPTY_BUCKET.metrics).toEqual({})
+    expect(EMPTY_BUCKET.top_violations).toEqual([])
+  })
+})
+
+// QA adversarial coverage (Mode B, task-428) — appended post-implementation, same
+// convention as the DASH-T block above: not from the architect's FMR table, targets
+// gaps the happy-path table doesn't reach.
+
+describe('metricRatio — QA adversarial', () => {
+  it('QA-MR1: num > den (cannot happen server-side) is not clamped to 100 — documents the gap, not a passing contract', () => {
+    expect(metricRatio({ x: { num: 150, den: 100 } }, 'x')).toBe(150)
+  })
+
+  it('QA-MR2: a negative num is not clamped to 0 either — same unclamped-math gap as QA-MR1', () => {
+    expect(metricRatio({ x: { num: -5, den: 100 } }, 'x')).toBe(-5)
+  })
+
+  it('QA-MR3: den:1 boundary — num:0 reads 0%, num:1 reads 100%, neither is mistaken for the null/absent case', () => {
+    expect(metricRatio({ x: { num: 0, den: 1 } }, 'x')).toBe(0)
+    expect(metricRatio({ x: { num: 1, den: 1 } }, 'x')).toBe(100)
+  })
+})
+
+describe('formatMetric — QA adversarial', () => {
+  it('QA-FM1: den:1 boundary renders "0%" and "100%", not the em dash', () => {
+    expect(formatMetric({ readiness: { num: 0, den: 1 } }, 'readiness')).toBe('0%')
+    expect(formatMetric({ readiness: { num: 1, den: 1 } }, 'readiness')).toBe('100%')
+  })
+
+  it('QA-FM2: a very large kobo amount (billions of naira) still routes through fmtShort — no separate "B" unit, so it renders as a 4-digit "M" figure, not an em dash or a throw', () => {
+    const m: Metrics = { vat_tracked: { num: 350_000_000_000, den: 1 } } // 3.5B naira after /100
+    expect(formatMetric(m, 'vat_tracked')).toBe('₦3500.0M')
+  })
+})
+
+describe('readinessBars — QA adversarial', () => {
+  it('QA-RB1: only one of the three bar metrics present — that one computes normally, the other two read null/em-dash, all three still returned in fixed order', () => {
+    const m: Metrics = { bar_tax_accuracy: { num: 90, den: 100 } }
+    const bars = readinessBars(m)
+
+    expect(bars).toHaveLength(3)
+    expect(bars[0].pct).toBeNull()
+    expect(bars[0].pctLabel).toBe('—')
+    expect(bars[1].pct).toBe(90)
+    expect(bars[1].pctLabel).toBe('90%')
+    expect(bars[2].pct).toBeNull()
+    expect(bars[2].pctLabel).toBe('—')
+  })
 })

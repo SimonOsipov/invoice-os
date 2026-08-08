@@ -30,7 +30,12 @@ interface MockResponse {
 // instead: the rollup call always gets ZERO_ROLLUP, and only invoices calls draw from the
 // queue -- keeping the queue's order exactly page 1, page 2, ... regardless of hook timing.
 const ZERO_ROLLUP: Rollup = {
-  totals: { counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }, needs_attention: 0 },
+  totals: {
+    counts: { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 },
+    needs_attention: 0,
+    metrics: {},
+    top_violations: [],
+  },
   clients: [],
   top_violations: [],
 }

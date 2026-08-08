@@ -17,13 +17,35 @@ type Counts struct {
 	Failed    int `json:"failed"`
 }
 
+// Metric is one readiness/health indicator, numerator over denominator
+// (e.g. readiness: invoices ready / total invoices).
+type Metric struct {
+	Num int64 `json:"num"`
+	Den int64 `json:"den"`
+}
+
+// Metric keys emitted per client and in Totals.Metrics.
+const (
+	MetricReadiness            = "readiness"
+	MetricBarFieldCompleteness = "bar_field_completeness"
+	MetricBarTaxAccuracy       = "bar_tax_accuracy"
+	MetricBarIdentifiersFormat = "bar_identifiers_format"
+	MetricBlockedByRules       = "blocked_by_rules"
+	MetricFailedInTransmission = "failed_in_transmission"
+	MetricNeverValidated       = "never_validated"
+	MetricVATTracked           = "vat_tracked"
+)
+
 // Bucket is one rollup scope: the state counts plus the needs-attention
 // overlay. NeedsAttention is NOT an eighth state — it cuts across
 // draft/rejected/failed (rejected ∪ failed ∪ (draft AND an error-severity
-// violation), AC-3).
+// violation), AC-3). TopViolations has no `omitempty`: an empty scope still
+// marshals "top_violations":[], never null.
 type Bucket struct {
-	Counts         Counts `json:"counts"`
-	NeedsAttention int    `json:"needs_attention"`
+	Counts         Counts            `json:"counts"`
+	NeedsAttention int               `json:"needs_attention"`
+	Metrics        map[string]Metric `json:"metrics"`
+	TopViolations  []RuleCount       `json:"top_violations"`
 }
 
 // Client is one per-entity row. Bucket is embedded ANONYMOUSLY so
@@ -36,8 +58,8 @@ type Client struct {
 	Bucket
 }
 
-// RuleCount is one violation rule's tenant-wide frequency (M4-07-02 fills
-// this in; left empty by Store.Rollup here).
+// RuleCount is one violation rule's frequency -- tenant-wide on
+// Rollup/Totals.TopViolations, or scoped to one entity on Client.TopViolations.
 type RuleCount struct {
 	RuleKey  string `json:"rule_key"`
 	Invoices int    `json:"invoices"`

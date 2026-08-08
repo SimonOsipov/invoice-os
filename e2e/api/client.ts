@@ -487,13 +487,14 @@ export function transitionInvoice(token: string, id: string, target: Invoice['st
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', body: { target }, token })
 }
 
-// ---- Dashboard rollup wire types, mirrored EXACTLY from internal/dashboard/
-// dashboard.go's Counts/Bucket/Client/RuleCount/Rollup (M4-07-05, task-159).
-// dashboard.go's Client embeds Bucket ANONYMOUSLY so encoding/json promotes
-// counts/needs_attention to the row's top level -- DashboardClient below
-// models that promotion directly (extends DashboardBucket) rather than
-// nesting a "bucket" key. No `omitempty` on any Counts field on the Go side,
-// so every key is always present, zeros included. ----
+// ---- Dashboard rollup wire types, mirrored from internal/dashboard/
+// dashboard.go's Counts/Bucket/Client/RuleCount/Rollup -- covers the fields
+// the API specs use. Client embeds Bucket ANONYMOUSLY so encoding/json
+// promotes counts/needs_attention to the row's top level -- DashboardClient
+// extends DashboardBucket rather than nesting a "bucket" key.
+// `metrics` and per-client `top_violations` are deliberately unmirrored
+// (no-e2e-change): rollup() only returns this type, never builds a request
+// literal, so TS excess-property checks don't apply. ----
 
 export interface Counts {
   draft: number

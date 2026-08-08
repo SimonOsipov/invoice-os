@@ -136,7 +136,7 @@ func TestRollupHandler_200Body(t *testing.T) {
 func TestRollupHandler_EmptyTenantSerializesAsArrays(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	rollup := func(ctx context.Context) (Rollup, error) {
-		return Rollup{Clients: []Client{}, TopViolations: []RuleCount{}}, nil
+		return Rollup{Totals: Bucket{TopViolations: []RuleCount{}}, Clients: []Client{}, TopViolations: []RuleCount{}}, nil
 	}
 	rec, _ := doRollup(t, rollup, &id)
 

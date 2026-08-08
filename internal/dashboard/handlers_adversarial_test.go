@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -208,7 +209,7 @@ func TestRollupHandler_LargeBodyRoundTripsWireContract(t *testing.T) {
 		t.Fatalf("decoded %d top_violations, want %d", len(got.TopViolations), nRules)
 	}
 	for i := range clients {
-		if got.Clients[i] != clients[i] {
+		if !reflect.DeepEqual(got.Clients[i], clients[i]) {
 			t.Errorf("client[%d] = %+v, want %+v", i, got.Clients[i], clients[i])
 		}
 	}

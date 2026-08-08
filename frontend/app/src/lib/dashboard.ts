@@ -34,6 +34,7 @@ import type { DonutSeg } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 
 import type { InvoiceStatus } from './invoices'
+import { fmtShort } from './format'
 
 // The 7-state count bucket (dashboard.go Bucket.Counts), no omitempty on the wire — a
 // zero state still serializes as an explicit 0.
@@ -47,21 +48,35 @@ export interface Counts {
   failed: number
 }
 
+// dashboard.go Metric — a num/den pair; the registry below decides how to read it, not
+// the wire (no kind discriminator).
+export interface Metric {
+  num: number
+  den: number
+}
+export type Metrics = Record<string, Metric>
+
 // dashboard.go Bucket — the 7-state counts plus the overlapping needs_attention overlay
 // (rejected ∪ failed ∪ drafts-with-an-error-severity-violation). Never a donut input.
+// Sibling of RollupClient below — kept in sync by hand, not by `extends`.
 export interface RollupBucket {
   counts: Counts
   needs_attention: number
+  metrics: Metrics
+  top_violations: RuleCount[]
 }
 
-// dashboard.go Client — Bucket is embedded anonymously there, so counts/needs_attention
-// promote to this row's top level on the wire; entity_id/entity_name are the row's own
-// fields. Only entities WITH at least one invoice appear here (INNER JOIN, store.go).
+// dashboard.go Client — Bucket is embedded anonymously there, so counts/needs_attention/
+// metrics/top_violations promote to this row's top level on the wire; entity_id/
+// entity_name are the row's own fields. Only entities WITH at least one invoice appear
+// here (INNER JOIN, store.go). Sibling of RollupBucket above — kept in sync by hand.
 export interface RollupClient {
   entity_id: string
   entity_name: string
   counts: Counts
   needs_attention: number
+  metrics: Metrics
+  top_violations: RuleCount[]
 }
 
 // dashboard.go RuleCount — one top_violations row, server-ordered invoices DESC,
@@ -201,7 +216,7 @@ export function entityHealth(clients: RollupClient[], entityId: string): EntityH
 // re-show every OTHER client's numbers under this one's name, exactly the bug
 // [dashboard-scope-per-client] replaces.
 const EMPTY_COUNTS: Counts = { draft: 0, validated: 0, queued: 0, submitted: 0, accepted: 0, rejected: 0, failed: 0 }
-export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0 }
+export const EMPTY_BUCKET: RollupBucket = { counts: EMPTY_COUNTS, needs_attention: 0, metrics: {}, top_violations: [] }
 
 // Resolves which Bucket a CLIENT-scoped surface renders for the current selection
 // ([dashboard-scope-per-client]). In-house has ZERO business_entities rows
@@ -214,5 +229,96 @@ export function scopedBucket(isInhouse: boolean, entityId: string | null, rollup
   if (isInhouse) return rollup.totals
   if (entityId == null) return EMPTY_BUCKET
   const client = rollup.clients.find((c) => c.entity_id === entityId)
-  return client ? { counts: client.counts, needs_attention: client.needs_attention } : EMPTY_BUCKET
+  return client
+    ? { counts: client.counts, needs_attention: client.needs_attention, metrics: client.metrics, top_violations: client.top_violations }
+    : EMPTY_BUCKET
+}
+
+// Registry deciding how each metric key reads — no kind discriminator on the wire.
+const METRIC_KIND: Record<string, 'ratio' | 'count' | 'amount'> = {
+  readiness: 'ratio',
+  bar_field_completeness: 'ratio',
+  bar_tax_accuracy: 'ratio',
+  bar_identifiers_format: 'ratio',
+  blocked_by_rules: 'count',
+  failed_in_transmission: 'count',
+  never_validated: 'count',
+  vat_tracked: 'amount',
+}
+
+// null — never 0 — is the empty signal for an absent metric or a zero denominator.
+export function metricRatio(m: Metrics, key: string): number | null {
+  const metric = m[key]
+  if (!metric || metric.den === 0) return null
+  return Math.round((metric.num / metric.den) * 100)
+}
+
+export function metricCount(m: Metrics, key: string): number | null {
+  const metric = m[key]
+  return metric ? metric.num : null
+}
+
+// An unregistered key reads '—' rather than throwing — formatMetric must survive a
+// future metric the frontend hasn't been told the kind of yet.
+export function formatMetric(m: Metrics, key: string): string {
+  const kind = METRIC_KIND[key]
+  if (kind === 'ratio') {
+    const pct = metricRatio(m, key)
+    return pct === null ? '—' : pct + '%'
+  }
+  if (kind === 'count') {
+    const count = metricCount(m, key)
+    return count === null ? '—' : String(count)
+  }
+  if (kind === 'amount') {
+    const metric = m[key]
+    return metric ? fmtShort(metric.num / 100) : '—' // wire is kobo; naira once, here
+  }
+  return '—'
+}
+
+// Ring geometry and colour bands ported verbatim from dashboardMock.ts's shipped tile
+// (R=50) so the real data doesn't visually shift it.
+export function readinessRing(m: Metrics): { score: number | null; circ: string; offset: string; color: string } {
+  const circ = 2 * Math.PI * 50
+  const score = metricRatio(m, 'readiness')
+  const color =
+    score === null
+      ? 'var(--status-muted-text)'
+      : score >= 85
+        ? 'var(--action)'
+        : score >= 70
+          ? 'var(--status-amber-text)'
+          : 'var(--status-red-text)'
+  const offset = score === null ? circ : circ * (1 - score / 100)
+  return { score, circ: circ.toFixed(1), offset: offset.toFixed(1), color }
+}
+
+const BAR_METRICS: { key: string; label: string }[] = [
+  { key: 'bar_field_completeness', label: 'Field completeness' },
+  { key: 'bar_tax_accuracy', label: 'Tax accuracy · VAT / WHT' },
+  { key: 'bar_identifiers_format', label: 'Identifiers & format' },
+]
+
+export function readinessBars(m: Metrics): { label: string; pct: number | null; pctLabel: string; color: string }[] {
+  return BAR_METRICS.map(({ key, label }) => {
+    const pct = metricRatio(m, key)
+    const color = pct === null ? 'var(--status-muted-text)' : pct >= 85 ? 'var(--status-green-text)' : 'var(--status-amber-text)'
+    return { label, pct, pctLabel: pct === null ? '—' : pct + '%', color }
+  })
+}
+
+const NOTE_CLAUSES: { key: string; suffix: string }[] = [
+  { key: 'blocked_by_rules', suffix: 'blocked by rules' },
+  { key: 'failed_in_transmission', suffix: 'failed in transmission' },
+  { key: 'never_validated', suffix: 'not yet checked' },
+]
+
+// [note-copy]: fixed clause order, zero clauses omitted, all-zero and no-metrics each
+// get their own pinned sentence.
+export function readinessNote(m: Metrics): string {
+  if (Object.keys(m).length === 0) return 'No invoices yet'
+  const clauses = NOTE_CLAUSES.map(({ key, suffix }) => ({ n: metricCount(m, key) ?? 0, suffix })).filter((c) => c.n > 0)
+  if (clauses.length === 0) return 'All invoices checked and clear of blocking rules.'
+  return clauses.map((c) => `${c.n} ${c.suffix}`).join(' · ')
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -1031,5 +1032,186 @@ func TestStoreListMemberships_ReadsStatusAndIdentity(t *testing.T) {
 		t.Error(`memberships[1] missing key "email", want present with JSON null`)
 	} else if string(raw) != "null" {
 		t.Errorf(`memberships[1]["email"] = %s, want null`, raw)
+	}
+}
+
+// TestMembershipsHandler_CrossTenantIdentityNotLeaked (AC-1/AC-2 adversarial,
+// QA-added): through the real HTTP handler wired to a real Store.ListMemberships
+// loader, tenant B's display_name/email must never reach tenant A's GET
+// /v1/memberships response. memberships_rls_test.go already proves this at
+// the raw-SQL/table level (TestRLS_MembershipsCrossTenantIdentityColumnsInvisible);
+// this proves it holds through the widened wire contract this subtask added.
+func TestMembershipsHandler_CrossTenantIdentityNotLeaked(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.NewString(), uuid.NewString()
+	userA, userB := uuid.NewString(), uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test leak A', 'firm'), ($2, 'tenancy qa-test leak B', 'firm')`,
+		tenantA, tenantB); err != nil {
+		t.Fatalf("seed tenants: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA, tenantB)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, display_name, email) VALUES ($1, $2, 'admin', 'A Person', 'a@example.com')`,
+		tenantA, userA); err != nil {
+		t.Fatalf("seed tenant A membership: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, display_name, email) VALUES ($1, $2, 'admin', 'B Secret', 'b-secret@example.com')`,
+		tenantB, userB); err != nil {
+		t.Fatalf("seed tenant B membership: %v", err)
+	}
+
+	store := NewStore(app)
+	handler := MembershipsHandler(store.ListMemberships, nil)
+
+	r := httptest.NewRequest("GET", "/v1/memberships", nil)
+	id := auth.Identity{Subject: userA, Role: "authenticated", TenantID: tenantA}
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "B Secret") || strings.Contains(rec.Body.String(), "b-secret@example.com") {
+		t.Fatalf("tenant B's identity data present in tenant A's response body: %s", rec.Body.String())
+	}
+
+	var body membershipsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(body.Memberships, &items); err != nil {
+		t.Fatalf("decode memberships %q: %v", body.Memberships, err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(memberships) = %d, want 1 (tenant A only): %s", len(items), body.Memberships)
+	}
+	var gotUserID string
+	if err := json.Unmarshal(items[0]["user_id"], &gotUserID); err != nil {
+		t.Fatalf("memberships[0].user_id: %v", err)
+	}
+	if gotUserID != userA {
+		t.Fatalf("user_id = %q, want %q (tenant B's row must not appear)", gotUserID, userA)
+	}
+	var gotName string
+	if err := json.Unmarshal(items[0]["display_name"], &gotName); err != nil {
+		t.Fatalf("memberships[0].display_name: %v", err)
+	}
+	if gotName != "A Person" {
+		t.Errorf("display_name = %q, want %q (tenant A's own value)", gotName, "A Person")
+	}
+}
+
+// TestStoreListMemberships_EmptyStringDisplayNameNotNull (AC-1 adversarial,
+// QA-added): display_name set to the empty string is a different state than
+// NULL and must round-trip through the *string scan as "", not as a nil
+// pointer -- and must marshal to JSON "" rather than null.
+func TestStoreListMemberships_EmptyStringDisplayNameNotNull(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	userID := uuid.NewString()
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test empty-string identity', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, display_name) VALUES ($1, $2, 'admin', '')`,
+		tenantID, userID); err != nil {
+		t.Fatalf("seed membership with empty-string display_name: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(memberships) = %d, want 1: %+v", len(got), got)
+	}
+	if got[0].DisplayName == nil {
+		t.Fatal("DisplayName = nil, want a non-nil pointer to \"\" (empty string is not NULL)")
+	}
+	if *got[0].DisplayName != "" {
+		t.Errorf("DisplayName = %q, want empty string", *got[0].DisplayName)
+	}
+	if got[0].Email != nil {
+		t.Errorf("Email = %q, want nil (not named on insert -> NULL)", *got[0].Email)
+	}
+
+	b, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("decode marshaled membership %s: %v", b, err)
+	}
+	if string(wire["display_name"]) != `""` {
+		t.Errorf(`wire display_name = %s, want "" (not null)`, wire["display_name"])
+	}
+	if string(wire["email"]) != "null" {
+		t.Errorf("wire email = %s, want null", wire["email"])
+	}
+}
+
+// TestStoreListMemberships_OrderTiebreakOnEqualCreatedAt (AC-2 adversarial,
+// QA-added): two rows sharing the exact same created_at must break the tie by
+// user_id ascending -- proves the ORDER BY's second clause specifically, not
+// just that the query is stable across repeated calls (as
+// TestStoreListMemberships_DeterministicOrder already does).
+func TestStoreListMemberships_OrderTiebreakOnEqualCreatedAt(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	uHigh, uLow := uuid.NewString(), uuid.NewString()
+	if uHigh < uLow {
+		uHigh, uLow = uLow, uHigh
+	}
+
+	if _, err := super.Exec(ctx,
+		`INSERT INTO tenants (id, name, kind) VALUES ($1, 'tenancy qa-test order tiebreak', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+	})
+	// Insert the lexically-later user_id FIRST, same created_at for both -- if
+	// the tiebreak were missing (or reversed), physical/insertion order could
+	// leak through instead of the required user_id ascending order.
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, created_at) VALUES
+		 ($1, $2, 'admin', '2026-03-01T00:00:00Z'), ($1, $3, 'preparer', '2026-03-01T00:00:00Z')`,
+		tenantID, uHigh, uLow); err != nil {
+		t.Fatalf("seed tied-created_at memberships: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: uHigh, Role: "authenticated", TenantID: tenantID})
+	got, err := store.ListMemberships(c)
+	if err != nil {
+		t.Fatalf("ListMemberships: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(memberships) = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].UserID != uLow || got[1].UserID != uHigh {
+		t.Errorf("order = [%s, %s], want [%s, %s] (user_id ascending tiebreak on equal created_at)",
+			got[0].UserID, got[1].UserID, uLow, uHigh)
 	}
 }

@@ -32,6 +32,7 @@ import {
   listMembers,
   memberInitials,
   MEMBER_UNBACKED,
+  membersSurface,
   membersViewState,
   mergeChips,
   nameFromEmail,
@@ -1801,5 +1802,44 @@ describe('activeAdmins/isProtectedAdmin — a short LIVE-shaped roster (4 rows) 
   it('a non-admin over the same roster is never protected', () => {
     const reviewer = live.find((m) => m.name === 'Reviewer One')!
     expect(isProtectedAdmin(live, reviewer)).toBe(false)
+  })
+})
+
+describe('membersSurface — the one derivation both tabs branch on, over every AsyncStatus', () => {
+  it('loading stays loading', () => {
+    expect(membersSurface('loading')).toBe('loading')
+  })
+
+  it('idle (no gateway configured) reads as empty, the roster-of-nothing surface', () => {
+    expect(membersSurface('idle')).toBe('empty')
+  })
+
+  it('empty (a landed, zero-row roster) reads as empty', () => {
+    expect(membersSurface('empty')).toBe('empty')
+  })
+
+  it('ready (a landed, non-empty roster) reads as roster', () => {
+    expect(membersSurface('ready')).toBe('roster')
+  })
+
+  // The whole point of AC1: a fetch that FAILED must never render as an empty SUCCESS. If
+  // this ever regressed to 'empty', both tabs would paint "just you" / "no roles yet" over
+  // a roster that never loaded, which is indistinguishable on screen from the truth.
+  it('error reads as error, never as empty or roster', () => {
+    expect(membersSurface('error')).toBe('error')
+    expect(membersSurface('error')).not.toBe('empty')
+    expect(membersSurface('error')).not.toBe('roster')
+  })
+
+  it('every status maps to exactly one surface, and only ready reaches roster', () => {
+    const ALL: AsyncStatus[] = ['idle', 'loading', 'error', 'empty', 'ready']
+    const bySurface = ALL.map((s) => [s, membersSurface(s)] as const)
+    expect(bySurface).toEqual([
+      ['idle', 'empty'],
+      ['loading', 'loading'],
+      ['error', 'error'],
+      ['empty', 'empty'],
+      ['ready', 'roster'],
+    ])
   })
 })

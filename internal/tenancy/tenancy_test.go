@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1711,50 +1712,560 @@ func TestMembership_SuspendedAdminCannotAdminister(t *testing.T) {
 }
 
 // TestMembership_ConcurrentLastTwoAdmins (AC-11, [last-admin-guard-is-race-safe]):
-// two active admins concurrently suspend each other -- exactly one must
-// succeed and one must get ErrLastActiveAdmin, and at least one active admin
-// must survive. A plain count (no FOR UPDATE over the admin set) would let
-// both commit and strand the tenant at zero admins.
+// two active admins concurrently suspend each other. The assertion is the
+// invariant, read back from the database: exactly one suspension COMMITS and an
+// active admin survives. Without FOR UPDATE over the admin set both transactions
+// see two active admins, both commit, and the tenant is stranded at zero.
+//
+// The refusal is ErrLastActiveAdmin when the transactions overlap and
+// ErrNotPermitted when they serialize (the loser's caller-role read already sees
+// itself suspended -- AC-10). Both are legal; pinning the exact pairing instead
+// failed ~6.7% of runs under contention while the invariant held every time.
+// Repeated because one round only exercises the unsafe path when they overlap.
 func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
-
-	tenantID := seedTenant(t, super, "T-CONCURRENT-ADMINS tenant")
-	adminX, adminY := uuid.NewString(), uuid.NewString()
-	seedMembership(t, super, tenantID, adminX, "admin", "active")
-	seedMembership(t, super, tenantID, adminY, "admin", "active")
-
 	store := NewStore(app)
-	cX := auth.WithIdentity(ctx, auth.Identity{Subject: adminX, Role: "authenticated", TenantID: tenantID})
-	cY := auth.WithIdentity(ctx, auth.Identity{Subject: adminY, Role: "authenticated", TenantID: tenantID})
 
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	wg.Add(2)
-	go func() { defer wg.Done(); _, errs[0] = store.SetMembershipStatus(cX, adminY, "suspended") }()
-	go func() { defer wg.Done(); _, errs[1] = store.SetMembershipStatus(cY, adminX, "suspended") }()
-	wg.Wait()
+	const rounds = 8
+	for round := range rounds {
+		tenantID := seedTenant(t, super, "T-CONCURRENT-ADMINS tenant")
+		adminX, adminY := uuid.NewString(), uuid.NewString()
+		seedMembership(t, super, tenantID, adminX, "admin", "active")
+		seedMembership(t, super, tenantID, adminY, "admin", "active")
 
-	oks, lastAdmin := 0, 0
-	for _, err := range errs {
-		switch {
-		case err == nil:
-			oks++
-		case errors.Is(err, ErrLastActiveAdmin):
-			lastAdmin++
+		cX := auth.WithIdentity(ctx, auth.Identity{Subject: adminX, Role: "authenticated", TenantID: tenantID})
+		cY := auth.WithIdentity(ctx, auth.Identity{Subject: adminY, Role: "authenticated", TenantID: tenantID})
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _, errs[0] = store.SetMembershipStatus(cX, adminY, "suspended") }()
+		go func() { defer wg.Done(); <-start; _, errs[1] = store.SetMembershipStatus(cY, adminX, "suspended") }()
+		close(start)
+		wg.Wait()
+
+		oks := 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				oks++
+			case errors.Is(err, ErrLastActiveAdmin), errors.Is(err, ErrNotPermitted):
+			default:
+				t.Fatalf("round %d: errs[%d] = %v, want nil, ErrLastActiveAdmin or ErrNotPermitted (a deadlock or serialization failure is a defect)", round, i, err)
+			}
+		}
+		if oks != 1 {
+			t.Fatalf("round %d: results = %v, want exactly one success", round, errs)
+		}
+
+		var suspended, active int
+		if err := super.QueryRow(ctx,
+			`SELECT count(*) FILTER (WHERE status = 'suspended'), count(*) FILTER (WHERE status = 'active')
+			   FROM memberships WHERE tenant_id = $1 AND role = 'admin'`, tenantID,
+		).Scan(&suspended, &active); err != nil {
+			t.Fatalf("round %d: count admins: %v", round, err)
+		}
+		if suspended != 1 || active != 1 {
+			t.Fatalf("round %d: admins after the race = %d suspended / %d active, want exactly 1 / 1 -- errs = %v", round, suspended, active, errs)
 		}
 	}
-	if oks != 1 || lastAdmin != 1 {
-		t.Fatalf("results = %v, want exactly one nil and one ErrLastActiveAdmin", errs)
+}
+
+// --- Stage-4 adversarial coverage -----------------------------------------
+
+// patchViaMux drives one PATCH through a real http.ServeMux registered with the
+// same pattern cmd/tenancy uses, so {user_id} is populated the way production
+// populates it -- the handler-only tests above leave PathValue empty.
+func patchViaMux(t *testing.T, set MembershipStatusSetter, id auth.Identity, pathID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /v1/memberships/{user_id}", SetMembershipStatusHandler(set, nil))
+	r := httptest.NewRequest("PATCH", "/v1/memberships/"+pathID, strings.NewReader(body))
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	return rec
+}
+
+// mustStatus reads one membership's status as the superuser.
+func mustStatus(t *testing.T, super *pgxpool.Pool, userID string) string {
+	t.Helper()
+	var status string
+	if err := super.QueryRow(context.Background(),
+		`SELECT status FROM memberships WHERE user_id = $1`, userID).Scan(&status); err != nil {
+		t.Fatalf("read back status of %s: %v", userID, err)
+	}
+	return status
+}
+
+// auditPayload returns the payload of the newest audit_log row for
+// tenantID+event whose payload names userID, RLS-scoped like auditCount.
+func auditPayload(t *testing.T, pool *pgxpool.Pool, tenantID, event, userID string) map[string]any {
+	t.Helper()
+	ctx := context.Background()
+	var raw []byte
+	if err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT payload FROM audit_log WHERE event = $1 AND payload->>'user_id' = $2 ORDER BY created_at DESC LIMIT 1`,
+			event, userID).Scan(&raw)
+	}); err != nil {
+		t.Fatalf("read audit_log payload (%s / %s): %v", event, userID, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode audit payload %q: %v", raw, err)
+	}
+	return got
+}
+
+// quoteLiteral renders a value as a SQL string literal. Only ever fed
+// uuid.NewString() output here.
+func quoteLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+// TestMembership_NonAdminRefusalIdenticalForEveryTargetShape (AC-2): a
+// non-admin must not be able to probe for a member's existence. Every
+// well-formed target -- a real member of the caller's own tenant, another
+// tenant's member, and an unseeded uuid -- must produce a byte-identical 403.
+// Driven through the real mux and the real store so the ordering under test is
+// the shipped one, not a stub's.
+func TestMembership_NonAdminRefusalIdenticalForEveryTargetShape(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	tenantA := seedTenant(t, super, "T-NO-ORACLE tenant A")
+	tenantB := seedTenant(t, super, "T-NO-ORACLE tenant B")
+	callerID := uuid.NewString()
+	seedMembership(t, super, tenantA, callerID, "preparer", "active")
+	sameTenant := uuid.NewString()
+	seedMembership(t, super, tenantA, sameTenant, "reviewer", "active")
+	crossTenant := uuid.NewString()
+	seedMembership(t, super, tenantB, crossTenant, "reviewer", "active")
+
+	store := NewStore(app)
+	id := auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantA}
+
+	shapes := []struct{ name, pathID string }{
+		{"existing same-tenant member", sameTenant},
+		{"cross-tenant member", crossTenant},
+		{"unknown uuid", uuid.NewString()},
+	}
+	var wantCode int
+	var wantBody string
+	for i, s := range shapes {
+		rec := patchViaMux(t, store.SetMembershipStatus, id, s.pathID, `{"status":"suspended"}`)
+		if i == 0 {
+			wantCode, wantBody = rec.Code, rec.Body.String()
+			if wantCode != http.StatusForbidden {
+				t.Fatalf("%s: status = %d, want 403: %s", s.name, wantCode, wantBody)
+			}
+		}
+		if rec.Code != wantCode || rec.Body.String() != wantBody {
+			t.Errorf("%s: (%d, %q), want byte-identical to %q's (%d, %q)",
+				s.name, rec.Code, rec.Body.String(), shapes[0].name, wantCode, wantBody)
+		}
 	}
 
-	var active int
-	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND role = 'admin' AND status = 'active'`, tenantID,
-	).Scan(&active); err != nil {
-		t.Fatalf("count active admins: %v", err)
+	if got := mustStatus(t, super, sameTenant); got != "active" {
+		t.Errorf("same-tenant target status = %q, want unchanged %q", got, "active")
 	}
-	if active < 1 {
-		t.Errorf("active admins after the race = %d, want >= 1", active)
+	if got := mustStatus(t, super, crossTenant); got != "active" {
+		t.Errorf("cross-tenant target status = %q, want unchanged %q", got, "active")
+	}
+
+	// A malformed path id is 404, not 403: the handler cannot call the store
+	// without a uuid. It is not an existence oracle -- the caller already knows
+	// the string is not a uuid, and it distinguishes no real member from any
+	// other. Pinned so changing it stays a decision rather than a drift.
+	rec := patchViaMux(t, store.SetMembershipStatus, id, "not-a-uuid", `{"status":"suspended"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("malformed path id: status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMembership_AuditFailureRollsBackRealSetMembershipStatus (AC-4): a failing
+// audit rolls the UPDATE back in the SHIPPED method.
+// TestMembership_AuditFailureRollsBackStatus proves it against a
+// hand-reconstructed tx, which cannot observe whether the real closure writes
+// its audit row inside its own transaction. The failure is forced by a trigger
+// keyed to this one target's payload, so no concurrent test can see it.
+func TestMembership_AuditFailureRollsBackRealSetMembershipStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-AUDIT-REAL tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	name := "qa_audit_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := super.Exec(ctx, fmt.Sprintf(
+		`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		 BEGIN RAISE EXCEPTION 'forced audit failure' USING ERRCODE = 'check_violation'; END; $$`, name)); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION IF EXISTS %s() CASCADE`, name))
+	})
+	if _, err := super.Exec(ctx, fmt.Sprintf(
+		`CREATE TRIGGER %s BEFORE INSERT ON audit_log FOR EACH ROW
+		 WHEN (NEW.payload->>'user_id' = %s) EXECUTE FUNCTION %s()`,
+		name, quoteLiteral(targetID), name)); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+	_, err := store.SetMembershipStatus(c, targetID, "suspended")
+	if err == nil {
+		t.Fatal("SetMembershipStatus succeeded with a failing audit write, want the whole transaction to abort")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("pgCode = %q, want 23514 from the forced audit failure: %v", code, err)
+	}
+	if got := mustStatus(t, super, targetID); got != "active" {
+		t.Errorf("status after a failed audit = %q, want the UPDATE rolled back to %q", got, "active")
+	}
+}
+
+// TestMembership_AuditPayloadRecordsTransition (AC-4): the audit row carries the
+// target and both ends of the transition, not just the event name -- a trail
+// that records only "someone was suspended" answers no question.
+func TestMembership_AuditPayloadRecordsTransition(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-AUDIT-PAYLOAD tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+
+	if _, err := store.SetMembershipStatus(c, targetID, "suspended"); err != nil {
+		t.Fatalf("SetMembershipStatus (suspend): %v", err)
+	}
+	got := auditPayload(t, app, tenantID, "membership.suspended", targetID)
+	for k, want := range map[string]any{"user_id": targetID, "from": "active", "to": "suspended"} {
+		if got[k] != want {
+			t.Errorf("suspend payload[%q] = %v, want %v (full payload %v)", k, got[k], want, got)
+		}
+	}
+
+	if _, err := store.SetMembershipStatus(c, targetID, "active"); err != nil {
+		t.Fatalf("SetMembershipStatus (reactivate): %v", err)
+	}
+	got = auditPayload(t, app, tenantID, "membership.reactivated", targetID)
+	for k, want := range map[string]any{"user_id": targetID, "from": "suspended", "to": "active"} {
+		if got[k] != want {
+			t.Errorf("reactivate payload[%q] = %v, want %v (full payload %v)", k, got[k], want, got)
+		}
+	}
+}
+
+// TestMembership_CrossTenantPatchLeavesNoAuditTrace: a refused cross-tenant
+// PATCH must leave nothing behind in the TARGET tenant's log either -- a
+// refusal that still wrote an audit row would leak the attempt, and the
+// attacker's subject, into a tenant that never consented to see it.
+func TestMembership_CrossTenantPatchLeavesNoAuditTrace(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "T-CROSS-AUDIT tenant A")
+	tenantB := seedTenant(t, super, "T-CROSS-AUDIT tenant B")
+	adminA := uuid.NewString()
+	seedMembership(t, super, tenantA, adminA, "admin", "active")
+	targetB := uuid.NewString()
+	seedMembership(t, super, tenantB, targetB, "reviewer", "active")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminA, Role: "authenticated", TenantID: tenantA})
+	if _, err := store.SetMembershipStatus(c, targetB, "suspended"); !errors.Is(err, ErrMembershipNotFound) {
+		t.Fatalf("cross-tenant PATCH err = %v, want ErrMembershipNotFound", err)
+	}
+
+	for _, tenantID := range []string{tenantA, tenantB} {
+		var n int
+		if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx,
+				`SELECT count(*) FROM audit_log WHERE payload->>'user_id' = $1`, targetB).Scan(&n)
+		}); err != nil {
+			t.Fatalf("count audit rows in %s: %v", tenantID, err)
+		}
+		if n != 0 {
+			t.Errorf("audit rows naming the cross-tenant target in tenant %s = %d, want 0", tenantID, n)
+		}
+	}
+}
+
+// TestMembership_CallerGateRefusesEveryNonActiveAdmin (AC-2, AC-10): the caller
+// gate is "an ACTIVE ADMIN", so every other caller shape is refused
+// identically. A suspended reviewer and an admin who has only been invited are
+// the shapes no pre-existing test covered.
+func TestMembership_CallerGateRefusesEveryNonActiveAdmin(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	cases := []struct{ name, role, status string }{
+		{"active reviewer", "reviewer", "active"},
+		{"suspended reviewer", "reviewer", "suspended"},
+		{"suspended preparer", "preparer", "suspended"},
+		{"suspended admin", "admin", "suspended"},
+		{"invited admin", "admin", "invited"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID := seedTenant(t, super, "T-CALLER-GATE tenant")
+			callerID := uuid.NewString()
+			seedMembership(t, super, tenantID, callerID, tc.role, tc.status)
+			// Two other active admins, so a wrongly-passed gate would really
+			// suspend the target rather than trip the last-admin guard.
+			targetID := uuid.NewString()
+			seedMembership(t, super, tenantID, targetID, "admin", "active")
+			seedMembership(t, super, tenantID, uuid.NewString(), "admin", "active")
+
+			c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
+			if _, err := store.SetMembershipStatus(c, targetID, "suspended"); !errors.Is(err, ErrNotPermitted) {
+				t.Fatalf("SetMembershipStatus (%s caller) err = %v, want ErrNotPermitted", tc.name, err)
+			}
+			if got := mustStatus(t, super, targetID); got != "active" {
+				t.Errorf("target status after a refused PATCH = %q, want unchanged %q", got, "active")
+			}
+		})
+	}
+}
+
+// TestMembership_ZeroActiveAdminsIsUnrecoverable records the escape hatch that
+// does not exist: with no active admin the tenant cannot be repaired through
+// this endpoint by anyone, and recovery is a superuser write. The endpoint can
+// never CREATE that state (the last-active-admin guard), so it is reachable only
+// via a seed, a migration, or a future role-change path.
+func TestMembership_ZeroActiveAdminsIsUnrecoverable(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "T-LOCKOUT tenant")
+	suspendedAdmin := uuid.NewString()
+	seedMembership(t, super, tenantID, suspendedAdmin, "admin", "suspended")
+	reviewer := uuid.NewString()
+	seedMembership(t, super, tenantID, reviewer, "reviewer", "active")
+
+	for name, callerID := range map[string]string{
+		"the suspended admin themselves": suspendedAdmin,
+		"an active reviewer":             reviewer,
+	} {
+		c := auth.WithIdentity(ctx, auth.Identity{Subject: callerID, Role: "authenticated", TenantID: tenantID})
+		if _, err := store.SetMembershipStatus(c, suspendedAdmin, "active"); !errors.Is(err, ErrNotPermitted) {
+			t.Errorf("reactivate by %s err = %v, want ErrNotPermitted", name, err)
+		}
+	}
+	if got := mustStatus(t, super, suspendedAdmin); got != "suspended" {
+		t.Errorf("admin status = %q, want still %q (nobody in the tenant can reactivate)", got, "suspended")
+	}
+}
+
+// TestMembership_MixedCaseTargetIDMatches: a non-canonical (uppercase) uuid must
+// resolve to the same row. is_target is computed in SQL rather than by a Go
+// string compare because pgx returns the canonical lowercase text, which an
+// uppercase argument would never equal -- the failure mode is a spurious 404 on
+// a target that plainly exists.
+func TestMembership_MixedCaseTargetIDMatches(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-MIXED-CASE tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "reviewer", "active")
+
+	store := NewStore(app)
+	id := auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID}
+
+	// Store level: the uppercase id reaches the SQL unchanged.
+	got, err := store.SetMembershipStatus(auth.WithIdentity(ctx, id), strings.ToUpper(targetID), "suspended")
+	if err != nil {
+		t.Fatalf("SetMembershipStatus with an uppercase uuid: %v", err)
+	}
+	if got.Status != "suspended" {
+		t.Errorf("status = %q, want %q", got.Status, "suspended")
+	}
+	if got.UserID != targetID {
+		t.Errorf("returned user_id = %q, want the canonical %q", got.UserID, targetID)
+	}
+	if s := mustStatus(t, super, targetID); s != "suspended" {
+		t.Errorf("row status = %q, want %q", s, "suspended")
+	}
+
+	// HTTP level: the handler normalises before the store ever sees it.
+	rec := patchViaMux(t, store.SetMembershipStatus, id, strings.ToUpper(targetID), `{"status":"active"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH with an uppercase path id: status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if s := mustStatus(t, super, targetID); s != "active" {
+		t.Errorf("row status after the uppercase PATCH = %q, want %q", s, "active")
+	}
+}
+
+// TestMembership_PathIDAndBodyOrdering pins the shipped ordering: the body is
+// validated before the path id. Both orderings agree on every single-fault
+// request; only a request bad in BOTH places tells them apart, and no
+// acceptance criterion constrains that case. The setter must never run.
+func TestMembership_PathIDAndBodyOrdering(t *testing.T) {
+	cases := []struct {
+		name, pathID, body string
+		want               int
+	}{
+		{"good id, bad body", uuid.NewString(), `{"status":"nope"}`, http.StatusBadRequest},
+		{"bad id, good body", "not-a-uuid", `{"status":"suspended"}`, http.StatusNotFound},
+		{"bad id, bad body", "not-a-uuid", `{"status":"nope"}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			set := func(context.Context, string, string) (Membership, error) {
+				t.Fatal("setter must not run for a request rejected at the handler")
+				return Membership{}, nil
+			}
+			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+			if rec := patchViaMux(t, set, id, tc.pathID, tc.body); rec.Code != tc.want {
+				t.Errorf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestMembership_StatusForErrTable (AC-3, AC-6, AC-13): each store sentinel maps
+// to its specified status and message on the wire, wrapped or bare, and no
+// message leaks the "tenancy: " sentinel prefix the SPA would render.
+func TestMembership_StatusForErrTable(t *testing.T) {
+	cases := []struct {
+		err     error
+		want    int
+		wantMsg string
+	}{
+		{db.ErrNoTenant, http.StatusUnauthorized, "unauthorized"},
+		{ErrInvalidStatus, http.StatusBadRequest, `status must be "active" or "suspended"`},
+		{ErrNotPermitted, http.StatusForbidden, "only an admin can change a member's status"},
+		{ErrMembershipNotFound, http.StatusNotFound, "membership not found"},
+		{ErrInvitedNotTransitionable, http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"},
+		{ErrLastActiveAdmin, http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"},
+		{errors.New("boom"), http.StatusInternalServerError, "internal server error"},
+	}
+	for _, tc := range cases {
+		for _, wrapped := range []bool{false, true} {
+			err, name := tc.err, tc.err.Error()
+			if wrapped {
+				err, name = fmt.Errorf("store: %w", tc.err), name+" (wrapped)"
+			}
+			t.Run(name, func(t *testing.T) {
+				set := func(context.Context, string, string) (Membership, error) { return Membership{}, err }
+				id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+				rec := patchViaMux(t, set, id, uuid.NewString(), `{"status":"suspended"}`)
+				if rec.Code != tc.want {
+					t.Errorf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+				}
+				var body struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode body %q: %v", rec.Body.String(), err)
+				}
+				if body.Error != tc.wantMsg {
+					t.Errorf("error = %q, want %q", body.Error, tc.wantMsg)
+				}
+				if strings.Contains(body.Error, "tenancy: ") {
+					t.Errorf("error %q leaks the sentinel prefix to the SPA", body.Error)
+				}
+			})
+		}
+	}
+}
+
+// TestMembership_OKBodyIsFiveKeyShape (AC-1): a 200 returns the updated
+// membership in the same five-key shape as a GET /v1/memberships element, with
+// a null email present rather than omitted.
+func TestMembership_OKBodyIsFiveKeyShape(t *testing.T) {
+	displayName := "Ada"
+	set := func(_ context.Context, userID, status string) (Membership, error) {
+		return Membership{UserID: userID, Role: "reviewer", Status: status, DisplayName: &displayName}, nil
+	}
+	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
+	targetID := uuid.NewString()
+	rec := patchViaMux(t, set, id, targetID, `{"status":"suspended"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode body %q: %v", rec.Body.String(), err)
+	}
+	gotKeys := make([]string, 0, len(raw))
+	for k := range raw {
+		gotKeys = append(gotKeys, k)
+	}
+	slices.Sort(gotKeys)
+	wantKeys := []string{"display_name", "email", "role", "status", "user_id"}
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("keys = %v, want exactly %v", gotKeys, wantKeys)
+	}
+	if string(raw["email"]) != "null" {
+		t.Errorf("email = %s, want null (present, never omitted)", raw["email"])
+	}
+	if string(raw["user_id"]) != `"`+targetID+`"` || string(raw["status"]) != `"suspended"` {
+		t.Errorf("body = %s, want the updated row for %s", rec.Body.String(), targetID)
+	}
+}
+
+// TestMembership_NoIdentity401: the PATCH endpoint answers nothing without a
+// verified caller, and the setter never runs -- the same fail-closed shape
+// MeHandler and MembershipsHandler already carry.
+func TestMembership_NoIdentity401(t *testing.T) {
+	set := func(context.Context, string, string) (Membership, error) {
+		t.Fatal("setter must not run without an identity")
+		return Membership{}, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /v1/memberships/{user_id}", SetMembershipStatusHandler(set, nil))
+	r := httptest.NewRequest("PATCH", "/v1/memberships/"+uuid.NewString(), strings.NewReader(`{"status":"suspended"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMembership_NoOpOnAlreadySuspendedAdminTarget (AC-12): the no-op guard runs
+// before the last-active-admin guard, so re-suspending an already-suspended
+// admin returns 200 without an UPDATE or an audit row.
+func TestMembership_NoOpOnAlreadySuspendedAdminTarget(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "T-NOOP-ADMIN tenant")
+	adminID := uuid.NewString()
+	seedMembership(t, super, tenantID, adminID, "admin", "active")
+	targetID := uuid.NewString()
+	seedMembership(t, super, tenantID, targetID, "admin", "suspended")
+
+	const event = "membership.suspended"
+	before := auditCount(t, app, tenantID, event)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: adminID, Role: "authenticated", TenantID: tenantID})
+	got, err := store.SetMembershipStatus(c, targetID, "suspended")
+	if err != nil {
+		t.Fatalf("re-suspending an already-suspended admin: %v", err)
+	}
+	if got.Status != "suspended" || got.Role != "admin" {
+		t.Errorf("no-op returned %+v, want the unchanged admin/suspended row", got)
+	}
+	if after := auditCount(t, app, tenantID, event); after != before {
+		t.Errorf("audit rows for %s = %d, want unchanged %d", event, after, before)
 	}
 }

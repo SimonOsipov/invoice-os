@@ -36,7 +36,7 @@
 // note); a high `offset` for empty-state (the shared dev tenant already
 // carries invoices from other specs, so there is no truly empty list).
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
+import { login, me, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -95,6 +95,15 @@ async function createFailedInvoice(tok: string, entityId: string, invoiceNumber:
   })
   return created.id
 }
+
+// The seeded active PREPARER of tenant a (db/seed.dev.sql): a member, so reads succeed,
+// but not an approver. Own copy — repo convention is no cross-spec imports.
+const PREPARER_SUBJECT = 'c0000000-0000-0000-0000-000000000003'
+
+// internal/invoice/handlers.go's notApproverTransmitReason, byte for byte (the separator
+// is an em dash, U+2014). This is the only layer where that Go const meets a TS literal on
+// bytes a running server emitted — assertErrorEnvelope never looks at the message.
+const NOT_APPROVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
 
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
@@ -794,6 +803,177 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const afterHistory = await rawFetch(`/api/invoice/v1/invoices/${id}/history`, { headers: { Authorization: `Bearer ${token}` } })
       const afterCount = (afterHistory.body as Record<string, unknown>[]).length
       expect(afterCount, 'resolving must not add a history row').toBe(beforeCount)
+    })
+  })
+
+  // The transmission gate: only an admin or a reviewer may drive an invoice to NRS/MBS.
+  // Only a deployed gateway proves it — the domain role resolves server-side from
+  // `memberships`, which every in-process handler test stubs. The preparer token is used
+  // for assertions ONLY; all setup runs as the admin, who is the only one who can do it.
+  test.describe('transmission RBAC', () => {
+    test('anchor: the preparer token really resolves an active preparer of this tenant', async () => {
+      // ANCHOR, not new coverage (the isolation.spec.ts idiom). Every refusal below would
+      // read the same for a stranger's token -- callerRole answers "" for a non-member and
+      // for a suspended one, and "" is refused by the same arm. Without this, the whole
+      // block would stay green if …0003 stopped being an active preparer.
+      const identity = await me(await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT }))
+      expect(identity.tenant.id, 'the preparer must resolve tenant a, the one the fixtures live in').toBe(PERSONAS.A.tenantId)
+      expect(identity.user.id, 'the token must resolve the seeded preparer subject').toBe(PREPARER_SUBJECT)
+      expect(identity.user.role, 'the refusals below must be caused by THIS role, not by absent membership').toBe('preparer')
+    })
+
+    test('a preparer cannot batch-submit a validated invoice; an admin submitting the same invoice enqueues it', async () => {
+      // Every fixture is built INSIDE the test body: CI retries once, and the admin
+      // submit below really enqueues, so a hoisted invoice would come back not_validated
+      // on the retry and report a false failure.
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const refused = await rawFetch('/api/invoice/v1/invoices/submissions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${preparerToken}` },
+        body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
+      })
+      assertErrorEnvelope(refused, 403, 'preparer batch-submit')
+      expect((refused.body as { error: string }).error, 'the 403 should carry the server sentence verbatim').toBe(NOT_APPROVER_REASON)
+
+      // Read the status back BEFORE the admin call -- that submit is not inert.
+      const after = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      expect((after.body as Record<string, unknown>).status, 'a refused submit must not move the invoice').toBe('validated')
+
+      // The positive control: same endpoint, same body shape, same invoice, admin token.
+      // Without it a mis-shaped request could 403 for reasons that have nothing to do with role.
+      const allowed = await rawFetch('/api/invoice/v1/invoices/submissions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
+      })
+      expect(allowed.status, 'an admin submitting the same invoice should return 200').toBe(200)
+      const results = (allowed.body as Record<string, unknown>).results as Record<string, unknown>[]
+      expect(results.length, 'exactly one result for one requested invoice').toBe(1)
+      expect(results[0].invoice_id, 'the result should name the requested invoice').toBe(created.id)
+      expect(results[0].enqueued, 'an admin submit of a validated invoice should enqueue it').toBe(true)
+      expect(results[0].status, 'the enqueued invoice should now be queued').toBe('queued')
+    })
+
+    test('a preparer cannot drive a transition, and the refused invoice is unmoved', async () => {
+      // Its own invoice, never the batch test's -- that one is genuinely enqueued and the
+      // worker drives it onward, so a shared fixture's status readback would be a race.
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${preparerToken}` },
+        body: { target: 'queued' },
+      })
+      assertErrorEnvelope(res, 403, 'preparer transition')
+      expect((res.body as { error: string }).error, 'the 403 should carry the server sentence verbatim').toBe(NOT_APPROVER_REASON)
+
+      const after = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      expect((after.body as Record<string, unknown>).status, 'a refused transition must not move the invoice').toBe('validated')
+    })
+
+    test("a preparer's 403 is identical for a real invoice and a random UUID (no existence oracle)", async () => {
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      const real = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${preparerToken}` },
+        body: { target: 'queued' },
+      })
+      const unknown = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${preparerToken}` },
+        body: { target: 'queued' },
+      })
+
+      // Pin the real id at 403 FIRST: two matching 404s (or two matching 401s) would
+      // satisfy the equality below without the gate existing at all.
+      assertErrorEnvelope(real, 403, 'preparer transition on a real invoice')
+      expect(unknown.status, 'an unknown id must answer with the same status').toBe(real.status)
+      expect(unknown.body, 'an unknown id must answer with an identical body').toEqual(real.body)
+    })
+
+    test('both transmit doors refuse a preparer with the same 403 body', async () => {
+      // No fixture: a random id is enough precisely because BOTH doors refuse before
+      // reading a row. One shared writeError feeds them, so any per-path variation is a defect.
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const id = crypto.randomUUID()
+
+      const transitionRes = await rawFetch(`/api/invoice/v1/invoices/${id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${preparerToken}` },
+        body: { target: 'queued' },
+      })
+      const batchRes = await rawFetch('/api/invoice/v1/invoices/submissions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${preparerToken}` },
+        body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+      })
+
+      assertErrorEnvelope(transitionRes, 403, 'preparer transition door')
+      assertErrorEnvelope(batchRes, 403, 'preparer batch-submit door')
+      expect((transitionRes.body as { error: string }).error, 'the transition door should carry the server sentence verbatim').toBe(NOT_APPROVER_REASON)
+      expect(batchRes.body, 'both doors must answer with an identical body').toEqual(transitionRes.body)
+    })
+
+    test('GET can_submit forks by role on ONE validated invoice: true for an admin, false + the role reason for a preparer', async () => {
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      // The admin leg is what makes the preparer leg non-vacuous: same row, same status,
+      // so the only thing that can explain the difference is the role.
+      const adminRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      expect(adminRes.status, 'GET on a validated invoice should return 200').toBe(200)
+      const adminBody = adminRes.body as Record<string, unknown>
+      expect(adminBody.can_submit, 'an admin can submit a validated invoice').toBe(true)
+      expect(adminBody.submit_blocked_reason, 'a submittable invoice carries no blocked reason').toBeNull()
+
+      const preparerRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${preparerToken}` } })
+      expect(preparerRes.status, 'a preparer can still READ the invoice').toBe(200)
+      const preparerBody = preparerRes.body as Record<string, unknown>
+      expect(preparerBody.can_submit, 'a preparer cannot submit any invoice').toBe(false)
+      expect(typeof preparerBody.submit_blocked_reason, 'the blocked reason should be a string').toBe('string')
+      expect(preparerBody.submit_blocked_reason, 'the read flag carries the same sentence as the 403').toBe(NOT_APPROVER_REASON)
+    })
+
+    test("a preparer's submit_blocked_reason survives a queued invoice, where an admin's is null", async () => {
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-RBAC-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      // A plain transition, not a batch submit: it enqueues no job, so nothing moves this
+      // fixture off `queued` mid-test (reconciliation's queued_never_sent drift is audit-only).
+      const queued = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'queued' },
+      })
+      expect(queued.status, 'setup: an admin transition to queued should return 200').toBe(200)
+
+      const adminRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })
+      const adminBody = adminRes.body as Record<string, unknown>
+      expect(adminBody.status, 'setup: the invoice should be queued').toBe('queued')
+      expect(adminBody.can_submit, 'a queued invoice is not submittable').toBe(false)
+      // Null for an admin because queued is not editable -- so on THIS status the role arm
+      // is the only thing that can put a sentence in the field.
+      expect(adminBody.submit_blocked_reason, 'an admin gets no reason on a queued invoice').toBeNull()
+
+      const preparerRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${preparerToken}` } })
+      const preparerBody = preparerRes.body as Record<string, unknown>
+      expect(preparerBody.can_submit, 'a preparer cannot submit any invoice').toBe(false)
+      expect(preparerBody.submit_blocked_reason, 'the role refusal is emitted on every status, not only the editable ones').toBe(NOT_APPROVER_REASON)
     })
   })
 })

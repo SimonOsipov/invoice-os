@@ -50,6 +50,26 @@ func TestWorkflowRole_KeyMatchesShippedSlugAlgorithm(t *testing.T) {
 		{"an inner separator collapses like any other run", nil, "A/B Testing", "a-b-testing"},
 		// --- added here: roles.test.ts never frees the base while its -2 is taken ---
 		{"a free base wins even when its -2 is taken", []string{"reviewer-2"}, "Reviewer", "reviewer"},
+
+		// --- QA adversarial: unicode past the two cases roles.test.ts pins. Every want
+		// below was cross-checked against the shipped newRoleKey, not derived by reading it. ---
+		{"an accented letter is dropped, never folded to its ascii base", nil, "Caf\u00e9 Manager", "caf-manager"},
+		// The same glyphs as the row above, decomposed: now the combining mark is the only
+		// non-slug rune, so the base letter survives and the two forms disagree.
+		{"a decomposed accent keeps its base letter, so NFD and NFC yield different keys", nil, "Cafe\u0301 Manager", "cafe-manager"},
+		// Unlike the emoji row these are letters, and every all-non-ascii title lands on
+		// the single fallback — so two unrelated titles collide there.
+		{"a title of only non-ascii letters falls back like punctuation", nil, "承認者", "role"},
+		{"ß is dropped rather than expanded to ss", nil, "Gr\u00f6\u00dfe Reviewer", "gr-e-reviewer"},
+		// The one JS divergence: JS full case-mapping gives "i"+U+0307 and slugs to i-x.
+		// Pinned at the Go value so adopting x/text case-mapping fails here loudly.
+		{"U+0130 lowercases without a combining mark in Go", nil, "\u0130X", "ix"},
+
+		// --- QA adversarial: the fallback's own boundaries ---
+		// Distinct from "###": the separator is already in the input, so trimming before
+		// replacing — or treating "-" as slug-safe — would never reach the fallback.
+		{"a hyphen-only title reaches the fallback too", nil, "---", "role"},
+		{"an empty title returns the fallback rather than panicking; the store rejects it first", nil, "", "role"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,14 +119,24 @@ func TestWorkflowRole_KeyNeverCollidesWithASeededKey(t *testing.T) {
 	}
 }
 
-// TestWorkflowRole_RenameKeepsKey covers the half of roles.test.ts:833-841 a pure
-// function can carry: re-deriving from an UNCHANGED title still moves the key,
-// because the stored key is itself in the taken-set. That a rename never calls the
-// port at all is UpdateRole's property, proven in subtask 04.
-func TestWorkflowRole_RenameKeepsKey(t *testing.T) {
+// TestWorkflowRole_RederivingOnSaveWouldMoveTheKey covers the half of
+// roles.test.ts:833-841 a pure function can carry: re-deriving from an UNCHANGED
+// title still moves the key, because the stored key is itself in the taken-set. That
+// a rename never calls the port at all is UpdateRole's property, proven in subtask 04.
+func TestWorkflowRole_RederivingOnSaveWouldMoveTheKey(t *testing.T) {
 	const stored, title = "engagement-partner", "Engagement Partner"
 	if got := newRoleKey(takenSet(stored), title); got == stored {
 		t.Errorf("newRoleKey({%q}, %q) = %q — a re-derive on save must be observable, never identity", stored, title, got)
+	}
+}
+
+// TestWorkflowRole_NilTakenSetBehavesAsEmpty: the store's key query can return zero
+// rows and leave `taken` nil. Reading a nil map is legal Go; pinned so a defensive
+// rewrite cannot start panicking on a tenant's first role.
+func TestWorkflowRole_NilTakenSetBehavesAsEmpty(t *testing.T) {
+	var taken map[string]bool
+	if got := newRoleKey(taken, "Engagement Partner"); got != "engagement-partner" {
+		t.Errorf("newRoleKey(nil, \"Engagement Partner\") = %q, want %q", got, "engagement-partner")
 	}
 }
 
@@ -123,6 +153,9 @@ func TestWorkflowRole_DeletedKeyIsNeverReused(t *testing.T) {
 	}{
 		{"a soft-deleted key still blocks its own slug", []string{"engagement-partner"}, "Engagement Partner", "engagement-partner-2"},
 		{"a soft-deleted suffix is walked past, not filled", []string{"engagement-partner", "engagement-partner-2", "engagement-partner-3"}, "Engagement Partner", "engagement-partner-4"},
+		// The walk returns the FIRST free suffix, so a set missing a middle key is filled
+		// rather than appended past. A highest-taken+1 port passes every other row here.
+		{"a gap in the taken-set is filled, not appended past", []string{"engagement-partner", "engagement-partner-3"}, "Engagement Partner", "engagement-partner-2"},
 		{"the fallback key is blocked the same way", []string{"role"}, "🎉", "role-2"},
 	}
 	for _, tc := range cases {

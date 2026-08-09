@@ -11,6 +11,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -166,6 +167,109 @@ func TestApprovalSteps_DeletedRoleKeyResolvesToBlocked(t *testing.T) {
 	}
 	if storedKey != "tax-reviewer" {
 		t.Errorf("step workflow_role_key after the role's soft delete = %q, want unchanged %q", storedKey, "tax-reviewer")
+	}
+}
+
+// seedBusinessEntity inserts one business entity as the superuser and returns its id.
+func seedBusinessEntity(t *testing.T, super *pgxpool.Pool, tenantID, name string) string {
+	t.Helper()
+	var id string
+	err := super.QueryRow(context.Background(),
+		`INSERT INTO business_entities (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		tenantID, name,
+	).Scan(&id)
+	if failIfUndefinedApprovalSchema(t, "seed business_entities", err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("seed business_entities: %v", err)
+	}
+	return id
+}
+
+// seedInvoice inserts one invoice as the superuser and returns its id. Every column but
+// tenant_id/entity_id/invoice_number is nullable or defaulted.
+func seedInvoice(t *testing.T, super *pgxpool.Pool, tenantID, entityID, invoiceNumber string) string {
+	t.Helper()
+	var id string
+	err := super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3) RETURNING id`,
+		tenantID, entityID, invoiceNumber,
+	).Scan(&id)
+	if failIfUndefinedApprovalSchema(t, "seed invoices", err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("seed invoices: %v", err)
+	}
+	return id
+}
+
+// seedApprovalRun inserts one run as the superuser and returns its id. content_fingerprint
+// is an opaque literal — no spec in this file compares fingerprints. state defaults to 'open'.
+func seedApprovalRun(t *testing.T, super *pgxpool.Pool, tenantID, invoiceID, versionID string) string {
+	t.Helper()
+	var id string
+	err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		tenantID, invoiceID, versionID, "fp-"+uuid.NewString(),
+	).Scan(&id)
+	if failIfUndefinedApprovalSchema(t, "seed approval_runs", err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("seed approval_runs: %v", err)
+	}
+	return id
+}
+
+// TestApprovalRuns_SecondOpenRunRejected (AC-7, RN-18): a second run with state='open'
+// for the same (tenant_id, invoice_id) is refused by approval_runs_one_open. Positive
+// controls: once the first run closes, a second open run on the same invoice succeeds;
+// an open run on a DIFFERENT invoice never collides.
+func TestApprovalRuns_SecondOpenRunRejected(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-03 second-open-run")
+	entityID := seedBusinessEntity(t, super, tenantID, "Second-open-run Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "RN-18-invoice-1")
+	otherInvoiceID := seedInvoice(t, super, tenantID, entityID, "RN-18-invoice-2")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Second-open-run policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	_, err := super.Exec(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint) VALUES ($1, $2, $3, $4)`,
+		tenantID, invoiceID, versionID, "fp-"+uuid.NewString())
+	if err == nil {
+		t.Fatal("second open run for the same (tenant_id, invoice_id) succeeded, want unique_violation (SQLSTATE 23505)")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("second open run: SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != "approval_runs_one_open" {
+		t.Errorf("constraint = %q, want %q", name, "approval_runs_one_open")
+	}
+
+	// Positive control: once the first run closes, a second open run on the same
+	// invoice succeeds — the partial index only binds state='open'.
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_runs SET state = 'approved', closed_at = now(), closed_by = 'rn-18-test' WHERE id = $1`,
+		runID); err != nil {
+		t.Fatalf("close the first run: %v", err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint) VALUES ($1, $2, $3, $4)`,
+		tenantID, invoiceID, versionID, "fp-"+uuid.NewString()); err != nil {
+		t.Fatalf("control: open run after the first closed: want success, got: %v", err)
+	}
+
+	// Positive control: an open run on a DIFFERENT invoice never collides.
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint) VALUES ($1, $2, $3, $4)`,
+		tenantID, otherInvoiceID, versionID, "fp-"+uuid.NewString()); err != nil {
+		t.Fatalf("control: open run on a different invoice: want success, got: %v", err)
 	}
 }
 

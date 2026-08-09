@@ -329,17 +329,19 @@ func tracedAppPool(t *testing.T) (*pgxpool.Pool, *sqlRecorder) {
 
 // TestWorkflowRole_StoreSatisfiesTheHandlerSeam is the only assertion in this file
 // that runs in CI's `go` job: it fails the BUILD on signature drift (06 wires the
-// handlers to these four types), and pins that every method resolves the identity
+// handlers to these five types), and pins that every method resolves the identity
 // before touching the pool — a store that dialled first would panic on the nil pool.
 //
-// UpdateRole is called with VALID arguments on purpose: (nil, nil) is ErrValidation
-// above the tx, which would silently stop proving the identity-first property.
+// UpdateRole and SetRoleMembers are called with VALID arguments on purpose: (nil, nil)
+// and a malformed or repeated member id are ErrValidation above the tx, which would
+// silently stop proving the identity-first property.
 func TestWorkflowRole_StoreSatisfiesTheHandlerSeam(t *testing.T) {
 	nilPool := NewStore(nil) // never dialled: the identity is resolved first
 	var list RolesLister = nilPool.ListRoles
 	var create RoleCreator = nilPool.CreateRole
 	var update RoleUpdater = nilPool.UpdateRole
 	var remove RoleDeleter = nilPool.DeleteRole
+	var staff RoleStaffer = nilPool.SetRoleMembers
 
 	if _, err := list(context.Background()); !errors.Is(err, db.ErrNoTenant) {
 		t.Errorf("ListRoles with no identity in ctx: err = %v, want db.ErrNoTenant", err)
@@ -352,6 +354,9 @@ func TestWorkflowRole_StoreSatisfiesTheHandlerSeam(t *testing.T) {
 	}
 	if _, err := remove(context.Background(), "engagement-partner"); !errors.Is(err, db.ErrNoTenant) {
 		t.Errorf("DeleteRole with no identity in ctx: err = %v, want db.ErrNoTenant", err)
+	}
+	if _, err := staff(context.Background(), "engagement-partner", []string{uuid.NewString()}); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("SetRoleMembers with no identity in ctx: err = %v, want db.ErrNoTenant", err)
 	}
 }
 

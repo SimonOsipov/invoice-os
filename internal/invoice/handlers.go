@@ -297,6 +297,13 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 	return true, nil
 }
 
+// submitGate is a RED-stage stub: today's status-only answer with role ignored,
+// so the role specs in transmission_rbac_test.go fail on an assertion rather
+// than a compile error. The role-first body is the executor's to write.
+func submitGate(s Status, role string) (bool, *string) {
+	return canSubmit(s), submitBlockedReason(s)
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +

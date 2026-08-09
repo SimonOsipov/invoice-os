@@ -466,11 +466,12 @@ func TestGetHandler_ResolvedInvoiceStillCanResolve(t *testing.T) {
 	}
 }
 
-// TestGetHandler_CallerRoleSkippedWhenNotFailed pins the perf fix (CodeRabbit
-// review finding 4): callerRole's own tenant-scoped query only runs when the
-// invoice is failed -- resolveOutsideGate is status-first and never consults
-// role otherwise.
-func TestGetHandler_CallerRoleSkippedWhenNotFailed(t *testing.T) {
+// TestGetHandler_CallerRoleResolvedOnEveryStatus: the old status-gated skip
+// (callerRole ran only on failed, since resolveOutsideGate is status-first) was
+// removed on purpose once submitGate started consulting role on every status.
+// The remaining hazard this now guards is a SECOND resolution per request --
+// one round-trip per gate instead of one shared value.
+func TestGetHandler_CallerRoleResolvedOnEveryStatus(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	statuses := []Status{StatusDraft, StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted, StatusRejected}
 	for _, s := range statuses {
@@ -485,14 +486,14 @@ func TestGetHandler_CallerRoleSkippedWhenNotFailed(t *testing.T) {
 				return "admin", nil
 			}
 			doInvoiceGetWithRole(t, get, role, &id, invoiceID)
-			if calls != 0 {
-				t.Errorf("callerRole called %d times for status %q, want 0", calls, s)
+			if calls != 1 {
+				t.Errorf("callerRole called %d times for status %q, want 1", calls, s)
 			}
 		})
 	}
 }
 
-// TestGetHandler_CallerRoleCalledOnceWhenFailed pins the other half: on a
+// TestGetHandler_CallerRoleCalledOnceWhenFailed pins the seventh status: on a
 // failed invoice, callerRole is still called -- exactly once.
 func TestGetHandler_CallerRoleCalledOnceWhenFailed(t *testing.T) {
 	invoiceID := uuid.NewString()

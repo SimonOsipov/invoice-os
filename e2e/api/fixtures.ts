@@ -167,6 +167,16 @@ export function freshTin(): string {
   return `${twelve.slice(0, 8)}-${twelve.slice(8)}`
 }
 
+// freshRoleTitle(): a per-run-unique workflow-role title, on freshTin's seed + counter
+// above — never Date.now()/Math.random(). Unlike a TIN, a colliding title cannot fail
+// loud: duplicate titles are legal and the server just suffixes the minted key to -2. So
+// this buys identifiability for cleanup, not constraint safety — which is why no
+// assertion may depend on a key value.
+export function freshRoleTitle(): string {
+  tinCounter += 1
+  return `Probe Role ${tinRunSeed}-${tinCounter}`
+}
+
 // canonicalTin(): the portfolio service canonicalizes an accepted TIN to its
 // digits-only form on write and echoes THAT form back (internal/portfolio/tin.go's
 // ValidateTIN strips the hyphen before persisting/returning) — so any assertion

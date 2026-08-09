@@ -218,6 +218,9 @@ func ResetEnabled(environment, flag string) bool {
 //	                          benefit -- seed.dev.sql already re-enables any
 //	                          rule a prior demo kill-switched via `UPDATE rules
 //	                          SET enabled = true ...`, never a drop/recreate.
+//	workflow_roles,           per-tenant configuration created only by a tenant
+//	workflow_role_members     admin's own CRUD. Nothing seeds them, so truncating
+//	                          would unstaff every seat with nothing to restore it.
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,

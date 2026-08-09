@@ -1220,6 +1220,31 @@ func TestWorkflowRole_UpdateReturnsTheRolesMembers(t *testing.T) {
 	}
 }
 
+// TestWorkflowRole_UpdateReturnsOnlyItsOwnMembers: the staffing read is scoped to the
+// renamed role's id. A second staffed role in the same tenant is what makes that
+// scoping observable — RLS alone would let the whole tenant's staffing through.
+func TestWorkflowRole_UpdateReturnsOnlyItsOwnMembers(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 update-members-scope")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	mine, theirs := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, mine, "preparer", "active")
+	seedMembership(t, super, tenantID, theirs, "preparer", "active")
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	otherID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	staffWorkflowRole(t, super, tenantID, roleID, mine, 0)
+	staffWorkflowRole(t, super, tenantID, otherID, theirs, 0)
+
+	got, err := NewStore(app).UpdateRole(c, "tax-reviewer", ptr("Renamed"), nil)
+	if err != nil {
+		t.Fatalf("UpdateRole: %v", err)
+	}
+	if !reflect.DeepEqual(got.Members, []string{mine}) {
+		t.Errorf("members = %v, want only %s — the other role's staffing must not be returned", got.Members, mine)
+	}
+}
+
 // TestWorkflowRole_UpdateValidatedBeforeTheCallerRoleIsRead pins the guard order: a
 // non-admin sending a blank title gets ErrValidation (400), not ErrNotPermitted (403).
 // The check reads no row and depends only on the caller's own argument, so answering
@@ -1249,25 +1274,60 @@ func TestWorkflowRole_UpdateValidatedBeforeTheCallerRoleIsRead(t *testing.T) {
 // identically whether the key exists or not — no 403-vs-404 existence oracle
 // (the house rule at internal/tenancy/store.go:96-118). The admin control proves 403
 // is not simply the only error either method can reach.
+//
+// All four target classes a key can fall into are probed, and the refusal is compared as
+// the status+message the SPA actually sees, the bar TestTransmitGate_NoExistenceOracle
+// sets (internal/invoice/transmission_rbac_test.go:299-347).
 func TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 no-existence-oracle")
+	otherTenant := seedTenant(t, super, "APPR-02 no-existence-oracle other")
 	store := NewStore(app)
 	preparer, _ := callerCtx(t, super, tenantID, "preparer", "active")
 	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
 	before := roleRow(t, super, roleID)
+	deadID := seedWorkflowRole(t, super, tenantID, "engagement-partner", "Engagement Partner")
+	softDeleteWorkflowRole(t, super, deadID)
+	seedWorkflowRole(t, super, otherTenant, "other-tenants-role", "Other Tenant's Role")
 
-	for _, key := range []string{"tax-reviewer", "no-such-role"} {
-		t.Run("UpdateRole/"+key, func(t *testing.T) {
-			if _, err := store.UpdateRole(preparer, key, ptr("New Title"), nil); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("UpdateRole(%q) as a preparer: err = %v, want ErrNotPermitted", key, err)
+	type refusal struct {
+		status int
+		msg    string
+	}
+	seen := map[string][]refusal{}
+	for _, tc := range []struct{ class, key string }{
+		{"live", "tax-reviewer"},
+		{"soft-deleted", "engagement-partner"},
+		{"another tenant's", "other-tenants-role"},
+		{"garbage", "no-such-role"},
+	} {
+		t.Run("UpdateRole/"+tc.class, func(t *testing.T) {
+			_, err := store.UpdateRole(preparer, tc.key, ptr("New Title"), nil)
+			if !errors.Is(err, ErrNotPermitted) {
+				t.Errorf("UpdateRole(%s) as a preparer: err = %v, want ErrNotPermitted", tc.class, err)
 			}
+			status, msg := statusForErr(err)
+			seen["UpdateRole"] = append(seen["UpdateRole"], refusal{status, msg})
 		})
-		t.Run("DeleteRole/"+key, func(t *testing.T) {
-			if _, err := store.DeleteRole(preparer, key); !errors.Is(err, ErrNotPermitted) {
-				t.Errorf("DeleteRole(%q) as a preparer: err = %v, want ErrNotPermitted", key, err)
+		t.Run("DeleteRole/"+tc.class, func(t *testing.T) {
+			_, err := store.DeleteRole(preparer, tc.key)
+			if !errors.Is(err, ErrNotPermitted) {
+				t.Errorf("DeleteRole(%s) as a preparer: err = %v, want ErrNotPermitted", tc.class, err)
 			}
+			status, msg := statusForErr(err)
+			seen["DeleteRole"] = append(seen["DeleteRole"], refusal{status, msg})
 		})
+	}
+	for method, got := range seen {
+		if len(got) != 4 {
+			t.Fatalf("%s: probed %d target classes, want 4 — a short table would pass vacuously", method, len(got))
+		}
+		for i, r := range got[1:] {
+			if r != got[0] {
+				t.Errorf("%s: class %d answered %d %q but class 0 answered %d %q — the refusals must be indistinguishable",
+					method, i+1, r.status, r.msg, got[0].status, got[0].msg)
+			}
+		}
 	}
 	if after := roleRow(t, super, roleID); !after.equal(before) {
 		t.Errorf("stored row = %v, want %v — a refused call may not write", after, before)
@@ -1336,6 +1396,75 @@ func TestWorkflowRole_UpdateAndDeleteRequireActiveAdmin(t *testing.T) {
 	}
 	if _, err := store.DeleteRole(admin, "tax-reviewer"); err != nil {
 		t.Fatalf("control: DeleteRole as an active admin: %v", err)
+	}
+}
+
+// TestWorkflowRole_UpdateAndDeleteAreTenantScoped: no statement carries a tenant_id
+// predicate, so RLS is the only thing keeping a by-key write inside the caller's tenant.
+// Both tenants hold the same key, which is what makes a mis-scoped write observable — an
+// out-of-tenant key that simply does not exist would 404 either way.
+func TestWorkflowRole_UpdateAndDeleteAreTenantScoped(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "APPR-02 write-scope A")
+	tenantB := seedTenant(t, super, "APPR-02 write-scope B")
+	store := NewStore(app)
+
+	sharedA := seedWorkflowRole(t, super, tenantA, "shared", "A Shared")
+	sharedB := seedWorkflowRole(t, super, tenantB, "shared", "B Shared")
+	seedRoleDesc(t, super, sharedB, "B's blurb")
+	bOnly := seedWorkflowRole(t, super, tenantB, "b-only", "B Only")
+	beforeB, beforeBOnly := roleRow(t, super, sharedB), roleRow(t, super, bOnly)
+
+	admin, _ := activeAdmin(t, super, tenantA)
+	preparer, _ := callerCtx(t, super, tenantA, "preparer", "active")
+
+	// A key only B holds is simply absent for A's admin — ErrNotFound, never B's row.
+	if _, err := store.UpdateRole(admin, "b-only", ptr("Renamed by A"), nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateRole on another tenant's key: err = %v, want ErrNotFound", err)
+	}
+	if _, err := store.DeleteRole(admin, "b-only"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteRole on another tenant's key: err = %v, want ErrNotFound", err)
+	}
+	// And A's non-admin gets its usual refusal, so the caller gate leaks nothing either.
+	if _, err := store.UpdateRole(preparer, "b-only", ptr("Renamed by A"), nil); !errors.Is(err, ErrNotPermitted) {
+		t.Errorf("UpdateRole on another tenant's key as a preparer: err = %v, want ErrNotPermitted", err)
+	}
+	if _, err := store.DeleteRole(preparer, "b-only"); !errors.Is(err, ErrNotPermitted) {
+		t.Errorf("DeleteRole on another tenant's key as a preparer: err = %v, want ErrNotPermitted", err)
+	}
+
+	// The shared key resolves to A's row on both paths.
+	if got, err := store.UpdateRole(admin, "shared", ptr("A Renamed"), nil); err != nil {
+		t.Fatalf("UpdateRole on the shared key: %v", err)
+	} else if got.Title != "A Renamed" {
+		t.Errorf("UpdateRole title = %q, want A Renamed", got.Title)
+	}
+	if after := roleRow(t, super, sharedA); after.Title != "A Renamed" {
+		t.Errorf("tenant A's row title = %q, want A Renamed", after.Title)
+	}
+	if _, err := store.DeleteRole(admin, "shared"); err != nil {
+		t.Fatalf("DeleteRole on the shared key: %v", err)
+	}
+	if after := roleRow(t, super, sharedA); after.DeletedAt == nil {
+		t.Error("tenant A's row deleted_at IS NULL after DeleteRole")
+	}
+
+	for _, b := range []struct {
+		label  string
+		id     string
+		before storedRole
+	}{{"shared", sharedB, beforeB}, {"b-only", bOnly, beforeBOnly}} {
+		if after := roleRow(t, super, b.id); !after.equal(b.before) {
+			t.Errorf("tenant B's %s row = %v, want %v — no write may cross tenants", b.label, after, b.before)
+		}
+	}
+	for _, event := range []string{"workflow_role.updated", "workflow_role.deleted"} {
+		if n := auditCount(t, super, tenantB, event); n != 0 {
+			t.Errorf("%s audit rows in tenant B = %d, want 0", event, n)
+		}
+		if n := auditCount(t, super, tenantA, event); n != 1 {
+			t.Errorf("%s audit rows in tenant A = %d, want 1", event, n)
+		}
 	}
 }
 
@@ -1418,6 +1547,58 @@ func TestWorkflowRole_UpdateAuditsInSameTx(t *testing.T) {
 	}
 	if !reflect.DeepEqual(payload, want) {
 		t.Errorf("audit payload = %v, want %v", payload, want)
+	}
+}
+
+// TestWorkflowRole_UpdateAuditsAnEditThatChangesNothing: an edit resolving to the stored
+// values is still audited, with from == to on both pairs. The modal gates Save on a
+// non-empty name and nothing else (canSaveRole, roles.ts:386-388), so this is a routine
+// request, and it follows portfolio.Update, which logs the fields SENT
+// (portfolio/store.go:215-218). tenancy's 200-no-op-without-audit
+// (tenancy/store.go:183-186) does not transfer: that guard exists to stop a redundant
+// transition tripping the last-active-admin 409, and this method has no such guard.
+func TestWorkflowRole_UpdateAuditsAnEditThatChangesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 update-no-change")
+	c, _ := activeAdmin(t, super, tenantID)
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	seedRoleDesc(t, super, roleID, "a blurb")
+	before := roleRow(t, super, roleID)
+
+	got, err := NewStore(app).UpdateRole(c, "tax-reviewer", ptr("Tax Reviewer"), ptr("a blurb"))
+	if err != nil {
+		t.Fatalf("UpdateRole with the stored values: %v, want success", err)
+	}
+	want := Role{Key: "tax-reviewer", Title: "Tax Reviewer", Desc: "a blurb", Members: []string{}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UpdateRole = %+v, want %+v", got, want)
+	}
+	if after := roleRow(t, super, roleID); !after.equal(before) {
+		t.Errorf("stored row = %v, want %v", after, before)
+	}
+	if n := auditCount(t, super, tenantID, "workflow_role.updated"); n != 1 {
+		t.Errorf("workflow_role.updated rows = %d, want 1 — a no-change edit is audited, not dropped", n)
+	}
+
+	var payloadJSON string
+	if err := super.QueryRow(context.Background(),
+		`SELECT payload::text FROM audit_log
+		  WHERE tenant_id = $1 AND event = 'workflow_role.updated'`, tenantID).Scan(&payloadJSON); err != nil {
+		t.Fatalf("read audit payload: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatalf("unmarshal payload %s: %v", payloadJSON, err)
+	}
+	wantPayload := map[string]any{
+		"key":        "tax-reviewer",
+		"from_title": "Tax Reviewer",
+		"to_title":   "Tax Reviewer",
+		"from_desc":  "a blurb",
+		"to_desc":    "a blurb",
+	}
+	if !reflect.DeepEqual(payload, wantPayload) {
+		t.Errorf("audit payload = %v, want %v — from/to is what lets a reader tell a no-op from a rename", payload, wantPayload)
 	}
 }
 
@@ -1713,6 +1894,74 @@ func TestWorkflowRole_ConcurrentDeleteExactlyOneWins(t *testing.T) {
 		}
 		if n := auditCount(t, super, tenantID, "workflow_role.deleted"); n != 1 {
 			t.Errorf("round %d: workflow_role.deleted audit rows = %d, want 1", round, n)
+		}
+	}
+}
+
+// TestWorkflowRole_ConcurrentDeleteAndRenameOneLosesCoherently: both take a lock on the
+// same role row, so they serialize either way round. If the rename lands first the delete
+// re-qualifies deleted_at IS NULL against the renamed version and audits the NEW title; if
+// the delete lands first the rename's locking read finds no live row and is ErrNotFound.
+// The delete can only ever lose to another delete, and a rename that failed must audit
+// nothing.
+func TestWorkflowRole_ConcurrentDeleteAndRenameOneLosesCoherently(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	const rounds = 8
+	for round := range rounds {
+		tenantID := seedTenant(t, super, "APPR-02 concurrent-delete-rename")
+		c, _ := activeAdmin(t, super, tenantID)
+		roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "A")
+
+		var wg sync.WaitGroup
+		var renameErr, deleteErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, renameErr = store.UpdateRole(c, "tax-reviewer", ptr("B"), nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, deleteErr = store.DeleteRole(c, "tax-reviewer")
+		}()
+		close(start)
+		wg.Wait()
+
+		if deleteErr != nil {
+			t.Fatalf("round %d: DeleteRole = %v (SQLSTATE %q), want success", round, deleteErr, pgCode(deleteErr))
+		}
+		row := roleRow(t, super, roleID)
+		if row.DeletedAt == nil {
+			t.Fatalf("round %d: stored deleted_at IS NULL, want the delete's stamp", round)
+		}
+		if n := auditCount(t, super, tenantID, "workflow_role.deleted"); n != 1 {
+			t.Fatalf("round %d: workflow_role.deleted rows = %d, want 1", round, n)
+		}
+		var deletedTitle string
+		if err := super.QueryRow(context.Background(),
+			`SELECT payload->>'title' FROM audit_log
+			  WHERE tenant_id = $1 AND event = 'workflow_role.deleted'`, tenantID).Scan(&deletedTitle); err != nil {
+			t.Fatalf("round %d: read the delete's audited title: %v", round, err)
+		}
+		renames := auditCount(t, super, tenantID, "workflow_role.updated")
+
+		switch {
+		case renameErr == nil:
+			if row.Title != "B" || deletedTitle != "B" || renames != 1 {
+				t.Errorf("round %d: rename won but stored title = %q, audited delete title = %q, updated rows = %d; want B, B, 1 — the delete must audit the title it actually removed",
+					round, row.Title, deletedTitle, renames)
+			}
+		case errors.Is(renameErr, ErrNotFound):
+			if row.Title != "A" || deletedTitle != "A" || renames != 0 {
+				t.Errorf("round %d: delete won but stored title = %q, audited delete title = %q, updated rows = %d; want A, A, 0 — a refused rename may not write",
+					round, row.Title, deletedTitle, renames)
+			}
+		default:
+			t.Fatalf("round %d: UpdateRole = %v (SQLSTATE %q), want nil or ErrNotFound", round, renameErr, pgCode(renameErr))
 		}
 	}
 }

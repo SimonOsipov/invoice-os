@@ -767,3 +767,43 @@ func TestApprovalSteps_RoleDeleteLeavesSealedVersionByteIdentical(t *testing.T) 
 		t.Errorf("step snapshot after role hard-delete = %s, want unchanged %s", afterHardDelete, before)
 	}
 }
+
+// TestPIL15_CondAmountUpdateOnSealedStepRejected (PIL-15): UPDATE of cond_amount on a sealed
+// step -> 23001; the row is byte-identical afterwards. QA gap-fill for APPR-03-04: mutating
+// cond_amount out of the content lock's 14-column comparison left every other PIL spec green.
+func TestPIL15_CondAmountUpdateOnSealedStepRejected(t *testing.T) {
+	migrator := migratorPool(t)
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "APPR-03 pil-15")
+	policyID := seedApprovalPolicy(t, super, tenantID, "PIL-15 cond_amount update policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	stepID := seedApprovalPolicyStep(t, super, tenantID, versionID, nil, "condition", 0)
+	if _, err := super.Exec(ctx, `UPDATE approval_policy_steps SET cond_op = '>', cond_amount = 100.00 WHERE id = $1`,
+		stepID); err != nil {
+		t.Fatalf("seed step cond_amount: %v", err)
+	}
+	sealApprovalPolicyVersion(t, super, versionID)
+	t.Cleanup(func() { teardownSealedApprovalFixture(t, super, tenantID) })
+
+	before := stepSnapshot(t, super, stepID)
+
+	tx, err := migrator.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin migrator tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	setTenantGUC(t, ctx, tx, tenantID)
+
+	opErr := attemptWithSavepoint(t, ctx, tx,
+		`UPDATE approval_policy_steps SET cond_amount = 999.00 WHERE id = $1`, stepID)
+	assertSQLState(t, opErr, "23001")
+
+	var afterSnap string
+	if err := tx.QueryRow(ctx, `SELECT to_jsonb(s)::text FROM approval_policy_steps s WHERE id = $1`, stepID).Scan(&afterSnap); err != nil {
+		t.Fatalf("read step after rejected content UPDATE: %v", err)
+	}
+	if afterSnap != before {
+		t.Errorf("step snapshot after rejected content UPDATE = %s, want unchanged %s", afterSnap, before)
+	}
+}

@@ -506,19 +506,18 @@ func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 }
 
 // =============================================================================
-// GET /v1/invoices/{id}'s submit gate -- RED specs, written before submitGate
-// has a role-first body (handlers.go currently ships a stub that ignores role)
-// and before GetHandler resolves the role on every status.
+// GET /v1/invoices/{id}'s submit gate: submitGate answers role before status,
+// and GetHandler resolves the caller role on every status, not only failed.
 //
 // AC map (this half's own numbering, distinct from the transmit doors' above):
 //
 //	AC-1 TestGetHandler_SubmitBlockedReasonRoleArm,
 //	     TestGetHandler_RealStore_PreparerSeesRoleReason,
 //	     TestGetHandler_RealStore_NoMembershipSeesRoleReason
-//	AC-2 TestSubmitGate_AdminAndReviewerUnchanged        (guard, green at RED)
+//	AC-2 TestSubmitGate_AdminAndReviewerUnchanged        (guard)
 //	AC-3 TestSubmitGate_RoleBeforeStatus
 //	AC-4 TestGetHandler_RoleResolvedOnValidatedStatus
-//	AC-5 TestGetHandler_CanSubmitKeysStillExactlyOnce    (guard, green at RED)
+//	AC-5 TestGetHandler_CanSubmitKeysStillExactlyOnce    (guard)
 //	AC-6 TestGetHandler_RoleArmFailsClosed
 //	AC-8 the two seedMembership repairs in handlers_test.go
 // =============================================================================

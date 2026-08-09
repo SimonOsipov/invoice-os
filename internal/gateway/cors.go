@@ -14,9 +14,11 @@ import (
 // from the browser. DELETE is granted for the resolved-outside undo (and keep-as-is
 // undo) round trip — without it the browser blocks the actual DELETE after a preflight
 // that omits it, failing client-side with net::ERR_FAILED before the request ever
-// reaches this service.
+// reaches this service. PUT is granted for the role-staffing whole-set replace
+// (PUT /api/invoice/v1/workflow-roles/{key}/members) — the first PUT from the browser,
+// and it would fail the same silent way.
 const (
-	corsAllowMethods = "GET, POST, PATCH, DELETE, OPTIONS"
+	corsAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 	corsAllowHeaders = "Authorization, Content-Type"
 	corsMaxAge       = "600" // seconds a browser may cache a preflight before re-asking
 )

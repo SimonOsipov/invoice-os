@@ -32,11 +32,15 @@ func NewStore(pool *pgxpool.Pool) *Store {
 type (
 	RolesLister func(ctx context.Context) ([]Role, error)
 	RoleCreator func(ctx context.Context, title, desc string) (Role, error)
+	RoleUpdater func(ctx context.Context, key string, title, desc *string) (Role, error)
+	RoleDeleter func(ctx context.Context, key string) (Role, error)
 )
 
 var (
 	_ RolesLister = new(Store).ListRoles
 	_ RoleCreator = new(Store).CreateRole
+	_ RoleUpdater = new(Store).UpdateRole
+	_ RoleDeleter = new(Store).DeleteRole
 )
 
 // ListRoles returns the tenant's live workflow roles, each with its members in that
@@ -193,6 +197,181 @@ func (s *Store) CreateRole(ctx context.Context, title, desc string) (Role, error
 		return Role{}, err
 	}
 	return created, nil
+}
+
+// UpdateRole renames a role and/or rewrites its blurb, auditing the change in the same
+// transaction. title and desc are pointers so an omitted field is distinguishable from
+// an empty one — clearing the blurb is a real edit — and only what was sent is written.
+//
+// `key` is NEVER in the SET list: it is minted once, at create, and a sealed policy step
+// may already name it. It follows that no unique constraint and no RLS WITH CHECK can
+// fire here, so this method has no ErrConflict path.
+//
+// Guard order is the security property: argument validation (above the tx, reading no
+// row) -> the caller's role -> the target row. A non-admin is therefore refused before
+// any workflow_roles row is read, identically whether the key exists or not
+// (TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead).
+func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string) (Role, error) {
+	// Trimmed like CreateRole and the shipped modal (RoleModal.tsx:82-83). Copied rather
+	// than trimmed in place: the pointers belong to the caller.
+	if title != nil {
+		trimmed := strings.TrimSpace(*title)
+		title = &trimmed
+	}
+	if desc != nil {
+		trimmed := strings.TrimSpace(*desc)
+		desc = &trimmed
+	}
+	// Checked before the tx, like CreateRole's: an argument that can never be stored needs
+	// no transaction, and a direct caller fails closed.
+	if title == nil && desc == nil {
+		return Role{}, ErrValidation
+	}
+	if title != nil && *title == "" {
+		return Role{}, ErrValidation
+	}
+
+	updated := Role{Members: []string{}} // [] on the wire, never null
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		var callerRole string
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
+		).Scan(&callerRole); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotPermitted
+			}
+			return err
+		}
+		if callerRole != "admin" {
+			return ErrNotPermitted
+		}
+
+		// FOR UPDATE because the pre-image below is read in Go and then written as audit
+		// fact: unlocked, two concurrent renames both report the same from_title
+		// (TestWorkflowRole_ConcurrentRenamesChainInTheAudit). deleted_at IS NULL is this
+		// resource's existence predicate.
+		var id, fromTitle, fromDesc string
+		if err := tx.QueryRow(ctx,
+			`SELECT id, title, description
+			   FROM workflow_roles
+			  WHERE key = $1 AND deleted_at IS NULL
+			    FOR UPDATE`, key,
+		).Scan(&id, &fromTitle, &fromDesc); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		// coalesce rather than Go-merged values: only the fields that were sent appear in
+		// the effective write. WHERE id is the locked row's, so the write cannot resolve to
+		// a different row than the pre-image above.
+		if err := tx.QueryRow(ctx,
+			`UPDATE workflow_roles
+			    SET title = coalesce($2, title), description = coalesce($3, description)
+			  WHERE id = $1
+			RETURNING key, title, description`,
+			id, title, desc,
+		).Scan(&updated.Key, &updated.Title, &updated.Desc); err != nil {
+			return err
+		}
+
+		// The response is a full Role: the SPA's replaceRole swaps the card wholesale, so
+		// an empty members here would blank the avatar stack.
+		members, err := tx.Query(ctx,
+			`SELECT user_id FROM workflow_role_members WHERE workflow_role_id = $1 ORDER BY ord`, id)
+		if err != nil {
+			return err
+		}
+		for members.Next() {
+			var userID string
+			if err := members.Scan(&userID); err != nil {
+				members.Close()
+				return err
+			}
+			updated.Members = append(updated.Members, userID)
+		}
+		members.Close()
+		if err := members.Err(); err != nil {
+			return err
+		}
+
+		// Last statement in the closure (TestWorkflowRole_UpdateAuditsInSameTx). Both field
+		// pairs: a desc-only edit would otherwise log a from_title == to_title rename, and
+		// this log is the only record of what a role used to be called.
+		return audit.Record(ctx, tx, caller.Subject, "workflow_role.updated", map[string]any{
+			"key":        updated.Key,
+			"from_title": fromTitle,
+			"to_title":   updated.Title,
+			"from_desc":  fromDesc,
+			"to_desc":    updated.Desc,
+		})
+	})
+	if err != nil {
+		return Role{}, err
+	}
+	return updated, nil
+}
+
+// DeleteRole soft-deletes a role and audits it in the same transaction. It never refuses
+// a live role and nothing cascades: the staffing rows survive, inert, unreachable while
+// deleted_at is set. invoice_app holds no DELETE grant on workflow_roles, so a hard
+// delete is structurally unreachable, and there is no undelete path.
+//
+// The returned Role carries no members — a deleted role has no addressable holders, and
+// the SPA's removeRole drops the card without reading the body (roles.ts:103-105).
+func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
+	deleted := Role{Members: []string{}} // [] on the wire, never null
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		// Same caller gate as CreateRole's and UpdateRole's, first and unlocked: no
+		// 403-vs-404 existence oracle.
+		var callerRole string
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
+		).Scan(&callerRole); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotPermitted
+			}
+			return err
+		}
+		if callerRole != "admin" {
+			return ErrNotPermitted
+		}
+
+		// One statement, no explicit lock: deleted_at IS NULL is both the existence
+		// predicate and the idempotency mechanism — under READ COMMITTED the second (or
+		// concurrent) delete re-evaluates it, matches nothing, and is ErrNotFound rather
+		// than a re-stamp (TestWorkflowRole_SecondDeleteIsNotFoundAndDoesNotRestamp).
+		// now(), not a Go clock: deleted_at is the transaction timestamp the audit row's
+		// created_at DEFAULT also takes (TestWorkflowRole_DeleteAuditsInSameTx).
+		if err := tx.QueryRow(ctx,
+			`UPDATE workflow_roles
+			    SET deleted_at = now()
+			  WHERE key = $1 AND deleted_at IS NULL
+			RETURNING key, title, description`, key,
+		).Scan(&deleted.Key, &deleted.Title, &deleted.Desc); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		// The title as stored at delete time: after this the row is unreachable from every
+		// HTTP door, and it may not be the title the create event recorded.
+		return audit.Record(ctx, tx, caller.Subject, "workflow_role.deleted", map[string]any{
+			"key":   deleted.Key,
+			"title": deleted.Title,
+		})
+	})
+	if err != nil {
+		return Role{}, err
+	}
+	return deleted, nil
 }
 
 // uniqueViolationOn reports whether err is a 23505 on exactly this constraint.

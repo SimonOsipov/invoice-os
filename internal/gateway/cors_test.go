@@ -138,6 +138,34 @@ func TestCORSPreflightGrantsDELETE(t *testing.T) {
 	}
 }
 
+// TestCORSPreflightGrantsPUT proves the preflight for the role-staffing round trip
+// (PUT /api/invoice/v1/workflow-roles/{key}/members) is granted. This is the repo's
+// first PUT from the browser, and the DELETE bug above is the precedent: every Go test
+// and every e2e/api spec passes without the grant, because those callers send no Origin
+// and so never preflight — only a browser does, and it blocks the PUT client-side.
+//
+// Asserted against the literal "PUT", not against corsAllowMethods: comparing the header
+// to the constant that produced it (TestCORSPreflightAnsweredWithGrant) cannot detect a
+// method missing from the constant.
+func TestCORSPreflightGrantsPUT(t *testing.T) {
+	next := &sentinel{}
+	h := CORS([]string{allowedOrigin})(next)
+
+	r := httptest.NewRequest("OPTIONS", "/api/invoice/v1/workflow-roles/tax-reviewer/members", nil)
+	r.Header.Set("Origin", allowedOrigin)
+	r.Header.Set("Access-Control-Request-Method", "PUT")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", rec.Code)
+	}
+	got := rec.Header().Get("Access-Control-Allow-Methods")
+	if !strings.Contains(got, "PUT") {
+		t.Errorf("Access-Control-Allow-Methods = %q, want it to contain PUT", got)
+	}
+}
+
 // TestCORSPreflightBypassesAuth wires the CORS layer exactly as main does — OUTSIDE the
 // JWT verifier — and proves a preflight to a protected /api route is answered 204, not
 // 401. Without the outer CORS the same OPTIONS (no bearer) is a 401 from the verifier.

@@ -864,3 +864,129 @@ func TestRLS_WorkflowRoleMembersOrdNotNull(t *testing.T) {
 	}
 	_, _ = h.super.Exec(ctx, `DELETE FROM workflow_role_members WHERE id = $1`, id)
 }
+
+// The ROLE leg of the composite FK, the half CrossTenantUserRefused does not reach: tenant
+// A naming B's role id is refused by workflow_role_members_tenant_role_fk. A single-column
+// REFERENCES workflow_roles(id) would accept it — the id exists — and referential checks run
+// RLS-bypassed, so nothing else in the schema would stop A staffing seats onto B's role.
+// Attempted as the superuser so no policy can be what refuses.
+func TestRLS_WorkflowRoleMembersCrossTenantRoleRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	roleB, cleanupRole := seedWorkflowRole(t, h.tenantB, wrKey("cross-role"))
+	defer cleanupRole()
+	ownUser := uuid.NewString()
+	_, cleanupMem := seedMembership(t, h.tenantA, ownUser, "reviewer")
+	defer cleanupMem()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO workflow_role_members (tenant_id, workflow_role_id, user_id, ord) VALUES ($1, $2, $3, 0)`,
+		h.tenantA, roleB, ownUser)
+	if err == nil {
+		t.Fatal("staffing tenant A's own member onto tenant B's role id succeeded, want 23503 — the " +
+			"workflow_roles FK is not composite on (tenant_id, id)")
+	}
+	if code := pgCode(err); code != "23503" {
+		t.Fatalf("cross-tenant workflow_role_id: SQLSTATE = %q, want 23503 (foreign_key_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != "workflow_role_members_tenant_role_fk" {
+		t.Errorf("constraint = %q, want %q", name, "workflow_role_members_tenant_role_fk")
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM workflow_role_members WHERE workflow_role_id = $1`, roleB); n != 0 {
+		t.Errorf("staffing rows after the refused INSERT = %d, want 0", n)
+	}
+}
+
+// Postgres requires the UPDATE privilege for SELECT ... FOR UPDATE, and the staffing table
+// has none — so the whole-set-replace path must take its lock on the ROLE row, never on a
+// staffing row. Mirror of TestRLS_WorkflowRolesSelectForUpdateAllowedForApp: a stray GRANT
+// UPDATE added to "make reordering easier" turns this refusal green and makes in-place ord
+// mutation possible.
+func TestRLS_WorkflowRoleMembersSelectForUpdateRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	roleA, cleanupRole := seedWorkflowRole(t, h.tenantA, wrKey("no-lock"))
+	defer cleanupRole()
+	userID := uuid.NewString()
+	_, cleanupMem := seedMembership(t, h.tenantA, userID, "reviewer")
+	defer cleanupMem()
+	memberA, cleanupMember := seedWorkflowRoleMember(t, h.tenantA, roleA, userID, 0)
+	defer cleanupMember()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var id string
+		return tx.QueryRow(ctx,
+			`SELECT id::text FROM workflow_role_members WHERE id = $1 FOR UPDATE`, memberA).Scan(&id)
+	})
+	if err == nil {
+		t.Fatal("app-role SELECT ... FOR UPDATE on workflow_role_members succeeded, want permission denied " +
+			"(SQLSTATE 42501) — the table carries no UPDATE grant")
+	}
+	if code := pgCode(err); code != "42501" {
+		t.Fatalf("FOR UPDATE on the staffing table: SQLSTATE = %q, want 42501 (insufficient_privilege): %v", code, err)
+	}
+	if msg := pgMessage(err); !strings.Contains(msg, "permission denied") {
+		t.Errorf("refusal message = %q, want the grant layer (\"permission denied\")", msg)
+	}
+
+	// Positive control: the same row read plainly by the same role succeeds, so the refusal
+	// is about the lock's UPDATE requirement and not about visibility.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, `SELECT count(*) FROM workflow_role_members WHERE id = $1`, memberA); n != 1 {
+			t.Errorf("plain SELECT of the same staffing row = %d, want 1", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("plain SELECT: %v", err)
+	}
+}
+
+// tenant_isolation must not filter on deleted_at. The key-mint scan reads keys WITHOUT a
+// deleted_at filter precisely because the UNIQUE spans soft-deleted rows; a policy narrowed
+// to `AND deleted_at IS NULL` would blind that scan while KeyUniquePerTenantSpansDeleted
+// stayed green — unique-index checks bypass RLS, so its 23505 fires whether the sealed row
+// is visible or not.
+func TestRLS_WorkflowRolesSoftDeletedRowStaysVisibleToItsTenant(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	key := wrKey("sealed")
+	roleA, cleanup := seedWorkflowRole(t, h.tenantA, key)
+	defer cleanup()
+	if _, err := h.super.Exec(ctx, `UPDATE workflow_roles SET deleted_at = now() WHERE id = $1`, roleA); err != nil {
+		t.Fatalf("soft-delete the seeded role: %v", err)
+	}
+
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		var gotKey string
+		var isDeleted bool
+		if e := tx.QueryRow(ctx,
+			`SELECT key, deleted_at IS NOT NULL FROM workflow_roles WHERE id = $1`, roleA,
+		).Scan(&gotKey, &isDeleted); e != nil {
+			return e
+		}
+		if gotKey != key {
+			t.Errorf("key of the soft-deleted role = %q, want %q", gotKey, key)
+		}
+		if !isDeleted {
+			t.Error("deleted_at on the soft-deleted role is NULL, want it set")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read the soft-deleted role as its own tenant: %v — tenant_isolation must not filter deleted_at, "+
+			"or the key-mint scan cannot see a sealed key it must not re-issue", err)
+	}
+
+	// Still isolated: sealed or not, B never sees it.
+	if err := db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		if n := mustCount(t, tx, `SELECT count(*) FROM workflow_roles WHERE id = $1`, roleA); n != 0 {
+			t.Errorf("A's soft-deleted role visible to B = %d, want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithinTenantTx as B: %v", err)
+	}
+}

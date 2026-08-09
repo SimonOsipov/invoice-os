@@ -396,6 +396,63 @@ func TestResetLeavesTenantsRulesAndMembershipsUntouched(t *testing.T) {
 	}
 }
 
+// TestResetLeavesWorkflowRolesAndStaffingUntouched: workflow_roles and
+// workflow_role_members are excluded from resetTables, and nothing seeds them —
+// so resetTargetTables never learns their names and no assertion above would
+// notice if a future edit added them. This seeds its own role + staffing row so
+// the claim is not vacuous: adding either table to resetTables goes red here.
+// (Adding only workflow_roles fails louder still — the TRUNCATE carries no
+// CASCADE, so its inbound FK aborts Reset outright.)
+func TestResetLeavesWorkflowRolesAndStaffingUntouched(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+			t.Errorf("restore curated demo state after reset test: %v", err)
+		}
+	})
+
+	// Reuse a seeded membership: the staffing FK is composite on (tenant_id, user_id).
+	var userID string
+	if err := pool.QueryRow(ctx,
+		`SELECT user_id::text FROM memberships WHERE tenant_id = $1 LIMIT 1`, demoTenantID,
+	).Scan(&userID); err != nil {
+		t.Fatalf("precondition: no seeded membership for the demo tenant: %v", err)
+	}
+
+	roleID := uuid.NewString()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workflow_roles WHERE id = $1`, roleID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO workflow_roles (id, tenant_id, key, title) VALUES ($1, $2, $3, 'Reset probe')`,
+		roleID, demoTenantID, "reset-probe-"+roleID,
+	); err != nil {
+		t.Fatalf("seed workflow_roles probe: %v", err)
+	}
+	memberID := uuid.NewString()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO workflow_role_members (id, tenant_id, workflow_role_id, user_id, ord)
+		 VALUES ($1, $2, $3, $4, 0)`,
+		memberID, demoTenantID, roleID, userID,
+	); err != nil {
+		t.Fatalf("seed workflow_role_members probe: %v", err)
+	}
+
+	if err := db.Reset(ctx, superDSN); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if got := mustCount(t, pool, `SELECT count(*) FROM workflow_roles WHERE id = $1`, roleID); got != 1 {
+		t.Errorf("workflow_roles probe row after Reset = %d, want 1 — the table is deliberately EXCLUDED "+
+			"from resetTables (reset.go), since nothing seeds it and a truncate would unstaff every seat", got)
+	}
+	if got := mustCount(t, pool, `SELECT count(*) FROM workflow_role_members WHERE id = $1`, memberID); got != 1 {
+		t.Errorf("workflow_role_members probe row after Reset = %d, want 1 — same exclusion", got)
+	}
+}
+
 // TestResetIsIdempotent: re-running Reset against an already-empty set of
 // target tables (or calling it twice back to back) must never error — a
 // redeploy of the same PR re-runs Provision, and Reset must tolerate that.

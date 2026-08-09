@@ -583,3 +583,113 @@ func TestRLS_ApprovalPolicyConfigTenantDeleteCascades(t *testing.T) {
 		t.Errorf("step rows after the tenant delete = %d, want 0", n)
 	}
 }
+
+// Adversarial additions (QA, not in the architect's PC-01..17 table): AC-1 enumerates
+// three more CHECKs on approval_policy_steps — kind, branch, cond_op — that no PC spec
+// provokes. APPR-03-02's Green Gate is just "PC-01...PC-17 green", so an enum typo in
+// the migration (e.g. kind missing 'notify') would ship silently green without these.
+
+// kind is pinned to the four Q-declared values; a fifth is a check_violation. Positive
+// control: 'autoapprove' succeeds — the one kind value no PC spec exercises.
+func TestRLS_ApprovalPolicyStepsKindCheckRejects(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyA, cleanupPolicy := seedApprovalPolicy(t, h.tenantA, apName("kind-check-policy"))
+	defer cleanupPolicy()
+	versionA, cleanupVersion := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersion()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind) VALUES ($1, $2, 0, 'bogus')`,
+		h.tenantA, versionA)
+	if failIfUndefinedApprovalPolicy(t, "kind CHECK provocation", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("insert with kind = 'bogus' succeeded, want check_violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("insert with kind = 'bogus': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); !strings.Contains(name, "kind") {
+		t.Errorf("constraint = %q, want one naming kind", name)
+	}
+
+	_, cleanupOK := seedApprovalPolicyStep(t, h.tenantA, versionA, 0, "autoapprove")
+	defer cleanupOK()
+}
+
+// branch is pinned to 'then'/'else'; anything else is a check_violation. Positive
+// control: 'then' succeeds, no CHECK ties it to parent_step_id being non-null.
+func TestRLS_ApprovalPolicyStepsBranchCheckRejects(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyA, cleanupPolicy := seedApprovalPolicy(t, h.tenantA, apName("branch-check-policy"))
+	defer cleanupPolicy()
+	versionA, cleanupVersion := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersion()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, branch, ord, kind) VALUES ($1, $2, 'maybe', 0, 'approval')`,
+		h.tenantA, versionA)
+	if failIfUndefinedApprovalPolicy(t, "branch CHECK provocation", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("insert with branch = 'maybe' succeeded, want check_violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("insert with branch = 'maybe': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); !strings.Contains(name, "branch") {
+		t.Errorf("constraint = %q, want one naming branch", name)
+	}
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, branch, ord, kind) VALUES ($1, $2, 'then', 0, 'approval')`,
+		h.tenantA, versionA); err != nil {
+		t.Fatalf("control: branch = 'then': want success, got: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_policy_steps WHERE version_id = $1`, versionA)
+	}()
+}
+
+// cond_op is pinned to the four comparison operators; anything else is a
+// check_violation. Positive control: '>=' succeeds.
+func TestRLS_ApprovalPolicyStepsCondOpCheckRejects(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyA, cleanupPolicy := seedApprovalPolicy(t, h.tenantA, apName("cond-op-check-policy"))
+	defer cleanupPolicy()
+	versionA, cleanupVersion := seedApprovalPolicyVersion(t, h.tenantA, policyA)
+	defer cleanupVersion()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind, cond_op) VALUES ($1, $2, 0, 'condition', '=')`,
+		h.tenantA, versionA)
+	if failIfUndefinedApprovalPolicy(t, "cond_op CHECK provocation", err) {
+		return
+	}
+	if err == nil {
+		t.Fatal("insert with cond_op = '=' succeeded, want check_violation (SQLSTATE 23514)")
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("insert with cond_op = '=': SQLSTATE = %q, want 23514 (check_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); !strings.Contains(name, "cond_op") {
+		t.Errorf("constraint = %q, want one naming cond_op", name)
+	}
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind, cond_op) VALUES ($1, $2, 0, 'condition', '>=')`,
+		h.tenantA, versionA); err != nil {
+		t.Fatalf("control: cond_op = '>=': want success, got: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_policy_steps WHERE version_id = $1`, versionA)
+	}()
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,6 +35,7 @@ type (
 	RoleCreator func(ctx context.Context, title, desc string) (Role, error)
 	RoleUpdater func(ctx context.Context, key string, title, desc *string) (Role, error)
 	RoleDeleter func(ctx context.Context, key string) (Role, error)
+	RoleStaffer func(ctx context.Context, key string, members []string) (Role, error)
 )
 
 var (
@@ -41,6 +43,7 @@ var (
 	_ RoleCreator = new(Store).CreateRole
 	_ RoleUpdater = new(Store).UpdateRole
 	_ RoleDeleter = new(Store).DeleteRole
+	_ RoleStaffer = new(Store).SetRoleMembers
 )
 
 // ListRoles returns the tenant's live workflow roles, each with its members in that
@@ -134,17 +137,8 @@ func (s *Store) CreateRole(ctx context.Context, title, desc string) (Role, error
 		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
 		caller, _ := auth.IdentityFromContext(ctx)
 
-		var callerRole string
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
-		).Scan(&callerRole); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotPermitted
-			}
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
 			return err
-		}
-		if callerRole != "admin" {
-			return ErrNotPermitted
 		}
 
 		// Bare on purpose — NO deleted_at filter: workflow_roles_tenant_key_uq spans
@@ -236,17 +230,8 @@ func (s *Store) UpdateRole(ctx context.Context, key string, title, desc *string)
 		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
 		caller, _ := auth.IdentityFromContext(ctx)
 
-		var callerRole string
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
-		).Scan(&callerRole); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotPermitted
-			}
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
 			return err
-		}
-		if callerRole != "admin" {
-			return ErrNotPermitted
 		}
 
 		// FOR UPDATE because the pre-image below is read in Go and then written as audit
@@ -328,19 +313,8 @@ func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		caller, _ := auth.IdentityFromContext(ctx)
 
-		// Same caller gate as CreateRole's and UpdateRole's, first and unlocked: no
-		// 403-vs-404 existence oracle.
-		var callerRole string
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
-		).Scan(&callerRole); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotPermitted
-			}
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
 			return err
-		}
-		if callerRole != "admin" {
-			return ErrNotPermitted
 		}
 
 		// One statement, no explicit lock: deleted_at IS NULL is both the existence
@@ -374,10 +348,138 @@ func (s *Store) DeleteRole(ctx context.Context, key string) (Role, error) {
 	return deleted, nil
 }
 
+// SetRoleMembers replaces a role's staffing wholesale: every existing row for the role
+// is deleted and the submitted list re-inserted, with `ord` the 0-based index of the
+// submitted array. An empty list is a legal unstaff, not an error.
+//
+// NO access-role check is applied to the STAFFED SUBJECT (Decision Q2): a preparer, a
+// suspended member and an invited one are all legal targets, and the approver filter
+// lives in the satisfaction predicate (APPR-06/07), not here
+// (TestStaffing_PreparerMayBeStaffed). The CALLER is a separate axis and must be an
+// active admin, like the other three writers.
+func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string) (Role, error) {
+	// Canonicalised before the tx, like CreateRole's title check: an argument that can
+	// never be stored needs no transaction, and a direct caller fails closed. uuid.Parse
+	// accepts forms Postgres's ::uuid rejects (urn:uuid:…), so the canonical string is what
+	// reaches the query — a malformed id must never leak 22P02 as a 500.
+	ids := make([]string, 0, len(members))
+	seen := make(map[string]bool, len(members))
+	for _, m := range members {
+		u, err := uuid.Parse(m)
+		if err != nil {
+			return Role{}, ErrValidation
+		}
+		// Rejected, never deduped: this method exists to persist exactly the submitted set,
+		// so silently storing something else is the one thing it may not do. Checked on the
+		// canonical id, or the two spellings of one uuid would slip past.
+		if seen[u.String()] {
+			return Role{}, ErrValidation
+		}
+		seen[u.String()] = true
+		ids = append(ids, u.String())
+	}
+
+	staffed := Role{Members: ids} // freshly allocated: never aliases the caller's slice
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		// FOR UPDATE serialises concurrent whole-set replaces. Unlocked, T2's DELETE never
+		// sees T1's uncommitted INSERTs and both submissions survive at ord 0,1,0,1 — a
+		// merge that trips no constraint (TestStaffing_ConcurrentPutsDoNotMerge). It locks
+		// workflow_roles, never workflow_role_members, which holds no UPDATE grant. All four
+		// fields are scanned because the PUT answers 200 Role.
+		var id string
+		if err := tx.QueryRow(ctx,
+			`SELECT id, key, title, description
+			   FROM workflow_roles
+			  WHERE key = $1 AND deleted_at IS NULL
+			    FOR UPDATE`, key,
+		).Scan(&id, &staffed.Key, &staffed.Title, &staffed.Desc); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		// Resolved by the locked row's id, not by key, so it cannot drift off the row above.
+		// A separate statement from the INSERT, for the reason invoice.replaceLinesTx spells
+		// out: tuples deleted by this transaction are already dead to its own uniqueness
+		// check, so restaffing someone already staffed needs no renumbering dance.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM workflow_role_members WHERE workflow_role_id = $1`, id); err != nil {
+			return err
+		}
+
+		// One statement whatever the member count. WITH ORDINALITY counts from 1, hence the
+		// -1: `ord` is 0-based and dense (NOT invoice.replaceLinesTx's i+1). unnest of an
+		// empty array yields zero rows, so the empty-set unstaff needs no branch.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO workflow_role_members (tenant_id, workflow_role_id, user_id, ord)
+			 SELECT $1, $2, m.user_id, (m.ord - 1)::int
+			   FROM unnest($3::uuid[]) WITH ORDINALITY AS m(user_id, ord)`,
+			caller.TenantID, id, ids,
+		); err != nil {
+			// Only the user leg is a 400: a user_id with no membership here is request data,
+			// not a path resource. The role leg stays unmapped — its id came from the locked
+			// read above, so a 23503 there means an invariant broke and 500 is honest
+			// (TestStaffing_FKViolationOnlyMapsTheUserConstraint).
+			if fkViolationOn(err, "workflow_role_members_tenant_user_fk") {
+				return ErrValidation
+			}
+			return err
+		}
+
+		// Last statement in the closure (TestStaffing_AuditsInSameTx). The key is the locked
+		// read's, matching the other three methods; members is the new ordered list.
+		return audit.Record(ctx, tx, caller.Subject, "workflow_role.staffed", map[string]any{
+			"key":     staffed.Key,
+			"members": ids,
+		})
+	})
+	if err != nil {
+		return Role{}, err
+	}
+	return staffed, nil
+}
+
+// requireActiveAdmin refuses any caller that is not an active admin. Takes pgx.Tx, never
+// the pool: a pool would open a second transaction and lose both the RLS tenant scoping
+// and the same-tx property. Must stay the FIRST statement in each closure — the guard
+// order is what TestWorkflowRole_UpdateAndDeletePermissionCheckedBeforeRowRead and
+// TestStaffing_PermissionCheckedBeforeRowRead pin.
+func requireActiveAdmin(ctx context.Context, tx pgx.Tx, subject string) error {
+	var role string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, subject,
+	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotPermitted
+		}
+		return err
+	}
+	if role != "admin" {
+		return ErrNotPermitted
+	}
+	return nil
+}
+
 // uniqueViolationOn reports whether err is a 23505 on exactly this constraint.
 // Checked by name, never by SQLSTATE alone: a 23505 on any other unique — a
 // gen_random_uuid collision on workflow_roles_tenant_id_id_uq, say — must stay a 500.
 func uniqueViolationOn(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
+}
+
+// fkViolationOn reports whether err is a 23503 on exactly this constraint. By name, never
+// by SQLSTATE alone: workflow_role_members has two foreign keys and only the user leg is
+// a 400.
+func fkViolationOn(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == constraint
 }

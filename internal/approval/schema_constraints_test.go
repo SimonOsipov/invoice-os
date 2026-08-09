@@ -273,6 +273,103 @@ func TestApprovalRuns_SecondOpenRunRejected(t *testing.T) {
 	}
 }
 
+// assertCheckViolation fails t unless err is a 23514 check_violation on the named
+// constraint.
+func assertCheckViolation(t *testing.T, err error, constraint string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("want check_violation on %s, got success", constraint)
+	}
+	if code := pgCode(err); code != "23514" {
+		t.Fatalf("%s: SQLSTATE = %q, want 23514 (check_violation): %v", constraint, code, err)
+	}
+	if name := pgConstraint(err); name != constraint {
+		t.Errorf("constraint = %q, want %q", name, constraint)
+	}
+}
+
+// TestApprovalDecisions_ActorCheckRejectsEmptyString: approval_decisions_actor_check
+// (char_length(actor) > 0) is asserted nowhere in the RN-01..RN-18 battery — a dropped
+// CHECK would let an empty actor silently break the "who decided" audit guarantee AC-9
+// depends on.
+func TestApprovalDecisions_ActorCheckRejectsEmptyString(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-03 empty-actor")
+	entityID := seedBusinessEntity(t, super, tenantID, "Empty-actor Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "actor-check-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Empty-actor policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	var stepID string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind) VALUES ($1, $2, 0, 'approval') RETURNING id`,
+		tenantID, runID).Scan(&stepID); err != nil {
+		t.Fatalf("seed approval_run_steps: %v", err)
+	}
+
+	_, err := super.Exec(context.Background(),
+		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor) VALUES ($1, $2, $3, 'approved', '')`,
+		tenantID, runID, stepID)
+	assertCheckViolation(t, err, "approval_decisions_actor_check")
+
+	// Positive control: a non-empty actor succeeds.
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor) VALUES ($1, $2, $3, 'approved', 'qa-tester')`,
+		tenantID, runID, stepID); err != nil {
+		t.Fatalf("control: non-empty actor: want success, got: %v", err)
+	}
+}
+
+// TestApprovalRunLedger_EnumChecksRejectInvalidValues: the state/kind/decision CHECKs on
+// all three runtime ledger tables are asserted nowhere in the RN-01..RN-18 battery — a
+// dropped or mistyped CHECK would let an out-of-vocabulary value persist silently.
+func TestApprovalRunLedger_EnumChecksRejectInvalidValues(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-03 enum-checks")
+	entityID := seedBusinessEntity(t, super, tenantID, "Enum-checks Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "enum-check-invoice-1")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Enum-checks policy")
+	versionID := seedApprovalPolicyVersion(t, super, tenantID, policyID)
+
+	t.Run("approval_runs.state", func(t *testing.T) {
+		_, err := super.Exec(context.Background(),
+			`INSERT INTO approval_runs (tenant_id, invoice_id, policy_version_id, content_fingerprint, state) VALUES ($1, $2, $3, $4, 'bogus')`,
+			tenantID, invoiceID, versionID, "fp-"+uuid.NewString())
+		assertCheckViolation(t, err, "approval_runs_state_check")
+	})
+
+	runID := seedApprovalRun(t, super, tenantID, invoiceID, versionID)
+
+	t.Run("approval_run_steps.kind", func(t *testing.T) {
+		_, err := super.Exec(context.Background(),
+			`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind) VALUES ($1, $2, 0, 'bogus')`,
+			tenantID, runID)
+		assertCheckViolation(t, err, "approval_run_steps_kind_check")
+	})
+
+	t.Run("approval_run_steps.state", func(t *testing.T) {
+		_, err := super.Exec(context.Background(),
+			`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind, state) VALUES ($1, $2, 1, 'approval', 'bogus')`,
+			tenantID, runID)
+		assertCheckViolation(t, err, "approval_run_steps_state_check")
+	})
+
+	var stepID string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO approval_run_steps (tenant_id, run_id, ord, kind) VALUES ($1, $2, 2, 'approval') RETURNING id`,
+		tenantID, runID).Scan(&stepID); err != nil {
+		t.Fatalf("seed approval_run_steps: %v", err)
+	}
+
+	t.Run("approval_decisions.decision", func(t *testing.T) {
+		_, err := super.Exec(context.Background(),
+			`INSERT INTO approval_decisions (tenant_id, run_id, run_step_id, decision, actor) VALUES ($1, $2, $3, 'bogus', 'qa-tester')`,
+			tenantID, runID, stepID)
+		assertCheckViolation(t, err, "approval_decisions_decision_check")
+	})
+}
+
 // TestApprovalPolicy_ThreeDeepApprovalChainIsAcceptedTodayKnownGap is a KNOWN-GAP TRIPWIRE
 // (PC-17), not a feature test: approval_policy_steps_depth_cap only rejects a CHILD whose
 // kind is 'condition', so a chain of nested approval steps is legal to arbitrary depth

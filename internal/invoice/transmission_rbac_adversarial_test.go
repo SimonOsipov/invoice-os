@@ -235,8 +235,9 @@ func TestTransmitGate_RefusalOutranksBodyGuards(t *testing.T) {
 // --- the gate is one round-trip, not one per guard ---------------------------
 
 // The architect's own note says the gate costs exactly one memberships
-// round-trip per transmit request. A second call site added later (say when
-// APPR-01-02 wires submit_blocked_reason) would double that silently.
+// round-trip per transmit request. A second call site added later (a
+// submit_blocked_reason-style read gate on the write path, say) would double
+// that silently.
 func TestTransmitGate_ApproverResolvesRoleExactlyOnce(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	resolved := 0

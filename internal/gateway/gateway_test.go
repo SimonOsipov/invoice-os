@@ -448,6 +448,43 @@ func seedMembershipRows(t *testing.T) []string {
 	return rows
 }
 
+// seedRowFor returns the memberships row seeding (subject, tenant).
+func seedRowFor(t *testing.T, rows []string, subject, tenant string) string {
+	t.Helper()
+	for _, row := range rows {
+		if strings.Contains(row, "'"+subject+"'") && strings.Contains(row, "'"+tenant+"'") {
+			return row
+		}
+	}
+	t.Fatalf("no memberships row for (%s, %s)", subject, tenant)
+	return ""
+}
+
+// A suspended member resolves to no role at all (callerRoleTx filters
+// status = 'active', internal/invoice/store.go), so allowlisting one mints a token
+// whose every role-gated call then refuses. The seeded pairing alone cannot see it:
+// TestLoginPersonas_AllSeeded passes just as happily on a suspended row.
+func TestLoginPersonas_SeededActive(t *testing.T) {
+	rows := seedMembershipRows(t)
+	for _, p := range loginPersonas {
+		row := seedRowFor(t, rows, p.subject, p.tenantID)
+		if !strings.Contains(row, "'active'") || strings.Contains(row, "'suspended'") {
+			t.Errorf("persona %s is not seeded active:%s", p.subject, row)
+		}
+	}
+}
+
+// The preparer is allowlisted so a refused submit is demonstrable on the hosted
+// build, which holds only while the seed still makes them a preparer. A seed edit to
+// an approver role retires that demonstration with every login case above still
+// green; seed_test.go's pin skips whenever no database is configured.
+func TestPreparerPersonaSeededAsPreparer(t *testing.T) {
+	row := seedRowFor(t, seedMembershipRows(t), preparerSubject, firmTenant)
+	if !strings.Contains(row, "'preparer'") {
+		t.Errorf("preparer persona is no longer seeded as a preparer:%s", row)
+	}
+}
+
 // TestMockLoginHostedRefusalOpaque pins AC-3: every refusal reason produces an
 // identical, byte-for-byte body that never names which field failed.
 func TestMockLoginHostedRefusalOpaque(t *testing.T) {

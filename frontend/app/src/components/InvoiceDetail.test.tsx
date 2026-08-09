@@ -967,6 +967,76 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
   )
 })
 
+// The ROLE refusal (notApproverTransmitReason, handlers.go) rather than a status one. The
+// specs above all fixture a status sentence, which a component that re-derived copy from
+// `status` could still satisfy; a preparer's block is invisible to any status map. Em dash
+// is U+2014, copied from the Go const -- a hyphen makes every toBe below vacuous.
+describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-5)', () => {
+  const ID = 'inv-role-blocked-1'
+  const ROLE_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+  it('a preparer on a validated invoice sees Submit disabled with the role sentence as visible text', async () => {
+    // `validated` is the status where a preparer actually meets the block: can_edit is true,
+    // so the bar renders, and can_submit is false only because of the role.
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: ROLE_REASON }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const btn = await screen.findByTestId('detail-submit')
+    expect((btn as HTMLButtonElement).disabled).toBe(true)
+    // Visible text node, not only the title attribute ([revalidate-visibility]).
+    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(ROLE_REASON)
+  })
+
+  it('the disabled Submit points aria-describedby at the role reason and mirrors it in title', async () => {
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: ROLE_REASON }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const btn = await screen.findByTestId('detail-submit')
+    const reasonEl = await screen.findByTestId('submit-blocked-reason')
+    expect(btn.getAttribute('aria-describedby')).toBe(reasonEl.id)
+    expect(btn.getAttribute('title')).toBe(ROLE_REASON)
+    expect(btn.getAttribute('aria-describedby')).not.toBe('revalidate-blocked-reason-text')
+  })
+
+  it('clicking the role-blocked Submit sends nothing and does not arm', async () => {
+    const { submitCalls } = mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: ROLE_REASON }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+
+    expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
+    expect(screen.queryByTestId('detail-submit-confirm')).toBeNull()
+    expect(submitCalls).toHaveLength(0)
+  })
+
+  // Pins a DELIBERATE silence, so the invariant comment at InvoiceDetail.tsx's submit
+  // reason node is not later read as a bug report. submitGate's role arm emits the sentence
+  // on every status, but the reason node lives inside the can_edit-gated actions bar -- on a
+  // queued invoice there is no Submit control to explain, so nothing renders. Do not widen
+  // that gate; 'the actions bar stays gated on can_edit alone' is its mutation oracle.
+  it("a preparer's role sentence on a non-editable invoice renders no bar and no reason", async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: ROLE_REASON }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    // Positive companion: the record really rendered, so the absences below are not an
+    // empty document.
+    await screen.findByTestId('invoice-status-badge')
+
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
+    expect(document.body.textContent).not.toContain(ROLE_REASON)
+  })
+})
+
 // RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture carries the literal
 // actor 'system', which renders fine today and hides the raw-UUID defect -- these pass a
 // real StatusChange[] through mockDetailFetch instead of relying on the [] default.

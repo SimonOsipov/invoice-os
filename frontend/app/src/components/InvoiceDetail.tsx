@@ -693,8 +693,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       {inv.revalidate_blocked_reason}
                     </div>
                   )}
-                  {/* Same convention, for Submit ([gates-on-the-wire]); non-null exactly when
-                      can_edit && !can_submit. */}
+                  {/* Same convention, for Submit ([gates-on-the-wire]). The wire guarantees
+                      submit_blocked_reason != null implies !can_submit; the converse does NOT
+                      hold, so key off the reason alone and never off can_edit/can_submit. */}
                   {inv.submit_blocked_reason != null && (
                     <div id={SUBMIT_REASON_ID} data-testid="submit-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {inv.submit_blocked_reason}

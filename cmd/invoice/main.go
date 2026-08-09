@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
@@ -168,6 +169,16 @@ func main() {
 	// edge is a cycle (TestDocument_ImportsNoRepoPackage). Go 1.22's {id} wildcard
 	// matches one segment, so /sheet cannot be swallowed by the download route above.
 	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
+
+	// /v1/workflow-roles... -- Settings > Roles: the approval seats and who staffs
+	// them (APPR-02). Same invoice_app pool as the invoice store above; the writes
+	// are admin-only inside the store, so no route here carries a role gate.
+	roleStore := approval.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/workflow-roles", approval.ListRolesHandler(roleStore.ListRoles, app.Logger))
+	app.Mux.HandleFunc("POST /v1/workflow-roles", approval.CreateRoleHandler(roleStore.CreateRole, app.Logger))
+	app.Mux.HandleFunc("PATCH /v1/workflow-roles/{key}", approval.UpdateRoleHandler(roleStore.UpdateRole, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/workflow-roles/{key}", approval.DeleteRoleHandler(roleStore.DeleteRole, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/workflow-roles/{key}/members", approval.SetRoleMembersHandler(roleStore.SetRoleMembers, app.Logger))
 
 	// POST /v1/invoices/submissions -- the batch submit endpoint ([trigger-surface],
 	// M5-04-07/08). q is an INSERT-ONLY River client (Queues/Workers both nil): this

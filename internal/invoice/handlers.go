@@ -297,10 +297,14 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 	return true, nil
 }
 
-// submitGate is a RED-stage stub: today's status-only answer with role ignored,
-// so the role specs in transmission_rbac_test.go fail on an assertion rather
-// than a compile error. The role-first body is the executor's to write.
+// submitGate checks role BEFORE status, deliberately the reverse of
+// resolveOutsideGate above: a preparer told "re-validate this invoice first"
+// would run a re-validation that still cannot end in a submit.
 func submitGate(s Status, role string) (bool, *string) {
+	if !isApprover(role) {
+		r := notApproverTransmitReason // a const is not addressable; copy to a local
+		return false, &r
+	}
 	return canSubmit(s), submitBlockedReason(s)
 }
 
@@ -309,9 +313,10 @@ func submitGate(s Status, role string) (bool, *string) {
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
 // Invoice (with line_items, [D7]) on success.
 //
-// callerRole feeds resolveOutsideGate alongside the fetched invoice's
-// status. It is not assumed to honor Store.CallerRole's own "never errors"
-// contract -- an error from it fails closed (not-an-approver), never a 5xx.
+// callerRole feeds both submitGate and resolveOutsideGate alongside the
+// fetched invoice's status. It is not assumed to honor Store.CallerRole's own
+// "never errors" contract -- an error from it fails closed (not-an-approver),
+// never a 5xx.
 func GetHandler(get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -352,19 +357,15 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 		// ([ubl-gate-is-content-not-status]).
 		canViewUBL, ublReason := ublGate(SubmissionCanonical(inv))
 
-		// resolveOutsideGate is status-first: on any non-failed status it returns the
-		// status reason regardless of role, so skip callerRole's own tenant-scoped query
-		// unless the invoice is actually failed. An erroring callerRole fails closed to
-		// "" (not-an-approver) rather than propagating -- the injected func is not
-		// assumed to honor Store.CallerRole's own "never errors" contract.
-		var role string
-		if inv.Status == StatusFailed {
-			role, err = callerRole(r.Context())
-			if err != nil {
-				role = ""
-			}
+		// ONE resolution shared by both gates: submitGate consults role on every
+		// status, resolveOutsideGate only on failed
+		// (TestGetHandler_CallerRoleResolvedOnEveryStatus).
+		role, err := callerRole(r.Context())
+		if err != nil {
+			role = ""
 		}
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
+		canSubmitInv, submitReason := submitGate(inv.Status, role)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -382,8 +383,8 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 			QRPNGBase64:                 qrPNGBase64,
 			CanEdit:                     canEdit(inv.Status),
 			CanRevalidate:               canRevalidate(inv.Status),
-			CanSubmit:                   canSubmit(inv.Status),
-			SubmitBlockedReason:         submitBlockedReason(inv.Status),
+			CanSubmit:                   canSubmitInv,
+			SubmitBlockedReason:         submitReason,
 			CanViewUBL:                  canViewUBL,
 			UBLBlockedReason:            ublReason,
 			CanResolveOutside:           canResolveOutside,

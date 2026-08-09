@@ -1,7 +1,6 @@
 // Specs for the transmission role gate on POST /v1/invoices/submissions and
-// POST /v1/invoices/{id}/transitions. Written RED: both handlers already take
-// the callerRole seam but never consult it, so every refusal assertion below
-// fails on a status code, not a compile error.
+// POST /v1/invoices/{id}/transitions. Adversarial siblings (cross-tenant
+// resolution, guard precedence) are in transmission_rbac_adversarial_test.go.
 //
 // AC map:
 //

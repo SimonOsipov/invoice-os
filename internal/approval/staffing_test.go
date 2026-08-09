@@ -993,6 +993,214 @@ func TestStaffing_ConcurrentPutsDoNotMerge(t *testing.T) {
 	}
 }
 
+// --- uuid canonicalisation -------------------------------------------------
+
+// nonCanonicalForms are the spellings uuid.Parse accepts for one id. Postgres itself
+// normalises braced/unhyphenated/upper-case, but rejects the urn: prefix and the
+// space-padded form outright (uuid.Parse's 38-char branch strips the first and last
+// byte without checking they are braces), so both would leak 22P02 as a 500 unless the
+// store canonicalises before the ::uuid[] cast.
+func nonCanonicalForms(id string) map[string]string {
+	return map[string]string{
+		"urn":            "urn:uuid:" + id,
+		"urn upper":      "URN:UUID:" + id,
+		"braced":         "{" + id + "}",
+		"space padded":   " " + id + " ",
+		"unhyphenated":   strings.ReplaceAll(id, "-", ""),
+		"upper-case hex": strings.ToUpper(id),
+	}
+}
+
+// TestStaffing_NonCanonicalUuidFormsAreCanonicalised: whatever spelling arrives, the
+// canonical id is what is stored, returned and logged. The response and the audit
+// payload are read back too — Postgres canonicalises the column on its own, so echoing
+// the raw argument would silently disagree with the row it just wrote.
+func TestStaffing_NonCanonicalUuidFormsAreCanonicalised(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	member := uuid.NewString()
+	for name, form := range nonCanonicalForms(member) {
+		t.Run(name, func(t *testing.T) {
+			tenantID := seedTenant(t, super, "APPR-02 staff-uuid-form "+name)
+			c, _ := activeAdmin(t, super, tenantID)
+			seedMembership(t, super, tenantID, member, "preparer", "active")
+			roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+
+			got, err := store.SetRoleMembers(c, "tax-reviewer", []string{form})
+			if err != nil {
+				t.Fatalf("SetRoleMembers(%q): err = %v (SQLSTATE %q), want the canonical id stored", form, err, pgCode(err))
+			}
+			want := []string{member}
+			if !reflect.DeepEqual(got.Members, want) {
+				t.Errorf("returned members = %v, want the canonical %v", got.Members, want)
+			}
+			if ids := staffedUserIDs(staffingRows(t, super, roleID)); !reflect.DeepEqual(ids, want) {
+				t.Errorf("stored members = %v, want %v", ids, want)
+			}
+			if n := auditCount(t, super, tenantID, "workflow_role.staffed"); n != 1 {
+				t.Fatalf("workflow_role.staffed audit rows = %d, want 1", n)
+			}
+			_, payload := staffedAudit(t, super, tenantID)
+			wantPayload := map[string]any{"key": "tax-reviewer", "members": []any{member}}
+			if !reflect.DeepEqual(payload, wantPayload) {
+				t.Errorf("audit payload = %v, want %v — the log must carry what was stored", payload, wantPayload)
+			}
+		})
+	}
+}
+
+// TestStaffing_DuplicateIsDetectedAcrossSpellings: the dedupe reads canonical ids, so two
+// spellings of one uuid are the ErrValidation a repeated id is — not a 23505 on
+// workflow_role_members_tenant_role_user_uq, which is unmapped and would 500.
+func TestStaffing_DuplicateIsDetectedAcrossSpellings(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 staff-duplicate-spellings")
+	c, _ := activeAdmin(t, super, tenantID)
+	app, rec := tracedAppPool(t)
+	store := NewStore(app)
+
+	member := uuid.NewString()
+	seedMembership(t, super, tenantID, member, "preparer", "active")
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+
+	for name, form := range nonCanonicalForms(member) {
+		t.Run(name, func(t *testing.T) {
+			rec.reset()
+			if _, err := store.SetRoleMembers(c, "tax-reviewer", []string{member, form}); !errors.Is(err, ErrValidation) {
+				t.Errorf("SetRoleMembers with %q beside its canonical form: err = %v (SQLSTATE %q), want ErrValidation",
+					form, err, pgCode(err))
+			}
+			if got := rec.mentioning("app.current_tenant"); len(got) != 0 {
+				t.Errorf("a rejected duplicate opened %d transactions, want 0 — the check reads no row", len(got))
+			}
+			if rows := staffingRows(t, super, roleID); len(rows) != 0 {
+				t.Errorf("staffing = %v, want none", rows)
+			}
+		})
+	}
+	if n := auditCount(t, super, tenantID, "workflow_role.staffed"); n != 0 {
+		t.Errorf("workflow_role.staffed audit rows = %d, want 0", n)
+	}
+
+	if _, err := store.SetRoleMembers(c, "tax-reviewer", []string{strings.ToUpper(member)}); err != nil {
+		t.Fatalf("control: one spelling alone: %v — the refusals above are vacuous unless this succeeds", err)
+	}
+}
+
+// --- scale and cross-method interleaving -----------------------------------
+
+// TestStaffing_LargeMemberListIsOneInsert: the statement count against
+// workflow_role_members is 2 (clear, re-staff) whatever the member count, so nothing here
+// is per-member — the body cap 06 applies leaves room for ~1,700 ids. The submission is in
+// reverse id order, so `ord` cannot pass by echoing either insertion or user_id order.
+func TestStaffing_LargeMemberListIsOneInsert(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 staff-large-list")
+	c, _ := activeAdmin(t, super, tenantID)
+	app, rec := tracedAppPool(t)
+	store := NewStore(app)
+
+	const n = 400
+	users := seedActiveMembers(t, super, tenantID, n)
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+
+	for _, size := range []int{3, n} {
+		submitted := make([]string, 0, size)
+		for i := size - 1; i >= 0; i-- {
+			submitted = append(submitted, users[i])
+		}
+		rec.reset()
+		got, err := store.SetRoleMembers(c, "tax-reviewer", sent(submitted...))
+		if err != nil {
+			t.Fatalf("SetRoleMembers with %d members: %v (SQLSTATE %q)", size, err, pgCode(err))
+		}
+		if stmts := rec.mentioning("workflow_role_members"); len(stmts) != 2 {
+			t.Errorf("%d members took %d workflow_role_members statements, want 2 (clear + re-staff): %v",
+				size, len(stmts), stmts)
+		}
+		if !reflect.DeepEqual(got.Members, submitted) {
+			t.Errorf("%d members: returned order differs from the submitted order", size)
+		}
+		rows := staffingRows(t, super, roleID)
+		if ids := staffedUserIDs(rows); !reflect.DeepEqual(ids, submitted) {
+			t.Errorf("%d members: stored order differs from the submitted order", size)
+		}
+		wantOrds := make([]int, size)
+		for i := range wantOrds {
+			wantOrds[i] = i
+		}
+		if ords := staffedOrds(rows); !reflect.DeepEqual(ords, wantOrds) {
+			t.Errorf("%d members: stored ord = %v, want 0..%d dense", size, ords, size-1)
+		}
+	}
+}
+
+// TestStaffing_ConcurrentStaffAndDeleteResolveCoherently: a staffing write and a soft
+// delete contend for the SAME workflow_roles row lock, so one of two coherent outcomes
+// holds — never a half-replaced set, and never staffing a role no door can reach. When the
+// delete commits first, the FOR UPDATE's re-check drops the row and the answer is
+// ErrNotFound; when it commits second, the replaced set survives inert.
+func TestStaffing_ConcurrentStaffAndDeleteResolveCoherently(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	const rounds = 8
+	for round := range rounds {
+		tenantID := seedTenant(t, super, "APPR-02 staff-vs-delete")
+		c, _ := activeAdmin(t, super, tenantID)
+		users := seedActiveMembers(t, super, tenantID, 3)
+		roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+		staffWorkflowRole(t, super, tenantID, roleID, users[0], 0)
+		before := staffingRows(t, super, roleID)
+		submitted := []string{users[2], users[1]}
+
+		var wg sync.WaitGroup
+		var staffErr, delErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, staffErr = store.SetRoleMembers(c, "tax-reviewer", sent(submitted...))
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, delErr = store.DeleteRole(c, "tax-reviewer")
+		}()
+		close(start)
+		wg.Wait()
+
+		if delErr != nil {
+			t.Fatalf("round %d: DeleteRole = %v (SQLSTATE %q) — the sole deleter of a live role must win", round, delErr, pgCode(delErr))
+		}
+		if r := roleRow(t, super, roleID); r.DeletedAt == nil {
+			t.Fatalf("round %d: the role is still live after DeleteRole committed", round)
+		}
+		rows := staffingRows(t, super, roleID)
+		switch {
+		case staffErr == nil:
+			if ids := staffedUserIDs(rows); !reflect.DeepEqual(ids, submitted) {
+				t.Errorf("round %d: staffing = %v, want %v — a committed replace is whole", round, ids, submitted)
+			}
+			if ords := staffedOrds(rows); !reflect.DeepEqual(ords, []int{0, 1}) {
+				t.Errorf("round %d: stored ord = %v, want [0 1]", round, ords)
+			}
+		case errors.Is(staffErr, ErrNotFound):
+			if !sameStaffing(rows, before) {
+				t.Errorf("round %d: staffing = %v, want it byte-identical to %v — a refused replace writes nothing",
+					round, rows, before)
+			}
+		default:
+			t.Fatalf("round %d: SetRoleMembers = %v (SQLSTATE %q), want success or ErrNotFound", round, staffErr, pgCode(staffErr))
+		}
+		if keys := liveRoleKeys(t, super, tenantID); len(keys) != 0 {
+			t.Errorf("round %d: live keys = %v, want none — the delete committed", round, keys)
+		}
+	}
+}
+
 // TestStaffing_AuditsInSameTx: one transaction wrote both rows, proven by a shared
 // non-frozen xmin. The join is against workflow_role_members on purpose — staffing never
 // writes the workflow_roles row, so its xmin is still the CREATE's xid and a copy of the

@@ -321,9 +321,9 @@ func TestMockLoginRoundTrip(t *testing.T) {
 	assertHeader(t, tg.caps["tenancy"].header, headerTenantID, "tenant-a")
 }
 
-// Hosted-allowlist personas mirror db/seed.dev.sql:21-24,30-37: subject and
-// tenant are seeded; role is the GoTrue JWT role every client sends, not the
-// seed's memberships.role (admin/preparer/reviewer).
+// Hosted-allowlist personas mirror db/seed.dev.sql — tenants :21-24, memberships
+// :34-47: subject and tenant are seeded; role is the GoTrue JWT role every client
+// sends, not the seed's memberships.role (admin/preparer/reviewer).
 const (
 	firmSubject          = "c0000000-0000-0000-0000-000000000001"
 	firmTenant           = "11111111-1111-1111-1111-111111111111"

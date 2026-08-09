@@ -161,12 +161,12 @@ type loginPersona struct{ subject, tenantID, role string }
 
 // subject and tenant are seeded (db/seed.dev.sql); role is the GoTrue JWT role every
 // client sends, NOT that seed's memberships.role (admin/preparer/reviewer) — changing
-// it to match the seed locks both personas out of the hosted demo. The seed's other
-// two members (…0003 preparer, …0004 reviewer) are assertion fixtures, never login
-// identities; a spec that signs either of them in must extend this table.
+// it to match the seed locks these personas out of the hosted demo. Every other
+// seeded membership is an assertion fixture: signing one in means adding it here.
 var loginPersonas = []loginPersona{
 	{"c0000000-0000-0000-0000-000000000001", "11111111-1111-1111-1111-111111111111", "authenticated"},
 	{"c0000000-0000-0000-0000-000000000002", "22222222-2222-2222-2222-222222222222", "authenticated"},
+	{"c0000000-0000-0000-0000-000000000003", "11111111-1111-1111-1111-111111111111", "authenticated"},
 }
 
 // MockLoginHandler mints a GoTrue-shaped token for the requested identity. It is

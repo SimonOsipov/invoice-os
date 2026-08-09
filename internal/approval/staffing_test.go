@@ -4,9 +4,8 @@ package approval
 // the FK disposition on both legs, and both directions of remove-prunes/suspend-keeps.
 //
 // Same gate as workflow_roles_test.go — every test here self-skips without DATABASE_URL
-// + DATABASE_SUPERUSER_URL, and no `rls` CI job runs this package until subtask 07. Run
-// locally with `DEV_DB_PORT=5433 make test-rls`-style DSNs and
-// `go test -p 1 ./internal/approval/...`.
+// + DATABASE_SUPERUSER_URL. Run locally with `DEV_DB_PORT=5433 make test-approvals`; in CI
+// the rls job's gate step fails the build on any skip.
 
 import (
 	"context"

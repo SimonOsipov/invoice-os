@@ -5,9 +5,9 @@ package approval
 // tenant filter.
 //
 // Every test below except TestWorkflowRole_StoreSatisfiesTheHandlerSeam self-skips
-// without DATABASE_URL + DATABASE_SUPERUSER_URL, and no `rls` CI job runs this
-// package until subtask 07 — so CI is green on skips until then. Run locally with
-// `DATABASE_URL=... DATABASE_SUPERUSER_URL=... go test -p 1 ./internal/approval/...`.
+// without DATABASE_URL + DATABASE_SUPERUSER_URL. Run locally with
+// `DEV_DB_PORT=5433 make test-approvals`; in CI the rls job's gate step fails the
+// build on any skip (TestApproval_CIRLSJobRunsThisPackage guards that the step exists).
 
 import (
 	"context"
@@ -34,14 +34,14 @@ import (
 // --- harness ---------------------------------------------------------------
 
 // dbTestPools returns the superuser (seed + read-back) and app-role (Store) pools,
-// or skips when the per-role DSNs are unset — the same gate `make test-rls` uses
+// or skips when the per-role DSNs are unset — the same gate the sibling suites use
 // (idiom copied from internal/tenancy/tenancy_test.go).
 func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	t.Helper()
 	appURL := os.Getenv("DATABASE_URL")
 	superURL := os.Getenv("DATABASE_SUPERUSER_URL")
 	if appURL == "" || superURL == "" {
-		t.Skip("approval db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("approval db-integration test skipped: set DATABASE_URL and DATABASE_SUPERUSER_URL (or run `make test-approvals`)")
 	}
 	ctx := context.Background()
 

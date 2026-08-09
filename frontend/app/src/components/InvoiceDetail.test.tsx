@@ -1035,6 +1035,62 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
     expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
     expect(document.body.textContent).not.toContain(ROLE_REASON)
   })
+
+  // The only shape where BOTH reason nodes render at once: rejected keeps can_edit true, so
+  // the bar is up, can_revalidate is false, and the role arm overrides the status sentence
+  // for Submit. Existing id-collision guards ('...points aria-describedby at its own reason
+  // element...') run on draft, where the revalidate node is absent -- a shared id would go
+  // unseen there. Resolves each describedby through getElementById rather than comparing
+  // strings, so a swap that keeps both ids distinct still fails.
+  it('a preparer on a rejected invoice gets both reasons on distinct nodes, each control describing its own', async () => {
+    const revalidateReason = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'rejected',
+        can_edit: true,
+        can_revalidate: false,
+        revalidate_blocked_reason: revalidateReason,
+        can_submit: false,
+        submit_blocked_reason: ROLE_REASON,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const submitEl = await screen.findByTestId('submit-blocked-reason')
+    const revalidateEl = screen.getByTestId('revalidate-blocked-reason')
+    expect(submitEl.id).not.toBe(revalidateEl.id)
+    expect(submitEl.textContent).toBe(ROLE_REASON)
+    expect(revalidateEl.textContent).toBe(revalidateReason)
+
+    const submitBtn = screen.getByTestId('detail-submit')
+    const revalidateBtn = screen.getByTestId('revalidate')
+    expect(document.getElementById(submitBtn.getAttribute('aria-describedby') ?? '')).toBe(submitEl)
+    expect(document.getElementById(revalidateBtn.getAttribute('aria-describedby') ?? '')).toBe(revalidateEl)
+    expect(submitBtn.getAttribute('title')).toBe(ROLE_REASON)
+    expect(revalidateBtn.getAttribute('title')).toBe(revalidateReason)
+  })
+
+  // Anti-drift on the ROLE-blocked shape. The existing sentinel spec ('...not from a client
+  // status map') fixtures draft, which a component re-deriving copy from status could still
+  // pass by keying its map on draft alone; validated + can_submit:false is reachable ONLY
+  // via the role, so a sentinel here has no status the SPA could have derived it from.
+  it('a sentence the SPA has never seen renders verbatim on the validated role-blocked shape', async () => {
+    const sentinel = 'Sentinel role refusal QQV-42 — not any shipped copy.'
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: sentinel }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const reasonEl = await screen.findByTestId('submit-blocked-reason')
+    expect(reasonEl.textContent).toBe(sentinel)
+    expect(screen.getByTestId('detail-submit').getAttribute('title')).toBe(sentinel)
+    // No shipped sentence leaks in beside it.
+    expect(document.body.textContent).not.toContain('ask an appro' + 'ver on your team')
+    expect(document.body.textContent).not.toContain('Only validated invoices can be sub' + 'mitted')
+  })
 })
 
 // RED specs (task-392, BUG-03-03, Mode A). Every demo-data fixture carries the literal

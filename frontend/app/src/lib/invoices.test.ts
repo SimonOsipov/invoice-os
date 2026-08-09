@@ -768,6 +768,21 @@ describe('getInvoice', () => {
     expect(result.can_edit).toBe(false)
   })
 
+  // MUTATION ORACLE (QA): every other reason fixture in this file is already tidy, so a
+  // `?.trim()` / `.normalize()` / whitespace-collapse slipped into getInvoice's normalizer
+  // survives the whole suite. Pass-through means the bytes, not the visible words.
+  it('getInvoice: a submit reason keeps its padding, NBSP and doubled spaces byte-for-byte', async () => {
+    // Escapes, not pasted characters: a literal NBSP/tab is invisible to the next reader.
+    const untidy = '  Only an admin or a reviewer can submit\u00a0 an invoice to NRS/MBS \u2014 ask an approver on your team.\t'
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: false, submit_blocked_reason: untidy }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(untidy)
+  })
+
   it('getInvoice: a wire missing submit_blocked_reason normalizes to null', async () => {
     const wire = { ...draftInvoice, can_edit: true, can_submit: false }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })

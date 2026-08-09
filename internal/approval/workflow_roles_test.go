@@ -128,7 +128,7 @@ func softDeleteWorkflowRole(t *testing.T, super *pgxpool.Pool, roleID string) {
 }
 
 // seedRoleDesc gives a seeded role a blurb, so "description unchanged" assertions are
-// not vacuously ” == ”.
+// not vacuously "" == "".
 func seedRoleDesc(t *testing.T, super *pgxpool.Pool, roleID, desc string) {
 	t.Helper()
 	tag, err := super.Exec(context.Background(),

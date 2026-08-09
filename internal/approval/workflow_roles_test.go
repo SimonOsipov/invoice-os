@@ -1785,7 +1785,7 @@ func TestWorkflowRole_DeleteLeavesPublishedStepsIntact(t *testing.T) {
 // TestWorkflowRole_DeletedRoleIsNotAddressable: deleted_at IS NULL is this resource's
 // existence predicate, so a soft-deleted role is ErrNotFound on every by-key write path.
 // The live-role control keeps this from passing against a store that refuses everything.
-// (SetRoleMembers is APPR-02-05's.)
+// (SetRoleMembers's own case is TestStaffing_DeletedRoleCannotBeStaffed.)
 func TestWorkflowRole_DeletedRoleIsNotAddressable(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "APPR-02 deleted-unaddressable")

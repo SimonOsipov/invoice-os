@@ -555,10 +555,7 @@ export function rollup(token: string): Promise<Rollup> {
 // exactly four keys, none tagged omitempty, so `desc` is an explicit "" and `members`
 // an explicit [] rather than absent. `desc`, NOT `description`. ----
 
-// A type alias, not an interface: contract specs widen a Role to
-// Record<string, unknown> to assert its exact key SET, and TS grants that implicit index
-// signature only to aliases.
-export type WorkflowRole = {
+export interface WorkflowRole {
   key: string
   title: string
   desc: string

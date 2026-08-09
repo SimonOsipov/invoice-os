@@ -171,8 +171,8 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
 
 	// /v1/workflow-roles... -- Settings > Roles: the approval seats and who staffs
-	// them (APPR-02). Same invoice_app pool as the invoice store above; the writes
-	// are admin-only inside the store, so no route here carries a role gate.
+	// them. Same invoice_app pool as the invoice store above; the writes are
+	// admin-only inside the store, so no route here carries a role gate.
 	roleStore := approval.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/workflow-roles", approval.ListRolesHandler(roleStore.ListRoles, app.Logger))
 	app.Mux.HandleFunc("POST /v1/workflow-roles", approval.CreateRoleHandler(roleStore.CreateRole, app.Logger))

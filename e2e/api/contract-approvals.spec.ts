@@ -159,9 +159,8 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
     // Read back through the list rather than trusting the response body, which a handler
     // could echo without persisting `ord`.
     const listed = await listWorkflowRoles(token)
-    const rows = listed.workflow_roles as Array<Record<string, unknown>>
     expect(
-      rows.find((r) => r.key === probe.key)?.members,
+      listed.workflow_roles.find((r) => r.key === probe.key)?.members,
       'the submitted order persisted',
     ).toEqual([PREPARER_TARGET, REVIEWER_TARGET])
   })
@@ -190,9 +189,8 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
     // No members assertion: DeleteRole answers [] even for a staffed role, by design.
 
     const listed = await listWorkflowRoles(token)
-    const rows = listed.workflow_roles as Array<Record<string, unknown>>
     expect(
-      rows.find((r) => r.key === probe.key),
+      listed.workflow_roles.find((r) => r.key === probe.key),
       'a soft-deleted role is invisible to the list',
     ).toBeUndefined()
   })

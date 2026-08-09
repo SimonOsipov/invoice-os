@@ -693,3 +693,109 @@ func TestRLS_ApprovalPolicyStepsCondOpCheckRejects(t *testing.T) {
 		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_policy_steps WHERE version_id = $1`, versionA)
 	}()
 }
+
+// QA adversarial addition: no PC spec exercises approval_policy_versions_tenant_policy_version_uq,
+// so a regression that dropped it or widened it to span tenants would ship silently green.
+func TestRLS_ApprovalPolicyVersionsVersionUniquePerPolicy(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyID, cleanup := seedApprovalPolicy(t, h.tenantA, apName("version-unique"))
+	defer cleanup()
+
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1)`,
+		h.tenantA, policyID); err != nil {
+		t.Fatalf("seed version 1: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM approval_policy_versions WHERE policy_id = $1`, policyID)
+	}()
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 1)`,
+		h.tenantA, policyID)
+	if err == nil {
+		t.Fatal("duplicate version 1 for the same policy succeeded, want 23505")
+	}
+	if code := pgCode(err); code != "23505" {
+		t.Fatalf("duplicate version: SQLSTATE = %q, want 23505 (unique_violation): %v", code, err)
+	}
+	if name := pgConstraint(err); name != "approval_policy_versions_tenant_policy_version_uq" {
+		t.Errorf("constraint = %q, want %q", name, "approval_policy_versions_tenant_policy_version_uq")
+	}
+
+	// Positive control: a different version number for the same policy succeeds.
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version) VALUES ($1, $2, 2)`,
+		h.tenantA, policyID); err != nil {
+		t.Fatalf("control: version 2 for the same policy: want success, got: %v", err)
+	}
+}
+
+// QA adversarial addition: PC-14 only exercises the tenant_id CASCADE (deleting a tenant),
+// which every one of the three tables carries independently. It never exercises the
+// non-tenant composite FKs' own ON DELETE CASCADE direction, so flipping any of the three
+// to RESTRICT would ship silently green. Each covers one composite FK in isolation.
+
+func TestRLS_ApprovalPolicyPoliciesDeleteCascadesToVersions(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyID, _ := seedApprovalPolicy(t, h.tenantA, apName("policy-delete-cascade"))
+	versionID, _ := seedApprovalPolicyVersion(t, h.tenantA, policyID)
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM approval_policies WHERE id = $1`, policyID); err != nil {
+		t.Fatalf("delete the policy directly (not via tenant): %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_policy_versions WHERE id = $1`, versionID); n != 0 {
+		t.Errorf("version rows after the policy delete = %d, want 0 — approval_policy_versions_tenant_policy_fk "+
+			"is not cascading", n)
+	}
+}
+
+func TestRLS_ApprovalPolicyVersionsDeleteCascadesToSteps(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyID, cleanupPolicy := seedApprovalPolicy(t, h.tenantA, apName("version-delete-cascade"))
+	defer cleanupPolicy()
+	versionID, _ := seedApprovalPolicyVersion(t, h.tenantA, policyID)
+	stepID, _ := seedApprovalPolicyStep(t, h.tenantA, versionID, 0, "approval")
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM approval_policy_versions WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("delete the version directly (not via tenant): %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_policy_steps WHERE id = $1`, stepID); n != 0 {
+		t.Errorf("step rows after the version delete = %d, want 0 — approval_policy_steps_tenant_version_fk "+
+			"is not cascading", n)
+	}
+}
+
+func TestRLS_ApprovalPolicyStepsParentDeleteCascadesToChildSteps(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	policyID, cleanupPolicy := seedApprovalPolicy(t, h.tenantA, apName("parent-delete-cascade"))
+	defer cleanupPolicy()
+	versionID, cleanupVersion := seedApprovalPolicyVersion(t, h.tenantA, policyID)
+	defer cleanupVersion()
+	parentID, _ := seedApprovalPolicyStep(t, h.tenantA, versionID, 0, "approval")
+
+	var childID string
+	if err := h.super.QueryRow(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, parent_step_id, branch, ord, kind)
+		 VALUES ($1, $2, $3, 'then', 0, 'approval') RETURNING id`,
+		h.tenantA, versionID, parentID,
+	).Scan(&childID); err != nil {
+		t.Fatalf("seed child step: %v", err)
+	}
+
+	if _, err := h.super.Exec(ctx, `DELETE FROM approval_policy_steps WHERE id = $1`, parentID); err != nil {
+		t.Fatalf("delete the parent step: %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM approval_policy_steps WHERE id = $1`, childID); n != 0 {
+		t.Errorf("child step rows after the parent delete = %d, want 0 — approval_policy_steps_tenant_parent_fk "+
+			"is not cascading", n)
+	}
+}

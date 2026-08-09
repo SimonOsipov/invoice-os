@@ -211,6 +211,60 @@ func pgCode(err error) string {
 	return ""
 }
 
+// sqlRecorder records the SQL of every statement its pool issues, so a statement
+// COUNT can be asserted — the only way to see an N+1, whose results are identical.
+type sqlRecorder struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+func (r *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	r.mu.Lock()
+	r.sql = append(r.sql, d.SQL)
+	r.mu.Unlock()
+	return ctx
+}
+
+func (r *sqlRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (r *sqlRecorder) reset() {
+	r.mu.Lock()
+	r.sql = nil
+	r.mu.Unlock()
+}
+
+// mentioning filters to the statements containing substr, which keeps the count
+// immune to the pool's own begin/commit/health-check traffic.
+func (r *sqlRecorder) mentioning(substr string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, s := range r.sql {
+		if strings.Contains(s, substr) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// tracedAppPool is a second app-role pool whose statements are recorded. Callers
+// must already have gone through dbTestPools, which owns the skip gate.
+func tracedAppPool(t *testing.T) (*pgxpool.Pool, *sqlRecorder) {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("parse DATABASE_URL: %v", err)
+	}
+	rec := &sqlRecorder{}
+	cfg.ConnConfig.Tracer = rec
+	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect traced app pool: %v", err)
+	}
+	t.Cleanup(p.Close)
+	return p, rec
+}
+
 // --- the seam (no DB, cannot skip) -----------------------------------------
 
 // TestWorkflowRole_StoreSatisfiesTheHandlerSeam is the only assertion in this file
@@ -352,6 +406,31 @@ func TestWorkflowRole_CreateRejectsEmptyTitle(t *testing.T) {
 	}
 }
 
+// TestWorkflowRole_CreateTitleIsValidatedBeforeTheCallerRoleIsRead pins the guard
+// order, which nothing else does: a non-admin sending a blank title gets
+// ErrValidation (400), not ErrNotPermitted (403). The check reads no row and depends
+// only on the caller's own argument, so answering it first reveals nothing about the
+// tenant and spares an unauthorized caller a transaction. Lower it back into the
+// closure and the first assertion goes red.
+func TestWorkflowRole_CreateTitleIsValidatedBeforeTheCallerRoleIsRead(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 guard-order")
+	store := NewStore(app)
+	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
+
+	if _, err := store.CreateRole(c, "   ", "a blurb"); !errors.Is(err, ErrValidation) {
+		t.Errorf("non-admin with a blank title: err = %v, want ErrValidation — the title is checked first", err)
+	}
+	// The same caller with a storable title reaches the permission gate, so the
+	// assertion above is about ORDER, not about a store that refuses everything.
+	if _, err := store.CreateRole(c, "Engagement Partner", ""); !errors.Is(err, ErrNotPermitted) {
+		t.Errorf("non-admin with a valid title: err = %v, want ErrNotPermitted", err)
+	}
+	if n := rowCount(t, super, "workflow_roles", tenantID); n != 0 {
+		t.Errorf("workflow_roles rows = %d, want 0 — neither refusal may write", n)
+	}
+}
+
 // TestWorkflowRole_CreateTrimsTitleAndDesc: RoleModal.tsx:82-83 trims BOTH fields,
 // and the trimmed title is what is stored and what feeds the key.
 func TestWorkflowRole_CreateTrimsTitleAndDesc(t *testing.T) {
@@ -455,6 +534,54 @@ func TestWorkflowRole_CreateRequiresActiveAdmin(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	if _, err := store.CreateRole(c, "Engagement Partner", ""); err != nil {
 		t.Fatalf("control: CreateRole as an active admin: %v — the refusals above are vacuous unless this succeeds", err)
+	}
+}
+
+// TestWorkflowRole_CreateCallerRoleIsScopedToTheCallersTenant: the caller-role read
+// carries no tenant predicate, so RLS on memberships is the only thing keeping one
+// human's admin row in tenant B out of a tenant-A create. Widen that policy and this
+// is the test that goes red; nothing else in the package would notice.
+func TestWorkflowRole_CreateCallerRoleIsScopedToTheCallersTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "APPR-02 caller-scope A")
+	tenantB := seedTenant(t, super, "APPR-02 caller-scope B")
+	store := NewStore(app)
+
+	dual := uuid.NewString() // admin in B, preparer in A
+	seedMembership(t, super, tenantB, dual, "admin", "active")
+	seedMembership(t, super, tenantA, dual, "preparer", "active")
+
+	stranger := uuid.NewString() // admin in B, unknown to A
+	seedMembership(t, super, tenantB, stranger, "admin", "active")
+
+	for name, subject := range map[string]string{
+		"admin in B, preparer in A": dual,
+		"admin in B, no row in A":   stranger,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := auth.WithIdentity(context.Background(),
+				auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantA})
+			if _, err := store.CreateRole(c, "Engagement Partner", ""); !errors.Is(err, ErrNotPermitted) {
+				t.Errorf("CreateRole into A as %s: err = %v, want ErrNotPermitted", name, err)
+			}
+		})
+	}
+	if n := rowCount(t, super, "workflow_roles", tenantA); n != 0 {
+		t.Errorf("tenant A workflow_roles rows = %d, want 0", n)
+	}
+
+	// Control: the same subject IS an active admin in B, so the refusals above are
+	// about the tenant axis rather than a mis-seeded membership.
+	cB := auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: dual, Role: "authenticated", TenantID: tenantB})
+	if _, err := store.CreateRole(cB, "Engagement Partner", ""); err != nil {
+		t.Fatalf("control: CreateRole into B as B's admin: %v — the refusals above are vacuous unless this succeeds", err)
+	}
+	if n := rowCount(t, super, "workflow_roles", tenantA); n != 0 {
+		t.Errorf("tenant A rows after B's create = %d, want 0 — the row must land in B", n)
+	}
+	if n := rowCount(t, super, "workflow_roles", tenantB); n != 1 {
+		t.Errorf("tenant B workflow_roles rows = %d, want 1", n)
 	}
 }
 
@@ -624,6 +751,46 @@ func TestWorkflowRole_ListReturnsMembersInOrdOrder(t *testing.T) {
 	}
 	if !reflect.DeepEqual(roles[0].Members, want) {
 		t.Errorf("members = %v, want %v (ord 0,1,2)", roles[0].Members, want)
+	}
+}
+
+// TestWorkflowRole_ListIssuesTwoQueriesRegardlessOfRoleCount: staffing is fetched
+// for ALL roles in one statement, so the count does not grow with the role count.
+// A per-role members query returns identical results, so only the statement count
+// discriminates it — and this is a hot settings read.
+func TestWorkflowRole_ListIssuesTwoQueriesRegardlessOfRoleCount(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 query-count")
+	c, _ := activeAdmin(t, super, tenantID)
+	app, rec := tracedAppPool(t)
+	store := NewStore(app)
+
+	user := uuid.NewString()
+	seedMembership(t, super, tenantID, user, "preparer", "active")
+
+	seeded := 0
+	for _, total := range []int{1, 5} {
+		for ; seeded < total; seeded++ {
+			key := fmt.Sprintf("role-%d", seeded)
+			staffWorkflowRole(t, super, tenantID, seedWorkflowRole(t, super, tenantID, key, key), user, 0)
+		}
+		rec.reset()
+		roles, err := store.ListRoles(c)
+		if err != nil {
+			t.Fatalf("ListRoles with %d roles: %v", total, err)
+		}
+		if len(roles) != total {
+			t.Fatalf("ListRoles returned %d roles, want %d", len(roles), total)
+		}
+		for _, r := range roles {
+			if !reflect.DeepEqual(r.Members, []string{user}) {
+				t.Errorf("with %d roles, %s members = %v, want [%s]", total, r.Key, r.Members, user)
+			}
+		}
+		if got := rec.mentioning("workflow_role"); len(got) != 2 {
+			t.Errorf("with %d roles ListRoles issued %d workflow_role statements, want 2 (the roles, then all staffing at once): %v",
+				total, len(got), got)
+		}
 	}
 }
 

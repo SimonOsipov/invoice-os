@@ -256,7 +256,7 @@ func doInvoiceTransition(t *testing.T, transition func(ctx context.Context, id s
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	TransitionHandler(transition, nil).ServeHTTP(rec, r)
+	TransitionHandler(transition, adminRoleStub, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -4283,6 +4283,9 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-E2E-GET")
 	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	// can_submit is role-aware: without a membership row this caller resolves
+	// to "" and the assertions below would read the role gate, not the status one.
+	seedMembership(t, super, tenantID, identity.Subject, "admin")
 	c := auth.WithIdentity(ctx, identity)
 
 	get := func() *httptest.ResponseRecorder {
@@ -4408,6 +4411,9 @@ func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T
 
 	invoiceID := seedInvoice(t, super, tenantID, entityID, "INVED-02-01-QA-SEQ")
 	identity := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: tenantID}
+	// Same reason as TestGetHandler_RealStore_ValidatedCanSubmit: the sequence
+	// below asserts the STATUS gate, so the caller must clear the role one.
+	seedMembership(t, super, tenantID, identity.Subject, "admin")
 	c := auth.WithIdentity(ctx, identity)
 
 	get := func() *httptest.ResponseRecorder {

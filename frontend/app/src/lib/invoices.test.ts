@@ -605,6 +605,9 @@ describe('getInvoice', () => {
       qr_png_base64: 'aGVsbG8=',
       // accepted: canEdit false, canRevalidate false -> the blocked reason is null (it is
       // non-null EXACTLY when canEdit && !canRevalidate, i.e. validated/rejected).
+      // Submit's rule is weaker and does NOT mirror that: submit_blocked_reason != null
+      // implies !can_submit, never the converse. This is the approver's shape; a preparer
+      // gets the role sentence here with can_edit still false.
       can_edit: false,
       can_revalidate: false,
       revalidate_blocked_reason: null,
@@ -628,6 +631,8 @@ describe('getInvoice', () => {
 
   it('I-fiscal-2: getInvoice normalizes a missing qr_png_base64 to null', async () => {
     // draftInvoice is status 'draft': canEdit and canRevalidate both true, reason null.
+    // The can_submit/submit_blocked_reason pair below is synthetic filler for this
+    // qr_png_base64 test -- no real wire pairs can_submit:false with a null reason on draft.
     const detailInvoice: InvoiceDetailRecord = {
       ...draftInvoice,
       rule_set_version: 2,
@@ -733,6 +738,51 @@ describe('getInvoice', () => {
     expect(result.submit_blocked_reason).toBe(reasonText)
   })
 
+  // The ROLE refusal, not a status one: notApproverTransmitReason (handlers.go) is the
+  // only blocked reason a preparer ever sees, and the em dash below is U+2014 copied from
+  // that const -- a hyphen here would make the byte-identity claim vacuous.
+  it('getInvoice: the role sentence passes through byte-identically', async () => {
+    const roleReason = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: false, submit_blocked_reason: roleReason }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(roleReason)
+    expect(result.can_submit).toBe(false)
+  })
+
+  // submitGate's role arm fires on EVERY status, including ones where can_edit is false --
+  // so the wire carries the sentence on queued/accepted too, and getInvoice must not drop
+  // it just because the SPA will have no actions bar to render it in.
+  it('getInvoice: the role sentence survives a status where can_edit is false', async () => {
+    const roleReason = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+    const wire = { ...draftInvoice, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: roleReason }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(roleReason)
+    expect(result.can_edit).toBe(false)
+  })
+
+  // MUTATION ORACLE (QA): every other reason fixture in this file is already tidy, so a
+  // `?.trim()` / `.normalize()` / whitespace-collapse slipped into getInvoice's normalizer
+  // survives the whole suite. Pass-through means the bytes, not the visible words.
+  it('getInvoice: a submit reason keeps its padding, NBSP and doubled spaces byte-for-byte', async () => {
+    // Escapes, not pasted characters: a literal NBSP/tab is invisible to the next reader.
+    const untidy = '  Only an admin or a reviewer can submit\u00a0 an invoice to NRS/MBS \u2014 ask an approver on your team.\t'
+    const wire = { ...draftInvoice, status: 'validated', can_edit: true, can_submit: false, submit_blocked_reason: untidy }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBe(untidy)
+  })
+
   it('getInvoice: a wire missing submit_blocked_reason normalizes to null', async () => {
     const wire = { ...draftInvoice, can_edit: true, can_submit: false }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
@@ -742,6 +792,22 @@ describe('getInvoice', () => {
 
     expect(result.submit_blocked_reason).toBeNull()
     expect(result.submit_blocked_reason).not.toBeUndefined()
+  })
+
+  // The companion to the missing-key case above: an approver on a non-editable status gets
+  // can_submit:false with an explicit null reason. Nothing may fill that hole -- the SPA has
+  // no authority to author a sentence the server declined to send.
+  it('getInvoice: an explicit null submit_blocked_reason stays null, never a substitute sentence', async () => {
+    const wire = { ...draftInvoice, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: null }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getInvoice(af, base, 'inv-1')
+
+    expect(result.submit_blocked_reason).toBeNull()
+    // Positive companion: the call really did return a parsed record, so the null above
+    // is the wire's null and not an empty/failed result.
+    expect(result.status).toBe('queued')
   })
 
   it('getInvoice: failure_kind (BUG-06-04 QA gap-fill) surfaces a stored kind from the real wire payload, not just a compiled fixture', async () => {
@@ -2733,6 +2799,35 @@ describe('the [isfixable-deleted] export is gone (INVED-01-06)', () => {
     expect(scanForIdentifier(srcRoot, 'computedLineSum').length).toBeGreaterThan(0)
 
     expect(scanForIdentifier(srcRoot, needle)).toEqual([])
+  })
+})
+
+// [gates-on-the-wire]: the blocked-reason copy is the backend's, and the three wire mirrors
+// only carry it. A literal in a production source file is how that decision gets quietly
+// reversed -- the SPA starts answering "why is this disabled" itself and drifts from Go.
+describe('no production source under src/ authors a submit-blocked sentence (APPR-01 AC-4)', () => {
+  const srcRoot = fileURLToPath(new URL('..', import.meta.url))
+  // Both spec files carry these sentences as FIXTURES, which is the point of them -- so the
+  // scan is production-only. Dropping this filter turns the specs below red on their own
+  // fixtures, which is also what proves the walker is reaching real files.
+  const productionOnly = (needle: string): string[] => scanForIdentifier(srcRoot, needle).filter((p) => !/\.test\.tsx?$/.test(p))
+
+  it('the role refusal sentence appears in no production file', () => {
+    // Split so this file's own text never spells the needle, belt-and-braces with the
+    // .test.ts(x) filter above (data.test.ts's idiom).
+    const needle = 'ask an appro' + 'ver on your team'
+
+    // Non-vacuity: the same walker, same filter, finds a symbol that unquestionably lives in
+    // a production file. A walker that visited nothing would pass the negatives for free.
+    expect(productionOnly('DETAIL_SUBMIT_COPY').length).toBeGreaterThan(0)
+    expect(productionOnly(needle)).toEqual([])
+  })
+
+  it('the status-fork submit sentences appear in no production file either', () => {
+    // submitBlockedReason's three arms (handlers.go) share this stem; the SPA must not
+    // reconstruct any of them, nor the role sentence's verb phrase.
+    expect(productionOnly('Only validated invoices can be sub' + 'mitted')).toEqual([])
+    expect(productionOnly('can sub' + 'mit an invoice to NRS/MBS')).toEqual([])
   })
 })
 

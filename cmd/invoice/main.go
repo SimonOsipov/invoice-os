@@ -82,7 +82,7 @@ func main() {
 	// is IRRELEVANT: Go 1.22+ ServeMux resolves by pattern specificity, and a
 	// literal segment always beats a {wildcard}.
 	app.Mux.HandleFunc("GET /v1/invoices/violation-summary", invoice.ViolationSummaryHandler(store.ViolationSummary, app.Logger))
-	app.Mux.HandleFunc("POST /v1/invoices/{id}/transitions", invoice.TransitionHandler(store.Transition, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/transitions", invoice.TransitionHandler(store.Transition, store.CallerRole, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/invoices/{id}", invoice.EditHandler(store.Edit, app.Logger))
 	// POST/DELETE /v1/invoices/{id}/keep-as-is -- D6's auditable-triage write
 	// (INVCR-01-15, task-291): never touches status or legalTransitions.
@@ -181,7 +181,7 @@ func main() {
 		log.Fatalf("invoice: queue: %v", err)
 	}
 	submitter := invoice.NewSubmitter(store, q)
-	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, store.CallerRole, app.Logger))
 
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("invoice: %v", err)

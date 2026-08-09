@@ -686,15 +686,18 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   </div>
                   {/* The backend's copy, verbatim ([revalidate-reason-from-backend]). The wire
                       guarantees it is non-null exactly when can_edit && !can_revalidate
-                      (lib/invoices.ts:186-196); if it is somehow null we render NOTHING rather
+                      (lib/invoices.ts:217-218); if it is somehow null we render NOTHING rather
                       than invent a fallback string the SPA has no authority to author. */}
                   {inv.revalidate_blocked_reason != null && (
                     <div id={REVALIDATE_REASON_ID} data-testid="revalidate-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {inv.revalidate_blocked_reason}
                     </div>
                   )}
-                  {/* Same convention, for Submit ([gates-on-the-wire]); non-null exactly when
-                      can_edit && !can_submit. */}
+                  {/* Same convention, for Submit ([gates-on-the-wire]). The wire guarantees
+                      submit_blocked_reason != null implies !can_submit; the converse does NOT
+                      hold, so key off the reason alone. Reachability is still the bar's
+                      can_edit gate above: a non-approver's sentence arrives on queued too and
+                      deliberately renders nowhere, there being no Submit button to explain. */}
                   {inv.submit_blocked_reason != null && (
                     <div id={SUBMIT_REASON_ID} data-testid="submit-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {inv.submit_blocked_reason}

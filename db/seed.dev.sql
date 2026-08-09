@@ -27,8 +27,9 @@ ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind;
 -- Widened demo memberships: identity (display_name/email) + status, carried over
 -- from lib/members.ts's deleted SEED_*_MEMBERS. DO UPDATE (not DO NOTHING)
 -- converges the new columns on an already-seeded environment, including
--- production (env-name-gating-trap) -- safe because every subject below is
--- seed-only and cannot sign in (loginPersonas, internal/gateway/gateway.go).
+-- production (env-name-gating-trap) -- safe because ON CONFLICT (tenant_id, user_id)
+-- confines it to these demo rows, whose state here is authoritative: a live edit to
+-- one is reverted on the next deploy.
 INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status) VALUES
     -- Okafor & Partners (firm) -- all three roles, one suspended, quality_reviewer unstaffed
     ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 'admin',    'Chinedu Okafor',                   'c.okafor@okafor.ng',                           'active'),

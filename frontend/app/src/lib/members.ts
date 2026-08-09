@@ -83,6 +83,10 @@ export const DEPARTMENTS: readonly Department[] = ['Finance', 'Tax & Compliance'
  * The "What can each role do?" expander — eight capability rows × the three roles. Labels
  * are §6's copy, kept lowercase exactly as the story writes them; casing at render time is
  * MEMB-01-05's display call, not a fact to bake in here.
+ *
+ * Two rows are server-enforced: 'transmit to NRS/MBS' (both transmit handlers reject a
+ * non-approver) and the manage half of 'invite and manage members' (admin-only memberships
+ * PATCH). The rest are descriptive — including 'approve in approval steps', still unbuilt.
  */
 export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer: boolean; reviewer: boolean }[] = [
   { label: 'create and edit invoices', admin: true, preparer: true, reviewer: true },

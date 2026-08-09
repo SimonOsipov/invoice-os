@@ -251,6 +251,13 @@ type getResponse struct {
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
 
+// notApproverTransmitReason is the ONE refusal sentence both transmit doors
+// emit, so a blocked caller's 403 never varies by request shape
+// (TestTransmitGate_NoExistenceOracle). Deliberately not routed through
+// ErrNotPermitted: that sentinel's statusForErr arm answers with the
+// resolve-outside copy, which would be a wire lie here.
+const notApproverTransmitReason = "Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team."
+
 // submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
 // but the copy FORKS by status: draft points at a live, enabled Re-validate,
 // rejected points at a disabled one, so one shared sentence would lie on
@@ -290,14 +297,26 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 	return true, nil
 }
 
+// submitGate checks role BEFORE status, deliberately the reverse of
+// resolveOutsideGate above: a preparer told "re-validate this invoice first"
+// would run a re-validation that still cannot end in a submit.
+func submitGate(s Status, role string) (bool, *string) {
+	if !isApprover(role) {
+		r := notApproverTransmitReason // a const is not addressable; copy to a local
+		return false, &r
+	}
+	return canSubmit(s), submitBlockedReason(s)
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
 // Invoice (with line_items, [D7]) on success.
 //
-// callerRole feeds resolveOutsideGate alongside the fetched invoice's
-// status. It is not assumed to honor Store.CallerRole's own "never errors"
-// contract -- an error from it fails closed (not-an-approver), never a 5xx.
+// callerRole feeds both submitGate and resolveOutsideGate alongside the
+// fetched invoice's status. It is not assumed to honor Store.CallerRole's own
+// "never errors" contract -- an error from it fails closed (not-an-approver),
+// never a 5xx.
 func GetHandler(get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -338,19 +357,15 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 		// ([ubl-gate-is-content-not-status]).
 		canViewUBL, ublReason := ublGate(SubmissionCanonical(inv))
 
-		// resolveOutsideGate is status-first: on any non-failed status it returns the
-		// status reason regardless of role, so skip callerRole's own tenant-scoped query
-		// unless the invoice is actually failed. An erroring callerRole fails closed to
-		// "" (not-an-approver) rather than propagating -- the injected func is not
-		// assumed to honor Store.CallerRole's own "never errors" contract.
-		var role string
-		if inv.Status == StatusFailed {
-			role, err = callerRole(r.Context())
-			if err != nil {
-				role = ""
-			}
+		// ONE resolution shared by both gates: submitGate consults role on every
+		// status, resolveOutsideGate only on failed
+		// (TestGetHandler_CallerRoleResolvedOnEveryStatus).
+		role, err := callerRole(r.Context())
+		if err != nil {
+			role = ""
 		}
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
+		canSubmitInv, submitReason := submitGate(inv.Status, role)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -368,8 +383,8 @@ func GetHandler(get func(ctx context.Context, id string) (Invoice, error), calle
 			QRPNGBase64:                 qrPNGBase64,
 			CanEdit:                     canEdit(inv.Status),
 			CanRevalidate:               canRevalidate(inv.Status),
-			CanSubmit:                   canSubmit(inv.Status),
-			SubmitBlockedReason:         submitBlockedReason(inv.Status),
+			CanSubmit:                   canSubmitInv,
+			SubmitBlockedReason:         submitReason,
 			CanViewUBL:                  canViewUBL,
 			UBLBlockedReason:            ublReason,
 			CanResolveOutside:           canResolveOutside,
@@ -631,13 +646,28 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Invoice, int, e
 // Store.Transition could promote without validating -- there is none today.
 // Hand-off: if M4-05 adds a second production consumer of Store.Transition,
 // re-evaluate this placement.
-func TransitionHandler(transition func(ctx context.Context, id string, target Status) (Invoice, error), log *slog.Logger) http.HandlerFunc {
+//
+// callerRole gates transmission: only an admin or a reviewer may drive a
+// transition, matching the shipped capability matrix. It is not assumed to
+// honor Store.CallerRole's "never errors" contract -- an error fails closed to
+// 403, never a 5xx.
+func TransitionHandler(transition func(ctx context.Context, id string, target Status) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// Refusing before any row is read keeps a non-approver from probing
+		// whether an id exists. callerRole opens its own transaction, separate
+		// from the write below, so a suspension racing the write is a known,
+		// accepted TOCTOU.
+		role, err := callerRole(r.Context())
+		if err != nil || !isApprover(role) {
+			writeError(w, http.StatusForbidden, notApproverTransmitReason)
 			return
 		}
 
@@ -1075,13 +1105,24 @@ const maxBatchSubmitBodyBytes = 64 * 1024
 // invoice_ids -> 400; >200 ids -> 400; blank or >218-char idempotency_key -> 400; any
 // non-uuid id -> 400 -> submit(ctx, BatchSubmitInput{...}) -> statusForErr (ErrNotFound ->
 // 404, ErrValidation -> 400, the existing map) -> 200 + BatchSubmitResult.
-func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), log *slog.Logger) http.HandlerFunc {
+//
+// callerRole gates transmission the same way TransitionHandler does: admin and
+// reviewer only, errors failing closed to 403.
+func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (BatchSubmitResult, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		// Ahead of the decode, for TransitionHandler's reasons: no existence
+		// oracle, and the same accepted TOCTOU on suspension.
+		role, err := callerRole(r.Context())
+		if err != nil || !isApprover(role) {
+			writeError(w, http.StatusForbidden, notApproverTransmitReason)
 			return
 		}
 

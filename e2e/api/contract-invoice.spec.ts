@@ -36,7 +36,7 @@
 // note); a high `offset` for empty-state (the shared dev tenant already
 // carries invoices from other specs, so there is no truly empty list).
 import { test, expect } from '@playwright/test'
-import { login, me, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
+import { login, me, memberships, createEntity, createInvoice, validateInvoice, rawFetch, listInvoices, PERSONAS, type Entity } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -816,10 +816,19 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       // read the same for a stranger's token -- callerRole answers "" for a non-member and
       // for a suspended one, and "" is refused by the same arm. Without this, the whole
       // block would stay green if …0003 stopped being an active preparer.
-      const identity = await me(await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT }))
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const identity = await me(preparerToken)
       expect(identity.tenant.id, 'the preparer must resolve tenant a, the one the fixtures live in').toBe(PERSONAS.A.tenantId)
       expect(identity.user.id, 'the token must resolve the seeded preparer subject').toBe(PREPARER_SUBJECT)
       expect(identity.user.role, 'the refusals below must be caused by THIS role, not by absent membership').toBe('preparer')
+
+      // /v1/me's role query carries no status filter (tenancy/store.go), so it reads
+      // 'preparer' for a SUSPENDED one too -- the other input callerRole answers "" for.
+      // Only the roster row's status tells the two apart.
+      const roster = await memberships(preparerToken)
+      const self = roster.memberships.find((m) => m.user_id === PREPARER_SUBJECT)
+      expect(self?.role, 'the roster must agree with /v1/me on the role').toBe('preparer')
+      expect(self?.status, 'a suspended preparer would 403 below for the wrong reason').toBe('active')
     })
 
     test('a preparer cannot batch-submit a validated invoice; an admin submitting the same invoice enqueues it', async () => {

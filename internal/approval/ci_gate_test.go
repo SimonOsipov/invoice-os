@@ -97,8 +97,9 @@ func TestApproval_CIRLSJobRunsThisPackage(t *testing.T) {
 }
 
 // `go test` exits 0 on a skip, so a short export set makes `make test-approvals` report `ok`
-// having run none of the DB-backed tests. Only the two DSNs the package actually reads are
-// pinned — DATABASE_MIGRATION_URL is exported for harness uniformity but nothing reads it.
+// having run none of the DB-backed tests. All three DSNs the package reads are pinned —
+// DATABASE_MIGRATION_URL feeds policy_immutability_test.go's migratorPool (the owner-proof
+// attacks on the seal lock).
 func TestApproval_MakeTargetExportsTheDSNsThePackageReads(t *testing.T) {
 	path := filepath.Join(repoRoot(t), "Makefile")
 	raw, err := os.ReadFile(path)
@@ -115,7 +116,7 @@ func TestApproval_MakeTargetExportsTheDSNsThePackageReads(t *testing.T) {
 		recipe = recipe[:end]
 	}
 
-	for _, dsn := range []string{"DATABASE_URL", "DATABASE_SUPERUSER_URL"} {
+	for _, dsn := range []string{"DATABASE_URL", "DATABASE_SUPERUSER_URL", "DATABASE_MIGRATION_URL"} {
 		if !strings.Contains(recipe, dsn+`="`) {
 			t.Errorf("test-approvals does not export %s — the suite would silently skip and still report ok:\n%s", dsn, recipe)
 		}

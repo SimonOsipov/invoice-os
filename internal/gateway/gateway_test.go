@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -327,7 +329,8 @@ const (
 	firmTenant           = "11111111-1111-1111-1111-111111111111"
 	inhouseSubject       = "c0000000-0000-0000-0000-000000000002"
 	inhouseTenant        = "22222222-2222-2222-2222-222222222222"
-	seededNotAllowlisted = "c0000000-0000-0000-0000-000000000003" // seed-only preparer, never a login identity
+	preparerSubject      = "c0000000-0000-0000-0000-000000000003" // firm-tenant preparer; allowlisted so a blocked submit is demonstrable on the hosted build
+	seededNotAllowlisted = "c0000000-0000-0000-0000-000000000004" // seed-only reviewer, never a login identity
 	unlistedTenant       = "99999999-9999-9999-9999-999999999999"
 	unlistedSubject      = "88888888-8888-8888-8888-888888888888"
 	personaRole          = "authenticated"
@@ -345,12 +348,20 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 	}{
 		{"firm persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, firmTenant, personaRole), http.StatusOK},
 		{"in-house persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, inhouseTenant, personaRole), http.StatusOK},
+		{"preparer persona", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, firmTenant, personaRole), http.StatusOK},
 		{"unknown tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, firmSubject, unlistedTenant, personaRole), http.StatusForbidden},
 		{"mismatched pairing", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, inhouseSubject, firmTenant, personaRole), http.StatusForbidden},
 		{"unknown subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, unlistedSubject, firmTenant, personaRole), http.StatusForbidden},
 		// seeded but never allowlisted: distinguishes "allowlist" from "any seeded membership".
 		{"seeded, not allowlisted subject", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, seededNotAllowlisted, firmTenant, personaRole), http.StatusForbidden},
 		{"escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, firmSubject, firmTenant), http.StatusForbidden},
+		{"preparer with an escalated role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"admin"}`, preparerSubject, firmTenant), http.StatusForbidden},
+		// the seed's own memberships.role — the substitution the persona table warns about.
+		{"preparer with the seed's domain role", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":"preparer"}`, preparerSubject, firmTenant), http.StatusForbidden},
+		{"preparer on the wrong tenant", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, inhouseTenant, personaRole), http.StatusForbidden},
+		// tenant and role swapped: loginPersona's literals are unkeyed, so an entry
+		// written (subject, role, tenant) compiles and would match this body instead.
+		{"preparer with tenant and role transposed", fmt.Sprintf(`{"subject":%q,"tenant_id":%q,"role":%q}`, preparerSubject, personaRole, firmTenant), http.StatusForbidden},
 		// role omitted: a defaults-then-match implementation would fill "authenticated" and pass this.
 		{"role omitted", fmt.Sprintf(`{"subject":%q,"tenant_id":%q}`, firmSubject, firmTenant), http.StatusForbidden},
 		{"empty body", `{}`, http.StatusForbidden},
@@ -382,6 +393,59 @@ func TestMockLoginHostedAllowlist(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoginPersonas_AllSeeded checks the table itself, not the wire: every entry
+// must be a real seeded membership and carry the GoTrue role. loginPersona's
+// literals are unkeyed, so an entry written (subject, role, tenant) compiles —
+// it fails both halves here.
+func TestLoginPersonas_AllSeeded(t *testing.T) {
+	if len(loginPersonas) != 3 {
+		t.Errorf("len(loginPersonas) = %d, want 3 (firm admin, in-house admin, firm preparer)", len(loginPersonas))
+	}
+
+	rows := seedMembershipRows(t)
+	for _, p := range loginPersonas {
+		if p.role != personaRole {
+			t.Errorf("persona %s role = %q, want %q", p.subject, p.role, personaRole)
+		}
+		seeded := false
+		for _, row := range rows {
+			if strings.Contains(row, "'"+p.subject+"'") && strings.Contains(row, "'"+p.tenantID+"'") {
+				seeded = true
+				break
+			}
+		}
+		if !seeded {
+			t.Errorf("persona (%s, %s) has no memberships row in db/seed.dev.sql", p.subject, p.tenantID)
+		}
+	}
+}
+
+// seedMembershipRows returns the lines of seed.dev.sql's memberships INSERT, read
+// from the embedded copy the binary ships, never the on-disk file.
+func seedMembershipRows(t *testing.T) []string {
+	t.Helper()
+	b, err := fs.ReadFile(dbsql.FS, "seed.dev.sql")
+	if err != nil {
+		t.Fatalf("read embedded seed.dev.sql: %v", err)
+	}
+	var rows []string
+	inBlock := false
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case strings.HasPrefix(line, "INSERT INTO memberships"):
+			inBlock = true
+		case inBlock && strings.HasPrefix(line, "ON CONFLICT"):
+			inBlock = false
+		case inBlock:
+			rows = append(rows, line)
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatalf("no memberships rows in embedded seed.dev.sql — the block markers moved")
+	}
+	return rows
 }
 
 // TestMockLoginHostedRefusalOpaque pins AC-3: every refusal reason produces an

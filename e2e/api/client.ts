@@ -550,3 +550,66 @@ export interface Rollup {
 export function rollup(token: string): Promise<Rollup> {
   return apiFetch<Rollup>(`${apiBase()}/api/dashboard/v1/rollup`, { token })
 }
+
+// ---- Workflow-role wire types, mirrored from internal/approval/approval.go's Role:
+// exactly four keys, none tagged omitempty, so `desc` is an explicit "" and `members`
+// an explicit [] rather than absent. `desc`, NOT `description`. ----
+
+// A type alias, not an interface: contract specs widen a Role to
+// Record<string, unknown> to assert its exact key SET, and TS grants that implicit index
+// signature only to aliases.
+export type WorkflowRole = {
+  key: string
+  title: string
+  desc: string
+  members: string[] // user_ids in this role's own `ord` order; [] never null
+}
+
+export interface WorkflowRolesResponse {
+  workflow_roles: WorkflowRole[]
+}
+
+export interface WorkflowRoleInput {
+  title: string
+  desc?: string // optional so JSON.stringify drops it — genuinely absent on the wire
+}
+
+export interface WorkflowRoleUpdateInput {
+  title?: string
+  desc?: string
+}
+
+// listWorkflowRoles(): GET /v1/workflow-roles -- a flat list, no pagination envelope.
+// Ungated by design: any caller with a tenant claim may read it.
+export function listWorkflowRoles(token: string): Promise<WorkflowRolesResponse> {
+  return apiFetch<WorkflowRolesResponse>(`${apiBase()}/api/invoice/v1/workflow-roles`, { token })
+}
+
+// createWorkflowRole(): POST /v1/workflow-roles. The key is minted server-side from the
+// title, so it can only be learned from the response, never predicted.
+export function createWorkflowRole(token: string, body: WorkflowRoleInput): Promise<WorkflowRole> {
+  return apiFetch<WorkflowRole>(`${apiBase()}/api/invoice/v1/workflow-roles`, { method: 'POST', body, token })
+}
+
+// updateWorkflowRole(): PATCH /v1/workflow-roles/{key}. Answers a FULL Role, staffing
+// included -- a rename never re-mints the key.
+export function updateWorkflowRole(token: string, key: string, body: WorkflowRoleUpdateInput): Promise<WorkflowRole> {
+  return apiFetch<WorkflowRole>(`${apiBase()}/api/invoice/v1/workflow-roles/${key}`, { method: 'PATCH', body, token })
+}
+
+// deleteWorkflowRole(): DELETE /v1/workflow-roles/{key}. SOFT -- the row survives with
+// deleted_at set and its key is never re-minted. Answers the deleted row.
+export function deleteWorkflowRole(token: string, key: string): Promise<WorkflowRole> {
+  return apiFetch<WorkflowRole>(`${apiBase()}/api/invoice/v1/workflow-roles/${key}`, { method: 'DELETE', token })
+}
+
+// staffWorkflowRole(): PUT /v1/workflow-roles/{key}/members, a whole-set replace. Builds
+// the {members} envelope itself, so it cannot express {"members":null} -- that 400 is
+// only reachable through rawFetch.
+export function staffWorkflowRole(token: string, key: string, members: string[]): Promise<WorkflowRole> {
+  return apiFetch<WorkflowRole>(`${apiBase()}/api/invoice/v1/workflow-roles/${key}/members`, {
+    method: 'PUT',
+    body: { members },
+    token,
+  })
+}

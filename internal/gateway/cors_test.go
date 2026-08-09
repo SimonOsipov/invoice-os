@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -184,6 +187,139 @@ func TestCORSPreflightBypassesAuth(t *testing.T) {
 	}
 	if tg.caps["tenancy"].hits != 0 {
 		t.Error("preflight must not reach an upstream service")
+	}
+}
+
+// TestCORSPreflightForStaffingReachesCORSThroughTheApiMount closes the last gap the
+// PUT grant could hide in: TestCORSPreflightGrantsPUT and TestCORSPreflightBypassesAuth
+// both call the composed handler directly, so neither proves the gateway's ServeMux
+// ROUTES an OPTIONS to the /api/ pattern in the first place. That leg has already bitten
+// this file once — /auth/login needed an explicit OPTIONS registration because a
+// method-scoped pattern 405s a preflight instead of letting CORS answer it. Mounted here
+// exactly as cmd/gateway/main.go does, with no Authorization header, as a browser sends it.
+func TestCORSPreflightForStaffingReachesCORSThroughTheApiMount(t *testing.T) {
+	tg := setupGateway(t)
+	mux := http.NewServeMux()
+	mux.Handle(routePrefix, CORS([]string{allowedOrigin})(tg.handler))
+
+	const path = "/api/invoice/v1/workflow-roles/tax-reviewer/members"
+
+	r := httptest.NewRequest("OPTIONS", path, nil)
+	r.Header.Set("Origin", allowedOrigin)
+	r.Header.Set("Access-Control-Request-Method", "PUT")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("anonymous preflight = %d, want 204 (body %s) — the browser would see this instead of the PUT",
+			rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "PUT") {
+		t.Errorf("Access-Control-Allow-Methods = %q, want it to contain PUT", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != allowedOrigin {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, allowedOrigin)
+	}
+	if tg.caps["invoice"].hits != 0 {
+		t.Error("a preflight must not reach the invoice service")
+	}
+
+	// Non-vacuity: the 204 is the CORS grant, not the mount answering everything. The
+	// same OPTIONS without an Origin is no preflight, falls through, and the verifier
+	// 401s it — as does the real PUT the browser sends next.
+	for _, c := range []struct{ name, method string }{
+		{"Origin-less OPTIONS", "OPTIONS"},
+		{"the follow-up PUT itself", "PUT"},
+	} {
+		t.Run(c.name+" is still 401 with no bearer", func(t *testing.T) {
+			r := httptest.NewRequest(c.method, path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, r)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestGatewayApiMountIsCORSWrappedAndNotMethodScoped pins the two properties the test
+// above assumes, at their real call site — every other test in this package composes CORS
+// itself, so without this one both could be broken in the deployed fleet with the whole
+// suite green. Dropping withCORS 401s every browser preflight; a method token on the
+// pattern 405s it before CORS is reached.
+func TestGatewayApiMountIsCORSWrappedAndNotMethodScoped(t *testing.T) {
+	const path = "../../cmd/gateway/main.go"
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	type mount struct{ pattern, wrapper string }
+	mounts := []mount{}
+	ast.Inspect(f, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "Handle" && sel.Sel.Name != "HandleFunc") || len(call.Args) < 2 {
+			return true
+		}
+		m := mount{}
+		switch pat := call.Args[0].(type) {
+		case *ast.Ident: // the pattern is the routePrefix constant, not a literal
+			if pat.Name != "routePrefix" {
+				return true
+			}
+			m.pattern = routePrefix
+		case *ast.BasicLit:
+			if pat.Kind != token.STRING || !strings.Contains(pat.Value, routePrefix) {
+				return true
+			}
+			m.pattern = strings.Trim(pat.Value, `"`)
+		default:
+			return true
+		}
+		if wrap, ok := call.Args[1].(*ast.CallExpr); ok {
+			if id, ok := wrap.Fun.(*ast.Ident); ok {
+				m.wrapper = id.Name
+			}
+		}
+		mounts = append(mounts, m)
+		return true
+	})
+
+	if len(mounts) != 1 {
+		t.Fatalf("found %d /api/ mounts in %s (%v), want exactly 1 — the scan is out of date, so its assertions are vacuous",
+			len(mounts), path, mounts)
+	}
+	if mounts[0].wrapper != "withCORS" {
+		t.Errorf("the /api/ mount handler is wrapped in %q, want withCORS — without it every browser preflight is 401'd",
+			mounts[0].wrapper)
+	}
+	if strings.ContainsAny(mounts[0].pattern, " ") {
+		t.Errorf("the /api/ mount pattern is %q — a method token 405s every preflight", mounts[0].pattern)
+	}
+	// The cmd copy of routePrefix is only comment-linked to this package's; if they ever
+	// diverge, the mount above stops being the path CORS actually guards.
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != "routePrefix" || len(vs.Values) != 1 {
+				continue
+			}
+			lit, ok := vs.Values[0].(*ast.BasicLit)
+			if !ok {
+				continue
+			}
+			if got := strings.Trim(lit.Value, `"`); got != routePrefix {
+				t.Errorf("cmd/gateway routePrefix = %q, want %q (this package's mount point)", got, routePrefix)
+			}
+		}
 	}
 }
 

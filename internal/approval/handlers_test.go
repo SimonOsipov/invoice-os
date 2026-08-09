@@ -366,6 +366,44 @@ func TestWorkflowRoleHandlers_UnknownFieldsIgnored(t *testing.T) {
 	}
 }
 
+// An empty title is the STORE's ErrValidation, checked on the trimmed value it stores.
+// A copy in the handler would be a second definition of "empty" that can drift from the
+// one that feeds the key, and it would answer with a message the store never wrote.
+func TestWorkflowRoleHandlers_EmptyTitleIsForwardedToTheStore(t *testing.T) {
+	for _, c := range []struct{ name, body, wantTitle string }{
+		{"empty", `{"title":""}`, ""},
+		{"whitespace only", `{"title":"   "}`, "   "},
+		{"absent", `{"desc":"blurb"}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			id := caller()
+			var gotTitle string
+			ran := false
+			s := failClosedSeam(t)
+			s.create = func(_ context.Context, title, _ string) (Role, error) {
+				ran, gotTitle = true, title
+				return Role{}, ErrValidation
+			}
+			rec := serveRole(t, s, nil, "POST", "/v1/workflow-roles", c.body, &id)
+
+			if !ran {
+				t.Fatalf("the creator never ran: the handler duplicated the store's empty-title check (%d %s)",
+					rec.Code, rec.Body.String())
+			}
+			if gotTitle != c.wantTitle {
+				t.Errorf("creator saw title %q, want %q verbatim (no trim in the handler)", gotTitle, c.wantTitle)
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request" {
+				t.Errorf("error = %q, want statusForErr's %q — a handler-authored message means a duplicate check",
+					got, "invalid request")
+			}
+		})
+	}
+}
+
 func TestWorkflowRoleHandlers_StaffBodyVocabulary(t *testing.T) {
 	cases := []struct {
 		name string
@@ -455,6 +493,33 @@ func TestWorkflowRoleHandlers_CreateReturns201AndFourKeys(t *testing.T) {
 	want := []string{"desc", "key", "members", "title"}
 	if got := keySet(t, rec.Body.Bytes()); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("response keys = %v, want exactly %v", got, want)
+	}
+}
+
+// The key is minted server-side and is the addressing token for every later call, so the
+// response must be the STORE's role and not the request echoed back — a handler that
+// echoed it would answer 201 with the right four keys and a key the client can never use.
+// Every field differs from the request, so no field can match by coincidence.
+func TestWorkflowRoleHandlers_CreateReturnsTheStoreMintedRole(t *testing.T) {
+	id := caller()
+	minted := Role{Key: "tax-reviewer-2", Title: "Tax Reviewer", Desc: "trimmed by the store", Members: []string{}}
+	s := failClosedSeam(t)
+	s.create = func(context.Context, string, string) (Role, error) { return minted, nil }
+	rec := serveRole(t, s, nil, "POST", "/v1/workflow-roles",
+		`{"title":"  Tax Reviewer  ","desc":"as submitted"}`, &id)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	var got Role
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if got.Key != minted.Key {
+		t.Errorf("key = %q, want the server-minted %q — the client cannot address the role it just made", got.Key, minted.Key)
+	}
+	if got.Title != minted.Title || got.Desc != minted.Desc {
+		t.Errorf("body = %+v, want the store's role %+v, not the request echoed back", got, minted)
 	}
 }
 
@@ -742,6 +807,63 @@ func TestWorkflowRoleHandlers_RoutesResolveOnAMuxAndUnlistedVerbsAre405(t *testi
 			t.Errorf("PATCH %s reached %q with key %q, want no handler at all",
 				path, rec.Header().Get("X-Matched-Pattern"), rec.Header().Get("X-Key"))
 		}
+	}
+}
+
+// {key} spans ONE segment, so a percent-encoded slash arrives as a literal `/` inside the
+// key and still cannot make the two-segment route swallow .../members. A `{key...}`
+// multi-segment wildcard would break exactly that, which is what this pins. A literal `..`
+// segment is path-cleaned into a 307 by the mux and reaches no handler at all; an encoded
+// one reaches the store as the key `..`, matches nothing under parameterised SQL, and is
+// 404 — addressable, so a client can always name back whatever it was given.
+func TestWorkflowRoleHandlers_EncodedSeparatorsCannotReachTheWrongRoute(t *testing.T) {
+	cases := []struct {
+		name, method, path string
+		wantStatus         int
+		wantKey            string // "" means the store must not run
+	}{
+		{"encoded slash on the two-segment route", "PATCH", "/v1/workflow-roles/a%2Fb", http.StatusOK, "a/b"},
+		{"encoded slash cannot cross into members", "PATCH", "/v1/workflow-roles/a%2Fb/members", http.StatusMethodNotAllowed, ""},
+		{"encoded slash on the members route", "PUT", "/v1/workflow-roles/a%2Fb/members", http.StatusOK, "a/b"},
+		{"literal traversal is redirected by the mux", "PATCH", "/v1/workflow-roles/..", http.StatusTemporaryRedirect, ""},
+		{"interior traversal is redirected by the mux", "PATCH", "/v1/workflow-roles/a/../b", http.StatusTemporaryRedirect, ""},
+		{"encoded traversal is just a key", "PATCH", "/v1/workflow-roles/%2E%2E", http.StatusOK, ".."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := caller()
+			var got string
+			ran := false
+			s := failClosedSeam(t)
+			record := func(key string) Role {
+				ran, got = true, key
+				return Role{Key: key, Title: "T", Members: []string{}}
+			}
+			s.update = func(_ context.Context, key string, _, _ *string) (Role, error) { return record(key), nil }
+			s.staff = func(_ context.Context, key string, _ []string) (Role, error) { return record(key), nil }
+
+			body := `{"title":"T"}`
+			if c.method == "PUT" {
+				body = `{"members":[]}`
+			}
+			rec := serveRole(t, s, nil, c.method, c.path, body, &id)
+
+			if rec.Code != c.wantStatus {
+				t.Errorf("status = %d, want %d: %s", rec.Code, c.wantStatus, rec.Body.String())
+			}
+			if c.wantKey == "" {
+				if ran {
+					t.Errorf("the store ran with key %q; no handler may be reached", got)
+				}
+				return
+			}
+			if !ran {
+				t.Fatalf("the store never ran for %s %s", c.method, c.path)
+			}
+			if got != c.wantKey {
+				t.Errorf("store received key %q, want %q", got, c.wantKey)
+			}
+		})
 	}
 }
 

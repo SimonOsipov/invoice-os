@@ -893,6 +893,53 @@ func TestStaffing_DeletedRoleCannotBeStaffed(t *testing.T) {
 	}
 }
 
+// DeleteRole reports members: [] while every staffing row survives the soft delete. The
+// [] is a wire convention (four keys always), not a fact, and it is unobservable today:
+// ListRoles filters deleted_at IS NULL, and the SPA discards the DELETE body
+// (App.tsx removeRole takes only a list and a key). Anything that makes a deleted role
+// readable again — a restore path — has to report the real holders instead.
+func TestStaffing_DeleteReportsNoMembersButKeepsTheRows(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "APPR-02 delete-keeps-staffing")
+	c, _ := activeAdmin(t, super, tenantID)
+	store := NewStore(app)
+
+	users := seedActiveMembers(t, super, tenantID, 2)
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	for i, u := range users {
+		staffWorkflowRole(t, super, tenantID, roleID, u, i)
+	}
+	before := staffingRows(t, super, roleID)
+	if len(before) != 2 {
+		t.Fatalf("seeded staffing rows = %d, want 2 — the survival assertion is vacuous without them", len(before))
+	}
+
+	got, err := store.DeleteRole(c, "tax-reviewer")
+	if err != nil {
+		t.Fatalf("DeleteRole: %v", err)
+	}
+	if !reflect.DeepEqual(got.Members, []string{}) {
+		t.Errorf("DeleteRole reported members = %v, want [] (the wire convention)", got.Members)
+	}
+	if raw, err := json.Marshal(got); err != nil {
+		t.Fatalf("marshal: %v", err)
+	} else if !strings.Contains(string(raw), `"members":[]`) {
+		t.Errorf("wire = %s, want \"members\":[]", raw)
+	}
+	if after := staffingRows(t, super, roleID); !sameStaffing(after, before) {
+		t.Errorf("staffing after the delete = %v, want it byte-identical to %v — the [] above is a convention, not a purge",
+			after, before)
+	}
+
+	roles, err := store.ListRoles(c)
+	if err != nil {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	if keys := keysOf(roles); len(keys) != 0 {
+		t.Errorf("ListRoles = %v, want none — a deleted role must stay unreadable, which is what makes the [] harmless", keys)
+	}
+}
+
 // --- tenancy, concurrency, audit -------------------------------------------
 
 // TestStaffing_IsTenantScoped: no statement carries a tenant_id predicate, so RLS is the

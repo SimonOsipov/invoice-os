@@ -77,3 +77,36 @@ describe('APPR-04-06 AC5/AC6: the builder must not read an unlanded roles fetch 
     expect(screen.getByText(/Role no longer exists/)).toBeTruthy()
   })
 })
+
+describe('APPR-04-06 QA: the guard must not over-widen to the genuinely-landed-empty status', () => {
+  // The spec above uses rolesState:'ready' as its "landed empty" stand-in, but a REAL empty
+  // roles fetch reports 'empty' (resolveStatus's isEmpty default, async-state.ts), never
+  // 'ready'. Verified a guard mutated to also gate on 'empty' passes all 3 pre-existing
+  // specs in this file untouched -- this is the spec that actually pins the guard's two
+  // conditions (loading/idle only, not empty).
+  it('rolesState "empty" renders the canvas, not Loading -- and still names the deleted role', () => {
+    render(<WorkflowBuilder ctx={builderCtx({ rolesState: 'empty', roles: [] })} policy={policyWith('fin_mgr')} />)
+
+    expect(document.querySelector('.apic-loading-spin'), 'a landed-empty fetch is not a loading fetch').toBeNull()
+    expect(screen.getByText('Deleted role must approve')).toBeTruthy()
+    expect(screen.getByText(/Role no longer exists/)).toBeTruthy()
+  })
+})
+
+describe('APPR-04-06 QA: the error guard fires before any node-shape assumption', () => {
+  it('a policy with zero nodes still renders ErrorState, not a crash, when the roles fetch failed', () => {
+    const emptyPolicy: Policy = { id: 'p2', name: 'Empty policy', scope: 'All invoices', status: 'draft', updated: 'now', nodes: [] }
+
+    expect(() =>
+      render(
+        <WorkflowBuilder
+          ctx={builderCtx({ rolesState: 'error', rolesError: new ApiError('http', 'roles gateway is down', 503), roles: [] })}
+          policy={emptyPolicy}
+        />,
+      ),
+    ).not.toThrow()
+
+    expect(screen.getByText('roles gateway is down')).toBeTruthy()
+    expect(screen.queryByText(/Role no longer exists/)).toBeNull()
+  })
+})

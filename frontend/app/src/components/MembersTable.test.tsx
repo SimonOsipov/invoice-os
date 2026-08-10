@@ -100,3 +100,41 @@ describe('APPR-04-06 AC2: an unlanded roles fetch must not claim "no roles"', ()
     expect(cell.textContent, 'a genuinely empty, LANDED roster must still read as "no roles"').toBe('—')
   })
 })
+
+describe('APPR-04-06 QA: every unlanded rolesState reads the same as loading, not just "loading" itself', () => {
+  it('idle renders the empty cell too', () => {
+    const m = member()
+    render(
+      <MembersTable
+        ctx={ctxWith({ members: [m], rolesState: 'idle' })}
+        rows={[m]}
+        policies={[]}
+        roles={[]}
+        onOpen={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    const cell = roleCellOf(screen.getByTestId('member-row'))
+    expect(cell.textContent).toBe('')
+  })
+
+  it('error renders the empty cell too, not the em-dash', () => {
+    const m = member()
+    render(
+      <MembersTable
+        ctx={ctxWith({ members: [m], rolesState: 'error' })}
+        rows={[m]}
+        policies={[]}
+        roles={[]}
+        onOpen={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    const cell = roleCellOf(screen.getByTestId('member-row'))
+    expect(cell.textContent).toBe('')
+  })
+})

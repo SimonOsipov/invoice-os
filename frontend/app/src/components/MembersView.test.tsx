@@ -281,6 +281,43 @@ describe('APPR-04-06 AC1: a roles-only fetch failure must not render the roster 
     expect(screen.getByTestId('members-table')).toBeTruthy()
     expect(screen.queryByTestId('members-unassigned')).toBeNull()
   })
+
+  // A genuinely landed-empty roles fetch reports rolesState:'empty', NOT 'ready' with roles:[]
+  // (resolveStatus's default isEmpty makes an empty array 'empty', never 'ready' -- see
+  // async-state.ts). The spec above never exercises this real combination, so it cannot
+  // catch a mutation that removes MembersView's rolesState==='empty' remap: verified this
+  // exact mutation passes all 16 pre-existing specs in this file untouched.
+  it('a REAL landed-empty roles fetch (rolesState "empty", not "ready") still renders the roster for real members', () => {
+    render(<Harness initial={threeMembers()} rolesState="empty" roles={[]} />)
+
+    expect(screen.getByTestId('members-table'), 'a tenant with 3 real members and zero configured roles is not a tenant with zero members').toBeTruthy()
+    expect(screen.queryByText('Just you at the firm'), 'zero roles must never collapse into "just you"').toBeNull()
+  })
+})
+
+describe('APPR-04-06 QA: both the roles fetch and the members fetch fail at once', () => {
+  it('the roles error wins the display -- ctx.rolesError ?? ctx.membersError -- and Retry fires both refetches', () => {
+    const refetchRoles = vi.fn()
+    const refetchMembers = vi.fn()
+    render(
+      <Harness
+        initial={[]}
+        rolesState="error"
+        rolesError={new ApiError('http', 'roles gateway is down', 503)}
+        refetchRoles={refetchRoles}
+        membersState="error"
+        membersError={new ApiError('http', 'members gateway is down', 503)}
+        refetchMembers={refetchMembers}
+      />,
+    )
+
+    expect(screen.getByText('roles gateway is down')).toBeTruthy()
+    expect(screen.queryByText('members gateway is down'), 'only one error surface can show at a time').toBeNull()
+
+    fireEvent.click(screen.getByText('Retry'))
+    expect(refetchRoles, 'both fetches actually failed, so both must be retried').toHaveBeenCalledOnce()
+    expect(refetchMembers).toHaveBeenCalledOnce()
+  })
 })
 
 describe('a second suspend fired while the first write is still in flight', () => {

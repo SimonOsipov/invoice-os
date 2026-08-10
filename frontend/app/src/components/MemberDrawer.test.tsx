@@ -4,7 +4,7 @@
 // forgets about it -- no await, no .catch, no in-flight guard. Every spec below fails on its
 // own target assertion (a call count that is still 2, a sentence that never renders, a pill
 // that a second click still reaches) -- never on import/typecheck.
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -151,5 +151,60 @@ describe('APPR-04-06 AC4: drawer copy this subtask does not own stays byte-uncha
     expect(screen.getByTestId('drawer-wfrole-helper').textContent).toBe(drawerRoleHelper('preparer'))
     expect(screen.getByText(SUSPENDED_STEPS_NOTE)).toBeTruthy()
     expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(1))
+  })
+})
+
+describe('APPR-04-06 QA: a rejected toggle followed by a successful retry', () => {
+  it('the stale rejection sentence clears on the retry click, and the second write goes through', async () => {
+    const REASON = 'only an admin can change workflow roles'
+    const staffRole = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('http', REASON, 403))
+      .mockResolvedValueOnce({ key: 'cfo', title: 'CFO', desc: '', members: ['u1', 'u2'] })
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [role({ key: 'cfo', members: ['u1'] })], staffRole })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    const pill = screen.getByTestId('drawer-wfrole-cfo')
+    fireEvent.click(pill)
+    await drain(staffRole)
+    expect(screen.getByText(REASON)).toBeTruthy()
+
+    fireEvent.click(pill) // the retry
+    expect(screen.queryByText(REASON), 'setRoleError(null) fires synchronously on the next click').toBeNull()
+
+    await waitFor(() => expect(pill.closest('fieldset')?.hasAttribute('disabled')).toBe(false))
+    expect(staffRole).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(REASON), 'a successful retry must not leave the earlier rejection on screen').toBeNull()
+  })
+})
+
+describe('APPR-04-06 QA: the in-flight lock is global, not scoped to the clicked pill', () => {
+  it('a different pill clicked while one write is pending is also a no-op', () => {
+    const staffRole = vi.fn(() => new Promise(() => {})) // never settles
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({
+          roles: [role({ key: 'cfo', members: [] }), role({ key: 'coo', title: 'COO', members: [] })],
+          staffRole,
+        })}
+        memberId="u2"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('drawer-wfrole-cfo'))
+    fireEvent.click(screen.getByTestId('drawer-wfrole-coo'))
+
+    expect(staffRole, 'the pending flag covers every pill, not just the one that started the write').toHaveBeenCalledTimes(1)
+    expect(staffRole).toHaveBeenCalledWith('cfo', expect.anything())
   })
 })

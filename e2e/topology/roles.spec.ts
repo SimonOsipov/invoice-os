@@ -861,8 +861,13 @@ test('in-house: a created role survives a reload, is selectable on a step, and b
   await page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true }).click()
   await expect(page.getByText(DELETED_ROLE_LINE, { exact: true })).toBeVisible()
   // The missing key is PREPENDED as an option, or the select would render blank on a step
-  // whose seat is gone.
-  expect(await wfSelect(page, 'Who must approve').locator('option').allTextContents()).toEqual([DELETED_ROLE_OPTION, ...seatTitles])
+  // whose seat is gone. Not full equality: a residue role from an earlier run's incomplete
+  // afterAll sweep adds its own option here without being wrong.
+  const deletedStepOptions = await wfSelect(page, 'Who must approve').locator('option').allTextContents()
+  expect(deletedStepOptions[0], 'the missing key is prepended').toBe(DELETED_ROLE_OPTION)
+  expect(deletedStepOptions, 'every seeded seat stays selectable').toEqual(expect.arrayContaining([...seatTitles]))
+  const seatPositions = seatTitles.map((t) => deletedStepOptions.indexOf(t))
+  expect(seatPositions, 'seeded seats keep their server order').toEqual([...seatPositions].sort((a, b) => a - b))
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

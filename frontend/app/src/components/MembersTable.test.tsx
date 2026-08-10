@@ -83,10 +83,13 @@ describe('APPR-04-06 AC2: an unlanded roles fetch must not claim "no roles"', ()
   })
 
   it('still renders the em-dash once the roles fetch has genuinely landed empty', () => {
+    // A real landed-empty fetch resolves to rolesState:'empty', not 'ready' with an empty
+    // array (resolveStatus's default isEmpty, packages/api-client/src/async-state.ts:64-69)
+    // — 'ready' never carries an empty list in practice.
     const m = member()
     render(
       <MembersTable
-        ctx={ctxWith({ members: [m], rolesState: 'ready' })}
+        ctx={ctxWith({ members: [m], rolesState: 'empty' })}
         rows={[m]}
         policies={[]}
         roles={[]}

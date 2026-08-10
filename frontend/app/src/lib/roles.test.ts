@@ -1346,6 +1346,73 @@ describe('AC-4 — the ctx write verbs', () => {
   })
 })
 
+describe('QA — rolePatch adversarial coverage', () => {
+  it('both title and desc changed: patch carries both, title-then-desc key order', () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'Old', members: [] }
+    const patch = rolePatch(stored, 'Chief Financial Officer', 'New')
+    expect(patch).toEqual({ title: 'Chief Financial Officer', desc: 'New' })
+    // Body key order is load-bearing on the wire (apiFetch stringifies as-is) -- nothing
+    // else in the suite pins it for a patch carrying both fields.
+    expect(JSON.stringify(patch)).toBe('{"title":"Chief Financial Officer","desc":"New"}')
+  })
+
+  it('desc only changed: title stays absent from the patch', () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'Old', members: [] }
+    const patch = rolePatch(stored, 'CFO', 'New')
+    expect(patch).toEqual({ desc: 'New' })
+    expect(patch.title).toBeUndefined()
+  })
+
+  it('a whitespace-only difference still counts as changed — rolePatch does not trim', () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'X', members: [] }
+    expect(rolePatch(stored, 'CFO ', 'X')).toEqual({ title: 'CFO ' })
+  })
+})
+
+// harnessCreateRole/harnessStaffRole above cover the created/staffed happy path and staffRole's
+// rejection; these compose the same already-shipped pieces for the two verbs that block did not
+// exercise on rejection.
+describe('QA — AC-4 rejected writes for createRole, renameRole and deleteRole', () => {
+  async function harnessRenameRole(af: AuthedFetch, mirror: readonly Role[], stored: Role, title: string, desc: string) {
+    const patch = rolePatch(stored, title, desc)
+    const updated = await updateWorkflowRole(af, wireBase, stored.key, patch)
+    return { updated, mirror: replaceRole(mirror, updated) }
+  }
+
+  async function harnessDeleteRole(af: AuthedFetch, mirror: readonly Role[], key: string) {
+    await deleteWorkflowRole(af, wireBase, key)
+    return removeRole(mirror, key)
+  }
+
+  it('a rejected createRole never stages anything in the mirror', async () => {
+    const boom = new ApiError('http', 'only an admin can create workflow roles', 403)
+    const af = vi.fn().mockRejectedValue(boom)
+
+    const created: Role = { key: 'k1', title: 'T', desc: 'D', members: [] }
+    async function harnessCreateRole(mirror: readonly Role[]) {
+      const role = await createStaffedRole(af as unknown as AuthedFetch, wireBase, created.title, created.desc, created.members)
+      return addRole(mirror, role)
+    }
+    await expect(harnessCreateRole([])).rejects.toBe(boom)
+  })
+
+  it('a rejected renameRole leaves the mirror untouched', async () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'X', members: [] }
+    const boom = new ApiError('http', 'only an admin can rename workflow roles', 403)
+    const af = vi.fn().mockRejectedValue(boom)
+
+    await expect(harnessRenameRole(af as unknown as AuthedFetch, [stored], stored, 'New Title', 'X')).rejects.toBe(boom)
+  })
+
+  it('a rejected deleteRole leaves the mirror untouched', async () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'X', members: [] }
+    const boom = new ApiError('http', 'only an admin can delete workflow roles', 403)
+    const af = vi.fn().mockRejectedValue(boom)
+
+    await expect(harnessDeleteRole(af as unknown as AuthedFetch, [stored], 'cfo')).rejects.toBe(boom)
+  })
+})
+
 // Story AC-1 "no gateway means no network call" is not unit-tested here: rolesAsync's
 // ternary (`base ? listWorkflowRoles(...) : Promise.reject(...)`) lives inline in App.tsx,
 // mirroring membersAsync's own untested null-base gate (App.tsx:297-303) -- there is no

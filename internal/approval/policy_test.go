@@ -12,11 +12,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -551,5 +557,436 @@ func TestPolicy_StatusForErrTable(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// --- QA: adversarial coverage ------------------------------------------------
+
+// embedHazardDemo is the deliberate counter-example. Step and Policy carry
+// value-receiver MarshalJSON methods, so embedding one anonymously promotes that
+// method onto the outer struct and every sibling field vanishes from the wire.
+// TestPolicy_NoAnonymousWireEmbedding scans for this shape and allows only this
+// one; TestPolicy_EmbeddingDropsSiblingFields is what it costs.
+type embedHazardDemo struct {
+	Policy
+	Extra string `json:"extra"`
+}
+
+// namedFieldIsSafe is the shape a response struct must use instead.
+type namedFieldIsSafe struct {
+	Policy Policy `json:"policy"`
+	Extra  string `json:"extra"`
+}
+
+func TestPolicy_EmbeddingDropsSiblingFields(t *testing.T) {
+	raw, err := json.Marshal(embedHazardDemo{Policy: Policy{ID: "p1"}, Extra: "dropped"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := keySet(t, raw); !reflect.DeepEqual(got, policyWireKeys) {
+		t.Fatalf("embedded key set = %v, want Policy's own %v — anonymous embedding no longer hijacks "+
+			"the outer struct, so re-check TestPolicy_NoAnonymousWireEmbedding before relying on it", got, policyWireKeys)
+	}
+	if bytes.Contains(raw, []byte(`"extra"`)) {
+		t.Errorf("%s carries extra — the hazard this file guards against is gone", raw)
+	}
+
+	// The prescribed alternative keeps both.
+	raw, err = json.Marshal(namedFieldIsSafe{Policy: Policy{ID: "p1"}, Extra: "kept"})
+	if err != nil {
+		t.Fatalf("marshal named field: %v", err)
+	}
+	if got := keySet(t, raw); !reflect.DeepEqual(got, []string{"extra", "policy"}) {
+		t.Errorf("named-field key set = %v, want [extra policy]", got)
+	}
+	if rawField(t, raw, "policy") == "null" {
+		t.Error("the named Policy field marshalled as null")
+	}
+}
+
+// TestPolicy_NoAnonymousWireEmbedding fails if any type in this package embeds Step
+// or Policy anonymously. Subtask 07 builds the response structs; a promoted
+// MarshalJSON drops sibling fields silently, with no compile error and no test
+// failure anywhere else.
+func TestPolicy_NoAnonymousWireEmbedding(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	if err != nil {
+		t.Fatalf("parse the package source: %v", err)
+	}
+	banned := map[string]bool{"Step": true, "Policy": true}
+
+	var declared, embeds []string
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				spec, ok := n.(*ast.TypeSpec)
+				if !ok {
+					return true
+				}
+				declared = append(declared, spec.Name.Name)
+				st, ok := spec.Type.(*ast.StructType)
+				if !ok || st.Fields == nil {
+					return true
+				}
+				for _, f := range st.Fields.List {
+					if len(f.Names) != 0 { // a named field is safe
+						continue
+					}
+					if name := embeddedTypeName(f.Type); banned[name] {
+						embeds = append(embeds, spec.Name.Name)
+						if spec.Name.Name != "embedHazardDemo" {
+							t.Errorf("%s: %s embeds %s anonymously — the promoted MarshalJSON hijacks %s "+
+								"and every sibling field disappears from the wire; use a named field",
+								filepath.Base(path), spec.Name.Name, name, spec.Name.Name)
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+
+	// Non-vacuity: the scan must have read policy.go, and must have caught the
+	// counter-example. Either miss would make every assertion above silent.
+	for _, want := range []string{"Step", "Policy", "embedHazardDemo"} {
+		if !slices.Contains(declared, want) {
+			t.Fatalf("the source scan never saw type %s (%d types found) — it is not reading this package", want, len(declared))
+		}
+	}
+	if !slices.Contains(embeds, "embedHazardDemo") {
+		t.Fatal("the scan did not flag embedHazardDemo, which exists precisely to be flagged — it cannot detect an embed")
+	}
+}
+
+func embeddedTypeName(expr ast.Expr) string {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	if id, ok := expr.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// TestPolicy_LanesAreNeverNullAtDepthOrThroughAPointer: the [] substitution lives on
+// a value receiver, so it must survive every path a handler can reach a Step by —
+// a lane child, a *Policy, and a []Step nested inside other containers.
+func TestPolicy_LanesAreNeverNullAtDepthOrThroughAPointer(t *testing.T) {
+	// Lane children carry nil lanes: exactly what nestSteps' leaves would if the
+	// substitution were not re-entrant.
+	tree := []Step{{
+		Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("250000.00"),
+		Then: []Step{{Kind: "approval", WorkflowRoleKey: ptr("tax-reviewer")}},
+		Else: []Step{{Kind: "notify", NotifyTarget: ptr("preparer"), NotifyChannel: ptr("email")}},
+	}}
+
+	cases := []struct {
+		name  string
+		value any
+		steps int
+	}{
+		{"a *Policy, as a handler holds one", &Policy{ID: "p1", Steps: tree}, 3},
+		{"a Policy value", Policy{ID: "p1", Steps: tree}, 3},
+		{"a bare []Step", tree, 3},
+		{"[]Step inside a map inside a slice", []map[string][]Step{{"steps": tree}}, 3},
+		{"a lane child on its own", tree[0].Then[0], 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			for _, lane := range []string{"then", "else"} {
+				if bytes.Contains(raw, []byte(`"`+lane+`":null`)) {
+					t.Errorf("%s carries %q:null", raw, lane)
+				}
+				if got := bytes.Count(raw, []byte(`"`+lane+`":`)); got != tc.steps {
+					t.Errorf("%s has %d %q keys, want one per step (%d)", raw, got, lane, tc.steps)
+				}
+			}
+		})
+	}
+}
+
+// TestPolicy_NestStepsEmptyIsNeverNull: an empty version's steps must reach the SPA
+// as [], and nestSteps is the only producer of that slice.
+func TestPolicy_NestStepsEmptyIsNeverNull(t *testing.T) {
+	for _, rows := range [][]stepRow{nil, {}} {
+		got := nestSteps(rows)
+		if got == nil {
+			t.Errorf("nestSteps(%v) = nil, want an empty non-nil slice", rows)
+		}
+		raw, err := json.Marshal(Policy{ID: "p1", Steps: got})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if f := rawField(t, raw, "steps"); f != "[]" {
+			t.Errorf("steps = %s, want []", f)
+		}
+	}
+}
+
+// TestPolicy_NestStepsOrdersByOrdNotRowOrder: the store's SELECT order is not part
+// of this contract, so nesting must sort by ord. Fed rows in reverse.
+func TestPolicy_NestStepsOrdersByOrdNotRowOrder(t *testing.T) {
+	rows := flattenSteps([]stepInput{
+		approvalIn("root-0"),
+		condIn(">", "250000.00",
+			[]stepInput{approvalIn("then-0"), approvalIn("then-1"), approvalIn("then-2")},
+			nil),
+		approvalIn("root-2"),
+	})
+	slices.Reverse(rows)
+
+	got := nestSteps(rows)
+	var rootKeys, thenKeys []string
+	for _, s := range got {
+		rootKeys = append(rootKeys, polStr(s.WorkflowRoleKey))
+		for _, c := range s.Then {
+			thenKeys = append(thenKeys, polStr(c.WorkflowRoleKey))
+		}
+	}
+	if want := []string{"root-0", "<nil>", "root-2"}; !reflect.DeepEqual(rootKeys, want) {
+		t.Errorf("root lane = %v, want %v", rootKeys, want)
+	}
+	if want := []string{"then-0", "then-1", "then-2"}; !reflect.DeepEqual(thenKeys, want) {
+		t.Errorf("then lane = %v, want %v", thenKeys, want)
+	}
+}
+
+// TestPolicy_NestFlattenRoundTripIsStable: the pipeline must be a pure function of
+// its input modulo the minted ids, or a PUT that changes nothing would still churn
+// the stored tree.
+func TestPolicy_NestFlattenRoundTripIsStable(t *testing.T) {
+	tree := []stepInput{
+		approvalIn("engagement-partner"),
+		condIn("<=", "250000.00",
+			[]stepInput{approvalIn("tax-reviewer"), {Kind: "autoapprove"}},
+			[]stepInput{notifyIn("preparer", "email")}),
+	}
+	first := nestSteps(flattenSteps(tree))
+	second := nestSteps(flattenSteps(tree))
+
+	var firstIDs, secondIDs []string
+	polWalk(first, func(s Step) { firstIDs = append(firstIDs, s.ID) })
+	polWalk(second, func(s Step) { secondIDs = append(secondIDs, s.ID) })
+	if len(firstIDs) != 5 || len(secondIDs) != 5 {
+		t.Fatalf("step counts = %d and %d, want 5 each", len(firstIDs), len(secondIDs))
+	}
+	for i := range firstIDs {
+		if firstIDs[i] == secondIDs[i] {
+			t.Errorf("step %d reused id %q across calls — ids are minted per call", i, firstIDs[i])
+		}
+	}
+
+	polZeroIDs(first)
+	polZeroIDs(second)
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("two runs over the same input diverged\n first: %+v\nsecond: %+v", first, second)
+	}
+}
+
+// TestPolicy_FlattenOrdStaysDenseAfterARemoval: approval_policy_steps_slot_uq is
+// UNIQUE NULLS NOT DISTINCT (version_id, parent_step_id, branch, ord), so a lane that
+// kept a gap after an edit would still write — and a lane that kept the REMOVED
+// element's ord would collide. ord is re-derived from position, never carried.
+func TestPolicy_FlattenOrdStaysDenseAfterARemoval(t *testing.T) {
+	full := condIn(">", "250000.00",
+		[]stepInput{approvalIn("then-a"), approvalIn("then-b"), approvalIn("then-c")}, nil)
+	trimmed := condIn(">", "250000.00",
+		[]stepInput{approvalIn("then-a"), approvalIn("then-c")}, nil)
+
+	rows := flattenSteps([]stepInput{trimmed})
+	byRole := polRowsByRole(t, rows)
+	for role, wantOrd := range map[string]int{"then-a": 0, "then-c": 1} {
+		if got := byRole[role].Ord; got != wantOrd {
+			t.Errorf("%s ord = %d, want %d — the removed middle element must not leave a gap", role, got, wantOrd)
+		}
+	}
+
+	// Every (parent, branch, ord) slot is unique across the whole tree.
+	for _, tree := range [][]stepInput{{full}, {trimmed}} {
+		seen := map[string]bool{}
+		for _, r := range flattenSteps(tree) {
+			slot := fmt.Sprintf("%s|%s|%d", polStr(r.ParentStepID), polStr(r.Branch), r.Ord)
+			if seen[slot] {
+				t.Errorf("slot %s emitted twice — approval_policy_steps_slot_uq would reject the write", slot)
+			}
+			seen[slot] = true
+		}
+	}
+}
+
+// TestPolicy_ValidateTreeDepthCap: approval_policy_steps_depth_cap allows a condition
+// only at the root, and no other kind may carry a lane, so two is the deepest legal
+// tree. Both ways of writing a third level are refused.
+func TestPolicy_ValidateTreeDepthCap(t *testing.T) {
+	deepest := []stepInput{condIn(">", "250000.00",
+		[]stepInput{approvalIn("tax-reviewer")},
+		[]stepInput{notifyIn("preparer", "email")})}
+	if err := validateTree(deepest); err != nil {
+		t.Errorf("the deepest legal tree (root condition + lane leaves) was refused: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		tree []stepInput
+	}{
+		{"a third level via a nested condition", []stepInput{condIn(">", "250000.00",
+			[]stepInput{condIn(">", "1.00", []stepInput{approvalIn("tax-reviewer")}, nil)}, nil)}},
+		{"a third level via a lane on a nested approval", []stepInput{condIn(">", "250000.00",
+			[]stepInput{{Kind: "approval", WorkflowRoleKey: ptr("tax-reviewer"),
+				Then: []stepInput{notifyIn("preparer", "email")}}}, nil)}},
+		{"a third level via a lane on a nested notify", []stepInput{condIn(">", "250000.00", nil,
+			[]stepInput{{Kind: "notify", NotifyTarget: ptr("preparer"), NotifyChannel: ptr("email"),
+				Else: []stepInput{{Kind: "autoapprove"}}}})}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateTree(tc.tree); !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+// TestPolicy_ValidateTreeBoundsApplyToEveryKind: sla_hours and cond_amount are written
+// whatever the kind carries them, so a bound that only fired on the owning kind would
+// still let 22003 reach the store as a 500.
+func TestPolicy_ValidateTreeBoundsApplyToEveryKind(t *testing.T) {
+	for _, kind := range stepKinds {
+		base := stepInput{Kind: kind}
+		switch kind {
+		case "condition":
+			base.CondOp, base.CondAmount = ptr(">"), ptr("1.00")
+		case "notify":
+			base.NotifyTarget, base.NotifyChannel = ptr("preparer"), ptr("email")
+		case "approval":
+			base.WorkflowRoleKey = ptr("tax-reviewer")
+		}
+
+		t.Run(kind+" with an sla_hours past int4", func(t *testing.T) {
+			s := base
+			s.SLAHours = ptr(2147483648)
+			if err := validateTree([]stepInput{s}); !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+		t.Run(kind+" with an sla_hours below int4", func(t *testing.T) {
+			s := base
+			s.SLAHours = ptr(-2147483649)
+			if err := validateTree([]stepInput{s}); !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+		t.Run(kind+" with an over-range cond_amount", func(t *testing.T) {
+			s := base
+			s.CondAmount = ptr("1000000000000.00")
+			if err := validateTree([]stepInput{s}); !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+// TestPolicy_ValidateCondAmountGrammarIsNarrowerThanPostgres: the safe direction is
+// the only one that matters — the validator may refuse text numeric would take, but
+// never the reverse, or 22003/22P02 reaches the store with no constraint name and
+// answers 500. NaN and Infinity are legal numeric input and must not get through:
+// stored, they would make every > comparison false.
+func TestPolicy_ValidateCondAmountGrammarIsNarrowerThanPostgres(t *testing.T) {
+	cases := []struct {
+		amount  string
+		wantErr bool
+	}{
+		{"+250000.00", false},      // numeric takes a leading sign
+		{"2.5e3", false},           // exponent notation resolves to 2500
+		{"-0.00", false},           // signed zero
+		{"250000", false},          // no fractional part at all
+		{"NaN", true},              // numeric accepts it; a NaN threshold silently never fires
+		{"Infinity", true},         // ditto (PG14+)
+		{"-Infinity", true},        //
+		{" 250000.00", true},       // numeric trims, this validator does not
+		{"250000.00 ", true},       //
+		{"250,000.00", true},       // group separators
+		{"₦250000.00", true},       // a currency mark from a paste
+		{"", true},                 //
+		{"2.5e-3", true},           // scale 4 once resolved — numeric would round it to 0.00
+		{"999999999999.999", true}, // scale 3 at the range boundary
+	}
+	for _, tc := range cases {
+		t.Run(strconv.Quote(tc.amount), func(t *testing.T) {
+			err := validateTree([]stepInput{condIn(">", tc.amount, nil, nil)})
+			if tc.wantErr && !errors.Is(err, ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("err = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestPolicy_ValidateCondAmountAnswersAHugeExponentFast: "1e100000000" is eleven bytes
+// inside maxPolicyBodyBytes and cannot be a legal numeric(14,2), but the magnitude
+// comparison rescales it into a 10^8-digit integer before it can say so — measured
+// 23.8s and 287MB of heap for one call, on the request goroutine, pre-tx. The
+// exponent has to be refused before any magnitude comparison.
+func TestPolicy_ValidateCondAmountAnswersAHugeExponentFast(t *testing.T) {
+	const amount = "1e100000000"
+	done := make(chan error, 1)
+	go func() { done <- validateTree([]stepInput{condIn(">", amount, nil, nil)}) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrValidation) {
+			t.Errorf("err = %v, want ErrValidation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("validateTree with cond_amount %q had not answered after 1s — an eleven-byte value "+
+			"burns CPU and heap in the request goroutine", amount)
+	}
+}
+
+// TestPolicy_NormalizeNameUnicode: the column is unbounded text, so the only rule is
+// the trim — and what counts as trimmable is unicode.IsSpace, not ASCII.
+func TestPolicy_NormalizeNameUnicode(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"a plain name", "Sign-off", "Sign-off", false},
+		{"outer ascii space", "  Sign-off  ", "Sign-off", false},
+		{"a non-breaking space is trimmed", " Sign-off ", "Sign-off", false},
+		{"an ideographic space is trimmed", "　Sign-off", "Sign-off", false},
+		{"inner runs survive byte-exact", "Ekwuo · B2G  approvals", "Ekwuo · B2G  approvals", false},
+		{"an emoji name is a name", "🚀", "🚀", false},
+		{"a zero-width space is not whitespace", "​", "​", false},
+		{"empty", "", "", true},
+		{"ascii whitespace only", " \t\n ", "", true},
+		{"non-breaking space only", "  ", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeName(tc.in)
+			if tc.wantErr {
+				if !errors.Is(err, ErrValidation) {
+					t.Errorf("err = %v, want ErrValidation", err)
+				}
+				if got != "" {
+					t.Errorf("value = %q, want the empty string alongside the error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if got != tc.want {
+				t.Errorf("normalizeName(%q) = %q (% x), want %q (% x)", tc.in, got, got, tc.want, tc.want)
+			}
+		})
 	}
 }

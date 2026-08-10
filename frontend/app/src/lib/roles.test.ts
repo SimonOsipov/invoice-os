@@ -4,10 +4,11 @@ import { ApiError, type ApiFetchOptions, type AsyncStatus } from '@invoice-os/ap
 
 import { APP_PERSONAS } from '../auth'
 import { createAuthedFetch } from './authedFetch'
-import { replaceMember, toMember, type Member, type MembershipWire } from './members'
+import { replaceMember, type Member } from './members'
 import type { AuthedFetch } from './portfolio'
 import {
   activeHolders,
+  addRole,
   canSaveRole,
   createStaffedRole,
   createWorkflowRole,
@@ -32,13 +33,11 @@ import {
   replaceRole,
   resolve,
   roleOf,
+  rolePatch,
   roleUsage,
   rolesOfMember,
   rolesSurface,
   rosterRoleCell,
-  SEED_FIRM_ROLES,
-  SEED_INHOUSE_ROLES,
-  seedRoles,
   setRoleMembers,
   stepsForMember,
   stepsWarning,
@@ -320,41 +319,10 @@ const role = (key: string, title: string, desc: string, members: string[]): Role
 const testPolicy = (name: string, nodes: Policy['nodes']): Policy => ({ id: 'test', name, scope: 'test', status: 'published', updated: 'now', nodes })
 
 describe('AC-2 — seed keys, titles, descriptions', () => {
-  it('seed firm has the six specified keys in brief order', () => {
-    expect(SEED_FIRM_ROLES.map((r) => r.key)).toEqual(['preparer', 'fin_mgr', 'fin_dir', 'compliance', 'cfo', 'quality_reviewer'])
-  })
-
-  it('seed firm titles and descs are the brief strings', () => {
-    expect(SEED_FIRM_ROLES.map((r) => r.title)).toEqual([
-      'Invoice Preparer',
-      'Engagement Manager',
-      'Senior Manager',
-      'Tax Reviewer',
-      'Engagement Partner',
-      'Quality Reviewer',
-    ])
-    expect(SEED_FIRM_ROLES.map((r) => r.desc)).toEqual([
-      'Prepares and imports client invoices',
-      'First sign-off on a client invoice',
-      'Second sign-off above ₦250m',
-      'Checks VAT, WHT and TIN detail before filing',
-      'Signs off invoices above ₦1bn',
-      'Second-partner review on flagged engagements',
-    ])
-  })
-
-  it('seed inhouse descs are the old department strings', () => {
-    expect(SEED_INHOUSE_ROLES.map((r) => r.desc)).toEqual([
-      'Accounts Payable',
-      'Requesting dept.',
-      'Finance',
-      'Finance',
-      'Finance',
-      'Tax & Compliance',
-      'Executive',
-      'Executive',
-    ])
-  })
+  // The three tautological seed-shape tests this block used to open with (key order, firm
+  // titles/descs, inhouse descs) are superseded by the Go seed test asserting the SAME facts
+  // against the live DB rows: internal/platform/db/seed_demo_test.go:4560,
+  // TestSeedWorkflowRolesExistForBothDemoTenants.
 
   it('firm has exactly two unsignable roles — preparer is staffed but by no approver', () => {
     expect(unassignedRoles(MOCK_FIRM_ROLES, MOCK_FIRM_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'quality_reviewer'])
@@ -366,8 +334,8 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
   })
 
   it('every seeded approval step names a role that exists in that mode', () => {
-    const firmKeys = new Set(SEED_FIRM_ROLES.map((r) => r.key))
-    const inhouseKeys = new Set(SEED_INHOUSE_ROLES.map((r) => r.key))
+    const firmKeys = new Set(MOCK_FIRM_ROLES.map((r) => r.key))
+    const inhouseKeys = new Set(MOCK_INHOUSE_ROLES.map((r) => r.key))
     const firmRoles = approvalRoles(SEED_FIRM_POLICIES)
     const inhouseRoles = approvalRoles(SEED_INHOUSE_POLICIES)
     // Guards against a vacuous pass — SEED_FIRM_POLICIES/SEED_INHOUSE_POLICIES are already
@@ -414,19 +382,9 @@ describe('AC-2 — seed keys, titles, descriptions', () => {
   })
 })
 
-describe('AC-3 — seedRoles deep-clones', () => {
-  it('seedRoles deep-clones so mutating one mode cannot reach the constant', () => {
-    const a = seedRoles()
-    const b = seedRoles()
-    a.firm[0].members.push('zzz')
-    expect(b.firm[0].members).not.toContain('zzz')
-    expect(SEED_FIRM_ROLES[0].members).not.toContain('zzz')
-  })
-})
-
 describe('AC-4 — reducers are immutable', () => {
   it('reducers return new arrays even on a miss', () => {
-    const list = SEED_FIRM_ROLES
+    const list = MOCK_FIRM_ROLES
     const unknownRole = role('nope', 'Nope', '', [])
     const result = replaceRole(list, unknownRole)
     expect(result).not.toBe(list)
@@ -445,7 +403,7 @@ describe('AC-5 — newRoleKey', () => {
   })
 
   it('newRoleKey never collides with a seeded key', () => {
-    const firm = seedRoles().firm
+    const firm = MOCK_FIRM_ROLES
     expect(firm.length).toBeGreaterThan(0) // guard against a vacuous pass
     const keys = new Set(firm.map((r) => r.key))
     for (const r of firm) expect(keys.has(newRoleKey(firm, r.title))).toBe(false)
@@ -476,11 +434,11 @@ describe("QA — newRoleKey's empty-slug fallback (Save gates on name, not on sl
 
 describe('AC-6 — roleOf', () => {
   it('roleOf returns a deleted sentinel for an absent key', () => {
-    expect(roleOf(SEED_FIRM_ROLES, 'nope')).toEqual({ key: 'nope', title: 'Deleted role', desc: '', members: [], deleted: true })
+    expect(roleOf(MOCK_FIRM_ROLES, 'nope')).toEqual({ key: 'nope', title: 'Deleted role', desc: '', members: [], deleted: true })
   })
 
   it('roleOf returns the role itself for a present key', () => {
-    expect(roleOf(SEED_FIRM_ROLES, 'cfo').title).toBe('Engagement Partner')
+    expect(roleOf(MOCK_FIRM_ROLES, 'cfo').title).toBe('Engagement Partner')
   })
 })
 
@@ -565,7 +523,7 @@ describe('AC-8 — resolve and inspectorResolve', () => {
 // shipped, so this pins existing behaviour rather than going red.
 describe('AC-8 — a deleted role resolves to the deleted-role sentence, in both display functions', () => {
   it('resolve and inspectorResolve both flag a role removed from the list as missing', () => {
-    const withoutCompliance = removeRole(SEED_FIRM_ROLES, 'compliance')
+    const withoutCompliance = removeRole(MOCK_FIRM_ROLES, 'compliance')
     expect(resolve(withoutCompliance, MOCK_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
     expect(inspectorResolve(withoutCompliance, MOCK_FIRM_MEMBERS, 'compliance')).toEqual({ text: 'Role no longer exists', warn: true })
   })
@@ -644,36 +602,36 @@ describe('AC-12 — copy helpers', () => {
 describe('QA — filterRoles', () => {
   it('matches case-insensitively on title', () => {
     // Not "INVOICE": that substring also hits fin_mgr's and cfo's descs.
-    expect(filterRoles(SEED_FIRM_ROLES, 'PREPARER').map((r) => r.key)).toEqual(['preparer'])
+    expect(filterRoles(MOCK_FIRM_ROLES, 'PREPARER').map((r) => r.key)).toEqual(['preparer'])
   })
 
   it('matches case-insensitively on desc when the title does not match', () => {
     // 'Tax Reviewer' never contains "vat" — only its desc does.
-    const hits = filterRoles(SEED_FIRM_ROLES, 'VAT')
+    const hits = filterRoles(MOCK_FIRM_ROLES, 'VAT')
     expect(hits.map((r) => r.key)).toEqual(['compliance'])
     expect(hits[0].title.toLowerCase()).not.toContain('vat')
   })
 
   it('returns nothing for a query no role matches', () => {
-    expect(filterRoles(SEED_FIRM_ROLES, 'zzz-nonexistent')).toEqual([])
+    expect(filterRoles(MOCK_FIRM_ROLES, 'zzz-nonexistent')).toEqual([])
   })
 
   it('an empty (or whitespace) query returns every role, as a copy', () => {
-    const result = filterRoles(SEED_FIRM_ROLES, '   ')
-    expect(result).toEqual(SEED_FIRM_ROLES)
-    expect(result).not.toBe(SEED_FIRM_ROLES)
+    const result = filterRoles(MOCK_FIRM_ROLES, '   ')
+    expect(result).toEqual(MOCK_FIRM_ROLES)
+    expect(result).not.toBe(MOCK_FIRM_ROLES)
   })
 })
 
 describe('QA — intro', () => {
   it('firm names its own first two role titles', () => {
-    expect(intro(SEED_FIRM_ROLES)).toBe(
+    expect(intro(MOCK_FIRM_ROLES)).toBe(
       'A role is a named seat in your approval policies — Invoice Preparer, Engagement Manager. Workflow steps point at the role; the people here are who actually signs.',
     )
   })
 
   it('inhouse names its own first two role titles, not firm’s', () => {
-    expect(intro(SEED_INHOUSE_ROLES)).toBe(
+    expect(intro(MOCK_INHOUSE_ROLES)).toBe(
       'A role is a named seat in your approval policies — Preparer, Line Manager. Workflow steps point at the role; the people here are who actually signs.',
     )
   })
@@ -768,7 +726,7 @@ describe('AC-6 — canSaveRole gates on the name alone', () => {
   })
 
   it('a non-empty name can save even when that title already exists — duplicates are allowed', () => {
-    expect(SEED_FIRM_ROLES.some((r) => r.title === 'Tax Reviewer')).toBe(true) // guard: the title really is a duplicate
+    expect(MOCK_FIRM_ROLES.some((r) => r.title === 'Tax Reviewer')).toBe(true) // guard: the title really is a duplicate
     expect(canSaveRole('Tax Reviewer')).toBe(true)
   })
 })
@@ -812,7 +770,7 @@ describe('AC-7 — removeRole never touches a policy object ([delete-does-not-de
     const published = SEED_FIRM_POLICIES.filter((p) => p.status === 'published')
     expect(published.length).toBeGreaterThan(0) // guard against a vacuous pass
     const before = published.map((p) => p)
-    removeRole(SEED_FIRM_ROLES, 'compliance')
+    removeRole(MOCK_FIRM_ROLES, 'compliance')
     const after = SEED_FIRM_POLICIES.filter((p) => p.status === 'published')
     expect(after).toEqual(before)
     for (let i = 0; i < before.length; i++) expect(after[i]).toBe(before[i]) // same object references
@@ -1068,89 +1026,16 @@ describe('resolve — blocked with more than one inactive holder still appends +
   })
 })
 
-// ============================================================================
-// AC-10 — SEED_*_ROLES re-pointed at the §5 seeded subjects ([member-id-is-the-subject])
-// ============================================================================
-// Currently RED against the shipped mock ids (mf1-mf5 / mh1-mh7) — the re-point is
-// APPR-15-05's implementation, not yet done.
-
-describe('AC-10 — SEED_*_ROLES members are re-pointed at the seeded subjects', () => {
-  const SUBJECT_RE = /^c0000000-0000-0000-0000-0000000000\d{2}$/
-
-  it('every staffed role id in SEED_FIRM_ROLES and SEED_INHOUSE_ROLES is a seeded subject', () => {
-    const ids = [...SEED_FIRM_ROLES, ...SEED_INHOUSE_ROLES].flatMap((r) => r.members)
-    expect(ids.length).toBeGreaterThan(0) // guard against a vacuous pass
-    for (const id of ids) expect(id).toMatch(SUBJECT_RE)
-  })
-
-  it('the unstaffed and suspended-only states survive the re-point', () => {
-    expect(SEED_FIRM_ROLES.find((r) => r.key === 'quality_reviewer')?.members).toEqual([])
-    expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'fin_mgr')?.members).toEqual([])
-    expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'ceo')?.members).toEqual([])
-    expect(SEED_INHOUSE_ROLES.find((r) => r.key === 'cfo')?.members).toEqual(['c0000000-0000-0000-0000-000000000012'])
-  })
-})
-
-// ============================================================================
-// AC-10 — unassignedRoles/resolve against the SHIPPED re-point and a LIVE-shaped directory
-// ============================================================================
-// The AC-10 block above pins the re-point by id; nothing yet exercises unassignedRoles or
-// resolve against SEED_FIRM_ROLES/SEED_INHOUSE_ROLES (the real, shipped constants) combined
-// with a directory built the way the server actually states one — through toMember, over
-// MembershipWire rows matching db/seed.dev.sql. Built from the wire, not hand-written, so
-// this reds the moment the seed and the re-point drift apart, from either side.
-
-const seedWire = (userId: string, role: string, name: string, email: string, status: string): MembershipWire => ({
-  user_id: userId,
-  role,
-  status,
-  display_name: name,
-  email,
-})
-
-const SEEDED_FIRM_MEMBERS: readonly Member[] = [
-  seedWire('c0000000-0000-0000-0000-000000000001', 'admin', 'Chinedu Okafor', 'c.okafor@okafor.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000003', 'preparer', 'Folake Adesina', 'f.adesina@okafor.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000004', 'reviewer', 'Musa Danjuma', 'm.danjuma@okafor.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000005', 'reviewer', 'Chiamaka Nwosu', 'c.nwosu@okafor.ng', 'active'),
-  seedWire(
-    'c0000000-0000-0000-0000-000000000006',
-    'preparer',
-    'Oluwaseyifunmi Adebanjo-Ogunleye',
-    'o.adebanjo-ogunleye@okaforandpartners.com.ng',
-    'active',
-  ),
-  seedWire('c0000000-0000-0000-0000-000000000007', 'reviewer', 'Halima Yusuf', 'h.yusuf@okafor.ng', 'suspended'),
-].map((w) => toMember(w, 'nobody'))
-
-const SEEDED_INHOUSE_MEMBERS: readonly Member[] = [
-  seedWire('c0000000-0000-0000-0000-000000000002', 'admin', 'Ngozi Balogun', 'n.balogun@honeywell.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000008', 'reviewer', 'Yetunde Fashola', 'y.fashola@honeywell.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000009', 'reviewer', 'Emeka Uzowulu', 'e.uzowulu@honeywell.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000010', 'reviewer', 'Tunde Adeyemi', 't.adeyemi@honeywell.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000011', 'reviewer', 'Ibrahim Bello', 'i.bello@honeywell.ng', 'active'),
-  seedWire('c0000000-0000-0000-0000-000000000012', 'reviewer', 'Adebayo Ogunlesi', 'a.ogunlesi@honeywell.ng', 'suspended'),
-  seedWire('c0000000-0000-0000-0000-000000000013', 'preparer', 'Zainab Lawal', 'z.lawal@honeywell.ng', 'active'),
-].map((w) => toMember(w, 'nobody'))
-
-describe('AC-10 — unassignedRoles/resolve against the shipped re-point and a live-shaped directory', () => {
-  it('firm: preparer and quality_reviewer are unassigned, and every one of the ten seeded approval steps resolves without warn', () => {
-    expect(unassignedRoles(SEED_FIRM_ROLES, SEEDED_FIRM_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'quality_reviewer'])
-    const stepRoles = approvalRoles(SEED_FIRM_POLICIES)
-    expect(stepRoles.length).toBe(10) // guard against a vacuous pass
-    for (const key of stepRoles) {
-      const result = resolve(SEED_FIRM_ROLES, SEEDED_FIRM_MEMBERS, key)
-      expect(result.warn).toBe(false)
-      expect(result.text).not.toBe('Nobody assigned')
-    }
-  })
-
-  it('inhouse: preparer/fin_mgr/cfo/ceo are unassigned, cfo blocks on its lone suspended holder, fin_dir resolves its active pair', () => {
-    expect(unassignedRoles(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS).map((r) => r.key)).toEqual(['preparer', 'fin_mgr', 'cfo', 'ceo'])
-    expect(resolve(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS, 'cfo')).toEqual({ text: 'Adebayo Ogunlesi', warn: true })
-    expect(resolve(SEED_INHOUSE_ROLES, SEEDED_INHOUSE_MEMBERS, 'fin_dir')).toEqual({ text: 'Ngozi Balogun +1', warn: false })
-  })
-})
+// The two "SEED_*_ROLES re-pointed at the seeded subjects" blocks that used to live here
+// (matching SEED_FIRM_ROLES/SEED_INHOUSE_ROLES member ids against a UUID regex, and
+// exercising unassignedRoles/resolve against them plus a hand-built wire directory) are
+// gone with the constants they pinned. Both are superseded, in stronger form, on the Go
+// side: TestSeedEveryStaffedUserHasAMembershipInThatTenant (a real FK join, not a regex)
+// and TestSeedAllFiveHolderStatesAreReachable (the exact same unstaffed/suspended-only
+// facts, off live DB rows) — internal/platform/db/seed_demo_test.go:4688,4852. The
+// unassignedRoles/resolve derivation itself stays covered by the MOCK_FIRM_ROLES/
+// MOCK_INHOUSE_ROLES specs above (:359-366), which assert the identical unassigned sets
+// and the identical suspended-cfo resolution.
 
 // [roles.ts:348] — a third `.toLowerCase()` on `email` no AC names (found in the plan pass).
 // Same shape as members.test.ts's filterMembers/classifyInvites null-email specs.
@@ -1384,6 +1269,89 @@ describe('AC-3 — createStaffedRole composes POST then PUT', () => {
     expect(firstOpts.method).toBe('POST')
   })
 })
+
+// ============================================================================
+// Story AC-4 — the ctx write verbs App.tsx composes over the wire layer above
+// ============================================================================
+// createRole/renameRole/staffRole/deleteRole stay INLINE closures in App.tsx, the
+// setMemberStatus precedent (App.tsx:1041-1044) — never independently unit tested there.
+// The harnesses below reproduce that composition exactly (wire call, then patch the
+// mirror off the SERVER's own returned row) so these specs pin the contract Stage 3's
+// App.tsx code has to satisfy. createRole/staffRole/the rejected-write case compose only
+// pieces already proven above (createStaffedRole, setRoleMembers, addRole, replaceRole),
+// so they hold today — their value is nailing down the exact composition, not driving new
+// behaviour. renameRole's diff is the one piece with no home yet: `rolePatch` is a new
+// export Stage 3 must add to lib/roles.ts, and these two specs genuinely fail until it does.
+describe('AC-4 — the ctx write verbs', () => {
+  async function harnessCreateRole(af: AuthedFetch, mirror: readonly Role[], title: string, desc: string, members: readonly string[]) {
+    const created = await createStaffedRole(af, wireBase, title, desc, members)
+    return { created, mirror: addRole(mirror, created) }
+  }
+
+  async function harnessStaffRole(af: AuthedFetch, mirror: readonly Role[], key: string, members: readonly string[]) {
+    const updated = await setRoleMembers(af, wireBase, key, members)
+    return { updated, mirror: replaceRole(mirror, updated) }
+  }
+
+  it('createRole stages the returned role in the mirror', async () => {
+    const created: Role = { key: 'k1', title: 'T', desc: 'D', members: [] }
+    const af = vi.fn().mockResolvedValue(created)
+
+    const { created: result, mirror } = await harnessCreateRole(af as unknown as AuthedFetch, [], 'T', 'D', [])
+
+    expect(result).toEqual(created)
+    expect(mirror).toEqual([created])
+  })
+
+  it('staffRole resolves the SERVER-ordered members, and the mirror carries that order', async () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: '', members: [] }
+    const staffed: Role = { ...stored, members: ['u2', 'u1'] } // the server's own order, not the caller's ['u1','u2']
+    const af = vi.fn().mockResolvedValue(staffed)
+
+    const { updated, mirror } = await harnessStaffRole(af as unknown as AuthedFetch, [stored], 'cfo', ['u1', 'u2'])
+
+    expect(updated.members).toEqual(['u2', 'u1'])
+    expect(mirror[0].members).toEqual(['u2', 'u1'])
+  })
+
+  it('a rejected write leaves the mirror untouched — nothing writes before the await', async () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: '', members: ['u1'] }
+    const boom = new ApiError('http', 'only an admin can change workflow roles', 403)
+    const af = vi.fn().mockRejectedValue(boom)
+
+    await expect(harnessStaffRole(af as unknown as AuthedFetch, [stored], 'cfo', ['u2'])).rejects.toBe(boom)
+    // The harness only computes a patched mirror AFTER the write settles — a rejection
+    // never reaches replaceRole, so a real ctx's own role list is left exactly as it was.
+  })
+
+  it('renameRole PATCHes only the changed field — an unchanged desc is never sent', async () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'X', members: [] }
+    const af = vi.fn().mockResolvedValue({ ...stored, title: 'Chief Financial Officer' })
+
+    const patch = rolePatch(stored, 'Chief Financial Officer', 'X')
+    expect(patch).toEqual({ title: 'Chief Financial Officer' })
+
+    await updateWorkflowRole(af as unknown as AuthedFetch, wireBase, stored.key, patch)
+    const [, init] = af.mock.calls[0] as [string, ApiFetchOptions]
+    expect(init.body).toBe(JSON.stringify({ title: 'Chief Financial Officer' }))
+  })
+
+  it('renameRole makes no call when nothing changed', () => {
+    const stored: Role = { key: 'cfo', title: 'CFO', desc: 'X', members: [] }
+    expect(rolePatch(stored, 'CFO', 'X')).toEqual({})
+    // Stage 3's renameRole gates the call on Object.keys(patch).length -- an empty patch
+    // is the signal to skip updateWorkflowRole and resolve the stored role directly.
+  })
+})
+
+// Story AC-1 "no gateway means no network call" is not unit-tested here: rolesAsync's
+// ternary (`base ? listWorkflowRoles(...) : Promise.reject(...)`) lives inline in App.tsx,
+// mirroring membersAsync's own untested null-base gate (App.tsx:297-303) -- there is no
+// separate shouldFetchRoles predicate to import (unlike shouldFetchEntities/
+// shouldFetchInvoices), and this repo never renders App.tsx in tests. Structurally
+// guaranteed instead: listWorkflowRoles's `base` parameter is typed `string`, not
+// `string | null`, so the ternary is the only legal caller when base is absent, checked by
+// Stage 3's `pnpm -r typecheck` gate.
 
 describe('AC-7 — rolesSurface takes the worse of the two statuses', () => {
   // Hand-computed, independent of any ladder implementation: error worst, then loading,

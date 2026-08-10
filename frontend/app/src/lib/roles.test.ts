@@ -973,6 +973,48 @@ describe('APPR-04-02 — the approver predicate', () => {
   })
 })
 
+// QA (Stage 4) gap-fill — the predicate is an AND of two independent halves, and three
+// functions that must stay OUTSIDE it (holders, rolesOfMember/rosterRoleCell, stepsForMember).
+describe('QA — APPR-04-02 adversarial coverage', () => {
+  it('a suspended admin blocks on status alone, even though the role half passes', () => {
+    const suspendedAdmin: Member = { ...MOCK_FIRM_MEMBERS[0], id: 'susp-admin', status: 'suspended' }
+    const members = [...MOCK_FIRM_MEMBERS, suspendedAdmin]
+    const roles = [role('lonely', 'Lonely', '', ['susp-admin'])]
+    expect(activeHolders(roles, members, 'lonely')).toEqual([])
+    expect(resolve(roles, members, 'lonely')).toEqual({ text: 'Chinedu Okafor', warn: true })
+  })
+
+  it('an active preparer and a suspended reviewer both fail the seat, for different reasons', () => {
+    const suspendedReviewer: Member = { ...MOCK_FIRM_MEMBERS[2], id: 'susp-reviewer', status: 'suspended' }
+    const members = [...MOCK_FIRM_MEMBERS, suspendedReviewer]
+    const roles = [role('both-fail', 'Both fail', '', ['mf2', 'susp-reviewer'])]
+    expect(activeHolders(roles, members, 'both-fail')).toEqual([])
+    expect(resolve(roles, members, 'both-fail')).toEqual({ text: 'Folake Adesina +1', warn: true })
+  })
+
+  it('an active admin listed second still becomes primary over a preparer listed first', () => {
+    const roles = [role('order', 'Order', '', ['mf2', 'mf1'])]
+    expect(activeHolders(roles, MOCK_FIRM_MEMBERS, 'order').map((m) => m.id)).toEqual(['mf1'])
+    expect(resolve(roles, MOCK_FIRM_MEMBERS, 'order')).toEqual({ text: 'Chinedu Okafor +1', warn: false })
+  })
+
+  it('holders stays unfiltered: an invited preparer still comes back', () => {
+    const roles = [role('inv', 'Inv', '', ['mf6'])]
+    expect(holders(roles, MOCK_FIRM_MEMBERS, 'inv').map((m) => m.id)).toEqual(['mf6'])
+  })
+
+  it('rolesOfMember and rosterRoleCell see a preparer holder exactly like any other', () => {
+    expect(rolesOfMember(MOCK_FIRM_ROLES, 'mf2').map((r) => r.title)).toEqual(['Invoice Preparer'])
+    expect(rosterRoleCell(MOCK_FIRM_ROLES, 'mf2')).toEqual({ text: 'Invoice Preparer', tooltip: 'Invoice Preparer' })
+  })
+
+  it('stepsForMember counts a preparer-held role: membership is the gate, not access role', () => {
+    const p = testPolicy('P', [{ id: 'a1', type: 'approval', role: 'cfo', sla: '48', delegate: false }])
+    const roles = [role('cfo', 'CFO', '', ['mf2'])]
+    expect(stepsForMember([p], roles, 'mf2')).toEqual({ total: 1, policies: [{ policyName: 'P', count: 1 }] })
+  })
+})
+
 // ============================================================================
 // QA (Stage 4) — traversal/resolution facts Mode A flagged as dropped with
 // stepsFor/resolvePosition and not portable from the seed alone: no seeded policy puts an

@@ -35,6 +35,7 @@ function drawerCtx(over: Record<string, unknown> = {}): PlatformCtx {
   return {
     members: [member(), member({ id: 'u2', name: 'Bo Person', initials: 'BP', email: 'bo@x.ng' })],
     roles: [],
+    rolesState: 'ready',
     policies: [],
     mode: 'firm',
     staffRole: vi.fn().mockResolvedValue(undefined),
@@ -206,5 +207,97 @@ describe('APPR-04-06 QA: the in-flight lock is global, not scoped to the clicked
 
     expect(staffRole, 'the pending flag covers every pill, not just the one that started the write').toHaveBeenCalledTimes(1)
     expect(staffRole).toHaveBeenCalledWith('cfo', expect.anything())
+  })
+})
+
+describe('RALPH fix (appr-04-06): the drawer read side must not report zero roles over an unlanded fetch', () => {
+  it('shows the shared Loading affordance, not an empty pill row, while ctx.rolesState is loading', () => {
+    const policy: Policy = {
+      id: 'p1',
+      name: 'Test policy',
+      scope: 'All invoices',
+      status: 'draft',
+      updated: 'now',
+      nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }],
+    }
+    render(
+      <MemberDrawer
+        // roles:[] is the real shape App.tsx leaves ctx.roles in mid-refetch (setRoles(data ?? [])) --
+        // not a stand-in for a landed-empty roster.
+        ctx={drawerCtx({ roles: [], policies: [policy], rolesState: 'loading' })}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    expect(screen.queryByTestId('drawer-wfrole-cfo'), 'an unlanded fetch must render no pill row, not an unset one').toBeNull()
+    expect(screen.queryByTestId('member-steps-named'), 'the involvement line must not silently read as zero').toBeNull()
+    expect(screen.getByText('Loading roles…'), 'the loading affordance must stand in for the suppressed claim').toBeTruthy()
+  })
+
+  it('shows the shared ErrorState, not an empty pill row, while ctx.rolesState is error', () => {
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({
+          roles: [],
+          rolesState: 'error',
+          rolesError: new ApiError('http', 'roles gateway is down', 503),
+          refetchRoles: vi.fn(),
+        })}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    expect(screen.queryByTestId('drawer-wfrole-cfo')).toBeNull()
+    expect(screen.getByText('roles gateway is down'), "the server's own error must reach the drawer, not a silent blank").toBeTruthy()
+  })
+
+  it('a genuinely landed-empty roles fetch (rolesState "empty") renders the normal roleless drawer, not Loading', () => {
+    render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [], rolesState: 'empty' })}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    expect(screen.queryByText('Loading roles…'), "'empty' is a landed answer, not an unlanded one").toBeNull()
+    expect(screen.getByTestId('drawer-wfrole-helper'), 'the rest of the drawer renders exactly as it does today').toBeTruthy()
+  })
+
+  it('a retry that lands recovers the pills -- the ErrorState swap is not sticky', () => {
+    const roles = [role({ key: 'cfo', members: ['u1'] })]
+    const { rerender } = render(
+      <MemberDrawer
+        ctx={drawerCtx({ roles: [], rolesState: 'error', rolesError: new ApiError('http', 'down', 503) })}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-wfrole-cfo')).toBeNull()
+
+    // The drawer stays mounted across the whole refetch lifecycle -- App.tsx never remounts
+    // it on a status change, so a fresh ctx arrives as a rerender, not a fresh mount.
+    rerender(
+      <MemberDrawer
+        ctx={drawerCtx({ roles, rolesState: 'ready' })}
+        memberId="u1"
+        onClose={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+      />,
+    )
+
+    const pill = screen.getByTestId('drawer-wfrole-cfo')
+    expect(pill.getAttribute('aria-pressed'), 'the real held role must render once the retry lands, not stay stuck on the error swap').toBe('true')
   })
 })

@@ -388,7 +388,12 @@ export async function createStaffedRole(
   return setRoleMembers(f, base, created.key, members)
 }
 
-/** Worst-of ladder over BOTH fetches the Roles screen needs landed — not `membersSurface`'s one-argument form. */
+/**
+ * Worst-of ladder over BOTH fetches the Roles screen needs landed — not `membersSurface`'s
+ * one-argument form. `'empty'` means the Roles screen's OWN no-roles-yet card — not "no
+ * data yet". Wrong for a member roster: `MembersView` remaps `'empty'`→`'ready'` before
+ * calling this, and any other roster-shaped caller must do the same.
+ */
 export function rolesSurface(rolesStatus: AsyncStatus, membersStatus: AsyncStatus): MembersSurface {
   if (rolesStatus === 'error' || membersStatus === 'error') return 'error'
   if (rolesStatus === 'loading' || membersStatus === 'loading') return 'loading'

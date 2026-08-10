@@ -29,7 +29,7 @@
 
 import { useId, useState, type ReactNode } from 'react'
 
-import { toApiError } from '@invoice-os/api-client'
+import { ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
@@ -122,8 +122,14 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   // is a rule no spec can hold (§15.8, and this file's header). `null` means render nothing;
   // the gate below is that null, never a re-derived count. Both modes, no fork. `ctx.policies`
   // / `ctx.roles` are the CURRENT workspace's; the seeds would never reflect an edit.
-  const steps = stepsForMember(ctx.policies, ctx.roles, row.id)
-  const heldRoleKeys = rolesOfMember(ctx.roles, row.id).map((r) => r.key)
+  // `ctx.roles` is `[]` for the round trip on every background roles refetch (App.tsx's
+  // `setRoles(rolesAsync.data ?? [])`, unlike `members`' patch-in-place), so reading it
+  // unguarded here would render an open drawer's held roles as "none" mid-refetch.
+  // MembersTable.tsx's own `rolesLanded` gate, reused: 'empty' is a genuinely landed
+  // answer and stays landed, only 'loading'/'idle'/'error' are not.
+  const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
+  const steps = rolesLanded ? stepsForMember(ctx.policies, ctx.roles, row.id) : null
+  const heldRoleKeys = rolesLanded ? rolesOfMember(ctx.roles, row.id).map((r) => r.key) : []
 
   // §6's rule, and a SEPARATE one from the last-admin lock: your own row has no Remove.
   // The `⋯` menu holds the same line (MembersTable.tsx). OMITTED, not disabled — a control
@@ -264,7 +270,13 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               shape (line 71 above), inlined rather than reused: that component always renders
               a reason note, and a staffing write in flight has none to show. */}
           <fieldset disabled={rolePending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
-            <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
+            {rolesLanded ? (
+              <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
+            ) : ctx.rolesState === 'error' ? (
+              ctx.rolesError && <ErrorState error={ctx.rolesError} onRetry={ctx.refetchRoles} />
+            ) : (
+              <Loading label="Loading roles…" />
+            )}
           </fieldset>
           {roleError && (
             <div

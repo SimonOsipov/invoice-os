@@ -235,9 +235,10 @@ func ResetEnabled(environment, flag string) bool {
 //	                          benefit -- seed.dev.sql already re-enables any
 //	                          rule a prior demo kill-switched via `UPDATE rules
 //	                          SET enabled = true ...`, never a drop/recreate.
-//	workflow_roles,           per-tenant configuration created only by a tenant
-//	workflow_role_members     admin's own CRUD. Nothing seeds them, so truncating
-//	                          would unstaff every seat with nothing to restore it.
+//	workflow_roles,           seeded now (db/seed.dev.sql, below memberships).
+//	workflow_role_members     Still excluded: Reset only reconstructs the known
+//	                          demo set, not arbitrary admin CRUD
+//	                          (TestResetLeavesWorkflowRolesAndStaffingUntouched).
 //	approval_policies,        per-tenant approval workflow CONFIGURATION,
 //	approval_policy_versions, created and mutated only by a tenant admin's
 //	approval_policy_steps     own CRUD + seal action (APPR-01/02) -- same

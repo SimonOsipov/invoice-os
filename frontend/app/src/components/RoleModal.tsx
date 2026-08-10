@@ -9,8 +9,9 @@
 // `environment: node`, so a string authored here is a string no spec can hold. The one
 // exception is marked below, matching `RolesView`'s own `NO_MATCH`.
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
+import { toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
 import { accessRoleLabel, emailLabel } from '../lib/members'
 import {
@@ -22,7 +23,6 @@ import {
   hiddenInvitedFootnote,
   hiddenSelectionNote,
   NEW_ROLE_SUBTITLE,
-  newRoleKey,
   pickerHiddenAmongSelected,
   pickerMembers,
   pickerSelectionCount,
@@ -43,6 +43,13 @@ const NO_PERSON_MATCH = 'No one matches that search.'
 /** Beyond this the list scrolls — both seeds are taller than it. */
 const LIST_MAX_HEIGHT = 232
 
+/** Set comparison, not array equality — a re-tick in a different order is not a change. */
+function membersChanged(selected: readonly string[], original: readonly string[]): boolean {
+  if (selected.length !== original.length) return true
+  const originalSet = new Set(original)
+  return selected.some((id) => !originalSet.has(id))
+}
+
 export function RoleModal({ ctx, subject, onClose, onFlash }: {
   ctx: PlatformCtx
   subject: RoleModalSubject
@@ -60,10 +67,20 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
   // MODAL-LOCAL, the MemberDrawer posture: it dies with the modal rather than needing to be
   // cleared on close.
   const [confirming, setConfirming] = useState(false)
+  // EntityFormModal's idiom (EntityFormModal.tsx:64,94): a write in flight disables the
+  // form and blocks a second submit; a rejected one renders the gateway's own sentence here
+  // instead of closing on it.
+  const [submitting, setSubmitting] = useState(false)
+  const [writeError, setWriteError] = useState<string | null>(null)
+
+  // AC-7: a write in flight must not be closed out from under by any route, X or Escape included.
+  const closeIfIdle = useCallback(() => {
+    if (!submitting) onClose()
+  }, [submitting, onClose])
 
   // No `outsideRef` — the scrim's own onClick is the outside click, the call shape
   // useDismiss.ts:20-21 pre-authorises for a modal.
-  useDismiss(true, onClose)
+  useDismiss(true, closeIfIdle)
 
   const selectable = pickerMembers(ctx.members)
   const shown = filterPickerMembers(selectable, query)
@@ -78,31 +95,58 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   }
 
-  function save() {
+  async function save() {
+    if (submitting) return // double-submit guard
     // The gate judges the trimmed name, so the trimmed name is what is stored.
     const title = name.trim()
-    const fields = { title, desc: desc.trim(), members: selected.slice() }
-    // `[key-is-a-slug]`: minted once from the title on create, never re-derived on rename —
-    // which is why the edit branch spreads the stored role rather than rebuilding it.
-    if (role) ctx.saveRole({ ...role, ...fields })
-    else ctx.addRole({ key: newRoleKey(ctx.roles, title), ...fields })
-    onFlash(savedNotice(title))
-    onClose()
+    const trimmedDesc = desc.trim()
+    setSubmitting(true)
+    setWriteError(null)
+    try {
+      if (role) {
+        // Two independent verbs, fired only for what actually changed — a rename-only edit
+        // must not restaff, and a restaff-only edit must not rename.
+        if (title !== role.title || trimmedDesc !== role.desc) await ctx.renameRole(role.key, title, trimmedDesc)
+        if (membersChanged(selected, role.members)) await ctx.staffRole(role.key, selected.slice())
+      } else {
+        await ctx.createRole(title, trimmedDesc, selected.slice())
+      }
+      onFlash(savedNotice(title))
+      onClose()
+    } catch (err) {
+      setWriteError(toApiError(err).message)
+      // `[D-PARTIAL-CREATE]`: createRole's POST can land even though the PUT staffing step
+      // after it fails, and App.tsx's mirror is only patched off the whole call's resolved
+      // value — so the created-but-unstaffed card would otherwise stay invisible.
+      if (!role) ctx.refetchRoles()
+    } finally {
+      setSubmitting(false)
+    }
   }
 
-  function remove() {
-    if (!role) return
-    // `[delete-does-not-demote]`: the role goes and NO policy is written. A published policy
-    // whose step named it stays published, and that step blocks.
-    ctx.deleteRole(role.key)
-    // The STORED title, not the field: an unsaved rename is not what is being deleted.
-    onFlash(deletedNotice(role.title))
-    onClose()
+  async function remove() {
+    if (!role || submitting) return
+    setSubmitting(true)
+    setWriteError(null)
+    try {
+      // `[delete-does-not-demote]`: the role goes and NO policy is written. A published
+      // policy whose step named it stays published, and that step blocks.
+      await ctx.deleteRole(role.key)
+      // The STORED title, not the field: an unsaved rename is not what is being deleted.
+      onFlash(deletedNotice(role.title))
+      onClose()
+    } catch (err) {
+      setWriteError(toApiError(err).message)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
     <div
-      onClick={onClose}
+      onClick={() => {
+        if (!submitting) onClose()
+      }}
       style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'oklch(20% .02 210 / 0.42)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
     >
       <div
@@ -123,7 +167,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={closeIfIdle}
             className="pf-btn"
             aria-label="Close"
             data-testid="role-modal-close"
@@ -150,6 +194,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             placeholder="e.g. Finance Director"
             aria-label="Role name"
             data-testid="role-modal-name"
+            disabled={submitting}
           />
 
           <div className="label" style={{ margin: '16px 0 6px' }}>
@@ -163,6 +208,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
             placeholder="e.g. Second sign-off above ₦500m"
             aria-label="What this role signs off"
             data-testid="role-modal-desc"
+            disabled={submitting}
           />
 
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '16px 0 6px' }}>
@@ -187,6 +233,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
               aria-label="Search people"
               data-testid="role-modal-search"
               style={{ height: 34, fontSize: 13, marginBottom: 8 }}
+              disabled={submitting}
             />
             <div style={{ maxHeight: LIST_MAX_HEIGHT, overflowY: 'auto' }}>
               {shown.length === 0 ? (
@@ -206,7 +253,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                       data-testid="role-modal-member"
                       style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', borderRadius: 'var(--radius-md)', background: sel ? 'var(--action-tint)' : 'transparent' }}
                     >
-                      <input type="checkbox" checked={sel} onChange={() => toggle(m.id)} style={{ flex: 'none' }} />
+                      <input type="checkbox" checked={sel} onChange={() => toggle(m.id)} disabled={submitting} style={{ flex: 'none' }} />
                       <InitialsChip initials={m.initials} status={m.status} size={26} />
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ display: 'block', fontSize: 13, color: 'var(--fg-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -240,6 +287,16 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
         </div>
 
         <div style={{ flex: 'none', padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>
+          {/* The SERVER's own reason for the write it just refused, verbatim — no prefix,
+              no substitute. MemberDrawer's `statusError` precedent (MemberDrawer.tsx:311-329). */}
+          {writeError && (
+            <div
+              data-testid="role-modal-error"
+              style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
+            >
+              {writeError}
+            </div>
+          )}
           {confirming && role ? (
             // `[delete-confirms-inline]`, on MemberDrawer's danger-zone shape. It replaces the
             // whole button row rather than only its left slot: at 560px a three-line red block
@@ -252,12 +309,20 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                 {deleteRoleConfirm(role.title, steps(ctx.policies, role.key))}
               </div>
               <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
-                <button type="button" onClick={() => setConfirming(false)} className="v2-btn v2-btn-ghost pf-btn" data-testid="role-delete-cancel" style={{ height: 32, fontSize: 12.5 }}>
+                <button
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  disabled={submitting}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  data-testid="role-delete-cancel"
+                  style={{ height: 32, fontSize: 12.5 }}
+                >
                   Keep role
                 </button>
                 <button
                   type="button"
-                  onClick={remove}
+                  onClick={() => void remove()}
+                  disabled={submitting}
                   className="pf-btn"
                   data-testid="role-delete-confirmed"
                   style={{ border: '1px solid var(--status-red-border)', background: 'var(--bg-2)', cursor: 'pointer', height: 32, padding: '0 14px', fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-red-text)' }}
@@ -272,6 +337,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                 <button
                   type="button"
                   onClick={() => setConfirming(true)}
+                  disabled={submitting}
                   className="pf-btn"
                   data-testid="role-delete"
                   // MemberDrawer's Remove treatment (MemberDrawer.tsx:341-354), same tokens.
@@ -281,20 +347,33 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
                 </button>
               )}
               <div style={{ flex: 1 }} />
-              <button type="button" onClick={onClose} className="v2-btn v2-btn-ghost pf-btn" data-testid="role-modal-cancel" style={{ height: 36, fontSize: 13 }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={submitting}
+                className="v2-btn v2-btn-ghost pf-btn"
+                data-testid="role-modal-cancel"
+                style={{ height: 36, fontSize: 13 }}
+              >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={save}
-                disabled={!canSave}
+                onClick={() => void save()}
+                disabled={!canSave || submitting}
                 className="v2-btn v2-btn-primary pf-btn"
                 data-testid="role-modal-save"
                 // The app's disabled-primary treatment: the real attribute, plus an inline swap
                 // so a dead button is not still painted as the action.
-                style={{ height: 36, fontSize: 13, background: canSave ? 'var(--action)' : 'var(--bg-3)', color: canSave ? 'var(--text-on-dark)' : 'var(--fg-4)', cursor: canSave ? 'pointer' : 'not-allowed' }}
+                style={{
+                  height: 36,
+                  fontSize: 13,
+                  background: canSave && !submitting ? 'var(--action)' : 'var(--bg-3)',
+                  color: canSave && !submitting ? 'var(--text-on-dark)' : 'var(--fg-4)',
+                  cursor: canSave && !submitting ? 'pointer' : 'not-allowed',
+                }}
               >
-                {role ? 'Save role' : 'Create role'}
+                {submitting ? 'Saving…' : role ? 'Save role' : 'Create role'}
               </button>
             </div>
           )}

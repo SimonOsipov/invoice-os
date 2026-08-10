@@ -52,7 +52,6 @@ import {
   type MemberStatus,
   type MembershipWire,
 } from './members'
-import { SEED_FIRM_ROLES, SEED_INHOUSE_ROLES } from './roles'
 
 // --- fixtures ---------------------------------------------------------------
 // The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
@@ -1395,15 +1394,22 @@ describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
   })
 })
 
-// The `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The
-// invite modal's Workflow role select now draws from BOTH SEED_FIRM_ROLES and
-// SEED_INHOUSE_ROLES, and `Role.key` is a free-form slug (`newRoleKey`), not a closed union —
-// a role titled "None" collides with the sentinel on its own, with no widening required. This
-// makes the risk MORE reachable than QA48 described it, not less.
+// The `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The invite
+// modal's Workflow role select draws from BOTH tenant modes' seeded roles, and `Role.key` is
+// a free-form, server-minted slug, not a closed union — a role titled "None" collides with
+// the sentinel on its own, with no widening required. This makes the risk MORE reachable
+// than QA48 described it, not less.
+//
+// File-local mirror of lib/roles.ts's former SEED_FIRM_ROLES/SEED_INHOUSE_ROLES key sets
+// (subtask 04 deleted the module-level seed; the DB seed's Go-side test is the source of
+// truth now) — only the keys matter here, not title/desc/members.
+const MOCK_FIRM_ROLE_KEYS = ['preparer', 'fin_mgr', 'fin_dir', 'compliance', 'cfo', 'quality_reviewer']
+const MOCK_INHOUSE_ROLE_KEYS = ['preparer', 'line_mgr', 'fin_mgr', 'controller', 'fin_dir', 'compliance', 'cfo', 'ceo']
+
 describe("the invite modal's `none` sentinel stays un-collided (QA48, updated)", () => {
   it('no seeded role, in either mode, is keyed `none`', () => {
-    expect(SEED_FIRM_ROLES.map((r) => r.key)).not.toContain('none')
-    expect(SEED_INHOUSE_ROLES.map((r) => r.key)).not.toContain('none')
+    expect(MOCK_FIRM_ROLE_KEYS).not.toContain('none')
+    expect(MOCK_INHOUSE_ROLE_KEYS).not.toContain('none')
   })
 })
 

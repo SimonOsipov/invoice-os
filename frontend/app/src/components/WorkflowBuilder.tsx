@@ -14,6 +14,7 @@
 
 import { useEffect, useState, type DragEvent } from 'react'
 
+import { ErrorState, Loading } from '@invoice-os/api-client'
 import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
@@ -79,6 +80,12 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
     const t = window.setTimeout(() => setSaved(false), 1700)
     return () => window.clearTimeout(t)
   }, [saved])
+
+  // After every hook above, so hook order never changes: an unlanded roles fetch must not
+  // read as "every role was deleted" (roleOf's fallback, lib/roles.ts:63). Lives here, not
+  // WorkflowsView — that forwards ctx whole and reads no role data ([D-BUILDER-GUARD]).
+  if (ctx.rolesState === 'loading' || ctx.rolesState === 'idle') return <Loading />
+  if (ctx.rolesState === 'error') return ctx.rolesError ? <ErrorState error={ctx.rolesError} onRetry={ctx.refetchRoles} /> : null
 
   // The reducers already demote a published policy to draft, so this just forwards.
   const applyEdit = (next: Policy) => ctx.savePolicy(next)

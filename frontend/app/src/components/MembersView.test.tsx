@@ -80,12 +80,18 @@ function Harness({
   membersError,
   refetchMembers,
   roles,
+  rolesState,
+  rolesError,
+  refetchRoles,
 }: {
   initial: Member[]
   membersState?: AsyncStatus
   membersError?: ApiError | null
   refetchMembers?: () => void
   roles?: Role[]
+  rolesState?: AsyncStatus
+  rolesError?: ApiError | null
+  refetchRoles?: () => void
 }) {
   const [members, setMembers] = useState<Member[]>(initial)
 
@@ -102,6 +108,9 @@ function Harness({
     membersState: membersState ?? 'ready',
     membersError: membersError ?? null,
     refetchMembers: refetchMembers ?? vi.fn(),
+    rolesState: rolesState ?? 'ready',
+    rolesError: rolesError ?? null,
+    refetchRoles: refetchRoles ?? vi.fn(),
     saveMember: vi.fn(), // the verb the UNWIRED table/drawer still call -- deliberately inert
     dropMember: vi.fn(),
     inviteMembers: vi.fn(),
@@ -247,6 +256,67 @@ describe('AC1: an errored roster never renders as an empty success', () => {
 
     fireEvent.click(screen.getByText('Retry'))
     expect(refetch).toHaveBeenCalledOnce()
+  })
+})
+
+// ============================================================================
+// APPR-04-06 AC1 -- the roster branches on the ROLES fetch too, not just members
+// ============================================================================
+
+describe('APPR-04-06 AC1: a roles-only fetch failure must not render the roster as if it loaded', () => {
+  function threeMembers(): Member[] {
+    return [member(), otherMember(), member({ id: 'u3', name: 'Third Person', initials: 'TP' })]
+  }
+
+  it('renders the error surface, not the table, when only ctx.rolesState is error', () => {
+    render(<Harness initial={threeMembers()} rolesState="error" rolesError={new ApiError('http', 'roles gateway is down', 503)} />)
+
+    expect(screen.queryByTestId('members-table'), 'a roles-only failure must not render the roster as if it loaded').toBeNull()
+    expect(screen.getByText('roles gateway is down')).toBeTruthy()
+  })
+
+  it('still renders the roster when the roles list is merely EMPTY, not errored', () => {
+    render(<Harness initial={threeMembers()} rolesState="ready" roles={[]} />)
+
+    expect(screen.getByTestId('members-table')).toBeTruthy()
+    expect(screen.queryByTestId('members-unassigned')).toBeNull()
+  })
+
+  // A genuinely landed-empty roles fetch reports rolesState:'empty', NOT 'ready' with roles:[]
+  // (resolveStatus's default isEmpty makes an empty array 'empty', never 'ready' -- see
+  // async-state.ts). The spec above never exercises this real combination, so it cannot
+  // catch a mutation that removes MembersView's rolesState==='empty' remap: verified this
+  // exact mutation passes all 16 pre-existing specs in this file untouched.
+  it('a REAL landed-empty roles fetch (rolesState "empty", not "ready") still renders the roster for real members', () => {
+    render(<Harness initial={threeMembers()} rolesState="empty" roles={[]} />)
+
+    expect(screen.getByTestId('members-table'), 'a tenant with 3 real members and zero configured roles is not a tenant with zero members').toBeTruthy()
+    expect(screen.queryByText('Just you at the firm'), 'zero roles must never collapse into "just you"').toBeNull()
+  })
+})
+
+describe('APPR-04-06 QA: both the roles fetch and the members fetch fail at once', () => {
+  it('the roles error wins the display -- ctx.rolesError ?? ctx.membersError -- and Retry fires both refetches', () => {
+    const refetchRoles = vi.fn()
+    const refetchMembers = vi.fn()
+    render(
+      <Harness
+        initial={[]}
+        rolesState="error"
+        rolesError={new ApiError('http', 'roles gateway is down', 503)}
+        refetchRoles={refetchRoles}
+        membersState="error"
+        membersError={new ApiError('http', 'members gateway is down', 503)}
+        refetchMembers={refetchMembers}
+      />,
+    )
+
+    expect(screen.getByText('roles gateway is down')).toBeTruthy()
+    expect(screen.queryByText('members gateway is down'), 'only one error surface can show at a time').toBeNull()
+
+    fireEvent.click(screen.getByText('Retry'))
+    expect(refetchRoles, 'both fetches actually failed, so both must be retried').toHaveBeenCalledOnce()
+    expect(refetchMembers).toHaveBeenCalledOnce()
   })
 })
 

@@ -7,9 +7,15 @@
 //
 // Both edges are TYPE-ONLY: the picker's meta column moved to `accessRoleLabel` at its own
 // call site when the in-house department fork went, so this module imports no runtime value.
+//
+// The `// Wire` section at the foot of this file adds five AuthedFetch wrappers over the
+// APPR-02 workflow-role endpoints, on lib/members.ts's live-wire shape.
 
-import type { AccessRole, Member } from './members'
-import type { Policy, WorkflowMode } from './workflows'
+import type { AsyncStatus } from '@invoice-os/api-client'
+
+import type { AccessRole, Member, MembersSurface } from './members'
+import type { AuthedFetch } from './portfolio'
+import type { Policy } from './workflows'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,9 +30,6 @@ export type Role = {
   members: string[]
 }
 
-/** Keyed per workspace mode, mirroring `PolicyStore` — NOT per client. */
-export type RoleStore = Record<WorkflowMode, Role[]>
-
 /** The card, the canvas and the inspector all need the amber tone to travel WITH the string. */
 export type Resolved = { text: string; warn: boolean }
 
@@ -34,62 +37,9 @@ export type Resolved = { text: string; warn: boolean }
 export type RoleSteps = { total: number; policies: { policyName: string; count: number }[] }
 
 // ---------------------------------------------------------------------------
-// Seed
-// ---------------------------------------------------------------------------
-
-// `members` holds MEMBERSHIP SUBJECTS (db/seed.dev.sql), the same ids `toMember` projects a
-// live roster onto — a mock id here resolves to zero holders.
-//
-// Practice vocabulary on the keys `SEED_FIRM_POLICIES` already references; `quality_reviewer`
-// is the one net-new key and the one role nobody holds, which is what puts the blocking copy
-// on screen at first load. …0004 Musa Danjuma is the seeded two-role holder.
-export const SEED_FIRM_ROLES: readonly Role[] = [
-  {
-    key: 'preparer',
-    title: 'Invoice Preparer',
-    desc: 'Prepares and imports client invoices',
-    members: ['c0000000-0000-0000-0000-000000000003', 'c0000000-0000-0000-0000-000000000006'],
-  },
-  { key: 'fin_mgr', title: 'Engagement Manager', desc: 'First sign-off on a client invoice', members: ['c0000000-0000-0000-0000-000000000004'] },
-  { key: 'fin_dir', title: 'Senior Manager', desc: 'Second sign-off above ₦250m', members: ['c0000000-0000-0000-0000-000000000004'] },
-  { key: 'compliance', title: 'Tax Reviewer', desc: 'Checks VAT, WHT and TIN detail before filing', members: ['c0000000-0000-0000-0000-000000000005'] },
-  { key: 'cfo', title: 'Engagement Partner', desc: 'Signs off invoices above ₦1bn', members: ['c0000000-0000-0000-0000-000000000001'] },
-  { key: 'quality_reviewer', title: 'Quality Reviewer', desc: 'Second-partner review on flagged engagements', members: [] },
-]
-
-// The eight shipped `position` values restaffed, each old department string kept as `desc`.
-// …0012 Adebayo Ogunlesi is suspended and the only cfo holder, which is what makes the
-// suspended-only state reachable without a user constructing it.
-export const SEED_INHOUSE_ROLES: readonly Role[] = [
-  { key: 'preparer', title: 'Preparer', desc: 'Accounts Payable', members: ['c0000000-0000-0000-0000-000000000013'] },
-  { key: 'line_mgr', title: 'Line Manager', desc: 'Requesting dept.', members: ['c0000000-0000-0000-0000-000000000009'] },
-  { key: 'fin_mgr', title: 'Finance Manager', desc: 'Finance', members: [] },
-  { key: 'controller', title: 'Financial Controller', desc: 'Finance', members: ['c0000000-0000-0000-0000-000000000010'] },
-  {
-    key: 'fin_dir',
-    title: 'Finance Director',
-    desc: 'Finance',
-    members: ['c0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000008'],
-  },
-  { key: 'compliance', title: 'Compliance Officer', desc: 'Tax & Compliance', members: ['c0000000-0000-0000-0000-000000000011'] },
-  { key: 'cfo', title: 'CFO', desc: 'Executive', members: ['c0000000-0000-0000-0000-000000000012'] },
-  { key: 'ceo', title: 'CEO', desc: 'Executive', members: [] },
-]
-
-/** Deep clone per call, mirroring `seedPolicies`. */
-export function seedRoles(): RoleStore {
-  return { firm: cloneRoles(SEED_FIRM_ROLES), inhouse: cloneRoles(SEED_INHOUSE_ROLES) }
-}
-
-/** `members` is the only nested value a Role carries, so a bare spread would alias the seed. */
-function cloneRoles(list: readonly Role[]): Role[] {
-  return list.map((r) => ({ ...r, members: r.members.slice() }))
-}
-
-// ---------------------------------------------------------------------------
 // Reducers
 // ---------------------------------------------------------------------------
-// All five allocate unconditionally, so a miss returns a new array holding the same values
+// All three allocate unconditionally, so a miss returns a new array holding the same values
 // rather than the input reference — the `replaceMember` / `replacePolicy` form.
 
 export function replaceRole(list: readonly Role[], next: Role): Role[] {
@@ -102,39 +52,6 @@ export function addRole(list: readonly Role[], next: Role): Role[] {
 
 export function removeRole(list: readonly Role[], key: string): Role[] {
   return list.filter((r) => r.key !== key)
-}
-
-/** Copies the ids: one `memberIds` argument must not end up aliased by the role it staffs. */
-export function setRoleMembers(list: readonly Role[], key: string, memberIds: readonly string[]): Role[] {
-  return list.map((r) => (r.key === key ? { ...r, members: memberIds.slice() } : r))
-}
-
-/** Removing a member drops them from every role; suspending deliberately does not. */
-export function pruneMember(list: readonly Role[], memberId: string): Role[] {
-  return list.map((r) => ({ ...r, members: r.members.filter((id) => id !== memberId) }))
-}
-
-/** The invite path's write: minted ids join the chosen role in the same commit as the roster. */
-export function addRoleMembers(list: readonly Role[], key: string, memberIds: readonly string[]): Role[] {
-  return list.map((r) => (r.key === key ? { ...r, members: [...r.members, ...memberIds] } : r))
-}
-
-/**
- * Slug of the title, suffixed only on collision within the mode. Same slug form as rules.ts's
- * `tenantSlug` and deliberately not shared: a rules-domain edit there must not re-key roles.
- */
-export function newRoleKey(list: readonly Role[], title: string): string {
-  // A title of only punctuation slugifies to nothing, and Save gates on an empty NAME.
-  const base =
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'role'
-  const taken = new Set(list.map((r) => r.key))
-  if (!taken.has(base)) return base
-  let n = 2
-  while (taken.has(`${base}-${n}`)) n++
-  return `${base}-${n}`
 }
 
 // ---------------------------------------------------------------------------
@@ -154,11 +71,12 @@ export function holders(list: readonly Role[], members: readonly Member[], key: 
 }
 
 /**
- * Status only — deliberately NOT filtered by access role. The delegate picker is the one place
- * the Reviewer role is a hard gate; a holder who is an admin still resolves.
+ * Status AND access role: only an active admin/reviewer satisfies a seat. Staffing a preparer
+ * stays legal server-side (`internal/approval/store.go:355-358`, `TestStaffing_PreparerMayBeStaffed`)
+ * — the approver filter is a read-time concern, not a staffing-time one.
  */
 export function activeHolders(list: readonly Role[], members: readonly Member[], key: string): Member[] {
-  return holders(list, members, key).filter((m) => m.status === 'active')
+  return holders(list, members, key).filter((m) => m.status === 'active' && isApprover(m.role))
 }
 
 export function rolesOfMember(list: readonly Role[], memberId: string): Role[] {
@@ -187,7 +105,7 @@ function resolution(list: readonly Role[], members: readonly Member[], key: stri
   if (!list.some((r) => r.key === key)) return { kind: 'missing' }
   const all = holders(list, members, key)
   if (all.length === 0) return { kind: 'none' }
-  const active = all.filter((m) => m.status === 'active')
+  const active = all.filter((m) => m.status === 'active' && isApprover(m.role))
   // `extra` counts the OTHER holders, active or not.
   const extra = all.length - 1
   if (active.length === 0) return { kind: 'blocked', primary: all[0].name, extra }
@@ -411,4 +329,79 @@ export function savedNotice(title: string): string {
 /** NOT IN BRIEF: the delete half of the pair, so the two cannot drift. */
 export function deletedNotice(title: string): string {
   return `${title} deleted`
+}
+
+// ---------------------------------------------------------------------------
+// Wire
+// ---------------------------------------------------------------------------
+// The wire object IS `Role` (approval.Role, field-for-field) — no separate wire type or
+// projection. `base` is a parameter, never `gatewayBase()` called here; no wrapper catches,
+// so a non-2xx rejects with the underlying ApiError unchanged.
+
+/** The one-key envelope; the other four wrappers below resolve a bare `Role`. */
+export async function listWorkflowRoles(f: AuthedFetch, base: string): Promise<Role[]> {
+  const body = await f<{ workflow_roles: Role[] }>(`${base}/api/invoice/v1/workflow-roles`)
+  return body.workflow_roles
+}
+
+export async function createWorkflowRole(f: AuthedFetch, base: string, title: string, desc: string): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles`, { method: 'POST', body: { title, desc } })
+}
+
+/** Go pointer fields: an absent key here must stay absent on the wire, never `""` or `null`. */
+export type RolePatch = { title?: string; desc?: string }
+
+/** Only the changed fields — an unchanged one is omitted, never sent back as its old value. */
+export function rolePatch(current: Role, title: string, desc: string): RolePatch {
+  const patch: RolePatch = {}
+  if (title !== current.title) patch.title = title
+  if (desc !== current.desc) patch.desc = desc
+  return patch
+}
+
+export async function updateWorkflowRole(f: AuthedFetch, base: string, key: string, patch: RolePatch): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}`, { method: 'PATCH', body: patch })
+}
+
+export async function deleteWorkflowRole(f: AuthedFetch, base: string, key: string): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}`, { method: 'DELETE' })
+}
+
+/** An empty set still PUTs an explicit `{"members":[]}` — the server 400s on an absent key. */
+export async function setRoleMembers(f: AuthedFetch, base: string, key: string, memberIds: readonly string[]): Promise<Role> {
+  return f<Role>(`${base}/api/invoice/v1/workflow-roles/${encodeURIComponent(key)}/members`, {
+    method: 'PUT',
+    body: { members: memberIds },
+  })
+}
+
+/** POSTs then PUTs the SERVER's own returned key, never a slug of the title; skips the PUT unstaffed. */
+export async function createStaffedRole(
+  f: AuthedFetch,
+  base: string,
+  title: string,
+  desc: string,
+  members: readonly string[],
+): Promise<Role> {
+  const created = await createWorkflowRole(f, base, title, desc)
+  if (members.length === 0) return created
+  return setRoleMembers(f, base, created.key, members)
+}
+
+/**
+ * Worst-of ladder over BOTH fetches the Roles screen needs landed — not `membersSurface`'s
+ * one-argument form. `'empty'` means the Roles screen's OWN no-roles-yet card — not "no
+ * data yet". Wrong for a member roster: `MembersView` remaps `'empty'`→`'ready'` before
+ * calling this, and any other roster-shaped caller must do the same.
+ */
+export function rolesSurface(rolesStatus: AsyncStatus, membersStatus: AsyncStatus): MembersSurface {
+  if (rolesStatus === 'error' || membersStatus === 'error') return 'error'
+  if (rolesStatus === 'loading' || membersStatus === 'loading') return 'loading'
+  if (rolesStatus === 'idle' || rolesStatus === 'empty' || membersStatus === 'idle' || membersStatus === 'empty') return 'empty'
+  return 'roster'
+}
+
+/** Mirrors internal/invoice/store.go's isApprover. */
+export function isApprover(role: AccessRole): boolean {
+  return role === 'admin' || role === 'reviewer'
 }

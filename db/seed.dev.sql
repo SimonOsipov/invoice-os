@@ -52,6 +52,67 @@ ON CONFLICT (tenant_id, user_id) DO UPDATE SET
     email        = EXCLUDED.email,
     status       = EXCLUDED.status;
 
+-- Workflow roles (Settings > Roles) for both persona tenants -- key/title/description
+-- verbatim from lib/roles.ts's SEED_FIRM_ROLES/SEED_INHOUSE_ROLES. created_at is
+-- explicit and ascending per role so ListRoles' `ORDER BY created_at, key`
+-- (internal/approval/store.go:65) reproduces the shipped card order -- a single
+-- multi-row INSERT would tie every row to now() and re-sort it alphabetically.
+-- DO UPDATE excludes created_at (never disturb the pinned order) and clears
+-- deleted_at (repairs a soft-deleted seat).
+INSERT INTO workflow_roles (id, tenant_id, key, title, description, created_at) VALUES
+    -- Okafor & Partners (firm)
+    ('d0000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'preparer',         'Invoice Preparer',   'Prepares and imports client invoices',         '2026-01-01 00:00:00+00'),
+    ('d0000000-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 'fin_mgr',          'Engagement Manager', 'First sign-off on a client invoice',           '2026-01-01 00:01:00+00'),
+    ('d0000000-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111', 'fin_dir',          'Senior Manager',     'Second sign-off above ₦250m',                  '2026-01-01 00:02:00+00'),
+    ('d0000000-0000-0000-0000-000000000004', '11111111-1111-1111-1111-111111111111', 'compliance',       'Tax Reviewer',       'Checks VAT, WHT and TIN detail before filing', '2026-01-01 00:03:00+00'),
+    ('d0000000-0000-0000-0000-000000000005', '11111111-1111-1111-1111-111111111111', 'cfo',              'Engagement Partner', 'Signs off invoices above ₦1bn',                '2026-01-01 00:04:00+00'),
+    ('d0000000-0000-0000-0000-000000000006', '11111111-1111-1111-1111-111111111111', 'quality_reviewer', 'Quality Reviewer',   'Second-partner review on flagged engagements', '2026-01-01 00:05:00+00'),
+    -- Honeywell Group (in-house)
+    ('d0000000-0000-0000-0000-000000000007', '22222222-2222-2222-2222-222222222222', 'preparer',   'Preparer',             'Accounts Payable',   '2026-01-01 00:00:00+00'),
+    ('d0000000-0000-0000-0000-000000000008', '22222222-2222-2222-2222-222222222222', 'line_mgr',   'Line Manager',         'Requesting dept.',   '2026-01-01 00:01:00+00'),
+    ('d0000000-0000-0000-0000-000000000009', '22222222-2222-2222-2222-222222222222', 'fin_mgr',    'Finance Manager',      'Finance',            '2026-01-01 00:02:00+00'),
+    ('d0000000-0000-0000-0000-000000000010', '22222222-2222-2222-2222-222222222222', 'controller', 'Financial Controller', 'Finance',            '2026-01-01 00:03:00+00'),
+    ('d0000000-0000-0000-0000-000000000011', '22222222-2222-2222-2222-222222222222', 'fin_dir',    'Finance Director',     'Finance',            '2026-01-01 00:04:00+00'),
+    ('d0000000-0000-0000-0000-000000000012', '22222222-2222-2222-2222-222222222222', 'compliance', 'Compliance Officer',   'Tax & Compliance',   '2026-01-01 00:05:00+00'),
+    ('d0000000-0000-0000-0000-000000000013', '22222222-2222-2222-2222-222222222222', 'cfo',        'CFO',                  'Executive',          '2026-01-01 00:06:00+00'),
+    ('d0000000-0000-0000-0000-000000000014', '22222222-2222-2222-2222-222222222222', 'ceo',        'CEO',                  'Executive',          '2026-01-01 00:07:00+00')
+ON CONFLICT ON CONSTRAINT workflow_roles_tenant_key_uq DO UPDATE SET
+    title       = EXCLUDED.title,
+    description = EXCLUDED.description,
+    deleted_at  = NULL;
+
+-- Staffing for the roles above, resolved by (tenant_id, key) rather than a literal
+-- workflow_role_id: the DO UPDATE above can leave a PRE-EXISTING row's id in place
+-- on conflict, and a hardcoded id here would then point at a row that was never
+-- inserted, aborting the whole seed on workflow_role_members_tenant_role_fk. ord is
+-- 0-based and dense per role, matching SetRoleMembers' own write
+-- (internal/approval/store.go:423). DO NOTHING only protects a row that still exists:
+-- an admin's edits to it survive, but a holder removed outright is re-created on the
+-- next seed, since the demo set is meant to converge.
+WITH role_member_seed (tenant_id, role_key, user_id, ord) AS (
+  VALUES
+    -- Okafor & Partners: preparer x2, fin_mgr/fin_dir share Musa Danjuma, cfo; quality_reviewer unstaffed
+    ('11111111-1111-1111-1111-111111111111'::uuid, 'preparer',   'c0000000-0000-0000-0000-000000000003'::uuid, 0),
+    ('11111111-1111-1111-1111-111111111111'::uuid, 'preparer',   'c0000000-0000-0000-0000-000000000006'::uuid, 1),
+    ('11111111-1111-1111-1111-111111111111'::uuid, 'fin_mgr',    'c0000000-0000-0000-0000-000000000004'::uuid, 0),
+    ('11111111-1111-1111-1111-111111111111'::uuid, 'fin_dir',    'c0000000-0000-0000-0000-000000000004'::uuid, 0),
+    ('11111111-1111-1111-1111-111111111111'::uuid, 'compliance', 'c0000000-0000-0000-0000-000000000005'::uuid, 0),
+    ('11111111-1111-1111-1111-111111111111'::uuid, 'cfo',        'c0000000-0000-0000-0000-000000000001'::uuid, 0),
+    -- Honeywell: preparer, line_mgr, controller, fin_dir x2, compliance, cfo (suspended); fin_mgr/ceo unstaffed
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'preparer',   'c0000000-0000-0000-0000-000000000013'::uuid, 0),
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'line_mgr',   'c0000000-0000-0000-0000-000000000009'::uuid, 0),
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'controller', 'c0000000-0000-0000-0000-000000000010'::uuid, 0),
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'fin_dir',    'c0000000-0000-0000-0000-000000000002'::uuid, 0),
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'fin_dir',    'c0000000-0000-0000-0000-000000000008'::uuid, 1),
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'compliance', 'c0000000-0000-0000-0000-000000000011'::uuid, 0),
+    ('22222222-2222-2222-2222-222222222222'::uuid, 'cfo',        'c0000000-0000-0000-0000-000000000012'::uuid, 0)
+)
+INSERT INTO workflow_role_members (tenant_id, workflow_role_id, user_id, ord)
+SELECT r.tenant_id, r.id, s.user_id, s.ord
+FROM role_member_seed s
+JOIN workflow_roles r ON r.tenant_id = s.tenant_id AND r.key = s.role_key AND r.deleted_at IS NULL
+ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
+
 -- task-162/M4-22-03: fold the former reset script's rule re-enable + curated
 -- demo portfolio into the boot-time seed ([demo-seed-shape]). No DELETE is
 -- ported here: a boot-time seed must stay destructive-statement-free

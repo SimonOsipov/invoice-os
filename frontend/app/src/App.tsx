@@ -47,14 +47,17 @@ import {
   type CustomRuleStore,
   type Suggestion,
 } from './lib/rules'
-// `addRole` is aliased: ctx's verb of that name is this file's own wrapper below.
 import {
-  addRole as appendRole,
+  addRole,
+  createStaffedRole,
+  deleteWorkflowRole,
+  listWorkflowRoles,
   removeRole,
   replaceRole,
-  seedRoles,
+  rolePatch,
+  setRoleMembers,
+  updateWorkflowRole,
   type Role,
-  type RoleStore,
 } from './lib/roles'
 import {
   newPolicy,
@@ -310,12 +313,18 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
   useEffect(() => {
     setMembers(membersAsync.data ?? [])
   }, [membersAsync.data])
-  // The approval seats a policy's steps point at, PER WORKSPACE MODE (lib/roles.ts) — the
-  // memberStore shape above, for the same reason. A firm's engagement seats and an in-house
-  // finance ladder are two different sets, and switching mode swaps the whole list rather
-  // than sharing any role object between them.
-  const [roleStore, setRoleStore] = useState<RoleStore>(seedRoles)
-  const roles = roleStore[mode]
+  // The approval seats a policy's steps point at — the `membersAsync` idiom immediately
+  // above, verbatim: ONE fetch, shared by the Roles tab and the Workflows builder, per
+  // tenant rather than per workspace mode (unlike `policies` above, which stays per-mode).
+  const rolesAsync = useAsync<Role[]>(
+    () => (base ? listWorkflowRoles(authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null },
+  )
+  const rolesState = membersViewState(base, rolesAsync.status)
+  const [roles, setRoles] = useState<Role[]>([])
+  useEffect(() => {
+    setRoles(rolesAsync.data ?? [])
+  }, [rolesAsync.data])
   // Multi-invoice import path (M4-08-04). `entityId` is a REAL portfolio entity id.
   // [entity-picker] step 3 of 3: DEFAULTS to `active.entityId` (resetImport, below) —
   // the user already answered "which company" via the switcher, so the import wizard
@@ -1043,25 +1052,36 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
   }
 
-  // The one-funnel shape once more, and the same pure pass-through: nothing is refused
-  // here, because a funnel that declined a write silently would leave the tab no way to
-  // say why.
-  function updateRoles(fn: (list: Role[]) => Role[]) {
-    setRoleStore((store) => ({ ...store, [mode]: fn(store[mode]) }))
+  // Settings › Roles' four writes, the `setMemberStatus` shape repeated: each calls the
+  // gateway first and patches the mirror off the SERVER's own returned row, so a rejection
+  // reaches the caller with nothing here to roll back.
+  async function createRole(title: string, desc: string, members: readonly string[]): Promise<Role> {
+    const created = await createStaffedRole(authedFetch, base!, title, desc, members)
+    setRoles((list) => addRole(list, created))
+    return created
   }
 
-  // The funnel's three verbs. The tab composes the next Role with the pure reducers in
-  // lib/roles.ts and hands the whole object back, so nothing here knows a role's shape.
-  function saveRole(next: Role) {
-    updateRoles((list) => replaceRole(list, next))
+  // Diffs against the mirror's own copy of the role, not a caller-supplied one — `rolePatch`
+  // is what lets an unchanged field skip the wire entirely.
+  async function renameRole(key: string, title: string, desc: string): Promise<Role> {
+    const current = roles.find((r) => r.key === key)
+    if (!current) throw new Error('Role no longer exists')
+    const patch = rolePatch(current, title, desc)
+    if (Object.keys(patch).length === 0) return current
+    const updated = await updateWorkflowRole(authedFetch, base!, key, patch)
+    setRoles((list) => replaceRole(list, updated))
+    return updated
   }
 
-  function addRole(next: Role) {
-    updateRoles((list) => appendRole(list, next))
+  async function staffRole(key: string, members: readonly string[]): Promise<Role> {
+    const updated = await setRoleMembers(authedFetch, base!, key, members)
+    setRoles((list) => replaceRole(list, updated))
+    return updated
   }
 
-  function deleteRole(key: string) {
-    updateRoles((list) => removeRole(list, key))
+  async function deleteRole(key: string): Promise<void> {
+    await deleteWorkflowRole(authedFetch, base!, key)
+    setRoles((list) => removeRole(list, key))
   }
 
   const user: SignedInUser = {
@@ -1110,6 +1130,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     membersError: membersAsync.error,
     refetchMembers: membersAsync.run,
     roles,
+    rolesState,
+    rolesError: rolesAsync.error,
+    refetchRoles: rolesAsync.run,
     entityId,
     pickedFiles,
     filesRefusal,
@@ -1164,8 +1187,9 @@ function Workspace({ session, onSignOut }: { session: Session; onSignOut: () => 
     deletePolicy,
     savePolicy,
     setMemberStatus,
-    saveRole,
-    addRole,
+    createRole,
+    renameRole,
+    staffRole,
     deleteRole,
     signOut: onSignOut,
   }

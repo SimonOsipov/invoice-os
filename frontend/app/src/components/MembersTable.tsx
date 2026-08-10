@@ -84,8 +84,8 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   /**
    * The CURRENT workspace's approval policies and workflow roles, both off `ctx`. Named as
    * their own props rather than read through `ctx` so that `stepsForMember`'s inputs are
-   * visible at the call site: the tempting wrong answers are `seedPolicies()` / `seedRoles()`,
-   * neither of which ever reflects an edit made on the Workflows or Roles screen.
+   * visible at the call site: the tempting wrong answer is `seedPolicies()`, which never
+   * reflects an edit made on the Workflows screen.
    */
   policies: Policy[]
   roles: Role[]
@@ -190,7 +190,11 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           // can drift from that one.
           const steps = m.status === 'suspended' ? stepsForMember(policies, roles, m.id) : null
           const blocked = steps ? steps.total : 0
-          const roleCell = rosterRoleCell(roles, m.id)
+          // Unreachable via the shipped app (MembersView only mounts this table once
+          // rolesState has landed) — defense-in-depth so an unlanded fetch renders empty,
+          // never ABSENT_LABEL's '—', which claims "holds no roles".
+          const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
+          const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           return (
             <Fragment key={m.id}>
               <div

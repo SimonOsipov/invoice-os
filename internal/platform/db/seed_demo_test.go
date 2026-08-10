@@ -4491,3 +4491,442 @@ func TestSeedMembershipUpsertNeverTouchesNonSeedRow(t *testing.T) {
 		t.Errorf("count(memberships) for tenant A after re-seed = %d, want 7 (6 curated + 1 real)", got)
 	}
 }
+
+// workflowRoleRow is a seeded workflow_roles row's presentable identity.
+type workflowRoleRow struct {
+	key, title, desc string
+}
+
+// shippedFirmRoles mirrors frontend/app/src/lib/roles.ts's SEED_FIRM_ROLES exactly
+// (key/title/desc -- staffing is asserted separately against memberships below).
+var shippedFirmRoles = []workflowRoleRow{
+	{key: "preparer", title: "Invoice Preparer", desc: "Prepares and imports client invoices"},
+	{key: "fin_mgr", title: "Engagement Manager", desc: "First sign-off on a client invoice"},
+	{key: "fin_dir", title: "Senior Manager", desc: "Second sign-off above ₦250m"},
+	{key: "compliance", title: "Tax Reviewer", desc: "Checks VAT, WHT and TIN detail before filing"},
+	{key: "cfo", title: "Engagement Partner", desc: "Signs off invoices above ₦1bn"},
+	{key: "quality_reviewer", title: "Quality Reviewer", desc: "Second-partner review on flagged engagements"},
+}
+
+// shippedInhouseRoles mirrors SEED_INHOUSE_ROLES exactly.
+var shippedInhouseRoles = []workflowRoleRow{
+	{key: "preparer", title: "Preparer", desc: "Accounts Payable"},
+	{key: "line_mgr", title: "Line Manager", desc: "Requesting dept."},
+	{key: "fin_mgr", title: "Finance Manager", desc: "Finance"},
+	{key: "controller", title: "Financial Controller", desc: "Finance"},
+	{key: "fin_dir", title: "Finance Director", desc: "Finance"},
+	{key: "compliance", title: "Compliance Officer", desc: "Tax & Compliance"},
+	{key: "cfo", title: "CFO", desc: "Executive"},
+	{key: "ceo", title: "CEO", desc: "Executive"},
+}
+
+// fetchWorkflowRoles returns tenantID's live workflow_roles rows (key, title, desc),
+// ordered by key.
+func fetchWorkflowRoles(t *testing.T, pool *pgxpool.Pool, tenantID string) []workflowRoleRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT key, title, description FROM workflow_roles WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY key`,
+		tenantID,
+	)
+	if err != nil {
+		t.Fatalf("query workflow_roles for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	var got []workflowRoleRow
+	for rows.Next() {
+		var r workflowRoleRow
+		if err := rows.Scan(&r.key, &r.title, &r.desc); err != nil {
+			t.Fatalf("scan workflow_roles row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate workflow_roles rows for tenant %s: %v", tenantID, err)
+	}
+	return got
+}
+
+func sortedWorkflowRoleRows(rows []workflowRoleRow) []workflowRoleRow {
+	out := make([]workflowRoleRow, len(rows))
+	copy(out, rows)
+	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
+	return out
+}
+
+// TestSeedWorkflowRolesExistForBothDemoTenants: Test Spec AC-1. After Seed runs, each
+// persona tenant's live workflow_roles rows match the shipped set (key, title, desc)
+// exactly -- firm 6 keys, in-house 8, verbatim from lib/roles.ts.
+func TestSeedWorkflowRolesExistForBothDemoTenants(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	gotFirm := fetchWorkflowRoles(t, pool, demoTenantID)
+	wantFirm := sortedWorkflowRoleRows(shippedFirmRoles)
+	if !reflect.DeepEqual(gotFirm, wantFirm) {
+		t.Fatalf("workflow_roles for the firm tenant does not match the shipped set exactly\ngot:  %+v\nwant: %+v", gotFirm, wantFirm)
+	}
+
+	gotInhouse := fetchWorkflowRoles(t, pool, honeywellTenantID)
+	wantInhouse := sortedWorkflowRoleRows(shippedInhouseRoles)
+	if !reflect.DeepEqual(gotInhouse, wantInhouse) {
+		t.Fatalf("workflow_roles for the in-house tenant does not match the shipped set exactly\ngot:  %+v\nwant: %+v", gotInhouse, wantInhouse)
+	}
+}
+
+// shippedFirmRoleOrder and shippedInhouseRoleOrder are the exact key order the shipped
+// Roles grid renders in. Store.ListRoles orders `created_at, key` (store.go:64-65) -- a
+// single multi-row INSERT would give every row the same now() and re-sort alphabetically,
+// which this test catches by pinning the order, not just the membership of the key set.
+var shippedFirmRoleOrder = []string{"preparer", "fin_mgr", "fin_dir", "compliance", "cfo", "quality_reviewer"}
+var shippedInhouseRoleOrder = []string{"preparer", "line_mgr", "fin_mgr", "controller", "fin_dir", "compliance", "cfo", "ceo"}
+
+// fetchWorkflowRoleKeysInListOrder returns tenantID's live workflow_roles keys ordered
+// exactly as Store.ListRoles orders them (created_at, key).
+func fetchWorkflowRoleKeysInListOrder(t *testing.T, pool *pgxpool.Pool, tenantID string) []string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT key FROM workflow_roles WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at, key`,
+		tenantID,
+	)
+	if err != nil {
+		t.Fatalf("query workflow_roles key order for tenant %s: %v", tenantID, err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatalf("scan workflow_roles key: %v", err)
+		}
+		got = append(got, key)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate workflow_roles keys for tenant %s: %v", tenantID, err)
+	}
+	return got
+}
+
+// TestSeedWorkflowRoleListOrderMatchesTheShippedGrid: Test Spec AC-3.
+func TestSeedWorkflowRoleListOrderMatchesTheShippedGrid(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	gotFirm := fetchWorkflowRoleKeysInListOrder(t, pool, demoTenantID)
+	if !reflect.DeepEqual(gotFirm, shippedFirmRoleOrder) {
+		t.Errorf("firm workflow_roles order (created_at, key) = %v, want the shipped grid order %v", gotFirm, shippedFirmRoleOrder)
+	}
+
+	gotInhouse := fetchWorkflowRoleKeysInListOrder(t, pool, honeywellTenantID)
+	if !reflect.DeepEqual(gotInhouse, shippedInhouseRoleOrder) {
+		t.Errorf("in-house workflow_roles order (created_at, key) = %v, want the shipped grid order %v", gotInhouse, shippedInhouseRoleOrder)
+	}
+}
+
+// TestSeedWorkflowRoleMembersOrdIsZeroBasedAndDense: Test Spec AC-4. Every seeded role
+// with at least one holder has ord 0..n-1, no gaps -- store.go's SetRoleMembers writes
+// `(m.ord - 1)` (store.go:423), so a seed that isn't 0-based/dense would desync from
+// what a live PUT would ever produce.
+func TestSeedWorkflowRoleMembersOrdIsZeroBasedAndDense(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT workflow_role_id, array_agg(ord ORDER BY ord)
+		   FROM workflow_role_members
+		  WHERE tenant_id IN ($1, $2)
+		  GROUP BY workflow_role_id`,
+		demoTenantID, honeywellTenantID,
+	)
+	if err != nil {
+		t.Fatalf("query workflow_role_members ord groups: %v", err)
+	}
+	defer rows.Close()
+
+	found := 0
+	for rows.Next() {
+		var roleID string
+		var ords []int32
+		if err := rows.Scan(&roleID, &ords); err != nil {
+			t.Fatalf("scan ord group: %v", err)
+		}
+		found++
+		for i, ord := range ords {
+			if int(ord) != i {
+				t.Errorf("role %s: ord sequence = %v, want 0-based dense (index %d has ord %d, want %d)", roleID, ords, i, ord, i)
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate ord groups: %v", err)
+	}
+	if found == 0 {
+		t.Fatal("no staffed workflow_role_members groups found for either persona tenant -- expected the seed's staffing rows")
+	}
+}
+
+// TestSeedEveryStaffedUserHasAMembershipInThatTenant: Test Spec AC-4. Every
+// workflow_role_members row's (tenant_id, user_id) resolves to a real memberships row --
+// the FK proves insertion succeeded, this proves the staffed ids are the RIGHT people.
+func TestSeedEveryStaffedUserHasAMembershipInThatTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	total := mustCount(t, pool, `SELECT count(*) FROM workflow_role_members WHERE tenant_id IN ($1, $2)`, demoTenantID, honeywellTenantID)
+	if total == 0 {
+		t.Fatal("workflow_role_members is empty for both persona tenants -- expected the seed's staffing rows")
+	}
+
+	unmatched := mustCount(t, pool,
+		`SELECT count(*)
+		   FROM workflow_role_members wrm
+		   LEFT JOIN memberships m
+		     ON m.tenant_id = wrm.tenant_id AND m.user_id = wrm.user_id
+		  WHERE wrm.tenant_id IN ($1, $2) AND m.user_id IS NULL`,
+		demoTenantID, honeywellTenantID,
+	)
+	if unmatched != 0 {
+		t.Errorf("count(workflow_role_members rows with no matching membership) = %d, want 0", unmatched)
+	}
+}
+
+// TestSeedWorkflowRolesAreIdempotent: Test Spec AC-5. Running Seed twice leaves the two
+// persona tenants' workflow_roles/workflow_role_members row counts unchanged.
+func TestSeedWorkflowRolesAreIdempotent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	firstRoles := mustCount(t, pool, `SELECT count(*) FROM workflow_roles WHERE tenant_id IN ($1, $2) AND deleted_at IS NULL`, demoTenantID, honeywellTenantID)
+	firstMembers := mustCount(t, pool, `SELECT count(*) FROM workflow_role_members WHERE tenant_id IN ($1, $2)`, demoTenantID, honeywellTenantID)
+	if firstRoles != 14 {
+		t.Fatalf("count(workflow_roles) after the FIRST Seed = %d, want 14 (6 firm + 8 in-house)", firstRoles)
+	}
+	if firstMembers != 13 {
+		t.Fatalf("count(workflow_role_members) after the FIRST Seed = %d, want 13 (6 firm + 7 in-house)", firstMembers)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (idempotency): %v", err)
+	}
+	secondRoles := mustCount(t, pool, `SELECT count(*) FROM workflow_roles WHERE tenant_id IN ($1, $2) AND deleted_at IS NULL`, demoTenantID, honeywellTenantID)
+	secondMembers := mustCount(t, pool, `SELECT count(*) FROM workflow_role_members WHERE tenant_id IN ($1, $2)`, demoTenantID, honeywellTenantID)
+
+	if secondRoles != firstRoles {
+		t.Errorf("count(workflow_roles) after the SECOND Seed = %d, want %d (unchanged from the first run)", secondRoles, firstRoles)
+	}
+	if secondMembers != firstMembers {
+		t.Errorf("count(workflow_role_members) after the SECOND Seed = %d, want %d (unchanged from the first run)", secondMembers, firstMembers)
+	}
+}
+
+// TestSeedWorkflowRolesRepairASoftDeletedSeat: Test Spec AC-5. Soft-deleting and
+// corrupting the firm cfo role's title, then re-seeding, must restore both --
+// workflow_roles_tenant_key_uq spans soft-deleted rows, so the repair upsert must clear
+// deleted_at, not just fix the title.
+func TestSeedWorkflowRolesRepairASoftDeletedSeat(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed (establish curated baseline): %v", err)
+	}
+
+	const curatedTitle = "Engagement Partner" // firm cfo, lib/roles.ts SEED_FIRM_ROLES
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE workflow_roles SET deleted_at = now(), title = 'wrong' WHERE tenant_id = $1 AND key = 'cfo'`,
+		demoTenantID,
+	); err != nil {
+		t.Fatalf("soft-delete and corrupt the cfo role (precondition): %v", err)
+	}
+
+	var mutatedDeletedAt *time.Time
+	var mutatedTitle string
+	if err := pool.QueryRow(ctx,
+		`SELECT deleted_at, title FROM workflow_roles WHERE tenant_id = $1 AND key = 'cfo'`,
+		demoTenantID,
+	).Scan(&mutatedDeletedAt, &mutatedTitle); err != nil {
+		t.Fatalf("read back mutated row (precondition): %v", err)
+	}
+	if mutatedDeletedAt == nil || mutatedTitle != "wrong" {
+		t.Fatalf("precondition: row after mutation = (deleted_at=%v, title=%q), want (non-nil, \"wrong\")", mutatedDeletedAt, mutatedTitle)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed (repair): %v", err)
+	}
+
+	var repairedDeletedAt *time.Time
+	var repairedTitle string
+	if err := pool.QueryRow(ctx,
+		`SELECT deleted_at, title FROM workflow_roles WHERE tenant_id = $1 AND key = 'cfo'`,
+		demoTenantID,
+	).Scan(&repairedDeletedAt, &repairedTitle); err != nil {
+		t.Fatalf("read back repaired row: %v", err)
+	}
+	if repairedDeletedAt != nil {
+		t.Errorf("deleted_at after repair Seed = %v, want nil (live) -- an upsert whose SET list omits deleted_at would leave the soft-delete in place", repairedDeletedAt)
+	}
+	if repairedTitle != curatedTitle {
+		t.Errorf("title after repair Seed = %q, want curated %q", repairedTitle, curatedTitle)
+	}
+}
+
+// holderMembership is one workflow_role_members row joined to its membership's role and
+// status -- the two columns lib/roles.ts's resolution() predicate reads.
+type holderMembership struct {
+	userID, role, status string
+}
+
+// fetchRoleHolders returns roleKey's staffed members in tenantID, joined to their
+// membership row, unordered.
+func fetchRoleHolders(t *testing.T, pool *pgxpool.Pool, tenantID, roleKey string) []holderMembership {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT m.user_id, m.role, m.status
+		   FROM workflow_role_members wrm
+		   JOIN workflow_roles r ON r.id = wrm.workflow_role_id AND r.tenant_id = wrm.tenant_id
+		   JOIN memberships m ON m.tenant_id = wrm.tenant_id AND m.user_id = wrm.user_id
+		  WHERE wrm.tenant_id = $1 AND r.key = $2 AND r.deleted_at IS NULL`,
+		tenantID, roleKey,
+	)
+	if err != nil {
+		t.Fatalf("query role holders for tenant %s role %s: %v", tenantID, roleKey, err)
+	}
+	defer rows.Close()
+
+	var got []holderMembership
+	for rows.Next() {
+		var h holderMembership
+		if err := rows.Scan(&h.userID, &h.role, &h.status); err != nil {
+			t.Fatalf("scan role holder: %v", err)
+		}
+		got = append(got, h)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate role holders for tenant %s role %s: %v", tenantID, roleKey, err)
+	}
+	return got
+}
+
+// holderIsApprover mirrors lib/roles.ts's resolution() active-approver leg: an active
+// admin or reviewer satisfies the role; a preparer or a non-active status does not.
+func holderIsApprover(role, status string) bool {
+	return status == "active" && (role == "admin" || role == "reviewer")
+}
+
+// TestSeedAllFiveHolderStatesAreReachable: Test Spec AC-8. Four of the five resolution()
+// states are reachable off the real seeded staffing (key-names-no-role is deferred to
+// subtask 07 -- it needs a DELETE, not a seed fact):
+//   - ok-one-holder: in-house line_mgr, exactly 1 holder, active admin/reviewer (...0009).
+//   - ok-several:    in-house fin_dir, 2 holders, at least 1 active approver (...0002, ...0008).
+//   - nobody-holds:  firm quality_reviewer and in-house ceo, 0 holders each.
+//   - suspended-only: in-house cfo, exactly 1 holder, status suspended (...0012).
+func TestSeedAllFiveHolderStatesAreReachable(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	lineMgr := fetchRoleHolders(t, pool, honeywellTenantID, "line_mgr")
+	if len(lineMgr) != 1 {
+		t.Fatalf("ok-one-holder: in-house line_mgr has %d holders, want exactly 1", len(lineMgr))
+	}
+	if !holderIsApprover(lineMgr[0].role, lineMgr[0].status) {
+		t.Errorf("ok-one-holder: in-house line_mgr's sole holder = (role=%q, status=%q), want an active admin/reviewer", lineMgr[0].role, lineMgr[0].status)
+	}
+
+	finDir := fetchRoleHolders(t, pool, honeywellTenantID, "fin_dir")
+	if len(finDir) != 2 {
+		t.Fatalf("ok-several: in-house fin_dir has %d holders, want exactly 2", len(finDir))
+	}
+	activeApprovers := 0
+	for _, h := range finDir {
+		if holderIsApprover(h.role, h.status) {
+			activeApprovers++
+		}
+	}
+	if activeApprovers == 0 {
+		t.Errorf("ok-several: in-house fin_dir has 0 active approvers among its 2 holders, want at least 1")
+	}
+
+	if got := fetchRoleHolders(t, pool, demoTenantID, "quality_reviewer"); len(got) != 0 {
+		t.Errorf("nobody-holds: firm quality_reviewer has %d holders, want 0", len(got))
+	}
+	if got := fetchRoleHolders(t, pool, honeywellTenantID, "ceo"); len(got) != 0 {
+		t.Errorf("nobody-holds: in-house ceo has %d holders, want 0", len(got))
+	}
+
+	cfo := fetchRoleHolders(t, pool, honeywellTenantID, "cfo")
+	if len(cfo) != 1 {
+		t.Fatalf("suspended-only: in-house cfo has %d holders, want exactly 1", len(cfo))
+	}
+	if cfo[0].status != "suspended" {
+		t.Errorf("suspended-only: in-house cfo's sole holder has status %q, want \"suspended\"", cfo[0].status)
+	}
+}
+
+// firmPolicyRoleKeys are the approval-node role keys frontend/app/src/lib/workflows.ts's
+// SEED_FIRM_POLICIES names (polF1-polF3) -- verified against the source, no key drift.
+var firmPolicyRoleKeys = []string{"fin_mgr", "fin_dir", "cfo", "compliance"}
+
+// inhousePolicyRoleKeys are the approval-node role keys SEED_INHOUSE_POLICIES names
+// (polH1-polH2).
+var inhousePolicyRoleKeys = []string{"line_mgr", "fin_dir", "cfo", "ceo"}
+
+// TestSeedEverySeededPolicyStepKeyExists: Test Spec AC-8. Every role key the SPA's seeded
+// policies point an approval step at must resolve to a real seeded workflow_roles row in
+// the SAME tenant -- the fin_mgr vs fin-mgr trap APPR-14's own Constraint names.
+func TestSeedEverySeededPolicyStepKeyExists(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	for _, key := range firmPolicyRoleKeys {
+		got := mustCount(t, pool, `SELECT count(*) FROM workflow_roles WHERE tenant_id = $1 AND key = $2 AND deleted_at IS NULL`, demoTenantID, key)
+		if got != 1 {
+			t.Errorf("firm tenant: count(workflow_roles WHERE key=%q) = %d, want exactly 1 -- SEED_FIRM_POLICIES names this key in an approval step", key, got)
+		}
+	}
+
+	for _, key := range inhousePolicyRoleKeys {
+		got := mustCount(t, pool, `SELECT count(*) FROM workflow_roles WHERE tenant_id = $1 AND key = $2 AND deleted_at IS NULL`, honeywellTenantID, key)
+		if got != 1 {
+			t.Errorf("in-house tenant: count(workflow_roles WHERE key=%q) = %d, want exactly 1 -- SEED_INHOUSE_POLICIES names this key in an approval step", key, got)
+		}
+	}
+}
